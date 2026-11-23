@@ -120,24 +120,30 @@ pub struct DispatchResult {
     pub missed: Vec<(String, String)>,
 }
 
+/// Each outcome carries the target's bare address as `label` and the agent's name,
+/// `None` for a pane-only target, beside it for a receipt to print the two together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DispatchOutcome {
     Sent {
         label: String,
+        name: Option<String>,
         message_id: MessageId,
         interrupt: super::InterruptConfirmation,
     },
     Queued {
         label: String,
+        name: Option<String>,
         message_id: MessageId,
         reason: Option<ParkReason>,
     },
     CompactionPending {
         label: String,
+        name: Option<String>,
         message_id: MessageId,
     },
     SkippedWaiting {
         label: String,
+        name: Option<String>,
         message_id: MessageId,
         reason: super::InputWait,
     },
@@ -490,6 +496,9 @@ impl ResolvedTarget {
         }
     }
 
+    /// The target's full address. The send receipt prints it, and the record stores it as
+    /// `MessageRecord.address` and as the address of each after/when condition, so it stays a
+    /// bare, resolvable address: a reader-facing name goes beside it, never inside it.
     fn label(&self, snapshot: &SidebarSnapshot) -> String {
         if let Some(agent) = self.agent.as_ref() {
             let peers = crate::address::addressable_agents(snapshot);
@@ -499,6 +508,10 @@ impl ResolvedTarget {
         } else {
             "@agent".to_owned()
         }
+    }
+
+    fn name(&self) -> Option<String> {
+        self.agent.as_ref().and_then(|agent| agent.name.clone())
     }
 
     fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
@@ -1275,6 +1288,7 @@ fn dispatch_one(
     if reason.is_some() {
         return Ok(DispatchOutcome::Queued {
             label: handle,
+            name: target.name(),
             message_id: message.message_id,
             reason,
         });
@@ -1304,27 +1318,32 @@ fn dispatch_one(
             }
             Ok(DispatchOutcome::Sent {
                 label: handle,
+                name: target.name(),
                 message_id,
                 interrupt,
             })
         }
         deliver::AttemptOutcome::SkippedWaiting(reason) => Ok(DispatchOutcome::SkippedWaiting {
             label: handle,
+            name: target.name(),
             message_id,
             reason,
         }),
         deliver::AttemptOutcome::Queued => Ok(DispatchOutcome::Queued {
             label: handle,
+            name: target.name(),
             message_id,
             reason: None,
         }),
         deliver::AttemptOutcome::TypingHeld { until } => Ok(DispatchOutcome::Queued {
             label: handle,
+            name: target.name(),
             message_id,
             reason: Some(ParkReason::TypingHeld { until }),
         }),
         deliver::AttemptOutcome::Deferred(deferral) => Ok(DispatchOutcome::Queued {
             label: handle,
+            name: target.name(),
             message_id,
             reason: Some(match deferral {
                 send::Deferral::Status(status) => ParkReason::Status(status),
@@ -1334,6 +1353,7 @@ fn dispatch_one(
         }),
         deliver::AttemptOutcome::CompactionPending => Ok(DispatchOutcome::CompactionPending {
             label: handle,
+            name: target.name(),
             message_id,
         }),
     }
@@ -1350,6 +1370,7 @@ fn dispatch_parked(
     let (message, queued_reason) = state.enqueue(target, None, text, mode, &handle)?;
     Ok(DispatchOutcome::Queued {
         label: handle,
+        name: target.name(),
         message_id: message.message_id,
         reason: queued_reason.or(reason),
     })

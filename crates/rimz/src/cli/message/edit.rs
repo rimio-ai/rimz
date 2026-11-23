@@ -118,7 +118,10 @@ pub(super) fn push_queued_message(
     if let deliver::DeliveryReport::Sent { interrupt } = delivered {
         #[expect(clippy::print_stdout, reason = "command result")]
         {
-            println!("sent to {label} ({message_id})");
+            println!(
+                "sent to {} ({message_id})",
+                rimz::address::handle_with_name(&label, record.agent_name.as_deref())
+            );
         }
         send::report_interrupt_confirmation(&label, interrupt);
         return Ok(());
@@ -128,6 +131,7 @@ pub(super) fn push_queued_message(
     {
         let outcome = rimz::message::dispatch::DispatchOutcome::Queued {
             label,
+            name: record.agent_name.clone(),
             message_id,
             reason: Some(rimz::message::dispatch::ParkReason::TypingHeld { until }),
         };
@@ -219,7 +223,10 @@ pub(super) fn requeue_message(
     let label = message_target_for_record(&copy, &snapshot);
     #[expect(clippy::print_stdout, reason = "command result")]
     {
-        println!("queued for {label} ({new_id})  (from {message_id})");
+        println!(
+            "queued for {} ({new_id})  (from {message_id})",
+            rimz::address::handle_with_name(&label, copy.agent_name.as_deref())
+        );
     }
     Ok(())
 }
