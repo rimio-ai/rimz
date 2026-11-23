@@ -63,7 +63,7 @@ struct WaitArgs {
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
     label: Option<String>,
     /// Wake once after this delay, rounded up to the next minute.
-    #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+    #[arg(long = "in", value_name = "DURATION", value_parser = parse_in)]
     in_after: Option<Duration>,
     /// Wake once at this time: `HH:MM` (today, else tomorrow), `<weekday> HH:MM`, or
     /// `YYYY-MM-DD HH:MM`.
@@ -119,6 +119,11 @@ pub fn run(args: WaitCommand, globals: &GlobalFlags) -> Result<()> {
         None if args.wait.is_empty() => list::run(args.wait.json, globals),
         None => add::run(args.wait, globals),
     }
+}
+
+/// `--in` read as every `in` value is: a delay greater than zero.
+fn parse_in(raw: &str) -> std::result::Result<Duration, String> {
+    rimz::harness::schedule::parse_delay(raw).map_err(|err| err.to_string())
 }
 
 impl WaitArgs {

@@ -177,11 +177,12 @@ pub fn read_condition(
 /// Refuse arming `expr` at `scope` in the room at `root` when the room's forge reading already
 /// says the checkout has no supported forge: a term on it could never be read. A scope never
 /// probed, a detached HEAD, and a closed room are not known to be unreadable, so they arm.
-pub fn refuse_unreadable_forge(
+fn refuse_unreadable_forge(
     root: &Path,
     scope: &Path,
     expr: &WhenExpr,
     sidebar_fresh: SidebarFresh,
+    field: &str,
 ) -> Result<()> {
     if !expr.reads_forge() {
         return Ok(());
@@ -197,12 +198,70 @@ pub fn refuse_unreadable_forge(
     };
     let reason = when::condition::unread_reason(Some(when::UnreadReason::NoForge), None);
     anyhow::bail!(
-        "--when: `{}` cannot be read in {}: {reason}; RimZ reads a git checkout whose `origin` \
+        "{field}: `{}` cannot be read in {}: {reason}; RimZ reads a git checkout whose `origin` \
          remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo \
          or codeberg (through `tea`), so wait on something else here",
         term.key,
         crate::theme::fmt::home_relative(&scope.to_string_lossy())
     )
+}
+
+/// Where a `when` is armed: the room at `root`, its forge terms read at `scope` (none for a
+/// task that reads each worktree).
+pub struct WhenPlace<'a> {
+    pub root: &'a Path,
+    pub scope: Option<&'a Path>,
+    pub sidebar_fresh: SidebarFresh,
+}
+
+/// The account a `when`'s window terms read: `kind`'s windows on `login`, for the checkout at
+/// `root`.
+pub struct WindowAccount {
+    pub kind: Option<String>,
+    pub login: Option<crate::ids::LoginKey>,
+    pub root: PathBuf,
+    pub runtime: RuntimePaths,
+}
+
+/// A `when` as it arms: its expression and the provider whose windows it reads.
+pub struct ArmedWhen {
+    pub expr: WhenExpr,
+    pub provider: Option<AgentKind>,
+}
+
+/// The one reading of a `when` every surface arms (`rimz wait`, `rimz loop add`, the `wait`
+/// and `schedule` tools): parsed against the room's team stages, refused when it reads a forge
+/// the checkout has none of, and its window terms resolved to a provider. `account` runs only
+/// when the clauses read a window. Refusals name the clauses as `field`; a window refusal keeps
+/// its [`WindowRefusal`] type for a caller to reword.
+pub fn read_when(
+    clauses: &[String],
+    field: &str,
+    place: &WhenPlace<'_>,
+    account: impl FnOnce() -> Result<WindowAccount>,
+) -> Result<ArmedWhen> {
+    let stages = when::condition::condition_stages(place.root)?;
+    let expr = WhenExpr::parse_with_stages(clauses, Some(&stages))
+        .map_err(|error| anyhow!("{field}: {error}"))?;
+    if let Some(scope) = place.scope {
+        refuse_unreadable_forge(place.root, scope, &expr, place.sidebar_fresh, field)?;
+    }
+    if expr.window_spans().next().is_none() {
+        return Ok(ArmedWhen {
+            expr,
+            provider: None,
+        });
+    }
+    let account = account()?;
+    let provider = window_condition_provider(
+        clauses,
+        account.kind.as_deref(),
+        account.login.as_ref(),
+        &account.root,
+        &account.runtime,
+        Timestamp::now(),
+    )?;
+    Ok(ArmedWhen { expr, provider })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -646,16 +705,6 @@ pub fn arm(
             true,
         ),
     };
-    let room_login = || -> Result<(RuntimePaths, Option<crate::ids::LoginKey>)> {
-        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-        let login = crate::harness::task_login::task_login(
-            &crate::store::writer::LaunchLogin::RoomDefault,
-            agent.kind.as_str(),
-            &runtime,
-        )?
-        .map(|login| login.key());
-        Ok((runtime, login))
-    };
     let mut condition = None;
     let (trigger, description) = if let Some(delay) = request.in_after {
         (
@@ -664,35 +713,41 @@ pub fn arm(
         )
     } else if let Some(at) = request.at.as_deref() {
         let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
-        let fire_at = schedule::resolve_once_at("wait", at, &now).map_err(at_refusal)?;
+        let fire_at = schedule::resolve_once_at("wait", at, &now)
+            .map_err(|error| at_refusal(error, "--at"))?;
         one_shot_trigger(TaskEntry {
             fire_at: Some(fire_at),
             ..TaskEntry::default()
         })?
     } else if !request.when.is_empty() {
-        let stages = crate::harness::when::condition::condition_stages(&workspace.project_root)?;
-        let expr = WhenExpr::parse_with_stages(&request.when, Some(&stages))
-            .map_err(|error| anyhow!("--when: {error}"))?;
-        refuse_unreadable_forge(
-            &workspace.project_root,
-            &workspace.worktree_root,
-            &expr,
-            room.sidebar_fresh,
-        )?;
-        let (runtime, login) = room_login()?;
-        let provider = window_condition_provider(
-            &request.when,
-            Some(agent.kind.as_str()),
-            login.as_ref(),
-            &workspace.worktree_root,
-            &runtime,
-            Timestamp::now(),
-        )
-        .map_err(window_refusal)?;
-        condition = Some(expr);
+        let place = WhenPlace {
+            root: &workspace.project_root,
+            scope: Some(&workspace.worktree_root),
+            sidebar_fresh: room.sidebar_fresh,
+        };
+        let armed = read_when(&request.when, "--when", &place, || {
+            let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
+            let login = crate::harness::task_login::task_login(
+                &crate::store::writer::LaunchLogin::RoomDefault,
+                agent.kind.as_str(),
+                &runtime,
+            )?
+            .map(|login| login.key());
+            Ok(WindowAccount {
+                kind: Some(agent.kind.as_str().to_owned()),
+                login,
+                root: workspace.worktree_root.clone(),
+                runtime,
+            })
+        })
+        .map_err(|error| match error.downcast::<WindowRefusal>() {
+            Ok(refusal) => window_refusal(refusal),
+            Err(error) => error,
+        })?;
+        condition = Some(armed.expr);
         one_shot_trigger(TaskEntry {
             when: Some(request.when.clone()),
-            provider,
+            provider: armed.provider,
             ..TaskEntry::default()
         })?
     } else if let Some(pid) = request.pid {
@@ -975,13 +1030,13 @@ fn one_shot_trigger(entry: TaskEntry) -> Result<(DeliveryTrigger, String)> {
 }
 
 /// `--at` refusals worded for the flag: a wait has no name before it arms.
-fn at_refusal(error: ScheduleErr) -> anyhow::Error {
+pub fn at_refusal(error: ScheduleErr, field: &str) -> anyhow::Error {
     match error {
         ScheduleErr::BadOnceAt { value, .. } => anyhow!(
-            "--at `{value}` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
+            "{field} `{value}` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
         ),
         ScheduleErr::PastOnceAt { value, .. } => {
-            anyhow!("--at `{value}` is in the past; choose a later time")
+            anyhow!("{field} `{value}` is in the past; choose a later time")
         }
         other => other.into(),
     }

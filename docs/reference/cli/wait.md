@@ -97,7 +97,8 @@ Each of these prints `error: ` and the message, exits 1, and arms nothing. An in
 | `<kind> has no <span> window` | A `window.*` term, when the account's reading has no window of that span. |
 | `--when: clause <N>, position <M>: <fix>` | A `--when` expression that does not parse, or names a team stage no team defines. |
 | ``--when: `<key>` cannot be read in <checkout>: no supported forge for this checkout; RimZ reads a git checkout whose `origin` remote is on github.com (through `gh`) or on a host whose name contains gitea, forgejo or codeberg (through `tea`), so wait on something else here`` | A `pr` or `ci` term, when the open room's last reading of your checkout found no supported forge ([state expression](#state-expression---when)). |
-| `<flag> must be greater than zero` | Zero for `--in`, `--check-in`, or `--every`. |
+| `invalid value '0s' for '--in <DURATION>': must be greater than zero` | Zero for `--in` (exit 2). |
+| `<flag> must be greater than zero` | Zero for `--check-in` or `--every`. |
 | `<flag> must be less than 24h` | `24h` or more for `--check-in` or `--every`. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
 | `nothing was armed: RimZ could not find the calling agent's live session from this process` | The caller's identity is set but no live session is visible, for example when a command sandbox hides the agent's process. The error names the kind and the launch id, or the pane for a legacy caller. |

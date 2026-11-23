@@ -110,29 +110,6 @@ pub(super) fn condition_now(
         .unwrap_or_default()
 }
 
-/// Refuse arming `expr` at `scope` in the room at `root` when the room's forge reading already
-/// says the checkout has no supported forge (`wait::refuse_unreadable_forge`).
-pub(super) fn refuse_unreadable_forge(root: &Path, scope: &Path, expr: &WhenExpr) -> Result<()> {
-    rimz::harness::schedule::wait::refuse_unreadable_forge(
-        root,
-        scope,
-        expr,
-        rimz::sidebar::fresh_sidebar_present,
-    )
-}
-
-/// [`refuse_unreadable_forge`] for a loop task about to be stored: its condition at its own
-/// checkout. A task that reads each worktree has no single checkout to refuse on.
-pub(super) fn refuse_unreadable_forge_task(entry: &TaskEntry) -> Result<()> {
-    let Some(when) = entry.when.as_deref().filter(|_| !entry.each_worktree) else {
-        return Ok(());
-    };
-    let Ok(expr) = WhenExpr::parse(when) else {
-        return Ok(());
-    };
-    refuse_unreadable_forge(&entry.resolved_root(), &entry.run_dir(), &expr)
-}
-
 pub(super) fn counts<'a>(owners: impl IntoIterator<Item = DeliveryOwner<'a>>) -> String {
     let (mut waits, mut subscriptions) = (0_usize, 0_usize);
     for owner in owners {
