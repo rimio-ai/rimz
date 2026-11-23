@@ -820,6 +820,22 @@ fn tab_command(env: &Env, focus: Option<&str>) -> Command {
 
 /// [`tab_command`], with the other two tabs only when `other_tabs` holds.
 fn tab_command_in(env: &Env, focus: Option<&str>, other_tabs: bool) -> Command {
+    tab_room_rows(env, other_tabs);
+    let mut command = command(env, &["close", "--tab"]);
+    command.env(
+        "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+        format!("{} [Created 1s ago]\n", session(env)),
+    );
+    let clients = focus.map_or(String::new(), |pane| format!("1 {pane} claude\n"));
+    command.env(
+        "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+        format!("CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n{clients}"),
+    );
+    command
+}
+
+/// The rows [`tab_command_in`] lists, written as the listing every later command reads.
+fn tab_room_rows(env: &Env, other_tabs: bool) {
     let pane = |id: u64, tab: u64, extra: Value| {
         let mut row = json!({"id": id, "is_plugin": false, "tab_id": tab});
         row.as_object_mut()
@@ -842,17 +858,6 @@ fn tab_command_in(env: &Env, focus: Option<&str>, other_tabs: bool) -> Command {
         serde_json::to_vec(rows).unwrap(),
     )
     .unwrap();
-    let mut command = command(env, &["close", "--tab"]);
-    command.env(
-        "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-        format!("{} [Created 1s ago]\n", session(env)),
-    );
-    let clients = focus.map_or(String::new(), |pane| format!("1 {pane} claude\n"));
-    command.env(
-        "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
-        format!("CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n{clients}"),
-    );
-    command
 }
 
 fn close_pane_request(id: u64) -> Value {
@@ -1176,6 +1181,71 @@ fn close_tab_on_the_sidebar_or_in_the_dashboard_closes_nothing() {
         .output()
         .unwrap();
     assert_exit(&output, 2);
+    assert_eq!(closes(&env), Vec::<String>::new());
+}
+
+/// The key's close names the pane it was pressed in, so a host whose highlight moved to
+/// terminal_8 meanwhile still names and closes terminal_7's card.
+#[test]
+fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_room_rows(&env, true);
+    seed(&env, "first", |_| {});
+    let output = exchange(
+        &env,
+        close_pane_request(7),
+        agent_reply("first", 7),
+        command(&env, &["close", "--from-pane", "zellij:terminal_7"]),
+    );
+    assert_exit(&output, 0);
+    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert_eq!(closes(&env).len(), 1, "{log:?}");
+    assert!(closes(&env)[0].ends_with("terminal_7"), "{log:?}");
+    let entries = read_closed(&env);
+    assert_eq!(entries[0]["agent_id"], "first", "{entries}");
+}
+
+/// A press on the sidebar or in the dashboard closes nothing and says nothing; a pane the
+/// host has no card for reports the host's refusal; a listing that fails closes nothing.
+#[test]
+fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    tab_room_rows(&env, true);
+    for pane in ["zellij:terminal_1", "zellij:terminal_5"] {
+        let output = exchanges(&env, &[], command(&env, &["close", "--from-pane", pane]));
+        assert_exit(&output, 0);
+        assert!(output.stderr.is_empty(), "{pane}: {output:?}");
+    }
+    let refusal = "sidebar close: no card owns pane zellij:terminal_99";
+    let output = exchange(
+        &env,
+        close_pane_request(99),
+        json!({"reply":"refused", "reason":refusal}),
+        command(&env, &["close", "--from-pane", "zellij:terminal_99"]),
+    );
+    assert_exit(&output, 0);
+    assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), refusal);
+    for conflict in ["--pane", "--tab"] {
+        let mut args = vec!["close", "--from-pane", "zellij:terminal_7", conflict];
+        if conflict == "--pane" {
+            args.push("zellij:terminal_8");
+        }
+        let output = command(&env, &args).output().unwrap();
+        assert_exit(&output, 2);
+    }
+    let mut failed = command(&env, &["close", "--from-pane", "zellij:terminal_7"]);
+    let garbage = env.home_root.join("garbage-panes.json");
+    std::fs::write(&garbage, "not json").unwrap();
+    failed.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", garbage);
+    let output = exchanges(&env, &[], failed);
+    assert_exit(&output, 1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("sidebar close: listing panes") && stderr.contains("nothing was closed"),
+        "{stderr}"
+    );
     assert_eq!(closes(&env), Vec::<String>::new());
 }
 

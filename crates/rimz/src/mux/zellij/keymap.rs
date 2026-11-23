@@ -152,6 +152,10 @@ fn step(
             },
         ],
         KeyActionName::PaneClose => return json!({"guard":{"action":["CloseFocus"]}}),
+        KeyActionName::CardClose => {
+            let args = ["sidebar", "close", "--session-name", session].map(str::to_owned);
+            return command_step(commands, args.to_vec(), "run_focused", root);
+        }
         KeyActionName::TabNew => &["NewTab"],
         KeyActionName::TabNext => &["GoToNextTab"],
         KeyActionName::TabPrev => &["GoToPreviousTab"],
@@ -427,6 +431,44 @@ mod tests {
                     "room"
                 ])
             );
+        }
+    }
+
+    #[test]
+    fn card_close_runs_the_close_of_the_focused_pane_in_every_bundled_keymap_and_a_user_bind() {
+        let user = "[room]\nstyle='rimz'\n[keys.bind.normal]\n'Alt+;'='card.close'\n";
+        let bundled = ["rimz", "tmux", "zellij", "vim"]
+            .map(|keymap| format!("[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\n"));
+        for config in bundled.iter().map(String::as_str).chain([user]) {
+            let wire = wire(config);
+            let machine: MachineConfig = toml::from_str(config).unwrap();
+            let mut checked = 0;
+            for (&mode, bindings) in &machine.room_keymap().modes {
+                for (&key, action) in bindings {
+                    if *action != KeyAction::Named(KeyActionName::CardClose) {
+                        continue;
+                    }
+                    let steps = steps(&wire, mode_word(mode), &key_label(key));
+                    let index = steps[0]["run_focused"].as_u64();
+                    assert!(index.is_some(), "{config} {key:?}: {steps}");
+                    assert_eq!(
+                        wire["commands"][index.unwrap() as usize],
+                        json!([
+                            "--mux",
+                            "zellij",
+                            "--root",
+                            "/project,=%2C",
+                            "sidebar",
+                            "close",
+                            "--session-name",
+                            "room"
+                        ]),
+                        "{config} {key:?}"
+                    );
+                    checked += 1;
+                }
+            }
+            assert!(checked >= 1, "{config}: card.close must be bound");
         }
     }
 

@@ -1,5 +1,5 @@
 use super::support::*;
-use crate::backend::card_commands::check_cards;
+use crate::backend::card_commands::{check_cards, write_rimz_style};
 
 #[test]
 fn walk_slot_last_close_and_reopen_follow_the_attached_view() {
@@ -12,9 +12,17 @@ fn walk_slot_last_close_and_reopen_follow_the_attached_view() {
         command.args(["--mux", "tmux"]);
         command
     };
+    write_rimz_style(&env);
     command()
         .args(["start", "--no-attach"])
         .assert_success_within_timeout("start card command room");
-    let _client = AttachedTmuxClient::attach(&server.socket, &session, 160, 50);
-    check_cards(&env, &server.backend, &session, &env.runtime_root, command);
+    let mut client = AttachedTmuxClient::attach(&server.socket, &session, 160, 50);
+    check_cards(
+        &env,
+        &server.backend,
+        &session,
+        &env.runtime_root,
+        command,
+        &mut || client.send(b"\x1bx"),
+    );
 }

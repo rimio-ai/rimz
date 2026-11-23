@@ -23,7 +23,7 @@ The global `--mux tmux|zellij` picks the backend. The commands never print to st
 
 A terminal's number is its tab name. RimZ records nothing else about it:
 
-- Closing a terminal (exiting its shell, `card.close` on its sidebar row, or closing the pane) frees its number. The next `rimz tab terminal N` opens a new one, and no other terminal is renumbered.
+- Closing a terminal (exiting its shell, `card.close` pressed in it, or closing the pane) frees its number. The next `rimz tab terminal N` opens a new one, and no other terminal is renumbered.
 - Renaming the tab gives up its number: the next call opens a new `term-N`. A tab you named `term-N` yourself counts as terminal `N`.
 - An agent launched in place inside a terminal takes the tab, which turns into that agent's tab. The number frees, and the next call opens a fresh shell.
 - The sidebar shows a terminal as an ordinary shell row, with no number.

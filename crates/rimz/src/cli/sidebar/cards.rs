@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
-use rimz::ids::{AgentKind, AgentSessionId, MuxName};
+use anyhow::{Context, Result, anyhow, bail};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::mux::{ClientFocusOptions, ClientView, PaneListOptions, PaneReadConsistency};
 use rimz::sidebar::produce::hosting::read_hosting;
 use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
@@ -54,6 +54,15 @@ pub(super) fn request(
     request: CardRequest,
 ) -> Result<()> {
     let (session, mux) = resolve_session(globals, session)?;
+    request_with(globals, session, mux, request)
+}
+
+fn request_with(
+    globals: &GlobalFlags,
+    session: String,
+    mux: MuxName,
+    request: CardRequest,
+) -> Result<()> {
     match rimz::sidebar_pane::request_card(mux, &session, request)? {
         CardReply::Done => Ok(()),
         CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
@@ -62,6 +71,37 @@ pub(super) fn request(
             close(&ctx, &globals, &session, vec![target], TabClose::WhenLast)
         }
     }
+}
+
+/// Close the card that owns `pane`, the pane a key was pressed in, as `--pane` does. A
+/// sidebar pane or a pane in the dashboard closes nothing.
+pub(super) fn close_from_pane(
+    globals: &GlobalFlags,
+    session: Option<String>,
+    pane: PaneId,
+) -> Result<()> {
+    let (session, mux) = resolve_session(globals, session)?;
+    let listing = rimz::mux::backend_for(mux)
+        .list_panes(PaneListOptions {
+            session_name: Some(session.clone()),
+            consistency: PaneReadConsistency::RequireAuthoritative,
+            ..Default::default()
+        })
+        .map_err(|err| anyhow!("sidebar close: listing panes: {err}; nothing was closed"))?;
+    if listing
+        .panes
+        .iter()
+        .any(|listed| listed.pane_id == pane && closes_nothing(listed))
+    {
+        return Ok(());
+    }
+    let request = CardRequest::CloseTarget { pane: Some(pane) };
+    request_with(globals, session, mux, request)
+}
+
+/// A key pressed on the sidebar or in the dashboard closes no card.
+fn closes_nothing(pane: &rimz::pane::PaneRef) -> bool {
+    pane.is_rimz_sidebar() || pane.view_name.as_deref() == Some(rimz::pane::VIEW_NAME)
 }
 
 /// Close the focused tab's cards: every tiled pane but the sidebar, through one stop of
@@ -91,7 +131,7 @@ pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Resul
     let focused = ClientView::unique_live_focus(&view.clients, &view.viewed_panes, &live)
         .and_then(|focused| listing.panes.iter().find(|pane| pane.pane_id == focused))
         .context("sidebar close --tab requires one attached client focused on one live pane")?;
-    if focused.is_rimz_sidebar() || focused.view_name.as_deref() == Some(rimz::pane::VIEW_NAME) {
+    if closes_nothing(focused) {
         return Ok(());
     }
     let mut targets = Vec::new();

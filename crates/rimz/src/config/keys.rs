@@ -259,6 +259,8 @@ pub enum KeyActionName {
     PaneResize(KeyDirection),
     PaneClose,
     PaneSendPrefix,
+    /// Close the card that owns the pane the key was pressed in.
+    CardClose,
     TabNew,
     TabNext,
     TabPrev,
@@ -274,8 +276,8 @@ pub enum KeyActionName {
 }
 
 use KeyActionName::{
-    KeysHelp, Mode, Palette, PaneClose, PaneFocus, PaneFocusNext, PaneResize, PaneSendPrefix,
-    PaneSplit, PaneSwap, Scrollback, SessionDetach, TabNew, TabNext, TabPrev,
+    CardClose, KeysHelp, Mode, Palette, PaneClose, PaneFocus, PaneFocusNext, PaneResize,
+    PaneSendPrefix, PaneSplit, PaneSwap, Scrollback, SessionDetach, TabNew, TabNext, TabPrev,
 };
 use KeyDirection::{Down, Left, Right, Up};
 
@@ -297,6 +299,7 @@ const TYPED_ACTIONS: &[(&str, KeyActionName)] = &[
     ("pane.resize.down", PaneResize(Down)),
     ("pane.close", PaneClose),
     ("pane.send_prefix", PaneSendPrefix),
+    ("card.close", CardClose),
     ("tab.new", TabNew),
     ("tab.next", TabNext),
     ("tab.prev", TabPrev),
@@ -343,7 +346,6 @@ const RIMZ_COMMANDS: &[(&str, &[&str])] = &[
         "filter.needs_you",
         &["sidebar", "filter", "needs-you", "--toggle"],
     ),
-    ("card.close", &["sidebar", "close"]),
     ("tab.close", &["sidebar", "close", "--tab"]),
     ("card.reopen", &["sidebar", "reopen"]),
     ("sidebar.focus", &["sidebar", "focus", "--toggle"]),
@@ -416,6 +418,7 @@ impl fmt::Display for KeyActionName {
             Self::PaneSplit(KeySplitDirection::Right) => formatter.write_str("pane.split.right"),
             Self::PaneSplit(KeySplitDirection::Down) => formatter.write_str("pane.split.down"),
             Self::PaneClose => formatter.write_str("pane.close"),
+            Self::CardClose => formatter.write_str("card.close"),
             Self::TabNew => formatter.write_str("tab.new"),
             Self::TabNext => formatter.write_str("tab.next"),
             Self::TabPrev => formatter.write_str("tab.prev"),
