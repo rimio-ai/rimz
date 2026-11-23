@@ -32,7 +32,6 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 - `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible. Unsafe code is denied, and a new site is a design decision.
 - Wrap source comments by hand to the width of the code around them, at most 100 columns: rustfmt leaves them as written and no gate catches them. A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
-- Python helpers run under `uv`.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
 - `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
@@ -45,12 +44,12 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule.
 - **One agent is one launch id.** A match that decides whether two rows are the same agent compares launch ids, never `(kind, session id)`.
 - **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
-- **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, clap help text (`about`, `long_about`, `help`), tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
+- **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, clap help text, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
 - **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
 
 ## Testing
 
-[gates.md](./docs/contributing/gates.md) defines the gate stack and the test profiles, and [running-gates.md](./docs/contributing/running-gates.md) has one section per trap of the runner.
+[gates.md](./docs/contributing/gates.md) defines the gate stack and the test profiles.
 
 - While iterating, run `cargo fmt --all`, then `cargo xtask check`, then `cargo xtask lint`, and `cargo xtask doc` when you touched rustdoc.
 - Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree its 15-minute budget trips, so run it there as `RIMZ_XTASK_TIMEOUT=30m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
@@ -58,9 +57,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
 - `cargo xtask invariants` greps tracked text, Rust and Markdown alike, each `AGENTS.md` included: describe a boundary in prose and leave the banned path unwritten. It does not see an untracked file, so stage new files with `git add -N` first.
-- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), start a gate or test run [in the background](./docs/contributing/running-gates.md#background-runs) or from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, or compare timings. Read [flakes.md](./docs/contributing/flakes.md) before you run the live tier, report a failure you leave unfixed, or debug a flake. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
-- Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
-- A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
+- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), start a gate or test run [in the background](./docs/contributing/running-gates.md#background-runs) or from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, or compare timings. Read [Writing a test](./docs/contributing/rust-conventions.md#writing-a-test) before you write or delete a test. Read [flakes.md](./docs/contributing/flakes.md) before you run the live tier, report a failure you leave unfixed, or debug a flake. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
 
 ## Code map
 
