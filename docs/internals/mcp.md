@@ -4,7 +4,7 @@
 
 ## Calls run in the server's process
 
-The server runs each tool call in its own process, on a thread of the call's own. `crates/rimz/src/mcp/` speaks the protocol and holds the catalog and the wording, and it reaches RimZ code only through the `crates/rimz/src/mcp/runner.rs::Runner` it is handed. `crates/rimz/src/cli/mcp.rs::run` hands it `crates/rimz/src/mcp_tools/mod.rs::Tools`, which has one function per tool: each calls the library function the tool's command calls and answers with the value that function returns. So a tool does what its command does, with no process started per call, and its answer is that value rather than the command's printed text.
+The server runs each tool call in its own process, on a thread of the call's own. `crates/rimz/src/mcp/` speaks the protocol and holds the catalog and the wording, and it reaches RimZ code only through the `crates/rimz/src/mcp/runner.rs::Runner` it is handed. `crates/rimz/src/cli/mcp.rs::run` hands it `crates/rimz/src/mcp_tools/mod.rs::Tools`, which has one function per tool: each calls the library function the tool's command calls and answers with the value that function returns. So a tool does what its command does, with no process started per call, and its answer is that value rather than the command's printed text. A command's handler can do part of the job around that library call (rewriting `@me` to the caller, filtering the agents a miss lists to the caller's channel, recording a bounced send), so a new tool's runner is written from a read of the handler end to end, and each such step lands in the runner or moves into the library.
 
 `guide` is the one tool the server answers itself, from the wording it read at its start (below), so it opens no room.
 
