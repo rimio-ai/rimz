@@ -219,6 +219,77 @@ fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callabl
     );
 }
 
+#[test]
+fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_it() {
+    let catalog = SubagentCatalog::Available(vec![subagent_policy::SubagentProfile {
+        name: "explorer".into(),
+        source: subagent_policy::SubagentProfileSource::Profile,
+        agent: None,
+        model: None,
+        effort: None,
+        description: None,
+    }]);
+    let mut actual = Vec::new();
+    for (kind, skills) in [
+        ("claude", None),
+        ("claude", Some(Vec::new())),
+        ("antigravity", Some(Vec::new())),
+    ] {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+        request.skills = skills;
+        let reminders = LaunchReminders {
+            mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+            subagent_catalog: Some(catalog.clone()),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        actual.push((
+            kind,
+            reminders.disable_native_subagents(&request),
+            text.lines()
+                .find(|line| line.starts_with("Launch them through"))
+                .map(str::to_owned),
+        ));
+        request.subagent = true;
+        assert!(
+            !reminders
+                .mcp_capabilities(&request)
+                .contains(&Capability::Subagents)
+        );
+        assert!(
+            reminders
+                .mcp_capabilities(&request)
+                .contains(&Capability::Wait)
+        );
+        request.subagent = false;
+        request.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Judge,
+        });
+        assert!(
+            !reminders
+                .mcp_capabilities(&request)
+                .contains(&Capability::Subagents)
+        );
+    }
+    let via = |server: &str| {
+        Some(format!(
+            "Launch them through the `subagent` tool of the `{server}` MCP server, subagents \
+             available to you:"
+        ))
+    };
+    assert_eq!(
+        actual,
+        [
+            ("claude", true, via("rimz")),
+            ("claude", true, via("rimz")),
+            ("antigravity", true, via("rimz_tools")),
+        ]
+    );
+}
+
 fn team_reminder(team: Team) -> TeamReminder {
     TeamReminder::new(team)
 }
@@ -354,7 +425,7 @@ You are @coder, running on Opus.
 
 ### Subagents
 
-Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.
+Subagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.
 
 ### Skills
 

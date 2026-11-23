@@ -87,6 +87,9 @@ pub struct Start {
     pub status: &'static str,
     pub stop: String,
     pub report: &'static str,
+    /// What the launch changed or skipped of what was asked, each as the command prints it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl Start {
@@ -97,6 +100,7 @@ impl Start {
             id,
             status: "running",
             report,
+            warnings: Vec::new(),
         }
     }
 }

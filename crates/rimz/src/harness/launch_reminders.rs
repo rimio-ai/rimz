@@ -110,7 +110,7 @@ impl LaunchReminders {
         if self.mcp_server.is_none() || self.mcp_switched_off.is_some() {
             return Vec::new();
         }
-        crate::config::mcp_capabilities(request.mcps.as_deref())
+        request.mcp_capabilities()
     }
 
     /// The variables that hand the launch's selection to a server its provider starts itself
@@ -172,9 +172,21 @@ impl LaunchReminders {
             || skill_is_callable(self.callable_skills(request).as_deref(), "rimz-lsp")
     }
 
+    /// The `subagent` tool of RimZ's MCP server is live for the launch.
+    fn subagents_tool(&self, request: &ExecRequest) -> bool {
+        self.mcp_capabilities(request)
+            .contains(&Capability::Subagents)
+    }
+
+    /// The launch can launch subagents, through the MCP tool or the skill.
+    fn subagents_callable(&self, request: &ExecRequest) -> bool {
+        self.subagents_tool(request)
+            || skill_is_callable(self.callable_skills(request).as_deref(), "rimz-subagents")
+    }
+
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
-            || (skill_is_callable(self.callable_skills(request).as_deref(), "rimz-subagents")
+            || (self.subagents_callable(request)
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
 }
@@ -238,11 +250,11 @@ pub(super) fn render(
     } else {
         &[]
     };
+    let server = crate::agents::find_definition(request.kind.as_str())
+        .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
+            adapter.mcp_server_name()
+        });
     let lsp_via = if reminders.lsp_tool(request) {
-        let server = crate::agents::find_definition(request.kind.as_str())
-            .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
-                adapter.mcp_server_name()
-            });
         format!("via the `lsp` tool of the `{server}` MCP server")
     } else {
         "via Skill(rimz-lsp)".to_owned()
@@ -266,10 +278,15 @@ pub(super) fn render(
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
-    } else if skill_is_callable(skills, "rimz-subagents")
+    } else if reminders.subagents_callable(request)
         && let Some(catalog) = reminders.subagent_catalog.as_ref()
     {
-        paragraphs.push(subagent_policy::reminder(catalog));
+        let via = if reminders.subagents_tool(request) {
+            format!("the `subagent` tool of the `{server}` MCP server")
+        } else {
+            "Skill(rimz-subagents)".to_owned()
+        };
+        paragraphs.push(subagent_policy::reminder(catalog, &via));
     }
     if skills.is_none_or(|skills| {
         skills

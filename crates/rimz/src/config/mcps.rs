@@ -146,7 +146,7 @@ impl fmt::Display for McpName {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum McpListErr {
     #[error(
-        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own MCP servers, each name with an optional `:always` or `:deferred`"
+        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes), or one of your own MCP servers, each name with an optional `:always` or `:deferred`"
     )]
     InvalidName(String),
     #[error("invalid mcps entry `{entry}`: `{earlier}` already gives `{}` another mark", entry.name())]
@@ -264,8 +264,8 @@ mod tests {
         assert_eq!(
             "github:eager".parse::<McpName>().unwrap_err().to_string(),
             "invalid mcps entry `github:eager`: list `*`, `rimz`, a RimZ capability \
-             (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own MCP servers, \
-             each name with an optional `:always` or `:deferred`"
+             (rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes), or one of your own \
+             MCP servers, each name with an optional `:always` or `:deferred`"
         );
         assert_eq!(
             parse_mcp_list(&["github".to_owned(), "github".to_owned()]).unwrap_err(),

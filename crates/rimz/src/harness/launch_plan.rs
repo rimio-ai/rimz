@@ -975,7 +975,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    let capabilities = crate::config::mcp_capabilities(request.mcps.as_deref());
+    let capabilities = request.mcp_capabilities();
     // A kind whose prompt rides an agent file takes a passed server only inside the file,
     // which only a fresh launch with a composed prompt writes; a kind that serves from the
     // launch env takes it on every launch.
@@ -1300,21 +1300,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     })
 }
 
-fn judge_launch(request: &ExecRequest) -> bool {
-    request
-        .identity
-        .params
-        .workflow
-        .as_ref()
-        .is_some_and(|workflow| workflow.role == crate::agents::WorkflowAttemptRole::Judge)
-}
-
 fn judge_read_only(
     request: &ExecRequest,
     cwd: &Path,
     checkout: Option<&Path>,
 ) -> Result<Vec<PathBuf>, LaunchPlanErr> {
-    if !judge_launch(request) {
+    if !request.is_judge() {
         return Ok(Vec::new());
     }
     let mut paths = vec![cwd.to_path_buf()];
@@ -1429,7 +1420,7 @@ fn reminders(
     }
     // A judge's checkout is read-only; a `rimz subagents` child would get a
     // writable one.
-    let subagent_catalog = (!judge_launch(request)).then(|| {
+    let subagent_catalog = (!request.is_judge()).then(|| {
         super::subagent_policy::catalog(
             request.identity.params.profile.as_deref(),
             &effective.profiles,

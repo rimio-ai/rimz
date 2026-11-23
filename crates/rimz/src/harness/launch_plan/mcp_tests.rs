@@ -475,7 +475,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-wait,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -517,7 +517,8 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         Some(&["rimz:deferred", "rimz-lsp:always", "github:always"]),
         &[],
     ));
-    let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-control:deferred,rimz-notes:deferred";
+    let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,rimz-control:deferred,\
+                 rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -557,7 +558,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-wait,rimz-control,rimz-notes",
+            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-control,rimz-notes",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -850,6 +851,7 @@ fn a_registered_capability_hides_its_skill_from_the_host_view() {
         "rimz-control",
         "rimz-lsp",
         "rimz-notes",
+        "rimz-subagents",
         "rimz-wait",
     ];
     for root in [home.join(".claude/skills"), home.join(".agents/skills")] {
@@ -862,7 +864,13 @@ fn a_registered_capability_hides_its_skill_from_the_host_view() {
             .unwrap();
         }
     }
-    let all = ["rimz-control", "rimz-lsp", "rimz-notes", "rimz-wait"];
+    let all = [
+        "rimz-control",
+        "rimz-lsp",
+        "rimz-notes",
+        "rimz-subagents",
+        "rimz-wait",
+    ];
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for kind in ["claude", "codex"] {

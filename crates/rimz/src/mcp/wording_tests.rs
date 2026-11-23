@@ -93,9 +93,17 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     assert_eq!(
         wording.instructions(&[Capability::Wait]),
         format!(
-            "RimZ tools: `wait` to wait outside your turn; `tasks`, `join`, and `stop` to \
-             list, await, or end what you started; `guide` for usage guides.\n{}\n{shared}",
+            "RimZ tools: `wait` to wait outside your turn; `tasks`, `join`, and `stop` for \
+             what you started; `guide` for guides.\n{}\n{shared}",
             sentence(Capability::Wait)
+        )
+    );
+    assert_eq!(
+        wording.instructions(&[Capability::Subagents]),
+        format!(
+            "RimZ tools: `subagent` to delegate; `tasks`, `join`, and `stop` for what you \
+             started; `guide` for guides.\n{}\n{shared}",
+            sentence(Capability::Subagents)
         )
     );
     let all = wording.instructions(&Capability::ALL);
@@ -323,7 +331,10 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         .guide(&[Capability::Wait], "rimz-wait/conditions")
         .expect("the conditions guide");
     assert!(conditions.contains("`pr.queue`"), "{conditions}");
-    let served = vec!["rimz-wait/conditions".to_owned()];
+    let served = vec![
+        "rimz-wait/conditions".to_owned(),
+        "rimz-subagents/delegating".to_owned(),
+    ];
     assert_eq!(
         wording.guide(&Capability::ALL, "rimz-wait/nope"),
         Err(served.clone())
@@ -334,5 +345,6 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         Err(Vec::new())
     );
     assert!(has_guides(Capability::Wait));
+    assert!(has_guides(Capability::Subagents));
     assert!(!has_guides(Capability::Lsp));
 }
