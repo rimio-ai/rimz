@@ -199,7 +199,8 @@ pub fn home_relative_to(home: Option<&str>, path: &str) -> String {
     }
 }
 
-/// A diagnostic collapsed onto one line: trimmed lines, blanks dropped, joined by `; `.
+/// A diagnostic collapsed onto one line: trimmed lines, blanks dropped, joined by `; `. Control
+/// characters pass through, so pack-supplied text goes through `crate::packs::one_line` instead.
 pub fn one_line(message: &str) -> String {
     message
         .lines()
