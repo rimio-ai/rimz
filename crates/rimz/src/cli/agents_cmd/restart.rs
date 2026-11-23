@@ -1,11 +1,14 @@
+//! CLI selection, continue policy, and rendering for agent and cohort restarts.
+
 use super::*;
 use crate::cli::{render, select};
-use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
-use rimz::harness::launch::{ExecAction, ExecRequest};
-use rimz::launcher::agent_pane::AgentPane;
-use rimz::sidebar::produce::hosting::HostingErr;
-use rimz::store::writer::SwapAbort;
+use rimz::harness::launch::ExecAction;
+use rimz::launcher::swap::{
+    finish_replacement, fresh_launch_request, held_by, held_elsewhere, open_session_run,
+    relaunch_request, replace, reserve_swap, restart_cell, restart_posture, swap_briefing,
+    with_run,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FreshReason {
@@ -216,7 +219,10 @@ pub(in crate::cli) fn restart_resolved(
         rimz::agents::empty_dir::prepare_reentry(store.paths(), &cwd)?;
     }
     let machine_config = crate::cli::machine_config();
-    let posture = restart_posture(agent, workspace, &machine_config)?;
+    let (posture, warning) = restart_posture(agent, workspace, &machine_config)?;
+    if let Some(warning) = warning {
+        writeln!(render::err(), "{warning}")?;
+    }
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let isolation = rimz::config::Isolation::resolve(
@@ -409,23 +415,23 @@ pub(in crate::cli) fn restart_resolved(
     invocation.continue_session = continues;
     let account = invocation.identity.params.login.clone().unwrap_or_default();
     let backend = rimz::mux::backend_for(old_pane.mux());
-    let placed = place_replacement(
-        ctx,
+    if let Some(warning) = replace(
+        workspace,
+        store,
         backend.as_ref(),
         agent,
         &old_pane,
         &invocation,
+        &batch,
         identity,
         agents,
         &cwd,
         focus,
         handover,
-    );
-    settle_placement(store, &batch, identity, agent, "restart", placed, || {
-        if let Some(run) = handover {
-            let _ = rimz::harness::run::hand_over(store.paths(), &run.run_id, None);
-        }
-    })?;
+        "restart",
+    )? {
+        let _ = writeln!(render::err(), "{warning}");
+    }
     if let Some(run) = failed_run {
         warn_after_bound(
             "the child's open run was not failed",
@@ -438,9 +444,15 @@ pub(in crate::cli) fn restart_resolved(
             "warning: could not settle the peer's open turn before restart: {err:#}"
         );
     }
-    let after_bind = hosting_after_bind(ctx, agent, &old_pane);
-    release_replaced(ctx, agent, &old_pane, fresh_reason.is_some());
-    close_replaced(ctx, backend.as_ref(), &old_pane, after_bind);
+    finish_replacement(
+        workspace,
+        store,
+        backend.as_ref(),
+        agent,
+        &old_pane,
+        fresh_reason.is_some(),
+        |notice| writeln!(render::err(), "{notice}"),
+    );
     if let Some(run) = child_handover {
         let caller = restart.as_ref().and_then(|restart| restart.caller);
         if let Err(err) = notify_parent_restarted(ctx, agents, agent, run, &account, caller) {
@@ -499,474 +511,12 @@ fn find_replaced_pane(ctx: &Ctx, agent: &AgentState, old_pane: &rimz::ids::PaneI
     }
 }
 
-/// Whether the lookup holds `agent`'s own session in `pane`, not another session of its
-/// launch: a revival can leave two live rows of one launch in two panes.
-pub(super) fn held_by(pane: &AgentPane, agent: &AgentState) -> bool {
-    pane.holder.0 == agent.kind && pane.holder.1 == agent.agent_id
-}
-
-/// The refusal's cause when [`held_by`] is false.
-pub(super) fn held_elsewhere(pane: &AgentPane) -> String {
-    format!(
-        "another session of the agent, {}, holds its pane {}",
-        pane.holder.1, pane.pane_id
-    )
-}
-
-/// Where the agent is once its replacement bound, read on the replaced pane's backend before
-/// that session is released; [`close_replaced`] closes the pane only on this answer.
-pub(super) fn hosting_after_bind(
-    ctx: &Ctx,
-    agent: &AgentState,
-    old_pane: &rimz::ids::PaneId,
-) -> Result<Option<AgentPane>, HostingErr> {
-    let mut notices = Vec::new();
-    let hosting = rimz::launcher::agent_pane::locate(
-        &ctx.workspace,
-        &ctx.store,
-        Some(old_pane.mux()),
-        &agent.kind,
-        agent.launch_key(),
-        &mut notices,
-    );
-    warn_after_bound(
-        "the multiplexer's notices were not printed",
-        crate::cli::render::room::print_notices(notices),
-    );
-    hosting
-}
-
-/// Reserve a swap of `source`'s agent, naming a refusal for the command
-/// (`verb`) that asked.
-pub(super) fn reserve_swap(
-    store: &rimz::Store,
-    source: &AgentState,
-    request: &AgentLaunchRequest,
-    scope: AgentLaunchScope,
-    verb: &str,
-) -> Result<AgentLaunchBatch> {
-    store
-        .begin_agent_swap(source, request, scope)
-        .map_err(|err| match err {
-            rimz::store::StoreErr::SwapNotHolder { agent } => anyhow::anyhow!(
-                "{verb} refused: @{agent} is not running in the session this {verb} names, or has \
-                 ended; nothing was changed"
-            ),
-            rimz::store::StoreErr::SwapInFlight { agent } => anyhow::anyhow!(
-                "{verb} refused: @{agent} already has a restart or molt starting; wait until it \
-                 registers or fails, then retry"
-            ),
-            err => err.into(),
-        })
-}
-
-/// Open the replacement pane beside `old_pane` and wait for its wrapper to bind.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the placement inputs are the restart's resolved launch"
-)]
-pub(super) fn place_replacement(
-    ctx: &Ctx,
-    backend: &dyn rimz::mux::MuxBackend,
-    agent: &AgentState,
-    old_pane: &rimz::ids::PaneId,
-    invocation: &ExecRequest,
-    identity: &AgentLaunchIdentity,
-    agents: &[AgentState],
-    cwd: &Path,
-    focus: LaunchFocus,
-    handover: Option<&rimz::store::run::RunRecord>,
-) -> Result<()> {
-    let workspace = &ctx.workspace;
-    let store = &ctx.store;
-    let pane_name = rimz::agents::pane_title::title(
-        rimz::agents::pane_title::Seat::from_launch(
-            &invocation.kind,
-            invocation.identity.name.as_deref(),
-            &invocation.identity.params,
-        ),
-        agents,
-    );
-    let argv = rimz::harness::launch::exec_argv(
-        &rimz::proc::rimz_exe(),
-        store.runtime_paths(),
-        invocation,
-    )?;
-    let env = relaunch_identity_env(
-        workspace,
-        agent.lane_path().map(Path::new).unwrap_or(cwd),
-        invocation,
-    );
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    if let Some(run) = handover {
-        rimz::harness::run::hand_over(store.paths(), &run.run_id, Some(old_pane.clone()))?;
-    }
-    if focus.takes_focus() {
-        rimz::mux::focus_anchor::execute_action(
-            backend,
-            ctx.runtime(),
-            &workspace.session_name,
-            old_pane.clone(),
-        )
-        .context("focusing the agent pane for restart")?;
-    }
-    let new_pane = backend
-        .split_pane(SplitPaneOptions {
-            target: rimz::mux::SplitTarget::SessionPane {
-                session_name: workspace.session_name.clone(),
-                pane_id: old_pane.clone(),
-            },
-            cwd: Some(cwd.display().to_string()),
-            command: Some(argv),
-            title: Some(pane_name),
-            close_on_exit: false,
-            env,
-            placement: rimz::mux::SplitPlacement::Rejoin(direction),
-            focus: focus.takes_focus(),
-        })
-        .context("opening the replacement agent pane")?;
-    #[cfg(any(test, feature = "testkit"))]
-    if let Some(bind) = std::env::var_os("RIMZ_TEST_SWAP_BIND_AS_WRAPPER")
-        .filter(|value| value == "1" || value == "old")
-    {
-        // The integration mux shims never run the pane's command, so the
-        // test stands in for the replacement's wrapper and binds it here,
-        // in the replaced pane itself when it asks for `old`.
-        let pane = if bind == "old" {
-            old_pane.clone()
-        } else {
-            new_pane.unwrap_or_else(|| {
-                let raw = match old_pane.mux() {
-                    rimz::ids::MuxName::Tmux => "%9999",
-                    rimz::ids::MuxName::Zellij => "terminal_9999",
-                };
-                rimz::ids::PaneId::from_parts(old_pane.mux(), raw)
-            })
-        };
-        store.bind_agent_launch(identity, &workspace.session_name, cwd, &pane, None)?;
-    }
-    #[cfg(not(any(test, feature = "testkit")))]
-    let _ = new_pane;
-    wait_for_swap_bind(store, identity)
-}
-
-/// Wait until the swap's reservation stands: its wrapper bound it (a fresh
-/// launch) or the resumed session took its epoch. A reservation its wrapper
-/// or a stop failed, or one still unbound at the timeout, is an error.
-pub(super) fn wait_for_swap_bind(
-    store: &rimz::Store,
-    identity: &AgentLaunchIdentity,
-) -> Result<()> {
-    let (launch, epoch) = (identity.launch_id(), identity.launch.epoch.unwrap_or(0));
-    let timeout = swap_bind_wait();
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let rows = store.audit_rows()?;
-        if rimz::agents::state::epoch_stood(rows.iter(), launch, epoch) {
-            return Ok(());
-        }
-        let failed = rows.iter().any(|row| {
-            row.launch_key() == launch
-                && row.epoch == epoch
-                && row.agent_id.is_provisional()
-                && row.session_over()
-        });
-        if failed {
-            bail!("its reservation failed before binding");
-        }
-        if std::time::Instant::now() >= deadline {
-            bail!(
-                "it did not bind within {}",
-                rimz::harness::schedule::arm::duration_label(timeout)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn swap_bind_wait() -> Duration {
-    #[cfg(any(test, feature = "testkit"))]
-    if let Some(ms) = std::env::var("RIMZ_TEST_SWAP_BIND_WAIT_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-    {
-        return Duration::from_millis(ms);
-    }
-    rimz::store::writer::SWAP_BIND_WAIT
-}
-
-/// The swap's one error boundary: a placement that failed before the
-/// replacement bound fails its reservation, and the command fails saying the
-/// agent stays in its old session, or that a stop ended it. One that bound
-/// anyway carries on.
-pub(super) fn settle_placement(
-    store: &rimz::Store,
-    batch: &AgentLaunchBatch,
-    identity: &AgentLaunchIdentity,
-    agent: &AgentState,
-    verb: &str,
-    placed: Result<()>,
-    undo: impl FnOnce(),
-) -> Result<()> {
-    let Err(err) = placed else {
-        return Ok(());
-    };
-    let handle = handle(agent);
-    let aborted = match store.abort_agent_swap(identity, batch.scope()) {
-        Ok(SwapAbort::Cancelled) if stop_ends_source(store, identity) => Ok(SwapAbort::Ended),
-        aborted => aborted,
-    };
-    match aborted {
-        Ok(SwapAbort::Bound) => {
-            // The swap carries on, so the caller's cleanup must still run.
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "rimz: the replacement bound despite an error: {err:#}"
-            );
-            Ok(())
-        }
-        Ok(SwapAbort::Ended) => {
-            undo();
-            bail!(
-                "{verb} of {handle} failed: the replacement did not start ({err:#}); a stop \
-                 ended {handle} while its replacement was starting, so no session of it is running"
-            )
-        }
-        aborted => {
-            undo();
-            let unrecorded = aborted.err().map_or_else(String::new, |write| {
-                format!(" (its reservation could not be marked failed: {write:#})")
-            });
-            bail!(
-                "{verb} of {handle} failed: the replacement did not start ({err:#}){unrecorded}; \
-                 {handle} is still running in its old session, and nothing owed to it was touched"
-            )
-        }
-    }
-}
-
-/// Whether the stop that cancelled a swap's reservation goes on to end the
-/// session it would replace. Such a stop cancels before it closes the holder,
-/// so the end can land after the abort: wait for it within the stop's own
-/// owner-exit bound.
-fn stop_ends_source(store: &rimz::Store, identity: &AgentLaunchIdentity) -> bool {
-    let deadline = std::time::Instant::now() + rimz::store::runtime::OWNER_EXIT_BOUND;
-    loop {
-        match store.swap_source_ended(identity) {
-            Ok(true) => return true,
-            Err(_) => return false,
-            Ok(false) if std::time::Instant::now() >= deadline => return false,
-            Ok(false) => {}
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 /// Report on stderr what a swap left undone once its replacement had bound. The swap has
 /// succeeded by then, so the command still reports it and exits 0.
 fn warn_after_bound(undone: &str, result: Result<()>) {
     if let Err(err) = result {
         let _ = writeln!(crate::cli::render::err(), "warning: {undone}: {err:#}");
     }
-}
-
-/// Withdraw what belonged to the session a swap replaced: its hibernation and
-/// idle stop, and, once its conversation is over, its raised attention. The
-/// agent's waits stay armed for the session that holds it now. Runs after the
-/// replacement has bound, so a failure is a warning.
-pub(super) fn release_replaced(
-    ctx: &Ctx,
-    agent: &AgentState,
-    old_pane: &rimz::ids::PaneId,
-    conversation_over: bool,
-) {
-    warn_after_bound(
-        "the replaced session's idle stop and hibernation were not withdrawn",
-        rimz::harness::schedule::arm::release_replaced_session(
-            &ctx.workspace.project_root,
-            &agent.kind,
-            &agent.agent_id,
-            conversation_over,
-        )
-        .map_err(anyhow::Error::msg),
-    );
-    warn_after_bound(
-        &format!("the replaced session's pane {old_pane} was not woken from hibernation"),
-        rimz::harness::hibernate::wake_pane(&ctx.store, old_pane)
-            .map(drop)
-            .map_err(Into::into),
-    );
-}
-
-/// Close the pane of the session a swap replaced, warning with the pane left open when the
-/// multiplexer refuses. Nothing is closed, with a warning, when the read after the bind
-/// still finds the agent in that pane or could not be made.
-pub(super) fn close_replaced(
-    ctx: &Ctx,
-    backend: &dyn rimz::mux::MuxBackend,
-    old_pane: &rimz::ids::PaneId,
-    after_bind: Result<Option<AgentPane>, HostingErr>,
-) {
-    match after_bind {
-        Ok(Some(pane)) if pane.pane_id == *old_pane => {
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "warning: the agent is still in pane {old_pane} after its replacement bound; \
-                 the pane was not closed"
-            );
-            return;
-        }
-        Err(err) => {
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "warning: the replaced session's pane {old_pane} was not closed: reading where \
-                 the agent is after its replacement bound: {err}"
-            );
-            return;
-        }
-        Ok(_) => {}
-    }
-    warn_after_bound(
-        &format!("the replaced session's pane {old_pane} is still open"),
-        backend
-            .close_pane(&ctx.workspace.session_name, old_pane)
-            .context("closing the replaced agent pane"),
-    );
-}
-
-/// The `@rimz` section a fresh session of a swapped agent starts with, listing
-/// what is still outstanding for it, or `None` when nothing is. A molt's
-/// `note` goes first.
-pub(super) fn swap_briefing(
-    store: &rimz::Store,
-    agent: &AgentState,
-    agents: &[AgentState],
-    project_root: &Path,
-    note: Option<&str>,
-) -> Result<Option<String>> {
-    let children = rimz::address::launched_children(agents, agent)
-        .into_iter()
-        .filter(|child| !child.session_over())
-        .map(handle)
-        .collect::<Vec<_>>();
-    let runs = rimz::harness::run::list(store.paths())?;
-    // Runtime drops a subagent's ended children, so the answers they owe are
-    // read over every retained row: each launch's holder, so a swapped
-    // child's replaced session never stands in for the live one.
-    let audit = store.audit_rows()?;
-    let holders = rimz::agents::state::LaunchHolders::new(audit.iter());
-    let held = audit.iter().filter(|row| !holders.replaced(row));
-    let owed = rimz::harness::fleet::FleetRuns::of(held, &runs, agent)
-        .unreported()
-        .into_iter()
-        .filter(|(child, _)| child.is_launched_child() && child.session_over())
-        .map(|(child, _)| handle(child))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let catalog = rimz::harness::schedule::catalog::TaskCatalog::load(Some(project_root))?;
-    let rows = audit.iter().collect::<Vec<_>>();
-    let waits = rimz::harness::schedule::pending::session_deliveries(
-        &catalog,
-        project_root,
-        Some(agent),
-        &rows,
-    )
-    .map(|(name, _)| name.to_owned())
-    .collect::<Vec<_>>();
-    let messages = store
-        .list_messages()?
-        .into_iter()
-        .filter(|message| {
-            message.sender.is_conversation() && agent.card_ref().matches(message.card_ref())
-        })
-        .collect::<Vec<_>>();
-    let count = |status: rimz::store::message::MessageStatus| {
-        messages
-            .iter()
-            .filter(|message| message.status == status)
-            .count()
-    };
-    let queued = count(rimz::store::message::MessageStatus::Queued)
-        + count(rimz::store::message::MessageStatus::Claimed);
-    let unconfirmed = count(rimz::store::message::MessageStatus::Sent);
-    let section = briefing_section(&children, &owed, &waits, queued, unconfirmed);
-    Ok(match (note, section) {
-        (None, None) => None,
-        (Some(note), None) => Some(note.to_owned()),
-        (None, Some(section)) => Some(section),
-        (Some(note), Some(section)) => Some(format!("{note}\n\n{section}")),
-    })
-}
-
-fn briefing_section(
-    children: &[String],
-    owed: &[String],
-    waits: &[String],
-    queued: usize,
-    unconfirmed: usize,
-) -> Option<String> {
-    let plural = |count: usize, one: &str, many: &str| {
-        if count == 1 {
-            format!("1 {one}")
-        } else {
-            format!("{count} {many}")
-        }
-    };
-    let mut lines = Vec::new();
-    if !children.is_empty() {
-        lines.push(format!(
-            "- {} still running ({}); their results come to you: `rimz subagents list`",
-            plural(children.len(), "subagent", "subagents"),
-            children.join(", ")
-        ));
-    }
-    if !owed.is_empty() {
-        lines.push(format!(
-            "- {} finished with {} still owed to you ({}): `rimz subagents list`",
-            plural(owed.len(), "subagent", "subagents"),
-            if owed.len() == 1 {
-                "its answer"
-            } else {
-                "their answers"
-            },
-            owed.join(", ")
-        ));
-    }
-    if !waits.is_empty() {
-        lines.push(format!(
-            "- {} still armed for you ({}): `rimz wait list`",
-            plural(waits.len(), "wait or delivery", "waits or deliveries"),
-            waits.join(", ")
-        ));
-    }
-    if queued > 0 {
-        lines.push(format!(
-            "- {} queued for your next turn: `rimz message list`",
-            plural(queued, "message", "messages")
-        ));
-    }
-    if lines.is_empty() && unconfirmed == 0 {
-        return None;
-    }
-    let mut section = String::from(
-        "Type: SWAP_BRIEFING\nFrom: @rimz\nContent:\nThis is a fresh session of the same \
-         agent; the earlier conversation is gone, and RimZ kept what was outstanding for it.\n",
-    );
-    for line in &lines {
-        section.push_str(line);
-        section.push('\n');
-    }
-    if unconfirmed > 0 {
-        section.push_str(&format!(
-            "Sent into the earlier session and not yet confirmed as read; RimZ sends a \
-             message again, a command it does not:\n- {}: `rimz message list`\n",
-            plural(unconfirmed, "message", "messages")
-        ));
-    }
-    Some(section)
 }
 
 pub(in crate::cli) fn relaunch_action(
@@ -1120,22 +670,6 @@ fn handle(agent: &AgentState) -> String {
         .map_or_else(|| agent.agent_id.to_string(), |name| format!("@{name}"))
 }
 
-/// The open workflow session run `agent` leads. A restart or molt hands it to the replacement,
-/// so only the agent's holder session settles it, and a replaced session's exit never does.
-pub(super) fn open_session_run<'a>(
-    runs: &'a [rimz::store::run::RunRecord],
-    agent: &AgentState,
-) -> Option<&'a rimz::store::run::RunRecord> {
-    let attempt = agent.workflow.as_ref()?;
-    runs.iter().find(|run| {
-        run.lifecycle == rimz::store::run::RunLifecycle::Session
-            && !run.status.is_terminal()
-            && run.workflow.as_ref() == Some(attempt)
-            && run.agent_name.is_some()
-            && run.agent_name == agent.name
-    })
-}
-
 /// What a restart does with a child's newest run, as `(handed over, failed)`: an open run goes
 /// to the replacement when the session resumes and no interrupted turn is abandoned, and fails
 /// otherwise. A settled run stays unbound.
@@ -1153,209 +687,6 @@ fn open_run_fate(
     }
 }
 
-/// A relaunch request that carries `run` with its exit policy, as the resume doorway sets them.
-pub(in crate::cli) fn with_run(
-    request: ExecRequest,
-    run: &rimz::store::run::RunRecord,
-) -> ExecRequest {
-    let (close_pane_on_exit, exit_on_run_completion) =
-        rimz::harness::plan::run_exit_policy(!run.keep);
-    ExecRequest {
-        run_id: Some(run.run_id.clone()),
-        close_pane_on_exit,
-        exit_on_run_completion,
-        ..request
-    }
-}
-
-/// The relaunch pane's identity env, naming the lane the relaunch carries.
-pub(in crate::cli) fn relaunch_identity_env(
-    workspace: &rimz::workspace::ResolvedWorkspace,
-    cwd: &Path,
-    request: &ExecRequest,
-) -> std::collections::BTreeMap<String, String> {
-    let channel = (request.identity.params.lane.as_ref()).and_then(rimz::ids::Lane::pin_name);
-    rimz::room::pane_identity_env(
-        workspace,
-        cwd,
-        channel.as_ref().map(rimz::ids::LaneName::as_str),
-    )
-}
-
-pub(in crate::cli) fn relaunch_request(
-    agent: &AgentState,
-    posture: &ResumePosture,
-    action: ExecAction,
-    login: Option<rimz::ids::LoginName>,
-    fresh_identity: Option<&AgentLaunchIdentity>,
-) -> ExecRequest {
-    let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
-        Some(identity.name.as_str())
-    });
-    let restart_params = rimz::agents::LaunchParams {
-        automation: agent.automation.clone(),
-        checkout: agent.checkout.clone(),
-        add_dirs: agent.add_dirs.clone(),
-        untrusted_checkout: agent.untrusted_checkout,
-        molted_from: None,
-        record: posture.launch.record.clone(),
-        parent_agent_id: agent.parent_agent_id.clone(),
-        parent_agent_kind: agent.parent_agent_kind.clone(),
-        launch_depth: agent.launch_depth,
-        launched_by: agent.launched_by.clone().map(Box::new),
-        profile: agent.profile.clone(),
-        profile_scope: agent.profile_scope,
-        login: fresh_identity.map_or(login, |identity| identity.launch.login.clone()),
-        tier: posture.launch.tier.clone(),
-        role: agent.role.clone(),
-        team: agent.team.clone(),
-        loop_task: agent.loop_task.clone(),
-        loop_booked_by: agent.loop_booked_by.clone(),
-        loop_fire: agent.loop_fire.clone(),
-        workflow: None,
-        launch_group: agent.launch_group.clone(),
-        launch_ordinal: agent.launch_ordinal,
-        channel: None,
-        lane: agent.lane.clone(),
-        mode: posture.launch.mode,
-        isolation: agent.isolation,
-        model: posture.launch.model.clone(),
-        effort: posture.launch.effort.clone(),
-        fast: posture.launch.fast,
-        code_mode: posture.launch.code_mode,
-        budget: posture.launch.budget.clone(),
-        epoch: fresh_identity.map_or((agent.epoch > 0).then_some(agent.epoch), |identity| {
-            identity.launch.epoch
-        }),
-        kind_ordinal: None,
-    };
-    ExecRequest {
-        close_pane_on_exit: true,
-        subagent: agent.is_launched_child(),
-        identity: rimz::harness::launch::ExecIdentity {
-            row_key: fresh_identity.map(|identity| identity.agent_id.to_string()),
-            resume_model_override: false,
-            name: identity_name.map(ToOwned::to_owned),
-            name_explicit: fresh_identity
-                .map_or(agent.name_explicit, |identity| identity.name_explicit),
-            launch_id: fresh_identity
-                .map(|identity| identity.launch_id().to_string())
-                .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
-            params: restart_params,
-        },
-        ..posture.launch.exec_request(agent.kind.clone(), action)
-    }
-}
-
-/// The posture this restart replays, from the same seam resume uses.
-///
-/// Restart is interactive, so a profile that now names a different provider, a
-/// prompt replacement the provider cannot take, and a team prompt layer the seat
-/// cannot receive refuse here rather than degrading. Every other degrade prints
-/// and continues.
-pub(super) fn restart_posture(
-    agent: &AgentState,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-) -> Result<ResumePosture> {
-    let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
-    launch.block_set_failure()?;
-    let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
-    let profiles = launch.profiles_for_launch(scope, agent.profile.as_deref());
-    launch.block_failed_launch(
-        &agent.kind,
-        agent.profile.as_deref(),
-        agent.record.as_deref(),
-        profiles,
-    )?;
-    let posture = member_posture(agent, profiles, &launch.teams);
-    match &posture.degraded {
-        Some(reason @ PostureDegrade::KindChanged { .. }) => {
-            bail!(
-                "{reason}; launch it fresh to change providers (rimz agents <profile> --agent <kind>)"
-            )
-        }
-        Some(
-            reason @ (PostureDegrade::PromptUnsupported { .. }
-            | PostureDegrade::TeamPromptRejected { .. }),
-        ) => bail!("{reason}"),
-        Some(reason) => writeln!(
-            crate::cli::render::err(),
-            "rimz: {reason}; launching as bare {}",
-            agent.kind
-        )?,
-        None => {}
-    }
-    Ok(posture)
-}
-
-pub(super) fn member_posture(
-    agent: &AgentState,
-    profiles: &rimz::config::ProfilesConfig,
-    teams: &rimz::config::TeamsConfig,
-) -> ResumePosture {
-    rimz::harness::resume::resolve_member_posture(
-        rimz::harness::resume::PostureRequest {
-            record: agent.record.as_deref(),
-            profile: agent.profile.as_deref(),
-            kind: &agent.kind,
-            stamped_mode: agent.mode,
-            stamped_tier: agent.tier.as_deref(),
-        },
-        profiles,
-        teams,
-        agent.team.as_deref(),
-        agent.role.as_deref(),
-    )
-}
-
-/// The layout cell a fresh restart launches, carrying the replayed posture and
-/// the agent's durable identity.
-pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
-    Cell::Agent(AgentCell {
-        notices: posture.launch.notices.clone(),
-        empty_dir: None,
-        timeout: None,
-        resume_model_override: false,
-        kind: agent.kind.clone(),
-        args: posture.launch.args.clone(),
-        auto_compact: posture.launch.auto_compact.clone(),
-        tuning: posture.launch.tuning.clone(),
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-        team_prompt: None,
-        skills: posture.launch.skills.clone(),
-        mcps: posture.launch.mcps.clone(),
-        no_skill_tool: posture.launch.no_skill_tool,
-        allowed_tools: posture.launch.allowed_tools.clone(),
-        tools: posture.launch.tools.clone(),
-        isolation_default: posture.launch.isolation_default,
-        launch: rimz::agents::LaunchParams {
-            automation: agent.automation.clone(),
-            checkout: agent.checkout.clone(),
-            add_dirs: agent.add_dirs.clone(),
-            untrusted_checkout: agent.untrusted_checkout,
-            profile: agent.profile.clone(),
-            tier: posture.launch.tier.clone(),
-            record: Some(rimz::agents::LaunchRecord::replay_or_new(
-                posture.launch.record.as_deref(),
-                posture.launch.model.as_deref(),
-                posture.launch.effort.as_deref(),
-                posture.launch.fast,
-            )),
-            role: agent.role.clone(),
-            mode: posture.launch.mode,
-            isolation: agent.isolation,
-            model: posture.launch.model.clone(),
-            effort: posture.launch.effort.clone(),
-            fast: posture.launch.fast,
-            code_mode: posture.launch.code_mode,
-            budget: posture.launch.budget.clone(),
-            ..Default::default()
-        },
-    })
-}
-
 fn fresh_reason(resume_support: bool, session_present: bool) -> Option<FreshReason> {
     if !resume_support {
         Some(FreshReason::NoResumeSupport)
@@ -1364,50 +695,6 @@ fn fresh_reason(resume_support: bool, session_present: bool) -> Option<FreshReas
     } else {
         None
     }
-}
-
-pub(super) fn fresh_launch_request(
-    agent: &AgentState,
-    cell: Cell,
-    mode: Option<PermissionMode>,
-) -> Result<AgentLaunchRequest> {
-    let layout = LayoutSpec::single(cell);
-    let mut requests = rimz::harness::plan::launch_identity_requests(
-        &layout,
-        None,
-        None,
-        agent.team.as_deref(),
-        agent.lane.as_ref(),
-        None,
-        None,
-        None,
-    )?;
-    let request = requests
-        .first_mut()
-        .context("restart produced no fresh launch request")?;
-    request.name = agent.name.as_ref().map_or(AgentLaunchName::Mint, |name| {
-        AgentLaunchName::Soft(name.clone())
-    });
-    request.launch.profile = agent.profile.clone();
-    request.launch.profile_scope = agent.profile_scope;
-    request.launch.checkout = agent.checkout.clone();
-    request.launch.add_dirs.clone_from(&agent.add_dirs);
-    request.launch.untrusted_checkout = agent.untrusted_checkout;
-    request.launch.parent_agent_id = agent.parent_agent_id.clone();
-    request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
-    request.launch.launch_depth = agent.launch_depth;
-    request.launch.launched_by = agent.launched_by.clone().map(Box::new);
-    request.launch.mode = mode;
-    request.launch.isolation = agent.isolation;
-    request.launch.role = agent.role.clone();
-    request.launch.team = agent.team.clone();
-    request.launch.loop_task = agent.loop_task.clone();
-    request.launch.loop_booked_by = agent.loop_booked_by.clone();
-    request.launch.loop_fire = agent.loop_fire.clone();
-    request.launch.workflow = agent.workflow.clone();
-    request.launch.launch_group = agent.launch_group.clone();
-    request.launch.launch_ordinal = agent.launch_ordinal;
-    Ok(request.clone())
 }
 
 /// Fail a child's open run that this restart cannot carry over: the session launches fresh, or

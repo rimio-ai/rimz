@@ -1,4 +1,4 @@
-//! Shared launch preparation, admission, and pane execution.
+//! Shared launch preparation, admission, pane execution, and session swaps.
 
 pub mod agent_join;
 pub mod agent_pane;
@@ -6,10 +6,12 @@ pub mod checkout;
 pub mod context;
 mod execute;
 pub mod lsp_admission;
+pub mod molt;
 pub mod placement;
 mod reconcile;
 pub mod stop;
 mod supervised;
+pub mod swap;
 pub mod team_join;
 pub mod workflow_host;
 use execute::{FreshLaunch, PreparedState, SettledLayout};

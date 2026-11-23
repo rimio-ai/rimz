@@ -62,6 +62,7 @@ use super::usage::{UsageError, shell_command};
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
 use placement::{Placement, resolve_fork_placement};
+#[cfg(test)]
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, LifecycleRefreshRequest};
 use rimz::harness::AutoContinueRequest;
@@ -75,15 +76,15 @@ use rimz::harness::plan::{mint_launch_id, validate_agent_name};
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::SupervisedRunOutcome;
 use rimz::harness::run_timeout::RunTimeoutRequest;
-use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
+use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};
+use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::store::{
-    writer::AgentLaunchBatch, writer::AgentLaunchIdentity, writer::AgentLaunchName,
-    writer::AgentLaunchRequest, writer::AgentLaunchScope,
+    writer::AgentLaunchIdentity, writer::AgentLaunchName, writer::AgentLaunchRequest,
+    writer::AgentLaunchScope,
 };
 use rimz::workspace::WorkspaceResolver;
 
@@ -108,9 +109,7 @@ use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
-pub(in crate::cli) use restart::{
-    relaunch_action, relaunch_identity_env, relaunch_request, restart_resolved, with_run,
-};
+pub(in crate::cli) use restart::{relaunch_action, restart_resolved};
 use resume::resume_lane;
 pub(in crate::cli) use rimz::launcher::stop::newest_run_for_child;
 use run_timeout::run_timeout;
