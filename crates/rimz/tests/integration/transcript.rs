@@ -2172,6 +2172,45 @@ fn register_live_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &
     );
 }
 
+#[test]
+fn codex_blocking_answer_reaches_the_transcript() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let branch = "codex-blocking-answer";
+    let questions = json!({"questions": [
+        {"id": "path", "header": "Migration", "question": "Pick a path?", "options": [
+            {"label": "Blue", "description": "Safer rollout"},
+            {"label": "Green", "description": "Faster rollout"}
+        ]},
+        {"id": "notify", "header": "Notify", "question": "Notify users?", "options": [
+            {"label": "Email", "description": "Send email"},
+            {"label": "Slack", "description": "Post to Slack"}
+        ]}
+    ]});
+    for payload in [
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-codex-answer",
+            "worktree_branch": branch}),
+        json!({"hook_event_name": "PreToolUse", "session_id": "sess-codex-answer",
+            "worktree_branch": branch, "tool_name": "request_user_input",
+            "tool_input": questions, "tool_use_id": "call_probe1"}),
+        // The response as a live Codex 0.171.0 sends it: a string holding JSON.
+        json!({"hook_event_name": "PostToolUse", "session_id": "sess-codex-answer",
+            "worktree_branch": branch, "tool_name": "request_user_input",
+            "tool_input": questions, "tool_use_id": "call_probe1",
+            "tool_response":
+                "{\"answers\":{\"notify\":{\"answers\":[\"Slack\",\"user_note: page on-call\"]},\"path\":{\"answers\":[\"Blue\"]}}}"}),
+    ] {
+        run_hook(&env, "codex", payload);
+    }
+
+    let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
+    assert!(output.contains("● Blue — user"), "{output}");
+    assert!(output.contains("● Slack — user"), "{output}");
+    assert!(output.contains("page on-call"), "{output}");
+    assert!(!output.contains("user_note"), "{output}");
+    assert!(!output.contains("\"answers\""), "{output}");
+}
+
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
     let mut owner = dummy_agent_process(env);
     run_hook_for_owner(env, source, payload, owner.id());
