@@ -41,12 +41,11 @@ Each fact has one owning page; every other page links to it with a half-line of 
 
 How to find the sentences a change made false.
 
-- Grep also the verbs a removed mechanism is described by.
+- Grep also the verbs a removed mechanism is described by. When a second input joins an outcome one key decided, grep the old key beside the outcome's verbs in both orders (`'mcps.{0,60}(choos|decid|serv)'` and its reverse), not only the phrases the plan lists.
 - A set that gains or loses a member is found by two existing members joined by `.*` in both orders, by the old count beside the set's noun, and, where a table documents it, by one member as a cell (``rg -n '^\| `lifted` \|'``).
 - A renumbered list moves every citation by number (`check 13`). A page that gains a new kind of content updates its one-line summary on each page that links to it.
 - A renamed identifier's stem is also grepped over test function names without `-w` (`rg -n 'fn <stem>_'`), since `rg -w` cannot match `fn agent_breakdown_folds_tail`.
 - A changed argv is grepped with any separator between its tokens (`'attach.{1,4}--create'`): a test joins them with a tab or lists them as array elements.
-- A change that adds a second input to an outcome an existing key decided greps the old key beside the outcome's verbs in both orders (`rg -n --no-ignore-dot -e 'mcps.{0,60}(choos|serv|decid|keep|require)' -e '(choos|serv|decid|keep|require).{0,60}mcps' docs`), not only the phrases the plan lists.
 - Every `rg` names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` reads stdin and hangs.
 - A tree-wide sweep passes `--no-ignore-dot`, since the root `.ignore` skips `docs/externals/`, `examples/`, `supply-chain/`, and `CHANGELOG.md`, and `--hidden` or `.github` when workflows are in scope.
 - Scan Markdown with `rg -o '.{0,80}PATTERN.{0,80}'`, never `cut -c`: a paragraph is one line.
