@@ -234,6 +234,7 @@ impl AttemptHost for FakeHost {
         match observation {
             Observation::Attempt => observed.turn = None,
             Observation::LeaderTurn => self.turn_observations.set(self.turn_observations.get() + 1),
+            Observation::Census => unreachable!("the engine never observes for the limit census"),
         }
         Ok(observed)
     }

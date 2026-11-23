@@ -3,28 +3,56 @@ use rimz::agents::{
     AgentLifecycleObservation, LifecycleSignal, WorkflowAttemptRef, WorkflowAttemptRole,
 };
 
-fn fill_limit(room: &Room, source: &records::RunRecord) {
+/// Occupy the limit with a run of the same workflow whose leader works, or, `at_rest`, whose
+/// session leader closed its turn since the attempt was published.
+fn fill_limit(room: &Room, source: &records::RunRecord, at_rest: bool) {
     let state = room.env.state_path_for(&room.env.project_root);
     let mut record = serde_json::to_value(source).unwrap();
     let id = WorkflowRunId::new();
     let checkout = room.env.project_root.join("occupied");
+    let mut run = rimz::store::run::RunRecord::new(
+        room.env.workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "occupied".into(),
+        checkout.clone(),
+    );
+    run.agent_id = Some("existing".into());
+    run.status = rimz::store::run::RunStatus::Running;
+    run.workflow = Some(WorkflowAttemptRef {
+        run: id.clone(),
+        seq: 1,
+        role: WorkflowAttemptRole::Step,
+    });
     record["id"] = json!(id);
     record["scope"]["path"] = json!(checkout);
     record["attempt"] = json!({
         "kind":"agent", "seq":1, "node":"build", "started_at":jiff::Timestamp::now(),
         "host":{"pid":std::process::id(),"start":rimz::proc::process_start_token(std::process::id())},
-        "run":{"run_id":rimz::ids::RunId::new(),"handle":"@codex"}
+        "run":{"run_id":run.run_id,"handle":"@codex"}
     });
+    if at_rest {
+        record["attempt"]["lifecycle"] = json!("session");
+        rimz::harness::run::create(&state, &run).unwrap();
+    }
     let record: records::RunRecord = serde_json::from_value(record).unwrap();
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         records::initialize(&state, &record, &guard).unwrap();
     }
     let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let end = at_rest.then_some(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    });
     for signal in [
         LifecycleSignal::Registered,
         LifecycleSignal::TurnStarted { turn_id: None },
-    ] {
+    ]
+    .into_iter()
+    .chain(end)
+    {
         let mut observation = AgentLifecycleObservation::new(Some("existing".into()), signal);
         observation.agent_name = Some("existing".into());
         observation.worktree_path = Some(checkout.display().to_string());
@@ -148,7 +176,7 @@ fn restart_waits_for_window_and_capacity_and_refuses_layouts_over_a_machine_cap(
             .unwrap();
         }
         let record = pending(&room, Some("nightly"));
-        fill_limit(&room, &record);
+        fill_limit(&room, &record, false);
         success(
             room.command(&["workflow", "restart", record.id.as_str()])
                 .output()
@@ -193,7 +221,7 @@ fn off_steps_still_hold_at_the_machine_automation_cap() {
     config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
     fs::write(core, config).unwrap();
     let record = pending(&room, Some("nightly"));
-    fill_limit(&room, &record);
+    fill_limit(&room, &record, false);
     let value = advance(&room, &record);
     assert_eq!(
         value["record"]["wait"]["hold"], "automation_cap",
@@ -208,6 +236,16 @@ fn off_steps_still_hold_at_the_machine_automation_cap() {
 }
 
 #[test]
+fn a_session_waiting_for_the_user_frees_its_slot_for_the_next_start() {
+    let room = Room::new("[agent.build.admission]\nthrottle='off'\ngive-up='1h'\nmax-parallel=1\n");
+    let record = pending(&room, Some("nightly"));
+    fill_limit(&room, &record, true);
+    let value = advance(&room, &record);
+    assert!(value["record"]["wait"].is_null(), "{value:#}");
+    assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
+}
+
+#[test]
 fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() {
     let mut actual = Vec::new();
     for (edge, terminal) in [("", "failed"), ("on.capacity='after'\n", "done")] {
@@ -216,18 +254,18 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
         ));
         // A task-owned run as an older RimZ's loop fire wrote it: an automated start, held.
         let record = pending(&room, Some("nightly"));
-        fill_limit(&room, &record);
+        fill_limit(&room, &record, false);
         let mut value = advance(&room, &record);
         assert_eq!(value["record"]["wait"]["hold"], "step_limit", "{value:#}");
         assert_eq!(
             value["record"]["wait"]["detail"],
-            "step build: 1 of 1 agents open (@codex)"
+            "step build: 1 of 1 agents working (@codex)"
         );
         assert_eq!(value["record"]["visits"], json!({}));
         let listed = success(room.command(&["workflow", "list"]).output().unwrap());
         assert!(
             listed.contains(" · 1 held")
-                && listed.contains("step build: 1 of 1 agents open (@codex)"),
+                && listed.contains("step build: 1 of 1 agents working (@codex)"),
             "{listed}"
         );
         assert!(!listed.contains("NEEDS YOU"), "{listed}");
@@ -261,13 +299,13 @@ fn skipped_limited_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
         )
         .unwrap();
         let mut record = pending(&room, task);
-        fill_limit(&room, &record);
+        fill_limit(&room, &record, false);
         record.capacity = records::StartCapacity::Skip;
         save(&room, &serde_json::to_value(&record).unwrap());
         let before = jiff::Timestamp::now().as_millisecond();
         let value = advance(&room, &record);
         assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
-        let skipped = "workflow review: 1 of 1 agents open (@codex)";
+        let skipped = "workflow review: 1 of 1 agents working (@codex)";
         assert_eq!(
             value["record"]["attempt"]["started_past_limit"], skipped,
             "{value:#}"
@@ -397,7 +435,7 @@ fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() 
 fn lock_timeouts_leave_a_limit_wait_as_recorded_and_its_standing_ahead() {
     let room = Room::new("[agent.build.admission]\ngive-up='1h'\nmax-parallel=1\n");
     let record = pending(&room, Some("nightly"));
-    fill_limit(&room, &record);
+    fill_limit(&room, &record, false);
     let limited = advance(&room, &record);
     assert_eq!(
         limited["record"]["wait"]["hold"], "step_limit",

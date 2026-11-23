@@ -10,10 +10,7 @@ pub(super) fn has_pending_verdict(record: &RunRecord) -> bool {
 }
 
 pub(super) fn eligible(observed: &Observed) -> Option<&LeaderTurn> {
-    observed
-        .turn
-        .as_ref()
-        .filter(|turn| turn.at_rest && observed.ask.is_none() && observed.stopped.is_none())
+    observed.resting_turn(false)
 }
 
 pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool> {

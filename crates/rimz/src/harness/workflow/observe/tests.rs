@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::*;
 use crate::agents::{
     AgentContext, AgentStatus, AgentTurnError, AskRoute, BudgetPark, BudgetScope, BudgetWindow,
-    OpenAsk, PermissionMode, TurnErrorClass,
+    LifecycleSignal, OpenAsk, PermissionMode, TurnErrorClass, TurnPhase,
 };
 use crate::ids::{AgentKind, AskId, WorkspaceId};
 use crate::store::run::{RunStatus, StoppedTurn};
@@ -824,4 +824,304 @@ fn an_earlier_descendant_limit_does_not_hide_the_leaders_errored_turn() {
         Some("@leader"),
         "the hold names the leader's error"
     );
+}
+
+/// One session step as the census reads it: a leader that closed a turn after its attempt was
+/// published and rests with nothing owed.
+struct RestScene {
+    record: crate::store::workflow::RunRecord,
+    run: RunRecord,
+    leader: AgentState,
+    others: Vec<AgentState>,
+    asks: Vec<(&'static str, OpenAskDetail)>,
+    open_run: bool,
+    frame: bool,
+}
+
+fn rest_scene() -> RestScene {
+    let pin = pin();
+    let mut leader = pinned(row("leader", 90), &pin);
+    leader.status = AgentStatus::Idle;
+    leader.phase = crate::agents::TurnPhase::Idle;
+    leader.turn_started_at = Some(ago(50));
+    leader.turn_ended_at = Some(ago(40));
+    let mut run = leader_run(&leader);
+    run.workflow = Some(pin.clone());
+    let record = serde_json::from_value(serde_json::json!({
+        "version":crate::store::workflow::VERSION, "id":pin.run, "workflow":"review",
+        "task":"nightly", "spec_dir":"/defs", "scope":{"kind":"worktree", "path":"/repo"},
+        "project_root":"/repo", "created_at":ago(200), "entered_at":ago(100), "node":"build",
+        "state":"active", "visits":{}, "deadline_fired":false, "next_seq":2,
+        "attempt":{
+            "kind":"agent", "seq":1, "node":"build", "lifecycle":"session",
+            "started_at":ago(100), "host":{"pid":1,"start":null},
+            "run":{"run_id":run.run_id,"handle":"@leader"}
+        }
+    }))
+    .unwrap();
+    RestScene {
+        record,
+        run,
+        leader,
+        others: Vec::new(),
+        asks: Vec::new(),
+        open_run: false,
+        frame: false,
+    }
+}
+
+impl RestScene {
+    fn hold_at_check(&mut self, check: Option<serde_json::Value>) {
+        self.record.held = Some(crate::store::workflow::HeldSession {
+            attempt: self.record.attempt.take().unwrap(),
+            entered_at: ago(100),
+            verdict: None,
+        });
+        self.record.node = "check".into();
+        self.record.wait = check.map(|wait| serde_json::from_value(wait).unwrap());
+    }
+
+    fn waits(self) -> bool {
+        let (_dir, store) = store();
+        if self.open_run {
+            let mut other = leader_run(&self.leader);
+            other.run_id = crate::ids::RunId::new();
+            crate::harness::run::create(store.paths(), &other).unwrap();
+        }
+        if self.frame {
+            let frame = crate::store::ingress::HookIngress {
+                boot_id: None,
+                schema_version: "1".into(),
+                event_id: EventId::new(),
+                ts: Timestamp::now(),
+                source: self.leader.kind.clone(),
+                event: Some("UserPromptSubmit".into()),
+                payload: "{}".into(),
+                cwd: "/repo".into(),
+                hook_pid: std::process::id(),
+                env: [
+                    ("RIMZ_WORKFLOW_RUN".into(), self.record.id.to_string()),
+                    ("RIMZ_RUN_ID".into(), self.run.run_id.to_string()),
+                ]
+                .into(),
+            };
+            let guard =
+                crate::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)
+                    .unwrap();
+            crate::store::ingress::append(store.paths(), &frame, &guard).unwrap();
+        }
+        let rows = std::iter::once(self.leader).chain(self.others).collect();
+        let asks = self.asks;
+        session_rests::<StoreErr>(&store, &self.record, &self.run, &snapshot(rows), |agent| {
+            Ok(asks
+                .iter()
+                .find(|(id, _)| agent.agent_id.as_str() == *id)
+                .map(|(_, ask)| ask.clone()))
+        })
+        .unwrap()
+    }
+}
+
+/// The census's real read: a leader whose session attempt is published in a temp store, its
+/// rows folded from lifecycle events and its budget park only in its ledger.
+fn published_leader_waits(turn_open: bool, budget_parked: bool) -> bool {
+    let (_dir, store) = store();
+    let kind = AgentKind::new_unchecked("claude");
+    let signals = [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ];
+    let reopen = turn_open.then_some(LifecycleSignal::TurnStarted { turn_id: None });
+    for signal in signals.into_iter().chain(reopen) {
+        let observation =
+            crate::agents::AgentLifecycleObservation::new(Some("leader".into()), signal);
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "census-test",
+                agent_kind: kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    if budget_parked {
+        let mut ledger = crate::harness::budget::BudgetLedger::new("1".parse().unwrap());
+        ledger.parked = Some(crate::harness::budget::BudgetParkStamp {
+            at_cost: 2.0,
+            at: Timestamp::now(),
+        });
+        ledger.last_interrupt_at = Some(Timestamp::now());
+        crate::harness::budget::write_ledger(
+            store.runtime_paths(),
+            &kind,
+            &"leader".into(),
+            &ledger,
+        )
+        .unwrap();
+    }
+    let scene = rest_scene();
+    crate::harness::run::create(store.paths(), &scene.run).unwrap();
+    session_waits_for_user(&store, &scene.record).unwrap()
+}
+
+#[test]
+fn the_census_reads_a_published_session_from_the_rooms_own_store() {
+    assert!(
+        published_leader_waits(false, false),
+        "a leader at a clean rest waits"
+    );
+    assert!(
+        !published_leader_waits(true, false),
+        "a leader in a turn works"
+    );
+    assert!(
+        !published_leader_waits(false, true),
+        "a budget park that only the ledger holds keeps the slot"
+    );
+}
+
+fn check_wait(outcome: &str) -> serde_json::Value {
+    serde_json::json!({
+        "node":"check", "outcome":outcome, "first":ago(30), "last":ago(30), "count":1,
+        "recheck_at":null
+    })
+}
+
+#[test]
+fn a_session_waits_for_the_user_only_at_a_clean_rest_of_the_whole_step() {
+    type Change = fn(&mut RestScene);
+    let waiting: &[(&str, Change)] = &[
+        ("plain rest", |_| {}),
+        ("interrupted", |scene| {
+            scene.run.stopped_turn = Some(StoppedTurn {
+                at: ago(40),
+                disposition: StoppedTurnDisposition::Canceled,
+            });
+        }),
+        ("parked run", |scene| {
+            scene.record.state = crate::store::workflow::RunState::Parked;
+        }),
+        ("rest check answered wait", |scene| {
+            scene.hold_at_check(Some(check_wait("sleeping")));
+        }),
+        ("resting companion", |scene| {
+            let pin = scene.leader.workflow.clone().unwrap();
+            let mut companion = pinned(row("companion", 80), &pin);
+            companion.status = AgentStatus::Idle;
+            companion.phase = crate::agents::TurnPhase::Idle;
+            scene.others.push(companion);
+        }),
+    ];
+    let working: &[(&str, Change)] = &[
+        ("no row yet", |scene| {
+            scene.run.agent_id = Some("unregistered".into());
+        }),
+        ("before first turn", |scene| {
+            scene.leader.turn_started_at = None;
+            scene.leader.turn_ended_at = None;
+        }),
+        ("in a turn", |scene| {
+            scene.leader.status = AgentStatus::Running;
+            scene.leader.turn_started_at = Some(ago(10));
+        }),
+        ("old closed turn at publication", |scene| {
+            scene.record.attempt.as_mut().unwrap().started_at = ago(20);
+        }),
+        ("own blocking ask", |scene| {
+            scene
+                .asks
+                .push(("leader", ask(AskKind::Question, AskDelivery::Blocking)));
+        }),
+        ("descendant's blocking ask", |scene| {
+            scene.others.push(child("kid", "leader", 45));
+            scene
+                .asks
+                .push(("kid", ask(AskKind::Permission, AskDelivery::Blocking)));
+        }),
+        ("failed turn", |scene| {
+            scene.run.stopped_turn = Some(StoppedTurn {
+                at: ago(40),
+                disposition: StoppedTurnDisposition::Failed,
+            });
+        }),
+        ("provider limit", |scene| {
+            scene.leader = errored(scene.leader.clone(), 35, TurnErrorClass::PausedRateLimit);
+            scene.leader.status = AgentStatus::Paused;
+        }),
+        ("budget park", |scene| {
+            scene.leader = parked(scene.leader.clone(), 35);
+        }),
+        ("compacting", |scene| {
+            scene.leader.compacting_since = Some(ago(5));
+        }),
+        ("background shell", |scene| {
+            scene.leader.phase = TurnPhase::Parked;
+        }),
+        ("other open run", |scene| scene.open_run = true),
+        ("pending ingress of a new turn", |scene| scene.frame = true),
+        ("dead leader", |scene| {
+            scene.leader.runtime_owner = Some(crate::pane::RuntimeOwner {
+                kind: crate::pane::RuntimeOwnerKind::Daemon,
+                subject_id: "leader".into(),
+                pid: u32::MAX - 1,
+                process_start: Some("gone".into()),
+                ancestors: Vec::new(),
+            });
+        }),
+        ("rest check before it answers", |scene| {
+            scene.hold_at_check(None)
+        }),
+        ("rest check held on capacity", |scene| {
+            scene.hold_at_check(Some(check_wait("capacity")));
+        }),
+        ("rest check running", |scene| {
+            scene.hold_at_check(Some(check_wait("sleeping")));
+            let held = scene.record.held.as_ref().unwrap().attempt.clone();
+            scene.record.attempt = Some(crate::store::workflow::LiveAttempt {
+                kind: crate::store::workflow::AttemptKind::Judge,
+                seq: 2,
+                node: "check".into(),
+                run: None,
+                ..held
+            });
+        }),
+        ("prepared push-back", |scene| {
+            scene.record.attempt.as_mut().unwrap().push = Some(crate::store::workflow::PushBack {
+                message: crate::ids::MessageId::new(),
+                queued: false,
+            });
+        }),
+        ("turn step", |scene| {
+            scene.record.attempt.as_mut().unwrap().lifecycle =
+                crate::store::workflow::StepLifecycle::Turn;
+        }),
+        ("restart staged", |scene| {
+            scene.record.restart = Some(crate::store::workflow::Restart {
+                resume: None,
+                settled: None,
+            });
+        }),
+        ("companion in a turn", |scene| {
+            let pin = scene.leader.workflow.clone().unwrap();
+            scene.others.push(pinned(row("companion", 80), &pin));
+        }),
+    ];
+    let wrong: Vec<&str> = waiting
+        .iter()
+        .map(|case| (case, true))
+        .chain(working.iter().map(|case| (case, false)))
+        .filter(|((_, change), expected)| {
+            let mut scene = rest_scene();
+            change(&mut scene);
+            scene.waits() != *expected
+        })
+        .map(|((name, _), _)| *name)
+        .collect();
+    assert_eq!(wrong, Vec::<&str>::new());
 }

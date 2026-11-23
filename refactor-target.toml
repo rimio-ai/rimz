@@ -4710,7 +4710,8 @@ path = "crates/rimz/src/store"
 # ingress::drain_lag and HookDrainLag carry the oldest unapplied hook frame to the sidebar fold (+2).
 # The hand-off compaction premise is judged by message::premise through the record.
 # store::workflow::state_word is the one state word of a workflow run, for the CLI and the MCP join.
-surface-budget = 691
+# ingress::peek_pending and Wait::answered_by_check let the limit census read rest lock-free (+2).
+surface-budget = 693
 
 [[verdict]]
 kind = "item"
@@ -6069,7 +6070,8 @@ allowed-dependencies = [
 # extend and Extension record a `rimz workflow extend` grant and name the step it raised (+2).
 # started_runs_running names the runs a cancel leaves going, for the CLI receipt and the MCP stop (+1).
 # join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
-surface-budget = 119
+# session_waits_for_user lets the limit census ask whether a session step waits for the user (+1).
+surface-budget = 120
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -6178,6 +6180,8 @@ allowed-dependencies = [
     "harness::check_run",
     "harness::duration",
     "harness::loop_task",
+    # The limit census asks the workflow rules whether a session step waits for the user.
+    "harness::workflow",
     "ids",
     "proc",
     "proc::memory",

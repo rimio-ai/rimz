@@ -11,7 +11,9 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::{Limited, Observation, Observed, StopKind, Stopped, WorkflowErr, leader_turn};
+use super::{
+    Limited, Observation, Observed, StopKind, Stopped, WorkflowErr, census_turn, leader_turn,
+};
 use crate::Store;
 use crate::agents::{AgentState, AskDelivery, AskKind, OpenAskDetail, WorkflowAttemptRef};
 use crate::disk::paths::StatePaths;
@@ -112,12 +114,160 @@ pub fn observe<E: From<StoreErr>>(
             }
         }
     }
-    if matches!(observation, Observation::LeaderTurn)
-        && let Some(workflow) = &run.workflow
-    {
-        observed.turn = leader_turn(store, root, &workflow.run, &run.run_id, woken_by)?;
+    if let Some(workflow) = &run.workflow {
+        match observation {
+            Observation::Attempt => {}
+            Observation::LeaderTurn => {
+                observed.turn = leader_turn(store, root, &workflow.run, &run.run_id, woken_by)?;
+            }
+            Observation::Census => {
+                observed.turn = census_turn(store, root, &workflow.run, &run.run_id)?;
+            }
+        }
     }
     Ok(observed)
+}
+
+/// Why the limit census could not read a room.
+struct Unreadable(String);
+
+impl From<StoreErr> for Unreadable {
+    fn from(error: StoreErr) -> Self {
+        Self(error.to_string())
+    }
+}
+
+/// Whether the session step `record` holds waits for the user, so it holds no limit slot. Takes
+/// no lock and writes nothing, from any room's process. Doubt reads as working: a record that
+/// names no readable supervised run answers false, and `Err` is a room that cannot be read.
+pub(in crate::harness) fn session_waits_for_user(
+    store: &Store,
+    record: &crate::store::workflow::RunRecord,
+) -> Result<bool, String> {
+    let Some(handle) = resting_attempt(record).and_then(|attempt| attempt.run.as_ref()) else {
+        return Ok(false);
+    };
+    let Ok(run) = crate::harness::run::load(store.paths(), &handle.run_id) else {
+        return Ok(false);
+    };
+    let mut snapshot = store.snapshot_cached().map_err(|error| error.to_string())?;
+    let now = snapshot.now;
+    if !leader(&snapshot, &run)
+        .is_some_and(|row| crate::harness::idle_stop::resting(row, now).is_ok())
+    {
+        return Ok(false);
+    }
+    crate::harness::budget::project_parks(
+        |_| false,
+        &mut snapshot,
+        store.runtime_paths(),
+        Some(store.paths()),
+        &crate::config::MachineConfig::load_lenient(),
+    );
+    session_rests(store, record, &run, &snapshot, |agent| {
+        crate::agents::read_open_ask(store.paths(), agent, None)
+            .map_err(|error| Unreadable(error.to_string()))
+    })
+    .map_err(|Unreadable(text)| text)
+}
+
+/// The session attempt of `record` when the record allows it to rest: a session step with no
+/// ending, restart, or unqueued push-back, and, if held at a rest check, one whose check has
+/// answered that it waits. While the check runs, or its launch waits, the session counts.
+fn resting_attempt(
+    record: &crate::store::workflow::RunRecord,
+) -> Option<&crate::store::workflow::LiveAttempt> {
+    let attempt = record.session_attempt()?;
+    let check_answered = record.held.as_ref().is_none_or(|held| {
+        record.attempt.is_none()
+            && held.verdict.is_none()
+            && record
+                .wait
+                .as_ref()
+                .is_some_and(crate::store::workflow::Wait::answered_by_check)
+    });
+    (!attempt.lifecycle.is_turn()
+        && attempt.ending.is_none()
+        && record.restart.is_none()
+        && attempt.push.as_ref().is_none_or(|push| push.queued)
+        && check_answered)
+        .then_some(attempt)
+}
+
+/// The rest check's reading of the step, with its three differences for the census: an
+/// interrupted turn rests ([`Observed::resting_turn`]), every live agent the attempt pins must
+/// rest too, and a pending ingress frame of any agent of the workflow run defers rest
+/// ([`census_turn`], which reads ingress with no lock).
+/// A companion that never opened a turn is at rest. The leader's turn must have closed since the
+/// attempt was published, since a resumed session carries its old closed turn on its row.
+fn session_rests<E: From<StoreErr>>(
+    store: &Store,
+    record: &crate::store::workflow::RunRecord,
+    run: &RunRecord,
+    snapshot: &SidebarSnapshot,
+    mut open_ask: impl FnMut(&AgentState) -> Result<Option<OpenAskDetail>, E>,
+) -> Result<bool, E> {
+    let Some(attempt) = resting_attempt(record) else {
+        return Ok(false);
+    };
+    let Some(root) = leader(snapshot, run) else {
+        return Ok(false);
+    };
+    if crate::store::runtime::agent_liveness(root) == crate::store::runtime::AgentLiveness::Dead
+        || root
+            .turn_ended_at
+            .is_none_or(|ended| ended < attempt.started_at)
+    {
+        return Ok(false);
+    }
+    let pin = WorkflowAttemptRef {
+        run: record.id.clone(),
+        seq: attempt.seq,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    };
+    let now = Timestamp::now();
+    let companions: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| {
+            agent.workflow.as_ref() == Some(&pin)
+                && agent.ended_at.is_none()
+                && !agent.is_provider_subagent()
+                && !run.matches_agent(agent)
+        })
+        .collect();
+    if companions.iter().any(|agent| {
+        crate::harness::idle_stop::resting(agent, now).is_err()
+            || agent.displayed_turn_error(now).is_some()
+    }) {
+        return Ok(false);
+    }
+    let observed = observe(
+        store,
+        run,
+        snapshot,
+        Observation::Census,
+        None,
+        &mut open_ask,
+        |_| None,
+    )?;
+    if observed.resting_turn(true).is_none() {
+        return Ok(false);
+    }
+    if companions.is_empty() {
+        return Ok(true);
+    }
+    let messages = store.list_messages()?;
+    let runs = crate::harness::run::listing(store.paths()).map_err(StoreErr::from)?;
+    for agent in companions {
+        if crate::harness::idle_stop::debt(store, &messages, &runs, agent)?.is_some()
+            || (!agent.is_reviewing_permission(snapshot.now)
+                && open_ask(agent)?.is_some_and(|ask| ask.delivery == AskDelivery::Blocking))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// `agent`'s displayed turn error as a stop: a rate or spend limit stops as a limit, any other
