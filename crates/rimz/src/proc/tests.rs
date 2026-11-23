@@ -58,8 +58,12 @@ fn stdio_terminal_reads_a_live_childs_descriptors() {
     let _master = pty.master;
     let tty = std::fs::File::from(pty.slave);
     let on_tty = || Stdio::from(tty.try_clone().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let to_file = || Stdio::from(std::fs::File::create(dir.path().join("out")).unwrap());
     let cases = [
         (on_tty(), on_tty(), StdioTerminal::Terminal),
+        (on_tty(), to_file(), StdioTerminal::Terminal),
+        (Stdio::piped(), to_file(), StdioTerminal::NotTerminal),
         (on_tty(), Stdio::piped(), StdioTerminal::NotTerminal),
         (Stdio::null(), on_tty(), StdioTerminal::NotTerminal),
         (Stdio::null(), Stdio::null(), StdioTerminal::NotTerminal),

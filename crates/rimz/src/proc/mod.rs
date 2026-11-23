@@ -783,23 +783,26 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
     })
 }
 
-/// Whether a process's standard input and output are a terminal: the mark of a CLI a
-/// person drives, as against one a command runs for its output.
+/// Whether a process's standard input is a terminal and its output a terminal or a
+/// file: the mark of a CLI a person drives, as against one a command runs for its
+/// output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StdioTerminal {
-    /// fd 0 and fd 1 are both a tty or a pty, whichever terminal that is. Only the
-    /// Linux reader can prove it.
+    /// fd 0 is a tty or a pty, whichever terminal that is, and fd 1 is one too or a
+    /// regular file. Only the Linux reader can prove it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Terminal,
-    /// fd 0 or fd 1 was read and is not a terminal: a pipe, a socket, a file, `/dev/null`.
+    /// fd 0 was read and is not a terminal, or fd 1 was read and is neither a terminal
+    /// nor a regular file: a pipe, a socket, `/dev/null`.
     NotTerminal,
     /// Neither is proven: a descriptor cannot be read (another uid, another user
     /// namespace, a process gone), or the platform has no reader.
     Unreadable,
 }
 
-/// Whether fd 0 and fd 1 of `pid` are a terminal, decided from the file type and
-/// device major the `/proc/<pid>/fd` links resolve to. It never opens a descriptor's
+/// Whether fd 0 of `pid` is a terminal and fd 1 a terminal or a regular file, decided
+/// from the file type and device major the `/proc/<pid>/fd` links resolve to. A
+/// version probe piped from a command still fails on fd 0. It never opens a descriptor's
 /// target, since opening another process's pty or pipe has side effects and can
 /// block, and it asks no filesystem server: `AT_STATX_DONT_SYNC` has NFS and FUSE
 /// answer from cached attributes, so a hung mount behind a redirect cannot stall it.
@@ -808,7 +811,7 @@ fn stdio_terminal(pid: u32) -> StdioTerminal {
     memo::stdio_terminal(pid, || {
         #[cfg(any(test, feature = "testkit"))]
         count(Counter::ProcStdio);
-        let reads = [0, 1].map(|fd| {
+        let [stdin, stdout] = [0, 1].map(|fd| {
             rustix::fs::statx(
                 rustix::fs::CWD,
                 format!("/proc/{pid}/fd/{fd}"),
@@ -817,18 +820,27 @@ fn stdio_terminal(pid: u32) -> StdioTerminal {
             )
             .ok()
         });
-        if reads
-            .iter()
-            .flatten()
-            .any(|target| !is_terminal_device(target))
+        if stdin
+            .as_ref()
+            .is_some_and(|target| !is_terminal_device(target))
+            || stdout
+                .as_ref()
+                .is_some_and(|target| !is_terminal_device(target) && !is_regular_file(target))
         {
             StdioTerminal::NotTerminal
-        } else if reads.iter().all(Option::is_some) {
+        } else if stdin.is_some() && stdout.is_some() {
             StdioTerminal::Terminal
         } else {
             StdioTerminal::Unreadable
         }
     })
+}
+
+/// A regular file: where a CLI a person drives may send its output, a log.
+#[cfg(target_os = "linux")]
+fn is_regular_file(target: &rustix::fs::Statx) -> bool {
+    rustix::fs::FileType::from_raw_mode(u32::from(target.stx_mode))
+        == rustix::fs::FileType::RegularFile
 }
 
 /// A tty (major 4), `/dev/tty` or the console (major 5), or a pty slave (136-143).

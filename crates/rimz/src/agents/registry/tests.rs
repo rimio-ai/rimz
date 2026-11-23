@@ -331,6 +331,24 @@ fn command_agent_kind_combines_descriptors_with_process_policy() {
 }
 
 #[test]
+fn exec_wrapper_classifies_as_its_kind_for_every_adapter() {
+    for definition in all_definitions() {
+        let kind = definition.spec().kind;
+        let command = format!(
+            "/home/me/.cargo/bin/rimz agents exec {kind} --worktree-path /repo/wt \
+             --request-file /runtime/exec.json --supervise /tmp/unit/supervise.json"
+        );
+        assert_eq!(command_agent_kind(&command), Some(kind), "{command}");
+        assert!(command_may_be_agent_kind(&command, kind), "{command}");
+        assert_eq!(
+            command_agent_kind_candidate(&command),
+            Some(kind),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn command_agent_kind_uses_precise_comm_without_claiming_launchers() {
     for (comm, expected) in [
         ("claude", Some("claude")),

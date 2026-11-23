@@ -314,7 +314,13 @@ impl LaunchCapability for MiniMaxAdapter {
         let Some(words) = shlex::split(command) else {
             return false;
         };
-        let program = crate::proc::command::effective_program_info(command).program;
+        let program = crate::proc::command::effective_program_info(command);
+        // RimZ's `rimz agents exec minimax` wrapper launches the interactive CLI
+        // only, and its own flags are not mcode's.
+        if program.from_exec_wrapper {
+            return true;
+        }
+        let program = program.program;
         let start = words.iter().position(|word| word == program).unwrap_or(0);
         let mut words = words.iter().skip(start + 1);
         let is_prompt = |word: &str| {

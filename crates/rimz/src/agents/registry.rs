@@ -332,6 +332,9 @@ fn adapter_matches_program(
     program: crate::proc::command::EffectiveProgram<'_>,
 ) -> bool {
     let definition = adapter.spec();
+    if program.from_exec_wrapper {
+        return program.program == definition.kind;
+    }
     let label = crate::proc::command::basename(program.program);
     let from_launcher = program.program != program.root_program
         && crate::proc::command::is_launcher(program.root_program);

@@ -513,8 +513,12 @@ fn launch_and_process_identity_match_mcode() {
     for name in ["node", "minimax-code"] {
         assert!(definition.spec().process_names.contains(&name));
     }
-    for command in ["mcode", "mcode --model minimax/model -- hello"] {
-        assert!(definition.is_interactive_process(command));
+    for command in [
+        "mcode",
+        "mcode --model minimax/model -- hello",
+        "/bin/rimz agents exec minimax --request-file exec",
+    ] {
+        assert!(definition.is_interactive_process(command), "{command}");
     }
     for command in ["mcode exec hello", "mcode acp"] {
         assert!(!definition.is_interactive_process(command));
