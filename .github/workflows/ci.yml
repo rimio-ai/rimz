@@ -533,6 +533,11 @@ jobs:
     concurrency:
       group: ci-commit-${{ github.sha }}-live-tests
       cancel-in-progress: ${{ github.event_name == 'push' }}
+    env:
+      # From the compile's last request to the stats step, the job makes no
+      # compile request for longer than sccache's 600-second idle default, and
+      # a stopped server takes its counters with it.
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - name: Assert running in the rimz-ci image
         run: |
