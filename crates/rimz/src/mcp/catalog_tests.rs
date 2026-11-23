@@ -430,9 +430,11 @@ fn lsp_passes_a_server_except_to_check() {
 }
 
 #[test]
-fn ambiguous_tune_and_note_arguments_are_refused() {
+fn ambiguous_or_empty_arguments_are_refused() {
     for (name, arguments) in [
         ("self_tune", json!({"value": "budget"})),
+        ("self_molt", json!({"prompt": ""})),
+        ("self_molt", json!({"prompt": " \n"})),
         (
             "notes",
             json!({"kind": "k", "title": "t", "body": "b", "file": "/f"}),
