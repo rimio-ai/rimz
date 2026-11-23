@@ -24,15 +24,17 @@ pub enum Capability {
     Lsp,
     Wait,
     Subagents,
+    Workflow,
     Control,
     Notes,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 5] = [
+    pub const ALL: [Capability; 6] = [
         Self::Lsp,
         Self::Wait,
         Self::Subagents,
+        Self::Workflow,
         Self::Control,
         Self::Notes,
     ];
@@ -40,7 +42,7 @@ impl Capability {
     /// Whether the group's tools start things, which `tasks`, `join`, and `stop` list, await,
     /// and end.
     pub fn starts_things(self) -> bool {
-        matches!(self, Self::Wait | Self::Subagents)
+        matches!(self, Self::Wait | Self::Subagents | Self::Workflow)
     }
 
     /// The capability's name, which is also the name of the skill it matches.
@@ -49,6 +51,7 @@ impl Capability {
             Self::Lsp => "rimz-lsp",
             Self::Wait => "rimz-wait",
             Self::Subagents => "rimz-subagents",
+            Self::Workflow => "rimz-workflow",
             Self::Control => "rimz-control",
             Self::Notes => "rimz-notes",
         }
@@ -102,6 +105,7 @@ pub enum Call {
     Lsp(LspArgs),
     Wait(WaitArgs),
     Subagent(SubagentArgs),
+    Workflow(WorkflowArgs),
     Tasks(TasksArgs),
     Join(JoinArgs),
     Stop(StopArgs),
@@ -218,7 +222,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 12] = [
+pub static TOOLS: [Tool; 13] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -254,6 +258,18 @@ pub static TOOLS: [Tool; 12] = [
         schema: schema::<SubagentArgs>,
         output: Some(start_schema),
         parse: |arguments| parse::<SubagentArgs>(arguments).map(Call::Subagent),
+    },
+    Tool {
+        name: "workflow",
+        capability: Some(Capability::Workflow),
+        purpose: Purpose::Workflows,
+        read_only: false,
+        command: "workflow run",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<WorkflowArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<WorkflowArgs>(arguments).map(Call::Workflow),
     },
     Tool {
         name: "tasks",
@@ -382,6 +398,7 @@ pub enum Purpose {
     Code,
     Start,
     Delegate,
+    Workflows,
     Started,
     Yourself,
     Notes,
@@ -395,6 +412,7 @@ impl Purpose {
             Self::Code => "read code",
             Self::Start => "wait outside your turn",
             Self::Delegate => "delegate",
+            Self::Workflows => "run workflows",
             Self::Started => "track what you started",
             Self::Yourself => "manage yourself",
             Self::Notes => "keep notes",
@@ -761,6 +779,47 @@ impl ToolArgs for SubagentArgs {
             .into_iter()
             .find(|(_, value)| value.trim().is_empty())
             .map(|(field, _)| format!("`{field}` is blank"))
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowArgs {
+    /// The deployed workflow's name; a path is refused.
+    pub name: String,
+    /// Run in this RimZ-owned worktree, created when missing; refused by a project-scoped
+    /// workflow.
+    pub worktree: Option<String>,
+    /// Text added to every agent and message step's prompt in this run.
+    pub prompt: Option<String>,
+    /// The start node's input: an object with a string `outcome`, and a `key`, when given,
+    /// that is a string or an integer and becomes the run's key.
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Replace the definition's deadline: a duration, `HH:MM`, `<weekday> HH:MM`, or a date.
+    pub deadline: Option<String>,
+    /// Give up capacity waits at this time; takes what `deadline` takes.
+    pub give_up: Option<String>,
+    /// Launch agent steps past every capacity hold.
+    #[serde(default)]
+    pub skip_capacity: bool,
+    /// Send no report when the run ends, for a run you will not be there for.
+    #[serde(default)]
+    pub detach: bool,
+}
+
+impl ToolArgs for WorkflowArgs {
+    fn refusal(&self) -> Option<String> {
+        let mut components = std::path::Path::new(&self.name).components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
+            return Some("`name` is a deployed workflow's name, not a path".to_owned());
+        }
+        self.worktree
+            .as_deref()
+            .is_some_and(|worktree| worktree.trim().is_empty())
+            .then(|| "`worktree` is blank".to_owned())
     }
 }
 

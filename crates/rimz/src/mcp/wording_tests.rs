@@ -334,6 +334,8 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
     let served = vec![
         "rimz-wait/conditions".to_owned(),
         "rimz-subagents/delegating".to_owned(),
+        "rimz-workflow/steering".to_owned(),
+        "rimz-workflow/debugging".to_owned(),
         "rimz-control/fresh-eyes".to_owned(),
     ];
     assert_eq!(

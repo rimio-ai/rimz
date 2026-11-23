@@ -15,10 +15,11 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 12] = [
+const ALL_TOOLS: [&str; 13] = [
     "lsp",
     "wait",
     "subagent",
+    "workflow",
     "tasks",
     "join",
     "stop",
@@ -786,7 +787,10 @@ fn launch_env_serves_the_launchs_selection_in_its_directory() {
     let (text, is_error) = server.call(2, "tasks", json!({}));
     assert!(is_error, "{text}");
     assert!(
-        text.contains(&format!("no room at {}", launched.display())),
+        text.contains(&format!(
+            "no room at {}: run `rimz start` there\"",
+            launched.display()
+        )),
         "{text}"
     );
     server.close();
@@ -833,7 +837,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-workflow, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -959,7 +963,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-control, rimz-notes"
         ),
         "{stderr}"
     );
@@ -1778,7 +1782,9 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"),
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-control, rimz-notes"
+        ),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
@@ -1821,6 +1827,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "rimz-lsp",
         "rimz-wait",
         "rimz-subagents",
+        "rimz-workflow",
         "rimz-control",
         "rimz-notes",
     ] {
@@ -1859,7 +1866,9 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
     let out = explain("xmark");
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"),
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-control, rimz-notes"
+        ),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
@@ -1889,7 +1898,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     // A profile that allows no subagents is served no subagent tool and offered no skill.
     let out = explain("cmute");
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes\n"),
+        out.contains("serves rimz-lsp, rimz-wait, rimz-workflow, rimz-control, rimz-notes\n"),
         "{out}"
     );
     assert!(!out.contains("rimz-subagents"), "{out}");
@@ -1987,7 +1996,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -2002,7 +2011,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -3146,6 +3155,315 @@ fn a_stopped_workflow_run_reads_as_ended_and_settles_as_a_cli_cancel_does() {
     assert!(finished && cli_finished, "both homes are finished");
     let settled = |record: &Value| (record["state"].clone(), record["loop_report"].clone());
     assert_eq!(settled(&record), settled(&cli), "{record:#}\n{cli:#}");
+}
+
+/// A definition whose one script holds the run live until it is canceled.
+const HELD_WORKFLOW: &str = "[workflow]\nscope = 'worktree'\nstart = 'hold'\n\
+    [script.hold]\nrun = 'sleep 300'\ntimeout = '1h'\non = { done = '@done' }\n";
+
+fn deploy_workflow(env: &Env, name: &str, spec: &str) {
+    let dir = env.rimz_home().join("workflows").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workflow.toml"), spec).unwrap();
+    std::fs::write(dir.join("prompt.md"), "Build it").unwrap();
+}
+
+fn live_run_ids(env: &Env) -> Vec<String> {
+    rimz::store::workflow::live_runs(&env.state_path_for(&env.project_root))
+        .unwrap()
+        .into_iter()
+        .map(|record| record.id.to_string())
+        .collect()
+}
+
+/// A run the tool starts is its caller's from the tool's answer on: `tasks` lists it, `join`
+/// reads it running, and the returned stop call cancels it. The record names the caller.
+#[test]
+fn a_workflow_the_tool_starts_is_listed_joined_and_stopped_by_its_caller() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    deploy_workflow(&env, "held", HELD_WORKFLOW);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(
+        1,
+        "workflow",
+        json!({"name": "held", "prompt": "keep the API", "deadline": "8h"}),
+    );
+    assert!(!is_error, "{start}");
+    let [run] = live_run_ids(&env).try_into().expect("one live run");
+    let id = format!("workflow:{run}");
+    assert_eq!(
+        start,
+        json!({
+            "id": id,
+            "status": "running",
+            "stop": format!("stop({{id: \"{id}\"}})"),
+            "report": "a WORKFLOW_REPORT message to you at your next turn boundary after the \
+                       run ends",
+        })
+    );
+    let (record, _) = run_record(&env, &run);
+    assert_eq!(
+        record["starter"],
+        json!({"by": "agent", "kind": "claude", "launch": "launch-session"}),
+        "{record:#}"
+    );
+    assert_eq!(record["loop_report"], json!("owed"), "{record:#}");
+    assert_eq!(record["prompt"], json!("keep the API"), "{record:#}");
+    assert!(record["deadline"].is_string(), "{record:#}");
+
+    let (listed, is_error) = server.answer(2, "tasks", json!({"kind": "workflow"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [id.as_str()], "{listed}");
+    let (joined, is_error) = server.answer(3, "join", json!({"id": id, "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined, json!({"id": id, "status": "running"}));
+    let (stopped, is_error) = server.answer(4, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+    assert_eq!(run_record(&env, &run).0["state"], json!("canceled"));
+    server.close();
+}
+
+/// The run's input reaches its record whole, and its `key` becomes the run's.
+#[test]
+fn a_workflow_the_tool_starts_reads_its_input_back_from_the_run() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    deploy_workflow(&env, "held", HELD_WORKFLOW);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let input = json!({"outcome": "green", "key": "pr-7", "detail": {"checks": 3}});
+    let (start, is_error) = server.answer(
+        1,
+        "workflow",
+        json!({"name": "held", "input": input.clone()}),
+    );
+    assert!(!is_error, "{start}");
+    let [run] = live_run_ids(&env).try_into().expect("one live run");
+    let (record, _) = run_record(&env, &run);
+    assert_eq!(record["input"], input, "{record:#}");
+    assert_eq!(record["key"], json!("pr-7"), "{record:#}");
+    let (stopped, _) = server.answer(2, "stop", json!({"id": format!("workflow:{run}")}));
+    assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+    server.close();
+}
+
+/// `detach` reaches the run's record, and the answer promises no report.
+#[test]
+fn a_detached_workflow_answers_that_no_report_comes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    deploy_workflow(&env, "held", HELD_WORKFLOW);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(1, "workflow", json!({"name": "held", "detach": true}));
+    assert!(!is_error, "{start}");
+    assert_eq!(
+        start["report"],
+        json!("no message when the run ends; `join` waits on it"),
+        "{start}"
+    );
+    let [run] = live_run_ids(&env).try_into().expect("one live run");
+    assert_eq!(run_record(&env, &run).0["loop_report"], json!("none"));
+    let (stopped, _) = server.answer(2, "stop", json!({"id": format!("workflow:{run}")}));
+    assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+    server.close();
+}
+
+/// A validation warning the command prints to stderr reaches the caller in `warnings`.
+#[test]
+fn a_workflow_definition_warning_reaches_the_answer() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    deploy_workflow(
+        &env,
+        "fan",
+        "[workflow]\nscope = 'worktree'\nstart = 'spread'\n\
+         [runs.spread]\nstart = [{ workflow = 'ghost' }]\ntimeout = '1m'\nthen = '@done'\n",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(1, "workflow", json!({"name": "fan"}));
+    assert!(!is_error, "{start}");
+    assert_eq!(
+        start["warnings"],
+        json!([
+            "warning: runs.spread.start.0.workflow: ghost is not a deployed workflow; the step \
+             fails when it starts it"
+        ]),
+        "{start}"
+    );
+    server.close();
+}
+
+/// Each refusal of `rimz workflow run` reaches the caller as the tool's error, and nothing
+/// starts.
+#[test]
+fn the_workflow_tool_refuses_what_the_command_refuses() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    deploy_workflow(&env, "held", HELD_WORKFLOW);
+    deploy_workflow(
+        &env,
+        "whole",
+        "[workflow]\nscope = 'project'\nstart = 'hold'\n\
+         [script.hold]\nrun = 'true'\ntimeout = '1m'\non = { done = '@done' }\n",
+    );
+    deploy_workflow(
+        &env,
+        "agentic",
+        "[workflow]\nscope = 'worktree'\nstart = 'build'\n\
+         [agent.build]\nagent = 'claude'\nprompt-file = 'prompt.md'\nthen = '@done'\n\
+         lifecycle = 'turn'\n",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let home = env.rimz_home().join("workflows");
+    let (failure, is_error) = server.answer(1, "workflow", json!({"name": "ghost"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!(format!(
+            "ghost: no workflow of that name in {} or an installed pack",
+            home.display()
+        ))
+    );
+    let (failure, is_error) = server.answer(2, "workflow", json!({"name": "./held"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("invalid arguments: `name` is a deployed workflow's name, not a path")
+    );
+    let (failure, is_error) = server.answer(
+        3,
+        "workflow",
+        json!({"name": "held", "deadline": "whenever"}),
+    );
+    assert!(is_error, "{failure}");
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid deadline `whenever`: "),
+        "{failure}"
+    );
+    let (failure, is_error) =
+        server.answer(4, "workflow", json!({"name": "whole", "worktree": "feat"}));
+    assert!(is_error, "{failure}");
+    let error = failure["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("whole has scope = project, so it runs at ")
+            && error.ends_with("; start it without `worktree`"),
+        "{failure}"
+    );
+    let (failure, is_error) =
+        server.answer(9, "workflow", json!({"name": "held", "worktree": "feat"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("`worktree` requires a git repository-backed room")
+    );
+    for (id, input, reason) in [
+        (
+            10,
+            json!({"key": "pr-7"}),
+            "expected an object with a string `outcome`",
+        ),
+        (
+            11,
+            json!({"outcome": 7}),
+            "expected an object with a string `outcome`",
+        ),
+        (
+            12,
+            json!({"outcome": "go", "key": true}),
+            "expected a `key` that is a string or an integer",
+        ),
+    ] {
+        let (failure, is_error) =
+            server.answer(id, "workflow", json!({"name": "held", "input": input}));
+        assert!(is_error, "{failure}");
+        assert_eq!(failure["error"], json!(format!("invalid input: {reason}")));
+    }
+    let (failure, is_error) = server.answer(13, "workflow", json!({"name": "held", "input": []}));
+    assert!(is_error, "{failure}");
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid arguments: "),
+        "{failure}"
+    );
+    let (failure, is_error) = server.answer(5, "workflow", json!({"name": "agentic"}));
+    assert!(is_error, "{failure}");
+    let error = failure["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("workflow start refused; nothing was created:\n- ")
+            && error.contains("(blocks build)"),
+        "{failure}"
+    );
+    assert_eq!(live_run_ids(&env), Vec::<String>::new());
+
+    let (started, is_error) = server.answer(6, "workflow", json!({"name": "held"}));
+    assert!(!is_error, "{started}");
+    let [run] = live_run_ids(&env).try_into().expect("one live run");
+    let (failure, is_error) = server.answer(7, "workflow", json!({"name": "held"}));
+    assert!(is_error, "{failure}");
+    assert!(
+        failure["error"].as_str().unwrap().contains(&run),
+        "the overlap names the live run: {failure}"
+    );
+    assert_eq!(live_run_ids(&env), vec![run.clone()]);
+    let (stopped, _) = server.answer(8, "stop", json!({"id": format!("workflow:{run}")}));
+    assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+    server.close();
+}
+
+/// A caller RimZ cannot identify starts nothing, and neither does one inside an inline run,
+/// whose start would record no starter.
+#[test]
+fn the_workflow_tool_starts_nothing_for_a_caller_it_could_not_own_it_for() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    deploy_workflow(&env, "held", HELD_WORKFLOW);
+    let mut command = env.rimz();
+    command.args(["mcp", "serve"]);
+    let mut stranger = McpServer::spawn(command);
+    stranger.initialize();
+    let (failure, is_error) = stranger.answer(1, "workflow", json!({"name": "held"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("starting a workflow is only available to an agent RimZ can identify"),
+        "{failure}"
+    );
+    assert_eq!(live_run_ids(&env), Vec::<String>::new());
+    stranger.close();
+
+    crate::common::wait::register_calling_agent(&env);
+    let inline = seed_started_run(&env, "launch-session", json!({"origin": "inline"}));
+    let mut command = crate::common::wait::agent_wait(&env);
+    command
+        .args(["mcp", "serve"])
+        .env("RIMZ_WORKFLOW_RUN", &inline);
+    let mut inside = McpServer::spawn(command);
+    inside.initialize();
+    let (failure, is_error) = inside.answer(1, "workflow", json!({"name": "held"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("a workflow started here would record no agent as its starter, so nothing started"),
+        "{failure}"
+    );
+    assert_eq!(live_run_ids(&env), [inline]);
+    inside.close();
 }
 
 /// A schedule the agent booked: `join` answers that its outcome comes by message, and

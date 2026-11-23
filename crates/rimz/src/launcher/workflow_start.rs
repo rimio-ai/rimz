@@ -167,6 +167,8 @@ pub struct WorkflowStart<'a> {
     pub name: &'a Path,
     pub dir: PathBuf,
     pub worktree: Option<&'a str>,
+    /// How a refusal names `worktree` to this caller: the command's flag or the tool's argument.
+    pub worktree_arg: &'a str,
     pub prompt: Option<String>,
     pub args: workflow::StartArgs,
     pub origin: StartOrigin,
@@ -186,6 +188,7 @@ pub fn start(
         name,
         dir,
         worktree,
+        worktree_arg,
         prompt,
         mut args,
         origin,
@@ -196,7 +199,7 @@ pub fn start(
     let definition = workflow::load(&dir)?;
     if worktree.is_some() && definition.scope() == workflow::ScopeKind::Project {
         bail!(
-            "{} has scope = project, so it runs at {}; start it without -w",
+            "{} has scope = project, so it runs at {}; start it without {worktree_arg}",
             workflow::directory_name(&dir).unwrap_or_else(|| dir.display().to_string()),
             workspace.project_root.display()
         );
@@ -286,6 +289,9 @@ pub fn start(
     refuse_unwritable_home("started")?;
     let scope = match worktree {
         Some(name) => {
+            if name.trim().is_empty() {
+                bail!("{worktree_arg} takes a worktree name");
+            }
             match named_checkout(workspace, store, machine, name, fire.as_ref(), interaction)? {
                 Some(scope) => scope,
                 None => return Ok(None),
@@ -344,9 +350,6 @@ fn named_checkout(
     fire: Option<&crate::ids::FireId>,
     interaction: &mut dyn Interaction,
 ) -> Result<Option<PathBuf>> {
-    if name.trim().is_empty() {
-        bail!("-w takes a worktree name");
-    }
     if !super::checkout::confirm_cross_repo_worktree(workspace, interaction)? {
         return Ok(None);
     }
