@@ -67,6 +67,12 @@ criteria = "safe-to-deploy"
 delta = "1.1.10 -> 1.1.11"
 notes = "AI source review by an Opus 5.5 subagent. Both published archive SHA-256 values independently matched the baseline (origin/main) and updated workspace lockfiles; compared the extracted registry sources with diff -ruN. Reviewed every production source and manifest change (21 files). Changes: the zio Writer gains a finished state and buffer position; write-side decoders' finish/try_finish now return UnexpectedEof on truncated input while reset drains; per-backend flush; zlib-rs uninit forwarders, and resets keep window bits and gzip mode; the miniz backend uses FullReset to clear the dictionary; the libz-sys reset now asserts the inflateReset2 return code inside its existing unsafe block. The zlib-rs requirement was already satisfied by the lockfile. No new unsafe operation, dependency, build script, network, process, environment or filesystem access. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.form_urlencoded]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values independently matched the old and new workspace lockfile checksums; compared the extracted packages with diff -ruN. Reviewed the complete production source and manifest delta. Serializer::for_suffix now clamps an out-of-range start_position to the target length instead of panicking; later appends still write through the existing serializer at or after that position. The percent-encoding requirement rises from 2.3.0 to 2.3.2, and the packaged Cargo.lock drops its version line. No unsafe, build script, I/O, process, network, or new dependency. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.granit-parser]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
