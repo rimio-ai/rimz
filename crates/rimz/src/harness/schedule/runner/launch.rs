@@ -219,7 +219,10 @@ impl Fire<'_> {
     }
 
     /// A live run of workflow `name` in the firing checkout that a person started, which the
-    /// fire would only collide with; a try (`run --once`) collides with nothing.
+    /// fire would only collide with; a try (`run --once`) collides with nothing. A deployed run
+    /// through another link to the same real directory is the same workflow, as the overlap
+    /// check in `create` holds. An unreadable deployed set only loses that wording: `create`
+    /// still refuses the launch.
     pub(super) fn hand_started_run(
         &self,
         state: &StatePaths,
@@ -242,15 +245,41 @@ impl Fire<'_> {
             }
             None => self.launch_checkout().canonicalize()?,
         };
-        Ok(crate::store::workflow::live_runs(state)?
+        let (named, others): (Vec<_>, Vec<_>) = crate::store::workflow::live_runs(state)?
             .into_iter()
-            .find(|run| {
+            .filter(|run| {
                 !run.state.is_terminal()
                     && run.task.is_none()
                     && !run.once
-                    && run.workflow == name
                     && run.scope.path == checkout
-            }))
+            })
+            .partition(|run| run.workflow == name);
+        if let Some(run) = named.into_iter().next() {
+            return Ok(Some(run));
+        }
+        if others.is_empty() {
+            return Ok(None);
+        }
+        let home = crate::disk::paths::agents_home();
+        let Ok(deployed) = crate::harness::workflow::Deployed::load(&home) else {
+            return Ok(None);
+        };
+        let Some(dir) = deployed
+            .find(name)
+            .ok()
+            .flatten()
+            .and_then(|dir| dir.canonicalize().ok())
+        else {
+            return Ok(None);
+        };
+        Ok(others.into_iter().find(|run| {
+            run.origin == crate::store::workflow::RunOrigin::Deployed
+                && run
+                    .spec_dir
+                    .as_deref()
+                    .and_then(|live| live.canonicalize().ok())
+                    .is_some_and(|live| live == dir)
+        }))
     }
 
     /// The neutral `overlapped` row naming the hand-started run; the trigger is not held.

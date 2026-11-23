@@ -595,6 +595,52 @@ fn a_workflow_fire_publishes_the_tasks_run_and_a_hand_started_run_overlaps_it() 
     std::fs::write(&release, "").unwrap();
 }
 
+/// A hand-started run through one link holds a task of another link to the same directory, and
+/// the fire names it as started by hand.
+#[cfg(unix)]
+#[test]
+fn a_workflow_fire_sees_a_hand_started_run_through_another_link() {
+    let env = live_room();
+    let release = env.home_root.join("release");
+    deploy_workflow(
+        &env,
+        "first",
+        "worktree",
+        &format!(
+            "while [ ! -e {:?} ]; do sleep 0.05; done",
+            release.display().to_string()
+        ),
+    );
+    let workflows = env.rimz_home().join("workflows");
+    std::os::unix::fs::symlink(workflows.join("first"), workflows.join("second")).unwrap();
+    loop_ok(
+        &env,
+        &["loop", "add", "wf", "--workflow", "second", "--every", "1h"],
+    );
+    let hand = env
+        .rimz()
+        .args(["workflow", "run", "first"])
+        .output()
+        .unwrap();
+    assert!(hand.status.success(), "{hand:?}");
+    let rows = read_loop_run_records(&env).len();
+    loop_ok(&env, &["loop", "run", "wf"]);
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), rows + 1, "{records:?}");
+    let overlapped = records.last().unwrap();
+    assert_eq!(
+        overlapped.result,
+        LoopRunResult::Overlapped,
+        "{overlapped:?}"
+    );
+    let detail = format!("{overlapped:?}");
+    assert!(
+        detail.contains("of `first` was started by hand — skipped"),
+        "{detail}"
+    );
+    std::fs::write(&release, "").unwrap();
+}
+
 /// A workflow task's steps read the fire's evidence as `RIMZ_LOOP_TRIGGER`, never the run's
 /// `--prompt`, and still get it when the task passes no prompt.
 #[cfg(unix)]
