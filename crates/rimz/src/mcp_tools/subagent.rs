@@ -82,15 +82,32 @@ pub(super) fn launch(tools: &Tools, args: &SubagentArgs) -> Result<Answer, Failu
         completion: RunCompletion::Detached,
     };
     let mut notices = CollectedNotices::default();
-    match crate::launcher::launch_background(&request, context, &mut notices)? {
-        BackgroundLaunchOutcome::Launched(child) => Ok(Answer::data(&Start {
-            warnings: notices.0,
-            ..Start::running(TaskKind::Subagent, &child.name, REPORT)
-        })),
-        BackgroundLaunchOutcome::BudgetExceeded { reason } => Err(Failure::new(reason)),
-        BackgroundLaunchOutcome::Aborted => Err(Failure::new(
+    let outcome = crate::launcher::launch_background(&request, context, &mut notices);
+    let warnings = notices.0;
+    let failure = match outcome {
+        Ok(BackgroundLaunchOutcome::Launched(child)) => {
+            return Ok(Answer::data(&Start {
+                warnings,
+                ..Start::running(TaskKind::Subagent, &child.name, REPORT)
+            }));
+        }
+        Ok(BackgroundLaunchOutcome::BudgetExceeded { reason }) => Failure::new(reason),
+        Ok(BackgroundLaunchOutcome::Aborted) => Failure::new(
             "the launch was declined or found an open launch of the same name; nothing launched",
         )
-        .with_hint("call `tasks` to see what you have running")),
+        .with_hint("call `tasks` to see what you have running"),
+        Err(err) => Failure::from(err),
+    };
+    Err(with_warnings(failure, warnings))
+}
+
+/// `failure` with the notices collected before it, which the command would already have
+/// printed; a failure with none keeps its plain shape.
+fn with_warnings(mut failure: Failure, warnings: Vec<String>) -> Failure {
+    if !warnings.is_empty() {
+        failure
+            .extra
+            .insert("warnings".to_owned(), serde_json::json!(warnings));
     }
+    failure
 }

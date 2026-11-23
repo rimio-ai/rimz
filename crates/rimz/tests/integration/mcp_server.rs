@@ -609,6 +609,37 @@ fn a_subagent_call_launches_a_child_of_the_caller_from_outside_the_room() {
         json!(["warning: `qwen` effort high is unsupported on qwen; launching without it"]),
         "{answer}"
     );
+
+    // A timeout past the last representable instant fails after the plan's notice.
+    let (answer, is_error) = server.answer(
+        4,
+        "subagent",
+        json!({
+            "profile": "qwen",
+            "prompt": "audit the lexer",
+            "effort": "high",
+            "timeout": "100000000h",
+        }),
+    );
+    assert!(is_error, "{answer}");
+    assert!(
+        answer["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("computing subagent kill deadline")),
+        "{answer}"
+    );
+    assert_eq!(
+        answer["warnings"],
+        json!(["warning: `qwen` effort high is unsupported on qwen; launching without it"]),
+        "{answer}"
+    );
+    assert_eq!(
+        rimz::harness::run::list(store.paths())
+            .expect("list runs")
+            .len(),
+        2,
+        "the failed launch starts no run"
+    );
 }
 
 /// The id of each row a `tasks` answer lists.
