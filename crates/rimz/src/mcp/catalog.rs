@@ -26,17 +26,19 @@ pub enum Capability {
     Subagents,
     Workflow,
     Loop,
+    Message,
     Control,
     Notes,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 7] = [
+    pub const ALL: [Capability; 8] = [
         Self::Lsp,
         Self::Wait,
         Self::Subagents,
         Self::Workflow,
         Self::Loop,
+        Self::Message,
         Self::Control,
         Self::Notes,
     ];
@@ -58,6 +60,7 @@ impl Capability {
             Self::Subagents => "rimz-subagents",
             Self::Workflow => "rimz-workflow",
             Self::Loop => "rimz-loop",
+            Self::Message => "rimz-message",
             Self::Control => "rimz-control",
             Self::Notes => "rimz-notes",
         }
@@ -113,6 +116,7 @@ pub enum Call {
     Subagent(SubagentArgs),
     Workflow(WorkflowArgs),
     Schedule(Box<ScheduleArgs>),
+    Message(MessageArgs),
     Tasks(TasksArgs),
     Join(JoinArgs),
     Stop(StopArgs),
@@ -233,7 +237,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 14] = [
+pub static TOOLS: [Tool; 15] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -295,6 +299,18 @@ pub static TOOLS: [Tool; 14] = [
         parse: |arguments| {
             parse::<ScheduleArgs>(arguments).map(|args| Call::Schedule(Box::new(args)))
         },
+    },
+    Tool {
+        name: "message",
+        capability: Some(Capability::Message),
+        purpose: Purpose::Message,
+        read_only: false,
+        command: "message",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<MessageArgs>,
+        output: Some(message_schema),
+        parse: |arguments| parse::<MessageArgs>(arguments).map(Call::Message),
     },
     Tool {
         name: "tasks",
@@ -425,6 +441,7 @@ pub enum Purpose {
     Delegate,
     Workflows,
     Schedule,
+    Message,
     Started,
     Yourself,
     Notes,
@@ -440,6 +457,7 @@ impl Purpose {
             Self::Delegate => "delegate",
             Self::Workflows => "run workflows",
             Self::Schedule => "schedule launches",
+            Self::Message => "message other agents",
             Self::Started => "track what you started",
             Self::Yourself => "manage yourself",
             Self::Notes => "keep notes",
@@ -1036,6 +1054,17 @@ pub enum ScheduleOverlap {
     Allow,
 }
 
+/// How a message reaches its receiver, as `rimz message` sends it bare, with `--steer`, or
+/// with `--interrupt`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageMode {
+    #[default]
+    Park,
+    Steer,
+    Interrupt,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleArgs {
@@ -1079,6 +1108,34 @@ impl ToolArgs for ScheduleArgs {
             }
         }
         self.run.refusal()
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MessageArgs {
+    /// The receiver: `@handle`, or `@handle#channel` in another channel.
+    pub to: String,
+    /// The message, delivered as written.
+    pub text: String,
+    /// `park` (default) lands it now or at the next turn boundary, `steer` into the running
+    /// turn, `interrupt` types it and stops the turn.
+    #[serde(default)]
+    pub mode: MessageMode,
+    /// Send to each agent `to` matches, where it matches several.
+    #[serde(default)]
+    pub all: bool,
+    /// Mark the receiver's header as wanting a message back.
+    #[serde(default)]
+    pub reply_wanted: bool,
+}
+
+impl ToolArgs for MessageArgs {
+    fn refusal(&self) -> Option<String> {
+        [("to", &self.to), ("text", &self.text)]
+            .into_iter()
+            .find(|(_, value)| value.trim().is_empty())
+            .map(|(field, _)| format!("`{field}` is blank"))
     }
 }
 
@@ -1257,6 +1314,28 @@ fn start_schema() -> Value {
             "warnings": array_of(string()),
         }),
         &["id", "status", "stop", "report"],
+    )
+}
+
+/// One row per message `message` recorded, with the agents compacted first and the warnings
+/// of the send.
+fn message_schema() -> Value {
+    let row = object(
+        serde_json::json!({
+            "to": string(),
+            "message_id": string(),
+            "status": { "type": "string", "enum": ["sent", "queued", "not_sent"] },
+            "detail": string(),
+        }),
+        &["to", "message_id", "status"],
+    );
+    object(
+        serde_json::json!({
+            "messages": array_of(row),
+            "compacted": array_of(string()),
+            "warnings": array_of(string()),
+        }),
+        &["messages"],
     )
 }
 

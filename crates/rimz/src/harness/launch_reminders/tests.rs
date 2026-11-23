@@ -1007,9 +1007,9 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
 - rimz-subagents: the `subagent` tool of the `{server}` MCP server
 - rimz-workflow: the `workflow` tool of the `{server}` MCP server
 - rimz-loop: the `schedule` tool of the `{server}` MCP server
+- rimz-message: the `message` tool of the `{server}` MCP server
 - rimz-control: the {control} of the `{server}` MCP server
-- rimz-notes: the `notes` tool of the `{server}` MCP server
-- rimz-message: Skill(rimz-message)"
+- rimz-notes: the `notes` tool of the `{server}` MCP server"
         ))
     };
     assert_eq!(actual, [served("rimz"), served("rimz_tools")]);
@@ -1089,11 +1089,11 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
                 skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
             request.rimz_capabilities = Some(vec![
                 "rimz-lsp:deferred".parse().unwrap(),
-                "rimz-message".parse().unwrap(),
+                "rimz-reflect".parse().unwrap(),
             ]);
             let reminders = LaunchReminders {
                 mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
-                rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+                rimz_skills: rimz_skills(&["rimz-lsp", "rimz-reflect", "rimz-wait"]),
                 ..LaunchReminders::default()
             };
             let names: Vec<_> = reminders
@@ -1101,7 +1101,7 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
                 .into_iter()
                 .map(|(name, _)| name)
                 .collect();
-            assert_eq!(names, ["rimz-lsp", "rimz-message"], "{kind}");
+            assert_eq!(names, ["rimz-lsp", "rimz-reflect"], "{kind}");
             actual.push(capabilities_paragraph_of(&render(
                 &request,
                 &reminders,
@@ -1113,12 +1113,12 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
     let served = Some(format!(
         "{CAPABILITIES_LEAD}\
 - rimz-lsp: the `lsp` tool of the `rimz` MCP server
-- rimz-message: Skill(rimz-message)"
+- rimz-reflect: Skill(rimz-reflect)"
     ));
     let skills = Some(format!(
         "{CAPABILITIES_LEAD}\
 - rimz-lsp: Skill(rimz-lsp)
-- rimz-message: Skill(rimz-message)"
+- rimz-reflect: Skill(rimz-reflect)"
     ));
     assert_eq!(actual, [served.clone(), served, skills.clone(), skills]);
 }
@@ -1155,10 +1155,12 @@ fn a_child_has_no_rimz_subagents_as_tool_or_skill() {
         let paragraph =
             capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
                 .unwrap();
-        assert!(
-            paragraph.contains("- rimz-message: Skill(rimz-message)"),
-            "{paragraph}"
-        );
+        let message = if served {
+            "- rimz-message: the `message` tool of the `rimz` MCP server"
+        } else {
+            "- rimz-message: Skill(rimz-message)"
+        };
+        assert!(paragraph.contains(message), "{paragraph}");
         assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
         assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
     }
@@ -1193,10 +1195,12 @@ fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
         let paragraph =
             capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
                 .unwrap();
-        assert!(
-            paragraph.contains("- rimz-message: Skill(rimz-message)"),
-            "{paragraph}"
-        );
+        let message = if served {
+            "- rimz-message: the `message` tool of the `rimz` MCP server"
+        } else {
+            "- rimz-message: Skill(rimz-message)"
+        };
+        assert!(paragraph.contains(message), "{paragraph}");
         assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
         assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
     }

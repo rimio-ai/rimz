@@ -483,7 +483,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -526,7 +526,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         &[],
     ));
     let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,\
-                 rimz-workflow:deferred,rimz-loop:deferred,rimz-control:deferred,rimz-notes:deferred";
+                 rimz-workflow:deferred,rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -566,7 +566,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-control,rimz-notes",
+            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -1040,7 +1040,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     assert_eq!(plan.mcp_capabilities, served(&[Capability::Subagents]));
     assert_eq!(
         plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
-        Some("rimz-lsp,rimz-wait,rimz-workflow,rimz-loop,rimz-control,rimz-notes")
+        Some("rimz-lsp,rimz-wait,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes")
     );
 }
 
@@ -1112,7 +1112,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
         "--always",
         "rimz-lsp"
     ]);
-    let grant = ["rimz-lsp:always", "rimz-wait", "rimz-message"];
+    let grant = ["rimz-lsp:always", "rimz-wait", "rimz-reflect"];
     let mut actual = Vec::new();
     for mcps in [None, Some(&["github"][..]), Some(&[][..])] {
         let plan = compile("claude", &grant, mcps);
@@ -1139,7 +1139,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
             ),
         ]
     );
-    let skills_only = compile("claude", &["rimz-message"], None);
+    let skills_only = compile("claude", &["rimz-reflect"], None);
     assert_eq!(claude_entry(&skills_only.process().provider_argv), None);
     assert_eq!(
         allowlist(&claude_settings(&skills_only.process().provider_argv)),

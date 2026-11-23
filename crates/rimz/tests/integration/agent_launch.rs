@@ -6682,6 +6682,7 @@ fn explain_prints_the_plan_without_side_effects() {
           "rimz-subagents",
           "rimz-workflow",
           "rimz-loop",
+          "rimz-message",
           "rimz-control",
           "rimz-notes"
         ],
@@ -7372,6 +7373,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
                 "rimz-lsp",
                 "rimz-wait",
                 "rimz-workflow",
+                "rimz-message",
                 "rimz-control",
                 "rimz-notes"
             ]),
