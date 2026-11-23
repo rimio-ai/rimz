@@ -135,7 +135,7 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | native idle compaction | `idleCompaction: false` when RimZ covers the seat, unless launch settings already set it ([settings merge](#settings-merge)) |
 | native auto-continue at a usage limit | `autoContinueAtUsageLimit: true` when `resume.auto_continue` is on, unless launch settings already set it ([settings merge](#settings-merge)); RimZ's rate-limit fallback waits a five-minute grace past the reset ([auto-continue](./providers.md#fire)) |
 | compaction command | `/compact <brief>` |
-| Native delegation disabled | for a `rimz subagents` child, or a launch with [callable `rimz-subagents`](../harness/fleet.md#launch-reminders) and an available catalog, `--disallowedTools` gains `Agent` in one final occurrence, even when `tools:` lists it |
+| Native delegation disabled | for a `rimz subagents` child, or a launch with [callable `rimz-subagents` or the served `subagent` tool](../harness/fleet.md#launch-reminders) and an available catalog, `--disallowedTools` gains `Agent` in one final occurrence, even when `tools:` lists it |
 | shared language servers configured | with the MCP `lsp` tool or callable `rimz-lsp`, `--disallowedTools` gains `LSP` ([native LSP denial](#native-lsp-denial)) |
 | skills home | `<config home>/skills` |
 | temp root | `CLAUDE_CODE_TMPDIR` set to the launch's `TMPDIR` (`temp_dir_env_keys`), so Claude's internal temp files land in the agent's temp unit on macOS too, where Claude ignores `TMPDIR` ([upstream](../../externals/agent-adapter/claude-reference.md#temp-root)). Under scoped isolation the value is `/tmp`. |

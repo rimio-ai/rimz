@@ -6176,7 +6176,9 @@ fn explain_prints_the_plan_without_side_effects() {
     assert!(!reminder.contains("git status"));
     assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
     assert!(!reminder.contains("effort"));
-    assert!(!reminder.contains("### Subagents"));
+    assert!(reminder.contains(
+        "Launch them through the `subagent` tool of the `rimz` MCP server, subagents available"
+    ));
     assert!(!reminder.contains("### Skills"));
     assert!(!reminder.contains("Skill(rimz-"));
     assert!(reminder.ends_with("\n</system_reminder>"));
@@ -6268,6 +6270,7 @@ fn explain_prints_the_plan_without_side_effects() {
         "hidden": [
           "rimz-lsp",
           "rimz-wait",
+          "rimz-subagents",
           "rimz-control",
           "rimz-notes"
         ],

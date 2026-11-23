@@ -3412,9 +3412,12 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
     let machine = rimz::config::MachineConfig::default();
     let vars = environment(&env);
     let mut actual = Vec::new();
-    for child in [false, true] {
+    // A parent that serves no RimZ capability keeps the skill; one that serves
+    // `rimz-subagents` withholds it as it withholds any served capability's skill.
+    for (child, mcps) in [(false, Some(Vec::new())), (false, None), (true, None)] {
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
         request.subagent = child;
+        request.mcps = mcps;
         let plan =
             rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
                 request: &request,
@@ -3457,6 +3460,10 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
         actual,
         [
             vec!["commit\n", "rimz-subagents\n"],
+            vec![
+                "commit\n",
+                "---\ndisable-model-invocation: true\n---\nrimz-subagents\n"
+            ],
             vec![
                 "commit\n",
                 "---\ndisable-model-invocation: true\n---\nrimz-subagents\n"

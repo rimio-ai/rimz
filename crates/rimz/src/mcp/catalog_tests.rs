@@ -52,6 +52,11 @@ fn capability_names_round_trip_and_become_only_arguments() {
         ["wait", "tasks", "join", "stop", "guide"]
     );
     assert_eq!(
+        names(&[Capability::Subagents]),
+        ["subagent", "tasks", "join", "stop", "guide"]
+    );
+    assert!(Capability::Subagents.starts_things());
+    assert_eq!(
         names(&[Capability::Lsp, Capability::Notes]),
         ["lsp", "notes"]
     );
@@ -97,6 +102,21 @@ fn calls_carry_their_arguments_as_data() {
         (join.id.as_str(), join.timeout.as_deref()),
         ("wait:$(id)", Some("-1s"))
     );
+    let Call::Subagent(subagent) = call(
+        "subagent",
+        json!({"profile": "--help", "prompt": "-p $(id)", "cwd": "../other", "timeout": "90m"}),
+    ) else {
+        panic!("a subagent call");
+    };
+    assert_eq!(
+        (subagent.profile.as_str(), subagent.prompt.as_str()),
+        ("--help", "-p $(id)")
+    );
+    assert_eq!(
+        subagent.cwd.as_deref(),
+        Some(std::path::Path::new("../other"))
+    );
+    assert_eq!(subagent.timeout.as_deref(), Some("90m"));
     let Call::Tasks(tasks) = call("tasks", json!({"kind": "schedule"})) else {
         panic!("a tasks call");
     };
@@ -142,6 +162,15 @@ fn data_tools_list_an_object_output_schema() {
     assert_eq!(
         tool("wait").output_schema().unwrap()["required"],
         json!(["id", "status", "stop", "report"])
+    );
+    assert_eq!(
+        tool("subagent").output_schema(),
+        tool("wait").output_schema()
+    );
+    let subagent = tool("subagent").listing(&Wording::built_in());
+    assert_eq!(
+        subagent["inputSchema"]["required"],
+        json!(["profile", "prompt"])
     );
 }
 
@@ -195,6 +224,22 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
+        ("subagent", json!({"prompt": "p"})),
+        ("subagent", json!({"profile": "general"})),
+        ("subagent", json!({"profile": " ", "prompt": "p"})),
+        ("subagent", json!({"profile": "general", "prompt": "\n\t"})),
+        (
+            "subagent",
+            json!({"profile": "general", "prompt": "p", "prompt_file": "/b.md"}),
+        ),
+        (
+            "subagent",
+            json!({"profile": "general", "prompt": "p", "wait": "5m"}),
+        ),
+        (
+            "subagent",
+            json!({"profile": "general", "prompt": "p", "yolo": true}),
+        ),
         ("lsp", json!({"verb": "refs", "targets": []})),
         (
             "lsp",
@@ -281,6 +326,7 @@ fn the_text_fits_what_providers_keep() {
     for group in [
         "`lsp`",
         "`wait`",
+        "`subagent`",
         "`tasks`, `join`, and `stop`",
         "`notes`",
         "`self_tune` to",

@@ -829,6 +829,27 @@ impl ExecRequest {
         })
     }
 
+    /// Whether this launch is a workflow judge, whose checkout is read-only.
+    pub(super) fn is_judge(&self) -> bool {
+        self.identity
+            .params
+            .workflow
+            .as_ref()
+            .is_some_and(|workflow| workflow.role == crate::agents::WorkflowAttemptRole::Judge)
+    }
+
+    /// The RimZ capabilities the launch's `mcps` selection serves, less `rimz-subagents` on a
+    /// child, whose every launch would be refused, and on a judge, whose child would get a
+    /// writable checkout.
+    pub(super) fn mcp_capabilities(&self) -> Vec<crate::mcp::catalog::Capability> {
+        let mut capabilities = crate::config::mcp_capabilities(self.mcps.as_deref());
+        if self.subagent || self.is_judge() {
+            capabilities
+                .retain(|capability| *capability != crate::mcp::catalog::Capability::Subagents);
+        }
+        capabilities
+    }
+
     /// The profile list handed to the provider, and the skills withheld from
     /// the model: `rimz-subagents` on a child, and the rimz skills `hidden`
     /// because the launch registers the MCP tools of the same name.

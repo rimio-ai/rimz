@@ -18,6 +18,7 @@ mod owned;
 mod room;
 mod start;
 mod stop;
+mod subagent;
 mod tasks;
 mod wait;
 
@@ -86,6 +87,7 @@ impl Runner for Tools {
         let answered = match call {
             Call::Lsp(args) => lsp::run(self, &args),
             Call::Wait(args) => wait::arm(self, &args),
+            Call::Subagent(args) => subagent::launch(self, &args),
             Call::Tasks(args) => tasks::tasks(self, &args),
             Call::Join(args) => join::join(self, &args, cancelled),
             Call::Stop(args) => stop::stop(self, &args),

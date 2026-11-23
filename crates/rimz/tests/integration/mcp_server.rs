@@ -15,9 +15,10 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 10] = [
+const ALL_TOOLS: [&str; 11] = [
     "lsp",
     "wait",
+    "subagent",
     "tasks",
     "join",
     "stop",
@@ -437,6 +438,179 @@ fn child_of_caller() -> rimz::agents::LaunchParams {
     }
 }
 
+/// A `subagent` call launches the child in the server's own process, in the caller's room and
+/// recorded as the caller's child, from a server whose process cwd is outside the room; `tasks`
+/// then lists it under the id the launch answered. A subagent's call answers the library's
+/// refusal and launches nothing.
+#[cfg(unix)]
+#[test]
+fn a_subagent_call_launches_a_child_of_the_caller_from_outside_the_room() {
+    use crate::common::room::{MATERIALIZED_ROOM_PANES, bind_child_panes, seed_live_zellij_room};
+    use rimz::agents::LaunchParams;
+    use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
+    crate::common::trust_codex_project(&env, &env.project_root);
+    env.install_agent_hooks("qwen");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    crate::common::write_failing_agent_shim(&env, "qwen", 1);
+    let shell = crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).expect("record room");
+    let seed = |launch: &str, name: &str, pane: &str, launch_params: LaunchParams| {
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: AgentSessionId::from(format!("{name}-session")),
+                    launch_id: Some(AgentSessionId::from(launch)),
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: launch_params,
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed an agent");
+    };
+    seed(
+        "parent-launch",
+        "parent",
+        "terminal_2",
+        LaunchParams::default(),
+    );
+    seed(
+        "child-launch",
+        "child",
+        "terminal_1",
+        LaunchParams {
+            parent_agent_id: Some(AgentSessionId::from("elsewhere-launch")),
+            parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            launch_depth: Some(1),
+            ..LaunchParams::default()
+        },
+    );
+    seed_live_zellij_room(
+        store.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(MATERIALIZED_ROOM_PANES).unwrap(),
+    );
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+    let trace = env.project_root.join("launch-trace.log");
+    let outside = tempfile::tempdir().expect("a directory outside the room");
+    let serve = |launch: &str| {
+        let mut command = env.rimz();
+        command
+            .current_dir(outside.path())
+            .args(["mcp", "serve", "--launch-env"])
+            .env("RIMZ_MCP_SERVE", "rimz-subagents")
+            .env("RIMZ_MCP_CWD", &env.project_root)
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, launch)
+            .env("SHELL", &shell)
+            .env("PATH", crate::common::path_with_front(&agent_bin))
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_PRESENCE_PLUGIN", &presence)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+        let mut server = McpServer::spawn(command);
+        server.initialize();
+        server
+    };
+    let call = json!({"profile": "codex", "prompt": "audit the parser"});
+
+    let mut refused = serve("child-launch");
+    let (answer, is_error) = refused.answer(1, "subagent", call.clone());
+    assert!(is_error, "{answer}");
+    assert_eq!(
+        answer,
+        json!({"error": "launch refused: subagents cannot launch agents or subagents. Do the work \
+            yourself and report the result to your caller; do not retry this command."})
+    );
+    assert!(
+        rimz::harness::run::list(store.paths())
+            .expect("list runs")
+            .is_empty()
+    );
+
+    let mut server = serve("parent-launch");
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    let (answer, is_error) = std::thread::scope(|scope| {
+        scope.spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
+        let answered = server.answer(1, "subagent", call);
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        answered
+    });
+    assert!(!is_error, "{answer}");
+    let runs = rimz::harness::run::list(store.paths()).expect("list runs");
+    let [run] = runs.as_slice() else {
+        panic!("one run: {runs:?}")
+    };
+    let name = run.agent_name.clone().expect("a minted petname");
+    let id = format!("subagent:{name}");
+    assert_eq!(answer["id"], json!(id), "{answer}");
+    assert_eq!(answer["status"], json!("running"), "{answer}");
+    assert!(answer.get("warnings").is_none(), "{answer}");
+    assert!(run.subagent, "{run:?}");
+    assert_eq!(
+        std::fs::canonicalize(&run.worktree_path).unwrap(),
+        std::fs::canonicalize(&env.project_root).unwrap()
+    );
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("launch history")
+        .agents;
+    let child = agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some(name.as_str()))
+        .expect("the child's launch row");
+    assert_eq!(
+        child.parent_agent_id,
+        Some(AgentSessionId::from("parent-launch")),
+        "{child:?}"
+    );
+    let (listed, is_error) = server.answer(2, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [id.as_str()], "{listed}");
+
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    let (answer, is_error) = std::thread::scope(|scope| {
+        scope.spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
+        let answered = server.answer(
+            3,
+            "subagent",
+            json!({"profile": "qwen", "prompt": "audit the lexer", "effort": "high"}),
+        );
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        answered
+    });
+    assert!(!is_error, "{answer}");
+    assert_eq!(
+        answer["warnings"],
+        json!(["warning: `qwen` effort high is unsupported on qwen; launching without it"]),
+        "{answer}"
+    );
+}
+
 /// The id of each row a `tasks` answer lists.
 fn task_ids(listed: &Value) -> Vec<&str> {
     listed["tasks"]
@@ -627,7 +801,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -745,14 +919,16 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     let total = stdout.lines().last().unwrap();
     assert_eq!(
         total,
-        format!("total: ~{sum} tokens in 10 tools"),
+        format!("total: ~{sum} tokens in 11 tools"),
         "{stdout}"
     );
 
     let (status, _, stderr) = run(&["--only", "rimz-message"]);
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
-        stderr.contains("expected one of rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        stderr.contains(
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"
+        ),
         "{stderr}"
     );
 }
@@ -1416,7 +1592,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        out.contains("serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
@@ -1455,7 +1631,13 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
 
-    for skill in ["rimz-lsp", "rimz-wait", "rimz-control", "rimz-notes"] {
+    for skill in [
+        "rimz-lsp",
+        "rimz-wait",
+        "rimz-subagents",
+        "rimz-control",
+        "rimz-notes",
+    ] {
         assert!(
             out.contains(&format!(
                 "\n  {skill}: the launch serves its MCP tools, so the model is not offered the skill\n"
@@ -1491,7 +1673,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
     let out = explain("xmark");
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes"),
+        out.contains("serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes"),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
@@ -1604,7 +1786,9 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
 
     let out = explain(&env, "gopen", &[]);
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes as `rimz_tools`\n"),
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes as `rimz_tools`\n"
+        ),
         "{out}"
     );
     assert!(
@@ -1617,7 +1801,9 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let bare = Env::new();
     let out = explain(&bare, "antigravity", &[]);
     assert!(
-        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes as `rimz_tools`\n"),
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes as `rimz_tools`\n"
+        ),
         "{out}"
     );
     assert!(

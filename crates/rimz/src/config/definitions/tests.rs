@@ -1535,8 +1535,8 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
                 .collect::<Vec<_>>(),
             [format!(
                 "sets `mcps:` with an invalid mcps entry `{shown}`: list `*`, `rimz`, a RimZ \
-                 capability (rimz-lsp, rimz-wait, rimz-control, rimz-notes), or one of your own \
-                 MCP servers, each name with an optional `:always` or `:deferred`"
+                 capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes), or one \
+                 of your own MCP servers, each name with an optional `:always` or `:deferred`"
             )]
         );
     }

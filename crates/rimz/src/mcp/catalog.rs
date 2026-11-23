@@ -23,17 +23,24 @@ pub const SERVER_NAME: &str = "rimz";
 pub enum Capability {
     Lsp,
     Wait,
+    Subagents,
     Control,
     Notes,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 4] = [Self::Lsp, Self::Wait, Self::Control, Self::Notes];
+    pub const ALL: [Capability; 5] = [
+        Self::Lsp,
+        Self::Wait,
+        Self::Subagents,
+        Self::Control,
+        Self::Notes,
+    ];
 
     /// Whether the group's tools start things, which `tasks`, `join`, and `stop` list, await,
     /// and end.
     pub fn starts_things(self) -> bool {
-        self == Self::Wait
+        matches!(self, Self::Wait | Self::Subagents)
     }
 
     /// The capability's name, which is also the name of the skill it matches.
@@ -41,6 +48,7 @@ impl Capability {
         match self {
             Self::Lsp => "rimz-lsp",
             Self::Wait => "rimz-wait",
+            Self::Subagents => "rimz-subagents",
             Self::Control => "rimz-control",
             Self::Notes => "rimz-notes",
         }
@@ -93,6 +101,7 @@ pub fn serve_args(only: &[Capability]) -> Vec<String> {
 pub enum Call {
     Lsp(LspArgs),
     Wait(WaitArgs),
+    Subagent(SubagentArgs),
     Tasks(TasksArgs),
     Join(JoinArgs),
     Stop(StopArgs),
@@ -208,7 +217,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 10] = [
+pub static TOOLS: [Tool; 11] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -232,6 +241,18 @@ pub static TOOLS: [Tool; 10] = [
         schema: schema::<WaitArgs>,
         output: Some(start_schema),
         parse: |arguments| parse::<WaitArgs>(arguments).map(Call::Wait),
+    },
+    Tool {
+        name: "subagent",
+        capability: Some(Capability::Subagents),
+        purpose: Purpose::Delegate,
+        read_only: false,
+        command: "subagents",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<SubagentArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<SubagentArgs>(arguments).map(Call::Subagent),
     },
     Tool {
         name: "tasks",
@@ -347,6 +368,7 @@ pub static TOOLS: [Tool; 10] = [
 pub enum Purpose {
     Code,
     Start,
+    Delegate,
     Started,
     Yourself,
     Notes,
@@ -359,10 +381,11 @@ impl Purpose {
         match self {
             Self::Code => "to read code",
             Self::Start => "to wait outside your turn",
-            Self::Started => "to list, await, or end what you started",
+            Self::Delegate => "to delegate",
+            Self::Started => "for what you started",
             Self::Yourself => "to manage yourself",
             Self::Notes => "to save a note",
-            Self::Guides => "for usage guides",
+            Self::Guides => "for guides",
         }
     }
 }
@@ -697,6 +720,37 @@ pub struct WaitArgs {
 
 impl ToolArgs for WaitArgs {}
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentArgs {
+    /// The subagent profile to launch.
+    pub profile: String,
+    /// The brief: the whole task, its scope, and the result to report.
+    pub prompt: String,
+    /// A label for `tasks` and the sidebar, a few words.
+    pub description: Option<String>,
+    /// Where the child works; defaults to your own checkout.
+    pub cwd: Option<PathBuf>,
+    /// End the child after this long (`90m`, `2h`); the profile's timeout when absent, 30m by
+    /// default.
+    pub timeout: Option<String>,
+    /// Override the profile's model.
+    pub model: Option<String>,
+    /// Override the profile's reasoning effort.
+    pub effort: Option<String>,
+    /// Override the profile's agent kind.
+    pub agent: Option<String>,
+}
+
+impl ToolArgs for SubagentArgs {
+    fn refusal(&self) -> Option<String> {
+        [("profile", &self.profile), ("prompt", &self.prompt)]
+            .into_iter()
+            .find(|(_, value)| value.trim().is_empty())
+            .map(|(field, _)| format!("`{field}` is blank"))
+    }
+}
+
 /// A kind of thing a tool starts, as an id names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -842,11 +896,13 @@ fn any_object() -> Value {
 }
 
 /// The answer of a tool that starts something: its `id`, `status`, the
-/// exact call that stops it, and how its result reaches the caller.
+/// exact call that stops it, how its result reaches the caller, and any
+/// `warnings` from the start.
 fn start_schema() -> Value {
     object(
         serde_json::json!({
             "id": string(), "status": string(), "stop": string(), "report": string(),
+            "warnings": array_of(string()),
         }),
         &["id", "status", "stop", "report"],
     )

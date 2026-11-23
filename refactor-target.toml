@@ -2997,7 +2997,8 @@ path = "crates/rimz/src/launcher"
 # agent_join::WaitSet::once is the one-poll join the CLI's join deferring to the caller's report runs (+1).
 # launch_background with BackgroundLaunch and BackgroundLaunchOutcome is the one background
 # supervised launch the CLI and the MCP subagent tool share (+3).
-surface-budget = 161
+# Notice::line is the one text of a launch notice, for the CLI and the MCP subagent tool (+1).
+surface-budget = 162
 
 [[verdict]]
 kind = "item"
@@ -5748,6 +5749,8 @@ allowed-dependencies = [
     "harness::spec",
     "harness::team_prompt",
     "ids",
+    # A subagent child's served capabilities drop the capability that launches subagents.
+    "mcp::catalog",
     # The provider-env compiler sets or clears the launch's MCP selection variables.
     "mcp::launch_env",
     "proc",
@@ -5772,7 +5775,10 @@ allowed-dependencies = [
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # CompiledAgentProcess::settings lets `agents explain --mcps` read the allowlist the adapter wrote (+1).
 # `mcp_server` builds RimZ's MCP server once for the argv channel and an agent file (+1).
-surface-budget = 59
+# ExecRequest::mcp_capabilities is the one served set the launch plan and its reminders read,
+# without the subagent tool for a subagent child (+1).
+# ExecRequest::is_judge is the one judge rule for the launch plan and the served set (+1).
+surface-budget = 61
 
 [[verdict]]
 kind = "item"

@@ -205,6 +205,79 @@ pub enum Notice<'a> {
     },
 }
 
+impl Notice<'_> {
+    /// The line a person reads for this notice: what the CLI prints to stderr, and a warning
+    /// the MCP subagent tool answers. `None` for a notice the CLI renders as a receipt or a
+    /// report of its own.
+    pub fn line(&self) -> Option<String> {
+        Some(match self {
+            Self::LaunchWarning(warning) => warning.to_string(),
+            Self::Warning(line) | Self::Reconcile(line) => (*line).to_owned(),
+            Self::Room(notice) => format!("note: {notice}"),
+            Self::Trust(notice) => notice.to_string(),
+            Self::LspIgnored(message) => format!("rimz: {message}"),
+            Self::LspRefused(message) => format!("rimz: {message}; agents use grep"),
+            Self::LspWait(wait) => format!(
+                "rimz: waiting to start language server {}: needs {}, {}; position {} in the queue; giving up in {}",
+                wait.shortfall.server,
+                crate::utils::size::decimal_bytes(wait.shortfall.estimate_bytes),
+                wait.shortfall.headroom(),
+                wait.position,
+                crate::utils::time::format_duration_compact(wait.remaining)
+            ),
+            Self::IsolationClamp { profile, source } => format!(
+                "rimz: {profile} {source}, and a subagent never runs looser than its parent"
+            ),
+            Self::PermissionClamp { profile, clamp } => format!(
+                "rimz: {profile} runs in {} mode: {} asks for {}, and a subagent never runs looser than its parent",
+                clamp.mode, clamp.source, clamp.requested
+            ),
+            Self::YoloSandbox(profile) => format!(
+                "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
+            ),
+            Self::UntrustedCwdFallback {
+                provider,
+                profile,
+                agent,
+                target,
+                cwd,
+            } => {
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let target = fallback_shell_path(target, home.as_deref());
+                let cwd = fallback_shell_path(cwd, home.as_deref());
+                let command = shell_command(
+                    ["rimz", "subagents", profile]
+                        .into_iter()
+                        .chain(agent.iter().flat_map(|agent| ["--agent", *agent])),
+                );
+                format!(
+                    "warning: {target} has no {provider} folder-trust decision; started as\n  \
+                     {command} --cwd {target} --empty-dir --add-dir {target} \"<brief>\"\n  \
+                     (in an empty directory, {cwd}, so nothing from the repo loads; \
+                     the child can read the repo)"
+                )
+            }
+            Self::Config(_)
+            | Self::RoomReset { .. }
+            | Self::Dispatch { .. }
+            | Self::PickerReceipt { .. }
+            | Self::ResumeAnnouncement(_)
+            | Self::ResumeReceipt { .. } => return None,
+        })
+    }
+}
+
+/// `path` as a shell word, under `~/` when it lies in `home` and needs no quoting there.
+fn fallback_shell_path(path: &Path, home: Option<&Path>) -> String {
+    if let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) {
+        let relative = relative.to_string_lossy();
+        if shell_command([relative.as_ref()]) == relative {
+            return format!("~/{relative}");
+        }
+    }
+    shell_command([path.to_string_lossy().as_ref()])
+}
+
 pub struct ClosedCohort<'a> {
     pub name: &'a str,
     pub subject: &'a str,

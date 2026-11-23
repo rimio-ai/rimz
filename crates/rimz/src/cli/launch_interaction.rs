@@ -47,53 +47,6 @@ impl Interaction for CliInteraction {
     fn notice(&mut self, notice: Notice<'_>) -> Result<()> {
         match notice {
             Notice::Config(config) => report_unknown_config_keys(config)?,
-            Notice::LaunchWarning(warning) => writeln!(render::err(), "{warning}")?,
-            Notice::Warning(line) | Notice::Reconcile(line) => writeln!(render::err(), "{line}")?,
-            Notice::Room(notice) => writeln!(render::err(), "note: {notice}")?,
-            Notice::Trust(notice) => writeln!(render::err(), "{notice}")?,
-            Notice::LspIgnored(message) => writeln!(render::err(), "rimz: {message}")?,
-            Notice::LspRefused(message) => {
-                writeln!(render::err(), "rimz: {message}; agents use grep")?
-            }
-            Notice::LspWait(wait) => write_wait(wait)?,
-            Notice::IsolationClamp { profile, source } => writeln!(
-                render::err(),
-                "rimz: {profile} {source}, and a subagent never runs looser than its parent"
-            )?,
-            Notice::PermissionClamp { profile, clamp } => writeln!(
-                render::err(),
-                "rimz: {profile} runs in {} mode: {} asks for {}, and a subagent never runs looser than its parent",
-                clamp.mode,
-                clamp.source,
-                clamp.requested
-            )?,
-            Notice::YoloSandbox(profile) => writeln!(
-                render::err(),
-                "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
-            )?,
-            Notice::UntrustedCwdFallback {
-                provider,
-                profile,
-                agent,
-                target,
-                cwd,
-            } => {
-                let home = std::env::var_os("HOME").map(PathBuf::from);
-                let target = fallback_shell_path(target, home.as_deref());
-                let cwd = fallback_shell_path(cwd, home.as_deref());
-                let command = super::usage::shell_command(
-                    ["rimz", "subagents", profile]
-                        .into_iter()
-                        .chain(agent.into_iter().flat_map(|agent| ["--agent", agent])),
-                );
-                writeln!(
-                    render::err(),
-                    "warning: {target} has no {provider} folder-trust decision; started as\n  \
-                     {command} --cwd {target} --empty-dir --add-dir {target} \"<brief>\"\n  \
-                     (in an empty directory, {cwd}, so nothing from the repo loads; \
-                     the child can read the repo)"
-                )?;
-            }
             Notice::RoomReset { session, report } => {
                 render::room::print_automatic_reset(session, report)?
             }
@@ -116,19 +69,14 @@ impl Interaction for CliInteraction {
                 identities,
                 leader,
             } => write_resume_receipt(&mut render::out(), plan, team, lane, identities, leader)?,
+            line => {
+                if let Some(line) = line.line() {
+                    writeln!(render::err(), "{line}")?;
+                }
+            }
         }
         Ok(())
     }
-}
-
-fn fallback_shell_path(path: &Path, home: Option<&Path>) -> String {
-    if let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) {
-        let relative = relative.to_string_lossy();
-        if super::usage::shell_command([relative.as_ref()]) == relative {
-            return format!("~/{relative}");
-        }
-    }
-    super::usage::shell_command([path.to_string_lossy().as_ref()])
 }
 
 pub(super) fn admit_lsp(checkout: &Path, machine: &rimz::config::MachineConfig) -> Result<()> {
@@ -540,15 +488,9 @@ fn report_cohort_resume(
 }
 
 pub(super) fn write_wait(wait: &rimz::lsp::admission::Wait) -> Result<()> {
-    writeln!(
-        super::render::err(),
-        "rimz: waiting to start language server {}: needs {}, {}; position {} in the queue; giving up in {}",
-        wait.shortfall.server,
-        rimz::utils::size::decimal_bytes(wait.shortfall.estimate_bytes),
-        wait.shortfall.headroom(),
-        wait.position,
-        rimz::utils::time::format_duration_compact(wait.remaining)
-    )?;
+    if let Some(line) = Notice::LspWait(wait).line() {
+        writeln!(super::render::err(), "{line}")?;
+    }
     Ok(())
 }
 pub(super) fn preflight_hooks(
