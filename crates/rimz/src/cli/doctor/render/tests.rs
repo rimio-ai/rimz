@@ -674,6 +674,31 @@ fn machine_config_definition_problem_names_launch_precondition() {
     assert!(!out.contains("built-in defaults"), "{out}");
 }
 
+#[test]
+fn machine_config_definition_path_stays_on_one_line() {
+    let config = MachineConfigHealth {
+        broken_files: vec![MachineConfigProblem {
+            diagnosis: None,
+            path: "/defs/agents/bad\nforged\u{1b}[2K.md".to_owned(),
+            error: "refused".to_owned(),
+            kind: MachineConfigProblemKind::Definition,
+        }],
+    };
+    let mut raw = Vec::new();
+    let mut tally = Tally::default();
+    render_machine_config(&mut raw, &config, &mut tally).unwrap();
+    let out = String::from_utf8(raw).unwrap();
+
+    assert!(
+        out.contains(r"bad\nforged\u{1b}[2K.md cannot be used: refused"),
+        "{out:?}"
+    );
+    assert!(
+        !out.lines().any(|line| line.starts_with("forged")),
+        "{out:?}"
+    );
+}
+
 fn mux_fixture() -> Mux {
     Mux {
         name: MuxName::Tmux,
