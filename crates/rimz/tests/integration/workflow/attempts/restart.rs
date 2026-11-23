@@ -1,7 +1,11 @@
 use super::*;
 
+pub(super) const RESTARTED_OWNER: &str = "restarted";
+
 pub(super) fn wait_for_pane_close(room: &Room, child: &mut std::process::Child) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Spans the restart binary's start-up, its preflight, and the stop's fixed 3 s departure
+    // grace, which this fixture's pane always pays.
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if fs::read_to_string(room.env.project_root.join("spawn.log"))
             .unwrap()
@@ -518,11 +522,11 @@ fn continued_restart(routed: bool) {
     let (id, run) = room.launch();
     let transcript = room.env.project_root.join("session.jsonl");
     fs::write(&transcript, "{}\n").unwrap();
-    let mut owner = dummy_agent_process();
+    let owner = room.owner(RESTARTED_OWNER);
     room.hook_with_owner(
         &id,
         &run,
-        owner.id(),
+        owner,
         json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
     );
     fs::write(
@@ -563,8 +567,7 @@ fn continued_restart(routed: bool) {
         .unwrap();
     wait_for_pane_close(&room, &mut child);
     // The trace shim closes the pane but cannot terminate its owner.
-    owner.kill().unwrap();
-    owner.wait().unwrap();
+    room.kill_owner(RESTARTED_OWNER);
     let receipt = success(child.wait_with_output().unwrap());
     assert!(
         (!routed || receipt.contains(&format!("via rimz workflow restart {id} --continue")))
@@ -631,11 +634,11 @@ fn continue_rechecks_the_history_pool_after_stopping() {
     let (id, run) = room.launch();
     let transcript = room.env.project_root.join("session.jsonl");
     fs::write(&transcript, "{}\n").unwrap();
-    let mut owner = dummy_agent_process();
+    let owner = room.owner(RESTARTED_OWNER);
     room.hook_with_owner(
         &id,
         &run,
-        owner.id(),
+        owner,
         json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
     );
     fs::write(
@@ -658,8 +661,7 @@ fn continue_rechecks_the_history_pool_after_stopping() {
             &"other".parse().unwrap(),
         )
         .unwrap();
-    owner.kill().unwrap();
-    owner.wait().unwrap();
+    room.kill_owner(RESTARTED_OWNER);
     success(child.wait_with_output().unwrap());
     let value = until(&room.env, &id, |value| {
         value["record"]["attempt"]["run"]["run_id"]

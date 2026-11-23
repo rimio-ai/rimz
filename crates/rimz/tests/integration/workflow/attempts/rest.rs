@@ -337,13 +337,13 @@ fn restart_after_pending_push(continued: bool) {
     .unwrap();
     let transcript = room.env.project_root.join("session.jsonl");
     fs::write(&transcript, "{}\n").unwrap();
-    let mut owner = dummy_agent_process();
+    let owner = room.owner(super::restart::RESTARTED_OWNER);
     for payload in [
         json!({"hook_event_name":"SessionStart", "transcript_path":transcript}),
         json!({"hook_event_name":"UserPromptSubmit", "prompt":"Review the PR"}),
         json!({"hook_event_name":"Stop"}),
     ] {
-        room.hook_with_owner(&id, &run, owner.id(), payload);
+        room.hook_with_owner(&id, &run, owner, payload);
     }
     let pushed = until(&room.env, &id, |value| {
         value["record"]["attempt"]["push"]["queued"] == true
@@ -371,8 +371,7 @@ fn restart_after_pending_push(continued: bool) {
         .unwrap();
     super::restart::wait_for_pane_close(&room, &mut child);
     // The trace shim closes the pane but cannot terminate its owner.
-    owner.kill().unwrap();
-    owner.wait().unwrap();
+    room.kill_owner(super::restart::RESTARTED_OWNER);
     success(child.wait_with_output().unwrap());
     let replacement = room.attempt(&id);
     assert_ne!(replacement.run_id, run.run_id);
