@@ -27,7 +27,7 @@ mod state;
 mod validate;
 
 pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Target};
-pub use deployed::Deployed;
+pub use deployed::{Deployed, directory_name};
 pub(crate) use engine::hears_lifecycle;
 pub(crate) use engine::join_report;
 pub use engine::{

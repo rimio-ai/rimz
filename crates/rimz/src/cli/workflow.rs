@@ -740,7 +740,7 @@ fn start(
     if worktree.is_some() && definition.scope() == workflow::ScopeKind::Project {
         bail!(
             "{} has scope = project, so it runs at {}; start it without -w",
-            dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy(),
+            workflow::directory_name(&dir).unwrap_or_else(|| dir.display().to_string()),
             ctx.workspace.project_root.display()
         );
     }

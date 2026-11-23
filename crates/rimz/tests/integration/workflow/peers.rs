@@ -1127,6 +1127,24 @@ fn validate_warns_about_runs_entries_a_start_would_refuse_and_a_workflow_that_st
         ["fan", "spread", "runs", "workflow"],
         "{table}"
     );
+    // A link to the workflow starts itself through the name its target carries.
+    std::os::unix::fs::symlink(
+        env.rimz_home().join("workflows/fan"),
+        env.rimz_home().join("workflows/fan-link"),
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["workflow", "validate", "fan-link", "--json"])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(
+        report["warnings"][2]["message"],
+        "workflow: fan-link starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it",
+        "{report:#}"
+    );
 }
 
 #[test]

@@ -51,8 +51,7 @@ impl Definition {
 
     /// Resolve `raw`, a bare name or one with a `workflow:` or `task:` selector, against the
     /// deployed workflows and the caller's loop tasks, or a path to a directory holding a
-    /// definition, named for the directory it resolves to; `None` for any other path or a run
-    /// target.
+    /// definition, named as a run of it is; `None` for any other path or a run target.
     pub(super) fn resolve(raw: &str, globals: &super::super::GlobalFlags) -> Result<Option<Self>> {
         let (selector, name) = match raw.split_once(':') {
             Some((selector @ ("workflow" | "task"), name)) => (Some(selector), name),
@@ -63,12 +62,9 @@ impl Definition {
             if selector.is_some() || !paths::workflow_spec_file(&dir).is_file() {
                 return Ok(None);
             }
-            let name = dir.canonicalize()?.file_name().map_or_else(
-                || raw.to_owned(),
-                |name| name.to_string_lossy().into_owned(),
-            );
             return Ok(Some(Self {
-                name,
+                name: rimz::harness::workflow::directory_name(&dir)
+                    .unwrap_or_else(|| raw.to_owned()),
                 raw: raw.into(),
                 dir,
                 task: None,

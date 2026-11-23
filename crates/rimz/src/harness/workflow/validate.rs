@@ -36,13 +36,7 @@ pub fn validate(
     project_root: Option<&Path>,
 ) -> Validation {
     let mut report = Validation::default();
-    let canonical = dir.canonicalize();
-    let Some(name) = canonical
-        .as_deref()
-        .unwrap_or(dir)
-        .file_name()
-        .and_then(|name| name.to_str())
-    else {
+    let Some(name) = super::directory_name(dir) else {
         report.error(
             "workflow",
             format!("{}: directory needs a workflow name", dir.display()),
@@ -62,9 +56,10 @@ pub fn validate(
             return report;
         }
     };
+    let name = name.as_str();
     let mut report = validate_spec(dir, name, &spec, definitions, project_root);
     match super::Deployed::load(&crate::disk::paths::agents_home()) {
-        Ok(deployed) => started_workflows(&mut report, name, &spec, &deployed),
+        Ok(deployed) => started_workflows(&mut report, dir, name, &spec, &deployed),
         Err(error) => report.warnings.push(issue(
             "workflow",
             format!(
@@ -81,6 +76,7 @@ pub fn validate(
 /// a run reads live at the step, so they never refuse a start: the step itself enforces them.
 fn started_workflows(
     report: &mut Validation,
+    dir: &Path,
     name: &str,
     spec: &Definition,
     deployed: &super::Deployed,
@@ -113,7 +109,14 @@ fn started_workflows(
     let mut seen = BTreeSet::new();
     let mut next: Vec<String> = started_by(spec);
     while let Some(workflow) = next.pop() {
-        if workflow == name {
+        let leads_here = || {
+            deployed
+                .find(&workflow)
+                .ok()
+                .flatten()
+                .is_some_and(|found| super::deployed::same_directory(found, dir))
+        };
+        if workflow == name || leads_here() {
             report.warnings.push(issue(
                 "workflow",
                 format!("{name} starts itself again through runs steps; each start runs one level deeper until [agents] max-workflow-depth refuses it"),

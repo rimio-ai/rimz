@@ -1651,9 +1651,18 @@ fn a_deployed_run_reads_its_directory_live_and_keeps_no_copy() {
     let record = start_at(&state, home.path(), deployed(&link)).unwrap();
     let paths = state.workflow(&record.id);
     assert_eq!(record.origin, RunOrigin::Deployed);
-    assert_eq!(record.workflow, "nightly");
+    assert_eq!(record.workflow, "linked");
     assert_eq!(record.spec_dir, Some(link));
     assert!(!paths.definition.exists());
+    // The link's run holds the scope against the directory under any other name.
+    let second = home.path().join("second");
+    std::os::unix::fs::symlink(&dir, &second).unwrap();
+    for other in [&dir, &second] {
+        assert!(matches!(
+            start_at(&state, home.path(), deployed(other)),
+            Err(WorkflowErr::Exists { run, .. }) if run == record.id
+        ));
+    }
     // A `..` after a link stays in the record, so it names the directory validated.
     let real = home.path().join("real");
     fs::create_dir_all(real.join("sub")).unwrap();
