@@ -462,7 +462,8 @@ upward-dependencies = ["address"]
 # drop_refused_effort runs only where the launch's final model is known (+1).
 # skills::rimz_skills gives the launch plan and `rimz agents validate` one on-disk inventory of
 # the rimz-* skills (+1).
-surface-budget = 1331
+# ContextObservation::provider_at_rest tells the statusline feed the provider reports itself at rest (+1).
+surface-budget = 1332
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2525,7 +2526,8 @@ path = "crates/rimz/src/harness"
 # build (+1).
 # plan::check_subagent_profile_spec is the one --subagent-profile refusal for launch, explain, and loop add (+1).
 # +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
-surface-budget = 1355
+# hook_drain::provider_rest_settle asks a drainer and reads the row for the statusline feed (+1).
+surface-budget = 1356
 
 [[verdict]]
 kind = "item"

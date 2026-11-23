@@ -59,12 +59,20 @@ impl SignIn {
 pub struct ContextObservation {
     pub agent_id: AgentSessionId,
     pub context: AgentContext,
+    /// The provider reports itself at rest with no background work, so a turn
+    /// the hooks still hold open ended without a hook: the statusline feed
+    /// reads the row and settles it through `agents::state::provider_rest_settle`.
+    pub provider_at_rest: bool,
 }
 
 impl ContextObservation {
     pub(super) fn new(agent_id: impl Into<AgentSessionId>, context: AgentContext) -> Option<Self> {
         let agent_id = agent_id.into();
-        (!agent_id.as_str().trim().is_empty()).then_some(Self { agent_id, context })
+        (!agent_id.as_str().trim().is_empty()).then_some(Self {
+            agent_id,
+            context,
+            provider_at_rest: false,
+        })
     }
 }
 

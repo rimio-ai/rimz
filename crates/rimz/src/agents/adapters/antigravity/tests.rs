@@ -1673,6 +1673,46 @@ fn statusline_payloads_carry_no_cost_and_keep_the_turn_end_total() {
         );
     }
 }
+#[test]
+fn statusline_reports_rest_only_when_idle_with_no_background_work() {
+    for (label, fields, at_rest) in [
+        ("idle", json!({"agent_state": "idle"}), true),
+        ("IDLE", json!({"agent_state": "IDLE"}), true),
+        (
+            "no tasks",
+            json!({"agent_state": "idle", "task_count": 0}),
+            true,
+        ),
+        (
+            "a background task",
+            json!({"agent_state": "idle", "task_count": 1}),
+            false,
+        ),
+        ("working", json!({"agent_state": "working"}), false),
+        ("an unknown state", json!({"agent_state": "resting"}), false),
+        ("no state", json!({}), false),
+        (
+            "a pending confirmation",
+            json!({"agent_state": "idle", "tool_confirmation_pending": true}),
+            false,
+        ),
+    ] {
+        let mut payload = fields;
+        payload["conversation_id"] = json!(SESSION_ID);
+        let observation = AntigravityAdapter
+            .observe_context("antigravity", &payload)
+            .unwrap();
+        assert_eq!(observation.provider_at_rest, at_rest, "{label}");
+        let settle = observation.context.settle.map(|settle| settle.outcome);
+        let expected = (label == "a pending confirmation")
+            .then_some(crate::agents::TurnSettleOutcome::NativeWait);
+        assert_eq!(
+            settle, expected,
+            "{label}: the adapter builds no rest settle"
+        );
+    }
+}
+
 fn statusline_fixture(source: &str) -> statusline::StatuslinePayload {
     serde_json::from_str(source).unwrap()
 }
