@@ -3244,14 +3244,14 @@ impl rimz::agents::capabilities::SpendingCapability for PiAdoptionTestAdapter {}
 impl rimz::agents::capabilities::RuntimeControlCapability for PiAdoptionTestAdapter {}
 
 #[test]
-fn the_apply_pool_cap_is_twice_the_cores_plus_one_up_to_64() {
+fn the_apply_pool_cap_is_twice_the_cores_plus_one_up_to_32() {
     use super::pool_cap;
 
     assert_eq!(pool_cap(1), 3);
     assert_eq!(pool_cap(4), 9);
-    assert_eq!(pool_cap(31), 63);
-    assert_eq!(pool_cap(32), 64);
-    assert_eq!(pool_cap(512), 64);
+    assert_eq!(pool_cap(15), 31);
+    assert_eq!(pool_cap(16), 32);
+    assert_eq!(pool_cap(512), 32);
 }
 
 #[test]
