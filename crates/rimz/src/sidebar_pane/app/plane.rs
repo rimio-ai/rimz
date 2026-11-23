@@ -82,6 +82,16 @@ impl RoomEvents {
                 .lock()
                 .note_focus_event(focused, unfocused, envelope.sent_at_ms);
         }
+        match &envelope.event {
+            SidebarEvent::CardClosing { pane_id } => self
+                .views
+                .lock()
+                .note_closing(pane_id, Some(received_at_ms + CLOSING_MARK_BOUND_MS)),
+            SidebarEvent::CardClosingCleared { pane_id } => {
+                self.views.lock().note_closing(pane_id, None);
+            }
+            _ => {}
+        }
         if envelope.event.is_overlay() {
             lock(&self.events).append(envelope.event.clone(), envelope.sent_at_ms, received_at_ms);
         }
@@ -99,6 +109,10 @@ impl RoomEvents {
     }
 }
 
+/// How long a closing mark outlives its event when no clear and no departing row ends it
+/// first: the wire is lossy, so a lost clear must not leave a card marked.
+pub(super) const CLOSING_MARK_BOUND_MS: u64 = 10_000;
+
 fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
     match event {
         event if event.requests_producer_verification() => Some(FetchRequest::fresh_panes()),
@@ -106,7 +120,9 @@ fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
         | SidebarEvent::BodyFilterChanged
         | SidebarEvent::Notify { .. }
         | SidebarEvent::FocusStranded { .. }
-        | SidebarEvent::FocusIntent { .. } => None,
+        | SidebarEvent::FocusIntent { .. }
+        | SidebarEvent::CardClosing { .. }
+        | SidebarEvent::CardClosingCleared { .. } => None,
         // The cycle folds the focus into the frame's per-tab work-pane memory.
         SidebarEvent::FocusChanged { .. } => Some(FetchRequest::default()),
         event if event.is_overlay() => None,

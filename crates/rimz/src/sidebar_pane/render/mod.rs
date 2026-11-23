@@ -551,6 +551,11 @@ pub(in crate::sidebar_pane) fn animation_interval(
     }
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
+    // A closing mark lapses at its bound, so frames keep coming while one is set and the
+    // paint pass drops it on time.
+    if !view.closing.is_empty() {
+        return Some(base);
+    }
     let Some(theme) = ui.cached_theme(&snapshot.theme) else {
         return Some(base);
     };

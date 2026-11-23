@@ -630,6 +630,8 @@ A pane keeps its baseline only while a fold applies an overlay or focus intent, 
 | `BodyFilterChanged` | none | Re-read the whole body lens and adopt pick and committed query without a producer fetch, leaving any local draft intact. | A renderer that changed the lens or auto-cleared its empty pick |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Raise the desktop notification and the tab bell. `recheck_unread` gates the bell on row-unread, not the desktop notification. Never fused into rows ([notifications.md](./notifications.md)). | The fetch worker, after it has run any notification command handlers itself |
 | `Reload` | none | Observe the durable workspace target: a changed host build drains attachments for reattach, and an unchanged build refetches in place. Supervisors poll the record independently. | `rimz reload` |
+| `CardClosing` | `pane_id` | The host's event record marks the card owning the pane as closing in every view, until `CLOSING_MARK_BOUND_MS` (10 seconds) past receipt ([the closing mark](./sidebar.md#the-closing-mark)). Never fused into rows. | `rimz sidebar close --from-pane` and `--pane`, first, before the room opens |
+| `CardClosingCleared` | `pane_id` | Lift that mark from every view. | The same close, when it was refused, failed, or closed nothing |
 
 `FocusStranded` repair keeps the renderer's baseline if that is a live visible work sibling, and otherwise picks the leftmost sibling. Distinct observed client views leave focus alone, because `focus-pane-id` is session-global. The repair reads the strand's sample on Zellij and the pulled `client_views` on tmux, never fused focus or intents. It is dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds), so late delivery cannot yank focus.
 

@@ -465,3 +465,51 @@ fn message_marks_measure_overrides_and_never_mark_process_rows() {
     assert!(!screen.contains(['✎', '↧']), "{screen}");
     assert_snapshot("message_marks_process", screen);
 }
+
+/// A card whose close began paints its lines in the closing tone, on the same lines, and
+/// the cards around it keep theirs.
+#[test]
+fn a_closing_card_mutes_its_own_lines_without_moving_any() {
+    let mut snapshot = message_card(AgentStatus::Running, Some("store refactor"));
+    let mut other = snapshot.worktree_groups[0].rows[0].clone();
+    other.id = "other".to_owned();
+    other.pane.as_mut().unwrap().pane_id = PaneId::from_parts(crate::MuxName::Tmux, "%42");
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    std::sync::Arc::make_mut(&mut group.rows).push(other);
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    let rolls = CostRolls::default();
+    let pane = snapshot
+        .rows()
+        .next()
+        .unwrap()
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let closing = std::collections::HashMap::from([(pane, 0)]);
+    let mut ctx = test_row_ctx(&snapshot, &theme, 46, usize::MAX, 0, &rolls);
+    let calm = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+    ctx.closing = &closing;
+    let marked = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+    assert_eq!(line_texts(&marked), line_texts(&calm));
+    let tone = theme.component(crate::sidebar_pane::render::theme::Component::CardClosing);
+    let changed = (0..calm.len())
+        .filter(|&index| calm[index] != marked[index])
+        .collect::<Vec<_>>();
+    assert!(!changed.is_empty());
+    for index in &changed {
+        let line = &marked[*index];
+        assert!(
+            line.spans
+                .iter()
+                .filter(|span| !span.content.trim().is_empty())
+                .all(|span| span.style.fg == Some(tone)),
+            "{line:?}"
+        );
+    }
+    assert!(
+        changed.len() * 2 < calm.len(),
+        "the other card keeps its tones"
+    );
+}

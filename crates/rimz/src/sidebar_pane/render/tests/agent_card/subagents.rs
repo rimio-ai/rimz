@@ -580,6 +580,44 @@ fn focused_child_snapshot() -> SidebarSnapshot {
     snapshot
 }
 
+/// A mark on a launched child's pane paints that child's entry, both its lines, and leaves
+/// the parent's lines and the sibling entry as they were.
+#[test]
+fn a_closing_childs_entry_takes_the_tone_inside_its_parents_card() {
+    let snapshot = focused_child_snapshot();
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    let closing = std::collections::HashMap::from([(
+        PaneId::from_parts(MuxName::Zellij, "terminal_child"),
+        0,
+    )]);
+    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    let calm = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+    ctx.closing = &closing;
+    let marked = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+    assert_eq!(
+        marked.iter().map(Line::to_string).collect::<Vec<_>>(),
+        calm.iter().map(Line::to_string).collect::<Vec<_>>()
+    );
+    let entry = marked
+        .iter()
+        .position(|line| line.to_string().contains("inspect the click seam"))
+        .unwrap();
+    let changed = (0..calm.len())
+        .filter(|&index| calm[index] != marked[index])
+        .collect::<Vec<_>>();
+    assert_eq!(changed, [entry, entry + 1]);
+    let tone = theme.component(Component::CardClosing);
+    for text in ["explorer", "inspect the click seam"] {
+        let span = marked[entry]
+            .spans
+            .iter()
+            .find(|span| span.content == text)
+            .unwrap();
+        assert_eq!(span.style.fg, Some(tone), "{text}");
+    }
+}
+
 #[test]
 fn selected_parent_marks_both_focused_child_entry_lines() {
     let mut snapshot = focused_child_snapshot();

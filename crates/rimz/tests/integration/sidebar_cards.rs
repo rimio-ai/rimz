@@ -1,12 +1,14 @@
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixDatagram, UnixListener};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use rimz::SidebarInstanceId;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, MuxName, PaneId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -50,6 +52,13 @@ fn exchanges(env: &Env, pairs: &[(Value, Value)], command: Command) -> Output {
     exchanges_watching(env, pairs, command, || {})
 }
 
+fn host_socket(env: &Env) -> PathBuf {
+    let digest = Sha256::digest(format!("zellij\0{}", session(env)));
+    env.runtime_paths()
+        .sock_dir
+        .join(format!("host.{}.sock", hex::encode(&digest[..6])))
+}
+
 /// `exchanges`, calling `on_request` as each request arrives, before its reply goes out.
 fn exchanges_watching(
     env: &Env,
@@ -57,11 +66,7 @@ fn exchanges_watching(
     mut command: Command,
     mut on_request: impl FnMut(),
 ) -> Output {
-    let digest = Sha256::digest(format!("zellij\0{}", session(env)));
-    let path = env
-        .runtime_paths()
-        .sock_dir
-        .join(format!("host.{}.sock", hex::encode(&digest[..6])));
+    let path = host_socket(env);
     let listener = UnixListener::bind(&path).unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut child = command
@@ -100,6 +105,51 @@ fn exchanges_watching(
     let output = child.wait_with_output().unwrap();
     std::fs::remove_file(path).unwrap();
     output
+}
+
+/// A renderer's wakeup socket for the test session, published through a live heartbeat.
+fn renderer_wire(env: &Env) -> UnixDatagram {
+    let runtime = env.runtime_paths();
+    std::fs::create_dir_all(&runtime.heartbeat_dir).unwrap();
+    let path = runtime.sock_dir.join("event.marks.sock");
+    let _ = std::fs::remove_file(&path);
+    let socket = UnixDatagram::bind(&path).unwrap();
+    let heartbeat = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Zellij,
+        session(env),
+        path,
+        None,
+    );
+    let published = runtime.heartbeat_dir.join("sidebar.marks.json");
+    std::fs::write(&published, serde_json::to_vec(&heartbeat).unwrap()).unwrap();
+    crate::common::room::date_heartbeat_as_live(&published);
+    socket
+}
+
+/// The closing marks and clears the wire holds, in order, each as its kind and pane.
+fn closing_marks(socket: &UnixDatagram) -> Vec<(String, PaneId)> {
+    socket.set_nonblocking(true).unwrap();
+    let mut buf = vec![0; 1 << 16];
+    let mut marks = Vec::new();
+    while let Ok(len) = socket.recv(&mut buf) {
+        let envelope: Value = serde_json::from_slice(&buf[..len]).unwrap();
+        let kind = envelope["event"]["kind"].as_str().unwrap().to_owned();
+        if kind.starts_with("card_closing") {
+            let pane = serde_json::from_value(envelope["event"]["pane_id"].clone()).unwrap();
+            marks.push((kind, pane));
+        }
+    }
+    marks
+}
+
+fn marked_and_cleared(pane: &str) -> Vec<(String, PaneId)> {
+    let pane: PaneId = pane.parse().unwrap();
+    vec![
+        ("card_closing".to_owned(), pane.clone()),
+        ("card_closing_cleared".to_owned(), pane),
+    ]
 }
 
 fn assert_exit(output: &Output, code: i32) {
@@ -1204,6 +1254,23 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
     env.record(&env.project_root);
     tab_room_rows(&env, true);
     seed(&env, "first", |_| {});
+    let wire = renderer_wire(&env);
+    let first = wire.try_clone().unwrap();
+    let mux_log = env.home_root.join("mux.log");
+    let watched_log = mux_log.clone();
+    // The mark is the close's first act: when it arrives the mux has not been asked anything.
+    let first_mark = std::thread::spawn(move || {
+        first
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut buf = vec![0; 1 << 16];
+        let len = first.recv(&mut buf).unwrap();
+        let envelope: Value = serde_json::from_slice(&buf[..len]).unwrap();
+        (
+            envelope["event"]["kind"].as_str().unwrap().to_owned(),
+            trace_lines(&watched_log).len(),
+        )
+    });
     let mut listed_at_request = None;
     let output = exchanges_watching(
         &env,
@@ -1217,7 +1284,13 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
         Some(0),
         "the read the close acts on follows the host's reply"
     );
-    let log = trace_lines(&env.home_root.join("mux.log"));
+    assert_eq!(first_mark.join().unwrap(), ("card_closing".to_owned(), 0));
+    assert_eq!(
+        closing_marks(&wire),
+        Vec::new(),
+        "a close that went ahead lifts no mark"
+    );
+    let log = trace_lines(&mux_log);
     assert_eq!(closes(&env).len(), 1, "{log:?}");
     assert!(closes(&env)[0].ends_with("terminal_7"), "{log:?}");
     let listings = log
@@ -1233,11 +1306,35 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
 /// A press on the sidebar or in the dashboard closes nothing and says nothing, whether the
 /// host refuses it or is absent; a pane the host has no card for reports the host's refusal,
 /// an absent host fails any other press, and a listing that fails closes nothing.
+/// Publish a pane frame naming pane 1 as a sidebar and pane 5 as a dashboard pane.
+fn publish_chrome_frame(env: &Env) {
+    let pane = |id: &str, tab: &str, name: &str, command: &str| {
+        serde_json::from_value::<rimz::pane::PaneRef>(json!({
+            "pane_id": id,
+            "session_name": session(env),
+            "view_id": tab,
+            "view_name": name,
+            "is_floating": false,
+            "command": command,
+        }))
+        .unwrap()
+    };
+    let panes = vec![
+        pane("zellij:terminal_1", "1", "room", "rimz-sidebar"),
+        pane("zellij:terminal_5", "3", rimz::pane::VIEW_NAME, "sh"),
+    ];
+    let frame =
+        rimz::sidebar::frame::assemble_frame(panes, rimz::utils::time::unix_now_ms(), session(env));
+    let runtime = env.runtime_paths();
+    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+}
+
 #[test]
 fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let env = Env::new();
     env.record(&env.project_root);
     tab_room_rows(&env, true);
+    let wire = renderer_wire(&env);
     for (pane, id) in [("zellij:terminal_1", 1), ("zellij:terminal_5", 5)] {
         let reason = format!("sidebar close: no card owns pane {pane}");
         let refused = exchange(
@@ -1253,7 +1350,37 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
             assert_exit(&output, 0);
             assert!(output.stderr.is_empty(), "{pane}: {output:?}");
         }
+        let mut twice = marked_and_cleared(pane);
+        twice.extend(marked_and_cleared(pane));
+        assert_eq!(closing_marks(&wire), twice);
     }
+    publish_chrome_frame(&env);
+    let host = UnixListener::bind(host_socket(&env)).unwrap();
+    host.set_nonblocking(true).unwrap();
+    let log = env.home_root.join("mux.log");
+    let listings = || {
+        trace_lines(&log)
+            .iter()
+            .filter(|line| line.contains("list-panes"))
+            .count()
+    };
+    let listed = listings();
+    for pane in ["zellij:terminal_1", "zellij:terminal_5"] {
+        let output = command(&env, &["close", "--from-pane", pane])
+            .output()
+            .unwrap();
+        assert_exit(&output, 0);
+        assert!(output.stderr.is_empty(), "{pane}: {output:?}");
+        assert_eq!(closing_marks(&wire), marked_and_cleared(pane));
+    }
+    assert_eq!(
+        host.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "a pane the frame names as chrome must not reach the host"
+    );
+    assert_eq!(listings(), listed, "{:?}", trace_lines(&log));
+    drop(host);
+    std::fs::remove_file(host_socket(&env)).unwrap();
     let hostless = command(&env, &["close", "--from-pane", "zellij:terminal_7"])
         .output()
         .unwrap();
@@ -1263,15 +1390,26 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
         stderr.contains("sidebar host: ") && stderr.contains("rimz sidebar repair"),
         "{stderr}"
     );
-    let refusal = "sidebar close: no card owns pane zellij:terminal_99";
-    let output = exchange(
-        &env,
-        close_pane_request(99),
-        json!({"reply":"refused", "reason":refusal}),
-        command(&env, &["close", "--from-pane", "zellij:terminal_99"]),
+    assert_eq!(
+        closing_marks(&wire),
+        marked_and_cleared("zellij:terminal_7")
     );
-    assert_exit(&output, 0);
-    assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), refusal);
+    let refusal = "sidebar close: no card owns pane zellij:terminal_99";
+    for flag in ["--from-pane", "--pane"] {
+        let output = exchange(
+            &env,
+            close_pane_request(99),
+            json!({"reply":"refused", "reason":refusal}),
+            command(&env, &["close", flag, "zellij:terminal_99"]),
+        );
+        assert_exit(&output, 0);
+        assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), refusal);
+        assert_eq!(
+            closing_marks(&wire),
+            marked_and_cleared("zellij:terminal_99"),
+            "{flag}"
+        );
+    }
     for conflict in ["--pane", "--tab"] {
         let mut args = vec!["close", "--from-pane", "zellij:terminal_7", conflict];
         if conflict == "--pane" {
@@ -1292,6 +1430,10 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
         "{stderr}"
     );
     assert_eq!(closes(&env), Vec::<String>::new());
+    assert_eq!(
+        closing_marks(&wire),
+        marked_and_cleared("zellij:terminal_7")
+    );
 }
 
 #[test]

@@ -42,6 +42,28 @@ fn card_commands_require_one_view_shared_by_all_attached_clients() {
 }
 
 #[test]
+fn a_closing_mark_reaches_every_view_and_its_clear_lifts_it_from_each() {
+    let clock = clock();
+    let mut views = Views::default();
+    views.reconcile_frame(&frame(&[(1, 11), (2, 21)]), clock.now(), HOLD);
+    assert_eq!(views.entries.len(), 2);
+    views.note_closing(&pane(7), Some(5_000));
+    assert!(
+        views
+            .entries
+            .values()
+            .all(|entry| entry.state.closing.get(&pane(7)) == Some(&5_000))
+    );
+    views.note_closing(&pane(7), None);
+    assert!(
+        views
+            .entries
+            .values()
+            .all(|entry| entry.state.closing.is_empty())
+    );
+}
+
+#[test]
 fn only_a_client_new_to_the_session_moves_the_attach_count() {
     let clock = clock();
     let handle = ViewsHandle::default();

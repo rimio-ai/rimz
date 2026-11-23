@@ -127,6 +127,16 @@ pub enum SidebarEvent {
     /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
     /// reload survives sidebar-event envelope version skew.
     Reload,
+    /// Latency hint that a close of the card owning `pane_id` began. Renderers mark that
+    /// card in every view until [`Self::CardClosingCleared`] names the pane, the card's
+    /// row leaves, or the mark's bound passes, since the wire is lossy.
+    CardClosing {
+        pane_id: PaneId,
+    },
+    /// The close a [`Self::CardClosing`] announced was refused, failed, or closed nothing.
+    CardClosingCleared {
+        pane_id: PaneId,
+    },
 }
 
 fn default_recheck_unread() -> bool {
@@ -195,6 +205,12 @@ mod tests {
                 notification_kind: Some("waiting".to_owned()),
             },
             SidebarEvent::Reload,
+            SidebarEvent::CardClosing {
+                pane_id: pane("terminal_5"),
+            },
+            SidebarEvent::CardClosingCleared {
+                pane_id: pane("terminal_5"),
+            },
         ];
         for event in variants {
             let expected = envelope(event);
@@ -260,6 +276,30 @@ mod tests {
         };
         assert_eq!(first.cmp(&second), std::cmp::Ordering::Less);
         assert!(first < second);
+    }
+
+    /// An envelope a sender wrote before the closing mark existed still parses.
+    #[test]
+    fn an_envelope_from_before_the_closing_mark_still_parses() {
+        let older = serde_json::json!({
+            "v": SIDEBAR_EVENT_VERSION,
+            "workspace_id": envelope(SidebarEvent::Reload).workspace_id,
+            "session_name": "rimz-test",
+            "sent_at_ms": 42,
+            "event": {"kind": "pane_closed", "pane_id": pane("terminal_1")},
+        });
+        let decoded: SidebarEventEnvelope = serde_json::from_value(older).unwrap();
+        assert_eq!(
+            decoded,
+            envelope(SidebarEvent::PaneClosed {
+                pane_id: pane("terminal_1")
+            })
+        );
+        let marked = serde_json::to_value(envelope(SidebarEvent::CardClosing {
+            pane_id: pane("terminal_1"),
+        }))
+        .unwrap();
+        assert_eq!(marked["event"]["kind"], "card_closing");
     }
 
     #[test]

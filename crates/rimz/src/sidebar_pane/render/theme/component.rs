@@ -189,6 +189,8 @@ pub(crate) enum Component {
     MessageQueued,
     /// Active per-pane typing hold on an agent card.
     Typing,
+    /// A card whose close began: every line of it takes this tone until it leaves.
+    CardClosing,
     /// Starts needing a fix, above the footer.
     ThrottleNotice,
     /// The hook drainer's lag behind ingress, below the footer.
@@ -293,6 +295,7 @@ impl Component {
         Component::FastMode,
         Component::MessageQueued,
         Component::Typing,
+        Component::CardClosing,
         Component::ThrottleNotice,
         Component::HookDrainLag,
         Component::StallLeadActive,
@@ -343,7 +346,7 @@ impl Component {
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
             | NeedsYouFilter | BookingWaiting | BookingEnded | EntryLane | EntryTeamTag
-            | EntryStage => palette.muted,
+            | EntryStage | CardClosing => palette.muted,
         })
     }
 }

@@ -155,7 +155,9 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::WidthTargetChanged
         | SidebarEvent::BodyFilterChanged
         | SidebarEvent::Notify { .. }
-        | SidebarEvent::Reload => None,
+        | SidebarEvent::Reload
+        | SidebarEvent::CardClosing { .. }
+        | SidebarEvent::CardClosingCleared { .. } => None,
     }
 }
 

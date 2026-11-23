@@ -54,6 +54,7 @@ impl CardHeights {
             theme: _, // The owned Rc is compared by identity below.
             now,
             typing_until: _, // Marks never change a card's height.
+            closing: _,
             width,
             tier: _, // Derived from width.
             bands,

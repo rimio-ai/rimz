@@ -1451,6 +1451,58 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
     );
 }
 
+/// A close's mark lands on its card and repaints, lifts on the clear, lapses at its bound,
+/// and leaves with its row.
+#[test]
+fn a_closing_mark_lifts_on_its_clear_lapses_at_its_bound_and_leaves_with_its_row() {
+    let clock = LoopClock::play(Timestamp::from_second(1_700_000_000).unwrap());
+    let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    let snapshot = agent_snapshot(&rig.ws);
+    let card = snapshot
+        .rows()
+        .find_map(|row| row.pane.as_ref())
+        .unwrap()
+        .pane_id
+        .clone();
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    rig.watch();
+    let marked = |rig: &mut Rig| rig.view().ui().closing.contains_key(&card);
+    let mark = SidebarEvent::CardClosing {
+        pane_id: card.clone(),
+    };
+    rig.state.pane.dirty = false;
+    rig.event(mark.clone());
+    assert!(marked(&mut rig) && rig.state.pane.dirty);
+    rig.event(SidebarEvent::CardClosingCleared {
+        pane_id: card.clone(),
+    });
+    assert!(!marked(&mut rig));
+
+    rig.event(mark.clone());
+    let bound = Duration::from_millis(super::super::super::plane::CLOSING_MARK_BOUND_MS);
+    rig.state
+        .pane
+        .clock
+        .advance(bound - Duration::from_millis(1));
+    rig.paint(true);
+    assert!(marked(&mut rig), "the mark holds until its bound");
+    clock.advance(Duration::from_millis(1));
+    rig.state.pane.next_frame = clock.now();
+    rig.paint(true);
+    assert!(!marked(&mut rig), "the mark lapses at its bound");
+
+    rig.event(mark);
+    let mut gone = snapshot;
+    for group in std::sync::Arc::make_mut(&mut gone.worktree_groups) {
+        std::sync::Arc::make_mut(&mut group.rows)
+            .retain(|row| row.pane.as_ref().is_none_or(|pane| pane.pane_id != card));
+    }
+    rig.view().ctx().current = gone;
+    rig.state.pane.next_frame = clock.now();
+    rig.paint(true);
+    assert!(!marked(&mut rig), "the mark leaves with its row");
+}
+
 #[test]
 fn search_commit_writes_and_dispatches_the_lens() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
