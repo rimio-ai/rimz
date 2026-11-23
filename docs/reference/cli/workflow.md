@@ -81,7 +81,7 @@ A run records who started it and how deep it sits ([starters and depth](#starter
 On success it prints three lines:
 
 1. The run id, printed at once. This line keeps its scripting format.
-2. The run's work directory (`RIMZ_WORKFLOW_DIR`) where the run's home is after the first decision: the finished directory when the run ended in it, since an ended run's home moves there. This line keeps its scripting format.
+2. The run's work directory (`RIMZ_WORKFLOW_DIR`) where the run's home is after the first decision: the finished directory when the run ended in it, since an ended run's home moves there. A try (`--once`) prints this line only while its home is live and its first decision left it unended: the finished view it closes with names the finished directory. This line keeps its scripting format.
 3. `→ rimz workflow show <run>`.
 
 ### Starters and depth

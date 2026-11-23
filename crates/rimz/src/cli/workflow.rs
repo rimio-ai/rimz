@@ -870,14 +870,20 @@ fn start(
     } else {
         receipt::first_pass(ctx.store.paths(), &record.id, Some(&advance))?
     };
+    #[cfg(feature = "testkit")]
+    rimz::testkit::rendezvous("RIMZ_TEST_WORKFLOW_BEFORE_WORK_DIR");
     // A run that ended in its first pass has its home moved to the finished directory.
-    let work = if paths.work.is_dir() {
+    let home_is_live = paths.work.is_dir();
+    let work = if home_is_live {
         paths.work.clone()
     } else {
         ctx.store.paths().finished_workflow(&record.id).work
     };
-    // A try that ended in its first pass names its finished work dir in the view it closes with.
-    let tried = once && passed.as_ref().is_some_and(|run| run.state.is_terminal());
+    // A try that has ended or left its live home names its finished work dir in its closing view.
+    let tried = once
+        && passed
+            .as_ref()
+            .is_some_and(|run| run.state.is_terminal() || !home_is_live);
     if !tried {
         writeln!(render::out(), "{}", work.display())?;
     }

@@ -204,6 +204,87 @@ fn a_try_whose_definition_stops_fitting_it_ends_failed_and_exits_one() {
     );
 }
 
+/// A first pass returns as soon as a command attempt is published, so the try can end and its
+/// home can move on either side of the receipt's work-dir line.
+#[test]
+fn a_try_names_its_finished_work_once_whether_its_home_moves_before_or_after_the_receipt() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+
+    for moved_first in [true, false] {
+        let (env, dir) = tries();
+        let answer = dir.join("answer.json");
+        let go = dir.join("go");
+        fs::write(&answer, r#"{"outcome":"red"}"#).unwrap();
+        fs::write(
+            dir.join("checks/lint.sh"),
+            format!(
+                "while [ ! -e '{}' ]; do sleep 0.02; done\ncat '{}'\n",
+                go.display(),
+                answer.display()
+            ),
+        )
+        .unwrap();
+        let socket = dir.join("work-dir.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut child = env
+            .rimz()
+            .args(["workflow", "run", "review", "--at", "lint", "--once"])
+            .env("RIMZ_TEST_WORKFLOW_BEFORE_WORK_DIR", &socket)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let id = lines.next().unwrap().unwrap();
+        let accept_by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut held = loop {
+            if let Ok((stream, _)) = listener.accept() {
+                break stream;
+            }
+            assert!(
+                std::time::Instant::now() < accept_by,
+                "the receipt never held"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let state = env.state_path_for(&env.project_root);
+        let run = id.parse().unwrap();
+        let mut stdout = format!("{id}\n");
+        if moved_first {
+            fs::write(&go, "").unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            while !state.finished_workflow(&run).work.is_dir() {
+                assert!(std::time::Instant::now() < deadline, "the home never moved");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        held.write_all(&[1]).unwrap();
+        if !moved_first {
+            for line in lines.by_ref() {
+                let line = line.unwrap();
+                stdout.push_str(&line);
+                stdout.push('\n');
+                if line.starts_with("→ ") {
+                    break;
+                }
+            }
+            let live = state.workflow(&run).work;
+            assert!(
+                stdout.contains(&format!("{}\n", live.display())),
+                "{stdout}"
+            );
+            fs::write(&go, "").unwrap();
+        }
+        for line in lines {
+            stdout.push_str(&line.unwrap());
+            stdout.push('\n');
+        }
+        assert!(child.wait().unwrap().success(), "{stdout}");
+        assert_names_finished_work_once(&env, &id, &stdout);
+    }
+}
+
 #[test]
 fn a_try_and_a_plain_run_start_beside_each_other_but_a_mid_graph_start_is_refused() {
     let (env, _dir) = tries();
