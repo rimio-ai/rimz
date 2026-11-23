@@ -310,6 +310,8 @@ fn input_typed_after_the_attach_exits_stays_queued_for_the_shell() {
     tty.read_exact(&mut queued)
         .expect("read queued shell typeahead");
     assert_eq!(queued, TYPEAHEAD);
+    // The terminal's reader ends only once no handle on the pty's slave is open.
+    drop(tty);
     drop(attach.terminal.finish());
 }
 
