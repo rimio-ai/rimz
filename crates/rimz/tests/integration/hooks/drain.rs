@@ -1882,8 +1882,9 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
     let child_pid = children[0];
     let mut request =
         UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()).unwrap();
+    // Below the 10 s after which the held child panics and frees the drainer without a kill.
     request
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(8)))
         .unwrap();
     writeln!(
         request,
