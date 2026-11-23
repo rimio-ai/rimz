@@ -534,21 +534,33 @@ pub(crate) fn launched_script_command(command: &str) -> Option<&str> {
 /// script file, and through RimZ's `rimz daemon host … -- <argv>` envelope:
 /// `/usr/bin/codex app-server` for `node /usr/bin/codex app-server` or `/bin/sh
 /// /usr/bin/codex app-server`. A `rimz agents exec` envelope stays as written.
-pub(crate) fn effective_argv(command: &str) -> Vec<&str> {
+pub(crate) fn effective_argv(command: &str) -> EffectiveArgv<'_> {
     let Some(parsed) = effective_program_and_args(command) else {
-        return Vec::new();
+        return EffectiveArgv::default();
     };
     if let Some(hosted) = rimz_daemon_hosted_command(command, &parsed) {
         return effective_argv(hosted);
     }
-    let script_at = launched_script_index(&parsed)
+    let launched_at = launched_script_index(&parsed);
+    let script_at = launched_at
         .or_else(|| shell_script_index(&parsed))
         .map_or(0, |index| index + 1);
-    std::iter::once(&parsed.program)
-        .chain(&parsed.args)
-        .skip(script_at)
-        .map(|word| word.text)
-        .collect()
+    EffectiveArgv {
+        words: std::iter::once(&parsed.program)
+            .chain(&parsed.args)
+            .skip(script_at)
+            .map(|word| word.text)
+            .collect(),
+        from_launcher: launched_at.is_some(),
+    }
+}
+
+/// What [`effective_argv`] reads from a command line.
+#[derive(Debug, Default)]
+pub(crate) struct EffectiveArgv<'a> {
+    pub(crate) words: Vec<&'a str>,
+    /// The first word is the script a JS launcher runs (`node …/codex.js`).
+    pub(crate) from_launcher: bool,
 }
 
 /// The command a `rimz daemon host … -- <argv>` envelope runs, as written after
