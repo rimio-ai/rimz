@@ -850,6 +850,10 @@ pub enum LayoutErr {
         valid: String,
     },
     #[error(
+        "profile `{profile}` allows subagent `{entry}`: `+` entries add to an inherited list in Markdown definitions only; list the bare name"
+    )]
+    PlusSubagentEntry { profile: String, entry: String },
+    #[error(
         "launch refused: profile `{caller_profile}` may only launch subagent profiles {allowed}; `{profile}` is not one of them. Pick an allowed profile or ask the user to widen the `subagents` list of profile `{caller_profile}`."
     )]
     SubagentProfileNotAllowed {
@@ -1000,6 +1004,12 @@ pub(crate) fn validate_subagent_allowlists(
         for entry in allowed {
             if is_cell_word(entry, subagent_profiles, commands) {
                 continue;
+            }
+            if entry.trim_start().starts_with('+') {
+                return Err(LayoutErr::PlusSubagentEntry {
+                    profile: profile_name.clone(),
+                    entry: entry.clone(),
+                });
             }
             return Err(LayoutErr::UnknownSubagentAllowlistEntry {
                 profile: profile_name.clone(),
@@ -1515,7 +1525,42 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             reason: err.to_string(),
         })?;
     normalize_budget(&mut resolved.launch.budget, name)?;
+    refuse_rimz_lists_beside_a_grant(&resolved, name)?;
     Ok(resolved)
+}
+
+/// A profile whose tools carry a `capabilities:` grant, a TOML profile over a Markdown kind
+/// base that writes one included, reaches RimZ only through the grant: its `skills` and
+/// `mcps` hold the user's own names, so a `rimz` or `rimz-` entry there is refused.
+fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -> Result<()> {
+    if resolved
+        .tools
+        .as_ref()
+        .and_then(crate::agents::ToolSet::rimz)
+        .is_none()
+    {
+        return Ok(());
+    }
+    // `skills` reserves only `rimz-` names; `mcps` reserves `rimz` too, RimZ's own server.
+    let skills = resolved.skills.iter().flatten().map(|skill| skill.as_str());
+    let mcps = resolved.mcps.iter().flatten().map(|entry| entry.name());
+    let rimz: Vec<String> = skills
+        .filter(|name| name.starts_with("rimz-"))
+        .chain(mcps.filter(|name| *name == "rimz" || name.starts_with("rimz-")))
+        .map(|name| format!("`{name}`"))
+        .collect();
+    if rimz.is_empty() {
+        return Ok(());
+    }
+    Err(LayoutErr::InvalidProfile {
+        profile: profile.to_owned(),
+        reason: format!(
+            "its kind base sets `capabilities:`, and its `skills` or `mcps` list {}; beside \
+             `capabilities:` those lists hold only your own, so list RimZ's in the kind base's \
+             `capabilities:` instead",
+            rimz.join(", ")
+        ),
+    })
 }
 
 /// The effort and fast mode a listing shows for profile `name`: what its launch takes through

@@ -844,6 +844,22 @@ fn customize_checks_every_target_and_field_before_writing_any() {
             ],
         ),
         (
+            vec![
+                "crew:writer",
+                "--set",
+                "capabilities=[bash]",
+                "--set",
+                "tools=[Bash]",
+            ],
+            2,
+            vec!["--set tools=[Bash]: sets both `capabilities:` and `tools:`; keep one".into()],
+        ),
+        (
+            vec!["crew:writer", "--set", "skills=[a, +b]"],
+            2,
+            vec!["--set skills=[a, +b]: sets `skills:` mixing `+` entries with plain ones".into()],
+        ),
+        (
             vec!["crew:writer", "--set", "agent=claude"],
             2,
             vec!["--set agent=claude: customize writes this field itself".into()],

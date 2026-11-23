@@ -396,7 +396,9 @@ impl<'a> PackOverride<'a> {
                 None => entries.push((field.clone(), parsed)),
             }
             frontmatter::parse::<AgentFrontmatter>(&self.item.path, &yaml_lines(&entries))
-                .map_err(|error| refuse(error.to_string()))?;
+                .map_err(|error| refuse(error.to_string()))?
+                .check_plus()
+                .map_err(refuse)?;
         }
         Ok(format!("---\n{}---\n", yaml_lines(&entries)))
     }

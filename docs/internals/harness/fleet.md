@@ -191,7 +191,7 @@ Cells carry pending model and tool notices as typed values, and only the launch 
 | raw `args` | the original's, with the base filling a gap, on the same kind; the base's on a different kind |
 | `fast`, `code-mode` | the base's written value when present, otherwise the original's on the same kind; the base's alone on a different kind |
 | mode | the original's written value, with the base's written value filling a gap |
-| budget, `auto-compact`, tools, allowed-tools, skills, `mcps`, system-prompt file | the original's, with the base filling a gap |
+| budget, `auto-compact`, tools (with a `capabilities:` grant), allowed-tools, skills, `mcps`, system-prompt file | the original's, with the base filling a gap |
 | appended system-prompt files | the base's fragments, then the original's |
 
 For a Markdown chain on either side, unset effort takes the final kind's base `effort`, then the kind's default for the final model. Every value in the table is a written one: a kind base's `fast`, `code-mode`, `effort`, and `auto-compact` are held apart from the chain as the kind-defaults layer and fill only what nothing wrote. `crates/rimz/src/harness/spec.rs::ResolvedProfile` records what the kind-defaults step filled (the base's four values and the built-in effort) separately from written values, strips those fills from both sides before a re-base or a role override, takes the replacement's kind base, and fills again after merging the model, so a base value follows the final kind and never carries across a provider change. Permission-mode defaulting is deferred until final argv settlement, after raw arguments and passthrough exist.
