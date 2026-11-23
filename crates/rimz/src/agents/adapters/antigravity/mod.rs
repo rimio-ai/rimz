@@ -723,7 +723,7 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
-        permissions::pin_ask_mode(&ASK_SETTINGS, paths, extra_args, artifact)
+        permissions::pin_modes(&ASK_SETTINGS, paths, extra_args, artifact)
     }
 
     /// `--sandbox` confines agy's terminal commands to the workspace and added dirs, with no

@@ -3,7 +3,8 @@
 //! `command(P)` matches P word by word with any trailing arguments, a file target covers a
 //! directory's descendants and expands no glob or `~`, and a rule string agy cannot read is
 //! accepted and matches nothing, so a rule with no translation is left out, never passed on.
-//! The same document carries an ask launch's `agentMode` pin (`pin_ask_mode`).
+//! The same document carries every launch's `queuedMessages` pin and an ask launch's
+//! `agentMode` pin (`pin_modes`).
 
 use std::path::Path;
 
@@ -106,23 +107,24 @@ fn mcp_target(name: &str) -> Option<String> {
     (tool == "*" || !tool.contains('*')).then(|| format!("{server}/{tool}"))
 }
 
-/// Fold the ask launch's own `--settings` document, `pin`, into the launch's one settings
-/// document, its empty `agentMode` winning over any mode a passthrough document sets: agy keeps
-/// only the last `--settings`, and a passthrough one follows the mode's arguments. A launch
-/// without the pin keeps its argv.
-pub(super) fn pin_ask_mode(
-    pin: &[&str],
+/// Pin `queuedMessages` to `"queue"` in the launch's one settings document, since message
+/// delivery presses Enter to queue and Alt+M to send now, keys a `send-immediately` setting
+/// swaps. Fold the ask launch's own `--settings` document, `ask_pin`, into that document too,
+/// its empty `agentMode` winning over any mode a passthrough document sets: agy keeps only
+/// the last `--settings`, and a passthrough one follows the mode's arguments. Both pins win
+/// over a passthrough value.
+pub(super) fn pin_modes(
+    ask_pin: &[&str],
     (cwd, artifact_dir): (&Path, &Path),
     extra_args: &mut Vec<String>,
     artifact: &mut Option<LaunchSettingsArtifact>,
 ) -> Result<(), LaunchSettingsErr> {
-    let Some(start) = extra_args
-        .windows(pin.len())
-        .position(|args| args.iter().map(String::as_str).eq(pin.iter().copied()))
-    else {
-        return Ok(());
-    };
-    extra_args.drain(start..start + pin.len());
+    let ask = extra_args
+        .windows(ask_pin.len())
+        .position(|args| args.iter().map(String::as_str).eq(ask_pin.iter().copied()));
+    if let Some(start) = ask {
+        extra_args.drain(start..start + ask_pin.len());
+    }
     *artifact = merge_settings(
         cwd,
         artifact_dir,
@@ -130,7 +132,13 @@ pub(super) fn pin_ask_mode(
         artifact.as_ref(),
         false,
         |object| {
-            object.insert("agentMode".to_owned(), serde_json::Value::from(""));
+            if ask.is_some() {
+                object.insert("agentMode".to_owned(), serde_json::Value::from(""));
+            }
+            object.insert(
+                "queuedMessages".to_owned(),
+                serde_json::Value::from("queue"),
+            );
             Ok(())
         },
     )?;

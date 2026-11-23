@@ -2064,7 +2064,8 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                             "permissions": {
                                 "deny": ["command(rm)"],
                                 "allow": ["command(git status)", "mcp(rimz_tools/*)"]
-                            }
+                            },
+                            "queuedMessages": "queue"
                         }),
                         "{case}"
                     );
@@ -2086,10 +2087,11 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
     }
 }
 
-/// The ask pin is agy's one settings document on every ask launch, with no allowed-tools list
-/// and whether or not a passthrough `--settings` follows it; no other mode writes it.
+/// Every agy launch carries one settings document pinning `queuedMessages` to `"queue"` over a
+/// passthrough value, and an ask launch adds its `agentMode` pin to that same document, with no
+/// allowed-tools list and whether or not a passthrough `--settings` follows it.
 #[test]
-fn antigravity_ask_pins_default_mode_in_the_one_settings_document() {
+fn antigravity_pins_queue_mode_and_ask_mode_in_the_one_settings_document() {
     use crate::agents::PermissionMode;
     let project = tempfile::tempdir().unwrap();
     let id = crate::WorkspaceId::from_project_root(project.path());
@@ -2098,7 +2100,8 @@ fn antigravity_ask_pins_default_mode_in_the_one_settings_document() {
     let machine = crate::config::MachineConfig::default();
     let ambient = BTreeMap::from([("HOME".into(), project.path().display().to_string())]);
     let adapter = crate::agents::find_definition("antigravity").unwrap();
-    let passthrough = r#"{"agentMode":"auto","model":{"name":"flash"}}"#;
+    let passthrough =
+        r#"{"agentMode":"auto","model":{"name":"flash"},"queuedMessages":"send-immediately"}"#;
     for action in ["launch", "resume"] {
         for mode in [
             PermissionMode::Ask,
@@ -2139,15 +2142,24 @@ fn antigravity_ask_pins_default_mode_in_the_one_settings_document() {
                     .filter(|pair| pair[0] == "--settings")
                     .map(|pair| serde_json::from_str(&pair[1]).unwrap())
                     .collect();
+                let queue = serde_json::json!("queue");
                 let expected = match (mode, user_settings) {
-                    (PermissionMode::Ask, false) => vec![serde_json::json!({"agentMode": ""})],
-                    (PermissionMode::Ask, true) => vec![serde_json::json!({
+                    (PermissionMode::Ask, false) => {
+                        serde_json::json!({"agentMode": "", "queuedMessages": queue})
+                    }
+                    (PermissionMode::Ask, true) => serde_json::json!({
                         "agentMode": "",
-                        "model": {"name": "flash"}
-                    })],
-                    (_, false) => vec![],
-                    (_, true) => vec![serde_json::from_str(passthrough).unwrap()],
+                        "model": {"name": "flash"},
+                        "queuedMessages": queue
+                    }),
+                    (_, false) => serde_json::json!({"queuedMessages": queue}),
+                    (_, true) => serde_json::json!({
+                        "agentMode": "auto",
+                        "model": {"name": "flash"},
+                        "queuedMessages": queue
+                    }),
                 };
+                let expected = vec![expected];
                 assert_eq!(settings, expected, "{case}: {argv:?}");
             }
         }
@@ -4877,7 +4889,16 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
     );
     let plan = compile_with_ambient(project.path(), &bare, &ambient).unwrap();
     assert_eq!(plan.agent_file, None);
-    assert_eq!(plan.process().provider_argv, ["agy", "--agent", "mine"]);
+    assert_eq!(
+        plan.process().provider_argv,
+        [
+            "agy",
+            "--agent",
+            "mine",
+            "--settings",
+            r#"{"queuedMessages":"queue"}"#
+        ]
+    );
 
     let config = home.path().join(".gemini/config/config.json");
     std::fs::write(&config, r#"{"plugins":{"rimz":{"enabled":false}}}"#).unwrap();
