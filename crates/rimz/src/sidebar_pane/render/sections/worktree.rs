@@ -220,6 +220,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
                 ctx.selected_index,
                 ctx.held_expansions,
             ),
+            ctx.now,
         );
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);

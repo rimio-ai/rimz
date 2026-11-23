@@ -423,6 +423,56 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
 }
 
 #[test]
+fn pre_tool_use_with_a_script_report_reaches_the_fold_and_a_plain_one_stays_dropped() {
+    let (_dir, store) = test_store();
+    let append = |observation: &AgentLifecycleObservation, event_name: &str| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name,
+                observation,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle event")
+    };
+    append(
+        &observation(LifecycleSignal::TurnStarted { turn_id: None }),
+        "UserPromptSubmit",
+    );
+    let proof = observation(LifecycleSignal::ToolUsed {
+        effect: ToolEffect::Observed,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    });
+    assert_eq!(append(&proof, "PreToolUse").primary_event_id, None);
+
+    let mut starts_script = proof;
+    starts_script.background_scripts = Some(crate::agents::BackgroundScriptReport::Started {
+        script: crate::agents::BackgroundScript {
+            id: "toolu_script".to_owned(),
+            description: Some("Run the suite".to_owned()),
+            started_at: jiff::Timestamp::now(),
+        },
+    });
+    assert!(
+        append(&starts_script, "PreToolUse")
+            .primary_event_id
+            .is_some()
+    );
+
+    let agents = snapshot::catch_up_rollup(store.paths())
+        .expect("rollup")
+        .1
+        .to_vec();
+    let agent =
+        find_agent(&agents, "claude", &AgentSessionId::from("sess-1")).expect("folded agent");
+    assert_eq!(agent.background_scripts.len(), 1);
+    assert_eq!(agent.background_scripts[0].id, "toolu_script");
+}
+
+#[test]
 fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
     let (_dir, store) = test_store();
     let started = observation(LifecycleSignal::TurnStarted { turn_id: None });

@@ -569,6 +569,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         pane_stamp: None,
         parent_agent_id: None,
         background_shells: None,
+        background_scripts: None,
     }
 }
 

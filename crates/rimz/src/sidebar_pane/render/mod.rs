@@ -334,6 +334,7 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
                         ui.selected_index,
                         &ui.held_expansions,
                     ),
+                    snapshot.now,
                 );
                 sections::delegation_motion(
                     row,

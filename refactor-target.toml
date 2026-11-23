@@ -463,7 +463,8 @@ upward-dependencies = ["address"]
 # skills::rimz_skills gives the launch plan and `rimz agents validate` one on-disk inventory of
 # the rimz-* skills (+1).
 # ContextObservation::provider_at_rest tells the statusline feed the provider reports itself at rest (+1).
-surface-budget = 1332
+# Background scripts, their report, and the shown threshold are folded by store and drawn by the renderer (+3).
+surface-budget = 1335
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4740,7 +4741,8 @@ path = "crates/rimz/src/store"
 # store::workflow::state_word is the one state word of a workflow run, for the CLI and the MCP join.
 # ingress::peek_pending and Wait::answered_by_check let the limit census read rest lock-free (+2).
 # Store::set_terminal_path saves the terminal PATH a user's room entry ran on, for hosted workflow children (+1).
-surface-budget = 694
+# AgentCard carries background scripts as CardScript labels, admitted at the view clock by shown_scripts (+1).
+surface-budget = 695
 
 [[verdict]]
 kind = "item"

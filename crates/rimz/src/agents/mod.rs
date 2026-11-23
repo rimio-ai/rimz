@@ -11,6 +11,7 @@ pub mod account_links;
 mod adapters;
 mod agent_file;
 pub mod attribution;
+mod background_script;
 mod background_shell;
 pub mod capabilities;
 #[cfg(test)]
@@ -82,6 +83,9 @@ pub use account::{
     RateLimitCacheEntry, RateLimitsCache, WindowSpan,
 };
 pub use agent_file::{AgentFile, AgentFileInput, AgentFileRefusal, publish_agent_file};
+pub use background_script::{
+    BACKGROUND_SCRIPT_SHOWN_AFTER, BackgroundScript, BackgroundScriptReport,
+};
 pub use background_shell::{BackgroundShell, BackgroundShellReport};
 pub use capabilities::ManualSkill;
 pub use context::{

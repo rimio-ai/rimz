@@ -105,6 +105,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
             child.status == AgentStatus::Running
                 || (child.compacting && !child.status.is_attention())
         }) || !agent.background_shells.is_empty()
+            || agent.shown_scripts(now).next().is_some()
             || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger))
             || agent.awaited.iter().any(waits::awaited_in_motion)
@@ -141,18 +142,19 @@ fn delegation_entries(agent: &AgentCard) -> DelegationEntries<'_> {
     }
 }
 
-fn wait_count(agent: &AgentCard) -> usize {
+fn wait_count(agent: &AgentCard, now: jiff::Timestamp) -> usize {
     agent.awaited.len()
         + waits::visible_waits(&agent.pending_waits).count()
         + agent.background_shells.len()
+        + agent.shown_scripts(now).count()
         + usize::from(agent.idle_stop.is_some())
 }
 
 /// Whether the card has a current child, a wait, or a booking for its delegation line
 /// to count.
-pub(super) fn has_delegation(agent: &AgentCard) -> bool {
+pub(super) fn has_delegation(agent: &AgentCard, now: jiff::Timestamp) -> bool {
     agent.current_sub_agents().next().is_some()
-        || wait_count(agent) > 0
+        || wait_count(agent, now) > 0
         || !agent.bookings.is_empty()
 }
 
@@ -344,6 +346,7 @@ pub(super) fn row_lines(
                             ctx,
                             &agent.pending_waits,
                             &agent.background_shells,
+                            agent.shown_scripts(ctx.now),
                             agent.idle_stop.as_ref(),
                         )
                         .into_iter()
@@ -450,7 +453,7 @@ fn message_mark_spans(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> V
 /// or the plan unfinished, the booked half last. Expansion only appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard, open: bool) -> Option<Line<'static>> {
     let child_count = agent.current_sub_agents().count();
-    let wait_count = wait_count(agent);
+    let wait_count = wait_count(agent, ctx.now);
     let booked = !agent.bookings.is_empty() && (open || bookings::open_plan(agent));
     if child_count == 0 && wait_count == 0 && !booked {
         return None;

@@ -117,6 +117,27 @@ fn completed_turn_working_wait_keeps_its_wait_description() {
 }
 
 #[test]
+fn resting_script_displays_running_without_changing_delivery_status() {
+    let mut session = agent("claude", "script", AgentStatus::Success, 0).worktree("/repo/main");
+    session
+        .background_scripts
+        .push(crate::agents::BackgroundScript {
+            id: "toolu_script".into(),
+            description: Some("Run the suite".into()),
+            started_at: ago(60),
+        });
+    let snapshot = room_with_agent_panes(vec![session]);
+    assert_eq!(
+        row(&snapshot, "script").status(),
+        Some(AgentStatus::Running)
+    );
+    assert_eq!(
+        rollup_agent(&snapshot, "script").effective_status(snapshot.now),
+        AgentStatus::Success
+    );
+}
+
+#[test]
 fn resting_shell_displays_running_without_changing_delivery_status() {
     let mut session = agent("claude", "shell", AgentStatus::Success, 0).worktree("/repo/main");
     session

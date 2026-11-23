@@ -13,6 +13,7 @@ use crate::agent_activity::ToolRepeat;
 use crate::ids::{AgentKind, AgentSessionId, AskId, LoginKey, LoginName, MessageId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
+use super::background_script::BackgroundScript;
 use super::background_shell::BackgroundShell;
 use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, SignIn, TurnErrorClass, TurnSettle,
@@ -1570,6 +1571,12 @@ pub struct AgentState {
     /// re-registers. Independent of the `Parked` phase.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_shells: Vec<BackgroundShell>,
+    /// Code-mode scripts this session is running, folded from adapter hook
+    /// reports and carried forward; cleared when the session ends or
+    /// re-registers. The card shows one only past
+    /// [`crate::agents::BACKGROUND_SCRIPT_SHOWN_AFTER`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_scripts: Vec<BackgroundScript>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -2229,6 +2236,7 @@ impl AgentState {
             raised_ask: None,
             alert: None,
             background_shells: Vec::new(),
+            background_scripts: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
             subagent_started_at: None,
@@ -2661,14 +2669,15 @@ impl AgentState {
     }
 
     /// A resting status as displayed: an owed compaction continue, a
-    /// background shell, or a `Working` wait lifts it to running, and a
-    /// `Sleeping` wait to sleeping.
+    /// background shell or script, or a `Working` wait lifts it to running,
+    /// and a `Sleeping` wait to sleeping.
     pub(crate) fn display_rest_status(&self, status: AgentStatus) -> AgentStatus {
         if !matches!(status, AgentStatus::Idle | AgentStatus::Success) {
             return status;
         }
         if self.soft_compact_in_flight()
             || !self.background_shells.is_empty()
+            || !self.background_scripts.is_empty()
             || self
                 .pending_waits
                 .iter()

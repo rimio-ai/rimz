@@ -23,6 +23,75 @@ fn registration_clears_shells_before_applying_its_report() {
     );
 }
 
+#[test]
+fn background_script_reports_fold_carry_and_clear() {
+    let started = |id: &str, at: i64| json!({"kind": "started", "script": {"id": id, "description": "long sleep", "started_at": Timestamp::from_second(at).unwrap()}});
+    let scripts = |events: &[EventEnvelope]| -> Vec<(String, i64)> {
+        reduce_agent_states(events)[0]
+            .background_scripts
+            .iter()
+            .map(|script| (script.id.clone(), script.started_at.as_second()))
+            .collect()
+    };
+    let owned = |pairs: &[(&str, i64)]| -> Vec<(String, i64)> {
+        pairs
+            .iter()
+            .map(|(id, at)| ((*id).to_owned(), *at))
+            .collect()
+    };
+    let tool = json!({"signal": "tool_used", "mutates": false, "edits": false, "name": "REPL"});
+    let parked = json!({"signal": "turn_ended", "errored": false, "parked_on_background": true});
+    let mut events = vec![
+        lifecycle(0, json!({"signal": {"signal": "registered"}})),
+        lifecycle(
+            1,
+            json!({"signal": tool, "background_scripts": started("a", 100)}),
+        ),
+        lifecycle(
+            2,
+            json!({"signal": tool, "background_scripts": started("a", 150)}),
+        ),
+        lifecycle(
+            3,
+            json!({"signal": tool, "background_scripts": started("b", 200)}),
+        ),
+        lifecycle(4, json!({"signal": parked})),
+    ];
+    assert_eq!(scripts(&events), owned(&[("a", 100), ("b", 200)]));
+
+    events.push(lifecycle(
+        5,
+        json!({"signal": tool, "background_scripts": {"kind": "finished", "id": "a"}}),
+    ));
+    assert_eq!(scripts(&events), owned(&[("b", 200)]));
+
+    events.push(lifecycle(
+        6,
+        json!({"signal": parked, "background_scripts": {"kind": "none_running"}}),
+    ));
+    assert!(scripts(&events).is_empty());
+
+    events.push(lifecycle(
+        7,
+        json!({"signal": tool, "background_scripts": started("c", 300)}),
+    ));
+    assert_eq!(scripts(&events), owned(&[("c", 300)]));
+    events.push(lifecycle(8, json!({"signal": {"signal": "ended"}})));
+    assert!(scripts(&events).is_empty());
+
+    let registered = [
+        lifecycle(
+            0,
+            json!({"signal": tool, "background_scripts": started("old", 100)}),
+        ),
+        lifecycle(
+            1,
+            json!({"signal": {"signal": "registered"}, "background_scripts": started("new", 200)}),
+        ),
+    ];
+    assert_eq!(scripts(&registered), owned(&[("new", 200)]));
+}
+
 fn lifecycle(secs: i64, params: serde_json::Value) -> EventEnvelope {
     let mut params = params;
     params["agent_id"] = json!("sess-1");

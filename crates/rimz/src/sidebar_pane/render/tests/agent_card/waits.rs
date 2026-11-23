@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents::{
-    ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingWait, PendingWaitTrigger, TurnPhase,
+    ATTENTION_AGE_CEILING_SECS, BackgroundScript, BackgroundShell, PendingWait, PendingWaitTrigger,
+    TurnPhase,
 };
 use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{elapsed_glyph, role_glyph};
@@ -859,6 +860,81 @@ fn running_card_shows_queued_question_without_changing_status() {
 /// A running shell job's lead: the working animation at the test phase.
 fn shell_lead(theme: &Theme, text: &str) -> String {
     format!("{} {text}", role_glyph(theme, AnimationRole::Working, 0))
+}
+
+#[test]
+fn background_scripts_join_the_shells_and_the_count_past_the_threshold() {
+    let script = |id: &str, description: Option<&str>, age: u64| BackgroundScript {
+        id: id.to_owned(),
+        description: description.map(ToOwned::to_owned),
+        started_at: fixed_now() - Duration::from_secs(age),
+    };
+    let mut parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    parent.background_scripts = vec![script("young", Some("quick look"), 29)];
+    let theme = Theme::fixed(false);
+    let rows = line_texts(&group_lines(
+        &snapshot_with(vec![parent.clone()]),
+        &theme,
+        0,
+    ));
+    assert!(!rows.iter().any(|line| line.contains("waits")), "{rows:#?}");
+    assert!(
+        !rows.iter().any(|line| line.contains("quick look")),
+        "{rows:#?}"
+    );
+
+    parent.pending_waits = vec![PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: "command".to_owned(),
+        trigger: PendingWaitTrigger::Command {
+            command: "make check".to_owned(),
+        },
+        armed_at: Some(fixed_now()),
+    }];
+    parent.background_shells = vec![BackgroundShell {
+        id: "b1".to_owned(),
+        command: Some("cargo test".to_owned()),
+        description: Some("Run the test suite".to_owned()),
+        started_at: fixed_now() - Duration::from_secs(300),
+    }];
+    parent.background_scripts = vec![
+        script("long", Some("long sleep"), 30),
+        script("bare", None, 45),
+        script("young", Some("quick look"), 29),
+    ];
+    let snapshot = snapshot_with(vec![parent]);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let rows = line_texts(&lines);
+    let stats = rows
+        .iter()
+        .position(|line| line.contains("⧖ waits (4)"))
+        .unwrap_or_else(|| panic!("{rows:#?}"));
+    assert!(rows[stats + 1].contains(&shell_lead(&theme, "command · make")));
+    assert!(rows[stats + 3].contains(&shell_lead(&theme, "shell · Run the test suite")));
+    assert!(rows[stats + 5].contains(&shell_lead(&theme, "shell · long sleep")));
+    assert!(rows[stats + 5].ends_with(&format!(
+        "{} <1m▐",
+        elapsed_glyph(&theme, 30, ATTENTION_AGE_CEILING_SECS)
+    )));
+    assert!(rows[stats + 6].contains(&shell_lead(&theme, "shell · script")));
+    assert!(
+        !rows.iter().any(|line| line.contains("quick look")),
+        "{rows:#?}"
+    );
+    let lead = &lines[stats + 5].spans[2];
+    assert_eq!(lead.content, role_glyph(&theme, AnimationRole::Working, 0));
+    assert_eq!(lead.style.fg, Some(theme.component(Component::WaitHeader)));
+    assert_snapshot(
+        "background_script_entries",
+        snapshot_to_screen(&snapshot, 54, 28),
+    );
 }
 
 #[test]
