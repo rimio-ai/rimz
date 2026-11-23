@@ -46,7 +46,17 @@ fn exchange(env: &Env, expected: Value, reply: Value, command: Command) -> Outpu
 }
 
 /// Answer each request the command sends the host, in order, with its paired reply.
-fn exchanges(env: &Env, pairs: &[(Value, Value)], mut command: Command) -> Output {
+fn exchanges(env: &Env, pairs: &[(Value, Value)], command: Command) -> Output {
+    exchanges_watching(env, pairs, command, || {})
+}
+
+/// `exchanges`, calling `on_request` as each request arrives, before its reply goes out.
+fn exchanges_watching(
+    env: &Env,
+    pairs: &[(Value, Value)],
+    mut command: Command,
+    mut on_request: impl FnMut(),
+) -> Output {
     let digest = Sha256::digest(format!("zellij\0{}", session(env)));
     let path = env
         .runtime_paths()
@@ -84,6 +94,7 @@ fn exchanges(env: &Env, pairs: &[(Value, Value)], mut command: Command) -> Outpu
             .read_line(&mut line)
             .unwrap();
         assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), *expected);
+        on_request();
         writeln!(peer, "{reply}").unwrap();
     }
     let output = child.wait_with_output().unwrap();
@@ -1185,39 +1196,73 @@ fn close_tab_on_the_sidebar_or_in_the_dashboard_closes_nothing() {
 }
 
 /// The key's close names the pane it was pressed in, so a host whose highlight moved to
-/// terminal_8 meanwhile still names and closes terminal_7's card.
+/// terminal_8 meanwhile still names and closes terminal_7's card, and the one listing the
+/// close acts on also answers whether the pane is a sidebar.
 #[test]
 fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
     let env = Env::new();
     env.record(&env.project_root);
     tab_room_rows(&env, true);
     seed(&env, "first", |_| {});
-    let output = exchange(
+    let mut listed_at_request = None;
+    let output = exchanges_watching(
         &env,
-        close_pane_request(7),
-        agent_reply("first", 7),
+        &[(close_pane_request(7), agent_reply("first", 7))],
         command(&env, &["close", "--from-pane", "zellij:terminal_7"]),
+        || listed_at_request = Some(listings_before_close(&env)),
     );
     assert_exit(&output, 0);
+    assert_eq!(
+        listed_at_request,
+        Some(0),
+        "the read the close acts on follows the host's reply"
+    );
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert_eq!(closes(&env).len(), 1, "{log:?}");
     assert!(closes(&env)[0].ends_with("terminal_7"), "{log:?}");
+    let listings = log
+        .iter()
+        .take_while(|line| !line.contains("close-pane"))
+        .filter(|line| line.contains("list-panes"))
+        .count();
+    assert_eq!(listings, 1, "{log:?}");
     let entries = read_closed(&env);
     assert_eq!(entries[0]["agent_id"], "first", "{entries}");
 }
 
-/// A press on the sidebar or in the dashboard closes nothing and says nothing; a pane the
-/// host has no card for reports the host's refusal; a listing that fails closes nothing.
+/// A press on the sidebar or in the dashboard closes nothing and says nothing, whether the
+/// host refuses it or is absent; a pane the host has no card for reports the host's refusal,
+/// an absent host fails any other press, and a listing that fails closes nothing.
 #[test]
 fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let env = Env::new();
     env.record(&env.project_root);
     tab_room_rows(&env, true);
-    for pane in ["zellij:terminal_1", "zellij:terminal_5"] {
-        let output = exchanges(&env, &[], command(&env, &["close", "--from-pane", pane]));
-        assert_exit(&output, 0);
-        assert!(output.stderr.is_empty(), "{pane}: {output:?}");
+    for (pane, id) in [("zellij:terminal_1", 1), ("zellij:terminal_5", 5)] {
+        let reason = format!("sidebar close: no card owns pane {pane}");
+        let refused = exchange(
+            &env,
+            close_pane_request(id),
+            json!({"reply":"refused", "reason":reason}),
+            command(&env, &["close", "--from-pane", pane]),
+        );
+        let hostless = command(&env, &["close", "--from-pane", pane])
+            .output()
+            .unwrap();
+        for output in [refused, hostless] {
+            assert_exit(&output, 0);
+            assert!(output.stderr.is_empty(), "{pane}: {output:?}");
+        }
     }
+    let hostless = command(&env, &["close", "--from-pane", "zellij:terminal_7"])
+        .output()
+        .unwrap();
+    assert_exit(&hostless, 1);
+    let stderr = String::from_utf8_lossy(&hostless.stderr);
+    assert!(
+        stderr.contains("sidebar host: ") && stderr.contains("rimz sidebar repair"),
+        "{stderr}"
+    );
     let refusal = "sidebar close: no card owns pane zellij:terminal_99";
     let output = exchange(
         &env,
@@ -1239,7 +1284,7 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let garbage = env.home_root.join("garbage-panes.json");
     std::fs::write(&garbage, "not json").unwrap();
     failed.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", garbage);
-    let output = exchanges(&env, &[], failed);
+    let output = exchange(&env, close_pane_request(7), agent_reply("first", 7), failed);
     assert_exit(&output, 1);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
