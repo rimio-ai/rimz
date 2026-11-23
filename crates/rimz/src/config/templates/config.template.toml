@@ -309,7 +309,8 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 ## flip_compact = "180k"          # compact on stage hand-off at this context threshold; "off" disables it; unset = 120k for a Plan owner, 180k otherwise
 
 ## [harness.prompt_cache_ttl]
-# Defaults: Claude 1h; Codex subscription 12h, API key or unknown 30m; others use fallback.
+# Defaults: Claude 1h; Codex subscription 12h, API key or unknown 30m; Antigravity 1h;
+# others use fallback.
 ## claude = "5m"                   # off or a duration longer than prompt_cache_margin
 ## codex = { subscription = "12h", api-key = "30m" } # split tables work for any kind
 ## fallback = "1h"                # off or a duration; fallback is a reserved kind name

@@ -772,6 +772,13 @@ impl crate::agents::capabilities::TranscriptCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
+    fn prompt_cache_ttl(
+        &self,
+        _sign_in: Option<crate::agents::context::SignIn>,
+    ) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(60 * 60))
+    }
+
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
         if !payload.is_object() {
             return None;

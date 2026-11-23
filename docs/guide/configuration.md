@@ -297,6 +297,7 @@ For Claude seats whose floor is enabled and whose configured lifetime exceeds th
 | Claude, every sign-in | 60 minutes | 59 minutes |
 | Codex, subscription | 12 hours | 11 hours 59 minutes |
 | Codex, API key or unknown sign-in | 30 minutes | 29 minutes |
+| Antigravity, every sign-in | 60 minutes | 59 minutes |
 | Other providers, via fallback | 60 minutes | 59 minutes |
 
 Each agent's newest observed cache write wins over settings, even `off`: a five-minute write uses five minutes, a one-hour write uses one hour, and a mixed write uses five minutes because its shorter-lived part expires first. Claude observes main-chain requests and Pi observes its active branch; read-only requests do not change the observation. A write with no retention split falls through to settings. Before an observation, the first match wins: the provider's sign-in setting, its plain setting, its built-in sign-in default, then `fallback` (default `1h`). Unknown sign-in skips split settings; Codex uses its shorter default until its account is classified.
