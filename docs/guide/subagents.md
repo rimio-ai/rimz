@@ -97,6 +97,14 @@ rimz transcript @calm-fox -n 0   # the whole run
 
 `list` from a shell outside any channel shows every child in the room. It needs the room running, takes `--filter` terms as [`rimz agents list`](../reference/cli/agents.md#filter-the-list) does, and `-q` prints just the addresses. A child silent past the stall window reads `failed` there while the sidebar shows it under its parent's card, with how long it has been silent under its row. A child parked on a provider usage limit reads `paused` there while it can still resume, with the provider's message under its row. Once the park is spent, it reads `failed`; `RUN` reads `failed` once RimZ fails the run, which for most rate and spend limits follows within one sidebar refresh, and an overload park's run stays `running` until its deadline ([status reference](../reference/cli/subagents.md#list-children)). A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](./loops.md). Channel and `@all` transcript views leave children out, so read a child by its handle.
 
+To try a subagent profile before any agent delegates to it, launch it as an ordinary agent:
+
+```sh
+rimz agents websearcher --subagent-profile -p "What changed in the Zellij 0.44 plugin API?"
+```
+
+RimZ reads the provider, model, effort, tools, and prompt from `subagents/websearcher.md`, opens the agent in a pane of its own, and prints its answer in your shell, as any [`rimz agents -p`](../reference/cli/agents.md#supervised-runs--p) run does. `rimz subagents websearcher` itself stays agent-only. The run tests the definition, not delegation: no parent card holds it, no parent permission mode caps it, the definition's `timeout` sets no deadline, no answer comes back to a parent, and the agent gets none of the reminder text a child gets, so its answers can differ slightly from a delegated run's. The [reference](../reference/cli/agents.md#launch-a-subagent-profile) lists what the flag refuses.
+
 A child runs one prompt and is not built to read messages mid-run. To change what a child is doing, stop it and let the parent relaunch.
 
 ## How results come back

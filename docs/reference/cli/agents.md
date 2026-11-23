@@ -104,7 +104,7 @@ A spec takes one of these forms:
 | Spec | Launches |
 | --- | --- |
 | A team name | The [team](../../guide/configuration.md#agent-profiles-commands-and-teams)'s layout. [`rimz teams`](./teams.md#launch-a-team) is the doorway for configured cohorts. The built-in `peer` team is the roleless `claude,codex`. |
-| `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. |
+| `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. Under [`--subagent-profile`](#launch-a-subagent-profile) the word is never read as a role: it names the subagent profile in any lane. |
 | An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group with one expanded member). |
 | `opencode-mini` | OpenCode's mini interface, sharing kind `opencode` and its kind base. Restart and resume keep mini; `--agent opencode` switches to the full interface. |
 
@@ -187,6 +187,25 @@ A `<base>-fast` cell launches its base in the provider's fast mode, as `--fast` 
 | `<kind>-<mode>-fast` | the permission-mode cell, with fast on |
 
 A command, profile, `term`, or kind whose exact name ends in `-fast` wins over this reading. A base on a kind with no fast switch, such as `cursor-fast`, warns with the alternative and launches without fast rather than looking for a `cursor-fast` executable on `PATH`; the supported kinds are in [agent support](../agent-support.md#fast-mode). `--no-fast` on the same launch turns the suffix off. An inline role works as on any agent cell: `reviewer-fast:critic`. A team role's `profile`, `--agent`, and a subagent allow-list entry take an exact profile or kind name, so they refuse the `-fast` suffix as they refuse a permission-mode cell; set fast there with the role's `fast: on` or the `--fast` flag. The suffix forces fast on over a profile's or kind base's `fast: off`.
+
+### Launch a subagent profile
+
+`--subagent-profile` launches one profile from `[subagents.profiles]` (`subagents/<name>.md`) as an ordinary top-level agent, so a subagent definition can be tried from your own shell without a parent to delegate to it. Without the flag, a name defined only there is refused with ``` profile `<name>` is defined under [subagents.profiles], but `rimz agents` resolves [agents.profiles]; launch it with `rimz agents <name> --subagent-profile`, or move or copy the profile to the expected section ``.
+
+```sh
+rimz agents websearcher --subagent-profile -p "What changed in the Zellij 0.44 plugin API?"
+rimz agents websearcher --subagent-profile --new-tab
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--subagent-profile` | Resolve SPEC from `[subagents.profiles]`: provider, model, effort, tools, and prompt come from that definition. A name both tables define takes the subagent definition. Accepted on an interactive launch, `--bg`, `-p`, `rimz agents launch`, [`explain`](#explain-a-launch), and a `rimz loop add --agent` tail. Conflicts with `--continue` and `--resume`. |
+
+The launched agent is not a child. It has no parent, gets no child reminder, and takes no parent permission-mode clamp, deadline, answer file, or report. A definition's `timeout` is ignored, so a `-p` run has no deadline unless `--timeout` sets one; its `empty-dir` applies as on any top-level launch. The agent records the subagent table as its profile table, so [`restart`](#restart), [`fork`](#fork), [`molt`](#molt), resume, rebirth, and `explain @handle` keep resolving its profile from `[subagents.profiles]`. Launched from an agent's pane it is a peer: it counts a generation against `max-chain-length` and is not checked against the caller's `subagents` allowlist, which governs only [`rimz subagents`](./subagents.md).
+
+SPEC must be exactly one profile name from `[subagents.profiles]`. Before any pane or record exists, the launch refuses no SPEC, a name defined only under `[agents.profiles]`, a team, a `<team>.<role>`, a bare agent kind, an `[agents.commands]` entry, a built-in cell or a variant spelled in the name (`term`, `codex-fast`, `<profile>-fast`; pass `--fast` to the profile instead), and anything that is not a single profile name, such as an inline layout. Each refusal reads `--subagent-profile takes one profile name defined under [subagents.profiles], and ` followed by the spec and what it is instead (````forge` is a team``).
+
+Into an existing named worktree with no agent running, the launch takes the [single-agent entry check](#relaunch-into-a-named-worktree), even when the worktree holds a closed agent of the same profile: it offers `(fresh/cancel)` or `(remove/fresh/cancel)`, never a resume, and the fresh command it prints keeps `--subagent-profile`.
 
 ### Shared launch params
 
@@ -289,7 +308,7 @@ A single-agent launch, a supervised `-p` run, or a team or multi-cell layout wit
 
 `fresh` keeps the checkout and prints ``launching <subject> fresh in worktree `NAME` ``. `remove` uses the same protections and recreation as the closed-cohort choice. Cancellation, EOF, or an unknown answer starts nothing and prints `canceled; nothing launched` with the fresh command. Without a terminal, entry refuses with the facts and fresh command, plus `rimz worktree remove NAME` only for a clean, landed tree. The refusal writes no agent row and leaves the checkout intact. It exits `1`, or `2` on `-p`.
 
-The fresh command is `rimz agents <spec> -w NAME --fresh [PROMPT]`, `rimz teams TEAM#NAME --fresh [PROMPT]`, or `rimz agents <spec> -p -w NAME --fresh [PROMPT]`. It shell-quotes the prompt as one argument. Print runs keep `--stdin` or `--input-format stream-json` when used, never stdin content. Other launch flags are not repeated. `message --create --worktree NAME` uses this check too and prints the agents command with the message as its prompt.
+The fresh command is `rimz agents <spec> -w NAME --fresh [PROMPT]`, `rimz teams TEAM#NAME --fresh [PROMPT]`, or `rimz agents <spec> -p -w NAME --fresh [PROMPT]`, with `--subagent-profile` after `<spec>` for a launch that passed it. It shell-quotes the prompt as one argument. Print runs keep `--stdin` or `--input-format stream-json` when used, never stdin content. Other launch flags are not repeated. `message --create --worktree NAME` uses this check too and prints the agents command with the message as its prompt.
 
 Occupied trees are entered without this question. Loop fires, `--from-pr`, `--continue`, `--resume`, bare `-w`, and missing trees skip it. Unmanaged trees keep their separate confirmation. Matching live or closed cohorts use their table above, never both questions.
 
@@ -552,7 +571,7 @@ rimz agents explain coder --mcps
 | a profile or `<team>.<role>` | A fresh launch, resolved exactly as a launch would be. Works without a room. A multi-cell layout is refused. |
 | an `@handle` | What `restart` would run for that recorded agent under the current profile configuration: a resume of the recorded conversation when supported, otherwise a fresh launch with the reason. A fresh-restart plan shows the recorded name and launch id, although a real restart allocates a new id and may pick a new name. Needs existing room state. |
 
-With a profile target, `explain` accepts the launch overrides `--account`, `--ask`, `--yolo`, `--model`, `--tier`, `--agent`, `--effort`, `--fast`, `--no-fast`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` replace even a profile's declared permission mode. `--account rimio` previews the selected provider's `kind@rimio` account and refuses an unknown name. The report's `overrides` list records the flags you passed, not that each one won. Passthrough arguments are repeated only when preserved in the provider argv; otherwise the list points to that argv instead of exposing replaced values, such as inline Claude settings. An `@handle` target refuses every override.
+With a profile target, `--subagent-profile` explains that profile from `[subagents.profiles]`, as a [subagent-profile launch](#launch-a-subagent-profile) would run it, under the same refusals; an `@handle` target refuses the flag, since the agent's recorded profile table already decides. With a profile target, `explain` accepts the launch overrides `--account`, `--ask`, `--yolo`, `--model`, `--tier`, `--agent`, `--effort`, `--fast`, `--no-fast`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` replace even a profile's declared permission mode. `--account rimio` previews the selected provider's `kind@rimio` account and refuses an unknown name. The report's `overrides` list records the flags you passed, not that each one won. Passthrough arguments are repeated only when preserved in the provider argv; otherwise the list points to that argv instead of exposing replaced values, such as inline Claude settings. An `@handle` target refuses every override.
 
 The default report shows:
 
