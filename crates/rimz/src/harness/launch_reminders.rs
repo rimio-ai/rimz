@@ -1,5 +1,6 @@
-//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), scoped view, subagent policy, and shared language servers.
+//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), scoped view, subagent policy, shared language servers, and how the launch reaches each RimZ capability it has.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::launch::{ExecRequest, ReminderSection};
@@ -58,6 +59,9 @@ pub(super) struct LaunchReminders {
     pub sandbox: bool,
     pub lsp_configured: bool,
     pub lsp_servers: Vec<String>,
+    /// The `rimz-*` skills on disk for the launch's kind and login; empty in
+    /// preflight compiles.
+    pub rimz_skills: BTreeSet<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub system_prompt_file: Option<PathBuf>,
     pub team: Option<TeamReminder>,
@@ -96,6 +100,7 @@ impl Default for LaunchReminders {
             sandbox: false,
             lsp_configured: false,
             lsp_servers: Vec::new(),
+            rimz_skills: BTreeSet::new(),
             subagent_catalog: None,
             system_prompt_file: None,
             team: None,
@@ -135,11 +140,6 @@ impl LaunchReminders {
         ])
     }
 
-    /// The `lsp` tool of RimZ's MCP server is live for the launch.
-    pub(super) fn lsp_tool(&self, request: &ExecRequest) -> bool {
-        self.mcp_capabilities(request).contains(&Capability::Lsp)
-    }
-
     /// The rimz skills hidden from the model because the launch registers the
     /// MCP tools of the same name: none where the launch cannot withhold a skill,
     /// on the host of a kind with no per-launch skill switch.
@@ -165,30 +165,109 @@ impl LaunchReminders {
         request.callable_skills(&self.hidden_skills(request))
     }
 
-    /// The launch can query the room's shared language servers, through the
-    /// MCP tool or the skill.
+    /// How the launch reaches `capability`: through its MCP tools where the
+    /// launch serves them, else through its skill.
+    fn reach(&self, request: &ExecRequest, capability: Capability) -> Reach {
+        if self.mcp_capabilities(request).contains(&capability) {
+            Reach::Tools(capability)
+        } else {
+            Reach::Skill
+        }
+    }
+
+    /// The launch can use `capability`, through its MCP tools or its skill.
+    fn callable(&self, request: &ExecRequest, capability: Capability) -> bool {
+        self.reach(request, capability) == Reach::Tools(capability)
+            || skill_is_callable(self.callable_skills(request).as_deref(), capability.name())
+    }
+
+    /// The launch can query the room's shared language servers.
     pub(super) fn lsp_callable(&self, request: &ExecRequest) -> bool {
-        self.lsp_tool(request)
-            || skill_is_callable(self.callable_skills(request).as_deref(), "rimz-lsp")
+        self.callable(request, Capability::Lsp)
     }
 
-    /// The `subagent` tool of RimZ's MCP server is live for the launch.
-    fn subagents_tool(&self, request: &ExecRequest) -> bool {
-        self.mcp_capabilities(request)
-            .contains(&Capability::Subagents)
-    }
-
-    /// The launch can launch subagents, through the MCP tool or the skill.
-    fn subagents_callable(&self, request: &ExecRequest) -> bool {
-        self.subagents_tool(request)
-            || skill_is_callable(self.callable_skills(request).as_deref(), "rimz-subagents")
+    /// Every RimZ capability the launch has, by name, and how it reaches each:
+    /// those its MCP server serves, in `Capability::ALL` order, then each
+    /// `rimz-*` skill on disk that its lists make callable and that it does not
+    /// withhold, less `rimz-subagents` where `ExecRequest::cannot_delegate` holds. A
+    /// capability the launch has as both tools and skill is its tools.
+    pub(super) fn rimz_capabilities(&self, request: &ExecRequest) -> Vec<(String, Reach)> {
+        let served = self.mcp_capabilities(request);
+        let hidden = self.hidden_skills(request);
+        let (_, withheld) = request.launch_skills(&hidden);
+        let callable = request.callable_skills(&hidden);
+        let skills = self
+            .rimz_skills
+            .iter()
+            .filter(|name| {
+                !withheld.contains(&name.as_str())
+                    && !(request.cannot_delegate() && *name == Capability::Subagents.name())
+                    && skill_is_callable(callable.as_deref(), name)
+                    && !served.iter().any(|capability| capability.name() == *name)
+            })
+            .map(|name| (name.clone(), Reach::Skill));
+        served
+            .iter()
+            .map(|capability| (capability.name().to_owned(), Reach::Tools(*capability)))
+            .chain(skills)
+            .collect()
     }
 
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
-            || (self.subagents_callable(request)
+            || (self.callable(request, Capability::Subagents)
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
+}
+
+/// How a launch reaches one RimZ capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reach {
+    /// The capability's tools on RimZ's MCP server.
+    Tools(Capability),
+    Skill,
+}
+
+/// How the launch reaches capability `name`, as every reminder sentence words
+/// it: the tools `TOOLS` assigns the capability, on RimZ's MCP server under the
+/// `server` name the provider knows it by, or the skill.
+fn reach_phrase(name: &str, reach: Reach, server: &str) -> String {
+    let Reach::Tools(capability) = reach else {
+        return format!("Skill({})", escape_reminder_text(name));
+    };
+    let tools: Vec<_> = crate::mcp::catalog::TOOLS
+        .iter()
+        .filter(|tool| tool.capability == Some(capability))
+        .map(|tool| format!("`{}`", tool.name))
+        .collect();
+    let (list, noun) = match tools.as_slice() {
+        [] | [_] => (tools.concat(), "tool"),
+        [first, second] => (format!("{first} and {second}"), "tools"),
+        [rest @ .., last] => (format!("{}, and {last}", rest.join(", ")), "tools"),
+    };
+    format!("the {list} {noun} of the `{server}` MCP server")
+}
+
+/// The RimZ capabilities paragraph; none when the launch has no capability.
+fn capabilities_paragraph(capabilities: &[(String, Reach)], server: &str) -> Option<String> {
+    if capabilities.is_empty() {
+        return None;
+    }
+    let bullets = capabilities
+        .iter()
+        .map(|(name, reach)| {
+            format!(
+                "- {}: {}",
+                escape_reminder_text(name),
+                reach_phrase(name, *reach, server)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "### RimZ capabilities\n\nA name written `rimz(x)` or `Skill(rimz-x)` in any text means \
+         RimZ's capability `rimz-x`, which you reach as its bullet says:\n\n{bullets}"
+    ))
 }
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
@@ -254,11 +333,14 @@ pub(super) fn render(
         .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
             adapter.mcp_server_name()
         });
-    let lsp_via = if reminders.lsp_tool(request) {
-        format!("via the `lsp` tool of the `{server}` MCP server")
-    } else {
-        "via Skill(rimz-lsp)".to_owned()
-    };
+    let lsp_via = format!(
+        "via {}",
+        reach_phrase(
+            Capability::Lsp.name(),
+            reminders.reach(request, Capability::Lsp),
+            server
+        )
+    );
     if reminders.env
         || !lsp_servers.is_empty()
         || team_context.is_some()
@@ -278,16 +360,20 @@ pub(super) fn render(
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
-    } else if reminders.subagents_callable(request)
+    } else if reminders.callable(request, Capability::Subagents)
         && let Some(catalog) = reminders.subagent_catalog.as_ref()
     {
-        let via = if reminders.subagents_tool(request) {
-            format!("the `subagent` tool of the `{server}` MCP server")
-        } else {
-            "Skill(rimz-subagents)".to_owned()
-        };
+        let via = reach_phrase(
+            Capability::Subagents.name(),
+            reminders.reach(request, Capability::Subagents),
+            server,
+        );
         paragraphs.push(subagent_policy::reminder(catalog, &via));
     }
+    paragraphs.extend(capabilities_paragraph(
+        &reminders.rimz_capabilities(request),
+        server,
+    ));
     if skills.is_none_or(|skills| {
         skills
             .iter()

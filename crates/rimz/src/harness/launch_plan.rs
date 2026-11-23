@@ -113,6 +113,10 @@ pub enum LaunchPlanWarning {
     SandboxOverridden { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
     DefaultReminders,
+    #[error(
+        "the system prompt names rimz({0}), which this launch reaches neither as a tool of RimZ's MCP server nor as a callable skill; the agent starts without it"
+    )]
+    UnreachableCapability(String),
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
     MissingTeam(String),
     #[error("parent {0} has no row in the room; this launch uses its own temp directory")]
@@ -858,6 +862,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     let login_env = login.env(inputs.ambient_env);
     reminders.settings = Some((inputs.runtime.prompt_dir(), login_env.clone()));
+    reminders.rimz_skills = crate::agents::skills::rimz_skills(
+        adapter.skills_home(&login_env).as_deref(),
+        crate::agents::skills::SkillChain::from_env(&login_env).as_ref(),
+    );
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
     reminders.runtime_env = adapter.spec().capabilities.prompt_context
@@ -1012,6 +1020,16 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             wording
                 .warnings_for(&mcp_capabilities)
                 .map(|warning| LaunchPlanWarning::McpWording(warning.to_string())),
+        );
+    }
+    if let Some(composed) = &prompt.composed {
+        let has = reminders.rimz_capabilities(&request);
+        warnings.extend(
+            crate::config::rimz_references(composed)
+                .into_iter()
+                .filter(|name| !has.iter().any(|(had, _)| had == name))
+                .filter_map(|name| name.strip_prefix("rimz-").map(str::to_owned))
+                .map(LaunchPlanWarning::UnreachableCapability),
         );
     }
     let hidden_skills = reminders.hidden_skills(&request);

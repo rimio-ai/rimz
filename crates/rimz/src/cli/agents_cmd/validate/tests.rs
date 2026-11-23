@@ -707,3 +707,124 @@ fn validation_checks_skills_even_without_sandbox_config() {
     let checked = load(root.path(), check, &Default::default());
     assert!(checked.errors.is_empty(), "{:?}", checked.errors);
 }
+
+#[test]
+fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_text() {
+    let root = tempfile::tempdir().unwrap();
+    for namespace in ["agents", "subagents"] {
+        std::fs::create_dir(root.path().join(namespace)).unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Base\n---\nBase names spawn_detached_rimz(x) and Rimz(Wait).",
+    )
+    .unwrap();
+    for (name, namespace, fields, body) in [
+        (
+            "reaches",
+            "agents",
+            "tools: [Bash, Skill]\n",
+            "Use rimz(wait), `rimz(message)`, and rimz(lsp).",
+        ),
+        (
+            "quoted",
+            "agents",
+            "tools: [Bash, Skill]\n",
+            "Use Skill(rimz-nope) and Skill(rimz-lsp).",
+        ),
+        (
+            "unknown",
+            "agents",
+            "tools: [Bash, Skill]\n",
+            "Use rimz(nope).",
+        ),
+        (
+            "shut",
+            "agents",
+            "tools: [Bash]\nmcps: [github]\n",
+            "Use rimz(wait) and rimz(message).",
+        ),
+        (
+            "unlisted",
+            "agents",
+            "tools: [Bash, Skill]\nskills: []\n",
+            "Use rimz(message) and rimz(notes).",
+        ),
+        (
+            "child",
+            "subagents",
+            "tools: [Bash, Skill]\n",
+            "Use rimz(subagents) and rimz(wait).",
+        ),
+    ] {
+        std::fs::write(
+            root.path().join(format!("{namespace}/{name}.md")),
+            format!("---\ndescription: Test\nagent: claude\n{fields}---\n{body}"),
+        )
+        .unwrap();
+    }
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let on_disk = |kind: &str| {
+        assert_eq!(kind, "claude");
+        Some(["rimz-message".to_owned()].into())
+    };
+    let errors = |machine: &str| {
+        let mut messages: Vec<_> =
+            capability_errors(&loaded, &toml::from_str(machine).unwrap(), on_disk)
+                .into_iter()
+                .map(|error| {
+                    let file = error.path.strip_prefix(root.path()).unwrap().to_owned();
+                    format!("{}: {}", file.display(), error.message)
+                })
+                .collect();
+        messages.sort();
+        messages
+    };
+    assert_eq!(
+        errors(""),
+        [
+            "agents/shut.md: profile shut: rimz(message) names `rimz-message`, which this \
+             profile cannot reach: its tools leave out Skill",
+            "agents/shut.md: profile shut: rimz(wait) names `rimz-wait`, which this profile \
+             cannot reach: its mcps leave out rimz-wait; its tools leave out Skill",
+            "agents/unknown.md: profile unknown: rimz(nope) names `rimz-nope`, which is neither \
+             a RimZ capability nor a skill on disk for claude",
+            "agents/unlisted.md: profile unlisted: rimz(message) names `rimz-message`, which \
+             this profile cannot reach: its skills leave out rimz-message",
+            "subagents/child.md: profile child: rimz(subagents) names `rimz-subagents`, which \
+             this profile cannot reach: a subagent cannot launch subagents",
+        ]
+    );
+    // With the server off, a capability is reached only as a skill on disk.
+    let off: Vec<_> = errors("[agents]\nrimz-mcp-server = false")
+        .into_iter()
+        .filter(|message| message.starts_with("agents/reaches.md"))
+        .collect();
+    assert_eq!(
+        off,
+        [
+            "agents/reaches.md: profile reaches: rimz(lsp) names `rimz-lsp`, which this profile \
+             cannot reach: the machine's rimz-mcp-server is off; no rimz-lsp skill is on disk for \
+             claude",
+            "agents/reaches.md: profile reaches: rimz(wait) names `rimz-wait`, which this \
+             profile cannot reach: the machine's rimz-mcp-server is off; no rimz-wait skill is on \
+             disk for claude",
+        ]
+    );
+    // An unchecked disk (validate inside a scoped view) judges the lists alone.
+    let unchecked: Vec<_> = capability_errors(&loaded, &Default::default(), |_| None)
+        .into_iter()
+        .map(|error| error.message)
+        .filter(|message| {
+            message.starts_with("profile unknown") || message.starts_with("profile unlisted")
+        })
+        .collect();
+    assert_eq!(
+        unchecked,
+        [
+            "profile unlisted: rimz(message) names `rimz-message`, which this profile cannot \
+          reach: its skills leave out rimz-message"
+        ]
+    );
+}

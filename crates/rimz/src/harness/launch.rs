@@ -838,12 +838,17 @@ impl ExecRequest {
             .is_some_and(|workflow| workflow.role == crate::agents::WorkflowAttemptRole::Judge)
     }
 
+    /// Whether the launch may not delegate: a child, whose every launch would be refused,
+    /// and a judge, whose child would get a writable checkout.
+    pub(super) fn cannot_delegate(&self) -> bool {
+        self.subagent || self.is_judge()
+    }
+
     /// The RimZ capabilities the launch's `mcps` selection serves, less `rimz-subagents` on a
-    /// child, whose every launch would be refused, and on a judge, whose child would get a
-    /// writable checkout.
+    /// launch that cannot delegate.
     pub(super) fn mcp_capabilities(&self) -> Vec<crate::mcp::catalog::Capability> {
         let mut capabilities = crate::config::mcp_capabilities(self.mcps.as_deref());
-        if self.subagent || self.is_judge() {
+        if self.cannot_delegate() {
             capabilities
                 .retain(|capability| *capability != crate::mcp::catalog::Capability::Subagents);
         }
