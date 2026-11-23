@@ -153,6 +153,7 @@ pub(super) fn launch_layout(
                 .map(|fire| fire.booked_by.clone())
                 .unwrap_or_default(),
             loop_fire: fire.map(|fire| fire.fire),
+            subagent_profile: launch.subagent_profile,
         },
         cwd,
         allow_in_place,

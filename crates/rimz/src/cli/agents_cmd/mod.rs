@@ -572,6 +572,9 @@ pub(crate) struct AgentLaunchArgs {
     /// Internal launch posture for the `rimz subagents` doorway.
     #[arg(skip)]
     pub(crate) subagent: bool,
+    /// Launch SPEC, one profile from [subagents.profiles], as a top-level agent.
+    #[arg(long, conflicts_with_all = ["resume", "continue_cohort"])]
+    pub(crate) subagent_profile: bool,
     /// Internal resume posture for the `rimz teams` doorways: a named lane
     /// matches by recorded lane, and refusals name teams-scene commands.
     #[arg(skip)]
@@ -1436,6 +1439,16 @@ pub(super) fn check_loop_launch(
     }
     let machine_config = crate::cli::machine_config();
     let effective = rimz::config::effective::load(&machine_config, place.project_root)?;
+    let scope = if launch.subagent_profile {
+        rimz::harness::plan::check_subagent_profile_spec(
+            &effective,
+            &machine_config.agents.commands,
+            launch.spec.as_deref(),
+        )?;
+        rimz::config::effective::ProfileScope::Subagents
+    } else {
+        rimz::config::effective::ProfileScope::Agents
+    };
     // The lane a fire launches into, as the launch reads it; a fire's own worktree is not
     // known yet, so only the tail's `--channel` names one there.
     let lane = launch
@@ -1467,13 +1480,13 @@ pub(super) fn check_loop_launch(
         snapshot.as_ref(),
         &machine_config,
         &effective,
-        rimz::config::effective::ProfileScope::Agents,
+        scope,
         launch.spec.as_deref(),
         launch.prompt.as_deref(),
         &launch_resolve::typed_overrides(&launch.overrides)?,
         launch.cohort.budget,
         launch.max_turns,
-        lane.as_ref(),
+        lane.as_ref().filter(|_| !launch.subagent_profile),
         launch.name.is_some(),
     )?;
     Ok(crate::cli::loop_launch::LoopLaunch {
@@ -1564,6 +1577,7 @@ fn into_supervised_request(
                 None,
                 args.launch.prompt.as_deref(),
                 Some(input),
+                args.launch.subagent_profile,
             )
             .1
         });
@@ -1607,6 +1621,7 @@ fn into_supervised_request(
     request.from_pr = args.launch.cohort.from_pr;
     request.channel = args.launch.cohort.channel;
     request.name = args.launch.name;
+    request.subagent_profile = args.launch.subagent_profile;
     request.force_new_tab = args.launch.cohort.new_tab;
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());

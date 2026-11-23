@@ -251,27 +251,90 @@ mod tests {
     #[test]
     fn relaunch_commands_cover_teams_and_inline_specs() {
         assert_eq!(
-            relaunch_commands("topic", "forge", Some("forge"), Some("topic"), None, None),
+            relaunch_commands(
+                "topic",
+                "forge",
+                Some("forge"),
+                Some("topic"),
+                None,
+                None,
+                false
+            ),
             (
-                "rimz teams resume 'forge#topic'".to_owned(),
+                Some("rimz teams resume 'forge#topic'".to_owned()),
                 "rimz teams 'forge#topic' --fresh".to_owned(),
             )
         );
         assert_eq!(
-            relaunch_commands("topic", "claude,codex", None, None, None, None),
+            relaunch_commands("topic", "claude,codex", None, None, None, None, false),
             (
-                "rimz agents 'claude,codex' -w topic --continue".to_owned(),
+                Some("rimz agents 'claude,codex' -w topic --continue".to_owned()),
                 "rimz agents 'claude,codex' -w topic --fresh".to_owned(),
             )
         );
     }
 
     #[test]
+    fn a_subagent_profile_launch_is_offered_no_resume_and_keeps_its_flag() {
+        let print = relaunch_commands(
+            "topic",
+            "scout",
+            None,
+            None,
+            Some("go"),
+            Some(PrintInput::Text),
+            true,
+        );
+        assert_eq!(
+            print,
+            (
+                None,
+                "rimz agents scout --subagent-profile -p -w topic --fresh go".to_owned(),
+            )
+        );
+        let (resume, fresh) = relaunch_commands("topic", "scout", None, None, None, None, true);
+        assert_eq!(
+            fresh,
+            "rimz agents scout --subagent-profile -w topic --fresh"
+        );
+        let mut offered = Vec::new();
+        let canceled = offer_with(
+            &Offer {
+                name: "topic",
+                subject: "`scout`",
+                facts: &facts(LandedVerdict::Unlanded, 1),
+                resume_command: resume.as_deref(),
+                fresh_command: &fresh,
+            },
+            true,
+            |_, choices, _| {
+                offered.extend(choices.iter().map(ToString::to_string));
+                Ok(None)
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(offered, ["fresh", "cancel"]);
+        assert_eq!(
+            canceled,
+            "canceled; nothing launched; launch fresh with `rimz agents scout --subagent-profile -w topic --fresh`"
+        );
+    }
+
+    #[test]
     fn team_relaunch_commands_resume_the_recorded_lane_and_fresh_worktree() {
         assert_eq!(
-            relaunch_commands("review", "forge", Some("forge"), Some("triage"), None, None),
+            relaunch_commands(
+                "review",
+                "forge",
+                Some("forge"),
+                Some("triage"),
+                None,
+                None,
+                false
+            ),
             (
-                "rimz teams resume 'forge#triage'".to_owned(),
+                Some("rimz teams resume 'forge#triage'".to_owned()),
                 "rimz teams 'forge#review' --fresh".to_owned(),
             )
         );
@@ -291,8 +354,9 @@ mod tests {
                 Some("triage"),
                 Some(prompt),
                 None,
+                false,
             );
-            for command in [resume, fresh] {
+            for command in [resume.expect("an unflagged launch has a resume"), fresh] {
                 let words = shlex::split(&command).unwrap();
                 assert_eq!(words.last().map(String::as_str), Some(prompt));
                 if prompt.starts_with('-') {
@@ -311,8 +375,10 @@ mod tests {
             (PrintInput::StreamJson, None),
         ]
         .map(|(input, prompt)| {
-            shlex::split(&relaunch_commands("demo", "claude", None, None, prompt, Some(input)).1)
-                .unwrap()
+            shlex::split(
+                &relaunch_commands("demo", "claude", None, None, prompt, Some(input), false).1,
+            )
+            .unwrap()
         });
         let base = ["rimz", "agents", "claude", "-p", "-w", "demo", "--fresh"];
         let expected = [

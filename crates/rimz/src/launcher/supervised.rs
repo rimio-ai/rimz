@@ -503,6 +503,7 @@ fn prepare(
             None,
             request.fresh,
             context.worktree_fresh_command.as_deref(),
+            request.subagent_profile,
             interaction,
         )?;
     }

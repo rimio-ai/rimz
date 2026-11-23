@@ -888,6 +888,51 @@ fn block_failed_kind_bases(
     Ok(())
 }
 
+/// Refuse a `--subagent-profile` spec that is not one `[subagents.profiles]` name, before
+/// anything resolves: under the subagent scope `resolve_launch` still resolves teams, roles,
+/// kinds, commands, and built-in cells. A name nothing defines passes, for resolution to
+/// report.
+pub fn check_subagent_profile_spec(
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+    spec: Option<&str>,
+) -> Result<()> {
+    const TAKES: &str =
+        "--subagent-profile takes one profile name defined under [subagents.profiles]";
+    let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
+        bail!("{TAKES}; name one (`rimz subagents profiles` lists them)");
+    };
+    if launch
+        .subagent_profiles
+        .0
+        .get(spec)
+        .is_some_and(|profile| !profile.kind_base)
+    {
+        return Ok(());
+    }
+    let what = if launch.teams.0.contains_key(spec) {
+        "is a team"
+    } else if launch.teams.role_spec(spec).is_some() {
+        "is a team role"
+    } else if crate::agents::find_definition(spec).is_some() {
+        "is an agent kind"
+    } else if launch.profiles.0.contains_key(spec) {
+        "is defined only under [agents.profiles]; drop --subagent-profile to launch it"
+    } else if commands.0.contains_key(spec) {
+        "is an [agents.commands] entry"
+    } else if crate::harness::spec::is_cell_word(spec, &launch.subagent_profiles, commands) {
+        "is a built-in cell or a kind or profile variant, not a profile name"
+    } else if !spec
+        .chars()
+        .all(|char| char.is_ascii_alphanumeric() || matches!(char, '-' | '_'))
+    {
+        "is not a single profile name"
+    } else {
+        return Ok(());
+    };
+    bail!("{TAKES}, and `{spec}` {what}");
+}
+
 /// Resolve effective profiles/teams without applying runtime launch options.
 pub fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
@@ -962,15 +1007,16 @@ fn wrong_doorway(
     scope: crate::config::effective::ProfileScope,
 ) -> crate::harness::spec::LayoutErr {
     use crate::config::effective::ProfileScope;
-    let (defined_in, command, expected_in) = match scope {
-        ProfileScope::Agents => ("subagents", "`rimz agents`", "agents"),
-        ProfileScope::Subagents => ("agents", "`rimz subagents`", "subagents"),
+    let (defined_in, command, expected_in, names_flag) = match scope {
+        ProfileScope::Agents => ("subagents", "`rimz agents`", "agents", true),
+        ProfileScope::Subagents => ("agents", "`rimz subagents`", "subagents", false),
     };
     crate::harness::spec::LayoutErr::ProfileWrongDoorway {
         name: name.to_owned(),
         defined_in,
         command,
         expected_in,
+        names_flag,
     }
 }
 
@@ -1101,15 +1147,19 @@ pub fn plan_supervised_launch(
     login: impl Fn(&AgentKind) -> crate::store::writer::LaunchLogin,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> Result<SupervisedLaunch> {
-    let scope = if request.subagent {
+    let scope = if request.subagent || request.subagent_profile {
         crate::config::effective::ProfileScope::Subagents
     } else {
         crate::config::effective::ProfileScope::Agents
     };
     let commands = &machine_config.agents.commands;
+    if request.subagent_profile {
+        check_subagent_profile_spec(&effective, commands, Some(&request.spec))?;
+    }
     let mut spec = Cow::Borrowed(request.spec.as_str());
     let mut inferred_lane = None;
-    if let Some((channel, team)) = lane {
+    // --subagent-profile already names one profile, so a lane's team role never claims it.
+    if let Some((channel, team)) = lane.filter(|_| !request.subagent_profile) {
         let qualified = crate::harness::spec::qualify_spec_in_channel(
             &request.spec,
             channel.as_str(),
@@ -1233,6 +1283,9 @@ pub fn plan_supervised_launch(
         .agent_cells_mut()
         .next()
         .expect("the supervised layout was checked to hold exactly one agent cell");
+    if request.subagent_profile {
+        cell.launch.profile_scope = Some(scope);
+    }
     let mut clamped = None;
     if request.subagent {
         let capped = cap_child_isolation(

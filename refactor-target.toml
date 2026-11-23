@@ -2520,7 +2520,8 @@ path = "crates/rimz/src/harness"
 # idle_stop::started::RowKey keys each started row so the MCP task tools find its thing (+1).
 # SupervisedRunRequest::subagent is the one subagent request the CLI and the MCP subagent tool
 # build (+1).
-surface-budget = 1353
+# plan::check_subagent_profile_spec is the one --subagent-profile refusal for launch, explain, and loop add (+1).
+surface-budget = 1354
 
 [[verdict]]
 kind = "item"
@@ -5674,7 +5675,14 @@ allowed-dependencies = [
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # `resolve_agent_cells` lets loop surplus admission read every cell of a team or multi-cell step (+1).
 # settle_effort_arg also settles a relaunch posture rendered from a profile (+1).
-surface-budget = 57
+# check_subagent_profile_spec gives the launcher, the -p planner, explain, and loop add one
+# --subagent-profile refusal (+1).
+surface-budget = 58
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::check_subagent_profile_spec"
+reason = "Every entry that takes --subagent-profile refuses a spec that is not one subagent profile in one place, the CLI's explain and loop add included."
 
 [[verdict]]
 kind = "item"

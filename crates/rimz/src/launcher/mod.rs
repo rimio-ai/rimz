@@ -79,6 +79,25 @@ pub struct LayoutLaunch {
     pub loop_task: Option<String>,
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
     pub loop_fire: Option<crate::ids::FireId>,
+    /// `--subagent-profile`: resolve the spec, one `[subagents.profiles]` name, from that table
+    /// and record the scope on the launched agent, which stays top-level.
+    pub subagent_profile: bool,
+}
+
+impl LayoutLaunch {
+    fn profile_scope(&self) -> crate::config::effective::ProfileScope {
+        if self.subagent_profile {
+            crate::config::effective::ProfileScope::Subagents
+        } else {
+            crate::config::effective::ProfileScope::Agents
+        }
+    }
+
+    /// The lane whose team qualifies a bare role in the spec: none under
+    /// `--subagent-profile`, which already names one profile.
+    fn qualifying_lane<'a>(&self, lane: Option<&'a LaneName>) -> Option<&'a LaneName> {
+        lane.filter(|_| !self.subagent_profile)
+    }
 }
 
 #[derive(Default)]
@@ -483,6 +502,13 @@ pub fn prepare_layout(
         tier: None,
         ..args.launch.overrides.clone()
     };
+    if args.launch.subagent_profile {
+        crate::harness::plan::check_subagent_profile_spec(
+            &effective,
+            &machine_config.agents.commands,
+            args.launch.spec.as_deref(),
+        )?;
+    }
     let mut reported_warnings = Vec::new();
     let mut print_warning = |warning: &crate::harness::plan::LaunchFinalizeWarning| -> Result<()> {
         if !fresh_launch
@@ -508,7 +534,7 @@ pub fn prepare_layout(
         snapshot.as_ref(),
         &machine_config,
         &effective,
-        crate::config::effective::ProfileScope::Agents,
+        args.launch.profile_scope(),
         args.launch.spec.as_deref(),
         args.launch
             .prompt
@@ -521,7 +547,7 @@ pub fn prepare_layout(
         },
         args.launch.cohort.budget,
         args.launch.max_turns,
-        lane.as_ref(),
+        args.launch.qualifying_lane(lane.as_ref()),
         args.launch.name.is_some(),
         Some((store.runtime_paths(), store.paths())),
     )
@@ -604,6 +630,9 @@ pub fn prepare_layout(
         if let Cell::Agent(cell) = row {
             cell.launch.workflow.clone_from(&args.workflow);
             cell.launch.automation.clone_from(&automation);
+            if args.launch.subagent_profile {
+                cell.launch.profile_scope = Some(args.launch.profile_scope());
+            }
         }
     }
     let prompt = args
@@ -1020,6 +1049,7 @@ fn settle_layout(
             args.launch.cohort.fresh,
             focus,
             loop_task.is_some(),
+            args.launch.subagent_profile,
             interaction,
         )? {
             reconcile::Reconciled::Done | reconcile::Reconciled::PromptDispatched => {
@@ -1100,6 +1130,7 @@ fn settle_layout(
             prompt,
             args.launch.cohort.fresh,
             None,
+            args.launch.subagent_profile,
             interaction,
         )?;
     }
