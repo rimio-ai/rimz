@@ -1101,14 +1101,44 @@ fn reconcile_filter_and_baseline(
         }
     }
     if let Some(pane) = derived {
-        if ui
-            .baseline_pane
-            .as_ref()
-            .is_some_and(|baseline| *baseline != pane)
-        {
-            ui.previous_card.clone_from(&ui.baseline_pane);
+        match ui.current_card.clone().or_else(|| ui.baseline_pane.clone()) {
+            Some(from) => advance_card_history(ui, &from, &pane),
+            None => {
+                ui.older_cards.retain(|card| *card != pane);
+                if ui.previous_card.as_ref() == Some(&pane) {
+                    ui.previous_card = ui.older_cards.pop();
+                }
+            }
         }
+        ui.current_card = Some(pane.clone());
         ui.baseline_pane = Some(pane);
+    }
+}
+
+/// Record a move between cards. A repeat changes nothing, and neither end stays in older history.
+pub(super) fn advance_card_history(ui: &mut ViewState, from: &PaneId, to: &PaneId) {
+    if from == to {
+        return;
+    }
+    if let Some(displaced) = ui.previous_card.take() {
+        ui.older_cards.push(displaced);
+    }
+    ui.older_cards.retain(|card| card != from && card != to);
+    ui.previous_card = Some(from.clone());
+}
+
+/// Drop departed cards from history, promoting the newest older card into a vacated previous.
+/// A frameless fold lists no rows to judge by, so it keeps the history.
+pub(super) fn prune_card_history(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
+    if snapshot.panes_produced_at_ms.is_none() {
+        return;
+    }
+    let roster = VisibleRoster::baseline(snapshot);
+    let listed = |card: &PaneId| roster.ordinal_of_pane(card).is_some();
+    ui.current_card.take_if(|card| !listed(card));
+    ui.older_cards.retain(|card| listed(card));
+    if ui.previous_card.as_ref().is_some_and(|card| !listed(card)) {
+        ui.previous_card = ui.older_cards.pop();
     }
 }
 
@@ -1142,6 +1172,7 @@ fn reconcile_browse_and_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot
         }
         anchor_selection_in(ui, &roster);
     }
+    prune_card_history(ui, snapshot);
 }
 
 fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {

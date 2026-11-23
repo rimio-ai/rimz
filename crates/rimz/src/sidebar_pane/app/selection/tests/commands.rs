@@ -219,6 +219,61 @@ fn card_last_tracks_only_distinct_card_baselines_and_refuses_a_departed_row() {
     assert_eq!(outcome, InputOutcome::default());
 }
 
+fn without_card(snapshot: &mut SidebarSnapshot, gone: &PaneId) {
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .retain(|row| row.pane.as_ref().is_none_or(|pane| pane.pane_id != *gone));
+}
+
+#[test]
+fn card_last_returns_to_the_card_left_for_an_unlisted_tab() {
+    let snapshot = filterable_snapshot(&workspace());
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let third = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let mut view = ViewState::default();
+    reconcile_selection(&mut view, &snapshot, Some(first));
+    reconcile_selection(&mut view, &snapshot, Some(second.clone()));
+    unseat_selection(&mut view);
+    let mut before_landing = view.clone();
+    jump(
+        &mut before_landing,
+        &snapshot,
+        CardRequest::Last,
+        "terminal_2",
+    );
+    reconcile_selection(&mut view, &snapshot, Some(third));
+    assert_eq!(view.previous_card, Some(second));
+    jump(&mut view, &snapshot, CardRequest::Last, "terminal_2");
+}
+
+#[test]
+fn card_last_falls_back_to_the_older_card_when_the_came_from_card_closes() {
+    let snapshot = filterable_snapshot(&workspace());
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let third = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let mut view = ViewState::default();
+    reconcile_selection(&mut view, &snapshot, Some(first.clone()));
+    reconcile_selection(&mut view, &snapshot, Some(second.clone()));
+
+    let mut closed_before_landing = view.clone();
+    unseat_selection(&mut closed_before_landing);
+    let mut without_second = snapshot.clone();
+    without_card(&mut without_second, &second);
+    reconcile_selection(&mut closed_before_landing, &without_second, None);
+    reconcile_selection(
+        &mut closed_before_landing,
+        &without_second,
+        Some(third.clone()),
+    );
+    assert_eq!(closed_before_landing.previous_card, Some(first.clone()));
+
+    reconcile_selection(&mut view, &snapshot, Some(third.clone()));
+    reconcile_selection(&mut view, &without_second, Some(third));
+    assert_eq!(view.previous_card, Some(first));
+    jump(&mut view, &without_second, CardRequest::Last, "terminal_1");
+}
+
 #[test]
 fn card_needs_you_set_toggle_and_empty_refusal_preserve_the_lens() {
     let snapshot = filterable_snapshot(&workspace());

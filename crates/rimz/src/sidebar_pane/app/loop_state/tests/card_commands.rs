@@ -904,8 +904,11 @@ fn card_failed_jump_restores_previous_card_with_the_baseline() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let previous = PaneId::from_parts(MuxName::Zellij, "terminal_4");
+    let older = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     rig.view().ui().baseline_pane = Some(first.clone());
+    rig.view().ui().current_card = Some(first.clone());
     rig.view().ui().previous_card = Some(previous.clone());
+    rig.view().ui().older_cards = vec![older.clone()];
     assert_eq!(
         command(&mut rig, CardRequest::Slot { n: 2 }),
         CardReply::Done
@@ -924,8 +927,47 @@ fn card_failed_jump_restores_previous_card_with_the_baseline() {
                 .roll_back_focus(view, &second, Instant::now())
                 .is_some()
         );
+        assert_eq!(view.current_card, Some(first.clone()));
         assert_eq!(view.baseline_pane, Some(first));
         assert_eq!(view.previous_card, Some(previous));
+        assert_eq!(view.older_cards, vec![older]);
+    }
+}
+
+#[test]
+fn card_jump_before_a_new_tab_lands_records_the_card_left() {
+    let (mut rig, _) = command_rig();
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    rig.view().ui().current_card = Some(first.clone());
+    assert_eq!(rig.view().ui().baseline_pane, None);
+    assert_eq!(
+        command(&mut rig, CardRequest::Slot { n: 2 }),
+        CardReply::Done
+    );
+    assert_eq!(rig.view().ui().previous_card, Some(first));
+}
+
+#[test]
+fn card_last_before_a_new_tab_lands_follows_the_pending_jump() {
+    let (mut rig, _) = command_rig();
+    let card = |n: u8| PaneId::from_parts(MuxName::Zellij, format!("terminal_{n}"));
+    rig.view().ui().current_card = Some(card(1));
+    for n in [2, 3] {
+        assert_eq!(command(&mut rig, CardRequest::Slot { n }), CardReply::Done);
+    }
+    assert_eq!(command(&mut rig, CardRequest::Last), CardReply::Done);
+    assert_eq!(rig.view().ctx().pending_input_focus, Some(card(2)));
+}
+
+#[test]
+fn card_last_repeated_before_a_new_tab_lands_toggles() {
+    let (mut rig, _) = command_rig();
+    let card = |n: u8| PaneId::from_parts(MuxName::Zellij, format!("terminal_{n}"));
+    rig.view().ui().current_card = Some(card(2));
+    rig.view().ui().previous_card = Some(card(1));
+    for expected in [2, 1] {
+        assert_eq!(command(&mut rig, CardRequest::Last), CardReply::Done);
+        assert_eq!(rig.view().ctx().pending_input_focus, Some(card(expected)));
     }
 }
 

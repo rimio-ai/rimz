@@ -51,7 +51,7 @@ Slots number every top-level pane-backed row in the room by pane birth, across g
 rimz sidebar last
 ```
 
-`last` focuses the previous card in this view. A jump between cards advances history immediately, so `last` returns to the card before that jump even while focus is still landing. Repeating it toggles between the two cards without waiting. Visiting the sidebar or a popup does not advance history. Empty history, or a previous card whose pane left the room, is a no-op. History lives in the sidebar host and is forgotten when the host restarts.
+`last` focuses the previous card in this view. A jump between cards advances history immediately, so `last` returns to the card before that jump even while focus is still landing. Repeating it toggles between the two cards without waiting. Visiting the sidebar or a popup does not advance history. Opening a new tab keeps the card you left as the previous card, even before the new tab's card appears. When the previous card's pane leaves the room, `last` goes to the newest older card still in the room. Empty history, or history with no card left in the room, is a no-op. History lives in the sidebar host and is forgotten when the host restarts.
 
 ## Show what needs you
 
