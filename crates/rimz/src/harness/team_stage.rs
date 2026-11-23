@@ -678,44 +678,38 @@ fn react_lifecycle(
         {
             warn!(error = %err, "lifecycle: failed to arm team signal bindings");
         }
-        let live_members = rows
-            .as_ref()
-            .zip(member)
-            .map(|(rows, member)| cohort_members(rows.iter(), member))
-            .unwrap_or_default();
         if !replay {
             let mut signals: Vec<_> = lifecycle_signal(event).into_iter().collect();
             if let (Some(rows), Some(member), Some(pending)) = (&rows, member, &pending) {
-                let sleeping = pending_waits_by_session(
-                    &TaskCatalog::load_lenient(Some(&workspace.project_root)),
-                    &workspace.project_root,
-                )
-                .into_keys()
-                .collect();
-                let addressable = signal_snapshot
-                    .get_or_init(|| {
-                        store
-                            .snapshot_cached()
-                            .inspect_err(|err| {
-                                warn!(
-                                    error = %err,
-                                    "lifecycle: failed to read team signal addresses"
-                                );
-                            })
-                            .ok()
-                    })
-                    .as_ref()
-                    .map(crate::address::addressable_agents)
-                    .unwrap_or_default();
-                for signal in team_lifecycle_signals(
-                    event,
-                    member,
-                    &live_members,
-                    &addressable,
-                    pending,
-                    &sleeping,
-                    rows,
-                ) {
+                let cohort = || {
+                    let sleeping = pending_waits_by_session(
+                        &TaskCatalog::load_lenient(Some(&workspace.project_root)),
+                        &workspace.project_root,
+                    )
+                    .into_keys()
+                    .collect();
+                    (cohort_members(rows.iter(), member), sleeping)
+                };
+                let addressable = || {
+                    signal_snapshot
+                        .get_or_init(|| {
+                            store
+                                .snapshot_cached()
+                                .inspect_err(|err| {
+                                    warn!(
+                                        error = %err,
+                                        "lifecycle: failed to read team signal addresses"
+                                    );
+                                })
+                                .ok()
+                        })
+                        .as_ref()
+                        .map(crate::address::addressable_agents)
+                        .unwrap_or_default()
+                };
+                for signal in
+                    team_lifecycle_signals(event, member, pending, rows, cohort, addressable)
+                {
                     match store.append_signal(&workspace.session_name, (&signal).into()) {
                         Ok(_) => signals.push(signal),
                         Err(err) => {

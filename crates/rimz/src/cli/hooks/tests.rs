@@ -613,6 +613,95 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
     }
 }
 
+/// A team member's tool use can raise no team signal, so its frame reads no
+/// room-wide sidecars for the team address view.
+#[test]
+fn cold_team_tool_frames_read_a_constant_number_of_sidecars() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::harness::launch::ENV_TEAM;
+
+    let mut counts = Vec::new();
+    for population in [8, 216] {
+        let (_dir, store) = hooks_test_store();
+        let store = std::sync::Arc::new(store);
+        for slot in 0..population {
+            rimz::store::event_log::append(
+                &store.paths().events_log,
+                &rimz::testkit::fleet::registered_lifecycle(&store.paths().workspace_id, slot),
+            )
+            .unwrap();
+            rimz::store::agent_context::write(
+                store.runtime_paths(),
+                "claude",
+                &format!("agent-{slot}"),
+                &rimz::agents::AgentContext::new("claude", jiff::Timestamp::now()),
+                None,
+            )
+            .unwrap();
+        }
+        let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+        let env = std::collections::BTreeMap::from([(ENV_TEAM.to_owned(), "forge".to_owned())]);
+        let apply = |event: &'static str, payload: serde_json::Value| {
+            let store = std::sync::Arc::clone(&store);
+            let env = env.clone();
+            std::thread::spawn(move || {
+                let frame = rimz::store::ingress::HookIngress {
+                    boot_id: None,
+                    schema_version: "1".into(),
+                    event_id: rimz::EventId::new(),
+                    ts: jiff::Timestamp::now(),
+                    source: adapter.spec().kind_id(),
+                    event: Some(event.into()),
+                    payload: payload.to_string(),
+                    cwd: "/tmp/hooks-test".into(),
+                    hook_pid: std::process::id(),
+                    env,
+                };
+                let before = rimz::testkit::sidecar_read_counts();
+                with_frame_env(&frame, FrameAttempt::First, || {
+                    let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+                    handle_lifecycle_hook(
+                        &hooks_test_workspace(Some("main")),
+                        &store,
+                        adapter,
+                        &mut decoded,
+                        &payload,
+                        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                        &hooks_test_globals(),
+                    )
+                    .unwrap()
+                });
+                let after = rimz::testkit::sidecar_read_counts();
+                (after.0 - before.0, after.1 - before.1, after.2 - before.2)
+            })
+            .join()
+            .unwrap()
+        };
+        apply("SessionStart", serde_json::json!({"session_id": "leader"}));
+        apply(
+            "UserPromptSubmit",
+            serde_json::json!({"session_id": "leader", "prompt": "work"}),
+        );
+        let events = std::fs::metadata(&store.paths().events_log).unwrap().len();
+        let tool = apply(
+            "PostToolUse",
+            serde_json::json!({
+                "session_id": "leader", "tool_name": "Bash",
+                "tool_input": {"command": "true"}, "tool_response": {}
+            }),
+        );
+        assert!(
+            std::fs::metadata(&store.paths().events_log).unwrap().len() > events,
+            "the tool use appended an event"
+        );
+        counts.push(tool);
+    }
+    assert_eq!(
+        counts[0], counts[1],
+        "a team member's tool frame must not read sidecars per room row: {counts:?}"
+    );
+}
+
 #[test]
 fn cold_team_frames_read_a_constant_number_of_run_records() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};

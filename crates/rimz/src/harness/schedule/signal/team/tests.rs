@@ -72,12 +72,68 @@ fn derive_with_sleeping(
     team_lifecycle_signals(
         event,
         member,
-        live,
-        &addressable_agents(&snapshot),
         pending,
-        sleeping,
         &audit,
+        || (live.to_vec(), sleeping.clone()),
+        || addressable_agents(&snapshot),
     )
+}
+
+/// A tool use leaves its member running or keeps it where it was, so no
+/// tool edge can name a team signal, whatever the cohort holds.
+#[test]
+fn a_tool_edge_names_no_team_signal_before_any_room_input_is_read() {
+    let tool = LifecycleSignal::ToolUsed {
+        effect: crate::agents::lifecycle::ToolEffect::Mutating,
+        name: Some("Bash".to_owned()),
+        native_key: None,
+        turn_id: None,
+    };
+    for prior in [
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Idle,
+        AgentStatus::Success,
+    ] {
+        let coder = member("coder", "auth", AgentStatus::Running);
+        let event = event(&coder, prior, tool.clone());
+        let audit = vec![coder.clone()].into();
+        let signals = team_lifecycle_signals(
+            &event,
+            &coder,
+            &[],
+            &audit,
+            || panic!("{prior:?}: the cohort and waits are read only for an edge that can signal"),
+            || panic!("{prior:?}: the address view is read only once a name was derived"),
+        );
+        assert!(signals.is_empty(), "{prior:?}");
+    }
+}
+
+/// A member coming to rest while a peer still runs names nothing, and reads
+/// no address view.
+#[test]
+fn a_rest_entry_beside_a_running_peer_reads_no_address_view() {
+    let coder = member("coder", "auth", AgentStatus::Success);
+    let reviewer = member("reviewer", "auth", AgentStatus::Running);
+    let event = event(&coder, AgentStatus::Running, turn_end());
+    let rows = [coder, reviewer];
+    let cohorts = team_cohorts(&rows);
+    let audit = rows.to_vec().into();
+    let mut cohort_read = false;
+    let signals = team_lifecycle_signals(
+        &event,
+        &rows[0],
+        &[],
+        &audit,
+        || {
+            cohort_read = true;
+            (cohorts[0].members.clone(), BTreeSet::new())
+        },
+        || panic!("the address view is read only once a name was derived"),
+    );
+    assert!(cohort_read, "a rest entry can name team.idle");
+    assert!(signals.is_empty());
 }
 
 fn turn_end() -> LifecycleSignal {
