@@ -135,8 +135,9 @@ pub(crate) fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<
 /// when readable. RimZ walks only a single-child chain from the pane root:
 /// direct agent launches, shell-hosted agents, and wrapper-spawned subshells
 /// such as `chezmoi cd -> zsh -> codex` are unambiguous, while a branching
-/// process tree abstains. A CLI whose stdio is proven off the terminal is an
-/// ordinary process here, as in [`hosted_agent_process_for_root`].
+/// process tree abstains. A CLI proven not driven from the terminal (see
+/// `StdioTerminal`) is an ordinary process here, as in
+/// [`hosted_agent_process_for_root`].
 pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPaneAgentProcess> {
     in_pane_agent_process_for_root_with(
         kind,
@@ -151,8 +152,8 @@ pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPan
 
 /// The outermost known agent CLI hosted below a pane root. RimZ classifies the
 /// full command line at each node on one single-child walk, passes over a CLI
-/// whose stdio is proven off the terminal, and abstains when the tree cannot
-/// prove one unambiguous live CLI.
+/// proven not driven from the terminal (see `StdioTerminal`), and abstains when
+/// the tree cannot prove one unambiguous live CLI.
 pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess> {
     hosted_agent_process_for_root_with(
         root_pid,
@@ -168,7 +169,8 @@ pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess
 /// This is stricter than [`in_pane_agent_process_for_root`]: unreadable or
 /// empty cmdlines, branching trees, and depth exhaustion are indeterminate, so they
 /// return `false` and keep callers on their transient-miss path. A matching CLI
-/// whose stdio is proven off the terminal is no match, so both walks agree on it.
+/// proven not driven from the terminal (see `StdioTerminal`) is no match, so both
+/// walks agree on it.
 pub(crate) fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
     hosted_agent_absent_under_root_with(
         kind,
@@ -232,9 +234,10 @@ fn hosted_agent_process_for_root_with(
 }
 
 /// The single-child walk both hosted-agent questions share. A node counts only
-/// when its command line classifies and its stdio is not proven off the terminal
-/// (see [`StdioTerminal`]): a CLI another command runs with piped or null stdio,
-/// such as a version probe, is an ordinary process the walk goes on past.
+/// when its command line classifies and it is not proven off the terminal (see
+/// [`StdioTerminal`]): stdin not a terminal, or stdout neither a terminal nor a file.
+/// A CLI another command runs with piped or null stdio, such as a version probe,
+/// is an ordinary process the walk goes on past.
 fn pane_agent_process_for_root_with(
     root_pid: u32,
     classify: &dyn Fn(&str) -> Option<AgentKind>,
@@ -453,39 +456,64 @@ mod tests {
     #[test]
     fn agent_wrapper_root_is_the_hosted_cli_whatever_its_children() {
         let start = timestamp("2026-07-01T10:00:00Z");
-        let launch = concat!(
-            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
-            "--request-file /runtime/exec.json"
-        );
-        let parked = concat!(
-            "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
-            "--request-file /runtime/exec.json --supervise /tmp/rimz/unit/supervise.json"
-        );
         let duty = "/home/me/.cargo/bin/rimz agents supervise-duty --request /tmp/req";
-        let cases = [
-            chain([(10, launch), (20, "codex"), (30, duty)]).branch(10, [20, 30]),
-            chain([(10, parked), (20, "codex"), (30, duty)]).branch(10, [20, 30]),
-            chain([
-                (10, launch),
-                (20, "bwrap --unshare-pid -- codex"),
-                (30, "/home/me/.cargo/bin/rimz hooks drain"),
-                (40, "zombie"),
-            ])
-            .branch(10, [20, 30, 40])
-            .unreadable(40),
+        let launches = [
+            (
+                "codex",
+                "codex",
+                concat!(
+                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
+                    "--request-file /runtime/exec.json"
+                ),
+                concat!(
+                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt ",
+                    "--request-file /runtime/exec.json --supervise /tmp/rimz/unit/supervise.json"
+                ),
+            ),
+            // The kind token is not among antigravity's program names (`agy`).
+            (
+                "antigravity",
+                "agy --model gemini-4",
+                concat!(
+                    "/home/me/.cargo/bin/rimz agents exec antigravity --worktree-path /repo/wt ",
+                    "--request-file /runtime/exec.json"
+                ),
+                concat!(
+                    "/home/me/.cargo/bin/rimz agents exec antigravity --worktree-path /repo/wt ",
+                    "--request-file /runtime/exec.json --supervise /tmp/rimz/unit/supervise.json"
+                ),
+            ),
         ];
 
-        for fixture in cases {
-            let fixture = fixture.live(10, start, None);
-            let hosted = fixture.hosted_agent(10).expect("wrapper reads as codex");
-            assert_eq!(
-                (hosted.kind.as_str(), hosted.pid, hosted.started_at),
-                ("codex", 10, start)
-            );
-            let in_pane = fixture
-                .in_pane_agent("codex", 10)
-                .expect("wrapper is codex");
-            assert_eq!((in_pane.pid, in_pane.started_at), (10, start));
+        for (kind, cli, launch, parked) in launches {
+            let cases = [
+                // No provider below the wrapper: only the wrapper itself can say not absent.
+                chain([(10, launch), (30, duty)]),
+                chain([(10, launch), (20, cli), (30, duty)]).branch(10, [20, 30]),
+                chain([(10, parked), (20, cli), (30, duty)]).branch(10, [20, 30]),
+                chain([
+                    (10, launch),
+                    (20, "bwrap --unshare-pid -- codex"),
+                    (30, "/home/me/.cargo/bin/rimz hooks drain"),
+                    (40, "zombie"),
+                ])
+                .branch(10, [20, 30, 40])
+                .unreadable(40),
+            ];
+
+            for fixture in cases {
+                let fixture = fixture.live(10, start, None);
+                assert!(!fixture.hosted_absent(kind, 10), "{kind}");
+                let hosted = fixture.hosted_agent(10).expect("wrapper reads as its kind");
+                assert_eq!(
+                    (hosted.kind.as_str(), hosted.pid, hosted.started_at),
+                    (kind, 10, start)
+                );
+                let in_pane = fixture
+                    .in_pane_agent(kind, 10)
+                    .expect("wrapper is its kind");
+                assert_eq!((in_pane.pid, in_pane.started_at), (10, start));
+            }
         }
     }
 

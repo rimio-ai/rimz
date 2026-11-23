@@ -1918,7 +1918,8 @@ impl AgentSpec {
     /// (`cursor-agent` for Cursor) while its kernel `comm` names the runtime
     /// instead. Target-triple suffix matching applies to each declared
     /// name rather than implicitly accepting the kind, so `antigravity` does
-    /// not shadow the actual `agy` process.
+    /// not shadow the actual `agy` process. Only RimZ's `rimz agents exec
+    /// <kind>` wrapper is matched by kind, in the registry's classifiers.
     pub fn launches_as(&self, name: &str) -> bool {
         self.bin_names
             .iter()

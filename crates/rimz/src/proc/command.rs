@@ -484,6 +484,9 @@ pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
 pub(crate) struct EffectiveProgram<'a> {
     pub(crate) program: &'a str,
     pub(crate) root_program: &'a str,
+    /// `program` is the agent kind a `rimz agents exec <kind>` envelope names,
+    /// not a program name.
+    pub(crate) from_exec_wrapper: bool,
 }
 
 pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
@@ -492,6 +495,7 @@ pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
         return EffectiveProgram {
             program,
             root_program: program,
+            from_exec_wrapper: false,
         };
     };
     let program = parsed.program.text;
@@ -499,17 +503,20 @@ pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
         return EffectiveProgram {
             program: kind,
             root_program: program,
+            from_exec_wrapper: true,
         };
     }
     if let Some(script) = launched_script(&parsed) {
         return EffectiveProgram {
             program: script.text,
             root_program: program,
+            from_exec_wrapper: false,
         };
     }
     EffectiveProgram {
         program,
         root_program: program,
+        from_exec_wrapper: false,
     }
 }
 
@@ -591,7 +598,8 @@ mod tests {
                 effective_program_info(command),
                 EffectiveProgram {
                     program: "cargo",
-                    root_program: "cargo"
+                    root_program: "cargo",
+                    from_exec_wrapper: false,
                 },
                 "{command}"
             );
@@ -605,7 +613,8 @@ mod tests {
                 effective_program_info(command),
                 EffectiveProgram {
                     program: "/usr/bin/codex",
-                    root_program: "node"
+                    root_program: "node",
+                    from_exec_wrapper: false,
                 },
                 "{command}"
             );
@@ -678,7 +687,8 @@ mod tests {
                 effective_program_info(command),
                 EffectiveProgram {
                     program: "/usr/bin/codex",
-                    root_program: "node"
+                    root_program: "node",
+                    from_exec_wrapper: false,
                 },
                 "{command}"
             );
@@ -775,6 +785,7 @@ mod tests {
             EffectiveProgram {
                 program: "/usr/bin/codex",
                 root_program: "node",
+                from_exec_wrapper: false,
             }
         );
         assert_eq!(program_label("node /usr/bin/codex"), "codex");
