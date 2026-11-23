@@ -709,13 +709,13 @@ $ rimz agents list
 needs you
   @planner  waiting  2m  which rotation strategy should we use?
 
-HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
+HANDLE    NAME           PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner  planner  claude  waiting  Opus 5@high   42%     84k   2m
+@planner  @stable-haven  planner  claude  waiting  Opus 5@high   42%     84k   2m
   which rotation strategy should we use?
 
-@coder    coder    codex   running  GPT 5.5@high  33%     84k   0s
+@coder    @round-binder  coder    codex   running  GPT 5.5@high  33%     84k   0s
   wire up the refresh-token path
 ```
 
@@ -726,6 +726,7 @@ Cards group by place and channel, using the sidebar's rule. `⑂` marks a checko
 | Column | Shows |
 | --- | --- |
 | `HANDLE` | An address you can paste from your current channel: a bare role, name, profile, or kind when it resolves uniquely, otherwise qualified with `#channel` (or a session or pane id when needed). Uniqueness is checked against the room, not just the printed rows. The JSON `handle` in `list` and `show` carries the same address. |
+| `NAME` | The agent's name written as an address (`@round-binder`) when it differs from the handle, or a faint `-` when it does not. It names the same agent the `HANDLE` does; the JSON `name` carries it without the `@`. |
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
@@ -769,7 +770,7 @@ Without a filter, `list` shows live, top-level agents in its scope. A term namin
 | Field | Type | Holds |
 | --- | --- | --- |
 | `name` | text | The agent's name. |
-| `handle` | text | The `HANDLE` address; a leading `@` is optional, and a value without `#lane` ignores the address's lane. |
+| `handle` | text | The `HANDLE` address or the agent's name; a leading `@` is optional, and a value without `#lane` ignores the address's lane. |
 | `profile` | text | The launch profile. |
 | `kind` | text | The provider kind. |
 | `account` | text | The named login, or `default`. |

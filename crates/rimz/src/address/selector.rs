@@ -920,7 +920,13 @@ fn value_matches(
         Value::Text(text) => text.as_str(),
     };
     match field {
-        Field::Handle => handle_matches(&row.handle, text),
+        Field::Handle => {
+            handle_matches(&row.handle, text)
+                || row
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| handle_matches(name, text))
+        }
         Field::Lane => lane_matches(row, text),
         Field::Team => {
             let text = text.trim_start_matches('@');

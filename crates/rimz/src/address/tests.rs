@@ -1041,6 +1041,10 @@ fn handle_with_name_pairs_a_name_only_where_it_differs() {
             expected != handle,
             "{handle} {name:?}"
         );
+        let column = name
+            .filter(|_| expected != handle)
+            .map_or_else(|| "-".to_owned(), |name| format!("@{name}"));
+        assert_eq!(name_column(handle, name), column, "{handle} {name:?}");
     }
 }
 
