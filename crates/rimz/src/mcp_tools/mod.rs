@@ -16,6 +16,7 @@ mod lsp;
 mod notes;
 mod owned;
 mod room;
+mod schedule;
 mod start;
 mod stop;
 mod subagent;
@@ -90,6 +91,7 @@ impl Runner for Tools {
             Call::Wait(args) => wait::arm(self, &args),
             Call::Subagent(args) => subagent::launch(self, &args),
             Call::Workflow(args) => workflow::start(self, &args),
+            Call::Schedule(args) => schedule::book(self, &args),
             Call::Tasks(args) => tasks::tasks(self, &args),
             Call::Join(args) => join::join(self, &args, cancelled),
             Call::Stop(args) => stop::stop(self, &args),

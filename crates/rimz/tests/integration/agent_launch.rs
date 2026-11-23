@@ -6681,6 +6681,7 @@ fn explain_prints_the_plan_without_side_effects() {
           "rimz-wait",
           "rimz-subagents",
           "rimz-workflow",
+          "rimz-loop",
           "rimz-control",
           "rimz-notes"
         ],
@@ -9219,7 +9220,7 @@ fn from_trunk_launch_warns_and_continues_when_origin_is_offline() {
 }
 
 #[cfg(unix)]
-fn team_worktree_launch_env() -> Env {
+pub(crate) fn team_worktree_launch_env() -> Env {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
     env.record(&env.project_root);
@@ -9248,7 +9249,7 @@ fn team_worktree_launch_env() -> Env {
 }
 
 #[cfg(unix)]
-fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
+pub(crate) fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
     let shim = write_env_dump_shim(env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
     crate::common::room::seed_live_zellij_room(

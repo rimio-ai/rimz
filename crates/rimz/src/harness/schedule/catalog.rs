@@ -408,6 +408,17 @@ impl TaskCatalog {
         &self.runnable
     }
 
+    /// Hold the lock every task-store edit takes, so a check of the rows read under it still
+    /// holds when an edit made under it writes.
+    pub(crate) fn lock_edits() -> Result<config_edit::EditLock> {
+        config_edit::EditLock::acquire()
+    }
+
+    /// Whether a machine row of this name exists that loading skipped, so its booker is unknown.
+    pub fn skipped_machine_row(&self, name: &str) -> bool {
+        self.skipped_machine.0.contains_key(name)
+    }
+
     pub fn replace_machine(&self, name: &str, entry: &TaskEntry) -> Result<TaskMutation> {
         if matches!(
             self.visible.get(name).map(LoadedTask::source),

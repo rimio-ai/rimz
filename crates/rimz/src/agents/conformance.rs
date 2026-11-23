@@ -48,9 +48,16 @@ fn routine_rimz_prefixes_match_documented_list() {
 }
 
 /// The MCP tools are granted with the routine commands, so each command a tool
-/// runs must already be one an agent runs unasked.
+/// runs must already be one an agent runs unasked. A group's tool that stands
+/// for no command escapes that check, so the one such tool is named.
 #[test]
 fn every_mcp_tool_command_is_a_routine_command() {
+    let commandless: Vec<&str> = crate::mcp::catalog::TOOLS
+        .iter()
+        .filter(|tool| tool.capability.is_some() && tool.commands().is_empty())
+        .map(|tool| tool.name)
+        .collect();
+    assert_eq!(commandless, ["schedule"]);
     let commands: Vec<String> = crate::mcp::catalog::TOOLS
         .iter()
         .flat_map(crate::mcp::catalog::Tool::commands)

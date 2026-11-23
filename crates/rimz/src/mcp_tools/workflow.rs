@@ -98,7 +98,10 @@ pub(super) fn start(tools: &Tools, args: &WorkflowArgs) -> Result<Answer, Failur
     Err(with_warnings(failure, warnings))
 }
 
-fn parse_when(field: &str, raw: Option<&str>) -> Result<Option<workflow::When>, Failure> {
+pub(super) fn parse_when(
+    field: &str,
+    raw: Option<&str>,
+) -> Result<Option<workflow::When>, Failure> {
     raw.map(|raw| {
         workflow::parse_when(raw)
             .map_err(|err| Failure::new(format!("invalid {field} `{raw}`: {err}")))

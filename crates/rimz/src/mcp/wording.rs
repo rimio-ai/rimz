@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
-const BUILT_IN: [(&str, &str); 25] = [
+const BUILT_IN: [(&str, &str); 30] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
     ("tasks.md", include_str!("tools/tasks.md")),
@@ -63,6 +63,26 @@ const BUILT_IN: [(&str, &str); 25] = [
         include_str!("tools/rimz-workflow/guides/debugging.md"),
     ),
     (
+        "rimz-loop/instructions.md",
+        include_str!("tools/rimz-loop/instructions.md"),
+    ),
+    (
+        "rimz-loop/schedule.md",
+        include_str!("tools/rimz-loop/schedule.md"),
+    ),
+    (
+        "rimz-loop/guides/targets.md",
+        include_str!("tools/rimz-loop/guides/targets.md"),
+    ),
+    (
+        "rimz-loop/guides/signals.md",
+        include_str!("tools/rimz-loop/guides/signals.md"),
+    ),
+    (
+        "rimz-loop/guides/managing.md",
+        include_str!("tools/rimz-loop/guides/managing.md"),
+    ),
+    (
         "rimz-control/instructions.md",
         include_str!("tools/rimz-control/instructions.md"),
     ),
@@ -95,6 +115,19 @@ const BUILT_IN: [(&str, &str); 25] = [
         include_str!("tools/rimz-notes/notes.md"),
     ),
 ];
+
+/// Where `wait` and `schedule` carry the one description of the `when`, `in`, and `at` values.
+const TRIGGER_VALUES_MARK: &str = "{{trigger-values}}";
+const TRIGGER_VALUES: &str = include_str!("tools/trigger-values.md");
+
+/// The conditions guide, which `rimz-loop` serves beside its owner, so one file teaches the
+/// grammar to a launch serving either.
+const CONDITIONS_GUIDE: &str = "rimz-wait/guides/conditions.md";
+
+/// `text` with the shared trigger values in place of their mark.
+fn expanded(text: &str) -> String {
+    text.replace(TRIGGER_VALUES_MARK, TRIGGER_VALUES.trim())
+}
 
 /// The shared part of the instructions, after the group sentences.
 const SHARED: &str = "instructions.md";
@@ -132,6 +165,8 @@ pub struct WordingWarning {
     /// The group whose folder holds the replaced file; `None` for a shared
     /// file and for a file RimZ has no wording file for.
     group: Option<Capability>,
+    /// The built-in file a rejected replacement stands for.
+    file: Option<&'static str>,
     message: String,
 }
 
@@ -155,7 +190,7 @@ impl Wording {
             .iter()
             .map(|(path, text)| {
                 let text = Text {
-                    text: Cow::Borrowed(text.trim()),
+                    text: Cow::Owned(expanded(text.trim())),
                     path: None,
                 };
                 (*path, text)
@@ -182,6 +217,7 @@ impl Wording {
         {
             wording.warnings.push(WordingWarning {
                 group: None,
+                file: None,
                 message: format!(
                     "{} cannot be read, so the built-in text is served: {err}",
                     dir.display()
@@ -196,7 +232,7 @@ impl Wording {
             };
             let text = match std::fs::read(&path) {
                 Ok(bytes) => String::from_utf8(bytes)
-                    .map(|text| text.trim().to_owned())
+                    .map(|text| expanded(text.trim()))
                     .map_err(|_| "it is not UTF-8".to_owned()),
                 Err(err) => Err(format!("it cannot be read: {err}")),
             };
@@ -236,14 +272,16 @@ impl Wording {
     }
 
     /// The warnings that concern a launch serving `groups`: those of the
-    /// groups' own files, of the shared files, and of every misplaced file.
+    /// groups' own files, of another group's guide the launch is served, of the
+    /// shared files, and of every misplaced file.
     pub fn warnings_for<'a>(
         &'a self,
         groups: &'a [Capability],
     ) -> impl Iterator<Item = &'a WordingWarning> {
-        self.warnings
-            .iter()
-            .filter(|warning| warning.group.is_none_or(|group| groups.contains(&group)))
+        self.warnings.iter().filter(|warning| {
+            warning.group.is_none_or(|group| groups.contains(&group))
+                || warning.file.is_some_and(|file| lent_guide(file, groups))
+        })
     }
 
     /// `tool`'s description.
@@ -355,12 +393,13 @@ impl Wording {
         self.reject(known, user, reason);
     }
 
-    fn reject(&mut self, known: &str, path: PathBuf, reason: &str) {
+    fn reject(&mut self, known: &'static str, path: PathBuf, reason: &str) {
         let group = known
             .split_once('/')
             .and_then(|(group, _)| Capability::from_name(group));
         self.warnings.push(WordingWarning {
             group,
+            file: Some(known),
             message: format!(
                 "{} is not used, so the built-in text is served: {reason}",
                 path.display()
@@ -455,6 +494,7 @@ fn unreadable_folder(root: &Path, dir: &Path, err: &std::io::Error) -> WordingWa
         .and_then(|first| Capability::from_name(&first.as_os_str().to_string_lossy()));
     WordingWarning {
         group,
+        file: None,
         message: format!(
             "{} cannot be read, so no file in it is used: {err}",
             dir.display()
@@ -476,6 +516,7 @@ fn misplaced(dir: &Path, relative: &str, path: &Path) -> WordingWarning {
     };
     WordingWarning {
         group: None,
+        file: None,
         message: format!(
             "{} is ignored: RimZ has no wording file {relative}{belongs}",
             path.display()
@@ -489,13 +530,20 @@ pub fn has_guides(group: Capability) -> bool {
     !guide_names(&[group]).is_empty()
 }
 
+/// Whether the built-in file at `path` is a guide of another group that `groups` are served:
+/// the conditions guide, which `rimz-loop` shares with `rimz-wait`.
+fn lent_guide(path: &str, groups: &[Capability]) -> bool {
+    path == CONDITIONS_GUIDE && groups.contains(&Capability::Loop)
+}
+
 /// The names `guide` takes for `groups`' guides, `<group>/<guide>`.
 fn guide_names(groups: &[Capability]) -> Vec<String> {
     BUILT_IN
         .iter()
         .filter_map(|(path, _)| {
             let (group, file) = path.split_once("/guides/")?;
-            let group = Capability::from_name(group).filter(|group| groups.contains(group))?;
+            let group = Capability::from_name(group)
+                .filter(|group| groups.contains(group) || lent_guide(path, groups))?;
             Some(format!("{}/{}", group.name(), file.strip_suffix(".md")?))
         })
         .collect()

@@ -251,28 +251,24 @@ fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_i
                 .find(|line| line.starts_with("Launch them through"))
                 .map(str::to_owned),
         ));
+        // A launch that cannot delegate is served neither tool that hands a launch on: a
+        // booking's fire would launch a top-level agent past its refusals.
+        let cannot_delegate = |request: &ExecRequest| {
+            let served = reminders.mcp_capabilities(request);
+            assert!(!served.contains(&Capability::Subagents), "{served:?}");
+            assert!(!served.contains(&Capability::Loop), "{served:?}");
+            assert!(served.contains(&Capability::Wait), "{served:?}");
+            assert!(served.contains(&Capability::Workflow), "{served:?}");
+        };
         request.subagent = true;
-        assert!(
-            !reminders
-                .mcp_capabilities(&request)
-                .contains(&Capability::Subagents)
-        );
-        assert!(
-            reminders
-                .mcp_capabilities(&request)
-                .contains(&Capability::Wait)
-        );
+        cannot_delegate(&request);
         request.subagent = false;
         request.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
             run: crate::ids::WorkflowRunId::new(),
             seq: 1,
             role: crate::agents::WorkflowAttemptRole::Judge,
         });
-        assert!(
-            !reminders
-                .mcp_capabilities(&request)
-                .contains(&Capability::Subagents)
-        );
+        cannot_delegate(&request);
     }
     let via = |server: &str| {
         Some(format!(
@@ -1010,6 +1006,7 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
 - rimz-wait: the `wait` tool of the `{server}` MCP server
 - rimz-subagents: the `subagent` tool of the `{server}` MCP server
 - rimz-workflow: the `workflow` tool of the `{server}` MCP server
+- rimz-loop: the `schedule` tool of the `{server}` MCP server
 - rimz-control: the {control} of the `{server}` MCP server
 - rimz-notes: the `notes` tool of the `{server}` MCP server
 - rimz-message: Skill(rimz-message)"
@@ -1179,10 +1176,14 @@ fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
         });
         let reminders = LaunchReminders {
             mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
-            rimz_skills: rimz_skills(&["rimz-message", "rimz-subagents"]),
+            rimz_skills: rimz_skills(&["rimz-loop", "rimz-message", "rimz-subagents"]),
             ..LaunchReminders::default()
         };
         let capabilities = reminders.rimz_capabilities(&request);
+        assert!(
+            capabilities.contains(&("rimz-loop".to_owned(), Reach::Skill)),
+            "a judge not served `schedule` keeps the rimz-loop skill: {capabilities:?}"
+        );
         assert!(
             capabilities
                 .iter()

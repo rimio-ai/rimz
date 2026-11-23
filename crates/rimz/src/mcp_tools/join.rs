@@ -26,8 +26,11 @@ use crate::store::snapshot::SidebarSnapshot;
 const TIMEOUT_DEFAULT: Duration = Duration::from_secs(4 * 60);
 /// Under a provider's own tool-call limit: Codex's 600 s, Claude's 600000 ms script limit.
 const TIMEOUT_MAX: Duration = Duration::from_secs(9 * 60);
-/// How a schedule's or a wait's outcome reaches the caller.
+/// How a wait's outcome reaches the caller.
 const BY_MESSAGE: &str = "its outcome comes to you as a message; join does not wait for it";
+/// What a booker hears of a schedule's fires: nothing delivers one a message (the fire's
+/// launch carries the booking chain for ownership only).
+const NO_MESSAGE: &str = "no message comes when it fires; join does not wait for it";
 const QUEUED: &str = "a message waits for you: read it, then join again";
 
 /// What `join` answers: `done` with the result, `running` at the deadline, or `ended` for a
@@ -115,7 +118,11 @@ pub(super) fn join(
             ..Joined::new(id, "ended")
         },
         Named::Schedule { .. } if schedule_disabled(&root, name)? => Joined::new(id, "disabled"),
-        Named::Schedule { .. } | Named::Wait { .. } => Joined {
+        Named::Schedule { .. } => Joined {
+            report: Some(NO_MESSAGE),
+            ..Joined::new(id, "running")
+        },
+        Named::Wait { .. } => Joined {
             report: Some(BY_MESSAGE),
             ..Joined::new(id, "running")
         },

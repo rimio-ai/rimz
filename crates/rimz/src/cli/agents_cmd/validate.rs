@@ -483,6 +483,9 @@ fn shut_out(
     }
     let tool = match Capability::from_name(name) {
         None => vec![format!("{name} has no MCP tools")],
+        Some(Capability::Loop) if subagent => {
+            vec!["a subagent is not served the rimz-loop tools".to_owned()]
+        }
         Some(_) if !machine.agents.rimz_mcp_server => {
             vec!["the machine's rimz-mcp-server is off".to_owned()]
         }

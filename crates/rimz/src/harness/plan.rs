@@ -797,16 +797,25 @@ fn resolve_layout(
     Ok(layout)
 }
 
+/// Why a loop launch's spec is not one agent.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NotOneAgent {
+    #[error("loop task `{0}` must resolve to one agent; use a kind, profile, or virtual cell")]
+    Cells(String),
+    #[error("loop task `{0}` must resolve to one agent; command cells are not supported")]
+    Command(String),
+}
+
 fn single_agent(
     spec: &str,
     layout: &crate::harness::spec::LayoutSpec,
 ) -> Result<ResolvedSingleAgentLaunch> {
     let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
     if cell_count != 1 {
-        bail!("loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell");
+        return Err(NotOneAgent::Cells(spec.to_owned()).into());
     }
     let Cell::Agent(cell) = &layout.columns[0].rows[0] else {
-        bail!("loop task `{spec}` must resolve to one agent; command cells are not supported");
+        return Err(NotOneAgent::Command(spec.to_owned()).into());
     };
     Ok(single_cell(cell))
 }

@@ -314,10 +314,17 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
     let dir = tempfile::tempdir().unwrap();
     put(dir.path(), "rimz-lsp/lsp.md", "");
     put(dir.path(), "guide.md", "");
+    put(dir.path(), "rimz-wait/guides/conditions.md", "");
     let wording = Wording::read(dir.path());
     let count = |groups: &[Capability]| wording.warnings_for(groups).count();
     assert_eq!(count(&[Capability::Lsp]), 2);
     assert_eq!(count(&[Capability::Notes]), 1);
+    assert_eq!(count(&[Capability::Wait]), 2);
+    assert_eq!(
+        count(&[Capability::Loop]),
+        2,
+        "a launch serving rimz-loop alone is served the conditions guide, so it hears its warning"
+    );
     assert_eq!(
         Wording::read(&dir.path().join("absent")).warnings().len(),
         0
@@ -336,6 +343,9 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         "rimz-subagents/delegating".to_owned(),
         "rimz-workflow/steering".to_owned(),
         "rimz-workflow/debugging".to_owned(),
+        "rimz-loop/targets".to_owned(),
+        "rimz-loop/signals".to_owned(),
+        "rimz-loop/managing".to_owned(),
         "rimz-control/fresh-eyes".to_owned(),
     ];
     assert_eq!(
@@ -347,7 +357,19 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         wording.guide(&[Capability::Lsp], "rimz-wait/conditions"),
         Err(Vec::new())
     );
+    assert_eq!(
+        wording.guide(&[Capability::Loop], "rimz-wait/conditions"),
+        Ok(conditions),
+        "a launch serving rimz-loop alone loads the one conditions guide"
+    );
+    let values = "`in`: a delay, one number and unit";
+    for tool in ["wait", "schedule"] {
+        let description = wording.description(self::tool(tool)).text();
+        assert_eq!(description.matches(values).count(), 1, "{description}");
+        assert!(!description.contains("{{"), "{description}");
+    }
     assert!(has_guides(Capability::Wait));
+    assert!(has_guides(Capability::Loop));
     assert!(has_guides(Capability::Subagents));
     assert!(!has_guides(Capability::Lsp));
 }

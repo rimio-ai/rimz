@@ -1,0 +1,3 @@
+- `when`: a condition, firing when it reads true, already true when set included.
+- `in`: a delay, one number and unit (`90s`, `20m`, `2h`, `1d`), rounded up to the next whole minute.
+- `at`: a clock time in the configured time zone (the `timezone` setting), the next one ahead: `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`.
