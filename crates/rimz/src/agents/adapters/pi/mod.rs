@@ -432,6 +432,31 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
                     r#"{"type":"compaction","timestamp":"2026-06-02T10:02:00.000Z","usage":{"output":20,"cost":{"total":0.12}}}"#,
                 )),
             }),
+            context_model: vec![
+                super::ContextModelFixture {
+                    effort: "high",
+                    producer: super::ContextModelProducer::Push {
+                        source: "pi",
+                        payload: serde_json::json!({
+                            "session_id": "sess-1",
+                            "model": "gpt-5.5",
+                            "provider": "openai-codex",
+                            "effort": "high"
+                        }),
+                    },
+                },
+                super::ContextModelFixture {
+                    effort: "high",
+                    producer: super::ContextModelProducer::Hook {
+                        event_name: "session_start",
+                        payload: serde_json::json!({
+                            "session_id": "sess-1",
+                            "model": "gpt-5.5",
+                            "effort": "high"
+                        }),
+                    },
+                },
+            ],
             ..super::AdapterConformance::default()
         }
     }

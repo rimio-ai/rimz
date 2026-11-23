@@ -479,6 +479,33 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
                     r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-13T23:23:09Z","model":"gemini-3-flash-preview","input_tokens":100,"cache_read_tokens":40,"output_tokens":20}"#,
                 ),
             }),
+            context_model: vec![
+                super::ContextModelFixture {
+                    effort: "xhigh",
+                    producer: super::ContextModelProducer::Push {
+                        source: "antigravity",
+                        payload: serde_json::json!({
+                            "conversation_id": "11111111-1111-4111-8111-111111111111",
+                            "model": {
+                                "id": "Gemini 4 Hydrogen (XHigh)",
+                                "display_name": "Gemini 4 Hydrogen (XHigh)"
+                            }
+                        }),
+                    },
+                },
+                super::ContextModelFixture {
+                    effort: "xhigh",
+                    producer: super::ContextModelProducer::Hook {
+                        event_name: "PreInvocation",
+                        payload: serde_json::json!({
+                            "conversationId": "11111111-1111-4111-8111-111111111111",
+                            "workspacePaths": ["/workspace/project"],
+                            "invocationNum": 0,
+                            "modelName": "gemini-4-hydrogen-xhigh"
+                        }),
+                    },
+                },
+            ],
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()
         }

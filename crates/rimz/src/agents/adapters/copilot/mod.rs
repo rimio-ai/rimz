@@ -381,6 +381,16 @@ impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
                 ))
                 .expect("valid Copilot statusline fixture"),
             }),
+            context_model: vec![super::ContextModelFixture {
+                effort: "medium",
+                producer: super::ContextModelProducer::Push {
+                    source: "copilot",
+                    payload: serde_json::from_str(include_str!(
+                        "tests/fixtures/statusline-modern.json"
+                    ))
+                    .expect("valid Copilot statusline fixture"),
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

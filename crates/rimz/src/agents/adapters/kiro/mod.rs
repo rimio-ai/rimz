@@ -303,6 +303,23 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
     fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
             classification: super::hook_types::catalog_classification_corpus(KIRO_HOOKS),
+            context_model: vec![super::ContextModelFixture {
+                effort: "high",
+                producer: super::ContextModelProducer::Local {
+                    agent_id: "sess_33333333-3333-4333-8333-333333333333",
+                    files: vec![
+                        (
+                            "sessions/e3af8a7251583e76/sess_33333333-3333-4333-8333-333333333333/messages.jsonl",
+                            "",
+                        ),
+                        (
+                            "sessions/e3af8a7251583e76/sess_33333333-3333-4333-8333-333333333333/session.json",
+                            r#"{"id":"sess_33333333-3333-4333-8333-333333333333","schemaVersion":"1.0.0","dataModelVersion":1,"workspacePaths":["/workspace/project"],"createdAt":"2025-01-01T00:00:00Z","modelId":"claude-sonnet-4.5","effortLevel":"high"}"#,
+                        ),
+                    ],
+                    home_env: &[],
+                },
+            }],
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()
         }

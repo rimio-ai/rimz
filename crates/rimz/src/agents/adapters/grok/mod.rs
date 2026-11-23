@@ -345,6 +345,23 @@ impl crate::agents::capabilities::CoreCapability for GrokAdapter {
 {"timestamp":1700000001,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":100,"cachedReadTokens":20,"outputTokens":10,"costUsdTicks":1000000000}}}}"#,
                 ),
             }),
+            context_model: vec![super::ContextModelFixture {
+                effort: "high",
+                producer: super::ContextModelProducer::Local {
+                    agent_id: "s1",
+                    files: vec![
+                        (
+                            "sessions/%2Fwork/s1/updates.jsonl",
+                            r#"{"timestamp":1700000000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"},"_meta":{"promptIndex":0}}}}"#,
+                        ),
+                        (
+                            "sessions/%2Fwork/s1/summary.json",
+                            r#"{"info":{"id":"s1"},"current_model_id":"grok-4","reasoning_effort":"high"}"#,
+                        ),
+                    ],
+                    home_env: &["GROK_HOME"],
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

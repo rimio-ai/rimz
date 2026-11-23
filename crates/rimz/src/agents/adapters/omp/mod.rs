@@ -41,6 +41,22 @@ impl CoreCapability for OmpAdapter {
                     "\n",
                 )),
             }),
+            context_model: vec![
+                crate::agents::ContextModelFixture {
+                    effort: "high",
+                    producer: crate::agents::ContextModelProducer::Push {
+                        source: "omp",
+                        payload: serde_json::json!({"session_id": "s", "model": "gpt-5", "effort": "high"}),
+                    },
+                },
+                crate::agents::ContextModelFixture {
+                    effort: "high",
+                    producer: crate::agents::ContextModelProducer::Hook {
+                        event_name: "session_start",
+                        payload: serde_json::json!({"session_id": "s", "model": "gpt-5", "effort": "high"}),
+                    },
+                },
+            ],
             ..AdapterConformance::default()
         }
     }

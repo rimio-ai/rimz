@@ -378,6 +378,19 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
                     data: r#"{"cost":0.42,"model":{"id":"gpt-5","providerID":"openai"},"time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
                 },
             }),
+            // The plugin sends the model's variant as the effort, beside its id.
+            context_model: vec![super::ContextModelFixture {
+                effort: "xhigh",
+                producer: super::ContextModelProducer::Hook {
+                    event_name: "session_created",
+                    payload: serde_json::json!({
+                        "session_id": "ses_1",
+                        "model": "gpt-5",
+                        "effort": "xhigh",
+                        "transcript_path": "/workspace/project/opencode.db"
+                    }),
+                },
+            }],
             ..super::AdapterConformance::default()
         }
     }

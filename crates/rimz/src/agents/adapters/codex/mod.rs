@@ -819,6 +819,38 @@ impl crate::agents::capabilities::CoreCapability for CodexAdapter {
                 ),
                 expected_kind: AskKind::PlanApproval,
             }),
+            context_model: vec![
+                super::ContextModelFixture {
+                    effort: "xhigh",
+                    producer: super::ContextModelProducer::Local {
+                        agent_id: "sess-1",
+                        files: vec![(
+                            "rollout-2026-06-02T10-00-00-sess-1.jsonl",
+                            concat!(
+                                r#"{"type":"session_meta","payload":{"id":"sess-1"}}"#,
+                                "\n",
+                                r#"{"type":"turn_context","payload":{"model":"gpt-5.5","effort":"xhigh"}}"#,
+                                "\n",
+                                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"output_tokens":20,"total_tokens":1020},"model_context_window":258400}}}"#,
+                                "\n",
+                            ),
+                        )],
+                        home_env: &["CODEX_HOME"],
+                    },
+                },
+                super::ContextModelFixture {
+                    effort: "xhigh",
+                    producer: super::ContextModelProducer::Hook {
+                        event_name: "SessionStart",
+                        payload: serde_json::json!({
+                            "session_id": "sess-1",
+                            "source": "startup",
+                            "model": "gpt-5.5",
+                            "reasoning_effort": "xhigh"
+                        }),
+                    },
+                },
+            ],
             local_session: Some(local_sessions::fixture_observation()),
             ..super::AdapterConformance::default()
         }

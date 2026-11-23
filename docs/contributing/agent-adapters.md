@@ -224,6 +224,7 @@ What a change to a shipped adapter also runs, pins, and checks. The [module cont
 
 - A change to a declared coverage or lifecycle-hook verdict, a preset, or an adapter's install version gate or hook set moves the pins that step 9 lists under **Shared pins move with the definition**, and runs the four filters named there as separate calls before the gate.
 - A conformance failure on a new adapter's declared marks is fixed in the marks, never by loosening a shared check; a check that seems wrong goes to review as its own change.
+- An adapter whose context or hook reports an effort declares a `context_model` fixture in `conformance` for each producer that carries one (an `observe_context` payload, the provider files a `local_context_refresh` reads, or a hook payload whose `decode_hook` reads the effort from the payload itself) and is listed in `CONTEXT_EFFORT_KINDS` in [`conformance.rs`](../../crates/rimz/src/agents/conformance.rs), and in `HOOK_EFFORT_KINDS` when its hook payload carries the effort. A hook that reads the effort from a provider file instead (Grok, Droid, and Kimi) declares no hook fixture. `context_model_fields_never_carry_the_effort` fails a fixture whose model id or display name ends in its effort, or that reports no effort ([model.md → Rich context](../internals/agents/model.md#rich-context)).
 
 ### Spend and pricing
 
