@@ -464,3 +464,43 @@ fn held_repairs_keep_process_fields_and_fresh_listing_until_due_or_thawed() {
     );
     assert!(checks.is_empty(), "thaw drops the stamps");
 }
+
+/// The process-table walk only finds a pidless pane's pid: a listing that gives every pane
+/// its pid, as tmux's does, skips it.
+#[test]
+fn the_pid_walk_runs_only_for_a_pidless_pane() {
+    let walks = std::cell::Cell::new(0);
+    let readers = RepairReaders {
+        cmdline: &|_| None,
+        comm: &|_| None,
+        children: &|_| Vec::new(),
+        hosted_process: &|_| None,
+        cwd: &|_| None,
+        resumed_session: &|_| crate::agents::ResumeProbe::Unsettled,
+        root_start: &|_, _| None,
+        cwd_starts: &|_, _| Vec::new(),
+        hosted_absent: &|_, _| false,
+        process_start: &|_| None,
+        elevated_agent: &|_| None,
+        backfill_pids: &|_, _| walks.set(walks.get() + 1),
+    };
+    let mut listed = pane("terminal_1", Some("zsh"), Some("/repo"));
+    listed.pane_pid = Some(1);
+    let pidless = pane("terminal_2", Some("zsh"), Some("/repo"));
+    for (panes, expected) in [(vec![listed.clone()], 0), (vec![listed, pidless], 1)] {
+        walks.set(0);
+        repair_pane_frame(
+            &mut frame(panes),
+            None,
+            "s",
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut SettledResumes::new(),
+            &readers,
+            &mut |_| {},
+        );
+        assert_eq!(walks.get(), expected);
+    }
+}
