@@ -1626,6 +1626,15 @@ pub fn name_column(handle: &str, name: Option<&str>) -> String {
         .map_or_else(|| "-".to_owned(), |name| format!("@{name}"))
 }
 
+/// [`agent_handle`] with the agent's name beside it when the two differ: how prose
+/// names an agent. Never an address to paste or parse.
+pub fn named_handle(agent: &AgentState, peers: &[&AgentState], include_channel: bool) -> String {
+    handle_with_name(
+        &agent_handle(agent, peers, include_channel),
+        agent.name.as_deref(),
+    )
+}
+
 /// The structured header for an agent-, subagent-, or harness-authored record.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,

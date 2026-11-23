@@ -481,6 +481,26 @@ fn card_projection_show_sections_follow_activity_before_stable_facts() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
 }
 
+#[test]
+fn agent_header_pairs_a_differing_name_with_the_handle() {
+    let mut agent = entry();
+    agent.handle = "@coder#auth".into();
+    agent.name = Some("round-binder".into());
+    let text = strip(|w| {
+        render_show_sections(
+            w,
+            &ShowReport::default(),
+            &agent,
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+    });
+    assert!(text.starts_with("@coder (@round-binder)  codex"), "{text}");
+    assert!(
+        text.lines().next().unwrap().ends_with("  (@coder#auth)"),
+        "{text}"
+    );
+}
+
 fn started_row(kind: RowKind, name: &str, status: &str, command: Option<&str>) -> StartedRow {
     StartedRow {
         kind,

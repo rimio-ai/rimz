@@ -4213,13 +4213,22 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         };
         assert_eq!(
             stop(&["@claude", "--when-idle", "off"]),
-            (true, "@claude#main has no pending idle stop\n".to_owned())
+            (
+                true,
+                format!(
+                    "{} has no pending idle stop\n",
+                    named(&env, "provider-session", "@claude#main")
+                )
+            )
         );
         assert_eq!(
             stop(&["@claude", "--when-idle"]),
             (
                 true,
-                "stop booked: @claude#main closes after 3m idle, once nothing holds it. A prompt from the user withdraws it.\n".to_owned()
+                format!(
+                    "stop booked: {} closes after 3m idle, once nothing holds it. A prompt from the user withdraws it.\n",
+                    named(&env, "provider-session", "@claude#main")
+                )
             )
         );
         let shown = run_success(
@@ -4238,8 +4247,10 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle", "0s"]),
             (
                 true,
-                "stop booked: @claude#main closes after 0s idle (replaces the pending 3m request), once nothing holds it. A prompt from the user withdraws it.\n"
-                    .to_owned()
+                format!(
+                    "stop booked: {} closes after 0s idle (replaces the pending 3m request), once nothing holds it. A prompt from the user withdraws it.\n",
+                    named(&env, "provider-session", "@claude#main")
+                )
             )
         );
         let (ok, refusal) = stop(&[run.run_id.as_str(), "--when-idle"]);
@@ -4386,8 +4397,12 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 assert_eq!(
                     lines.next(),
                     Some(
-                        "stop booked: @claude#main closes after 0s idle (replaces the pending 0s \
-                         request), once nothing holds it. A prompt from the user withdraws it."
+                        format!(
+                            "stop booked: {} closes after 0s idle (replaces the pending 0s \
+                             request), once nothing holds it. A prompt from the user withdraws it.",
+                            named(&env, "provider-session", "@claude#main")
+                        )
+                        .as_str()
                     ),
                     "{receipt}"
                 );
@@ -4448,7 +4463,10 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 stop(&["@claude", "--when-idle", "off"]),
                 (
                     true,
-                    "withdrew the pending idle stop for @claude#main\n".to_owned()
+                    format!(
+                        "withdrew the pending idle stop for {}\n",
+                        named(&env, "provider-session", "@claude#main")
+                    )
                 )
             );
             assert!(rimz::store::idle_stop::read(store.paths()).is_empty());
@@ -4656,7 +4674,7 @@ fn stop_closes_the_agents_listed_pane_when_its_ended_run_names_a_gone_one() {
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @claude (claude); resume: rimz agents resume @repro"
+        "stopped @claude (@repro) (claude); resume: rimz agents resume @repro"
     );
     assert!(process.try_wait().unwrap().is_some(), "its process is gone");
 }
@@ -5327,7 +5345,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "stopped @coder (claude); resume: rimz agents forge.coder --continue"
+        "stopped @coder (@team-pet) (claude); resume: rimz agents forge.coder --continue"
     );
     // A seat in a RimZ worktree resumes by the name `-w` maps back to its path.
     let repo = env.project_root.file_name().unwrap().to_str().unwrap();
@@ -5358,7 +5376,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --continue -w feat-b"
+        "stopped @reviewer (@worktree-pet) (claude); resume: rimz agents forge.reviewer --continue -w feat-b"
     );
 }
 
@@ -5380,7 +5398,7 @@ fn stop_terms_a_process_that_outlives_its_closed_pane() {
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @claude (claude); resume: rimz agents resume @dies"
+        "stopped @claude (@dies) (claude); resume: rimz agents resume @dies"
     );
     assert!(dies.try_wait().unwrap().is_some(), "SIGTERM ended it");
 
@@ -5401,7 +5419,8 @@ fn stop_terms_a_process_that_outlives_its_closed_pane() {
     let text = String::from_utf8_lossy(&stop.stderr);
     assert!(
         text.contains(&format!(
-            "@claude#main was not stopped: @claude#main: its process {pid} is still running \
+            "@claude#main (@ignores) was not stopped: @claude#main: its process {pid} is \
+             still running \
              after RimZ sent it SIGTERM"
         )),
         "{text}"
@@ -5705,8 +5724,8 @@ fn stop_of_an_unknown_process_succeeds_only_once_its_end_is_recorded() {
     let text = String::from_utf8_lossy(&stop.stderr);
     assert!(
         text.contains(
-            "@claude#main was not stopped: @claude#main: RimZ could not confirm its process is \
-             gone; the stop succeeds once the agent's end is recorded"
+            "@claude#main (@silent) was not stopped: @claude#main: RimZ could not \
+             confirm its process is gone; the stop succeeds once the agent's end is recorded"
         ),
         "{text}"
     );
@@ -5848,7 +5867,8 @@ exec "$RIMZ_TEST_TRACE" "$@"
         let text = String::from_utf8_lossy(&stop.stderr);
         assert!(
             text.contains(
-                "@claude#main was not stopped: @claude#main: the multiplexer could not be read: "
+                "@claude#main (@unread) was not stopped: @claude#main: the multiplexer \
+                 could not be read: "
             ),
             "{text}"
         );
@@ -6014,7 +6034,7 @@ fn stop_non_resumable_agent_omits_resume_clause() {
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @claude (claude)"
+        "stopped @claude (@receipt-pet) (claude)"
     );
     reap_later(process);
 }
@@ -6205,7 +6225,10 @@ fn stop_counts_a_failed_close_of_an_agent_that_ends_with_its_owner_as_stopped() 
     assert!(!output.status.success(), "{output:?}");
     let text = String::from_utf8_lossy(&output.stderr);
     assert!(
-        text.contains("was not stopped: @claude#main: a pane still hosts it: zellij:terminal_4"),
+        text.contains(
+            "@claude#main (@lingering) was not stopped: @claude#main: a pane still hosts it: \
+             zellij:terminal_4"
+        ),
         "{text}"
     );
     assert!(rimz::proc::process_is_live(lingering, None), "no SIGTERM");
@@ -6248,7 +6271,7 @@ done
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @claude (claude); resume: rimz agents resume @erred"
+        "stopped @claude (@erred) (claude); resume: rimz agents resume @erred"
     );
     assert_eq!(closed_stop_panes(&env), [TRACE_PANE]);
     assert!(owner.try_wait().unwrap().is_some(), "SIGTERM ended it");
@@ -6402,11 +6425,13 @@ esac
         let text = String::from_utf8_lossy(&stop.stderr);
         let expected = if gone {
             format!(
-                "@claude#main was not stopped: @claude#main: RimZ found no pane for it in this \
-                 room and did not signal its process {pid}, which is still running"
+                "@claude#main (@orphaned) was not stopped: @claude#main: RimZ found \
+                 no pane for it in this room and did not signal its process {pid}, which is still \
+                 running"
             )
         } else {
-            "@claude#main was not stopped: @claude#main: the multiplexer could not be read: "
+            "@claude#main (@orphaned) was not stopped: @claude#main: the multiplexer \
+             could not be read: "
                 .to_owned()
         };
         assert!(text.contains(&expected), "{stderr}: {text}");
@@ -15015,7 +15040,8 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
             assert_eq!(output.status.code(), Some(1));
             assert!(
                 stderr.contains(&format!(
-                    "@claude: compaction {}: agent compacted before this compaction was typed",
+                    "{}: compaction {}: agent compacted before this compaction was typed",
+                    rimz::address::handle_with_name("@claude", command.agent_name.as_deref()),
                     command.message_id
                 )) && !stderr.contains("never follows a compaction"),
                 "{stderr}"
@@ -15313,7 +15339,12 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
         traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
         "manual compact",
     );
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with(&format!(
+            "compacting {} (msg_",
+            named(&env, "sess-manual-compact", "@claude")
+        ))
+    );
     assert_compact_segments_then_enter(
         &trace_lines(&trace),
         rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
@@ -15355,7 +15386,13 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
         assert_eq!(refused.status.code(), Some(1), "after {hook:?}");
         assert!(refused.stdout.is_empty());
         let stderr = String::from_utf8_lossy(&refused.stderr);
-        assert!(stderr.starts_with("error: @claude: "), "{stderr}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error: {}: ",
+                named(&env, "sess-manual-compact", "@claude")
+            )),
+            "{stderr}"
+        );
         assert!(stderr.contains("compaction"), "after {hook:?}: {stderr}");
         if matches!(hook, Some("PostCompact" | "SessionStart")) {
             assert!(stderr.contains("never follows a compaction"), "{stderr}");
@@ -15403,7 +15440,12 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
         traced_rimz(&env, &next_trace).args(["agents", "compact", "@claude", "--no-continue"]),
         "compact at rest with no continue",
     );
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with(&format!(
+            "compacting {} (msg_",
+            named(&env, "sess-manual-compact", "@claude")
+        ))
+    );
     assert!(
         env.store()
             .list_messages()
@@ -15631,7 +15673,10 @@ fn compaction_left_queued_arms_the_elder_wake() {
         "queue running compact",
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).starts_with("queued compaction for @claude (msg_")
+        String::from_utf8_lossy(&output.stdout).starts_with(&format!(
+            "queued compaction for {} (msg_",
+            named(&env, "sess-compact-wake", "@claude")
+        ))
     );
     let messages = env.store().list_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -16429,10 +16474,12 @@ fn agents_compact_queues_for_a_running_agent() {
     );
     let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(
-        receipt.starts_with("queued compaction for @claude (msg_")
-            && receipt
-                .trim_end()
-                .ends_with("is running; delivers at its next turn boundary, then continues it"),
+        receipt.starts_with(&format!(
+            "queued compaction for {} (msg_",
+            named(&env, "sess-queued-compact", "@claude")
+        )) && receipt
+            .trim_end()
+            .ends_with("is running; delivers at its next turn boundary, then continues it"),
         "{receipt}"
     );
     let messages = env.store().list_messages().expect("messages");
@@ -16470,8 +16517,9 @@ fn agents_compact_queues_for_a_running_agent() {
     assert_eq!(
         String::from_utf8_lossy(&joined.stdout).trim_end(),
         format!(
-            "compaction {} is already queued for @claude; delivers at its next turn boundary, then continues it",
-            command.message_id
+            "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it",
+            command.message_id,
+            named(&env, "sess-queued-compact", "@claude")
         )
     );
     assert_eq!(env.store().list_messages().expect("messages").len(), 2);

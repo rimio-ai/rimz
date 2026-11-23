@@ -87,7 +87,7 @@ pub(super) fn compact(tools: &Tools, args: &SelfCompactArgs) -> Result<Answer, F
     let room = Room::open(&tools.start_dir)?;
     let snapshot = room.resolution_snapshot_with_context()?;
     let agent = resolve_me(&room.store, &snapshot)?;
-    let handle = agent_handle(agent, &addressable_agents(&snapshot), false);
+    let handle = crate::address::named_handle(agent, &addressable_agents(&snapshot), false);
     let caller = resolve_caller(&room.store)?;
     let channel = current_channel(&room.workspace, Some(&room.store));
     let receipt = crate::message::compact::compact_agent(

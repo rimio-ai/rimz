@@ -46,10 +46,18 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         )
         .map_err(|failure| molt_error(failure.error))?;
     let mut out = crate::cli::render::out();
-    let handle = &molted.handle;
     // The replacement has bound, so a receipt that fails to print still lets
     // the replaced session go.
     let rest = args.when_idle.unwrap_or_default();
+    let receipt = writeln!(out, "{}", receipt(&molted.handle, molted.name(), rest))
+        .and_then(|()| out.flush());
+    molted.close_when_rested(rest, |notice| {
+        writeln!(crate::cli::render::err(), "{notice}")
+    });
+    Ok(receipt?)
+}
+
+fn receipt(handle: &str, name: Option<&str>, rest: std::time::Duration) -> String {
     let closes = if rest.is_zero() {
         "when this turn ends".to_owned()
     } else {
@@ -58,15 +66,10 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
             rimz::harness::schedule::arm::duration_label(rest)
         )
     };
-    let receipt = writeln!(
-        out,
-        "molted {handle} into a fresh session beside this one; this session closes {closes}\nnext: rimz agents show {handle}"
+    format!(
+        "molted {} into a fresh session beside this one; this session closes {closes}\nnext: rimz agents show {handle}",
+        rimz::address::handle_with_name(handle, name)
     )
-    .and_then(|()| out.flush());
-    molted.close_when_rested(rest, |notice| {
-        writeln!(crate::cli::render::err(), "{notice}")
-    });
-    Ok(receipt?)
 }
 
 /// The hidden helper a replaced session's turn-end hook spawns to close it once rested.
@@ -80,5 +83,20 @@ fn molt_error(error: MoltErr) -> anyhow::Error {
         MoltErr::OutsideAgent | MoltErr::EmptyNote => UsageError::new(error.to_string()).into(),
         MoltErr::Other(error) => error,
         error => error.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn receipt_names_a_differing_name_in_prose_and_keeps_the_command_bare() {
+        assert_eq!(
+            super::receipt("@coder", Some("round-binder"), std::time::Duration::ZERO),
+            "molted @coder (@round-binder) into a fresh session beside this one; this session closes when this turn ends\nnext: rimz agents show @coder"
+        );
+        assert_eq!(
+            super::receipt("@coder", Some("coder"), std::time::Duration::ZERO),
+            "molted @coder into a fresh session beside this one; this session closes when this turn ends\nnext: rimz agents show @coder"
+        );
     }
 }

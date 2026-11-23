@@ -88,7 +88,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
     let mut failed = 0;
     let mut out = render::out();
     for agent in targets {
-        let label = rimz::address::agent_handle(agent, &peers, true);
+        let label = rimz::address::named_handle(agent, &peers, true);
         failed += usize::from(!refresh_one(&mut out, &snapshot, runtime, agent, &label)?);
     }
     select::batch_result(failed)
@@ -102,7 +102,10 @@ fn refresh_selected(ctx: &Ctx, mut selected: Vec<select::Selected>) -> Result<()
     for target in &selected {
         let snapshot = refresh_snapshot(ctx)?;
         let refreshed = match select::reread(ctx, &snapshot, target) {
-            Ok(agent) => refresh_one(&mut out, &snapshot, ctx.runtime(), agent, &target.address)?,
+            Ok(agent) => {
+                let label = rimz::address::handle_with_name(&target.address, agent.name.as_deref());
+                refresh_one(&mut out, &snapshot, ctx.runtime(), agent, &label)?
+            }
             Err(err) => {
                 writeln!(out, "error {}: {err:#}", target.address)?;
                 false

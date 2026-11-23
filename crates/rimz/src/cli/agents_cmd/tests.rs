@@ -2896,7 +2896,7 @@ fn wait_reason_reports_only_changes_and_resets_after_running() {
         TurnWaitReason::NoTurnStarted,
         TurnWaitReason::MessageQueued,
     ] {
-        wait::report_wait_reason(&mut err, &mut previous, Some(reason), "@coder#a").unwrap();
+        wait::report_wait_reason(&mut err, &mut previous, Some(reason), "@coder#a", None).unwrap();
     }
     assert_eq!(
         String::from_utf8(err).unwrap(),
@@ -2906,6 +2906,21 @@ fn wait_reason_reports_only_changes_and_resets_after_running() {
             "waiting on @coder#a: no turn started\n",
             "waiting on @coder#a: it has a message queued; this rest is not its finish\n",
         )
+    );
+
+    // A differing pet name joins the prose; the answer command keeps the bare address.
+    let mut err = Vec::new();
+    wait::report_wait_reason(
+        &mut err,
+        &mut None,
+        Some(TurnWaitReason::WaitingOnPerson(None)),
+        "@coder#a",
+        Some("round-binder"),
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "waiting on @coder#a (@round-binder): it is waiting on a person; answer: rimz answer '@coder#a'\n"
     );
 }
 

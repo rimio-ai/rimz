@@ -14,6 +14,7 @@ pub(super) fn report_wait_reason(
     previous: &mut Option<TurnWaitReason>,
     reason: Option<TurnWaitReason>,
     address: &str,
+    name: Option<&str>,
 ) -> Result<()> {
     let now = jiff::Timestamp::now();
     let text = reason
@@ -30,7 +31,11 @@ pub(super) fn report_wait_reason(
             Some(TurnWaitReason::WakeInFlight | TurnWaitReason::MessageQueued) => "it has a ",
             _ => "it is ",
         };
-        write!(err, "waiting on {address}: {prefix}{text}")?;
+        write!(
+            err,
+            "waiting on {}: {prefix}{text}",
+            rimz::address::handle_with_name(address, name)
+        )?;
         if matches!(previous, Some(TurnWaitReason::WaitingOnPerson(_))) {
             write!(
                 err,
@@ -215,9 +220,10 @@ fn wait_deferred(
         &mut |observed| match observed {
             Observed::Reason {
                 address,
+                name,
                 mut previous,
                 reason,
-            } => report_wait_reason(&mut render::err(), &mut previous, reason, address),
+            } => report_wait_reason(&mut render::err(), &mut previous, reason, address, name),
             Observed::Pending { .. } => Ok(()),
         },
     )?;
@@ -367,9 +373,10 @@ fn wait_non_stream(
         &mut |observed| match observed {
             Observed::Reason {
                 address,
+                name,
                 mut previous,
                 reason,
-            } => report_wait_reason(&mut render::err(), &mut previous, reason, address),
+            } => report_wait_reason(&mut render::err(), &mut previous, reason, address, name),
             Observed::Pending { waits, settled } => {
                 style.report_progress(store, session_name, waits, settled)
             }
@@ -797,7 +804,13 @@ fn report_run_wait_reason(
         return Ok(());
     };
     let address = rimz::address::paste_address(agent, &view.snapshot, current_channel);
-    report_wait_reason(&mut render::err(), reason, view.reason(agent), &address)
+    report_wait_reason(
+        &mut render::err(),
+        reason,
+        view.reason(agent),
+        &address,
+        agent.name.as_deref(),
+    )
 }
 
 fn all_exit_code(waits: &WaitSet) -> i32 {
@@ -1021,6 +1034,7 @@ fn wait_interactive_agent_stream(
             &mut reason,
             view.reason(agent),
             &address,
+            agent.name.as_deref(),
         )?;
         for text in cursor.messages(
             agent.transcript_path.as_deref(),

@@ -413,8 +413,10 @@ fn self_compaction_mid_turn_types_the_command_then_its_continue() {
     let fixture = Fixture::new("claude");
     fixture.send(SoftCompactStep::WrapUp);
     let receipt = fixture.compact(&["keep the plan"]);
+    let named =
+        rimz::address::handle_with_name("@claude", fixture.records()[0].agent_name.as_deref());
     assert!(
-        receipt.starts_with("queued compaction for @claude (msg_")
+        receipt.starts_with(&format!("queued compaction for {named} (msg_"))
             && receipt
                 .trim_end()
                 .ends_with("delivers at its next turn boundary, then continues it"),
@@ -515,8 +517,9 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
         assert_eq!(
             receipt.trim_end(),
             format!(
-                "compaction {} is already queued for @claude; delivers at its next turn boundary, then continues it",
-                command.message_id
+                "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it",
+                command.message_id,
+                rimz::address::handle_with_name("@claude", command.agent_name.as_deref())
             )
         );
     }
@@ -555,7 +558,8 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     assert!(
         stderr.contains(&format!(
-            "@claude: compaction {} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it",
+            "{}: compaction {} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it",
+            rimz::address::handle_with_name("@claude", fixture.agent().name.as_deref()),
             command.message_id
         )) && !stderr.contains("never follows a compaction"),
         "{stderr}"

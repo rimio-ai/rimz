@@ -452,7 +452,10 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
         .handle
         .split_once('#')
         .map_or(agent.handle.as_str(), |(handle, _)| handle);
-    let identity = render::paint(render::palette::identity(agent.kind.as_str()), handle);
+    let identity = render::paint(
+        render::palette::identity(agent.kind.as_str()),
+        &rimz::address::handle_with_name(handle, agent.name.as_deref()),
+    );
     let mut facts = vec![
         agent
             .login
@@ -1060,7 +1063,10 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
     writeln!(
         render::out(),
         "focused {}",
-        rimz::address::paste_address(agent, &snapshot, &ctx.address_context())
+        rimz::address::handle_with_name(
+            &rimz::address::paste_address(agent, &snapshot, &ctx.address_context()),
+            agent.name.as_deref(),
+        )
     )?;
     Ok(())
 }

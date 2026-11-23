@@ -75,6 +75,27 @@ fn card_projection_list_summary_counts_and_attention() {
 }
 
 #[test]
+fn list_summary_pairs_a_differing_name_with_the_needs_you_handle() {
+    let mut waiting = entry(AgentStatus::Waiting);
+    waiting.name = Some("round-binder".into());
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_list_summary(
+        &mut out,
+        &live(&[waiting]),
+        1,
+        "#auth",
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("@waiting (@round-binder)  ")),
+        "{text}"
+    );
+}
+
+#[test]
 fn card_projection_list_summary_omits_zero_counts_and_uses_ask() {
     let mut waiting = entry(AgentStatus::Waiting);
     waiting.ask = Some(super::super::report::AskReport {

@@ -3003,7 +3003,8 @@ path = "crates/rimz/src/launcher"
 # swap shares the restart and molt reservation, request, placement, and cleanup seams (+16).
 # molt exposes caller preparation, a bound receipt, and caller-owned cleanup in process (+9).
 # molt books the replaced session's close, and its turn-end hook and hidden helper close it (+3).
-surface-budget = 190
+# Molted::name hands the CLI receipt the replaced agent's name to print beside its handle (+1).
+surface-budget = 191
 
 [[verdict]]
 kind = "item"
