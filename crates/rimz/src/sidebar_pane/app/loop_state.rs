@@ -3142,11 +3142,14 @@ impl PaneState {
                 .context
                 .pending_input_focus
                 .as_ref()
+                .or(v.state.current_card.as_ref())
                 .or(v.state.baseline_pane.as_ref())
                 .and_then(|pane| v.context.current.row_owning_pane(pane))
                 .and_then(|row| row.pane.as_ref())
                 .map(|pane| pane.pane_id.clone());
+            let current_card = v.state.current_card.clone();
             let previous_card = v.state.previous_card.clone();
+            let older_cards = v.state.older_cards.clone();
             let previous_entry = v.state.entry_cursor.clone();
             let previous_row = v
                 .state
@@ -3234,11 +3237,11 @@ impl PaneState {
                         .filter(|row| row.pane_ids().any(|id| id == pane))
                         .or_else(|| v.context.current.row_owning_pane(pane));
                     if let Some(target) = owner.and_then(|row| row.pane.as_ref())
-                        && previous_focus
-                            .as_ref()
-                            .is_some_and(|previous| *previous != target.pane_id)
+                        && let Some(previous) = &previous_focus
                     {
-                        v.state.previous_card.clone_from(&previous_focus);
+                        super::selection::advance_card_history(v.state, previous, &target.pane_id);
+                        // Until the jump lands, the card it left is in history, not current.
+                        v.state.current_card = None;
                     }
                     v.context.focus_rollback = owner.map(|row| FocusRollback {
                         input: crate::ids::FocusNonce::new(),
@@ -3252,7 +3255,9 @@ impl PaneState {
                         started_at_ms: self.clock.now_ms(),
                         target: pane.clone(),
                         baseline: v.state.baseline_pane.clone(),
+                        current_card: current_card.clone(),
                         previous_card: previous_card.clone(),
+                        older_cards: older_cards.clone(),
                         entry_focus: v.state.entry_focus.clone(),
                         label: row.display_name().to_owned(),
                         agent: matches!(effect, InputEffect::Focus(_))

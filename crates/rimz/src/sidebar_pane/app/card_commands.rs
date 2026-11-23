@@ -125,7 +125,12 @@ pub(super) fn reduce(
             Some((*pane).clone())
         }
         CardRequest::Last => {
-            let Some(previous) = &view.previous_card else {
+            // Baseline-less with a current card: arrived at an unlisted tab, so that card was left.
+            let left_card = view
+                .current_card
+                .as_ref()
+                .filter(|_| view.baseline_pane.is_none());
+            let Some(previous) = left_card.or(view.previous_card.as_ref()) else {
                 return (outcome, request.refused("no previous card"));
             };
             if !snapshot.rows().any(|row| {

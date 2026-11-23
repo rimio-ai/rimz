@@ -78,7 +78,9 @@ pub(super) struct FocusRollback {
     pub(super) started_at_ms: u64,
     pub(super) target: PaneId,
     pub(super) baseline: Option<PaneId>,
+    pub(super) current_card: Option<PaneId>,
     pub(super) previous_card: Option<PaneId>,
+    pub(super) older_cards: Vec<PaneId>,
     pub(super) entry_focus: Option<PaneId>,
     pub(super) label: String,
     /// The agent a card focus is aimed at, read from the reducing snapshot; `None` for a
@@ -380,7 +382,9 @@ impl ViewContext {
             .focus_rollback
             .take_if(|request| request.target == *target)?;
         state.baseline_pane = rollback.baseline;
+        state.current_card = rollback.current_card;
         state.previous_card = rollback.previous_card;
+        state.older_cards = rollback.older_cards;
         state.entry_focus = rollback.entry_focus;
         state.entry_cursor = state.entry_focus.clone().map(render::EntryCursor::SubAgent);
         state.browse = None;
@@ -657,13 +661,15 @@ impl ViewContext {
             .filter(|pane| ui.selected_pane.as_ref() == Some(pane))
             .cloned();
         // A delayed landing must not replace history already advanced by an input.
-        let pending_previous_card = self
+        let pending_history = self
             .pending_input_focus
             .as_ref()
-            .map(|_| ui.previous_card.clone());
+            .map(|_| (ui.previous_card.clone(), ui.older_cards.clone()));
         reconcile_selection_with_previous(ui, &self.current, focused.clone(), Some(previous));
-        if let Some(previous_card) = pending_previous_card {
+        if let Some((previous_card, older_cards)) = pending_history {
             ui.previous_card = previous_card;
+            ui.older_cards = older_cards;
+            super::selection::prune_card_history(ui, &self.current);
         }
         if let Some(pane) = pending_pick
             && focused.as_ref() != Some(&pane)
