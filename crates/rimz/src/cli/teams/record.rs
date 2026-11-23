@@ -67,6 +67,10 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
         text: &text,
         now: Timestamp::now(),
     })?;
-    writeln!(std::io::stdout().lock(), "recorded {section} @{by}")?;
+    let by_label = rimz::address::handle_with_name(
+        &format!("@{by}"),
+        member.and_then(|member| member.name.as_deref()),
+    );
+    writeln!(std::io::stdout().lock(), "recorded {section} {by_label}")?;
     Ok(())
 }

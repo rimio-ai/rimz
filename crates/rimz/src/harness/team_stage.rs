@@ -108,6 +108,13 @@ impl Flipper<'_> {
             Self::User => "user",
         }
     }
+
+    fn agent_name(&self) -> Option<&str> {
+        match self {
+            Self::Member { agent, .. } => agent.name.as_deref(),
+            Self::User => None,
+        }
+    }
 }
 
 pub struct FlipRequest<'a> {
@@ -272,6 +279,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         owner,
         leader: request.team.leader.as_deref(),
         by: request.by.name(),
+        by_name: request.by.agent_name(),
         self_owned: matches!(&request.by, Flipper::Member { role, .. } if Some(*role) == owner),
         note: Some(request.note),
         mux: request.mux,
@@ -467,6 +475,7 @@ fn with_rewake<T>(
             owner,
             leader: team.leader.as_deref(),
             by: REWAKE_BY,
+            by_name: None,
             self_owned: false,
             note: None,
             mux,
@@ -851,6 +860,8 @@ struct StageOpening<'a> {
     /// The declared leader; `None` when the team declares none, so no seat gets a channel rule.
     leader: Option<&'a str>,
     by: &'a str,
+    /// The flipping member's name, paired with `by` in the notice's prose.
+    by_name: Option<&'a str>,
     self_owned: bool,
     note: Option<&'a str>,
     mux: Option<MuxName>,
@@ -943,6 +954,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
                 opening.from,
                 opening.to,
                 opening.by,
+                opening.by_name,
                 opening.note,
                 opening.rewake,
                 opening.leader.filter(|leader| *leader != owner),
@@ -1021,10 +1033,12 @@ fn stage_open_body(
     from: Option<&str>,
     to: &str,
     by: &str,
+    by_name: Option<&str>,
     note: Option<&str>,
     rewake: bool,
     leader: Option<&str>,
 ) -> String {
+    let by = crate::address::handle_with_name(&format!("@{by}"), by_name);
     let mut body = if rewake {
         format!(
             "The team resumed at stage {to}, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops."
@@ -1033,15 +1047,15 @@ fn stage_open_body(
         match from {
             Some(from) if from == to => {
                 format!(
-                    "@{by} re-opened {to}. It is still yours: pick it up from .rimz/team/blackboard.md."
+                    "{by} re-opened {to}. It is still yours: pick it up from .rimz/team/blackboard.md."
                 )
             }
             Some(from) => format!(
-                "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
+                "{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
             ),
             None => {
                 format!(
-                    "@{by} opened the stage {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
+                    "{by} opened the stage {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
                 )
             }
         }
@@ -1335,6 +1349,7 @@ mod tests {
                 Some("Plan"),
                 "Implement",
                 "planner",
+                None,
                 Some("plan ready"),
                 false,
                 None
@@ -1342,14 +1357,35 @@ mod tests {
             "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: plan ready"
         );
         assert_eq!(
-            stage_open_body(None, "Explore", "planner", Some("opened"), false, None),
+            stage_open_body(
+                None,
+                "Explore",
+                "planner",
+                None,
+                Some("opened"),
+                false,
+                None
+            ),
             "@planner opened the stage Explore. Explore is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: opened"
+        );
+        assert_eq!(
+            stage_open_body(
+                Some("Plan"),
+                "Implement",
+                "planner",
+                Some("round-binder"),
+                None,
+                false,
+                Some("lead")
+            ),
+            "@planner (@round-binder) flipped the stage Plan -> Implement. Implement is yours: pick it up from .rimz/team/blackboard.md.\n\nYour report goes in your stage file and anything for the user to @lead; end the turn with the flip and no pane text."
         );
         assert_eq!(
             stage_open_body(
                 Some("Implement"),
                 "Implement",
                 "user",
+                None,
                 Some("retry"),
                 false,
                 None
@@ -1357,7 +1393,15 @@ mod tests {
             "@user re-opened Implement. It is still yours: pick it up from .rimz/team/blackboard.md.\n\nNote: retry"
         );
         assert_eq!(
-            stage_open_body(Some("Implement"), "Implement", "rimz", None, true, None),
+            stage_open_body(
+                Some("Implement"),
+                "Implement",
+                "rimz",
+                None,
+                None,
+                true,
+                None
+            ),
             "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops."
         );
     }
@@ -1674,6 +1718,7 @@ mod tests {
                 Some("Plan"),
                 "Implement",
                 "planner",
+                None,
                 Some("plan ready"),
                 false,
                 Some("planner")
@@ -1685,6 +1730,7 @@ mod tests {
                 Some("Implement"),
                 "Implement",
                 "rimz",
+                None,
                 None,
                 true,
                 Some("planner")
