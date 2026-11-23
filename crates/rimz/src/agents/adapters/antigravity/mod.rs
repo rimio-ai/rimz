@@ -47,6 +47,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
+use session::{PromptEvidence, PromptRead};
 
 const HOOK_TIMEOUT_SECS: u64 = 5;
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";
@@ -503,7 +504,7 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             None,
         );
         decoded.set_reply(self.payload_hook_reply(event_name, payload));
-        let fields = decode_lifecycle_fields(event_name, payload, session::latest_prompt);
+        let fields = decode_lifecycle_fields(event_name, payload, session::read_prompt);
         decoded.set_routing(
             HookRouting::session(fields.agent_id.map(Into::into))
                 .with_worktree(fields.worktree_path),
@@ -822,9 +823,9 @@ struct DecodedLifecycleFields {
 fn decode_lifecycle_fields(
     event_name: &str,
     payload: &Value,
-    prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
+    prompt_reader: impl FnOnce(&Path, &str, PromptRead) -> PromptEvidence,
 ) -> DecodedLifecycleFields {
-    let mut taken_in_from = None;
+    let mut prompt_read = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
@@ -834,7 +835,14 @@ fn decode_lifecycle_fields(
                 Some(0) if invocation.common.runs_compact_command() => {
                     Some(LifecycleSignal::Compacting)
                 }
-                Some(0) => Some(LifecycleSignal::TurnStarted { turn_id: None }),
+                Some(0) => {
+                    prompt_read = Some(
+                        invocation
+                            .initial_num_steps
+                            .map_or(PromptRead::Newest, PromptRead::OpenedBelow),
+                    );
+                    Some(LifecycleSignal::TurnStarted { turn_id: None })
+                }
                 _ => None,
             };
             (invocation.common, signal)
@@ -845,10 +853,11 @@ fn decode_lifecycle_fields(
             let Some(invocation) = payloads::parse_invocation(payload) else {
                 return DecodedLifecycleFields::default();
             };
-            taken_in_from = invocation
+            prompt_read = invocation
                 .initial_num_steps
-                .filter(|_| !invocation.common.runs_compact_command());
-            let signal = taken_in_from.map(|_| LifecycleSignal::TurnStarted { turn_id: None });
+                .filter(|_| !invocation.common.runs_compact_command())
+                .map(PromptRead::TakenInFrom);
+            let signal = prompt_read.map(|_| LifecycleSignal::TurnStarted { turn_id: None });
             (invocation.common, signal)
         }
         "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
@@ -901,14 +910,14 @@ fn decode_lifecycle_fields(
             (common, None)
         }
     };
-    observation_with_prompt_reader(common, signal, taken_in_from, prompt_reader)
+    observation_with_prompt_reader(common, signal, prompt_read, prompt_reader)
 }
 
 fn observation_with_prompt_reader(
     common: payloads::CommonPayload,
     signal: Option<LifecycleSignal>,
-    taken_in_from: Option<u64>,
-    prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
+    prompt_read: Option<PromptRead>,
+    prompt_reader: impl FnOnce(&Path, &str, PromptRead) -> PromptEvidence,
 ) -> DecodedLifecycleFields {
     let Some(agent_id) = common
         .conversation_id()
@@ -932,27 +941,29 @@ fn observation_with_prompt_reader(
     let transcript_path = common
         .transcript_path
         .filter(|path| !path.trim().is_empty());
-    let prompt = matches!(signal, LifecycleSignal::TurnStarted { .. })
-        .then(|| {
-            prompt_reader(
-                Path::new(transcript_path.as_deref()?),
-                agent_id.as_str(),
-                taken_in_from,
-            )
-        })
-        .flatten();
-    if taken_in_from.is_some() && prompt.is_none() {
-        return DecodedLifecycleFields {
-            agent_id: Some(agent_id),
-            worktree_path,
-            lifecycle: None,
-        };
-    }
+    let evidence = match (prompt_read, transcript_path.as_deref()) {
+        (Some(read), Some(path)) => prompt_reader(Path::new(path), agent_id.as_str(), read),
+        _ => PromptEvidence::Unread,
+    };
+    let snapshot = matches!(prompt_read, Some(PromptRead::TakenInFrom(_)));
+    let prompt = match evidence {
+        PromptEvidence::Prompt(prompt) => Some(prompt),
+        PromptEvidence::Unread if !snapshot => None,
+        // A steer report with no steer, and an opener no prompt opened (a continuation),
+        // report nothing.
+        PromptEvidence::Unread | PromptEvidence::NoPrompt => {
+            return DecodedLifecycleFields {
+                agent_id: Some(agent_id),
+                worktree_path,
+                lifecycle: None,
+            };
+        }
+    };
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);
     observation.worktree_path = worktree_path.clone();
     observation.prompt = SanitizedPrompt::new(prompt.as_deref());
     observation.transcript_path = transcript_path;
-    observation.state_snapshot = taken_in_from.map(|_| true);
+    observation.state_snapshot = snapshot.then_some(true);
     observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
     DecodedLifecycleFields {
         agent_id: Some(agent_id),
@@ -967,5 +978,12 @@ fn observe_lifecycle_with_prompt_reader(
     payload: &Value,
     prompt_reader: impl FnOnce(&Path, &str, Option<u64>) -> Option<String>,
 ) -> Option<AgentLifecycleObservation> {
-    decode_lifecycle_fields(event_name, payload, prompt_reader).lifecycle
+    decode_lifecycle_fields(event_name, payload, |path, session_id, read| {
+        let taken_in_from = match read {
+            PromptRead::TakenInFrom(step) => Some(step),
+            PromptRead::Newest | PromptRead::OpenedBelow(_) => None,
+        };
+        prompt_reader(path, session_id, taken_in_from).into()
+    })
+    .lifecycle
 }

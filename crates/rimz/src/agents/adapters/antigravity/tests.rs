@@ -67,8 +67,9 @@ fn turn_start_sanitizes_the_transcript_prompt() {
     for raw in
         std::iter::once("a real request").chain(crate::agents::CONTROL_TAG_PREFIXES.iter().copied())
     {
-        let decoded =
-            decode_lifecycle_fields("PreInvocation", &payload, |_, _, _| Some(raw.to_owned()));
+        let decoded = decode_lifecycle_fields("PreInvocation", &payload, |_, _, _| {
+            PromptEvidence::Prompt(raw.to_owned())
+        });
         assert_eq!(
             decoded.lifecycle.unwrap().prompt.as_deref(),
             (raw == "a real request").then_some(raw),
@@ -3054,12 +3055,211 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
         &hook_payload(),
         [("invocationNum", json!(2)), ("initialNumSteps", json!(8))],
     );
-    let fields = decode_lifecycle_fields("PostInvocation", &unreadable, |_, _, _| None);
+    let fields = decode_lifecycle_fields("PostInvocation", &unreadable, |_, _, _| {
+        PromptEvidence::Unread
+    });
     assert!(
         fields.lifecycle.is_none(),
         "an unread transcript reports nothing"
     );
     assert_eq!(fields.agent_id.as_deref(), Some(SESSION_ID));
+}
+/// The invocation-0 openers and transcripts of the agy 1.5.15 capture: a first prompt (bound 1),
+/// a message drained at a turn's end (bound 5), a background command's result after a steer
+/// taken in at step 3 (bound 8), and a native subagent's result waking the parent (bound 4).
+#[test]
+fn an_opener_reports_only_the_prompt_that_opened_its_invocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let openers = include_str!("tests/fixtures/openers/openers.jsonl")
+        .lines()
+        .map(json_value);
+    for opener in openers {
+        let transcript = match opener["case"].as_str().unwrap() {
+            "background" => include_str!("tests/fixtures/openers/background.jsonl"),
+            "drain" => include_str!("tests/fixtures/openers/drain.jsonl"),
+            "subagent" => include_str!("tests/fixtures/openers/subagent.jsonl"),
+            _ => continue,
+        };
+        let payload = &opener["payload"];
+        let bound = payload["initialNumSteps"].as_u64().unwrap();
+        let continuation = matches!(
+            (opener["case"].as_str().unwrap(), bound),
+            ("background", 8) | ("subagent", 4)
+        );
+        let at_hook = transcript
+            .lines()
+            .filter(|line| json_value(line)["step_index"].as_u64().unwrap() < bound)
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        for contents in [at_hook.as_str(), transcript] {
+            let id = payload["conversationId"].as_str().unwrap();
+            let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", contents);
+            let payload = with(payload, [("transcriptPath", json!(path))]);
+            let fields = decode_lifecycle_fields("PreInvocation", &payload, |path, id, read| {
+                session::read_prompt_under(dir.path(), path, id, read)
+            });
+            assert_eq!(fields.agent_id.as_deref(), Some(id));
+            if continuation {
+                assert!(
+                    fields.lifecycle.is_none(),
+                    "{opener}: {:?}",
+                    fields.lifecycle
+                );
+                continue;
+            }
+            let started = fields.lifecycle.expect("a prompt opened the invocation");
+            assert_eq!(
+                started.signal,
+                LifecycleSignal::TurnStarted { turn_id: None }
+            );
+            assert_eq!(
+                started.prompt.as_deref(),
+                payload["lastUserInput"].as_str(),
+                "{opener}"
+            );
+            assert!(!started.is_state_snapshot());
+        }
+    }
+    // An execution that ended with no answer row leaves its prompt below the next opener's.
+    let unanswered = [
+        user_record(0, AT_09, "an interrupted prompt"),
+        user_record(1, AT_10, "the next prompt"),
+    ]
+    .join("\n");
+    let opened = |contents: &str, bound: u64| {
+        let path =
+            write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", contents);
+        let payload = with(
+            &hook_payload(),
+            [
+                ("transcriptPath", json!(path)),
+                ("invocationNum", json!(0)),
+                ("initialNumSteps", json!(bound)),
+            ],
+        );
+        decode_lifecycle_fields("PreInvocation", &payload, |path, id, read| {
+            session::read_prompt_under(dir.path(), path, id, read)
+        })
+        .lifecycle
+        .map(|started| started.prompt.map(|prompt| prompt.to_string()))
+    };
+    assert_eq!(
+        opened(&unanswered, 2),
+        Some(Some("the next prompt".to_owned()))
+    );
+
+    // Rows that are no answer, more than the 64 KiB tail holds.
+    let filler = |steps: std::ops::Range<u64>| {
+        steps
+            .map(|step| {
+                let content = "x".repeat(1024);
+                format!(
+                    "{}\n",
+                    record(step, "MODEL", "GENERIC", "DONE", AT_11, &content)
+                )
+            })
+            .collect::<String>()
+    };
+    let background = include_str!("tests/fixtures/openers/background.jsonl");
+    assert_eq!(
+        opened(&format!("{background}{}", filler(10..90)), 8),
+        None,
+        "a continuation applied after agy wrote past the tail"
+    );
+    let fresh = format!(
+        "{}\n{}",
+        user_record(0, AT_09, "a fresh prompt"),
+        filler(1..81)
+    );
+    assert_eq!(
+        opened(&fresh, 1),
+        Some(Some("a fresh prompt".to_owned())),
+        "a fresh prompt applied after agy wrote past the tail"
+    );
+    assert_eq!(
+        opened(&fresh, 81),
+        Some(Some("a fresh prompt".to_owned())),
+        "the tail starts inside the interval, after its prompt"
+    );
+    // A `/compact` sent while the turn was parked writes a user row and a checkpoint, and no
+    // answer (the decoding rule for `/compact`); no agy capture covers a wake after one.
+    let compacted = [
+        user_record(0, AT_09, "run it in the background"),
+        planner_record(1, AT_09, None),
+        user_record(2, AT_10, "/compact"),
+        record(3, "SYSTEM", "CHECKPOINT", "DONE", AT_10, "summary").to_string(),
+    ]
+    .join("\n");
+    assert_eq!(opened(&compacted, 4), None, "a /compact opens nothing");
+}
+#[test]
+fn an_opener_that_cannot_read_its_evidence_still_starts_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let opener = |case: &str, bound: u64| {
+        include_str!("tests/fixtures/openers/openers.jsonl")
+            .lines()
+            .map(json_value)
+            .find(|opener| opener["case"] == case && opener["payload"]["initialNumSteps"] == bound)
+            .unwrap()["payload"]
+            .clone()
+    };
+    let decode = |payload: &Value| {
+        decode_lifecycle_fields("PreInvocation", payload, |path, id, read| {
+            session::read_prompt_under(dir.path(), path, id, read)
+        })
+        .lifecycle
+        .map(|started| {
+            (
+                started.signal,
+                started.prompt.map(|prompt| prompt.to_string()),
+            )
+        })
+    };
+    let started = |prompt: Option<&str>| {
+        Some((
+            LifecycleSignal::TurnStarted { turn_id: None },
+            prompt.map(ToOwned::to_owned),
+        ))
+    };
+    let background = include_str!("tests/fixtures/openers/background.jsonl");
+    let continuation = opener("background", 8);
+    let id = continuation["conversationId"].as_str().unwrap();
+    let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", background);
+    let continuation = with(&continuation, [("transcriptPath", json!(path))]);
+
+    let mut unbounded = continuation.clone();
+    unbounded.as_object_mut().unwrap().remove("initialNumSteps");
+    assert_eq!(
+        decode(&unbounded),
+        started(Some(
+            "After the first command finishes, launch the second command in the background and reply STARTED without waiting."
+        )),
+        "with no bound the opener reads the newest prompt"
+    );
+    let short = background.lines().take(7).collect::<Vec<_>>().join("\n");
+    write_transcript_named(dir.path(), id, "transcript_full.jsonl", &short);
+    assert_eq!(
+        decode(&continuation),
+        started(None),
+        "the row below the bound is not on disk"
+    );
+    let missing = with(
+        &continuation,
+        [("transcriptPath", json!(dir.path().join("missing.jsonl")))],
+    );
+    assert_eq!(decode(&missing), started(None));
+    // A native child's first opener: bound 0, and agy has not created its transcript yet.
+    let child = opener("subagent-child", 0);
+    let child_id = child["conversationId"].as_str().unwrap();
+    let child_path = dir
+        .path()
+        .join("brain")
+        .join(child_id)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    assert_eq!(
+        decode(&with(&child, [("transcriptPath", json!(child_path))])),
+        started(None)
+    );
 }
 #[cfg(unix)]
 #[test]

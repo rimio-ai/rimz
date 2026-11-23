@@ -527,15 +527,50 @@ pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
     transcript_for_session_under(&home, session_id)
 }
 
-pub(super) fn latest_prompt(
+/// Which user rows of a transcript a lifecycle frame reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PromptRead {
+    /// The newest: an `invocationNum: 0` opener whose payload carries no `initialNumSteps`.
+    Newest,
+    /// Those that opened the invocation which began with this many steps.
+    OpenedBelow(u64),
+    /// Those the invocation which began with this many steps took in while it ran.
+    TakenInFrom(u64),
+}
+
+/// What a transcript read found for a frame's prompt.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PromptEvidence {
+    Prompt(String),
+    /// The rows the read needs were read and hold no user row.
+    NoPrompt,
+    /// The transcript, or the rows the read needs, could not be read.
+    Unread,
+}
+
+impl From<Option<String>> for PromptEvidence {
+    fn from(prompt: Option<String>) -> Self {
+        prompt.map_or(Self::Unread, Self::Prompt)
+    }
+}
+
+pub(super) fn read_prompt(path: &Path, session_id: &str, read: PromptRead) -> PromptEvidence {
+    let Some(home) = home() else {
+        return PromptEvidence::Unread;
+    };
+    read_prompt_under(&home, path, session_id, read)
+}
+
+pub(super) fn read_prompt_under(
+    home: &Path,
     path: &Path,
     session_id: &str,
-    from_step: Option<u64>,
-) -> Option<String> {
-    let home = home()?;
-    match from_step {
-        Some(from_step) => prompt_taken_in_under(&home, path, session_id, from_step),
-        None => latest_prompt_under(&home, path, session_id),
+    read: PromptRead,
+) -> PromptEvidence {
+    match read {
+        PromptRead::Newest => latest_prompt_under(home, path, session_id).into(),
+        PromptRead::OpenedBelow(bound) => prompt_opened_under(home, path, session_id, bound),
+        PromptRead::TakenInFrom(step) => prompt_taken_in_under(home, path, session_id, step).into(),
     }
 }
 
@@ -543,6 +578,60 @@ pub(super) fn latest_prompt_under(home: &Path, path: &Path, session_id: &str) ->
     valid_transcript_under(home, path, session_id).then_some(())?;
     let lines = read_transcript_tail(path)?;
     fold(&lines).latest_prompt
+}
+
+/// The newest user row after the newest answer below `bound`, the `initialNumSteps` of an
+/// `invocationNum: 0` opener. A fresh prompt and a message drained at a turn's end sit just below
+/// the bound when the opener fires, while a continuation (a background command's or a subagent's
+/// result) has the answer that parked the turn there and its result at the bound (agy 1.5.15).
+/// Only rows below the bound count, and the whole file is read when the tail does not reach back
+/// over the interval, so a frame applied late reads what one applied on time does.
+fn prompt_opened_under(home: &Path, path: &Path, session_id: &str, bound: u64) -> PromptEvidence {
+    if bound == 0 || !valid_transcript_under(home, path, session_id) {
+        return PromptEvidence::Unread;
+    }
+    let Some(tail) = read_transcript_tail_with_status(path) else {
+        return PromptEvidence::Unread;
+    };
+    if let Some(evidence) = prompt_opened_in(&tail.text, bound, tail.whole_file) {
+        return evidence;
+    }
+    if tail.whole_file {
+        return PromptEvidence::Unread;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|lines| prompt_opened_in(&lines, bound, true))
+        .unwrap_or(PromptEvidence::Unread)
+}
+
+/// The opener's evidence when `lines` cover its interval, from the answer or `/compact` row that
+/// ends the previous execution (or the file's first row, when `lines` start there) through step
+/// `bound - 1`; `None` when they do not.
+fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<PromptEvidence> {
+    let mut interval_started = from_file_start;
+    let mut read_last = false;
+    let mut opener = None;
+    for record in parse_records(lines).filter(|record| record.step_index < bound) {
+        read_last |= record.step_index + 1 == bound;
+        let prompt =
+            is_turn_start(&record).then(|| normalize_user_content(record.content.as_deref()));
+        if record.record_type == "PLANNER_RESPONSE"
+            || prompt
+                .as_ref()
+                .is_some_and(|text| text.as_deref() == Some(super::COMPACT_COMMAND))
+        {
+            interval_started = true;
+            opener = None;
+        } else if prompt.is_some() {
+            opener = prompt;
+        }
+    }
+    match opener {
+        Some(prompt) if read_last => Some(prompt.into()),
+        None if read_last && interval_started => Some(PromptEvidence::NoPrompt),
+        _ => None,
+    }
 }
 
 pub(super) fn prompt_taken_in_under(
