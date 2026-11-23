@@ -54,9 +54,17 @@ impl Room {
     }
 
     fn compile_at(&self, machine: &str, request: &ExecRequest, isolation: Isolation) -> LaunchPlan {
-        let machine: crate::config::MachineConfig = toml::from_str(machine).unwrap();
+        self.compile_config(&toml::from_str(machine).unwrap(), request, isolation)
+    }
+
+    fn compile_config(
+        &self,
+        machine: &crate::config::MachineConfig,
+        request: &ExecRequest,
+        isolation: Isolation,
+    ) -> LaunchPlan {
         let effective = crate::config::effective::load_with_roots(
-            &machine,
+            machine,
             self.project.path(),
             self.project.path(),
         )
@@ -70,7 +78,7 @@ impl Room {
             runtime: &self.runtime,
             state: &self.state,
             effective: Some(&effective),
-            machine: &machine,
+            machine,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             isolation,
@@ -932,6 +940,93 @@ fn a_registered_capability_hides_its_skill_from_the_host_view() {
         }
     }
     assert_eq!(actual, expected);
+}
+
+/// A launch that gets no subagent surface (a profile with `subagents = []`, a child, a judge)
+/// is handed a server without `rimz-subagents`, and its plan, launch env, and withheld skills
+/// agree with what the server serves.
+#[test]
+fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_skill() {
+    use crate::mcp::catalog::Capability;
+    let room = Room::new();
+    let home = Path::new(&room.ambient["HOME"]);
+    let names = ["rimz-lsp", "rimz-subagents"];
+    for name in names {
+        let root = home.join(".claude/skills").join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name}\n---\n{name}\n"),
+        )
+        .unwrap();
+    }
+    let mut machine: crate::config::MachineConfig = toml::from_str(&switches(true, true)).unwrap();
+    machine.agents.profiles = toml::from_str(
+        "[mute]\nagent = 'claude'\nsubagents = []\n[agy-mute]\nagent = 'antigravity'\nsubagents = []\n",
+    )
+    .unwrap();
+    let served: Vec<_> = Capability::ALL
+        .into_iter()
+        .filter(|capability| *capability != Capability::Subagents)
+        .collect();
+    let only: Vec<_> = served
+        .iter()
+        .flat_map(|capability| ["--only", capability.name()])
+        .collect();
+    let mute = |kind: &str, profile: &str| {
+        let mut request = launch(kind, None, &[]);
+        request.identity.params.profile = Some(profile.to_owned());
+        request
+    };
+    let mut child = launch("claude", None, &[]);
+    child.subagent = true;
+    let mut judge = launch("claude", None, &[]);
+    judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
+    });
+    for (case, mut request) in [
+        ("profile", mute("claude", "mute")),
+        ("child", child),
+        ("judge", judge),
+    ] {
+        let plan = room.compile_config(&machine, &request, Isolation::Host);
+        let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
+        let mut args = vec!["mcp", "serve"];
+        args.extend(&only);
+        assert_eq!(entry["args"], serde_json::json!(args), "{case}");
+        assert_eq!(plan.mcp_capabilities, served, "{case}");
+
+        request.skills = Some(names.map(|name| name.parse().unwrap()).to_vec());
+        for isolation in [Isolation::Host, Isolation::Scoped] {
+            let plan = room.compile_config(&machine, &request, isolation);
+            assert!(
+                plan.withheld_skills.contains(&"rimz-subagents"),
+                "{case} {isolation:?}: {:?}",
+                plan.withheld_skills
+            );
+            assert!(!plan.hidden_skills.contains(&"rimz-subagents"), "{case}");
+        }
+        let plan = room.compile_config(&machine, &request, Isolation::Host);
+        let Some(crate::agents::skills::HostSkillPlan::Applied { unlisted, .. }) =
+            &plan.process().host_skills
+        else {
+            panic!("{case}: {:?}", plan.process().host_skills);
+        };
+        assert_eq!(
+            serde_json::to_value(unlisted).unwrap(),
+            serde_json::json!(names),
+            "{case}"
+        );
+    }
+
+    let plan = room.compile_config(&machine, &mute("antigravity", "agy-mute"), Isolation::Host);
+    assert_eq!(plan.mcp_capabilities, served);
+    assert_eq!(
+        plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
+        Some("rimz-lsp,rimz-wait,rimz-control,rimz-notes")
+    );
 }
 
 /// agy reads its own server's tools under the adapter's name, and an `allowed-tools` launch

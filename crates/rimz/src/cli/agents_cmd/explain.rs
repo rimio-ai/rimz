@@ -1007,7 +1007,7 @@ impl<'a> ExplainReport<'a> {
             tier_stamp: params.tier.as_deref(),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
-                callable: request.callable_skills(&plan.hidden_skills),
+                callable: request.callable_skills(&plan.withheld_skills),
                 hidden: &plan.hidden_skills,
                 no_skill_tool: request.no_skill_tool,
                 applied: bwrap.is_some(),

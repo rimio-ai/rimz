@@ -115,7 +115,15 @@ impl LaunchReminders {
         if self.mcp_server.is_none() || self.mcp_switched_off.is_some() {
             return Vec::new();
         }
-        request.mcp_capabilities()
+        request.mcp_capabilities(self.no_subagents(request))
+    }
+
+    /// The launch gets no subagent surface (no `subagent` tool, no `rimz-subagents` skill, no
+    /// Subagents paragraph): a child, whose every launch would be refused; a judge, whose child
+    /// would get a writable checkout; and a caller whose profile allows no subagents.
+    pub(super) fn no_subagents(&self, request: &ExecRequest) -> bool {
+        request.cannot_delegate()
+            || matches!(self.subagent_catalog, Some(SubagentCatalog::NoneAllowed))
     }
 
     /// The variables that hand the launch's selection to a server its provider starts itself
@@ -160,6 +168,16 @@ impl LaunchReminders {
             .collect()
     }
 
+    /// The skills withheld from the model: the hidden ones, and `rimz-subagents` on a launch
+    /// that gets no subagent surface, on every host kind.
+    pub(super) fn withheld_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
+        self.no_subagents(request)
+            .then_some("rimz-subagents")
+            .into_iter()
+            .chain(self.hidden_skills(request))
+            .collect()
+    }
+
     /// The skills callable for the launch, less those its MCP tools hide.
     fn callable_skills(&self, request: &ExecRequest) -> Option<Vec<crate::config::SkillName>> {
         request.callable_skills(&self.hidden_skills(request))
@@ -189,19 +207,18 @@ impl LaunchReminders {
     /// Every RimZ capability the launch has, by name, and how it reaches each:
     /// those its MCP server serves, in `Capability::ALL` order, then each
     /// `rimz-*` skill on disk that its lists make callable and that it does not
-    /// withhold, less `rimz-subagents` where `ExecRequest::cannot_delegate` holds. A
-    /// capability the launch has as both tools and skill is its tools.
+    /// withhold (`LaunchReminders::withheld_skills`). A capability the launch has
+    /// as both tools and skill is its tools.
     pub(super) fn rimz_capabilities(&self, request: &ExecRequest) -> Vec<(String, Reach)> {
         let served = self.mcp_capabilities(request);
         let hidden = self.hidden_skills(request);
-        let (_, withheld) = request.launch_skills(&hidden);
+        let withheld = self.withheld_skills(request);
         let callable = request.callable_skills(&hidden);
         let skills = self
             .rimz_skills
             .iter()
             .filter(|name| {
                 !withheld.contains(&name.as_str())
-                    && !(request.cannot_delegate() && *name == Capability::Subagents.name())
                     && skill_is_callable(callable.as_deref(), name)
                     && !served.iter().any(|capability| capability.name() == *name)
             })
@@ -374,7 +391,8 @@ pub(super) fn render(
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
-    } else if reminders.callable(request, Capability::Subagents)
+    } else if !reminders.no_subagents(request)
+        && reminders.callable(request, Capability::Subagents)
         && let Some(catalog) = reminders.subagent_catalog.as_ref()
     {
         let via = reach_phrase(

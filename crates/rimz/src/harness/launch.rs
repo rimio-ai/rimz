@@ -844,38 +844,30 @@ impl ExecRequest {
         self.subagent || self.is_judge()
     }
 
-    /// The RimZ capabilities the launch's `mcps` selection serves, less `rimz-subagents` on a
-    /// launch that cannot delegate.
-    pub(super) fn mcp_capabilities(&self) -> Vec<crate::mcp::catalog::Capability> {
+    /// The RimZ capabilities the launch's `mcps` selection serves, less `rimz-subagents` when
+    /// the launch gets no subagent surface (`LaunchReminders::no_subagents`).
+    pub(super) fn mcp_capabilities(
+        &self,
+        no_subagents: bool,
+    ) -> Vec<crate::mcp::catalog::Capability> {
         let mut capabilities = crate::config::mcp_capabilities(self.mcps.as_deref());
-        if self.cannot_delegate() {
+        if no_subagents {
             capabilities
                 .retain(|capability| *capability != crate::mcp::catalog::Capability::Subagents);
         }
         capabilities
     }
 
-    /// The profile list handed to the provider, and the skills withheld from
-    /// the model: `rimz-subagents` on a child, and the rimz skills `hidden`
-    /// because the launch registers the MCP tools of the same name.
-    pub(super) fn launch_skills<'a>(
-        &self,
-        hidden: &[&'a str],
-    ) -> (Option<Vec<crate::config::SkillName>>, Vec<&'a str>) {
-        let withheld: Vec<&str> = self
-            .subagent
-            .then_some("rimz-subagents")
-            .into_iter()
-            .chain(hidden.iter().copied())
-            .collect();
-        let listed = self.skills.as_ref().map(|skills| {
+    /// The profile list handed to the provider, less the skills `withheld` from the model
+    /// (`LaunchReminders::withheld_skills`).
+    pub(super) fn launch_skills(&self, withheld: &[&str]) -> Option<Vec<crate::config::SkillName>> {
+        self.skills.as_ref().map(|skills| {
             skills
                 .iter()
                 .filter(|skill| !withheld.contains(&skill.as_str()))
                 .cloned()
                 .collect()
-        });
-        (listed, withheld)
+        })
     }
 
     pub fn fresh(
@@ -1260,7 +1252,8 @@ fn compile_agent_process_with_extra_env(
     }
     let skill_env = login_env;
     let skill_chain = crate::agents::skills::SkillChain::from_env(&skill_env);
-    let (listed, withheld) = request.launch_skills(&reminders.hidden_skills(request));
+    let withheld = reminders.withheld_skills(request);
+    let listed = request.launch_skills(&withheld);
     let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
         && (listed.is_some()
             || (!withheld.is_empty()

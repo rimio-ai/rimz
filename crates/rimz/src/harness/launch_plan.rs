@@ -70,6 +70,9 @@ pub struct LaunchPlan {
     /// The rimz skills hidden from the model because the launch serves the
     /// MCP tools of the same name.
     pub hidden_skills: Vec<&'static str>,
+    /// Every skill withheld from the model: the hidden ones, and `rimz-subagents` on a
+    /// launch that gets no subagent surface.
+    pub withheld_skills: Vec<&'static str>,
     pub warnings: Vec<LaunchPlanWarning>,
     temp_owner: Option<String>,
     runtime: RuntimePaths,
@@ -983,7 +986,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    let capabilities = request.mcp_capabilities();
+    let capabilities = request.mcp_capabilities(reminders.no_subagents(&request));
     // A kind whose prompt rides an agent file takes a passed server only inside the file,
     // which only a fresh launch with a composed prompt writes; a kind that serves from the
     // launch env takes it on every launch.
@@ -1033,6 +1036,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         );
     }
     let hidden_skills = reminders.hidden_skills(&request);
+    let withheld_skills = reminders.withheld_skills(&request);
     let only_all = request.mcps.as_deref().is_some_and(|entries| {
         !entries.is_empty() && entries.iter().all(crate::config::McpName::is_all)
     });
@@ -1252,7 +1256,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 source: path.clone(),
                 target: path,
             });
-            let (listed, withheld) = request.launch_skills(&hidden_skills);
+            let listed = request.launch_skills(&withheld_skills);
             let plan = sandbox::plan(&sandbox::SandboxInputs {
                 env: &env,
                 cwd: inputs.cwd,
@@ -1274,7 +1278,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     kind: request.kind.as_str(),
                     home: adapter.skills_home(&env),
                     manual: adapter.manual_skill(),
-                    withheld: &withheld,
+                    withheld: &withheld_skills,
                     callable: listed.as_deref(),
                 },
             })?;
@@ -1310,6 +1314,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         skill_links,
         mcp_capabilities,
         mcp_switched_off: reminders.mcp_switched_off.clone(),
+        withheld_skills,
         hidden_skills,
         warnings,
         temp_owner,

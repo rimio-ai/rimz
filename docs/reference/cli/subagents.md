@@ -351,7 +351,7 @@ A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
-At launch, RimZ also gives each non-child launch except a workflow judge this same filtered catalog in its appended system prompt, on providers that support one, when its [skill policy](../../guide/configuration.md#skills) makes `rimz-subagents` callable or the launch serves the `subagent` MCP tool. The catalog says delegation is disabled when the profile allows none or no entries are available. Without callable `rimz-subagents` or the served `subagent` MCP tool, there is no catalog paragraph.
+At launch, RimZ also gives each non-child launch except a workflow judge this same filtered catalog in its appended system prompt, on providers that support one, when its [skill policy](../../guide/configuration.md#skills) makes `rimz-subagents` callable or the launch serves the `subagent` MCP tool. A profile with `subagents: []` is neither served the tool nor offered the skill, so it gets no catalog paragraph; the catalog says delegation is disabled when no entries are available. Without callable `rimz-subagents` or the served `subagent` MCP tool, there is no catalog paragraph.
 
 ## Children cannot delegate
 

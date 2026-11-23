@@ -1703,6 +1703,15 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "[mcp_servers.github]\ncommand = 'gh'\n[mcp_servers.notion]\ncommand = 'notion'\n",
     )
     .unwrap();
+    for skill in ["rimz-subagents", "rimz-lsp"] {
+        let dir = env.home_root.join(".claude/skills").join(skill);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: {skill}\n---\n{skill}\n"),
+        )
+        .unwrap();
+    }
     for (name, kind, mcps) in [
         (
             "cmark",
@@ -1717,8 +1726,17 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             "['rimz:deferred', 'rimz-lsp:always', github]",
         ),
         ("pmark", "pi", "[rimz-lsp]"),
+        (
+            "cmute",
+            "claude",
+            "['*']\nskills: [rimz-subagents, rimz-lsp]\nsubagents: []",
+        ),
     ] {
-        let tools = if kind == "pi" { "" } else { "\ntools: [Bash]" };
+        let tools = match (kind, name) {
+            ("pi", _) => "",
+            (_, "cmute") => "\ntools: [Bash, Skill]",
+            _ => "\ntools: [Bash]",
+        };
         crate::common::write_definition(
             &env,
             "agents",
@@ -1729,7 +1747,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     }
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    let explain = |profile: &str| {
+    let explain_with = |profile: &str, mcps: bool| {
         let mut bins = Vec::new();
         for kind in ["claude", "codex", "pi"] {
             bins.push(crate::common::write_failing_agent_shim(&env, kind, 0));
@@ -1742,7 +1760,8 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         );
         let output = env
             .rimz()
-            .args(["agents", "explain", profile, "--mcps"])
+            .args(["agents", "explain", profile])
+            .args(mcps.then_some("--mcps"))
             .env("SHELL", shell)
             .env("PATH", path)
             .output()
@@ -1754,6 +1773,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         );
         String::from_utf8(output.stdout).unwrap()
     };
+    let explain = |profile: &str| explain_with(profile, true);
 
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
@@ -1865,6 +1885,20 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         !out.contains("## lsp") && !out.contains("Server instructions"),
         "{out}"
     );
+
+    // A profile that allows no subagents is served no subagent tool and offered no skill.
+    let out = explain("cmute");
+    assert!(
+        out.contains("serves rimz-lsp, rimz-wait, rimz-control, rimz-notes\n"),
+        "{out}"
+    );
+    assert!(!out.contains("rimz-subagents"), "{out}");
+    let out = explain_with("cmute", false);
+    let callable = out
+        .lines()
+        .find(|line| line.starts_with("  callable: "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(!callable.contains("rimz-subagents"), "{out}");
 
     std::fs::write(&config, "[agents]\nrimz-mcp-server = false\n").unwrap();
     let out = explain("cmark");

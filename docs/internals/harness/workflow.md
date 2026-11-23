@@ -907,7 +907,7 @@ An interrupt of a held session abandons the rest-check judge evaluating it: `aba
 
 ### Isolation
 
-A judge is read-only on the scope checkout and its Git admin and common directories. Scoped isolation overlays them read-only for a Judge-role launch after all reach rebinds, and host isolation enforces the rule only through the prompt. The root view and the required-path rebinds leave `work/` writable, a room home under host `/tmp` included. A judge gets no subagent catalog, is never served the `rimz-subagents` MCP capability (`crates/rimz/src/harness/launch.rs::ExecRequest::mcp_capabilities`), and keeps native delegation.
+A judge is read-only on the scope checkout and its Git admin and common directories. Scoped isolation overlays them read-only for a Judge-role launch after all reach rebinds, and host isolation enforces the rule only through the prompt. The root view and the required-path rebinds leave `work/` writable, a room home under host `/tmp` included. A judge gets no subagent catalog, is never served the `rimz-subagents` MCP capability nor offered its skill (`crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::no_subagents`), and keeps native delegation.
 
 ### Declines
 
