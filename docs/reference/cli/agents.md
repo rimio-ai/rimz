@@ -777,6 +777,7 @@ Without a filter, `list` shows live, top-level agents in its scope. A term namin
 | `kind` | text | The provider kind. |
 | `account` | text | The named login, or `default`. |
 | `model` | text | The model id. |
+| `effort` | text | The reasoning effort: the agent's latest status-line or session reading, else the effort its launch or hooks recorded. |
 | `lane` | address | The agent's lane, matched by the rule `SCOPE` uses; a value with `*` compares the lane label. |
 | `team` | address | The team name, optionally `team#lane`. |
 | `role` | text | The team role. |
@@ -797,7 +798,7 @@ $ rimz agents list --filter stauts=idle
 error: filter term `stauts=idle`: unknown field `stauts`; did you mean `status`?
 ```
 
-`--json` emits `{"schema":2,"agents":[...]}`, one entry per listed row. Each entry carries the field table's 18 keys, with `null` for a missing value, beside the card the table renders, not the store's provider-shaped record. `age` is whole seconds, `ctx` a whole percent, `tokens` a count, and `cost` dollars. A launched child is its own entry with `parent` set. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, and `model_detail.tier` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+`--json` emits `{"schema":2,"agents":[...]}`, one entry per listed row. Each entry carries the field table's 19 keys, with `null` for a missing value, beside the card the table renders, not the store's provider-shaped record. `age` is whole seconds, `ctx` a whole percent, `tokens` a count, and `cost` dollars. A launched child is its own entry with `parent` set. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, and `model_detail.tier` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |

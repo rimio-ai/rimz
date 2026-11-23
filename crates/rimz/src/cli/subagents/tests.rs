@@ -996,6 +996,25 @@ fn a_nameless_child_shows_a_dash_in_the_name_column() {
     );
 }
 
+#[test]
+fn child_report_json_carries_the_rows_effort() {
+    let at = Timestamp::from_second(1_700_000_000).expect("valid timestamp");
+    let planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let mut child = launched_child(&planner, "thinker");
+    child.effort = Some("xhigh".to_owned());
+    let agents = [planner.clone(), child, launched_child(&planner, "plain")];
+
+    let reports = reports_for(&rimz::agents::ParkDemotion::default(), &agents, &[], at);
+
+    let effort = |name: &str| {
+        let report = reports.iter().find(|report| report.name == name).unwrap();
+        report.json().expect("serialize child report")["effort"].clone()
+    };
+    assert_eq!(effort("thinker"), "xhigh");
+    assert_eq!(effort("plain"), serde_json::Value::Null);
+}
+
 /// The reports `subagents list` builds for every launched child of a room
 /// holding `agents`.
 fn reports_for(
