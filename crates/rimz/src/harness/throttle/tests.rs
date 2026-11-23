@@ -711,7 +711,7 @@ fn capacity_checks_refresh_open_counts_after_running_off_lock() {
         }));
         let mut candidate = run("nightly");
         candidate.gives_up_ms = Some(fake.now_ms() + 1_000);
-        let expected = "1 of 1 agents open (@claude)";
+        let expected = "1 of 1 agents open (@claude (@new))";
         let attempt = try_admit_in(&fake.host(), &configured, &candidate).unwrap();
         assert!(
             matches!(&attempt, Attempt::Held(hold) if hold.text == expected),
@@ -1091,7 +1091,7 @@ fn cap_only_off_starts_count_the_committed_row_at_the_report() {
     // Before the report the admitted start reserves a slot; afterward its row does.
     for (report, expected) in [
         (false, "0 of 1 agents open, 1 more starting"),
-        (true, "1 of 1 agents open (@claude)"),
+        (true, "1 of 1 agents open (@claude (@launch_a))"),
     ] {
         if report {
             fake.set_agents(&workspace(), vec![launched("launch_a")]);
@@ -1204,6 +1204,13 @@ fn a_cap_reason_truncates_the_agents_it_names() {
         &workspace(),
         ["a", "b", "c", "d"]
             .map(|id| agent(id, AgentStatus::Running))
+            .map(|mut agent| {
+                // A profile handle beside a differing name names both.
+                if agent.agent_id.as_str() == "a" {
+                    agent.profile = Some("coder".to_owned());
+                }
+                agent
+            })
             .to_vec(),
     );
     let hold = limit_hold(
@@ -1214,7 +1221,7 @@ fn a_cap_reason_truncates_the_agents_it_names() {
     )
     .expect("sample")
     .expect("held");
-    assert_eq!(hold.text, "4 of 3 agents open (@a, @b, +2)");
+    assert_eq!(hold.text, "4 of 3 agents open (@coder (@a), @b, +2)");
 }
 
 #[test]
@@ -1430,7 +1437,7 @@ fn a_compacting_agent_counts_toward_both_caps_throughout_its_window() {
             .unwrap()
             .unwrap_or_else(|| panic!("{capped}: a stale compaction counts"));
         assert!(
-            hold.text.ends_with("agents open (@claude)"),
+            hold.text.ends_with("agents open (@claude (@otter))"),
             "{}",
             hold.text
         );

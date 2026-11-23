@@ -1138,7 +1138,7 @@ fn name_counted(names: &mut Vec<String>, agents: &[AgentState], counted: &[&Agen
         counted
             .iter()
             .take(NAMED_AGENTS.saturating_sub(names.len()))
-            .map(|agent| crate::address::agent_handle(agent, &peers, false)),
+            .map(|agent| crate::address::named_handle(agent, &peers, false)),
     );
 }
 

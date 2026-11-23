@@ -317,11 +317,19 @@ pub(super) fn render(
         .team
         .as_ref()
         .filter(|_| !request.subagent)
-        .and_then(|team| launch_context::team_launch_context(params, &request.action, team, cwd));
+        .and_then(|team| {
+            launch_context::team_launch_context(
+                params,
+                request.identity.name.as_deref(),
+                &request.action,
+                team,
+                cwd,
+            )
+        });
     if let Some(context) = &team_context {
         paragraphs.push(format!("### Team\n\n{}", launch_context::reminder(context)));
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
-        paragraphs.push(model_line(params, &model));
+        paragraphs.push(model_line(params, request.identity.name.as_deref(), &model));
     }
     if let Some(section) = &request.reminder_section {
         let (heading, body) = match section {
@@ -522,11 +530,14 @@ fn model_fragment(params: &LaunchParams) -> Option<String> {
 }
 
 /// The standalone model line for a launch with no team paragraph to carry the fragment.
-fn model_line(params: &LaunchParams, fragment: &str) -> String {
+fn model_line(params: &LaunchParams, name: Option<&str>, fragment: &str) -> String {
     match params.role.as_deref().or(params.profile.as_deref()) {
         Some(handle) => format!(
-            "You are @{}, running {fragment}.",
-            escape_reminder_text(handle)
+            "You are {}, running {fragment}.",
+            escape_reminder_text(&crate::address::handle_with_name(
+                &format!("@{handle}"),
+                name
+            ))
         ),
         None => format!("You are running {fragment}."),
     }

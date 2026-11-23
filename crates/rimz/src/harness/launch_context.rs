@@ -66,6 +66,7 @@ pub(super) struct TeamLaunchContext {
     scratch_patterns: Vec<String>,
     scratch: ScratchScan,
     board: BoardStart,
+    name: Option<String>,
 }
 
 impl TeamLaunchContext {
@@ -76,6 +77,7 @@ impl TeamLaunchContext {
 
 pub(super) fn team_launch_context(
     params: &LaunchParams,
+    name: Option<&str>,
     action: &ExecAction,
     reminder: &TeamReminder,
     cwd: &Path,
@@ -123,6 +125,7 @@ pub(super) fn team_launch_context(
         scratch_patterns,
         scratch,
         board,
+        name: name.map(str::to_owned),
     })
 }
 
@@ -168,13 +171,16 @@ pub(super) fn reminder(context: &TeamLaunchContext) -> String {
 }
 
 fn identity_sentence(context: &TeamLaunchContext) -> String {
-    let role = escape_reminder_text(&context.role);
+    let you = escape_reminder_text(&crate::address::handle_with_name(
+        &format!("@{}", context.role),
+        context.name.as_deref(),
+    ));
     let team = escape_reminder_text(&context.team);
     let leader = escape_reminder_text(&context.leader);
     let mut text = if context.is_leader() {
-        format!("You are @{role}, leader of team `{team}`")
+        format!("You are {you}, leader of team `{team}`")
     } else {
-        format!("You are @{role} in team `{team}`")
+        format!("You are {you} in team `{team}`")
     };
     if let Some(channel) = context.channel.as_deref() {
         text.push_str(&format!(
@@ -384,6 +390,7 @@ mod tests {
             session: LaunchSession::Fresh,
             scratch_patterns: vec![".rimz/team/*.md".to_owned()],
             scratch: ScratchScan::default(),
+            name: None,
         }
     }
 
@@ -402,6 +409,21 @@ mod tests {
         );
         context.scratch_patterns.clear();
         assert_eq!(files_block(&context), None);
+    }
+
+    #[test]
+    fn identity_pairs_the_seat_with_a_differing_name() {
+        let mut context = fresh_context();
+        context.name = Some("round-binder".to_owned());
+        assert_eq!(
+            identity_sentence(&context),
+            "You are @coder (@round-binder) in team `forge` on #feature, led by @planner."
+        );
+        context.name = Some("coder".to_owned());
+        assert_eq!(
+            identity_sentence(&context),
+            "You are @coder in team `forge` on #feature, led by @planner."
+        );
     }
 
     #[test]
@@ -500,9 +522,14 @@ mod tests {
                 scratch_files: Some(vec!["/blackboard.md".to_owned(), "[abc.md".to_owned()]),
                 ..Team::default()
             };
-            let context =
-                team_launch_context(&params(), &launch(), &team_reminder(team), worktree.path())
-                    .unwrap();
+            let context = team_launch_context(
+                &params(),
+                None,
+                &launch(),
+                &team_reminder(team),
+                worktree.path(),
+            )
+            .unwrap();
             let listing = if present {
                 "blackboard.md"
             } else {
@@ -524,6 +551,7 @@ mod tests {
         };
         let context = team_launch_context(
             &params(),
+            None,
             &launch(),
             &team_reminder(team.clone()),
             Path::new("/tmp/worktree"),
@@ -541,6 +569,7 @@ mod tests {
         team.roles[0].owns = vec!["Plan".to_owned()];
         let context = team_launch_context(
             &params(),
+            None,
             &launch(),
             &team_reminder(team),
             Path::new("/tmp/worktree"),
@@ -566,6 +595,7 @@ mod tests {
             assert!(
                 team_launch_context(
                     &params,
+                    None,
                     &launch(),
                     &team_reminder(Team::default()),
                     Path::new("/tmp")

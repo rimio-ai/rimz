@@ -1380,7 +1380,7 @@ pub fn plan_lane_resume(
                 scope: lane.display,
                 labels: live
                     .iter()
-                    .map(|agent| crate::address::agent_handle(agent, &peers, true))
+                    .map(|agent| crate::address::named_handle(agent, &peers, true))
                     .collect(),
             });
         }
@@ -1798,7 +1798,7 @@ fn plan_live_lane_split(
         .clone();
     let live_labels = live
         .iter()
-        .map(|agent| crate::address::agent_handle(agent, &peers, true))
+        .map(|agent| crate::address::named_handle(agent, &peers, true))
         .collect();
     let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
     Ok(LaneResumeAction::SplitClosed {
@@ -2565,7 +2565,7 @@ impl SplitMemberRestore<'_> {
             .peers
             .iter()
             .find(|agent| agent.kind == identity.kind && agent.agent_id == identity.session_id)
-            .map(|agent| crate::address::agent_handle(agent, self.peers, true))
+            .map(|agent| crate::address::named_handle(agent, self.peers, true))
             .into_iter()
             .collect();
         SplitMemberWarning {

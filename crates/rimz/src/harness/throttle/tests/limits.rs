@@ -222,7 +222,10 @@ fn a_workflow_limit_cannot_loosen_the_machine_automation_cap() {
     let request = limited(Some("max-parallel=10"), None);
     let hold =
         held(try_admit_in(&fake.host(), &config("max-parallel-automation=1"), &request).unwrap());
-    assert_eq!(hold.text, "1 of 1 automated agents open (@claude)");
+    assert_eq!(
+        hold.text,
+        "1 of 1 automated agents open (@claude (@leader))"
+    );
 }
 
 #[test]
