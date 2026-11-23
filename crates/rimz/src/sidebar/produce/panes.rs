@@ -811,7 +811,11 @@ fn repair_pane_frame(
                 agent_panes,
             )
         } else {
-            (readers.backfill_pids)(frame, session);
+            // The walk reads the whole process table to find a pidless pane's pid; a
+            // listing that gives every pane its pid, as tmux's does, has nothing to find.
+            if frame.pane_states().any(|pane| pane.current.pid.is_none()) {
+                (readers.backfill_pids)(frame, session);
+            }
             false
         };
         let drops = repair_processes(frame, prior, &unstamped, skipped, settled_resumes, readers);
