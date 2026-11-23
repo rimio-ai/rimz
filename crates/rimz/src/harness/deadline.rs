@@ -357,6 +357,35 @@ mod tests {
     }
 
     #[test]
+    fn an_escaped_antigravity_child_opens_the_interrupt_hold() {
+        // Antigravity stores this settle from its statusline idle, so its
+        // supervised children reach the hold the same way a hook provider does.
+        let marker: Timestamp = "2026-01-01T00:10:00Z".parse().unwrap();
+        let mut child =
+            AgentState::stub("antigravity", "child", crate::agents::AgentStatus::Running);
+        child.last_activity = marker - Duration::from_secs(5);
+        let mut context = crate::agents::AgentContext::new("antigravity", marker);
+        context.settle = Some(crate::agents::context::TurnSettle {
+            at: marker,
+            outcome: crate::agents::context::TurnSettleOutcome::Interrupted,
+        });
+        child.context = Some(context);
+        let mut run = held(marker);
+        run.kind = AgentKind::new_unchecked("antigravity");
+        run.interrupted_at = None;
+        run.agent_id = Some(child.agent_id.clone());
+        assert_eq!(interrupt_evidence(&run, &[child.clone()]), Some(marker));
+
+        let mut claude = run.clone();
+        claude.kind = AgentKind::new_unchecked("claude");
+        assert_eq!(
+            interrupt_evidence(&claude, &[child]),
+            None,
+            "the card must be the run's own kind"
+        );
+    }
+
+    #[test]
     fn the_host_sends_the_stop_only_where_the_hook_has_not_claimed_it_in_time() {
         let mut record = record();
         let deadline = record.deadline_at.unwrap();
