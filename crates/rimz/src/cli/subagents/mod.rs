@@ -643,6 +643,10 @@ fn caller_and_children(agents: &[AgentState]) -> Result<(&AgentState, Vec<&Agent
 #[derive(Serialize)]
 struct ChildReport {
     name: String,
+    /// The agent's own name, without the JSON `name` field's agent-id fallback: what
+    /// the NAME column pairs with the handle.
+    #[serde(skip)]
+    agent_name: Option<String>,
     handle: String,
     parent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -848,8 +852,11 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
                 .map_or_else(|| "-".to_owned(), render::format_compact_duration),
         )
         .dash();
-        let name =
-            render::cell(rimz::address::name_column(&child.handle, Some(&child.name))).dash();
+        let name = render::cell(rimz::address::name_column(
+            &child.handle,
+            child.agent_name.as_deref(),
+        ))
+        .dash();
         let row = match scope {
             ListScope::Caller(_) => vec![
                 render::cell(child.handle),
@@ -906,6 +913,7 @@ fn child_reports(
                     .name
                     .clone()
                     .unwrap_or_else(|| child.agent_id.to_string()),
+                agent_name: child.name.clone(),
                 handle: row.handle().to_owned(),
                 parent: row.parent().map(ToOwned::to_owned).unwrap_or_else(|| {
                     format!(

@@ -945,6 +945,7 @@ fn child_reports_name_each_parent_and_channel() {
 fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
     let report = ChildReport {
         name: "swift-otter".to_owned(),
+        agent_name: Some("swift-otter".to_owned()),
         handle: "@swift-otter".to_owned(),
         parent: "@planner".to_owned(),
         channel: None,
@@ -966,6 +967,33 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
     assert_eq!(value["parent"], "@planner");
     assert!(value.get("channel").is_none());
     assert!(value.get("turn_error").is_none());
+}
+
+#[test]
+fn a_nameless_child_shows_a_dash_in_the_name_column() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut child = AgentState::stub("claude", "child", rimz::agents::AgentStatus::Running);
+    child.name = None;
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    let report = reports_for(
+        &rimz::agents::ParkDemotion::default(),
+        std::slice::from_ref(&child),
+        &[],
+        now,
+    )
+    .remove(0);
+
+    assert_eq!(
+        report.name,
+        child.agent_id.to_string(),
+        "JSON keeps its fallback"
+    );
+    assert_eq!(report.agent_name, None);
+    assert_eq!(
+        rimz::address::name_column(&report.handle, report.agent_name.as_deref()),
+        "-"
+    );
 }
 
 /// The reports `subagents list` builds for every launched child of a room
