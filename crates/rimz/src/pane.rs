@@ -162,29 +162,51 @@ pub(crate) fn is_terminal_view_name(name: &str) -> bool {
         .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
 }
 
-/// Substring marking the Claude remote-control host in a pane command.
+/// Subcommand of the Claude and Codex remote-control hosts.
 pub(crate) const COMMAND_MARKER: &str = "remote-control";
 
-/// Substring marking the per-session Codex app-server broker.
+/// Subcommand of the Codex app-server daemon and of RimZ's `rimz codex` broker.
 pub(crate) const APP_SERVER_MARKER: &str = "app-server";
+
+/// A managed daemon host a command line runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DaemonHost {
+    /// `claude remote-control`.
+    ClaudeRemoteControl,
+    /// The `codex` binary on its `app-server` or `remote-control` surface, or
+    /// RimZ's `rimz codex app-server` broker.
+    Codex,
+}
+
+/// The daemon host a command line runs, read from its program and that program's
+/// first argument, through wrappers, JS launchers, and the `rimz daemon host …
+/// --` envelope. An agent whose prompt or worktree path merely mentions a host
+/// surface stays the agent.
+fn command_daemon_host(command: &str) -> Option<DaemonHost> {
+    let argv = crate::proc::command::effective_argv(command);
+    let [program, surface, rest @ ..] = argv.as_slice() else {
+        return None;
+    };
+    let program = crate::proc::command::basename(program);
+    match (program, *surface) {
+        ("claude", COMMAND_MARKER) => Some(DaemonHost::ClaudeRemoteControl),
+        (_, APP_SERVER_MARKER | COMMAND_MARKER)
+            if program == "codex" || program.starts_with("codex-") =>
+        {
+            Some(DaemonHost::Codex)
+        }
+        ("rimz", "codex") if rest.first() == Some(&APP_SERVER_MARKER) => Some(DaemonHost::Codex),
+        _ => None,
+    }
+}
 
 /// Whether a command line is one of RimZ's managed daemon hosts.
 pub(crate) fn command_is_host(command: &str) -> bool {
-    command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
+    command_daemon_host(command).is_some()
 }
 
 pub(crate) fn command_is_claude_host(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
-    while let Some(token) = tokens.next() {
-        let is_claude = Path::new(token)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "claude");
-        if is_claude {
-            return tokens.next() == Some(COMMAND_MARKER);
-        }
-    }
-    false
+    command_daemon_host(command) == Some(DaemonHost::ClaudeRemoteControl)
 }
 
 /// Whether this pane runs one of RimZ's managed daemon hosts.
@@ -638,6 +660,37 @@ mod tests {
             spawn_command: Some("claude remote-control --spawn worktree".to_owned()),
             ..pane("terminal_1", "tab_1", None)
         }));
+        assert!(pane_is_host(&PaneRef {
+            spawn_command: Some(
+                "/bin/rimz daemon host --workspace-id w -- env \
+                 CLAUDE_CONFIG_DIR='/srv/my work' claude remote-control --spawn worktree"
+                    .to_owned()
+            ),
+            ..pane("terminal_1", "tab_1", None)
+        }));
+        for command in [
+            "/home/u/.codex/packages/standalone/current/codex app-server",
+            "node /usr/bin/codex remote-control start",
+            "/bin/sh /tmp/shim/codex app-server",
+        ] {
+            assert!(command_is_host(command), "{command}");
+        }
+        // An agent whose worktree path or prompt merely mentions a host surface
+        // is the agent, not the host.
+        for command in [
+            "/bin/rimz agents exec codex --worktree-path /w/codex-app-server-fix \
+             --request-file /r/exec.json",
+            "/bin/rimz agents exec claude --worktree-path /w/remote-control-fix",
+            "codex 'why does the app-server crash'",
+            "/bin/sh /tmp/shim/codex 'why does the app-server crash'",
+            "claude 'is claude remote-control on'",
+        ] {
+            assert!(!command_is_host(command), "{command}");
+            assert!(!pane_runs_daemon_host(&PaneRef {
+                spawn_command: Some(command.to_owned()),
+                ..pane("terminal_1", "tab_1", Some(command))
+            }));
+        }
         assert!(pane_is_host(&PaneRef {
             view_name: Some(VIEW_NAME.to_owned()),
             ..pane("terminal_1", "tab_1", Some("rimz"))

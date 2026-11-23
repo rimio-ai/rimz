@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::ids::AgentSessionId;
-use crate::pane::{APP_SERVER_MARKER, COMMAND_MARKER};
 
 const CODEX_BINARY_MARKER: &str = "codex";
 
@@ -42,10 +41,9 @@ pub fn pid_is_codex_daemon(pid: u32) -> bool {
 }
 
 /// Whether a command line runs the Codex daemon: the `codex` binary on its
-/// `app-server` or `remote-control` surface. Mirrors
-/// [`crate::pane::pane_is_host`]'s markers, narrowed to the `codex`
-/// binary so an unrelated process that merely mentions a marker is not mistaken
-/// for the daemon.
+/// `app-server` or `remote-control` surface, or RimZ's `rimz codex app-server`
+/// broker: the daemon hosts of [`crate::pane::command_is_host`] that are not
+/// Claude's.
 fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
     codex_process_role(cmdline) == CodexProcessRole::Service
 }
@@ -85,9 +83,7 @@ pub(super) fn is_interactive_process(cmdline: &str) -> bool {
 }
 
 fn codex_process_role(cmdline: &str) -> CodexProcessRole {
-    let on_service_surface =
-        cmdline.contains(APP_SERVER_MARKER) || cmdline.contains(COMMAND_MARKER);
-    if on_service_surface && cmdline.contains(CODEX_BINARY_MARKER) {
+    if crate::pane::command_is_host(cmdline) && !crate::pane::command_is_claude_host(cmdline) {
         return CodexProcessRole::Service;
     }
     let program = crate::proc::command::effective_program_info(cmdline).program;

@@ -309,8 +309,15 @@ fn command_agent_kind_combines_descriptors_with_process_policy() {
         ("node /srv/app/server.js", None),
         ("codex app-server", None),
         ("codex remote-control start", None),
+        ("codex 'why does the app-server crash'", Some("codex")),
+        ("codex --model gpt-5.5 'stop remote-control'", Some("codex")),
         (
             "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt",
+            Some("codex"),
+        ),
+        (
+            "/bin/rimz agents exec codex --worktree-path /w/codex-app-server-fix \
+             --request-file /r/exec.json",
             Some("codex"),
         ),
         ("rimz agents exec unknown", None),
