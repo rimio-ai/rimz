@@ -929,19 +929,45 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
         actual.push(capabilities_paragraph_of(&text));
     }
     // Claude withholds the skills its served tools stand for; Antigravity on the host cannot,
-    // so it has both, and the tool wins.
+    // so it has both, and the tool wins. rimz-control's tools come from the catalog, so a tool
+    // trunk adds there leaves this test alone; `tool_list_joins_one_two_and_more_tools` pins
+    // the list wording.
+    let control: Vec<_> = crate::mcp::catalog::TOOLS
+        .iter()
+        .filter(|tool| tool.capability == Some(Capability::Control))
+        .map(|tool| format!("`{}`", tool.name))
+        .collect();
+    let control = tool_list(&control);
     let served = |server: &str| {
         Some(format!(
             "{CAPABILITIES_LEAD}\
 - rimz-lsp: the `lsp` tool of the `{server}` MCP server
 - rimz-wait: the `wait` tool of the `{server}` MCP server
 - rimz-subagents: the `subagent` tool of the `{server}` MCP server
-- rimz-control: the `self_stop`, `self_compact`, `self_tune`, and `self_molt` tools of the `{server}` MCP server
+- rimz-control: the {control} of the `{server}` MCP server
 - rimz-notes: the `notes` tool of the `{server}` MCP server
 - rimz-message: Skill(rimz-message)"
         ))
     };
     assert_eq!(actual, [served("rimz"), served("rimz_tools")]);
+}
+
+#[test]
+fn tool_list_joins_one_two_and_more_tools() {
+    let quoted =
+        |names: &[&str]| -> Vec<String> { names.iter().map(|name| format!("`{name}`")).collect() };
+    assert_eq!(
+        [
+            tool_list(&quoted(&["a"])),
+            tool_list(&quoted(&["a", "b"])),
+            tool_list(&quoted(&["a", "b", "c", "d"])),
+        ],
+        [
+            "`a` tool",
+            "`a` and `b` tools",
+            "`a`, `b`, `c`, and `d` tools"
+        ]
+    );
 }
 
 #[test]

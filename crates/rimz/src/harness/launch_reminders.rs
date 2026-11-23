@@ -240,12 +240,18 @@ fn reach_phrase(name: &str, reach: Reach, server: &str) -> String {
         .filter(|tool| tool.capability == Some(capability))
         .map(|tool| format!("`{}`", tool.name))
         .collect();
-    let (list, noun) = match tools.as_slice() {
+    format!("the {} of the `{server}` MCP server", tool_list(&tools))
+}
+
+/// `tools`, already quoted, as a list with its noun: "`a` tool", "`a` and `b` tools",
+/// "`a`, `b`, and `c` tools".
+fn tool_list(tools: &[String]) -> String {
+    let (list, noun) = match tools {
         [] | [_] => (tools.concat(), "tool"),
         [first, second] => (format!("{first} and {second}"), "tools"),
         [rest @ .., last] => (format!("{}, and {last}", rest.join(", ")), "tools"),
     };
-    format!("the {list} {noun} of the `{server}` MCP server")
+    format!("{list} {noun}")
 }
 
 /// The RimZ capabilities paragraph; none when the launch has no capability.
