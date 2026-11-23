@@ -678,7 +678,7 @@ Plan clarifications and default-mode questionnaires use the blocking `request_us
 "{\"answers\":{\"path\":{\"answers\":[\"Blue\"]}}}"
 ```
 
-The questionnaire (`tui/src/bottom_pane/request_user_input/mod.rs`) opens with the first option of each question selected. Down moves the selection, and the submit key (Enter by default, remappable in the keymap) commits the answer, advances to the next question, and submits after the last. Each question also accepts notes and free-form text.
+The questionnaire (`tui/src/bottom_pane/request_user_input/mod.rs`) opens with the first option of each question selected. Down moves the selection, and the submit key (Enter by default, remappable in the keymap) commits the answer, advances to the next question, and submits after the last. Each question also accepts notes and free-form text, which the response carries as a final `user_note: <text>` entry in that question's `answers` ([`submit_answers`](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs)).
 
 `request_user_input_async` is the non-blocking variant: its input is `{ "questions": [ { "title", "options"?: [string] } ] }`, it returns `{"accepted":true}` at once, and the questions appear as an `AgentMessage` item with `delivery: "async"` and `questions` that the user answers inline while the turn continues ([handler](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs)). The [historical observations](#async-questions-observed-on-01580) distinguish current editor changes from 0.158.0 captures.
 

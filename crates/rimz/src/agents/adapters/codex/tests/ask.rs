@@ -188,28 +188,61 @@ fn question_detail_normalizes_verified_codex_schema() {
 }
 
 #[test]
-fn native_answer_map_uses_ids_and_input_question_order() {
-    let answers = ask::answer_detail(
-        "request_user_input",
-        &json!({
-            "questions": [
-                { "id": "path", "question": "Pick a path?" },
-                { "id": "notify", "question": "Notify users?" }
-            ]
-        }),
-        &json!({
-            "answers": {
-                "notify": { "answers": ["Email"] },
-                "path": { "answers": ["Blue"] }
-            }
-        }),
-    )
-    .expect("native answers");
+fn blocking_answer_reads_the_json_string_codex_sends() {
+    // Captured from a live Codex 0.171.0 PostToolUse.
+    let payload = json!({
+        "session_id": "01a206fb-604e-7f92-9ea5-d6eab4e4e012",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "request_user_input",
+        "tool_input": {"questions": [
+            {"id": "path", "header": "Migration", "question": "Pick a path?", "options": [
+                {"label": "Blue", "description": "Safer rollout"},
+                {"label": "Green", "description": "Faster rollout"}
+            ]},
+            {"id": "notify", "header": "Notify", "question": "Notify users?", "options": [
+                {"label": "Email", "description": "Send email"},
+                {"label": "Slack", "description": "Post to Slack"}
+            ]}
+        ]},
+        "tool_response": "{\"answers\":{\"notify\":{\"answers\":[\"Slack\"]},\"path\":{\"answers\":[\"Blue\"]}}}",
+        "tool_use_id": "call_probe1"
+    });
+    let output =
+        crate::agents::testkit::hook_output(&super::super::CodexAdapter, "PostToolUse", &payload);
+    let answers = output.native_answers().expect("native answers");
 
     assert_eq!(answers[0].question.as_deref(), Some("Pick a path?"));
     assert_eq!(answers[0].chosen, vec!["Blue"]);
     assert_eq!(answers[1].question.as_deref(), Some("Notify users?"));
-    assert_eq!(answers[1].chosen, vec!["Email"]);
+    assert_eq!(answers[1].chosen, vec!["Slack"]);
+
+    let input = &payload["tool_input"];
+    let noted = ask::answer_detail(
+        "request_user_input",
+        input,
+        &json!(r#"{"answers":{"path":{"answers":["Blue","user_note: gradual"]},"notify":{"answers":["user_note: Pager"]}}}"#),
+    )
+    .expect("noted answers");
+    assert_eq!(
+        (noted[0].chosen.as_slice(), noted[0].note.as_deref()),
+        (["Blue".to_owned()].as_slice(), Some("gradual"))
+    );
+    assert_eq!(
+        (noted[1].chosen.as_slice(), noted[1].note.as_deref()),
+        (["Pager".to_owned()].as_slice(), None)
+    );
+    for unanswered in [
+        json!(r#"{"answers":{}}"#),
+        json!(r#"{"answers":{"path":{"answers":[]}}}"#),
+        json!("not json"),
+        json!({"answers": {"path": {"answers": ["Blue"]}}}),
+    ] {
+        assert_eq!(
+            ask::answer_detail("request_user_input", input, &unanswered),
+            None,
+            "{unanswered}"
+        );
+    }
 }
 
 #[test]

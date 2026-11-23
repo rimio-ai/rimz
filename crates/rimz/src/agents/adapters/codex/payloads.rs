@@ -121,9 +121,9 @@ impl CodexPostToolUse {
 }
 
 /// What RimZ reads of a Codex `PostToolUse` response, the keep rule both the
-/// feed and the decode apply: both question tools whole (the async one's
-/// response stays the JSON string its reader parses), and for every other tool
-/// only that a response is present, which the empty object keeps.
+/// feed and the decode apply: both question tools whole (each response stays
+/// the JSON string its reader parses), and for every other tool only that a
+/// response is present, which the empty object keeps.
 pub(super) fn read_tool_response(tool_name: &str, _response: &Value) -> Option<Value> {
     match tool_name {
         REQUEST_USER_INPUT_TOOL | REQUEST_USER_INPUT_ASYNC_TOOL => None,

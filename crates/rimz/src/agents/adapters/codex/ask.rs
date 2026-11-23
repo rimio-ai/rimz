@@ -10,6 +10,7 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 pub(super) const REQUEST_USER_INPUT_TOOL: &str = "request_user_input";
 pub(super) const REQUEST_USER_INPUT_ASYNC_TOOL: &str = "request_user_input_async";
 const SUBMITTED_PROMPT_MAX_CHARS: usize = 1_000;
+const USER_NOTE_PREFIX: &str = "user_note: ";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,7 +159,7 @@ pub(super) fn answer_detail(
         tool_input,
         super::super::question::PreviewPolicy::None,
     )?;
-    let mut response: CodexQuestionResponse = Deserialize::deserialize(tool_response).ok()?;
+    let mut response: CodexQuestionResponse = serde_json::from_str(tool_response.as_str()?).ok()?;
     let mut answers = Vec::new();
     for question in input {
         let Some(id) = question.native_id else {
@@ -167,18 +168,25 @@ pub(super) fn answer_detail(
         let Some(entry) = response.answers.remove(&id) else {
             continue;
         };
-        let chosen = entry
-            .answers
-            .into_iter()
-            .filter_map(|answer| non_empty_trimmed(&answer))
-            .collect::<Vec<_>>();
+        let mut chosen = Vec::new();
+        let mut note = None;
+        for answer in &entry.answers {
+            match answer.strip_prefix(USER_NOTE_PREFIX) {
+                Some(text) => note = non_empty_trimmed(text),
+                None => chosen.extend(non_empty_trimmed(answer)),
+            }
+        }
+        // A free-form question has no option, so its note is the answer.
+        if chosen.is_empty() {
+            chosen.extend(note.take());
+        }
         if chosen.is_empty() {
             continue;
         }
         answers.push(AskAnswer {
             question: Some(question.question.question),
             chosen,
-            note: None,
+            note,
         });
     }
     (!answers.is_empty()).then_some(answers)
