@@ -1113,7 +1113,6 @@ path = "crates/rimz/src/cli"
 # The position's standing and its in-room check serve accounts list and accounts redeem (+1).
 # Ctx shares cached channel provenance with create-on-miss through launcher context.
 # Explicit child statuses reach main through the shared exit-code error.
-# anchor_caller_workspace shares agent-started placement across launch paths (+1).
 # open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
 # Launch checkout and caller/lane facts move into the library (-4).
 # Supervised store creation and cross-repo consent move into the library (-2).
@@ -3041,7 +3040,9 @@ path = "crates/rimz/src/launcher"
 # refuse_unwritable_home (+12).
 # The ended-child resume and the relaunch plan it shares with restart and explain move here
 # from the CLI, so `rimz message` and the MCP `message` tool resume alike (+6).
-surface-budget = 209
+# LayoutRoom::enter, launch_layout and require_named_worktree are the one layout launch the CLI
+# and the MCP launch tools share (+4).
+surface-budget = 213
 
 [[verdict]]
 kind = "item"
@@ -12220,7 +12221,7 @@ reason = "The residual is a table of distinct resume outcomes: stamped-family re
 [[verdict]]
 kind = "item"
 key = "cli::agents_cmd::launch::launch_layout"
-reason = "The CLI anchors the caller, maps posture and selection into a library request, and renders the outcome. Exact provider-id resume retains the existing explicit-session CLI entry."
+reason = "The CLI enters the library's layout room, maps posture and selection into a library launch, and renders the outcome. Exact provider-id resume retains the existing explicit-session CLI entry."
 
 [[verdict]]
 kind = "item"
@@ -13366,11 +13367,6 @@ reason = "Admission compares existing runs using their recorded scope kind befor
 kind = "item"
 key = "workspace::ResolvedWorkspace::at_launch_dir"
 reason = "Interactive and supervised CLI launches resolve the launch directory's own repository without changing the room pin."
-
-[[verdict]]
-kind = "item"
-key = "cli::anchor_caller_workspace"
-reason = "Interactive and supervised launch entrypoints share caller-checkout placement and CLI refusal wording."
 
 [[verdict]]
 kind = "item"

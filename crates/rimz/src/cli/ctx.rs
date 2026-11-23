@@ -38,6 +38,20 @@ impl Ctx {
         })
     }
 
+    /// The room a launch already entered, anchored at its caller's checkout.
+    pub(crate) fn entered(
+        workspace: ResolvedWorkspace,
+        store: Store,
+        mux: Option<MuxName>,
+    ) -> Self {
+        Self {
+            workspace,
+            store,
+            channel: std::sync::OnceLock::new(),
+            mux,
+        }
+    }
+
     /// Open a workspace named by a detached helper without recording it again.
     pub(crate) fn for_workspace(
         workspace_id: WorkspaceId,

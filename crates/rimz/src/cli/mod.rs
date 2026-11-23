@@ -75,7 +75,7 @@ mod worktree_entry;
 mod worktree_protection;
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -1005,22 +1005,6 @@ pub(crate) fn position_standing(
     let in_room = pinned_room_root()
         .is_some_and(|pin| pin.canonicalize().ok() == position.project_root.canonicalize().ok());
     Ok((standing, in_room))
-}
-
-fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
-    rimz::launcher::checkout::check_launch_room(globals.root.as_deref())
-}
-
-pub(crate) fn anchor_caller_workspace(
-    workspace: rimz::ResolvedWorkspace,
-    caller: Option<&rimz::agents::AgentState>,
-    globals: &GlobalFlags,
-) -> Result<rimz::ResolvedWorkspace> {
-    rimz::launcher::checkout::anchor_caller_workspace(workspace, caller, globals.root.as_deref())
-}
-
-fn resolve_launch_cwd(path: Option<&Path>, paths: &rimz::StatePaths) -> Result<Option<PathBuf>> {
-    rimz::launcher::checkout::resolve_launch_cwd(path, paths)
 }
 
 fn confirm_cross_repo_worktree_with(
