@@ -82,7 +82,7 @@ The seat fold in [`effort.rs`](../../../crates/rimz/src/agents/spending/effort.r
 
 ### What reads the totals
 
-The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache. The current aggregate versions are listed under [Schema versions](#schema-versions).
+The walk publishes the machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. The `agents::spending` engine is the only runtime writer of `provider-spending.json` and `workspace-spending.<scope_hash>.json`, through one version-stamping writer per file. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache. The current aggregate versions are listed under [Schema versions](#schema-versions).
 
 | Reader | Reads |
 | --- | --- |

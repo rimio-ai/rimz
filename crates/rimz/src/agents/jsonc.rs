@@ -1,4 +1,8 @@
 //! Comment-tolerant JSON parsing for read-only upstream configuration probes.
+//!
+//! Every read-only probe of a user-editable upstream JSON file parses here. An
+//! install flow that rewrites the file keeps strict parsing, so comments are
+//! never silently discarded.
 
 use serde::de::DeserializeOwned;
 

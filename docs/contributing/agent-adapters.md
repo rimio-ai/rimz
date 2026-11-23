@@ -201,6 +201,8 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 
 What a change to a shipped adapter also runs, pins, and checks. The [module contract](../../crates/rimz/src/agents/AGENTS.md#before-a-change) routes each kind of change here.
 
+A new file in an adapter directory gets a row in its adapter page's `## Files` table when the page has one.
+
 ### Launch surface and routine verbs
 
 - A change to a provider's launch argv or its `--settings` JSON also runs `cargo xtask test -E 'binary(integration) & test(/^sandbox::/)'`: `sandbox::sandbox_skills_under_host_use_provider_switches` pins the rendered Claude settings, and adapter-focused filters miss it.
