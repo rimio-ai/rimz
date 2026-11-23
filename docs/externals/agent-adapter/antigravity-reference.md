@@ -400,13 +400,13 @@ Since 1.4.0, the CLI also emits OSC 7501 terminal status sequences (working, wai
 | `agent` | `{name}` of the active custom agent (omitted for the default agent) | docs, 1.5.14 binary |
 | `product` | application name, `antigravity` | docs |
 | `quota` | map from bucket ID to `{remaining_fraction?, remaining_amount?, reset_time, reset_in_seconds, disabled?}`, optional. A 1.5.12 capture held `gemini-5h`, `gemini-weekly`, `3p-5h`, and `3p-weekly`, with no `window` field | docs, 1.5.14 binary, 1.5.12 capture |
-| `agent_state` | `idle`, `working`, `tool_use`, `reviewing`, `authenticating`, `initializing`, or `error` (example `title.sh` still checks `thinking`) | docs |
+| `agent_state` | `idle`, `working`, `tool_use`, `reviewing`, `authenticating`, `initializing`, or `error` (example `title.sh` still checks `thinking`). See [Agent state in 1.5.15](#agent-state-in-1515) | docs, 1.5.15 capture |
 | `vcs` | docs list `{type}` (`git`, `jj`, or `hg`, omitted outside a repo). Example `statusline.sh` also reads `branch` and `dirty`, and 1.5.14 binary retains `branch`, `dirty`, and `client` tags | docs, example script, 1.5.14 binary |
 | `cycle_mode` | mode selected with `Shift+Tab`: `accept-edits`, `auto`, or `plan` (omitted in `default`) | docs, 1.5.14 binary |
 | `sandbox` | `{enabled}` (1.5.14 binary also retains `allow_network`) | docs, 1.5.14 binary |
 | `subagents` | array of running and finished subagents, each `{name, role, status, model?}` (`status` is `running` or `completed`, `model` added in 1.5.3) | docs, 1.5.3 changelog, 1.5.14 binary |
 | `artifact_count` | artifacts produced in the conversation (omitted when 0) | docs |
-| `task_count` | running background tasks, including timers, recurring jobs, and other background tools since 1.3.1 (omitted when 0) | docs, 1.3.1 changelog |
+| `task_count` | running background tasks, including timers, recurring jobs, and other background tools since 1.3.1 (omitted when 0). A 1.5.15 capture read `1` on every payload while a turn was parked on background work, and omitted it after an Escape with no background work | docs, 1.3.1 changelog, 1.5.15 capture |
 | `pending_input_count` | queued user messages (omitted when 0) | docs |
 | `tool_confirmation_pending` | `true` while a tool-confirmation dialog is showing (omitted otherwise) | docs |
 | `plan_tier` | subscription tier, optional | docs |
@@ -414,7 +414,7 @@ Since 1.4.0, the CLI also emits OSC 7501 terminal status sequences (working, wai
 | `terminal_width` | live terminal width | docs |
 | `vim` | `{mode}`: `NORMAL`, `INSERT`, `VISUAL`, or `VISUAL LINE`. Present only in Vim editor mode | docs |
 | `cost` | `{total_usd, subagent_usd, estimated}`: estimated USD spend based on list prices, not billed amounts (omitted until reported). Absent from every payload of a 1.5.14 capture on a Google AI Ultra sign-in. See [Cost](#cost) | docs, 1.5.14 binary, 1.5.14 capture |
-| `artifacts`, `background_tasks` | arrays beside the two count fields, shape unpublished | 1.5.14 binary |
+| `artifacts`, `background_tasks` | arrays beside the two count fields, shape unpublished. No 1.5.15 payload carried `background_tasks` | 1.5.14 binary, 1.5.15 capture |
 
 Most fields are `omitempty`, so omission alone does not establish a measured zero. The living docs example:
 
@@ -452,6 +452,17 @@ Most fields are `omitempty`, so omission alone does not establish a measured zer
 No source says whether `total_*` token fields count the current window or the whole session, or how often `current_usage` refreshes. The full set of `quota` bucket IDs is unpublished.
 
 A 1.5.12 capture (2026-11-19, no model turn) fills the payload in stages within one session: the first three payloads carry neither `quota` nor `plan_tier`, the next two carry `quota` only, and later ones carry both, with `email` present from the second. While `agent_state` is `initializing`, and until the first model turn, `context_window.current_usage` is `null`.
+
+#### Agent state in 1.5.15
+
+Live probes on agy 1.5.15 (2026-11-23) emitted a payload only when a field changed, with no periodic refresh, and read `agent_state` as follows:
+
+- Escape on a no-tool answer: `working` to `idle` 70, 75, 84, and 118 ms after the key (four tries), with no hook of any kind after it. Escape during a foreground `run_command`: `idle` 263 ms after the key, with no `PostToolUse`, `PostInvocation`, or `Stop`.
+- A permission prompt reads `tool_use` with `tool_confirmation_pending: true`, and a native `ask_question` on screen reads `tool_use` for its whole duration. Neither read `idle`.
+- A tool-call turn reads `working` across `PostInvocation` and `PreInvocation` boundaries, and `idle` comes about 200 ms after `Stop`. With a `Stop` hook that slept 2 s, the first `idle` came 323 to 474 ms after the hook returned (three of three).
+- A bare `/compact` reads `working` until its `Stop`, and `idle` about 300 ms after.
+- A turn parked on background work sends `Stop` with `fullyIdle: false`, then `idle` about 220 ms later with `task_count: 1` while the command runs. The only payload between the finished task's `PostToolUse` and the next `PreInvocation` read `idle` with `task_count: 1` (three of three).
+- `idle` also arrives between a prompt's Enter and its invocation-0 `PreInvocation`, up to about 3 s before the hook in one trial.
 
 ## Transcripts and local state
 
