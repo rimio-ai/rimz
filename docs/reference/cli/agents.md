@@ -741,7 +741,7 @@ Under each row, the sidebar's description rule chooses the error reason, first w
 
 | Status | Meaning |
 | --- | --- |
-| `running` | A turn, in-flight wait (PID, command, check, unfinished team, or working child), or listed background shell is in progress. |
+| `running` | A turn, in-flight wait (PID, command, check, unfinished team, or working child), or listed background shell or script is in progress. |
 | `waiting` | The agent is waiting on you: a question, a permission prompt, or a plan to approve. |
 | `idle` | At rest, including after an interrupted turn. |
 | `success` | The last turn completed. |
