@@ -249,6 +249,39 @@ fn field_table_matches_the_row_keys() {
 }
 
 #[test]
+fn effort_reads_the_context_then_the_rollup() {
+    let mut observed = agent("observed", "%1");
+    observed.effort = Some("low".to_owned());
+    let mut context = AgentContext::new("codex", now());
+    context.effort = Some("high".to_owned());
+    observed.context = Some(context);
+    let mut launched = agent("launched", "%2");
+    launched.effort = Some("medium".to_owned());
+    let plain = agent("plain", "%3");
+    let snapshot = snapshot(
+        vec![observed, launched, plain],
+        &["observed", "launched", "plain"],
+    );
+    let rows = live_rows(&snapshot, &ParkDemotion::default(), &reader(), now());
+    let efforts = rows
+        .iter()
+        .map(|row| serde_json::to_value(row).unwrap()["effort"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        efforts,
+        [
+            serde_json::json!("high"),
+            serde_json::json!("medium"),
+            serde_json::Value::Null
+        ]
+    );
+    let ids = |filters: &[&str]| selected(&snapshot, filters);
+    assert_eq!(ids(&["effort=high"]), ["observed"]);
+    assert_eq!(ids(&["effort=medium"]), ["launched"]);
+    assert_eq!(ids(&["effort=none"]), ["plain"]);
+}
+
+#[test]
 fn none_is_an_ordinary_value_and_comparisons_skip_it() {
     let mut limited = agent("limited", "%1");
     rate_limited(&mut limited);

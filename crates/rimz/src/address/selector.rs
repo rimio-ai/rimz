@@ -31,6 +31,7 @@ pub enum Field {
     Kind,
     Account,
     Model,
+    Effort,
     Lane,
     Team,
     Role,
@@ -46,13 +47,14 @@ pub enum Field {
 }
 
 impl Field {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Name,
         Self::Handle,
         Self::Profile,
         Self::Kind,
         Self::Account,
         Self::Model,
+        Self::Effort,
         Self::Lane,
         Self::Team,
         Self::Role,
@@ -75,6 +77,7 @@ impl Field {
             Self::Kind => "kind",
             Self::Account => "account",
             Self::Model => "model",
+            Self::Effort => "effort",
             Self::Lane => "lane",
             Self::Team => "team",
             Self::Role => "role",
@@ -102,6 +105,7 @@ impl Field {
             | Self::Kind
             | Self::Account
             | Self::Model
+            | Self::Effort
             | Self::Role => FieldKind::Text,
             Self::Lane | Self::Team | Self::Parent | Self::Launcher => FieldKind::Address,
             Self::Status | Self::Error | Self::Live => FieldKind::Enum,
@@ -269,6 +273,7 @@ pub struct AgentRow<'a> {
     kind: AgentKind,
     account: String,
     model: Option<String>,
+    effort: Option<String>,
     lane: Option<String>,
     team: Option<String>,
     role: Option<String>,
@@ -367,6 +372,11 @@ impl<'a> AgentRow<'a> {
                 .as_ref()
                 .and_then(|context| context.model_id.clone())
                 .or_else(|| agent.model.clone()),
+            effort: agent
+                .context
+                .as_ref()
+                .and_then(|context| context.effort.clone())
+                .or_else(|| agent.effort.clone()),
             lane: lane_label(agent),
             team: agent.team.clone(),
             role: agent.role.clone(),
@@ -417,6 +427,7 @@ impl<'a> AgentRow<'a> {
             Field::Kind => Some(self.kind.as_str()),
             Field::Account => Some(&self.account),
             Field::Model => self.model.as_deref(),
+            Field::Effort => self.effort.as_deref(),
             Field::Lane => self.lane.as_deref(),
             Field::Team => self.team.as_deref(),
             Field::Role => self.role.as_deref(),

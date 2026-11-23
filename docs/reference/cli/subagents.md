@@ -227,7 +227,7 @@ An agent whose own launch RimZ cannot resolve lists as a user shell does. `SUBAG
 
 A plain shell in the project directory has no current channel even when a team runs in place there, because an in-place team's lane, named after the team, is carried by its panes, not the directory. `list` from that shell shows every channel, and the `CHANNEL` column tells the lanes apart.
 
-`--json` prints a bare array with one object per child. Each object carries the 18 keys of the [`agents list --json` field table](./agents.md#filter-the-list), with `null` for a missing value, and beside them the keys below; where both name a key, the field table's value is the one printed:
+`--json` prints a bare array with one object per child. Each object carries the 19 keys of the [`agents list --json` field table](./agents.md#filter-the-list), with `null` for a missing value, and beside them the keys below; where both name a key, the field table's value is the one printed:
 
 | Field | Meaning |
 | --- | --- |
