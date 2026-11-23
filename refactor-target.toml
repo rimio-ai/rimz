@@ -4725,7 +4725,8 @@ path = "crates/rimz/src/store"
 # The hand-off compaction premise is judged by message::premise through the record.
 # store::workflow::state_word is the one state word of a workflow run, for the CLI and the MCP join.
 # ingress::peek_pending and Wait::answered_by_check let the limit census read rest lock-free (+2).
-surface-budget = 693
+# Store::set_terminal_path saves the terminal PATH a user's room entry ran on, for hosted workflow children (+1).
+surface-budget = 694
 
 [[verdict]]
 kind = "item"
@@ -6209,7 +6210,8 @@ allowed-dependencies = [
     "workspace",
 ]
 # drop_room_identity scrubs the room identity from a loop launch child as from a check (+1).
-surface-budget = 18
+# find_hosted_program lets script checks resolve their program and name the PATH searched as hosted commands do (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/harness/duration.rs"

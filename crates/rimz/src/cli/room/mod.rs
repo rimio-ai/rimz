@@ -702,7 +702,11 @@ fn prepare_room(
                 ..
             } => *agent_shell_persistence,
             _ => rimz::harness::launch::AgentShellPersistence::Room,
-        });
+        })
+        .saving_terminal_path(matches!(
+            entry,
+            RoomEntry::Start { .. } | RoomEntry::AttachCwd { .. } | RoomEntry::AttachSession { .. }
+        ));
         let cwd = match source {
             RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
             RoomBirthSource::Recorded(record) => record.project_root.clone(),

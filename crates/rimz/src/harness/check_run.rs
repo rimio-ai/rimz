@@ -143,19 +143,48 @@ fn hosted_command(
 ) -> std::io::Result<Command> {
     // The trampoline's failed exec would read as the command's exit, so a missing program
     // fails here as a direct spawn would, against the child's PATH.
-    let path = env
-        .get("PATH")
-        .map(std::ffi::OsString::from)
-        .or_else(|| std::env::var_os("PATH"));
-    let program = argv.map_or("sh".as_ref(), |argv| argv[0].as_os_str());
-    which::which_in(program, path, dir)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
+    find_hosted_program(
+        argv.map_or("sh".as_ref(), |argv| argv[0].as_os_str()),
+        env,
+        dir,
+    )?;
     let Some(argv) = argv else {
         return Ok(check_command(cmd));
     };
     let mut child = Command::new(crate::proc::rimz_exe());
     child.args(["loop", "check-exec", "--"]).args(argv);
     Ok(child)
+}
+
+/// Find `program` as a hosted child run with `env` in `dir` would: on the child's `PATH`,
+/// else this process's. A bare program found nowhere names the `PATH` searched; a program given
+/// as a path never searched one, so its error says the file is missing or not executable.
+pub(in crate::harness) fn find_hosted_program(
+    program: &std::ffi::OsStr,
+    env: &BTreeMap<String, String>,
+    dir: &Path,
+) -> std::io::Result<std::path::PathBuf> {
+    let path = env
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    which::which_in(program, Some(&path), dir).map_err(|_| {
+        let shown = program.to_string_lossy();
+        if !program.as_encoded_bytes().contains(&b'/') {
+            let searched = path.to_string_lossy();
+            let reason = format!("cannot find `{shown}` on PATH \"{searched}\"");
+            return std::io::Error::new(std::io::ErrorKind::NotFound, reason);
+        }
+        if dir.join(program).exists() {
+            let reason = format!("`{shown}` is not executable");
+            return std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason);
+        }
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("`{shown}` does not exist"),
+        )
+    })
 }
 
 #[cfg(test)]

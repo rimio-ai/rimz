@@ -235,6 +235,9 @@ impl RoomContext {
         if let Some(logins) = &self.birth_logins {
             self.pin_room_logins(logins)?;
         }
+        if self.saves_terminal_path {
+            self.record_terminal_path()?;
+        }
         if !pre_existed {
             if Isolation::ambient(&crate::agents::ambient_env()).is_some_and(Isolation::is_scoped) {
                 bail!("this pane runs inside a RimZ scoped view; start the room from a host shell");

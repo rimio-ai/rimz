@@ -467,6 +467,23 @@ impl Store {
         })
     }
 
+    /// Save the `PATH` of the terminal entering the room, `None` when it had none.
+    #[must_use = "durability barrier; check the result"]
+    pub fn set_terminal_path(
+        &self,
+        workspace: &ResolvedWorkspace,
+        terminal_path: Option<String>,
+    ) -> Result<()> {
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            record.terminal_path = terminal_path;
+            record::write(txn.paths, &record)?;
+            Ok(())
+        })
+    }
+
     /// Replace the warnings from the room's latest configuration judgment.
     #[must_use = "durability barrier; check the result"]
     pub fn set_skipped_settings(
@@ -1325,6 +1342,7 @@ fn workspace_record_preserving_room_state(
         record.pins.clone_from(&prior.pins);
         record.skipped.clone_from(&prior.skipped);
         record.agent_shell.clone_from(&prior.agent_shell);
+        record.terminal_path.clone_from(&prior.terminal_path);
         record
             .remote_control_off
             .clone_from(&prior.remote_control_off);

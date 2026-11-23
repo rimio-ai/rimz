@@ -172,11 +172,13 @@ impl Store {
                 && !(record.pins.is_empty()
                     && record.remote_control_off.is_empty()
                     && record.agent_shell.is_none()
+                    && record.terminal_path.is_none()
                     && record.skipped.is_empty())
             {
                 record.pins.clear();
                 record.remote_control_off.clear();
                 record.agent_shell = None;
+                record.terminal_path = None;
                 record.skipped.clear();
                 crate::workspace::record::write(paths, &record)?;
             }

@@ -404,7 +404,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
         .map_or_else(String::new, |summary| format!(" ({summary})"));
     Some(match node.kind()? {
         Kind::Test(Invocation::Run(command)) | Kind::Script(Invocation::Run(command)) => format!(
-            "The check {name} runs {}{clause}. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.",
+            "The check {name} runs {}{clause}. Words containing a `/` must name files inside the definition folder; bare commands use the PATH the room was last started or attached with. It runs from the checkout. You may run this command yourself.",
             span(command.text())
         ),
         Kind::Test(Invocation::Shell(command)) | Kind::Script(Invocation::Shell(command)) => {

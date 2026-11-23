@@ -6,6 +6,21 @@ use std::time::{Duration, Instant};
 use super::*;
 
 #[test]
+fn a_missing_program_given_as_a_path_names_no_path_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.sh");
+    let env = BTreeMap::from([("PATH".to_owned(), "/searched".to_owned())]);
+    let error = find_hosted_program(missing.as_os_str(), &env, dir.path()).unwrap_err();
+    assert_eq!(
+        (error.kind(), error.to_string()),
+        (
+            std::io::ErrorKind::NotFound,
+            format!("`{}` does not exist", missing.display())
+        )
+    );
+}
+
+#[test]
 fn run_check_captures_output_status_and_timeout() {
     let dir = tempfile::tempdir().expect("tempdir");
     let check = |cmd: &str, timeout| {

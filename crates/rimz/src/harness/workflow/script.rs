@@ -206,20 +206,17 @@ pub(super) fn evaluate(
         }
         Invocation::Shell(shell) => (vec!["sh".into(), "-c".into(), shell.into()], "sh"),
     };
+    let env = child_env(state, paths, record);
+    if let Err(error) = check_run::find_hosted_program(&argv[0], &env, &record.scope.path) {
+        result.object = Err(error.to_string());
+        return result;
+    }
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
         .current_dir(&record.scope.path)
         .stdin(Stdio::null())
-        .env("RIMZ_WORKFLOW_DIR", &paths.work)
-        .env("RIMZ_WORKFLOW_DEFINITION", record.definition_dir(paths))
-        .env("RIMZ_WORKFLOW_RUN", record.id.as_str())
-        .env("RIMZ_WORKFLOW_NODE", &record.node)
-        .envs(crate::workspace::pin_env(
-            &state.workspace_id,
-            &record.project_root,
-        ))
-        .envs(loop_task_env(record));
+        .envs(&env);
     let (output, interrupt) = with_child(
         state,
         paths,
@@ -529,8 +526,9 @@ fn with_child<T>(
     (result, decided.get())
 }
 
-/// The environment of a shell check or command step: the room pin, the run's directories, id
-/// and node, and the loop task that started the run, as a loop guard's shell had it.
+/// The environment of every hosted child: the room pin, the run's directories, id and node, the
+/// loop task that started the run, as a loop guard's shell had it, and the room's saved
+/// terminal `PATH`. A room that saved none, or a run without a room, inherits the advance's.
 fn child_env(
     state: &StatePaths,
     paths: &WorkflowPaths,
@@ -545,6 +543,13 @@ fn child_env(
     env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
     env.insert("RIMZ_WORKFLOW_NODE".into(), record.node.clone());
     env.extend(loop_task_env(record));
+    if let Some(path) = crate::workspace::record::read_optional(&state.workspace_record)
+        .ok()
+        .flatten()
+        .and_then(|room| room.terminal_path)
+    {
+        env.insert("PATH".into(), path);
+    }
     env
 }
 
