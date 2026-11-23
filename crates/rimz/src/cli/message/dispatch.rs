@@ -365,13 +365,15 @@ fn recipient_miss(
             | TargetErr::PaneUnbound { .. }
     ) {
         if let Some(request) = resume {
-            use crate::cli::subagents::ResumeChildOutcome;
-            match crate::cli::subagents::resume_child(
-                ctx,
+            use rimz::launcher::child_resume::{ResumeChildOutcome, resume_child};
+            match resume_child(
+                &ctx.workspace,
+                &ctx.store,
                 miss.target,
                 miss.worktree.or(miss.channel_flag),
                 &ctx.address_context(),
                 request,
+                &mut crate::cli::launch_interaction::CliInteraction,
             ) {
                 Ok(ResumeChildOutcome::AlreadyBound) => return Ok(RecipientMissOutcome::Retry),
                 Ok(ResumeChildOutcome::Dispatched(result)) => {

@@ -3039,7 +3039,9 @@ path = "crates/rimz/src/launcher"
 # workflow tool: the module, start, WorkflowStart, StartOrigin, StartedHere with its starting
 # field, started_here, definitions, deployed, definition_dir, not_deployed, validated, and
 # refuse_unwritable_home (+12).
-surface-budget = 203
+# The ended-child resume and the relaunch plan it shares with restart and explain move here
+# from the CLI, so `rimz message` and the MCP `message` tool resume alike (+6).
+surface-budget = 209
 
 [[verdict]]
 kind = "item"
@@ -5065,7 +5067,8 @@ upward-dependencies = ["agents"]
 # fmt::one_line and fmt::checkout_name move with the loop verdict's reason text out of the CLI, whose copies delegate (+2).
 # ProviderLogo and resolve_provider_logos put the logo tier order beside provider identity (+2).
 # The age, countdown and home-relative path words a wake row carries are shared with the CLI (+4).
-surface-budget = 49
+# `fmt::refill_in` words a refill wait for the CLI and the ended-child resume refusal (+1).
+surface-budget = 50
 
 [[verdict]]
 kind = "item"

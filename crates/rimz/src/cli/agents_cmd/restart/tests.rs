@@ -1,4 +1,5 @@
 use super::*;
+use rimz::launcher::relaunch::relaunch_action;
 
 #[test]
 fn restarting_peer_fails_only_its_open_turn() {
@@ -64,19 +65,6 @@ fn restarting_peer_fails_only_its_open_turn() {
     let mut runs = rimz::harness::run::list(store.paths()).unwrap();
     runs.sort_by_key(|run| run.team.is_some());
     assert_eq!(runs, vec![failed, team]);
-}
-
-#[test]
-fn resume_classification_names_each_fresh_reason() {
-    assert_eq!(
-        fresh_reason(false, true),
-        Some(FreshReason::NoResumeSupport)
-    );
-    assert_eq!(
-        fresh_reason(true, false),
-        Some(FreshReason::NoRecordedConversation)
-    );
-    assert_eq!(fresh_reason(true, true), None);
 }
 
 fn child_run(child: &AgentState) -> rimz::store::run::RunRecord {

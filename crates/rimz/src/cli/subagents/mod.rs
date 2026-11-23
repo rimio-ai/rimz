@@ -18,9 +18,6 @@ use rimz::address::selector::{self, AgentRow, Field, Query};
 use rimz::agents::AgentState;
 use rimz::store::snapshot::SidebarSnapshot;
 
-mod resume;
-pub(in crate::cli) use resume::{ResumeChildOutcome, resume_child};
-
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct SubagentsArgs {
