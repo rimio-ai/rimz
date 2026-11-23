@@ -56,7 +56,8 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `capabilities.same_pane_session` | `KeepPrimary` |
 | `launch` | `LaunchSpec::EMPTY` without a `[launch]` table: no program, so `launch_command` returns `None`. The three `launch.*` rows below hold only with one |
 | `launch.prompt` | positional after `--` |
-| `launch.resume`, `fork`, `max_turn_flag`, `interrupt_key`, `presets.auto_compact`, `presets.fast` | none. Resume argv comes from `resume_command` instead |
+| `launch.resume`, `fork`, `max_turn_flag`, `presets.auto_compact`, `presets.fast` | none. Resume argv comes from `resume_command` instead |
+| `launch.message_keys` | `MessageKeys::NOT_YET_IMPLEMENTED`: Enter to send now, to queue, and to submit a command, Escape to interrupt |
 | `launch.compact_command` | the manifest string, with `CompactInstruction::Unsupported` |
 | `default_model`, `default_context_window` | none |
 | `thread_key` | `[transcripts].thread-key`, default `PerFile` |

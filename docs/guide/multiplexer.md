@@ -108,7 +108,7 @@ On tmux, the team prefix is magenta (`meta`) and the workflow or loop prefix is 
 
 An agent is a plain process in an ordinary pane. A layout is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side and launches a CLI in each, exactly the splits you would make by hand, in one command instead of several. The layout grammar is in [agents → compose a layout](./fleet.md#compose-a-layout).
 
-`rimz message @coder "rebase first"` resolves the handle to one live pane and writes the text into it as a single bracketed paste, then presses Enter as a separate key, using the multiplexer's own primitives. `rimz pane capture @coder` reads the pane's visible text with `capture-pane`. The sidebar is one more pane. You can list, focus, and drive every pane in a room yourself, with `zellij action` or with `tmux -S` against the socket above, and RimZ is calling exactly those commands. What a message carries and when it lands is in [messaging](./messaging.md).
+`rimz message @coder "rebase first"` resolves the handle to one live pane and writes the text into it as a single bracketed paste, then presses the agent's submit key (Enter on most agents) as a separate key, using the multiplexer's own primitives. `rimz pane capture @coder` reads the pane's visible text with `capture-pane`. The sidebar is one more pane. You can list, focus, and drive every pane in a room yourself, with `zellij action` or with `tmux -S` against the socket above, and RimZ is calling exactly those commands. What a message carries and when it lands is in [messaging](./messaging.md).
 
 ## Which backend a room uses
 

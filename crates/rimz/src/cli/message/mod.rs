@@ -34,7 +34,7 @@ const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent
 
   rimz message @coder "rebase first"             now if free, else at turn end
   rimz message --steer @coder "use the cache"    type into its running turn
-  rimz message --interrupt @coder "stop"         type, then stop its turn
+  rimz message --interrupt @coder "stop"         stop its turn, then type
   rimz message --reply-wanted @coder "landed?"   ask for a message back
   rimz message                                   what you sent in this lane
   rimz message show msg_0123456789abcdef         why a message has not landed"#;
@@ -65,7 +65,7 @@ pub struct MessageArgs {
     /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
-    /// Type the text, then press the agent's interrupt key about 3s later. Codex confirms the stop when possible, but may not replay the text as a fresh turn. Refused for agents without an interrupt key.
+    /// Stop the agent's running turn with its interrupt key, wait up to 5s for the stop, then type the text and send it at once. A resting agent gets no key.
     #[arg(long, conflicts_with_all = ["steer", "on", "schedule", "after", "when"])]
     interrupt: bool,
     /// Park the message until at least this duration or configured-zone `HH:MM`.
@@ -136,7 +136,7 @@ enum MessageSubcmd {
         #[arg(long)]
         force: bool,
     },
-    /// Type a queued message, then press the interrupt key about 3s later. Codex confirms the stop when possible, but may not replay the text as a fresh turn.
+    /// Stop the agent's running turn, wait up to 5s for the stop, then type a queued message and send it at once.
     Interrupt {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids
@@ -624,11 +624,11 @@ mod tests {
         for (help, wanted) in [
             (
                 &send,
-                "Type the text, then press the agent's interrupt key about 3s later",
+                "Stop the agent's running turn with its interrupt key, wait up to 5s for the stop",
             ),
             (
                 &interrupt,
-                "Type a queued message, then press the interrupt key about 3s later",
+                "wait up to 5s for the stop, then type a queued message and send it at once",
             ),
             (&send, FORCE),
             (&steer, FORCE),

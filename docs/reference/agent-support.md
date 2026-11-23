@@ -449,25 +449,19 @@ OMP likewise keeps its discovered append and context material after replacement,
 
 OpenCode's project instructions and RimZ's launch reminder still follow the replaced prompt. The replacement targets its `build` agent only. Other selected agents and managed settings have [limits](../internals/agents/adapter_opencode.md#launch-and-resume).
 
-### Interrupt key
+### Message keys
 
-[`rimz message --interrupt`](./cli/message.md#when-a-message-lands) types a prompt, then presses the agent's interrupt key to stop the live turn. The message reference describes when Codex replays the prompt as a fresh turn. Only agents with a declared interrupt key support this mode.
+Every message RimZ delivers presses keys from the receiving agent's declaration: [`rimz message --steer`](./cli/message.md#when-a-message-lands) presses send-now after the text, a boundary send presses queue, a typed command such as `/compact` presses command, and [`rimz message --interrupt`](./cli/message.md#when-a-message-lands) presses interrupt, waits up to 5 seconds for the agent's row to show the stop, then types the text and presses send-now. An agent at rest gets no interrupt keys.
 
-| Agent | Interrupt key | Behaviour |
-| --- | :--: | --- |
-| Claude Code | Esc | Supported, without stop confirmation |
-| Codex | Esc | Supported. The Interrupt hook confirms the stop, otherwise RimZ warns |
-| Antigravity | Esc | Supported, without stop confirmation. Escape returns queued text to the composer, so RimZ presses Enter half a second later to send it. With `--no-enter` it presses no Enter, and the text stays unsubmitted in the composer |
-| Every other agent and process plugins | none | `--interrupt` refused. Use `--steer` or park |
+| Agent | Send now | Queue | Interrupt | Command |
+| --- | --- | --- | --- | --- |
+| Claude Code | Ctrl+X, then Ctrl+S 100 ms later | Enter | Esc | Enter |
+| Codex | Enter | Tab | Esc | Enter |
+| Pi | Enter | Alt+Enter | Esc | Enter |
+| Antigravity | Alt+M | Enter | Esc | Enter |
+| Every other agent and process plugins | Enter | Enter | Esc | Enter |
 
-### Steer key
-
-[`rimz message --steer`](./cli/message.md#when-a-message-lands) types a prompt and presses Enter. An agent that queues text submitted during a running turn also declares a steer key, which RimZ presses after the Enter so the text joins that turn.
-
-| Agent | Steer key | Behaviour |
-| --- | :--: | --- |
-| Antigravity | Alt+M | Pressed half a second after Enter when the agent is mid-turn. Not pressed with `--no-enter` or for a resting agent |
-| Every other agent and process plugins | none | Enter only |
+The last row is not yet implemented: those keys were not checked against each agent. Antigravity's two keys hold because RimZ launches it with `queuedMessages` set to `"queue"` ([permission modes](../internals/agents/adapter_antigravity.md#permission-rules-sandbox-and-added-dirs)); an agy started by hand with `send-immediately` saved swaps them.
 
 ### Auto-compaction window
 
