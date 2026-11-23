@@ -5,9 +5,7 @@ Pick the `trigger` by the habit it replaces; `value` is its argument:
 - `check`: an until-sleep loop on a state (a port open, a lock gone, a URL healthy); reruns the command every `every` (`1s`; use `30s` for anything that polls another host) until it succeeds, or until it fails with `on: fail`.
 - `file`: a `tail -F | grep` on an event; fires on any change to the path (creation, deletion, write, replacement by a rename), and with `grep` on the first new complete line holding that literal, case-sensitive text. A relative path resolves from `cwd`, not the checkout root. A rerun that truncates and regrows the file within a second hides the lines before the old end, so remove a log before starting a command that rewrites it.
 - `pid`: a process already running, waking when it is gone, without its exit status.
-- `when`: a condition, firing once when it reads true, already true at the arm included.
-- `in`: a sleep, one number and unit (`90s`, `20m`, `2h`, `1d`), rounded up to the next whole minute.
-- `at`: a clock time in the configured time zone (the `timezone` setting), the next one ahead: `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`.
+{{trigger-values}}
 
 `run` and `check` take the whole command as one string, even a two-word one, run through POSIX `sh -c` at the root of the checkout, with stdin closed and stdout and stderr going to the wait's output file. The wake names the outcome and that file: `exit 1 after 12m · output: <path> (~14k tokens, 1210 lines)`.
 

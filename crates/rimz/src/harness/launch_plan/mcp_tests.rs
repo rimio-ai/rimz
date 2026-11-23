@@ -483,7 +483,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-workflow,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -526,7 +526,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         &[],
     ));
     let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,\
-                 rimz-workflow:deferred,rimz-control:deferred,rimz-notes:deferred";
+                 rimz-workflow:deferred,rimz-loop:deferred,rimz-control:deferred,rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -566,7 +566,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-workflow,rimz-control,rimz-notes",
+            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-control,rimz-notes",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -965,14 +965,13 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         "[mute]\nagent = 'claude'\nsubagents = []\n[agy-mute]\nagent = 'antigravity'\nsubagents = []\n",
     )
     .unwrap();
-    let served: Vec<_> = Capability::ALL
-        .into_iter()
-        .filter(|capability| *capability != Capability::Subagents)
-        .collect();
-    let only: Vec<_> = served
-        .iter()
-        .flat_map(|capability| ["--only", capability.name()])
-        .collect();
+    // A child and a judge are not served `rimz-loop` either; a profile allowing none is.
+    let served = |withheld: &[Capability]| -> Vec<Capability> {
+        Capability::ALL
+            .into_iter()
+            .filter(|capability| !withheld.contains(capability))
+            .collect()
+    };
     let mute = |kind: &str, profile: &str| {
         let mut request = launch(kind, None, &[]);
         request.identity.params.profile = Some(profile.to_owned());
@@ -986,11 +985,27 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         seq: 1,
         role: crate::agents::WorkflowAttemptRole::Judge,
     });
-    for (case, mut request) in [
-        ("profile", mute("claude", "mute")),
-        ("child", child),
-        ("judge", judge),
+    for (case, mut request, served) in [
+        (
+            "profile",
+            mute("claude", "mute"),
+            served(&[Capability::Subagents]),
+        ),
+        (
+            "child",
+            child,
+            served(&[Capability::Subagents, Capability::Loop]),
+        ),
+        (
+            "judge",
+            judge,
+            served(&[Capability::Subagents, Capability::Loop]),
+        ),
     ] {
+        let only: Vec<_> = served
+            .iter()
+            .flat_map(|capability| ["--only", capability.name()])
+            .collect();
         let plan = room.compile_config(&machine, &request, Isolation::Host);
         let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
         let mut args = vec!["mcp", "serve"];
@@ -1022,10 +1037,10 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     }
 
     let plan = room.compile_config(&machine, &mute("antigravity", "agy-mute"), Isolation::Host);
-    assert_eq!(plan.mcp_capabilities, served);
+    assert_eq!(plan.mcp_capabilities, served(&[Capability::Subagents]));
     assert_eq!(
         plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
-        Some("rimz-lsp,rimz-wait,rimz-workflow,rimz-control,rimz-notes")
+        Some("rimz-lsp,rimz-wait,rimz-workflow,rimz-loop,rimz-control,rimz-notes")
     );
 }
 

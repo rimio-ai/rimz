@@ -884,11 +884,14 @@ impl ExecRequest {
 
     /// The RimZ capabilities the launch's grant, or else its `mcps` selection, serves, less
     /// `rimz-subagents` when the launch gets no subagent surface
-    /// (`LaunchReminders::no_subagents`).
+    /// (`LaunchReminders::no_subagents`), and less `rimz-loop` on a launch that cannot delegate:
+    /// a booking's fire resolves no caller, so it would launch a top-level agent past the
+    /// child's refusal.
     pub(super) fn mcp_capabilities(
         &self,
         no_subagents: bool,
     ) -> Vec<crate::mcp::catalog::Capability> {
+        use crate::mcp::catalog::Capability;
         let mut capabilities = match &self.rimz_capabilities {
             Some(_) => self
                 .served_marks()
@@ -898,8 +901,10 @@ impl ExecRequest {
             None => crate::config::mcp_capabilities(self.mcps.as_deref()),
         };
         if no_subagents {
-            capabilities
-                .retain(|capability| *capability != crate::mcp::catalog::Capability::Subagents);
+            capabilities.retain(|capability| *capability != Capability::Subagents);
+        }
+        if self.cannot_delegate() {
+            capabilities.retain(|capability| *capability != Capability::Loop);
         }
         capabilities
     }

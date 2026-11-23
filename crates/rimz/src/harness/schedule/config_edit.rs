@@ -11,6 +11,40 @@ use crate::disk::paths::{agents_home, holds_rimz_home, rimz_home};
 use crate::trust::TrustState;
 
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
+const EDIT_LOCK: &str = "task-edit.lock";
+
+thread_local! {
+    static EDITS_HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The lock every task-store edit holds across its read and its write, so two edits of one
+/// store never interleave and a check made under it still holds at the write. A thread that
+/// holds it takes it again for free, so a caller can check a row and then write through the
+/// edits here. It is taken before `tasks.lock` (`task_record_store`) and the room's
+/// `loop-instances.lock`, never while either is held.
+pub(crate) struct EditLock {
+    _file: Option<crate::disk::lock::WorkspaceLock>,
+}
+
+impl EditLock {
+    pub(crate) fn acquire() -> Result<Self> {
+        let file = if EDITS_HELD.get() == 0 {
+            Some(crate::disk::lock::WorkspaceLock::acquire(
+                &crate::disk::paths::loops_dir().join(EDIT_LOCK),
+            )?)
+        } else {
+            None
+        };
+        EDITS_HELD.set(EDITS_HELD.get() + 1);
+        Ok(Self { _file: file })
+    }
+}
+
+impl Drop for EditLock {
+    fn drop(&mut self) {
+        EDITS_HELD.set(EDITS_HELD.get() - 1);
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TaskStore<'a> {
@@ -69,6 +103,7 @@ impl TaskStore<'_> {
 }
 
 pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<()> {
+    let _held = EditLock::acquire()?;
     let path = store.path();
     let text = store.read_text()?;
     if matches!(store, TaskStore::Machine) {
@@ -116,26 +151,18 @@ pub(super) fn remove_machine_at_root(name: &str, root: &Path) -> Result<bool> {
     remove_at_root(TaskStore::Machine, name, Some(root))
 }
 
+/// A store with no matching row is left without opening the lock: `rimz wait` arms through
+/// here for a name that normally has no row, inside a provider's command sandbox that leaves
+/// the home's `loops/` read-only. A matching row is read again and decided under the lock.
 fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Result<bool> {
-    let path = store.path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    if matching_row(store, name, root)?.is_none() {
+        return Ok(false);
+    }
+    let _held = EditLock::acquire()?;
+    let Some(mut doc) = matching_row(store, name, root)? else {
         return Ok(false);
     };
-    if let Some(root) = root {
-        let config: crate::config::LoopConfig =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        if !config
-            .tasks
-            .0
-            .get(name)
-            .is_some_and(|entry| entry.resolved_root() == root)
-        {
-            return Ok(false);
-        }
-    }
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let path = store.path();
     let removed = remove_keeping_comments(&mut doc, &["tasks".to_owned(), name.to_owned()])?;
     if removed {
         let rendered = doc.to_string();
@@ -147,7 +174,40 @@ fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Resu
     Ok(removed)
 }
 
+/// The store's document when it holds `name`, at `root` when one is given.
+fn matching_row(
+    store: TaskStore<'_>,
+    name: &str,
+    root: Option<&Path>,
+) -> Result<Option<DocumentMut>> {
+    let path = store.path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    if let Some(root) = root {
+        let config: crate::config::LoopConfig =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if !config
+            .tasks
+            .0
+            .get(name)
+            .is_some_and(|entry| entry.resolved_root() == root)
+        {
+            return Ok(None);
+        }
+    }
+    let doc = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let held = doc
+        .get("tasks")
+        .and_then(Item::as_table_like)
+        .is_some_and(|tasks| tasks.contains_key(name));
+    Ok(held.then_some(doc))
+}
+
 pub(super) fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result<bool> {
+    let _held = EditLock::acquire()?;
     let path = store.path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
@@ -235,6 +295,60 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A writer waits for the lock another thread holds, and the holder takes it again freely.
+    #[test]
+    fn a_task_store_edit_waits_for_the_edit_lock() {
+        let entry = TaskEntry {
+            cron: Some("0 9 * * *".to_owned()),
+            root: PathBuf::from("/repo"),
+            ..TaskEntry::default()
+        };
+        let held = EditLock::acquire().unwrap();
+        let again = EditLock::acquire().unwrap();
+        let writer = std::thread::spawn({
+            let entry = entry.clone();
+            move || set_entry(TaskStore::Machine, "waiter", &entry)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let written = || {
+            std::fs::read_to_string(MachineConfig::loop_path())
+                .is_ok_and(|text| text.contains("[tasks.waiter]"))
+        };
+        assert!(
+            !writer.is_finished() && !written(),
+            "the writer ran under the held lock"
+        );
+        drop(again);
+        drop(held);
+        writer.join().unwrap().unwrap();
+        assert!(written());
+    }
+
+    /// Removing a row the store does not hold opens no lock, so `rimz wait` arms where a
+    /// command sandbox leaves the home's `loops/` read-only; a row it holds is removed under it.
+    #[test]
+    fn removing_an_absent_row_needs_no_edit_lock() {
+        let entry = TaskEntry {
+            cron: Some("0 9 * * *".to_owned()),
+            root: PathBuf::from("/repo"),
+            ..TaskEntry::default()
+        };
+        set_entry(TaskStore::Machine, "kept", &entry).unwrap();
+        let lock = crate::disk::paths::loops_dir().join(EDIT_LOCK);
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        let absent = remove_machine_at_root("absent", Path::new("/repo"));
+        let elsewhere = remove_machine_at_root("kept", Path::new("/other"));
+        let unnamed = remove(TaskStore::Machine, "absent");
+        let held = remove(TaskStore::Machine, "kept");
+        std::fs::remove_dir(&lock).unwrap();
+        assert!(!absent.unwrap());
+        assert!(!elsewhere.unwrap());
+        assert!(!unnamed.unwrap());
+        assert!(held.is_err(), "{held:?}");
+        assert!(remove(TaskStore::Machine, "kept").unwrap());
+    }
 
     #[test]
     fn resident_fields_round_trip_machine_and_instance_rows() {

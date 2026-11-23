@@ -36,6 +36,36 @@ fn the_reference_table_lists_every_tool_under_its_capability() {
 }
 
 #[test]
+fn a_schedule_takes_exactly_one_trigger_and_declares_no_command() {
+    let schedule = TOOLS.iter().find(|tool| tool.name == "schedule").unwrap();
+    assert_eq!(schedule.commands(), Vec::<String>::new());
+    assert!(Capability::Loop.starts_things());
+    let run = serde_json::json!({"agent": {"profile": "worker", "prompt": "go"}});
+    for trigger in [
+        serde_json::json!({"at": "09:00", "every": "1h"}),
+        serde_json::json!({"every": "1h", "match": {"branch": "x"}}),
+        serde_json::json!({"cron": "@daily", "for": "1m"}),
+        serde_json::json!({}),
+    ] {
+        let arguments = serde_json::json!({"name": "n", "trigger": trigger, "run": run});
+        assert!(schedule.call(arguments).is_err(), "{trigger}");
+    }
+    let arguments = serde_json::json!({
+        "name": "n",
+        "trigger": {"signal": "ci.failed", "match": {"branch": "x"}},
+        "repeat": true,
+        "run": run,
+    });
+    assert!(schedule.call(arguments).is_ok());
+    let two_targets = serde_json::json!({
+        "name": "n",
+        "trigger": {"every": "1h"},
+        "run": {"agent": {"profile": "worker", "prompt": "go"}, "team": {"team": "t", "goal": "g"}},
+    });
+    assert!(schedule.call(two_targets).is_err());
+}
+
+#[test]
 fn capability_names_round_trip_and_become_only_arguments() {
     for capability in Capability::ALL {
         assert_eq!(Capability::from_name(capability.name()), Some(capability));
