@@ -476,8 +476,10 @@ fn stop_with_read(mut stopper: Stopper<'_>, agents: &[&AgentState]) -> Result<Ve
         .collect())
 }
 
-/// How long a stop waits for an agent's process to leave, and for a closed pane to leave
-/// the listing: an exec wrapper holds both through two signal graces after the hangup.
+/// How long a stop waits for an agent's process to leave before it signals it, and for a
+/// closed pane to leave the listing: an exec wrapper holds both through two signal graces
+/// after the hangup. The wait after the signal takes [`OWNER_EXIT_BOUND`] even under the
+/// test override, since a fixture owner ends there and a short wait loses to a loaded host.
 fn stop_owner_exit_bound() -> Duration {
     #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_STOP_OWNER_EXIT_MS")
@@ -1007,7 +1009,7 @@ impl Stopper<'_> {
                 .filter(|ending| ending.signaled)
                 .map(|ending| &mut **ending)
                 .collect::<Vec<_>>();
-            projection = self.await_endings(&mut termed, Instant::now() + bound)?;
+            projection = self.await_endings(&mut termed, Instant::now() + OWNER_EXIT_BOUND)?;
             read = self.refresh();
         }
         if read.is_ok() {
