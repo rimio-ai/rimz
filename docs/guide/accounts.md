@@ -1,6 +1,6 @@
 # Provider accounts
 
-You may use more than one Claude, Codex, or Pi account: a work subscription and a personal one, or a second seat you move to when the first hits its weekly limit. All three CLIs already support this. Claude reads its credentials, settings, and transcripts from `CLAUDE_CONFIG_DIR` (default `~/.claude`), Codex from `CODEX_HOME` (default `~/.codex`), and Pi from `PI_CODING_AGENT_DIR` (default `~/.pi/agent`), so `CLAUDE_CONFIG_DIR=~/.claude-work claude` is a second, fully separate account: its own credentials, its own limits, its own transcripts.
+You may use more than one Claude, Codex, Pi, or Antigravity account: a work subscription and a personal one, or a second seat you move to when the first hits its weekly limit. Claude, Codex, and Pi already support this. Claude reads its credentials, settings, and transcripts from `CLAUDE_CONFIG_DIR` (default `~/.claude`), Codex from `CODEX_HOME` (default `~/.codex`), and Pi from `PI_CODING_AGENT_DIR` (default `~/.pi/agent`), so `CLAUDE_CONFIG_DIR=~/.claude-work claude` is a second, fully separate account: its own credentials, its own limits, its own transcripts.
 
 That works for one terminal. A fleet needs each agent, child, and restart to keep the correct home too: a session can resume only under an account that reads the same history, which a standalone account keeps in its own home. RimZ records an account on each agent. For future launches, a room either pins an account or follows the project and machine defaults live. Declare each home once, then choose whether this room should stay on one account or follow your defaults, without moving the agents already working.
 
@@ -25,7 +25,7 @@ Without a name, RimZ uses the account a launch here would use. It shows that log
 
 ## Declare an account
 
-`rimz accounts add <kind> <name>` declares a named account for `claude`, `codex`, or `pi`:
+`rimz accounts add <kind> <name>` declares a named account for `claude`, `codex`, `pi`, or `antigravity`:
 
 ```console
 $ rimz accounts add claude work
@@ -107,6 +107,8 @@ $ rimz accounts show claude@hooloovoo
 ```
 
 Without `@name`, `rimz accounts show claude` prints all Claude accounts. Queries probe login and refresh due usage into the sidebar's caches; they neither switch accounts nor touch running agents. `--refresh` bypasses the TTLs. Use `--json` on the overview or detail command for the same [account row contract](../reference/cli/accounts.md#json-output).
+
+Antigravity accounts work differently, because `agy` has no variable that moves its data directory. `rimz accounts add antigravity work` creates a directory, and each launch on it runs `agy` inside a bubblewrap mount of that directory over `~/.gemini/antigravity-cli`, with `HOME` unchanged. That needs Linux and a working `bwrap`. The account keeps its own login, settings, and conversations (always `standalone`), so its first session asks you to sign in and accept agy's terms in its own pane. On a machine where agy keeps its login in the OS keyring, every directory shares that login, so RimZ refuses to launch the named account rather than run it on the wrong one. It also refuses when an account with no saved login cannot be confirmed as signed out, for example when agy's check times out.
 
 ## Start a room on an account
 

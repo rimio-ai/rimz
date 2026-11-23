@@ -94,6 +94,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 
 ### Antigravity
 
+- Named accounts need Linux and `bwrap`, and are always standalone ([accounts](./cli/accounts.md)).
 - `agy` is an alias of `antigravity`: `agent: agy` and the kind base `agents/agy.md` work as their `antigravity` spellings do.
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
 - `--add-dir` opens each directory as an agy workspace: agy loads its `AGENTS.md`, `.agents/rules`, and `.agents/skills` and runs its `.agents/hooks.json`, without a trust prompt for it. The launch warns.

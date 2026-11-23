@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` compares provider accounts, plans, usage left, and launch health; it is the same as `rimz accounts list` and exits 0. `show` expands account details. The other subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME`, and Pi with `PI_CODING_AGENT_DIR`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` compares provider accounts, plans, usage left, and launch health; it is the same as `rimz accounts list` and exits 0. `show` expands account details. The other subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME`, and Pi with `PI_CODING_AGENT_DIR`, set to that home. agy reads no such variable, so RimZ runs a named Antigravity account inside a bubblewrap mount of its directory over `~/.gemini/antigravity-cli`, which needs Linux and a working `bwrap`, and leaves `HOME` as it is. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use` and `use --reset`, which require running inside one. Bare `use` pins only the current room's account for that provider, leaving running agents and machine and project configuration unchanged. `--reset` removes that pin. An unpinned provider follows the trusted project's selection, then the machine's, then `default`, live on each launch ([Accounts at start](./getting-started.md#accounts)). `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A machine selection reaches new rooms and existing rooms following that default, not pinned providers. Inside the multiplexer session of a room that is already running, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -19,7 +19,7 @@ rimz accounts remove claude work                     # forget the entry; the hom
 
 ## Kinds, names, and homes
 
-Named accounts exist for `claude`, `codex`, and `pi` only. `add`, `use`, `redeem`, and `remove` refuse kinds without named accounts with `<kind> has no named accounts; accounts are supported for claude, codex, pi`; `list` and `show` report every known kind. `use --global <kind> default` can also clear a hand-set selection for any kind.
+Named accounts exist for `claude`, `codex`, `pi`, and `antigravity` only. An `antigravity` account is always `standalone`: `add` writes that, and a declaration with any other history is refused. Its first session shows agy's own sign-in and Terms of Service screens in its pane. A named account whose login agy finds outside its directory (the OS keyring every data directory shares) refuses to launch. `add`, `use`, `redeem`, and `remove` refuse kinds without named accounts with `<kind> has no named accounts; accounts are supported for claude, codex, pi, antigravity`; `list` and `show` report every known kind. `use --global <kind> default` can also clear a hand-set selection for any kind.
 
 An account name is 1 to 32 characters of `a-z`, `0-9`, `_`, and `-`, starting with a letter or digit. `default` is reserved for the provider's own home.
 
@@ -49,7 +49,7 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone] [-
 
 | Argument or flag | Effect |
 | --- | --- |
-| `KIND` | `claude`, `codex`, or `pi`. |
+| `KIND` | `claude`, `codex`, `pi`, or `antigravity`. |
 | `NAME` | The account name a room selects with `--account <KIND>@<NAME>`. |
 | `--home <PATH>` | The account's provider home, such as an existing `~/.claude-work`. Without it, the home is the default location above. |
 | `--label <TEXT>` | Sets the display label; `--label ''` removes the field. On a rerun, changes only this field (and `history` when `--history` is also given); without the flag, leaves it alone. An invalid label is refused before any config write or home creation. |
@@ -258,7 +258,7 @@ Listing and `show` probe every catalog login and run due usage reads for logged-
 
 | Reading | Plain run | With `--refresh` |
 | --- | --- | --- |
-| Login, plan, account id, version | Probe after 10 minutes; failures retain the last good facts and retry after 10, 20, 40, ... seconds, capped at 10 minutes per login. Changed adapter inputs bypass the backoff after a 10-second floor. A provisional Pi or OpenCode answer also retries after that floor; an undecided login reports unknown plan and metering, and no credits. A new Pi session or Pi login change follows within seconds, behind the same floor from the previous probe. A settled answer can still take up to 10 minutes to follow a switch inside a running session, a resume, or concurrent Pi sessions on different providers. For kinds supporting named accounts (Claude, Codex, and Pi), stored logged-out or ambiguous legacy records are probed again on every run. | Probe every catalog login, regardless of the selected kind or name. |
+| Login, plan, account id, version | Probe after 10 minutes; failures retain the last good facts and retry after 10, 20, 40, ... seconds, capped at 10 minutes per login. Changed adapter inputs bypass the backoff after a 10-second floor. A provisional Pi or OpenCode answer also retries after that floor; an undecided login reports unknown plan and metering, and no credits. A new Pi session or Pi login change follows within seconds, behind the same floor from the previous probe. A settled answer can still take up to 10 minutes to follow a switch inside a running session, a resume, or concurrent Pi sessions on different providers. For kinds supporting named accounts (Claude, Codex, Pi, and Antigravity), stored logged-out or ambiguous legacy records are probed again on every run. | Probe every catalog login, regardless of the selected kind or name. |
 | Claude live plan | Read at the next account probe for a never-read or changed account, a changed auth-status plan, a new machine-wide cockpit session, an early usage reset, or a profile answer older than 24 hours. Attempts are at least 10 minutes apart. After a sign-in whose auth-status plan differs from the answer's saved-plan basis, auth status shows until a new read answers. A failed read keeps the last answer without changing login state or usage. | Read for every probed Claude subscription login with a known identity, except offline or behind an account producer that outlives the wait bound. |
 | Windows, paid usage, reset credits | Read for logged-in accounts after 5 minutes, or 1 hour after missing/rejected credentials or subscription access. Providers without a usage API show agent-reported windows. | Read now for logged-in accounts of the selected kinds. Successful usage clears a recorded lapse. |
 | Spend | Last published `provider-spending.json`. | Same; this command does not compute spend. |
@@ -275,7 +275,7 @@ Every key below is present, with `null` when unknown, except `problem`, `probe_e
 
 | Field | Meaning |
 | --- | --- |
-| `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only Claude, Codex, and Pi. |
+| `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only those with named accounts. |
 | `home`, `history` | Absolute home; `shared` or `standalone` history (`null` for default or undeclared accounts). |
 | `label` | Valid display label, or `null` for default, undeclared accounts, or unset or invalid labels. Always present. |
 | `machine_default` | Whether this is the machine's selection, or `default` when none is set. |
@@ -336,7 +336,7 @@ rimz accounts redeem <KIND> [NAME] [--dry-run] [--yes]
 | `--dry-run` | Read and print the preview, then exit 0 without prompting, stamping, or spending. |
 | `--yes` | Spend without prompting. Required for a non-terminal stdin unless `--dry-run` is set. |
 
-Pi refuses with `reset-credit request failed: pi does not support reset-credit redemption`, exit 1. Kinds without named accounts refuse with `<kind> has no named accounts; accounts are supported for claude, codex, pi`, exit 1.
+Pi refuses with `reset-credit request failed: pi does not support reset-credit redemption`, exit 1. Kinds without named accounts refuse with `<kind> has no named accounts; accounts are supported for claude, codex, pi, antigravity`, exit 1.
 
 The preview on stdout names the resolved login, banked credits and soonest expiry across every grant (countdown and wall clock), then each unscoped 5h and 7d window's used percentage and reset countdown, or `∞` for a window the provider is not enforcing, which gets no redemption line. Where the provider selects the grant a redemption claims (Claude), a `spends` row names that grant by its provider label (`unlabelled grant` without one) and its own expiry, and each enforced window the grant does not clear gets a `redeem` row reading `not refilled by this grant` in place of a refill. Codex selects no grant and refills now, restarting each reset a full window from now. Claude refills each window its grant clears now, while that window's reset stays at the displayed time. A free reset closer than the login's [`min_gain`](../../guide/configuration.md#auto-redeem) produces a warning about giving it up, not a refusal. The last row, `auto-redeem forecast`, is what auto-redeem would do if the longest window ran dry now under the provider's level (`off` at level `rescue`, `armed`, `holding`, or `no credits` at zero credits), not a verdict on a live agent. A Claude `hold` row explains why banked credits cannot be spent now; a cooldown deadline uses the same local wall-clock format as the reset rows.
 

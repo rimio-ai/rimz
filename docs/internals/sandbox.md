@@ -17,6 +17,10 @@ The code lives in `crates/rimz/src/sandbox/`:
 
 `harness/launch_plan.rs` is the one production caller of `sandbox::plan`, `sandbox::apply`, and `sandbox::bwrap_argv`. Two other places read a view back to host paths: `launcher::checkout::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `crates/rimz/src/cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
 
+## Mounted account homes
+
+A provider that cannot be pointed at another home declares `LaunchCapability::mounted_home_target` (Antigravity). A named account of that kind binds its directory over that target: in the scoped view as the provider-home bind with source and target apart, and at host or sandbox isolation through a bwrap view holding only that bind (`crates/rimz/src/harness/launch_plan.rs::compile`). It is a directory bind, so a provider's atomic renames inside it stay visible.
+
 ## Choosing the isolation
 
 A launch resolves its level through `Isolation::resolve`: the recorded `--isolation` override wins, then the profile's `isolation: host|scoped|sandbox`, then the machine's `agents.isolation` as it reads now. A repository profile in either namespace that sets `isolation` is refused, so the level comes only from machine definitions, machine policy, and flags, none of which the trust hash covers. Team roles inherit the named definition's default and cannot declare their own.
