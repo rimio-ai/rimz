@@ -319,7 +319,9 @@ pub(super) fn send_batch_to_live_pane(
         });
     }
     writer.press(key)?;
-    if returns_queued_text {
+    // An unsubmitted draft stays in the composer through the key (agy 1.5.15), and Enter
+    // would submit it.
+    if returns_queued_text && head.enter {
         sleep(INTERRUPT_RESUBMIT_DELAY);
         writer.press(NamedKey::Enter)?;
     }
