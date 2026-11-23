@@ -460,7 +460,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::fold_permission_settings lets harness compile fold a permission mode's own
 # settings document into the launch's one --settings before other contributions (+1).
 # drop_refused_effort runs only where the launch's final model is known (+1).
-surface-budget = 1330
+# skills::rimz_skills gives the launch plan and `rimz agents validate` one on-disk inventory of
+# the rimz-* skills (+1).
+surface-budget = 1331
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1212,7 +1214,8 @@ upward-dependencies = [
 # The [harness.auto_redeem] table exports its config, level, and resolved policy to every ladder reader.
 # served_marks gives the launch env and explain each served capability's load mark (+1).
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
-surface-budget = 304
+# rimz_references is the one rimz(x) scanner the launch warning and `rimz agents validate` share (+1).
+surface-budget = 305
 
 [[verdict]]
 kind = "item"
@@ -5789,7 +5792,9 @@ allowed-dependencies = [
 # ExecRequest::mcp_capabilities is the one served set the launch plan and its reminders read,
 # without the subagent tool for a subagent child (+1).
 # ExecRequest::is_judge is the one judge rule for the launch plan and the served set (+1).
-surface-budget = 61
+# ExecRequest::cannot_delegate is the one rule that keeps rimz-subagents from a child and a
+# judge, read by the served set and the reminder's capability set (+1).
+surface-budget = 62
 
 [[verdict]]
 kind = "item"

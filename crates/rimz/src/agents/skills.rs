@@ -297,6 +297,26 @@ pub(crate) fn enumerate(
     Ok(inventory)
 }
 
+/// The `rimz-*` skills on disk under a provider root and the RimZ skill chain. A root
+/// that is missing or cannot be read adds nothing, so the set holds what the
+/// readable roots establish.
+pub fn rimz_skills(
+    provider_root: Option<&Path>,
+    chain: Option<&SkillChain>,
+) -> std::collections::BTreeSet<String> {
+    let keep = |name: &str| name.starts_with("rimz-");
+    let provider = provider_root
+        .and_then(|root| skill_paths(root, keep, false).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, path)| path.join("SKILL.md").exists())
+        .map(|(name, _)| name);
+    let library = chain
+        .and_then(|chain| chain.read_inventory(keep, LibraryRead::SkipUnreadable).ok())
+        .unwrap_or_default();
+    provider.chain(library.skills.into_keys()).collect()
+}
+
 fn scan_pack(
     pack: &ResolvedPack,
     home: &BTreeMap<String, PathBuf>,

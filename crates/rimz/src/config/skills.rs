@@ -76,6 +76,33 @@ pub fn validate_skill_list(skills: &[SkillName]) -> Result<(), SkillListErr> {
     Ok(())
 }
 
+/// The RimZ capabilities `text` names in the `rimz(x)` notation, each as `rimz-x`: a
+/// lowercase name (`[a-z][a-z0-9-]*`) between `rimz(` and `)`, where `rimz` follows no
+/// identifier character, so `spawn_detached_rimz(x)` names nothing. Any other casing or shape
+/// is plain text, and a code span counts like any other text.
+pub fn rimz_references(text: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for (at, opening) in text.match_indices("rimz(") {
+        if text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_')
+        {
+            continue;
+        }
+        let Some((name, _)) = text[at + opening.len()..].split_once(')') else {
+            continue;
+        };
+        let mut chars = name.chars();
+        if chars.next().is_some_and(|first| first.is_ascii_lowercase())
+            && chars.all(|rest| rest.is_ascii_lowercase() || rest.is_ascii_digit() || rest == '-')
+        {
+            names.insert(format!("rimz-{name}"));
+        }
+    }
+    names
+}
+
 pub(crate) fn deserialize_optional_skill_list<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<SkillName>>, D::Error>
@@ -123,6 +150,30 @@ mod tests {
             assert_eq!(error, SkillListErr::InvalidName(input.to_owned()));
             assert!(error.to_string().contains("the `:mode` suffix is gone"));
         }
+    }
+
+    #[test]
+    fn rimz_references_take_lowercase_names_after_a_non_identifier_boundary() {
+        let text = "Use rimz(wait), `rimz(lsp)`, and (rimz(workflow-write)); rimz(wait) again.\n\
+                    rimz(notes2) and x-rimz(control) count. spawn_detached_rimz(foo), \
+                    rimz2(bar), Rimz(baz), RIMZ(qux), rimz(Wait), rimz( wait), rimz(), \
+                    rimz(1x), rimz(-x), rimz(a_b), rimz(a b), Skill(rimz-message), rimz(open";
+        assert_eq!(
+            rimz_references(text).into_iter().collect::<Vec<_>>(),
+            [
+                "rimz-control",
+                "rimz-lsp",
+                "rimz-notes2",
+                "rimz-wait",
+                "rimz-workflow-write"
+            ]
+        );
+        assert_eq!(
+            rimz_references("rimz(wait)")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["rimz-wait"]
+        );
     }
 
     #[test]

@@ -612,7 +612,12 @@ fn a_star_list_limits_nothing_on_claude_or_codex() {
             mcp_server: Some((PathBuf::from("/bin/rimz"), Vec::new())),
             ..Default::default()
         };
-        assert!(reminders.lsp_tool(&request), "{mcps:?}");
+        assert!(
+            reminders
+                .mcp_capabilities(&request)
+                .contains(&crate::mcp::catalog::Capability::Lsp),
+            "{mcps:?}"
+        );
 
         let argv = room
             .compile(&switches(true, true), &launch("codex", Some(mcps), &[]))

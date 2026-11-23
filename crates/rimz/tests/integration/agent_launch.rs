@@ -6421,7 +6421,12 @@ fn explain_prints_the_plan_without_side_effects() {
         "Launch them through the `subagent` tool of the `rimz` MCP server, subagents available"
     ));
     assert!(!reminder.contains("### Skills"));
-    assert!(!reminder.contains("Skill(rimz-"));
+    // The capabilities lead quotes the notation; no capability is reached through a skill.
+    assert!(
+        !reminder
+            .replace("`Skill(rimz-x)`", "")
+            .contains("Skill(rimz-")
+    );
     assert!(reminder.ends_with("\n</system_reminder>"));
     assert!(
         provider_argv
@@ -11793,5 +11798,69 @@ fn seats_of_one_batch_on_a_shared_account_set_its_history_aside_once() {
     assert_eq!(
         std::fs::read_to_string(stamp.join("sessions/old.jsonl")).unwrap(),
         "before sharing"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreachable_rimz_reference_warns_on_stderr_and_card_and_the_agent_starts() {
+    use rimz::config::PromptSource;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shell = write_fake_login_shell(&env, "reference-shell", &[]);
+    let shim = write_env_dump_shim(&env, "codex");
+    let probe = env.home_root.join("reference-provider-env");
+    let prompt = env.home_root.join("reference-prompt.md");
+    std::fs::write(&prompt, "Wait with rimz(wait); hand off with rimz(nope).\n").unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::new(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "agent",
+            "agent.launched",
+            serde_json::json!({"agent_id": "launch-reference", "launch_id": "launch-reference",
+            "agent_name": "reference-agent", "agent_name_explicit": true, "state": "starting"}),
+        ))
+        .unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+    request.identity.launch_id = Some("launch-reference".into());
+    request.identity.name = Some("reference-agent".into());
+    request.system_prompt_file = Some(PromptSource::File(prompt));
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(probe.is_file(), "the provider never started: {stderr}");
+    let expected = "the system prompt names rimz(nope), which this launch reaches neither as a \
+                    tool of RimZ's MCP server nor as a callable skill; the agent starts without it";
+    let warnings: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("rimz: "))
+        .filter(|text| text.contains("rimz("))
+        .collect();
+    assert_eq!(warnings, [expected], "{stderr}");
+    let shown = env
+        .rimz()
+        .args(["agents", "show", "@reference-agent", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let report: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let card = report["agent"]["launch_warnings"].as_array().unwrap();
+    assert!(card.iter().any(|warning| warning == expected), "{report}");
+    assert!(
+        !card.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|text| text.contains("rimz(wait)"))),
+        "{report}"
     );
 }

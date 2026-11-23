@@ -26,7 +26,20 @@ pub(super) fn run(json: bool) -> Result<()> {
             "rimz: skill listings were not checked because this shell runs inside a scoped view; run `rimz agents validate` from a host shell"
         )?;
     }
-    let loaded = load(&home, check, &machine);
+    let mut loaded = load(&home, check, &machine);
+    let chain = rimz::agents::skills::SkillChain::from_home(&home);
+    loaded
+        .errors
+        .extend(capability_errors(&loaded, &machine, |kind| {
+            (!in_sandbox).then(|| {
+                rimz::agents::skills::rimz_skills(
+                    rimz::agents::find_definition(kind)
+                        .and_then(|definition| definition.skills_home(&env))
+                        .as_deref(),
+                    Some(&chain),
+                )
+            })
+        }));
     let mut warnings = warnings(&loaded, machine.agents.isolation, &machine.tiers);
     warnings.extend(lsp_warnings(&loaded, &machine));
     warnings.extend(keep_warm_warnings(&loaded, &machine.harness));
@@ -421,43 +434,166 @@ fn keep_warm_warnings(
     warnings
 }
 
-fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfig) -> Vec<Warning> {
-    if machine.lsp.servers.is_empty() {
-        return Vec::new();
-    }
+/// The profile behind each definition row `validate` judges on its own: seat rows
+/// are skipped, since their definition's row carries what the definition does,
+/// and a kind base, which has a row in each table, is judged once, on its agents row.
+fn own_rows(
+    loaded: &LoadedDefinitions,
+) -> impl Iterator<Item = (&definitions::DefinitionRow, &rimz::config::Profile)> {
     loaded
         .rows
         .iter()
-        // Seat rows are skipped; their definition's row warns for what the definition carries.
         .filter(|row| row.namespace != "team")
-        .filter(|row| {
+        .filter_map(|row| {
             let profiles = if row.namespace == "subagents" {
                 &loaded.subagent_profiles
             } else {
                 &loaded.agent_profiles
             };
-            let Some(profile) = profiles.0.get(&row.name) else {
-                return false;
-            };
-            // A kind base has a row in each table; its agents row warns once.
-            if profile.kind_base && row.namespace == "subagents" {
-                return false;
+            let profile = profiles.0.get(&row.name)?;
+            (!(profile.kind_base && row.namespace == "subagents")).then_some((row, profile))
+        })
+}
+
+/// What shuts a profile out of RimZ capability `name`, judged offline by the
+/// machine config and the profile's `tools`, `skills`, and `mcps`: the reasons
+/// its MCP tools are out of reach, then the reasons its skill is. An empty side is
+/// a way in; the skill side does not look at the disk.
+fn shut_out(
+    machine: &rimz::config::MachineConfig,
+    kind: &str,
+    profile: &rimz::config::Profile,
+    subagent: bool,
+    name: &str,
+) -> (Vec<String>, Vec<String>) {
+    use rimz::mcp::catalog::Capability;
+    if subagent && name == Capability::Subagents.name() {
+        let reason = vec!["a subagent cannot launch subagents".to_owned()];
+        return (reason.clone(), reason);
+    }
+    let tool = match Capability::from_name(name) {
+        None => vec![format!("{name} has no MCP tools")],
+        Some(_) if !machine.agents.rimz_mcp_server => {
+            vec!["the machine's rimz-mcp-server is off".to_owned()]
+        }
+        Some(_)
+            if !rimz::agents::find_definition(kind)
+                .is_some_and(|definition| definition.takes_mcp_servers()) =>
+        {
+            vec![format!("{kind} takes no MCP servers")]
+        }
+        Some(capability)
+            if !rimz::config::mcp_capabilities(profile.mcps.as_deref()).contains(&capability) =>
+        {
+            vec![format!("its mcps leave out {name}")]
+        }
+        Some(_) => Vec::new(),
+    };
+    let skill = if rimz::agents::skills_lack_skill_tool(kind, profile.tools.as_ref()) {
+        vec!["its tools leave out Skill".to_owned()]
+    } else if !rimz::config::skill_is_callable(profile.skills.as_deref(), name) {
+        vec![format!("its skills leave out {name}")]
+    } else {
+        Vec::new()
+    };
+    (tool, skill)
+}
+
+/// Each `rimz(x)` in a profile's resolved prompt sources that names no capability
+/// and no skill on disk for its kind, or that the profile cannot reach. `on_disk`
+/// gives a kind's `rimz-*` skills, or `None` when the disk is not checked, and
+/// then only the lists judge. The launch only warns for these, so they stay out of
+/// the definition loader, whose errors refuse a launch.
+fn capability_errors(
+    loaded: &LoadedDefinitions,
+    machine: &rimz::config::MachineConfig,
+    on_disk: impl Fn(&str) -> Option<std::collections::BTreeSet<String>>,
+) -> Vec<definitions::DefinitionErr> {
+    let mut inventories = std::collections::BTreeMap::new();
+    let mut errors = Vec::new();
+    for (row, profile) in own_rows(loaded) {
+        let names: std::collections::BTreeSet<String> = profile
+            .system_prompt_file
+            .iter()
+            .chain(&profile.append_system_prompt_files)
+            .filter_map(|source| match source {
+                rimz::config::PromptSource::Text { text, .. } => Some(text.clone()),
+                rimz::config::PromptSource::File(path) => std::fs::read_to_string(path).ok(),
+            })
+            .flat_map(|text| rimz::config::rimz_references(&text))
+            .collect();
+        let inventory = inventories
+            .entry(row.kind.clone())
+            .or_insert_with(|| on_disk(&row.kind));
+        for name in names {
+            let present = inventory
+                .as_ref()
+                .is_none_or(|skills| skills.contains(&name));
+            let short = &name["rimz-".len()..];
+            let known = rimz::mcp::catalog::Capability::from_name(&name).is_some() || present;
+            let (tool, mut skill) = shut_out(
+                machine,
+                &row.kind,
+                profile,
+                row.namespace == "subagents",
+                &name,
+            );
+            if skill.is_empty() && !present {
+                skill.push(format!("no {name} skill is on disk for {}", row.kind));
             }
-            let lsp_tool = machine.agents.rimz_mcp_server
-                && rimz::agents::find_definition(&row.kind)
-                    .is_some_and(|definition| definition.takes_mcp_servers())
-                && rimz::config::mcp_capabilities(profile.mcps.as_deref())
-                    .contains(&rimz::mcp::catalog::Capability::Lsp);
-            let lsp_skill =
-                !rimz::agents::skills_lack_skill_tool(&row.kind, profile.tools.as_ref())
-                    && rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp");
-            (lsp_tool || lsp_skill)
+            let message = if !known {
+                format!(
+                    "profile {}: rimz({short}) names `{name}`, which is neither a RimZ \
+                     capability nor a skill on disk for {}",
+                    row.name, row.kind
+                )
+            } else if tool.is_empty() || skill.is_empty() {
+                continue;
+            } else {
+                // A skills-only name is shut out by its skill side alone.
+                let mut reasons = if rimz::mcp::catalog::Capability::from_name(&name).is_some() {
+                    tool
+                } else {
+                    Vec::new()
+                };
+                reasons.extend(skill);
+                reasons.dedup();
+                format!(
+                    "profile {}: rimz({short}) names `{name}`, which this profile cannot reach: {}",
+                    row.name,
+                    reasons.join("; ")
+                )
+            };
+            errors.push(definitions::DefinitionErr {
+                path: row.source.clone(),
+                message,
+                cause: definitions::DefinitionCause::Invalid,
+            });
+        }
+    }
+    errors
+}
+
+fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfig) -> Vec<Warning> {
+    if machine.lsp.servers.is_empty() {
+        return Vec::new();
+    }
+    own_rows(loaded)
+        .filter(|(row, profile)| {
+            let (tool, skill) = shut_out(
+                machine,
+                &row.kind,
+                profile,
+                row.namespace == "subagents",
+                rimz::mcp::catalog::Capability::Lsp.name(),
+            );
+            (tool.is_empty() || skill.is_empty())
                 && profile
                     .tools
                     .as_ref()
                     .is_some_and(|tools| tools.bases().iter().any(|tool| tool == "LSP"))
         })
-        .map(|row| Warning {
+        .map(|(row, _)| Warning {
             path: row.source.clone(),
             message: format!(
                 "profile {}: tools names LSP, which a room with a shared language server strips",

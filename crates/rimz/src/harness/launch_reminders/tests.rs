@@ -895,3 +895,150 @@ fn team_files_finish_environment_after_bullets() {
     assert!(!text.contains("$ ls"));
     assert!(!text.contains("no memory files"));
 }
+
+fn rimz_skills(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+fn capabilities_paragraph_of(text: &str) -> Option<String> {
+    let start = text.find("### RimZ capabilities")?;
+    let rest = &text[start..];
+    let end = rest[1..]
+        .find("\n\n###")
+        .map_or_else(|| rest.find("\n</").unwrap_or(rest.len()), |end| end + 1);
+    Some(rest[..end].to_owned())
+}
+
+const CAPABILITIES_LEAD: &str = "### RimZ capabilities\n\nA name written `rimz(x)` or \
+    `Skill(rimz-x)` in any text means RimZ's capability `rimz-x`, which you reach as its \
+    bullet says:\n\n";
+
+#[test]
+fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_disk() {
+    let mut actual = Vec::new();
+    for kind in ["claude", "antigravity"] {
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+        let reminders = LaunchReminders {
+            mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        assert_eq!(text.matches("<system_reminder>").count(), 1, "{text}");
+        actual.push(capabilities_paragraph_of(&text));
+    }
+    // Claude withholds the skills its served tools stand for; Antigravity on the host cannot,
+    // so it has both, and the tool wins.
+    let served = |server: &str| {
+        Some(format!(
+            "{CAPABILITIES_LEAD}\
+- rimz-lsp: the `lsp` tool of the `{server}` MCP server
+- rimz-wait: the `wait` tool of the `{server}` MCP server
+- rimz-subagents: the `subagent` tool of the `{server}` MCP server
+- rimz-control: the `self_stop`, `self_compact`, `self_tune`, and `self_molt` tools of the `{server}` MCP server
+- rimz-notes: the `notes` tool of the `{server}` MCP server
+- rimz-message: Skill(rimz-message)"
+        ))
+    };
+    assert_eq!(actual, [served("rimz"), served("rimz_tools")]);
+}
+
+#[test]
+fn capabilities_paragraph_on_a_skills_only_launch_follows_the_skills_list() {
+    let mut actual = Vec::new();
+    for skills in [
+        None,
+        Some(vec!["rimz-message", "rimz-wait", "commit"]),
+        Some(Vec::new()),
+    ] {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("opencode"), Vec::new());
+        request.skills =
+            skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+        let reminders = LaunchReminders {
+            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+            ..LaunchReminders::default()
+        };
+        actual.push(capabilities_paragraph_of(&render(
+            &request,
+            &reminders,
+            Path::new("/checkout"),
+            None,
+        )));
+    }
+    assert_eq!(
+        actual,
+        [
+            Some(format!(
+                "{CAPABILITIES_LEAD}\
+- rimz-lsp: Skill(rimz-lsp)
+- rimz-message: Skill(rimz-message)
+- rimz-wait: Skill(rimz-wait)"
+            )),
+            Some(format!(
+                "{CAPABILITIES_LEAD}\
+- rimz-message: Skill(rimz-message)
+- rimz-wait: Skill(rimz-wait)"
+            )),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn a_child_has_no_rimz_subagents_as_tool_or_skill() {
+    for (kind, served) in [("claude", true), ("opencode", false)] {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+        request.subagent = true;
+        let reminders = LaunchReminders {
+            mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
+            rimz_skills: rimz_skills(&["rimz-message", "rimz-subagents"]),
+            ..LaunchReminders::default()
+        };
+        let paragraph =
+            capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
+                .unwrap();
+        assert!(
+            paragraph.contains("- rimz-message: Skill(rimz-message)"),
+            "{paragraph}"
+        );
+        assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
+        assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
+    }
+}
+
+#[test]
+fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
+    for (kind, served) in [("claude", true), ("opencode", false)] {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+        request.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Judge,
+        });
+        let reminders = LaunchReminders {
+            mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
+            rimz_skills: rimz_skills(&["rimz-message", "rimz-subagents"]),
+            ..LaunchReminders::default()
+        };
+        let capabilities = reminders.rimz_capabilities(&request);
+        assert!(
+            capabilities
+                .iter()
+                .all(|(name, _)| name != Capability::Subagents.name()),
+            "{capabilities:?}"
+        );
+        let paragraph =
+            capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
+                .unwrap();
+        assert!(
+            paragraph.contains("- rimz-message: Skill(rimz-message)"),
+            "{paragraph}"
+        );
+        assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
+        assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
+    }
+}
