@@ -505,23 +505,33 @@ fn retire_ended_sessions_in(
 /// durably ended, each with whether its agent ended too
 /// ([`crate::agents::state::agent_end`]). A session another swap replaced can
 /// end while its agent lives on in the holder; a launch id ends with its agent.
+/// One pass indexes the launch rule, so the cost is rows plus pins, not their
+/// product.
 fn ended_pinned_sessions<'a, 'agents>(
-    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
+    agents: impl IntoIterator<Item = &'agents AgentState>,
     pinned: &'a std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
 ) -> Vec<(
     &'a (crate::ids::AgentKind, crate::ids::AgentSessionId),
     bool,
 )> {
+    let agents = agents.into_iter().collect::<Vec<_>>();
+    let launch_rows = crate::harness::fleet::LaunchRows::new(agents.iter().copied());
     let ended = agents
-        .clone()
-        .into_iter()
+        .iter()
         .filter(|agent| agent.ended_at.is_some() && !agent.is_provider_subagent())
         .map(|agent| (&agent.kind, &agent.agent_id))
         .collect::<std::collections::BTreeSet<_>>();
     pinned
         .iter()
         .filter_map(|key| {
-            let end = crate::agents::state::agent_end(agents.clone(), &key.0, &key.1);
+            let members = launch_rows
+                .members(&key.0, &key.1)
+                .into_iter()
+                .map(|index| agents[index])
+                .collect::<Vec<_>>();
+            // The rule over its own members selects them all again, so this
+            // reads what it would over every row.
+            let end = crate::agents::state::agent_end(members, &key.0, &key.1);
             let session_ended = ended.contains(&(&key.0, &key.1));
             // A launch pin goes with its agent, even while a session its
             // failed replacement replaced is still open.
