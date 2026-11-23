@@ -1,9 +1,8 @@
-//! Agent-only fresh-session swap: the agent keeps its handle and launch in a fresh session.
+//! CLI input and receipt for the calling agent's fresh-session swap.
 
 use super::*;
-use rimz::config::effective::ProfileScope;
-use rimz::harness::ancestry::{LaunchFocus, resolve_caller, resolve_launch_caller};
-use rimz::harness::launch::ExecAction;
+use rimz::harness::ancestry::resolve_caller;
+use rimz::launcher::molt::{MoltErr, MoltSource};
 
 #[derive(Debug, Args)]
 pub(super) struct MoltArgs {
@@ -19,218 +18,31 @@ pub(super) struct MoltArgs {
 }
 
 pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
-    let user_shell = || {
-        UsageError::new(
-        "molt runs only inside an agent: only the session holding the context can write the note. Type /rimz-molt in the agent's pane, or send it with `rimz message @<agent> '/rimz-molt'`".into(),
-    )
-    };
     let ctx = match Ctx::open(globals) {
         Ok(ctx) => ctx,
-        Err(_) if resolve_caller(&[]).is_none() => return Err(user_shell().into()),
+        Err(_) if resolve_caller(&[]).is_none() => return Err(molt_error(MoltErr::OutsideAgent)),
         Err(error) => return Err(error),
     };
-    let snapshot = ctx.store.runtime_projection(rimz::RuntimeScope::Runtime)?;
-    let caller = resolve_caller(&snapshot.agents).ok_or_else(user_shell)?;
-    let source = resolve_launch_caller(&snapshot.agents, &caller)?;
-    if source.is_launched_child() {
-        bail!("subagents cannot molt; finish and report to your caller; do not retry this command");
-    }
+    let source = MoltSource::resolve(&ctx.store).map_err(molt_error)?;
     let piped = if args.stdin {
         crate::cli::send::read_stdin_prompt()?
     } else {
         None
     };
     let note = crate::cli::send::combine_text_prompt(args.note.as_deref(), piped.as_deref())
-        .ok_or_else(|| UsageError::new("molt requires non-empty NOTE or --stdin".into()))?;
-    let workspace = &ctx.workspace;
-    let store = &ctx.store;
-    let cwd = source
-        .worktree_path
-        .as_deref()
-        .map_or_else(|| workspace.worktree_root.clone(), PathBuf::from);
-    let machine = crate::cli::machine_config();
-    let (kind, posture) = if let Some(alias) = args.agent.as_deref() {
-        let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
-        effective.block_set_failure()?;
-        replacement_posture(
-            source,
-            &machine,
-            &effective,
-            alias,
-            Some((store.runtime_paths(), store.paths())),
-        )?
-    } else {
-        (
-            source.kind.clone(),
-            restart::restart_posture(source, workspace, &machine)?,
+        .ok_or_else(|| molt_error(MoltErr::EmptyNote))?;
+    let molted = source
+        .launch(
+            &ctx.workspace,
+            ctx.mux(),
+            &crate::cli::machine_config(),
+            note,
+            args.agent,
+            |notice| writeln!(crate::cli::render::err(), "{notice}"),
         )
-    };
-    let mut agent = source.clone();
-    agent.kind = kind.clone();
-    let adapter = rimz::agents::find_definition(kind.as_str())
-        .with_context(|| format!("unknown agent kind `{kind}`"))?;
-    let isolation = rimz::config::Isolation::resolve(
-        source.isolation,
-        posture.launch.isolation_default,
-        machine.agents.isolation,
-    );
-    rimz::sandbox::preflight_launch(
-        isolation,
-        &kind,
-        posture.launch.skills.is_some(),
-        adapter.manual_skill(),
-    )?;
-    posture.launch.validate_fresh_agent_file_lists(&kind)?;
-    rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &cwd)?;
-    let logins = rimz::agents::room_accounts(
-        &store.paths().workspace_record,
-        Some(&workspace.project_root),
-        &machine,
-    )?;
-    let catalog = rimz::agents::machine_login_catalog();
-    let login = if args.agent.is_some() {
-        Some(logins.name(&kind)?)
-    } else {
-        restart::relaunch_action(source, &logins, &catalog, &cwd)?.1
-    };
-    let provider_login = rimz::agents::session_login(&kind, login.as_ref(), &machine.accounts)?;
-    crate::cli::launch_interaction::preflight_hooks(
-        provider_login.health(&rimz::agents::ambient_env()),
-        || Some(rimz::launcher::trust::Unattended::Agent),
-        || {
-            rimz::config::definitions::hook_trust_fix(
-                &kind,
-                args.agent.as_deref().or(source.profile.as_deref()),
-                None,
-            )
-        },
-        &mut Default::default(),
-        &mut crate::cli::render::err(),
-    )?;
-    let repo_root = if source.checkout.is_none() {
-        workspace.at_launch_dir(&cwd)?.cwd_project_root
-    } else {
-        None
-    };
-    crate::cli::launch_interaction::preflight(
-        kind.as_str(),
-        &cwd,
-        adapter.folder_trust(
-            &cwd,
-            repo_root.as_deref(),
-            &provider_login.env(&rimz::agents::ambient_env()),
-        ),
-        None,
-    )?;
-    let action = ExecAction::Launch {
-        prompt: Some(note.clone()),
-        extra_args: Vec::new(),
-    };
-    if !isolation.is_scoped() {
-        rimz::harness::launch::preflight_agent_process(
-            &workspace.project_root,
-            &restart::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
-            &cwd,
-            Some(store.runtime_paths()),
-        )?;
-    }
-    let mut notices = Vec::new();
-    // An accepted window, as at restart's re-find: the briefing and the reservation run after
-    // this read, while the close stays guarded by `hosting_after_bind`.
-    let found = rimz::launcher::agent_pane::find(
-        workspace,
-        store,
-        ctx.mux(),
-        &source.kind,
-        source.launch_key(),
-        &mut notices,
-    );
-    crate::cli::render::room::print_notices(notices)?;
-    let old_pane = match found {
-        Ok(pane) if !restart::held_by(&pane, source) => {
-            bail!("{}; nothing was changed", restart::held_elsewhere(&pane))
-        }
-        Ok(pane) => pane.pane_id,
-        Err(rimz::launcher::agent_pane::FindErr::Nowhere) => {
-            bail!("molt needs the caller's own pane; nothing was changed")
-        }
-        Err(err) => bail!("{err}; nothing was changed"),
-    };
-    let mut request = molt_request(&agent, &posture, login.clone())?;
-    request.prompt = restart::swap_briefing(
-        store,
-        source,
-        &snapshot.agents,
-        &workspace.project_root,
-        Some(&note),
-    )?;
-    let action = ExecAction::Launch {
-        prompt: request.prompt.clone(),
-        extra_args: Vec::new(),
-    };
-    let runs = if source.workflow.is_some() {
-        rimz::harness::run::list(store.paths())?
-    } else {
-        Vec::new()
-    };
-    let handover = restart::open_session_run(&runs, source);
-    let batch = restart::reserve_swap(
-        store,
-        source,
-        &request,
-        AgentLaunchScope {
-            session_name: workspace.session_name.clone(),
-            cwd: cwd.clone(),
-            branch: None,
-            description: None,
-        },
-        "molt",
-    )?;
-    let launch = batch.single_identity()?;
-    let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
-    if let Some(run) = handover {
-        invocation = restart::with_run(invocation, run);
-    }
-    let backend = rimz::mux::backend_for(old_pane.mux());
-    let placed = restart::place_replacement(
-        &ctx,
-        backend.as_ref(),
-        &agent,
-        &old_pane,
-        &invocation,
-        launch,
-        &snapshot.agents,
-        &cwd,
-        LaunchFocus::Keep,
-        handover,
-    );
-    restart::settle_placement(store, &batch, launch, source, "molt", placed, || {
-        if let Some(run) = handover {
-            let _ = rimz::harness::run::hand_over(store.paths(), &run.run_id, None);
-        }
-    })?;
-    if args.agent.is_some() {
-        rimz::harness::assist_log::record_tier_fallbacks(batch.identities());
-    }
-    let peers = snapshot
-        .agents
-        .iter()
-        .filter(|agent| !agent.is_provider_subagent())
-        .collect::<Vec<_>>();
-    let handle = rimz::address::agent_handle(source, &peers, true);
-    rimz::harness::assist_log::append(&rimz::harness::assist_log::AssistRecord {
-        at: jiff::Timestamp::now(),
-        assist: rimz::harness::assist_log::Assist::Molt {
-            kind: source.kind.clone(),
-            agent_id: source.agent_id.clone(),
-            label: handle.clone(),
-            successor_kind: kind,
-            successor_id: launch.agent_id.clone(),
-            successor_label: handle.clone(),
-            generation: source.launch_depth,
-        },
-    });
+        .map_err(|failure| molt_error(failure.error))?;
     let mut out = crate::cli::render::out();
+    let handle = &molted.handle;
     // The replacement has bound, so a receipt that fails to print still lets
     // the replaced session go.
     let receipt = writeln!(
@@ -238,290 +50,14 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         "molted {handle} into a fresh session beside this one; this session closes now\nnext: rimz agents show {handle}"
     )
     .and_then(|()| out.flush());
-    let after_bind = restart::hosting_after_bind(&ctx, source, &old_pane);
-    restart::release_replaced(&ctx, source, &old_pane, true);
-    restart::close_replaced(&ctx, backend.as_ref(), &old_pane, after_bind);
+    molted.close_replaced(|notice| writeln!(crate::cli::render::err(), "{notice}"));
     Ok(receipt?)
 }
 
-fn replacement_posture(
-    agent: &AgentState,
-    machine: &rimz::config::MachineConfig,
-    effective: &rimz::config::effective::LaunchAgents,
-    alias: &str,
-    room: Option<(&rimz::RuntimePaths, &rimz::StatePaths)>,
-) -> Result<(AgentKind, ResumePosture)> {
-    let (scope, _) = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child())
-        .resolve_launch(
-            agent.profile.as_deref(),
-            &effective.profiles,
-            &effective.subagent_profiles,
-        );
-    let spec = match (agent.team.as_deref(), agent.role.as_deref()) {
-        (Some(team), Some(role)) => format!("{team}.{role}"),
-        _ => agent
-            .profile
-            .clone()
-            .unwrap_or_else(|| agent.kind.to_string()),
-    };
-    let finalized = launch_resolve::resolve_finalized_layout(
-        None,
-        machine,
-        effective,
-        scope,
-        Some(&spec),
-        None,
-        &LaunchOverrideArgs {
-            agent: Some(alias.into()),
-            isolation: agent.isolation,
-            ..Default::default()
-        },
-        None,
-        None,
-        None,
-        true,
-        room,
-    )?;
-    for warning in &finalized.warnings {
-        writeln!(crate::cli::render::err(), "{warning}")?;
-    }
-    let mut cell = finalized
-        .resolved
-        .layout
-        .agent_cells()
-        .next()
-        .context("molt produced no agent cell")?
-        .clone();
-    if let Some(mode) = agent.mode {
-        let adapter = rimz::agents::find_definition(cell.kind.as_str())
-            .context("unknown replacement provider")?;
-        adapter.spec().launch.strip_permission_args(&mut cell.args);
-        cell.args
-            .extend(adapter.spec().launch.permission_args(mode));
-        cell.launch.mode =
-            adapter
-                .spec()
-                .launch
-                .settle_permission_mode(&mut cell.args, Some(mode), None);
-    }
-    cell.launch.isolation = agent.isolation;
-    let record = cell.launch.record.get_or_insert_with(Default::default);
-    record.agent = Some(alias.into());
-    record.notes = agent
-        .record
-        .as_ref()
-        .and_then(|record| record.notes.clone());
-    record.loop_section = agent
-        .record
-        .as_ref()
-        .and_then(|record| record.loop_section.clone());
-    Ok((
-        cell.kind.clone(),
-        ResumePosture {
-            launch: rimz::harness::plan::ResumeLaunchPosture::from(&cell),
-            degraded: None,
-        },
-    ))
-}
-
-fn molt_request(
-    agent: &AgentState,
-    posture: &ResumePosture,
-    login: Option<rimz::ids::LoginName>,
-) -> Result<AgentLaunchRequest> {
-    let mut request = restart::fresh_launch_request(
-        agent,
-        restart::restart_cell(agent, posture),
-        posture.launch.mode,
-    )?;
-    request.login = rimz::store::writer::LaunchLogin::Pinned(login.unwrap_or_default());
-    Ok(request)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replacement_resolves_a_child_fork_and_its_alias_in_the_subagent_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut machine = rimz::config::MachineConfig::default();
-        machine.subagents.profiles = serde_json::from_value(serde_json::json!({
-            "worker": {"agent": "claude", "model": "opus"},
-            "replacement": {"agent": "codex", "model": "gpt-6.1-sol"}
-        }))
-        .unwrap();
-        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
-        let mut agent = rimz::testkit::agent_state("claude", "fork", jiff::Timestamp::UNIX_EPOCH);
-        agent.profile = Some("worker".into());
-        agent.profile_scope = Some(ProfileScope::Subagents);
-        let actual = replacement_posture(&agent, &machine, &effective, "replacement", None)
-            .map(|(kind, posture)| (kind.to_string(), posture.launch.model))
-            .map_err(|error| error.to_string());
-        assert_eq!(actual, Ok(("codex".into(), Some("gpt-6.1-sol".into()))));
-    }
-
-    #[test]
-    fn mini_molt_rebases_the_variant_without_losing_the_role() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut machine = rimz::config::MachineConfig::default();
-        machine.agents.profiles = toml::from_str("[worker]\nagent = 'opencode-mini'").unwrap();
-        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
-        let mut agent = rimz::testkit::agent_state("opencode", "mini", jiff::Timestamp::UNIX_EPOCH);
-        agent.profile = Some("worker".into());
-        let actual = ["opencode-mini", "opencode"].map(|base| {
-            replacement_posture(&agent, &machine, &effective, base, None)
-                .map(|(kind, posture)| {
-                    (
-                        kind.to_string(),
-                        posture.launch.args.first().map(String::as_str) == Some("mini"),
-                        posture.launch.record.unwrap().agent,
-                    )
-                })
-                .map_err(|error| error.to_string())
-        });
-        assert_eq!(
-            actual,
-            [
-                Ok(("opencode".into(), true, Some("opencode-mini".into()))),
-                Ok(("opencode".into(), false, Some("opencode".into()))),
-            ]
-        );
-    }
-
-    #[test]
-    fn replacement_rebases_the_same_role_without_replaying_the_old_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let role_prompt = dir.path().join("role.md");
-        std::fs::write(&role_prompt, "Keep the role's job").unwrap();
-        let mut machine = rimz::config::MachineConfig::default();
-        machine.agents.profiles = serde_json::from_value(serde_json::json!({
-            "worker": {"agent": "claude", "model": "opus"},
-            "replacement": {
-                "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium",
-                "auto-compact": "200k"
-            }
-        }))
-        .unwrap();
-        machine.agents.teams = serde_json::from_value(serde_json::json!({
-            "forge": {"roles": [{"role": "coder", "profile": "worker", "system-prompt-file": role_prompt}]}
-        })).unwrap();
-        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
-        let mut agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
-        agent.profile = Some("worker".into());
-        agent.team = Some("forge".into());
-        agent.role = Some("coder".into());
-        agent.mode = Some(PermissionMode::Ask);
-        agent.isolation = Some(rimz::config::Isolation::Scoped);
-        agent.record = Some(Box::new(rimz::agents::LaunchRecord {
-            model: Some("old-record".into()),
-            effort: Some("xhigh".into()),
-            fast: Some(true),
-            agent: None,
-            auto_compact: None,
-            notes: Some("20261107/002336Z-loop-review".into()),
-            loop_section: None,
-        }));
-        let mut record = serde_json::to_value(&agent.record).unwrap();
-        record["loop_section"] = "The original loop fire".into();
-        agent.record = serde_json::from_value(record).unwrap();
-        let (kind, posture) =
-            replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
-        assert_eq!(kind.as_str(), "codex");
-        assert_eq!(posture.launch.model.as_deref(), Some("gpt-6.1-sol"));
-        assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
-        assert_eq!(
-            posture.launch.record.as_ref().unwrap().notes,
-            agent.record.as_ref().unwrap().notes,
-            "changing the provider must keep this run's notes"
-        );
-        assert_eq!(posture.launch.fast, None);
-        assert_eq!(
-            serde_json::to_value(&posture.launch.record).unwrap()["loop_section"],
-            "The original loop fire",
-            "replacement molt keeps the original loop context"
-        );
-        assert_eq!(
-            serde_json::to_value(posture.launch.record.as_ref().unwrap()).unwrap()["auto_compact"],
-            200_000
-        );
-        assert_eq!(posture.launch.mode, agent.mode);
-        assert_eq!(posture.launch.isolation, agent.isolation);
-        assert_eq!(posture.launch.system_prompt_file, Some(role_prompt.into()));
-        assert_eq!(
-            posture.launch.record.as_ref().unwrap().agent.as_deref(),
-            Some("replacement")
-        );
-
-        machine
-            .agents
-            .profiles
-            .0
-            .get_mut("replacement")
-            .unwrap()
-            .args = Some("-c approvals_reviewer=user".into());
-        let effective = rimz::config::effective::load(&machine, dir.path()).unwrap();
-        agent.mode = Some(PermissionMode::Auto);
-        let (_, posture) =
-            replacement_posture(&agent, &machine, &effective, "replacement", None).unwrap();
-        assert_eq!(
-            posture.launch.mode, None,
-            "raw reviewer makes the replay unknown"
-        );
-    }
-
-    #[test]
-    fn molt_request_copies_the_seat_and_lineage_without_opening_a_peer_turn() {
-        let mut agent =
-            rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
-        agent.name = Some("fox".into());
-        agent.launch_id = Some("launch_old".into());
-        agent.team = Some("forge".into());
-        agent.role = Some("coder".into());
-        agent.profile = Some("worker".into());
-        agent.worktree_path = Some("/repo".into());
-        rimz::testkit::set_lane(&mut agent, "lane");
-        agent.launch_group = Some("group".into());
-        agent.launch_ordinal = Some(2);
-        agent.launch_depth = Some(3);
-        agent.loop_task = Some("fixer".into());
-        agent.launched_by = Some(rimz::agents::LaunchedBy {
-            kind: AgentKind::new_unchecked("codex"),
-            agent_id: "launch_root".into(),
-        });
-        agent.profile_scope = Some(ProfileScope::Subagents);
-        let posture = ResumePosture {
-            launch: Default::default(),
-            degraded: None,
-        };
-        let request = molt_request(&agent, &posture, Some("work".parse().unwrap())).unwrap();
-        assert_eq!(request.launch.launch_depth, agent.launch_depth);
-        assert_eq!(
-            request.launch.launched_by.as_deref(),
-            agent.launched_by.as_ref()
-        );
-        assert_eq!(request.launch.parent_agent_id, agent.parent_agent_id);
-        assert_eq!(request.launch.parent_agent_kind, agent.parent_agent_kind);
-        assert_eq!(request.launch.team, agent.team);
-        assert_eq!(request.launch.role, agent.role);
-        assert_eq!(request.launch.profile, agent.profile);
-        assert_eq!(
-            request
-                .launch
-                .lane
-                .as_ref()
-                .map(|lane| String::from(lane.routing_name())),
-            Some("lane".to_owned())
-        );
-        assert_eq!(request.launch.launch_group, agent.launch_group);
-        assert_eq!(request.launch.launch_ordinal, agent.launch_ordinal);
-        assert_eq!(request.launch.loop_task, agent.loop_task);
-        assert_eq!(
-            request.login,
-            rimz::store::writer::LaunchLogin::Pinned("work".parse().unwrap())
-        );
-        assert_eq!(request.name, AgentLaunchName::Soft("fox".into()));
-        assert!(request.run_id.is_none());
-        assert_eq!(request.launch.profile_scope, Some(ProfileScope::Subagents));
+fn molt_error(error: MoltErr) -> anyhow::Error {
+    match error {
+        MoltErr::OutsideAgent | MoltErr::EmptyNote => UsageError::new(error.to_string()).into(),
+        MoltErr::Other(error) => error,
+        error => error.into(),
     }
 }

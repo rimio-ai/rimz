@@ -5,6 +5,7 @@ use crate::cli::supervised;
 use rimz::config::effective::ProfileScope;
 use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
+use rimz::launcher::swap;
 use rimz::message::dispatch::{
     self, DispatchErr, DispatchOutcome, DispatchRequest, DispatchResult, ParkReason,
 };
@@ -248,7 +249,7 @@ fn resume_resolved(
         parent_pane.pane_id.mux(),
         rimz::room::RoomSizing::OrdinaryTab,
     )?;
-    let env = agents_cmd::relaunch_identity_env(
+    let env = swap::relaunch_identity_env(
         &parent_workspace,
         child.lane_path().map(Path::new).unwrap_or(&cwd),
         &request,
@@ -368,11 +369,11 @@ fn resume_request(
     login: Option<rimz::ids::LoginName>,
     follow_up_message: Option<rimz::ids::MessageId>,
 ) -> ExecRequest {
-    let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
+    let mut request = swap::relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
     ExecRequest {
         follow_up_message,
-        ..agents_cmd::with_run(request, run)
+        ..swap::with_run(request, run)
     }
 }
 

@@ -2999,7 +2999,9 @@ path = "crates/rimz/src/launcher"
 # launch_background with BackgroundLaunch and BackgroundLaunchOutcome is the one background
 # supervised launch the CLI and the MCP subagent tool share (+3).
 # Notice::line is the one text of a launch notice, for the CLI and the MCP subagent tool (+1).
-surface-budget = 162
+# swap shares the restart and molt reservation, request, placement, and cleanup seams (+16).
+# molt exposes caller preparation, a bound receipt, and caller-owned cleanup in process (+9).
+surface-budget = 187
 
 [[verdict]]
 kind = "item"
@@ -5239,10 +5241,8 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # The launch module and shared placement leave the published CLI surface (-2).
 # Sidebar close/reopen share resume_command and resume_worktree_name with stop receipts (+2).
 # Sidebar close shares offers_resume with the stop receipt's eligibility gate (+1).
-# Restart hands a child's run over through newest_run_for_child and with_run, which the
-# subagent resume doorway shares (+2).
-# relaunch_identity_env states the relaunch's carried lane in the subagent resume pane's
-# env, as restart and molt do (+1).
+# Restart and subagent resume share newest_run_for_child through launcher::stop.
+# Relaunch request builders and lane environment now belong to launcher::swap (-3).
 # The workflow attempt stop passes its run, and the idle stop its re-check, through
 # StopTerms and stop_resolved_with (+2).
 # Command::is_launch, check_loop_launch and cohort_place_flag let `loop add` check an agent or team tail through the launch's own parser (+3).
@@ -5948,17 +5948,17 @@ reason = "A parent-ended cancel records its cause on the run so the digest, suba
 
 [[verdict]]
 kind = "item"
-key = "cli::agents_cmd::restart::fresh_launch_request"
+key = "launcher::swap::fresh_launch_request"
 reason = "Restart and molt share durable seat and lineage copying without creating a peer generation."
 
 [[verdict]]
 kind = "item"
-key = "cli::agents_cmd::restart::restart_posture"
+key = "launcher::swap::restart_posture"
 reason = "Molt replays the same recorded posture and degradation policy as restart."
 
 [[verdict]]
 kind = "item"
-key = "cli::agents_cmd::restart::restart_cell"
+key = "launcher::swap::restart_cell"
 reason = "Molt and fresh restart reserve from the same replayed launch cell."
 
 [[verdict]]
@@ -5969,7 +5969,103 @@ reason = "Agent-only self-succession is dispatched through the agents command."
 [[verdict]]
 kind = "item"
 key = "cli::agents_cmd::molt::run_molt"
-reason = "The agents dispatcher owns the agent-only molt verb."
+reason = "The agents dispatcher reads the note and flushes the receipt before closing the old pane."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap"
+reason = "Restart, molt, and relaunch callers share session-swap preparation and settlement."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::SwapErr"
+reason = "The session-swap callers need typed reservation, posture, and placement failures."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::held_by"
+reason = "Restart, molt, idle compaction, and budget parking check the session holding the answered pane."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::held_elsewhere"
+reason = "Restart and molt share the cause of a holder mismatch."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::reserve_swap"
+reason = "Restart and molt name the durable swap reservation refusal at the calling verb."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::replace"
+reason = "Restart and molt share placement, bind settlement, and run handover rollback."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::finish_replacement"
+reason = "Restart and molt release and close only after the post-bind hosting guard."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::swap_briefing"
+reason = "Fresh restart and molt carry the same outstanding work into the replacement prompt."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::open_session_run"
+reason = "Restart and molt hand over only the open workflow session run the replaced session leads."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::with_run"
+reason = "Restart, molt, and child resume stamp the run and its exit policy onto the request."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::relaunch_identity_env"
+reason = "Swap placement and child resume pin relaunch identity and lane in the pane environment."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::relaunch_request"
+reason = "Swap placement, explain, and child resume compile the same replayed posture and identity."
+
+[[verdict]]
+kind = "item"
+key = "launcher::swap::member_posture"
+reason = "Restart and explain replay the recorded member posture through the same seam."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt"
+reason = "The CLI and in-process callers can perform a molt without owning placement or cleanup choreography."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt::MoltErr"
+reason = "The CLI still maps caller and note refusals to usage errors."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt::MoltFailure"
+reason = "In-process callers receive notices even when a later molt step refuses."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt::MoltSource"
+reason = "The CLI resolves the caller before reading its note from stdin."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt::Molted"
+reason = "The successor receipt keeps final release and pane close under the caller's control."
+
+[[verdict]]
+kind = "item"
+key = "launcher::molt::molt"
+reason = "In-process callers supply a note and receive the bound successor and notices."
+
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
@@ -9422,7 +9518,7 @@ reason = "The one relaunch posture seam shared by rebirth, lane, cohort, restart
 [[verdict]]
 kind = "item"
 key = "harness::resume::resolve_member_posture"
-reason = "The posture seam with a team member's role and team prompt layers, for restart, molt, and explain in the CLI; team resume resolves the binding in-module and retains its compiled team layer."
+reason = "The posture seam with a team member's role and team prompt layers, for shared swap preparation and the CLI explain; team resume resolves the binding in-module and retains its compiled team layer."
 
 [[verdict]]
 kind = "item"

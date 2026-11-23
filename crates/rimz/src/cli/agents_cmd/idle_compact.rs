@@ -77,7 +77,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     crate::cli::render::room::print_notices(notices)?;
     let pane = found
         .ok()
-        .filter(|pane| super::restart::held_by(pane, agent))
+        .filter(|pane| rimz::launcher::swap::held_by(pane, agent))
         .context("idle-compaction target pane is no longer bound to the agent")?;
     let snapshot = ctx
         .published_snapshot()

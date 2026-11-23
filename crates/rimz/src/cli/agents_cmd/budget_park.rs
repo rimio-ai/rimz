@@ -33,7 +33,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
     // that moved, or a pane nobody can read presses nothing and settles nothing, and the
     // producer's next due interrupt retries. Only a failed lock keeps the settlement.
     let writer = match found {
-        Ok((pane, writer)) if super::restart::held_by(&pane, agent) => Ok(writer),
+        Ok((pane, writer)) if rimz::launcher::swap::held_by(&pane, agent) => Ok(writer),
         Ok(_) | Err(FindErr::Nowhere) => bail!(UNBOUND),
         Err(FindErr::Lock { source, .. }) => Err(source),
         Err(err) => return Err(err).context("finding the over-budget agent's pane"),
