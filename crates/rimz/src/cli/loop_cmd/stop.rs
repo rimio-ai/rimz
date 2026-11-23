@@ -96,7 +96,9 @@ fn stop_alive_launches(
             Ok(pane_open) => {
                 stopped += 1;
                 let label = match &launch.launch {
-                    Launch::Agent(_) => address.clone(),
+                    Launch::Agent(agent) => {
+                        rimz::address::handle_with_name(&address, agent.name.as_deref())
+                    }
                     Launch::Workflow(_) | Launch::Supervised(_) => format!("run {address}"),
                     Launch::Child { .. } => format!("launch process {address}"),
                 };
@@ -108,7 +110,10 @@ fn stop_alive_launches(
                     format!("loop `{name}`: workflow run {address} not canceled: {err:#}")
                 }
                 Launch::Supervised(_) => format!("loop `{name}`: run {address}: {err:#}"),
-                Launch::Agent(_) => format!("loop `{name}`: {address} not stopped: {err:#}"),
+                Launch::Agent(agent) => format!(
+                    "loop `{name}`: {} not stopped: {err:#}",
+                    rimz::address::handle_with_name(&address, agent.name.as_deref())
+                ),
                 Launch::Child { .. } => {
                     format!("loop `{name}`: launch process {address} not stopped: {err:#}")
                 }
