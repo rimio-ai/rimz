@@ -250,7 +250,7 @@ Four `ContextCapability` methods feed the gauge:
 | Method | Runs | Implemented by |
 | --- | --- | --- |
 | `observe_context(source, payload)` | inline, on a payload pushed to RimZ: a statusline's stdin (`rimz statusline`) or a hook envelope | Claude, Antigravity, Qwen, Copilot, Cursor, Pi, OMP, OpenCode, and the plugin adapter |
-| `local_context_refresh(trigger, ctx)` | inline, on a hook (`RefreshTrigger::Hook`), a producer tick (`Tick`), or transcript growth (`Watch`), for a cheap local read | Claude, Codex, Copilot, Cursor, Droid, Grok, Kimi, Kiro |
+| `local_context_refresh(trigger, ctx)` | inline, on a hook (`RefreshTrigger::Hook`), a producer tick (`Tick`), or transcript growth (`Watch`), for a cheap local read | Antigravity, Claude, Codex, Copilot, Cursor, Droid, Grok, Kimi, Kiro |
 | `context_refresh_spawn` with `refresh_session_context` | in the detached `rimz agents refresh-context` helper, for a source that needs network, a subprocess, or a broker connection | Codex (its app-server) |
 | `merge_session_context` | under the sidecar record lock, folding a rich reading from that helper onto the stored record | Codex |
 
@@ -260,7 +260,7 @@ A local refresh returns explicit keep, set, clear, and token-merge patches. The 
 
 The detached helper keeps network and subprocess work off the agent's turn. `context_refresh_spawn` returns argv for `rimz agents refresh-context`, the caller spawns it with nulled stdio and never waits, and `refresh_session_context` is the body of that helper. Codex's app-server builds its observation directly, without `observe_context`.
 
-The unchanged-source gate on a local refresh is shared. The adapter resolves its source path and the stat that stands for it: usually `TranscriptStat::from_path`, and for Grok one composite stat over the transcript and its `summary.json` and `signals.json` companions. It passes that stat to [`LocalContextRefreshCtx::changed_transcript`](../../../crates/rimz/src/agents/mod.rs), which returns it only when it differs from the stat the sidecar recorded and otherwise ends the refresh before any read. Copilot, Cursor, Grok, Kimi, and Kiro gate there. Three adapters keep their own gate because they sometimes must re-read a file whose stat is unchanged: Claude when its spend fold resets (a truncated file, or a stored fold older than the dedup window), Codex when a live fold still needs token-counter backfill, and Droid, whose telemetry read compares a composite settings-plus-transcript stat.
+The unchanged-source gate on a local refresh is shared. The adapter resolves its source path and the stat that stands for it: usually `TranscriptStat::from_path`, and for Grok one composite stat over the transcript and its `summary.json` and `signals.json` companions. It passes that stat to [`LocalContextRefreshCtx::changed_transcript`](../../../crates/rimz/src/agents/mod.rs), which returns it only when it differs from the stat the sidecar recorded and otherwise ends the refresh before any read. Antigravity, Copilot, Cursor, Grok, Kimi, and Kiro gate there, Antigravity only while its path is the one the sidecar recorded. Three adapters keep their own gate because they sometimes must re-read a file whose stat is unchanged: Claude when its spend fold resets (a truncated file, or a stored fold older than the dedup window), Codex when a live fold still needs token-counter backfill, and Droid, whose telemetry read compares a composite settings-plus-transcript stat.
 
 ### Reading rules
 

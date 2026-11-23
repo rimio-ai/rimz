@@ -60,7 +60,7 @@ Two coverage declarations sit side by side and answer different questions:
 
 A concern fed by a native event is Wired even when its behavior has a gap; the gap belongs on the user capability's limit and in the adapter's Known gaps.
 
-Conformance links the two one-directionally: a **full** mark rests on wired mechanism, and an **unsupported** mark rests on unsupported mechanism. Between those ends the roll-up is your judgement — mechanism that reports still reads **partial** when the user-visible result is incomplete or arrives late. Cursor's subagent hooks exist and the children land only when the parent's turn ends; Antigravity's dollar figure is a session total that moves only when a turn ends. Name that limit in the mark.
+Conformance links the two one-directionally: a **full** mark rests on wired mechanism, and an **unsupported** mark rests on unsupported mechanism. Between those ends the roll-up is your judgement — mechanism that reports still reads **partial** when the user-visible result is incomplete or arrives late. Cursor's subagent hooks exist and the children land only when the parent's turn ends. Name that limit in the mark.
 
 Write the six marks in product language. `note`, `shows`, `limit`, and `reason` print verbatim to end users through `rimz coverage`, so keep each one lowercase, without a trailing period, roughly six to fourteen words, and phrased in what the card shows rather than which hook carries it. Pick the rung that already exists: [agent-support.md → What the marks mean](../reference/agent-support.md#what-the-marks-mean) defines full, partial, and unsupported, and [The six capabilities](../reference/agent-support.md#the-six-capabilities) spells out each ladder per capability.
 

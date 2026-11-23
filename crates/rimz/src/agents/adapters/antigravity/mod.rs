@@ -197,7 +197,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         prompt_context: false,
         native_ask_ui: true,
         permission_before_auto_review: false,
-        transcript_tail_context: false,
+        transcript_tail_context: true,
         registers_lazily: true,
         reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::FullScan,
@@ -352,9 +352,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     context_usage: ConcernCoverage::Wired {
         via: "custom statusline context_window payload",
     },
-    realtime_cost: ConcernCoverage::Partial {
-        via: "turn-end transcript token rows priced at list price by exact model",
-        gap: "the session total moves only when a turn ends",
+    realtime_cost: ConcernCoverage::Wired {
+        via: "transcript_full token rows priced at list price by exact model as the file grows",
     },
     rich_context: ConcernCoverage::Wired {
         via: "custom statusline context plus agy -p /usage quota windows",
@@ -381,7 +380,7 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
     },
     live: CapabilityLevel::Partial {
         shows: "context fill, token composition, and the session's priced dollar total",
-        limit: "the dollar total updates when a turn ends",
+        limit: "the dollar total is a list-price estimate, not what the plan bills",
     },
     history: CapabilityLevel::Partial {
         shows: "past sessions read end to end, with per-turn tokens and dollars",
@@ -752,6 +751,31 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
         let parsed = statusline::StatuslinePayload::deserialize(payload).ok()?;
         let agent_id = parsed.conversation_id.clone()?;
         super::ContextObservation::new(agent_id, parsed.into_context(source, Timestamp::now()))
+    }
+
+    fn local_context_refresh(
+        &self,
+        _trigger: super::RefreshTrigger<'_>,
+        ctx: &super::LocalContextRefreshCtx<'_>,
+    ) -> Option<super::LocalContextRefresh> {
+        // A hook may name `transcript.jsonl`, which repeats the rows spend reads.
+        let is_source = |path: &Path| {
+            path.file_name()
+                .is_some_and(|name| name == spend::SOURCE_TRANSCRIPT)
+        };
+        let hint = ctx
+            .current_transcript_path
+            .or(ctx.prior_transcript_path)
+            .map(Path::new)
+            .filter(|path| is_source(path));
+        let path = crate::agents::capabilities::SpendingCapability::session_transcript(
+            self,
+            ctx.agent_id,
+            hint,
+            ctx.login_env,
+        )
+        .filter(|path| is_source(path))?;
+        spend::refresh(&path, ctx)
     }
 }
 

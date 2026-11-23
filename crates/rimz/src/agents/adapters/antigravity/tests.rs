@@ -1832,6 +1832,263 @@ mod spend_rows {
         assert!((cost - (neon_cost(100, 0, 10) + neon_cost(50, 100, 5))).abs() < 1e-12);
     }
 
+    struct LiveCost {
+        dir: tempfile::TempDir,
+        env: std::collections::BTreeMap<String, String>,
+        pricing: PathBuf,
+        prior: Option<crate::agents::LocalContextRefresh>,
+        hint: Option<PathBuf>,
+    }
+
+    impl LiveCost {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let env = std::collections::BTreeMap::from([(
+                "HOME".to_owned(),
+                dir.path().display().to_string(),
+            )]);
+            let pricing = dir.path().join("pricing.sqlite");
+            crate::agents::pricing::testkit::seed_cache_at(&pricing, NEON);
+            Self {
+                dir,
+                env,
+                pricing,
+                prior: None,
+                hint: None,
+            }
+        }
+
+        fn write(&self, rows: &[String]) -> PathBuf {
+            self.write_named("transcript_full.jsonl", rows)
+        }
+
+        fn write_named(&self, basename: &str, rows: &[String]) -> PathBuf {
+            let home = self.dir.path().join(".gemini/antigravity-cli");
+            write_transcript_named(&home, SESSION_ID, basename, &rows.join("\n"))
+        }
+
+        /// One refresh with the sidecar state the previous one left, as the hook,
+        /// tick, and watch callers pass it.
+        fn refresh(
+            &mut self,
+            trigger: crate::agents::RefreshTrigger<'_>,
+        ) -> Option<crate::agents::LocalContextRefresh> {
+            let fold = self
+                .prior
+                .as_ref()
+                .and_then(|prior| match &prior.spend_fold {
+                    crate::agents::FieldPatch::Set(fold) => Some(fold.clone()),
+                    _ => None,
+                });
+            let ctx = crate::agents::LocalContextRefreshCtx {
+                open_permission_since: None,
+                prior_permission_settle: None,
+                login_env: &self.env,
+                agent_id: SESSION_ID,
+                model_hint: None,
+                prior_session_name: None,
+                current_transcript_path: self.hint.as_deref().and_then(Path::to_str),
+                prior_transcript_path: self
+                    .prior
+                    .as_ref()
+                    .and_then(|prior| prior.transcript_path.as_deref()),
+                prior_transcript_stat: self
+                    .prior
+                    .as_ref()
+                    .and_then(|prior| prior.transcript_stat.as_ref()),
+                prior_spend_fold: fold.as_ref(),
+                prior_model_context_limits_key: None,
+                shared_pricing_cache_path: &self.pricing,
+            };
+            let refresh = AntigravityAdapter.local_context_refresh(trigger, &ctx);
+            if let Some(refresh) = &refresh {
+                let mut stored = refresh.clone();
+                if stored.spend_fold == crate::agents::FieldPatch::Keep {
+                    stored.spend_fold = self
+                        .prior
+                        .as_ref()
+                        .map_or(crate::agents::FieldPatch::Keep, |prior| {
+                            prior.spend_fold.clone()
+                        });
+                }
+                self.prior = Some(stored);
+            }
+            refresh
+        }
+    }
+
+    fn cost_of(refresh: &crate::agents::LocalContextRefresh) -> Option<f64> {
+        match &refresh.context.cost {
+            crate::agents::FieldPatch::Set(cost) => cost.total_cost_usd,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn live_cost_prices_the_transcript_as_it_grows_on_every_trigger() {
+        use crate::agents::RefreshTrigger;
+        let mut live = LiveCost::new();
+        let first = token_row(1, "gemini-4-neon-high", 100, 0, 10);
+        let path = live.write(std::slice::from_ref(&first));
+        // No turn has ended: the first priced record already reads in USD.
+        let refresh = live.refresh(RefreshTrigger::Tick).expect("priced");
+        assert_eq!(
+            refresh.context,
+            crate::agents::LocalContextPatch {
+                cost: crate::agents::FieldPatch::Set(crate::agents::AgentCost {
+                    total_cost_usd: Some(neon_cost(100, 0, 10)),
+                    ..crate::agents::AgentCost::default()
+                }),
+                ..crate::agents::LocalContextPatch::default()
+            },
+            "cost only, as a session total; the statusline keeps model, tokens, and settle"
+        );
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(path.to_str().unwrap())
+        );
+        assert!(refresh.transcript_stat.is_some());
+
+        let second = token_row(3, "gemini-4-neon-high", 50, 100, 5);
+        live.write(&[first.clone(), second.clone()]);
+        let refresh = live.refresh(RefreshTrigger::Watch).expect("grown");
+        let two = neon_cost(100, 0, 10) + neon_cost(50, 100, 5);
+        assert!((cost_of(&refresh).unwrap() - two).abs() < 1e-12);
+
+        let third = token_row(5, "gemini-4-neon-high", 10, 0, 1);
+        live.write(&[first, second, third]);
+        let refresh = live
+            .refresh(RefreshTrigger::Hook("PostToolUse"))
+            .expect("grown");
+        let three = two + neon_cost(10, 0, 1);
+        assert!((cost_of(&refresh).unwrap() - three).abs() < 1e-12);
+        let turn_end = crate::agents::spending::session_cost_usd(
+            crate::agents::definition_by_kind("antigravity").unwrap(),
+            SESSION_ID,
+            &path,
+            &PriceBook::from_litellm_json(NEON),
+        )
+        .and_then(|cost| cost.total_cost_usd)
+        .unwrap();
+        assert!(
+            (turn_end - three).abs() < 1e-12,
+            "the turn-end total agrees with the live fold"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_transcript_costs_a_stat_and_no_price_book() {
+        let mut live = LiveCost::new();
+        live.write(&[token_row(1, "gemini-4-neon-high", 100, 0, 10)]);
+        live.refresh(crate::agents::RefreshTrigger::Tick)
+            .expect("priced");
+        let loads = crate::agents::pricing::testkit::book_loads();
+        crate::agents::pricing::testkit::reset_cached_book();
+        assert_eq!(
+            live.refresh(crate::agents::RefreshTrigger::Watch),
+            None,
+            "an unchanged stat writes no sidecar"
+        );
+        assert_eq!(crate::agents::pricing::testkit::book_loads(), loads);
+    }
+
+    #[test]
+    fn a_refresh_that_reads_no_new_bytes_writes_nothing_and_loads_no_price_book() {
+        let mut live = LiveCost::new();
+        live.write(&[token_row(1, "gemini-4-neon-high", 100, 0, 10)]);
+        live.refresh(crate::agents::RefreshTrigger::Tick)
+            .expect("priced");
+        let stored = live.prior.clone().unwrap();
+        let changed = crate::agents::TranscriptStat {
+            len: stored.transcript_stat.unwrap().len + 1,
+            ..stored.transcript_stat.unwrap()
+        };
+        for prior_stat in [None, Some(changed)] {
+            live.prior = Some(crate::agents::LocalContextRefresh {
+                transcript_stat: prior_stat,
+                ..stored.clone()
+            });
+            crate::agents::pricing::testkit::reset_cached_book();
+            let loads = crate::agents::pricing::testkit::book_loads();
+            assert_eq!(
+                live.refresh(crate::agents::RefreshTrigger::Hook("PostToolUse")),
+                None,
+                "past the stat gate with nothing new: {prior_stat:?}"
+            );
+            assert_eq!(crate::agents::pricing::testkit::book_loads(), loads);
+        }
+    }
+
+    #[test]
+    fn a_hint_naming_the_compact_transcript_still_prices_the_full_one() {
+        let mut live = LiveCost::new();
+        let full = live.write(&[token_row(1, "gemini-4-neon-high", 100, 0, 10)]);
+        live.hint = Some(live.write_named(
+            "transcript.jsonl",
+            &[token_row(1, "gemini-4-neon-high", 900, 0, 90)],
+        ));
+        let refresh = live
+            .refresh(crate::agents::RefreshTrigger::Hook("PostToolUse"))
+            .expect("priced");
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(full.to_str().unwrap())
+        );
+        assert!((cost_of(&refresh).unwrap() - neon_cost(100, 0, 10)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_shrunk_transcript_never_lowers_the_live_cost() {
+        use crate::agents::RefreshTrigger;
+        let mut live = LiveCost::new();
+        let rows = [
+            token_row(1, "gemini-4-neon-high", 100, 0, 10),
+            token_row(3, "gemini-4-neon-high", 50, 100, 5),
+        ];
+        let path = live.write(&rows);
+        let old_len = std::fs::metadata(&path).unwrap().len();
+        let shown = cost_of(&live.refresh(RefreshTrigger::Tick).unwrap()).unwrap();
+
+        live.write(&rows[..1]);
+        let refresh = live
+            .refresh(RefreshTrigger::Watch)
+            .expect("a new stat lands");
+        assert!(
+            (cost_of(&refresh).unwrap() - shown).abs() < 1e-12,
+            "the spent figure stands"
+        );
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(path.to_str().unwrap())
+        );
+        assert_eq!(
+            refresh.transcript_stat,
+            crate::agents::TranscriptStat::from_path(&path)
+        );
+        let crate::agents::FieldPatch::Set(fold) = &refresh.spend_fold else {
+            panic!("the fresh fold is stored: {:?}", refresh.spend_fold);
+        };
+        assert_eq!(fold.cursor.offset, std::fs::metadata(&path).unwrap().len());
+
+        // Appended below the old end of the file, then past it: each row is priced once.
+        let below = token_row(5, "gemini-4-neon-high", 10, 0, 1);
+        live.write(&[rows[0].clone(), below.clone()]);
+        assert!(std::fs::metadata(&path).unwrap().len() < old_len);
+        let refresh = live.refresh(RefreshTrigger::Watch).expect("grown");
+        let with_below = shown + neon_cost(10, 0, 1);
+        assert!((cost_of(&refresh).unwrap() - with_below).abs() < 1e-12);
+
+        let past = [
+            token_row(7, "gemini-4-neon-high", 70, 0, 7),
+            token_row(9, "gemini-4-neon-high", 70, 0, 7),
+        ];
+        live.write(&[rows[0].clone(), below, past[0].clone(), past[1].clone()]);
+        assert!(std::fs::metadata(&path).unwrap().len() > old_len);
+        let refresh = live.refresh(RefreshTrigger::Watch).expect("grown");
+        let with_past = with_below + 2.0 * neon_cost(70, 0, 7);
+        assert!((cost_of(&refresh).unwrap() - with_past).abs() < 1e-12);
+    }
+
     #[test]
     fn spend_sources_are_the_full_transcripts_under_the_login_home() {
         let dir = tempfile::tempdir().unwrap();

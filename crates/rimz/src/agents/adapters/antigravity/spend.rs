@@ -16,7 +16,10 @@ use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendingSource, iso_to_unix_secs, record_unknown_model,
 };
 use crate::agents::transcript_fs::try_read_transcript_lines;
-use crate::agents::{PriceBook, TokenSplit};
+use crate::agents::{
+    AgentCost, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
+    LocalSpendFold, PriceBook, TokenSplit, TranscriptStat, pricing,
+};
 
 const EFFORT_SUFFIXES: [&str; 5] = ["-low", "-medium", "-high", "-xhigh", "-max"];
 
@@ -25,6 +28,64 @@ pub(super) fn sources(provider_home: &Path) -> Vec<SpendingSource> {
         provider_home.join("brain"),
         "*/.system_generated/logs/transcript_full.jsonl",
     )
+}
+
+/// The one transcript spend reads: `transcript.jsonl` repeats its rows.
+pub(super) const SOURCE_TRANSCRIPT: &str = "transcript_full.jsonl";
+
+/// The card's live cost: the conversation's cumulative list-price total, folded from the
+/// bytes written since the last refresh. It patches cost only, since the statusline owns
+/// model, tokens, and settle, and a transcript with no new bytes costs one stat.
+pub(super) fn refresh(
+    path: &Path,
+    ctx: &LocalContextRefreshCtx<'_>,
+) -> Option<LocalContextRefresh> {
+    let mut stat = TranscriptStat::from_path(path)?;
+    let same_path = ctx.prior_transcript_path.map(Path::new) == Some(path);
+    if same_path {
+        stat = ctx.changed_transcript(stat)?;
+    }
+    let prior_fold = same_path.then_some(ctx.prior_spend_fold).flatten();
+    let mut fold = LocalSpendFold::resume(prior_fold, stat.len);
+    let from = fold.cursor.offset;
+    let resumed = prior_fold.is_some_and(|prior| prior.cursor.offset == from);
+    if resumed && from == stat.len {
+        return None;
+    }
+    let parsed = parse(
+        path,
+        Some(&fold.cursor),
+        &pricing::cached_book(ctx.shared_pricing_cache_path),
+    );
+    if resumed && parsed.cursor.offset == from {
+        return None;
+    }
+    fold.absorb(&parsed.entries);
+    fold.cursor = parsed.cursor;
+    // A transcript cut shorter folds again from byte zero, and its total can come out
+    // below the figure shown. That money was spent, so the fresh fold carries the prior
+    // totals as its floor, and rows written after the cut add to them.
+    if let Some(prior) = prior_fold.filter(|prior| fold.total_usd < prior.total_usd) {
+        fold.total_usd = prior.total_usd;
+        fold.input = fold.input.max(prior.input);
+        fold.output = fold.output.max(prior.output);
+        fold.cache_write = fold.cache_write.max(prior.cache_write);
+        fold.cache_read = fold.cache_read.max(prior.cache_read);
+    }
+    let cost = (fold.total_usd > 0.0).then(|| AgentCost {
+        total_cost_usd: Some(fold.total_usd),
+        ..AgentCost::default()
+    });
+    Some(LocalContextRefresh {
+        context: LocalContextPatch {
+            cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
+            ..LocalContextPatch::default()
+        },
+        transcript_path: Some(path.to_string_lossy().into_owned()),
+        transcript_stat: Some(stat),
+        model_context_limits_key: None,
+        spend_fold: FieldPatch::Set(fold),
+    })
 }
 
 #[derive(Deserialize)]
