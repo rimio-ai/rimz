@@ -553,15 +553,20 @@ fn pane_row(
     now: jiff::Timestamp,
 ) -> Vec<render::Cell> {
     let agent = agent.filter(|_| !pane.is_rimz_sidebar());
+    let handle = agent.map(|agent| rimz::address::agent_handle(agent, peers, true));
     let occupant_cell = if pane.is_rimz_sidebar() {
         render::cell("sidebar").fg(render::palette::muted())
     } else {
-        match agent {
-            Some(agent) => render::cell(rimz::address::agent_handle(agent, peers, true))
-                .fg(render::palette::accent()),
+        match &handle {
+            Some(handle) => render::cell(handle.as_str()).fg(render::palette::accent()),
             None => render::cell("process").fg(render::palette::muted()),
         }
     };
+    let name_cell = render::cell(handle.as_deref().map_or_else(
+        || "-".to_owned(),
+        |handle| rimz::address::name_column(handle, agent.and_then(|agent| agent.name.as_deref())),
+    ))
+    .dash();
     let status_cell = match agent {
         Some(agent) => {
             let status = agent.effective_status(now);
@@ -590,6 +595,7 @@ fn pane_row(
     }
     vec![
         occupant_cell,
+        name_cell,
         status_cell,
         command_cell,
         render::cell(cwd).dash(),
@@ -998,7 +1004,7 @@ fn pane_table(
     all: bool,
 ) -> (render::Table, usize) {
     let now = overlay.map_or_else(jiff::Timestamp::now, |snapshot| snapshot.now);
-    let mut table = render::Table::new(["AGENT", "STATUS", "COMMAND", "CWD", "PANE"]);
+    let mut table = render::Table::new(["AGENT", "NAME", "STATUS", "COMMAND", "CWD", "PANE"]);
     let peers: Vec<_> = overlay.map(pane_handle_peers).unwrap_or_default();
     let mut headings = HashMap::new();
     let mut hidden = 0;

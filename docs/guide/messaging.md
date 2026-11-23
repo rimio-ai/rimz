@@ -31,7 +31,7 @@ A handle resolves through the shortest unique name for a running agent:
 
 - **`@codex`** is a kind. It reaches the one Codex in your channel, and is ambiguous only when several share it.
 - **`@planner`** is a profile or team role you defined in Markdown, so it reaches the right member wherever its pane sits.
-- **`@swift-otter`** is the pet name RimZ gives every launch. A handle column shows it in place of a kind that is not unique enough, and receipts, refusals, and warnings print it beside a handle it differs from, as `@coder (@swift-otter)`; either one addresses the agent. The ordinal `@codex-2` remains typeable too; either names one specific instance.
+- **`@swift-otter`** is the pet name RimZ gives every launch. A handle column shows it in place of a kind that is not unique enough, and receipts, refusals, and warnings print it beside a handle it differs from, as `@coder (@swift-otter)`, and tables such as `rimz agents list` show it in a `NAME` column beside the handle; either one addresses the agent. The ordinal `@codex-2` remains typeable too; either names one specific instance.
 - **`@all`** is every agent in the channel, minus the caller when an agent sends the message.
 
 The `@` sigil is required, so a stray word never reaches an agent: `rimz message coder "…"` fails with ``agent target `coder` must start with `@` (try `@coder`)`` rather than guessing. A raw pane id (`tmux:%1`, `zellij:terminal_3`) is the one address that needs no sigil. Handles are minted when an agent launches, and [the agents guide](./fleet.md) covers how kinds, profiles, and team roles become them.

@@ -44,19 +44,19 @@ With tmux selected, a bare `%N` is also accepted as `tmux:%N` and checked agains
 
 ## List panes
 
-`rimz pane list` prints the room as panes: one section per native tab, and one row per non-sidebar pane with its occupant, status, command, working directory, and pane id. `--all` includes sidebars; otherwise a line after the table counts the hidden sidebars.
+`rimz pane list` prints the room as panes: one section per native tab, and one row per non-sidebar pane with its occupant, the occupant's name, status, command, working directory, and pane id. `--all` includes sidebars; otherwise a line after the table counts the hidden sidebars.
 
 ```text
-AGENT                 STATUS   COMMAND  CWD                        PANE
+AGENT                 NAME           STATUS   COMMAND  CWD                        PANE
 
 #auth-refresh
-@claude#auth-refresh  running  claude   ~/code/qe-wt/auth-refresh  zellij:terminal_3
-@codex#auth-refresh   idle     codex    ~/code/qe-wt/auth-refresh  zellij:terminal_4 (self)
-process               -        zsh      ~/code/qe-wt/auth-refresh  zellij:terminal_5
+@claude#auth-refresh  @proud-garden  running  claude   ~/code/qe-wt/auth-refresh  zellij:terminal_3
+@codex#auth-refresh   @round-binder  idle     codex    ~/code/qe-wt/auth-refresh  zellij:terminal_4 (self)
+process               -              -        zsh      ~/code/qe-wt/auth-refresh  zellij:terminal_5
 +1 sidebar · --all shows it
 ```
 
-The `AGENT` column holds a handle naming that agent alone (launched children included), `sidebar` for RimZ's sidebar, and `process` for any other pane. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix, fall back to the tab's view id when the multiplexer gives no name, and read `(panes)` when it gives neither. Repeated headings get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
+The `AGENT` column holds a handle naming that agent alone (launched children included), `sidebar` for RimZ's sidebar, and `process` for any other pane. `NAME` is the agent's name written as an address when it differs from that handle, and `-` when it does not or the row holds no agent. Only agent rows carry a status. `COMMAND` is the agent kind for agent rows, otherwise the foreground command or `-`. `(self)` marks the pane that ran the command, which is not necessarily the focused pane; the listing has no focus mark. Tab headings omit RimZ's status glyph suffix, fall back to the tab's view id when the multiplexer gives no name, and read `(panes)` when it gives neither. Repeated headings get ` (2)`, ` (3)`, and so on. Tabs left with no visible rows are omitted.
 
 `rimz pane list [SCOPE]` limits the listing to a channel (`#` optional), worktree, branch, or directory name. An agent pane matches through its agent's channel or worktree; sidebars and process panes match when they share a native tab with a matching agent. Other agent panes in that tab still need to match individually. A scope with no matching panes exits `0`: the table view prints a note on stderr and nothing on stdout, and `--json` prints the usual document with `"tabs": []`. Scoping a session without reachable agent records, including a foreign session, fails with the session name and exits `1`.
 
@@ -170,18 +170,18 @@ The new pane's normalized id (`tmux:%3` or `zellij:terminal_7`) is the only line
 `rimz pane bandwidth` samples how many bytes each pane's processes write per second, over a window, and prints the rates highest first. Use it to find which pane makes an attached room busy, locally or over SSH. Run it on the Linux host serving the room, as the room's user, from a pane in the room, the room's directory, or with `--root <project>`.
 
 ```text
-PANE          LABEL                      WRITE/S
-tmux:%2       @codex#auth-refresh          39k/s
-tmux:%1       @claude#auth-refresh          3k/s
-tmux:%4       #auth-refresh - zsh         120B/s
-WIRE(ssh↑)    ssh egress → client(s)        6k/s
-WIRE(ssh↓)    ssh ingress ← client(s)     400B/s
-TOTAL         5s sample                    42k/s
+PANE          LABEL                      NAME           WRITE/S
+tmux:%2       @codex#auth-refresh        @round-binder    39k/s
+tmux:%1       @claude#auth-refresh       @proud-garden     3k/s
+tmux:%4       #auth-refresh - zsh        -               120B/s
+WIRE(ssh↑)    ssh egress → client(s)                       6k/s
+WIRE(ssh↓)    ssh ingress ← client(s)                    400B/s
+TOTAL         5s sample                                   42k/s
 
 per-pane rows are producer write-rate; muxes diff the focused tab and SSH compresses it, so WIRE(ssh) is the actual TCP payload on this room's SSH socket, usually far below the per-pane sum. WIRE is absent for local rooms.
 ```
 
-Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle naming that agent alone (launched children included), a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`, or the command alone when the tab carries the same name. Tab names omit RimZ's status glyph suffix, and a label longer than 56 characters is cut to 53 plus `...`. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts them (`2 quiet panes not shown · --all lists them`). `TOTAL` sums every pane, quiet ones included.
+Each pane row is everything the pane's process tree wrote, including files such as transcripts. An agent pane is labelled by its handle naming that agent alone (launched children included), a sidebar `<tab> - sidebar`, and other panes `<tab> - <command>`, or the command alone when the tab carries the same name. `NAME` is an agent pane's name written as an address when it differs from its handle, and `-` otherwise and for every other pane; the `WIRE` and `TOTAL` rows leave it empty. Tab names omit RimZ's status glyph suffix, and a label longer than 56 characters is cut to 53 plus `...`. Rows with a zero write rate are hidden unless `--all` is passed; a line after `TOTAL` counts them (`2 quiet panes not shown · --all lists them`). `TOTAL` sums every pane, quiet ones included.
 
 The two `WIRE(ssh)` rows are what actually crossed the SSH socket to and from attached clients, after the multiplexer redraws only the focused tab and SSH compresses the stream, so they sit far below the per-pane sum. They appear only when an SSH client is attached and `ss` can read the socket's counters. The caveat paragraph appears only with these rows. Full-screen programs that redraw constantly, such as an agent mid-turn or a system monitor, lead the report.
 

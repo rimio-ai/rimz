@@ -45,7 +45,7 @@ These handles name one agent:
 | `@<session-prefix>` | A leading slice of the provider session id. |
 | `@me` | The calling agent, from an agent pane: accepted by single-agent commands, direct messages, and loop delivery targets. `me` is reserved and cannot name an agent, profile, command, or team. |
 
-A receipt, refusal, or warning that names an agent prints its name beside its handle when the two differ, as `@coder (@round-binder)`. JSON, `-q`, and every command printed for you to copy keep the bare address, and so do `top`'s `AGENT` cell and the handle columns of `pane list`, `pane bandwidth`, and `teams list`, which are promised to resolve when pasted back.
+Receipts, refusals, and warnings that name an agent print its name beside its handle when the two differ, as `@coder (@round-binder)`. JSON, `-q`, every command printed for you to copy, a message's `From:` sender, and handles a record stores (workflow asks, holds, and history) keep the bare address. A table keeps its handle column bare and carries a differing name in a `NAME` column beside it, `-` when the two agree: `list`, `top`, [`pane list`](./pane.md#list-panes), [`pane bandwidth`](./pane.md#bandwidth), [`teams show`](./teams.md#inspect-one-team), [`rimz asks`](./asks.md#list-open-asks), [`subagents list`](./subagents.md#list-children), and the `rimz doctor` agent table. The member handles of `teams list` and its needs-you rows stay bare.
 
 These handles name a type and can match several agents:
 
@@ -709,7 +709,7 @@ $ rimz agents list
 2 agents · 1 lane · 1 needs you · 1 running · #auth-refresh
 
 needs you
-  @planner  waiting  2m  which rotation strategy should we use?
+  @planner (@stable-haven)  waiting  2m  which rotation strategy should we use?
 
 HANDLE    NAME           PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
@@ -721,14 +721,14 @@ HANDLE    NAME           PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AG
   wire up the refresh-token path
 ```
 
-The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, including a parent whose current child of either origin waits or whose provider-native child fails, using the sidebar's rule. Everything except attention, running, or sleeping counts as `at rest`. A closed session's row (`live=no`) counts as `at rest` whatever its status, since nothing can be answered in a closed pane. The `needs you` block lists paste-ready addresses, status, age, and ask summaries or pause/failure reasons, oldest first. Age is the open ask's age while awaiting input, otherwise time since the card's last activity.
+The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, including a parent whose current child of either origin waits or whose provider-native child fails, using the sidebar's rule. Everything except attention, running, or sleeping counts as `at rest`. A closed session's row (`live=no`) counts as `at rest` whatever its status, since nothing can be answered in a closed pane. The `needs you` block lists paste-ready addresses, each followed by its name when the two differ (`@planner (@stable-haven)`), then status, age, and ask summaries or pause/failure reasons, oldest first. Age is the open ask's age while awaiting input, otherwise time since the card's last activity.
 
 Cards group by place and channel, using the sidebar's rule. `⑂` marks a checkout group and every named lane, which groups at its lane's checkout; a foreign checkout's own lane groups by its home path, listed or not. A record that carries no lane groups by its folder. A non-repo room's root has a bare label. A checkout group's header names its lane, then a dim `· <branch>` when the checkout's branch differs from that label, the sidebar's last-known branch or else the one its agents reported. An agent's git root outside this project and its listed worktrees adds a dim `· <repo folder>` chip unless that repeats the label, and labels that collide add the sidebar's qualifier, the shortest path suffix that tells the checkouts apart (`· a/dotfiles`); an agent with no known place or channel collects under `external`. When the displayed label is not a selector for the group, the header adds `· #<channel>`. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 
 | Column | Shows |
 | --- | --- |
 | `HANDLE` | An address you can paste from your current channel: a bare role, name, profile, or kind when it resolves uniquely, otherwise qualified with `#channel` (or a session or pane id when needed). Uniqueness is checked against the room, not just the printed rows. The JSON `handle` in `list` and `show` carries the same address. |
-| `NAME` | The agent's name written as an address (`@round-binder`) when it differs from the handle, or a faint `-` when it does not. It names the same agent the `HANDLE` does; the JSON `name` carries it without the `@`. |
+| `NAME` | The agent's name written as an address (`@round-binder`) when it differs from the handle, or a faint `-` when it does not. It names the same agent the `HANDLE` does; the JSON `name` carries it without the `@`. The column prints at every width: a table wider than the terminal clips its trailing columns. |
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
@@ -1001,11 +1001,11 @@ Member and total `cost_usd`, `tokens`, and `active_secs` are all-in; asks, tool 
 ```console
 $ rimz agents top --once
 4 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
-AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
-@coder            running  96.0%  892 MB  4 MB/s     12  33%     1M  0s
-  └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
-@planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
-@reviewer         idle      1.0%   50 MB       -      4   3%    12k  15m
+AGENT             NAME           STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
+@coder            @round-binder  running  96.0%  892 MB  4 MB/s     12  33%     1M  0s
+  └ @swift-otter  -              running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
+@planner          @stable-haven  waiting   2.0%  410 MB       -      6  42%   200k  2m
+@reviewer         @quiet-otter   idle      1.0%   50 MB       -      4   3%    12k  15m
 ```
 
 | Flag | Effect |
@@ -1015,7 +1015,7 @@ AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
 | `--all` | Every channel in the room instead of the current channel. |
 | `-w, --worktree <NAME>` | One worktree or channel, with an optional leading `#`. Conflicts with `--all`. An unknown lane fails with the same refusal as `list`. |
 
-The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered. Children indent under their parent, whose rank uses their combined CPU; a child without a parent in scope stays at top level. `AGE` uses the same cache-clock origin as `list`. Resource columns read `-` where process metrics are unavailable for the platform or pane; the summary's CPU is `-` until any row has two samples, and `IO/S` is omitted when no row has an I/O rate. `SPENT` is provider-reported cumulative session usage, while `list`'s `TOKENS` shows window occupancy. The summary sums `SPENT` across the displayed sessions. In this example the parent's 1M and child's 2M together account for the 3M whole-seat spend in `show @coder`.
+The `AGENT` column uses the same paste-ready addresses as `list`, even when the table is filtered, and `NAME` follows it as in `list`: the name written as an address when it differs from the handle, `-` when it does not. Children indent under their parent, whose rank uses their combined CPU; a child without a parent in scope stays at top level. `AGE` uses the same cache-clock origin as `list`. Resource columns read `-` where process metrics are unavailable for the platform or pane; the summary's CPU is `-` until any row has two samples, and `IO/S` is omitted when no row has an I/O rate. `SPENT` is provider-reported cumulative session usage, while `list`'s `TOKENS` shows window occupancy. The summary sums `SPENT` across the displayed sessions. In this example the parent's 1M and child's 2M together account for the 3M whole-seat spend in `show @coder`.
 
 ```console
 $ rimz agents top -w '#nonsense' --once
@@ -1024,7 +1024,7 @@ error: no lane '#nonsense' in this workspace; lanes: #auth-refresh, #main
 
 #### `focus`
 
-`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane and prints `focused <address>`. The pane is the one the room's pane listing shows hosting the agent when the command runs: focus wakes it, reads the listing again, and focuses it only when the agent is still there. An agent no listed pane hosts fails with `agent <name> has no bound pane`; an agent that left its pane while it was woken fails with `agent <name>: the agent left pane <id> while it was woken; nothing was focused`; a listing that cannot be read fails with `agent <name>: <error>; nothing was focused`. Each failure focuses nothing.
+`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane and prints `focused <address>`, with the agent's name beside the address when the two differ (`focused @coder (@round-binder)`). The pane is the one the room's pane listing shows hosting the agent when the command runs: focus wakes it, reads the listing again, and focuses it only when the agent is still there. An agent no listed pane hosts fails with `agent <name> has no bound pane`; an agent that left its pane while it was woken fails with `agent <name>: the agent left pane <id> while it was woken; nothing was focused`; a listing that cannot be read fails with `agent <name>: <error>; nothing was focused`. Each failure focuses nothing.
 
 #### `fork`
 
