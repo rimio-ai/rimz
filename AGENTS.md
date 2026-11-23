@@ -30,7 +30,7 @@ Every bullet here is an invariant, and a change to one is a product decision. [D
 The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority.
 
 - **Fail-fast at the point of use.** The room always opens: a configuration problem warns at entry, the room runs as if that setting were absent, and the room's record keeps the warning for the sidebar and `rimz doctor`. A configured capability that cannot work fails with the fix at the command that uses it, and that command never reads a broken setting as absent where that would change the account it runs on. Best-effort is for latency and enrichment, never for a precondition the user switched on. The settled cases sit in the subsystem contracts as `Fail-fast, settled` bullets.
-- `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible. Unsafe code is denied, and a new site is a design decision.
+- `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible.
 - Wrap source comments by hand to the width of the code around them, at most 100 columns: rustfmt leaves them as written and no gate catches them. A harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
@@ -53,7 +53,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 [gates.md](./docs/contributing/gates.md) defines the gate stack and the test profiles.
 
 - While iterating, run `cargo fmt --all`, then `cargo xtask check`, then `cargo xtask lint`, and `cargo xtask doc` when you touched rustdoc.
-- Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree its 15-minute budget trips, so run it there as `RIMZ_XTASK_TIMEOUT=60m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
+- Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree, run it as `RIMZ_XTASK_TIMEOUT=60m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
 - Run one Cargo-family command at a time in a worktree. When another worktree's Cargo process holds the lock, start yours and let it queue.
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
