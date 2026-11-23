@@ -348,7 +348,7 @@ Closing the room keeps the file. `rimz gc` removes it once no watcher runs and t
 
 ## While a wait is pending
 
-An agent at rest with a pending timer, clock time, condition, file watch, or one-shot signal delivery shows `sleeping` (`☾` in the sidebar) where it would show `idle` or `success`. A PID wait, watched command, polled check, unfinished team, or working child shows `running` instead, as does a listed background shell. Child waits follow the target's work through further waits. A settled child's report contributes neither state. A standing (repeating) signal subscription does not count. The [status table](./agents.md#list) gives the precedence.
+An agent at rest with a pending timer, clock time, condition, file watch, or one-shot signal delivery shows `sleeping` (`☾` in the sidebar) where it would show `idle` or `success`. A PID wait, watched command, polled check, unfinished team, or working child shows `running` instead, as does a listed background shell or script. Child waits follow the target's work through further waits. A settled child's report contributes neither state. A standing (repeating) signal subscription does not count. The [status table](./agents.md#list) gives the precedence.
 
 In a supervised run, arming a wait and ending the turn does not finish the run: it stays `running` and keeps its pane until the work ends, and the wake starts the next turn in that same run. If the wake is lost and nothing else remains to wake the parked run, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`. A run held only for a person's or an agent's message that is then withdrawn completes instead. The run's timeout still applies ([supervised runs](./agents.md#supervised-runs--p)).
 

@@ -29,12 +29,12 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | --- | --- | --- | --- |
 | `SessionStart` | lifecycle | `Registered`, or `CompactionEnded { auto: None }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload |
 | `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized text as `task` and `prompt` (below); a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` |
-| `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells) |
+| `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells), and clears the [background scripts](#background-scripts) when it lists no pending `code` task |
 | `StopFailure` | lifecycle | `TurnEnded { errored: true }` for non-pausing errors; otherwise none | writes `AgentContext.turn_error`, never a final assistant message ([turn endings](#turn-endings)) |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
 | `Notification` | lifecycle | none | |
-| `PreToolUse` | lifecycle | `ToolUsed { effect: Observed, name: None }` | proof of work only, keyed by `tool_use_id` |
-| `PostToolUse` | lifecycle | `ToolUsed { effect, name }` | every tool, named, keyed by `tool_use_id`; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
+| `PreToolUse` | lifecycle | `ToolUsed { effect: Observed, name: None }` | proof of work, keyed by `tool_use_id`; a `REPL` call starts a [background script](#background-scripts), and that report is what Store appends it for |
+| `PostToolUse` | lifecycle | `ToolUsed { effect, name }` | every tool, named, keyed by `tool_use_id`; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells); a `REPL` call finishes its [background script](#background-scripts) |
 | `PreCompact` | lifecycle | `Compacting` | opens the [compaction bracket](./model.md#the-compaction-bracket) |
 | `PostCompact` | lifecycle | `CompactionEnded { auto }` | carries the manual or auto trigger |
 | `SubagentStart` | lifecycle | `SubagentStarted` | see [Subagents](#subagents) |
@@ -63,7 +63,7 @@ Every signal derived from a `PreToolUse` or a `PostToolUse` carries that payload
 
 The spec's `ToolClassification` decides the effect: `Editing` for `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, `Mutating` for `Bash`, and `Observed` for every other tool. `Editing` moves the turn's [phase](./model.md#turn-phase) from reasoning to acting.
 
-A broad `PreToolUse` is unnamed proof of work. Store appends it only under the rule in [model.md](./model.md#the-state-machine): when a subagent owns it, or when it clears a wait, closes a compaction bracket, or reconciles a resting row. Every `PostToolUse` carries its tool name, so Store always appends it, read-only tools and answered asks included, and the named completions feed the live session tool map.
+A broad `PreToolUse` is unnamed proof of work. Store appends it only under the rule in [model.md](./model.md#the-state-machine): when a subagent owns it, when it carries a background script report, or when it clears a wait, closes a compaction bracket, or reconciles a resting row. Every `PostToolUse` carries its tool name, so Store always appends it, read-only tools and answered asks included, and the named completions feed the live session tool map.
 
 ### Turn endings
 
@@ -84,6 +84,16 @@ A root session's hooks report its background shells as a `BackgroundShellReport`
 - A `UserPromptSubmit` whose prompt is one or more `<task-notification>` blocks drops each `<task-id>` whose `<status>` is not `running`.
 
 Subagent hooks report nothing: they target the child row, and the parent's `Stop` lists every shell. `SubagentStop.background_tasks` is parent-scoped and ignored.
+
+### Background scripts
+
+A root session's hooks report the code-mode scripts it runs through the `REPL` tool as a `BackgroundScriptReport` on the observation, keyed by the `REPL` call's `tool_use_id`, and the rollup folds them into `AgentState.background_scripts` ([model.md](./model.md#turn-endings-and-parked-turns)):
+
+- A `PreToolUse` for `REPL` starts a script with the `tool_input` description. A repeated start for a known id keeps the first sighting.
+- A `PostToolUse` for `REPL` finishes it. Claude sends it when the script settles, never at the dispatch receipt the model sees, and a script that outlives its turn sends it after that turn's `Stop`, under the same `tool_use_id`.
+- A `Stop` whose `background_tasks` holds no pending entry of `type` `code` clears the list, the guard against a script that ended without a result hook. A `Stop` that still lists one leaves the list alone, since the task id matches no `tool_use_id`, and so does a `Stop` without the array.
+
+The commands a script runs fire their own `Bash` hooks under `repl_`-prefixed ids, which report nothing here. Subagent hooks, `SubagentStop` included, report nothing. RimZ decodes no failed-tool hook for Claude, so a script that throws is cleared by its `PostToolUse` if Claude sends one, else by the next `Stop`. The card shows a script only once it has run `BACKGROUND_SCRIPT_SHOWN_AFTER` (30 s) from first sight ([sidebar.md](../sidebar/sidebar.md#delegation-entries)). Any listed script lifts a resting card to `running` from first sight ([model.md](./model.md#sleeping)).
 
 ### Conversation replacement
 

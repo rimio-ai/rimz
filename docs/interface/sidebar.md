@@ -63,7 +63,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | `!` | failed | a manually raised alert, or the turn errored, died on a provider API error, ended on a refused tool call, went silent past the stall window (also a launched child whose first turn never started), or repeated one tool call 20 times, or rests on a model its provider refuses on that account (the description quotes the provider's sentence) | yes |
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or on Claude's auto-mode safety check returning no verdict, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume, or one on a model the provider refuses on that account, becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
-| `⢿` | working | running a turn, waiting on in-flight work, or running a background shell; active turns animate through braille frames (`⣾`, `⣽`, ...), while a resting turn uses the waiting head below | no |
+| `⢿` | working | running a turn, waiting on in-flight work, or running a background shell or script; active turns animate through braille frames (`⣾`, `⣽`, ...), while a resting turn uses the waiting head below | no |
 | `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child | no |
 | `○` | idle | alive, nothing in flight | no |
 
@@ -79,7 +79,7 @@ A running agent can show a head in place of `⢿`. Whichever head it shows, it c
 |-------|------|---------|
 | `⠁` | thinking | the turn has not edited a file yet; a research turn that never edits stays here to the end |
 | `▇` | compacting | condensing its context window |
-| `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a command, check, PID, team, or peer agent, or a background shell; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
+| `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a command, check, PID, team, or peer agent, or a background shell or script; a launched child's provider park replaces this head with `⏸︎`, or `!` once it can no longer resume |
 
 Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations). On a card, each head takes the card's emphasis like the status glyph it replaces.
 
@@ -151,7 +151,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⧖` | waits the agent has armed |
 | `◷` | a timer wait |
 | `⌁` | a signal wait, or an awaited agent whose run ended and is reporting or that has no card |
-| working spinner, in violet | a live watch (command, check, PID, file) or a background shell |
+| working spinner, in violet | a live watch (command, check, PID, file), a background shell, or a background script |
 | `2 more finished` | finished subagents of the current turn beyond the five listed |
 | `▷` (Nerd Font: `󰃰`) | a booked launch that will start: the `▷ booked (N)` half, its mark in the violet of `⧉` and `⧖`, and each unfired entry, muted |
 | `–` | a fired booked launch with nothing left alive |
@@ -505,6 +505,7 @@ Each entry starts with its live state or wait icon, then who or what it names an
 | check | working spinner | `check · test` (program name) | time since armed | full command, with the program path trimmed |
 | file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
 | background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since RimZ first saw it | command when known, with the program path trimmed |
+| background script | working spinner | `shell ·` the script description, else `script`; listed once it has run 30 s | time since RimZ first saw it | never |
 | signal | `⌁` | `signal · pr.merged` (selector) | time since armed | never |
 | idle stop | `◷` | `stop · after 3m idle, in 1m`: the requested rest, then the time left or `due` while the agent rests and its clock runs | time since requested | never |
 
@@ -512,7 +513,7 @@ Entries list in a fixed order:
 
 1. Unfinished subagents of the current turn, including paused and stalled children, in the order they started. They are never capped.
 2. The five most recently finished subagents of the current turn, newest finish first, then a muted `K more finished` line counting the rest. The line is not a separate target: a click on it acts as a click on the card. A child whose turn ended cleanly with background work still running takes that turn end as its finish instant once its entry shows `✓`. Closing a pane or reaping a session does not change that finish instant, except that reaping such a child rests it at idle, back among the unfinished entries.
-3. Waits: the agents the card waits on, in wait order, then timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
+3. Waits: the agents the card waits on, in wait order, then timers by due time, then watches, then background shells, then background scripts, then signals. A wait leaves the list when it fires or its job ends.
 
 The listed subagents plus `K` equal the count in the line. A child that finishes moves from the unfinished entries to the top of the finished ones, and no other entry moves.
 
@@ -613,6 +614,7 @@ A sleeping card names its first sleeping wait in the description:
 | timer | `wakes in 12m`, then `wakes now` |
 | PID | `wakes after pid 16776` |
 | command or check | `wakes after <command>` |
+| background script, with no working wait | `wakes after <description>`, else `wakes after script` |
 | file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
 | signal | `wakes on pr.merged` |
 | subagent | `wakes when @calm-fox reports` |
@@ -621,7 +623,7 @@ A sleeping card names its first sleeping wait in the description:
 
 A subagent wait on a child listed under `⧉` draws no separate entry and does not count in `⧖`, since the child's own entry stands for it. Any other agent the card waits on, a peer launched with `rimz agents` or a child of an earlier turn, counts in `⧖` and draws an entry with that agent's live state, profile, named lane and activity text; a click on it focuses that agent's live pane, and an agent with no card in the sidebar draws the entry with the static `⌁` lead and the word `agent`. A team wait counts in `⧖` and draws a static `team forge#feat-x · ◉ Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
-`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell or script instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
 Hibernation does not change a card's state, glyph, ranking, or unread result. A frozen agent keeps the same working or sleeping wait classification, or its idle or done state when nothing is pending. `rimz agents show` carries the hibernation details.
 
