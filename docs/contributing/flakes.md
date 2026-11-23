@@ -153,7 +153,7 @@ Triage a flake by forcing the state it needs and showing the unfixed tree fail w
 
 Find where a slow command idles before you read code.
 
-1. Run the test binary (the `binary:` line that `cargo xtask stress` prints) under `strace -f -tt -s 4096 -e trace=execve,clone,clone3 -o <file> <bin> --exact <module>::<test> --test-threads=1`. The `clone` lines show which process spawned each child.
+1. Run the test binary (its suite's `binary-path` in `cargo xtask test --list <fragment> --message-format json`) under `strace -f -tt -s 4096 -e trace=execve,clone,clone3 -o <file> <bin> --exact <module>::<test> --test-threads=1`. The `clone` lines show which process spawned each child.
 2. Keep the `execve`, `clone`, and `exited with` lines, and read the gaps between them to locate the suspect process.
 3. Add `clock_nanosleep,poll` to the trace set and group its lines by thread id. A thread that repeats one short sleep for seconds is a poll, and its run length is the wait. `poll(2)` can hold a wait such as the DSR fence without a `clock_nanosleep` line.
 4. Trace every syscall of the suspect process with `-ttt -T` to separate time inside a `poll` or sleep from time outside every syscall (CPU, runqueue, or page faults). Off-syscall time is work slowed by load, and is no designed wait.
