@@ -550,10 +550,18 @@ impl Resolver<'_> {
             let delegates = fm
                 .tools
                 .as_deref()
-                .and_then(|tools| ToolSet::parse(tools).ok())
+                .and_then(|tools| {
+                    let bare: Vec<String> = tools
+                        .iter()
+                        .map(|tool| tool.trim().trim_start_matches('+').to_owned())
+                        .collect();
+                    ToolSet::parse(&bare).ok()
+                })
                 .is_some_and(|tools| tools.has("Agent"));
             fm.inherit_base(base, self.namespace, delegates);
         }
+        fm.settle_plus(kind)
+            .map_err(|message| DefinitionErr::new(path, message))?;
         if let Some(seat) = self.seat {
             seat.edit(&mut fm);
         }

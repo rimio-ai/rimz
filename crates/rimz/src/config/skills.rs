@@ -25,6 +25,9 @@ impl FromStr for SkillName {
     type Err = SkillListErr;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.starts_with('+') {
+            return Err(SkillListErr::PlusEntry(value.to_owned()));
+        }
         if value.is_empty()
             || matches!(value, "." | "..")
             || value.contains(['/', '\\', ':'])
@@ -62,6 +65,10 @@ pub enum SkillListErr {
         "invalid skill name `{0}`: list bare names (the `:mode` suffix is gone; listed skills are model-callable, unlisted ones user-only)"
     )]
     InvalidName(String),
+    #[error(
+        "invalid skill entry `{0}`: `+` entries add to an inherited list in Markdown definitions only; list the bare name"
+    )]
+    PlusEntry(String),
     #[error("duplicate skill name `{0}`")]
     DuplicateName(SkillName),
 }
@@ -150,6 +157,21 @@ mod tests {
             assert_eq!(error, SkillListErr::InvalidName(input.to_owned()));
             assert!(error.to_string().contains("the `:mode` suffix is gone"));
         }
+    }
+
+    #[test]
+    fn plus_entries_are_refused_outside_a_markdown_list() {
+        let error = "+commit".parse::<SkillName>().unwrap_err();
+        assert_eq!(error, SkillListErr::PlusEntry("+commit".to_owned()));
+        assert!(
+            error.to_string().contains("in Markdown definitions only"),
+            "{error}"
+        );
+        let error =
+            toml::from_str::<crate::config::Profile>("agent = 'claude'\nskills = ['+commit']")
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("skill entry `+commit`"), "{error}");
     }
 
     #[test]

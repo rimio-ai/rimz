@@ -303,6 +303,28 @@ fn roster(
 }
 
 impl SeatLoader<'_> {
+    /// `definition`'s frontmatter with its `agent:` chain inherited as the definition resolves
+    /// alone: each layer inherits its parent's already-inherited frontmatter, so a layer that
+    /// writes one of `tools`/`capabilities` hides the other key above it from every `+` list.
+    fn chain_frontmatter(
+        &self,
+        definition: &Definition,
+        path: &Path,
+    ) -> Result<frontmatter::AgentFrontmatter, DefinitionErr> {
+        let mut fm = definition.frontmatter.clone();
+        if let Some(parent) = definition
+            .frontmatter
+            .agent
+            .as_ref()
+            .map(|name| self.agents.lookup(name, path))
+            .transpose()?
+            .flatten()
+        {
+            fm.inherit(&self.chain_frontmatter(parent, path)?);
+        }
+        Ok(fm)
+    }
+
     fn load(
         &self,
         path: &Path,
@@ -324,17 +346,11 @@ impl SeatLoader<'_> {
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
         let mut fm = role.overlay();
-        let mut ancestor = Some(definition);
-        while let Some(definition) = ancestor {
-            fm.inherit(&definition.frontmatter);
-            ancestor = definition
-                .frontmatter
-                .agent
-                .as_ref()
-                .map(|name| self.agents.lookup(name, path))
-                .transpose()?
-                .flatten();
-        }
+        fm.check_plus().map_err(|message| {
+            let handle = role.role.as_deref().unwrap_or(&role.agent);
+            DefinitionErr::new(path, format!("team '{name}' role '{handle}' {message}"))
+        })?;
+        fm.inherit(&self.chain_frontmatter(definition, path)?);
         let kind = fm
             .model
             .as_deref()

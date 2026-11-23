@@ -101,6 +101,9 @@ impl FromStr for McpName {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let invalid = || McpListErr::InvalidName(value.to_owned());
         let entry = value.trim();
+        if entry.starts_with('+') {
+            return Err(McpListErr::PlusEntry(value.to_owned()));
+        }
         let (name, mode) = match entry.rsplit_once(':') {
             Some((name, mark)) => (
                 name.trim_end(),
@@ -149,6 +152,10 @@ pub enum McpListErr {
         "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-control, rimz-notes), or one of your own MCP servers, each name with an optional `:always` or `:deferred`"
     )]
     InvalidName(String),
+    #[error(
+        "invalid mcps entry `{0}`: `+` entries add to an inherited list in Markdown definitions only; list the bare name"
+    )]
+    PlusEntry(String),
     #[error("invalid mcps entry `{entry}`: `{earlier}` already gives `{}` another mark", entry.name())]
     ConflictingMark { entry: McpName, earlier: McpName },
     #[error("duplicate mcps entry `{0}`")]
@@ -275,6 +282,26 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid mcps entry `github`: `github:always` already gives `github` another mark"
+        );
+    }
+
+    #[test]
+    fn plus_entries_are_refused_outside_a_markdown_list() {
+        for input in ["+github", " +rimz-lsp:deferred"] {
+            assert_eq!(
+                input.parse::<McpName>().unwrap_err(),
+                McpListErr::PlusEntry(input.to_owned()),
+                "{input}"
+            );
+        }
+        let error =
+            toml::from_str::<crate::config::Profile>("agent = 'claude'\nmcps = ['+github']")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            error.contains("mcps entry `+github`")
+                && error.contains("in Markdown definitions only"),
+            "{error}"
         );
     }
 
