@@ -76,7 +76,7 @@ After pressing Escape for Codex, RimZ waits up to five seconds for its Interrupt
 
 ### Receipts
 
-The send prints one line per target:
+The send prints one line per target. A receipt names the target by its address, with the agent's name beside it when the two differ (`sent to @coder (@round-binder) (msg_…)`); every command it prints carries the bare address. The rows below show a target whose name and address agree:
 
 | Output | Meaning |
 | --- | --- |

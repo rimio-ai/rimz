@@ -3349,7 +3349,8 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let scheduled_id = queued_id_from_stdout(&scheduled.stdout);
     let receipt = String::from_utf8_lossy(&scheduled.stdout);
     assert!(receipt.starts_with(&format!(
-        "queued for @claude#feature-scheduled ({scheduled_id}) — opens in "
+        "queued for {} ({scheduled_id}) — opens in ",
+        named(&env, "sess-scheduled", "@claude#feature-scheduled")
     )));
 
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -9004,7 +9005,10 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
         "forced message steer",
     );
     let stdout = String::from_utf8_lossy(&steered.stdout);
-    assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
+    assert!(stdout.contains(&format!(
+        "sent to {} ({message_id})",
+        named(&env, "sess-steer-queued", "@claude")
+    )));
     assert_text_then_enter(&trace_log, &user_message("push now"));
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
@@ -9067,14 +9071,15 @@ fn turn_ended_reserved_pane_names_the_provider_error() {
     let receipt = String::from_utf8_lossy(&parked.stdout);
     let parked_id = receipt
         .split(['(', ')'])
-        .nth(1)
+        .find(|part| part.starts_with("msg_"))
         .expect("receipt names the message id");
     assert!(
         receipt.contains(&format!(
-            "queued for {LABEL} ({parked_id}) — {LABEL} ended its turn on a provider error; its \
+            "queued for {named} ({parked_id}) — {named} ended its turn on a provider error; its \
              pane is held until its next activity in case a background approval is still open\n  \
              check it: rimz pane capture {LABEL}      send now: rimz message steer {parked_id} \
-             --force"
+             --force",
+            named = named(&env, "sess-steer-ended", LABEL),
         )),
         "{receipt}"
     );
@@ -9153,7 +9158,7 @@ fn a_refused_model_holds_every_message_kind_until_its_record_clears() {
         );
         receipt
             .split(['(', ')'])
-            .nth(1)
+            .find(|part| part.starts_with("msg_"))
             .expect("receipt names the message id")
             .to_owned()
     };
@@ -10496,7 +10501,8 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     assert_eq!(
         String::from_utf8_lossy(&queued.stdout).trim(),
         format!(
-            "queued for @claude#feature-boundary ({queued_id}) — @claude#feature-boundary is running; send now: rimz message steer {queued_id}"
+            "queued for {named} ({queued_id}) — {named} is running; send now: rimz message steer {queued_id}",
+            named = named(&env, "sess-boundary", "@claude#feature-boundary"),
         )
     );
     assert_eq!(
@@ -10615,7 +10621,10 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
     let command_id = queued_id_from_stdout(&parked.stdout);
     assert_eq!(
         String::from_utf8_lossy(&parked.stdout).trim(),
-        format!("queued for @claude#feature-sent-hold ({command_id}) — behind {prompt_id}")
+        format!(
+            "queued for {} ({command_id}) — behind {prompt_id}",
+            named(&env, "sess-sent-hold", "@claude#feature-sent-hold")
+        )
     );
     let command_id = MessageId::parse(&command_id).expect("message id");
     assert_eq!(
@@ -10719,7 +10728,8 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
     assert_eq!(
         String::from_utf8_lossy(&queued.stdout).trim(),
         format!(
-            "queued for @claude#feature-queue-hint ({message_id}) — @claude#feature-queue-hint is running; send now: rimz message steer {message_id}"
+            "queued for {named} ({message_id}) — {named} is running; send now: rimz message steer {message_id}",
+            named = named(&env, "sess-queue-hint", "@claude#feature-queue-hint"),
         )
     );
 
@@ -10732,7 +10742,10 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
     );
     assert_eq!(
         String::from_utf8_lossy(&steered.stdout).trim(),
-        format!("sent to @claude ({message_id})")
+        format!(
+            "sent to {} ({message_id})",
+            named(&env, "sess-queue-hint", "@claude")
+        )
     );
     assert_text_then_enter(&trace_log, &user_message("send this exact record"));
 }
@@ -10776,7 +10789,10 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
     let queued_id = queued_id_from_stdout(&parked.stdout);
     assert_eq!(
         String::from_utf8_lossy(&parked.stdout).trim(),
-        format!("queued for @claude#feature-steer-fifo ({queued_id}) — behind {prompt_id}")
+        format!(
+            "queued for {} ({queued_id}) — behind {prompt_id}",
+            named(&env, "sess-steer-fifo", "@claude#feature-steer-fifo")
+        )
     );
     let lines = trace_lines(&trace_log);
     assert!(
@@ -10795,7 +10811,10 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
     );
     assert_eq!(
         String::from_utf8_lossy(&steered.stdout).trim(),
-        format!("sent to @claude ({queued_id})")
+        format!(
+            "sent to {} ({queued_id})",
+            named(&env, "sess-steer-fifo", "@claude")
+        )
     );
     let lines = trace_lines(&trace_log);
     assert!(
@@ -13285,7 +13304,11 @@ fn assert_fresh_boundary_send_race(winner_sent: bool) {
     );
     assert_eq!(
         String::from_utf8_lossy(&winner_output.stdout).trim(),
-        format!("sent to @claude#send-race ({})", held.message_id)
+        format!(
+            "sent to {} ({})",
+            named(&env, "sess-send-race", "@claude#send-race"),
+            held.message_id
+        )
     );
     let loser_id = MessageId::parse(&queued_id_from_stdout(&loser_output.stdout)).unwrap();
     assert!(loser_id.as_str() > held.message_id.as_str());
@@ -18340,6 +18363,20 @@ fn assert_second_precision_created(shown: &str) {
     assert_eq!(absolute.len(), "2026-07-06T12:47:26Z".len(), "{line}");
     assert!(absolute.contains('T') && absolute.ends_with('Z'), "{line}");
     assert!(!absolute.contains('.'), "{line}");
+}
+
+/// `handle` as a receipt names it: the pet name RimZ minted for `session_id` beside it.
+fn named(env: &Env, session_id: &str, handle: &str) -> String {
+    let snapshot = env.store().snapshot().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == session_id)
+        .expect("receiving agent row");
+    format!(
+        "{handle} (@{})",
+        agent.name.as_deref().expect("minted pet name")
+    )
 }
 
 fn sent_id_from_stdout(stdout: &[u8]) -> String {

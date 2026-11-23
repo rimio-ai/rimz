@@ -73,10 +73,10 @@ Either way you get a receipt. It says whether the text went in now or is queued,
 
 ```console
 $ rimz message @coder#auth "open a PR summary once tests pass"
-queued for @coder#auth (msg_06gc05m0d327d1d0) — @coder#auth is running; send now: rimz message steer msg_06gc05m0d327d1d0
+queued for @coder#auth (@round-binder) (msg_06gc05m0d327d1d0) — @coder#auth (@round-binder) is running; send now: rimz message steer msg_06gc05m0d327d1d0
 
 $ rimz message @planner#auth "draft the follow-up plan"
-sent to @planner#auth (msg_06gc05nhj9q2b4t7)
+sent to @planner#auth (@stable-haven) (msg_06gc05nhj9q2b4t7)
 ```
 
 Nothing is locked in until it lands: `rimz message cancel msg_06gc05m0d327d1d0` stops a message still waiting, and `rimz message steer msg_06gc05m0d327d1d0` promotes that exact record past its gate.
