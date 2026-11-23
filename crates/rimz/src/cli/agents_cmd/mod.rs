@@ -390,15 +390,7 @@ pub(crate) struct CohortLaunchArgs {
 
 impl CohortLaunchArgs {
     fn validate_fresh_worktree(&self) -> Result<()> {
-        if self.fresh
-            && self
-                .worktree
-                .as_deref()
-                .is_none_or(|name| name.trim().is_empty())
-        {
-            bail!("--fresh needs a named worktree (-w NAME)");
-        }
-        Ok(())
+        rimz::launcher::require_named_worktree(self.fresh, self.worktree.as_deref())
     }
 }
 

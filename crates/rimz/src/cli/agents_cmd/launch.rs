@@ -3,7 +3,6 @@
 use super::*;
 use crate::cli::launch_interaction::{CliInteraction, LayoutReceipt};
 use crate::cli::{machine_config, render};
-use rimz::harness::ancestry;
 pub(super) use rimz::launcher::ResumeEntrance;
 
 pub(super) fn validate_resume_inputs(
@@ -22,24 +21,21 @@ pub(super) fn launch_layout(
     if args.launch.cohort.continue_cohort {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
     }
-    args.launch.cohort.validate_fresh_worktree()?;
     let machine_config = machine_config();
-    if args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some() {
-        crate::cli::require_worktree_config(&machine_config)?;
-    }
-    crate::cli::check_launch_room(globals)?;
-    let mut ctx = Ctx::open(globals)?;
-    let snapshot = ctx.cached_snapshot()?;
-    // A launch under a loop fire resolves no caller.
-    let caller = fire
-        .is_none()
-        .then(|| ancestry::resolve_calling_agent(&snapshot.agents).ok())
-        .flatten();
-    ctx.workspace = crate::cli::anchor_caller_workspace(ctx.workspace, caller, globals)?;
-    let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
+    let room = rimz::launcher::LayoutRoom::enter(rimz::launcher::LayoutEntry {
+        root: globals.root.clone(),
+        mux: globals.mux,
+        machine: machine_config.clone(),
+        worktree: args.launch.cohort.worktree.as_deref(),
+        from_pr: args.launch.cohort.from_pr.is_some(),
+        fresh: args.launch.cohort.fresh,
+        cwd: args.launch.cwd.as_deref(),
+        under_fire: fire.is_some(),
+    })?;
 
     let mut launch = args.launch;
     if matches!(launch.resume, Some(Some(_))) {
+        let ctx = Ctx::entered(room.workspace.clone(), room.store.clone(), globals.mux);
         if let Some(name) = launch
             .cohort
             .worktree
@@ -113,65 +109,43 @@ pub(super) fn launch_layout(
         rimz::launcher::Selection::Fresh
     };
     let overrides = typed_overrides(&launch.overrides)?;
-    let request = rimz::launcher::LayoutRequest {
-        context: rimz::launcher::LaunchContext {
-            workspace: ctx.workspace.clone(),
-            store: ctx.store.clone(),
-            machine: machine_config,
-            mux: globals.mux,
-            root: globals.root.clone(),
-            channel: ctx.current_channel().as_deref().cloned(),
+    let layout = rimz::launcher::LayoutLaunch {
+        spec: launch.spec.take(),
+        prompt: launch.prompt.take(),
+        name: launch.name.take(),
+        cwd: launch.cwd.take(),
+        cohort: rimz::launcher::CohortRequest {
+            worktree: launch.cohort.worktree,
+            from_trunk: launch.from_trunk,
+            from_pr: launch.cohort.from_pr,
+            channel: launch.cohort.channel,
+            description: launch.cohort.description,
+            budget: launch.cohort.budget,
+            fresh: launch.cohort.fresh,
+            bg: launch.cohort.bg,
+            new_tab: launch.cohort.new_tab,
         },
-        launch: rimz::launcher::LayoutLaunch {
-            spec: launch.spec.take(),
-            prompt: launch.prompt.take(),
-            name: launch.name.take(),
-            cwd: launch.cwd.take(),
-            cohort: rimz::launcher::CohortRequest {
-                worktree: launch.cohort.worktree,
-                from_trunk: launch.from_trunk,
-                from_pr: launch.cohort.from_pr,
-                channel: launch.cohort.channel,
-                description: launch.cohort.description,
-                budget: launch.cohort.budget,
-                fresh: launch.cohort.fresh,
-                bg: launch.cohort.bg,
-                new_tab: launch.cohort.new_tab,
-            },
-            selection,
-            new_pane: launch.new_pane,
-            overrides,
-            max_turns: launch.max_turns,
-            teams_scene: launch.teams_scene,
-            report_to: report_to(launch.cohort.detach),
-            loop_task: fire
-                .as_ref()
-                .map(|fire| fire.task.clone())
-                .filter(|task| !task.is_empty()),
-            loop_booked_by: fire
-                .as_ref()
-                .map(|fire| fire.booked_by.clone())
-                .unwrap_or_default(),
-            loop_fire: fire.map(|fire| fire.fire),
-            subagent_profile: launch.subagent_profile,
-        },
-        cwd,
-        allow_in_place,
-        entry: rimz::launcher::RoomEntry::Live,
-        starter: rimz::launcher::Starter::Human,
-        workflow: None,
-        automation: None,
-        leader_run: None,
+        selection,
+        new_pane: launch.new_pane,
+        overrides,
+        max_turns: launch.max_turns,
+        teams_scene: launch.teams_scene,
+        report_to: report_to(launch.cohort.detach),
+        loop_task: fire
+            .as_ref()
+            .map(|fire| fire.task.clone())
+            .filter(|task| !task.is_empty()),
+        loop_booked_by: fire
+            .as_ref()
+            .map(|fire| fire.booked_by.clone())
+            .unwrap_or_default(),
+        loop_fire: fire.map(|fire| fire.fire),
+        subagent_profile: launch.subagent_profile,
     };
-    let mut interaction = CliInteraction;
-    let outcome = match rimz::launcher::prepare_layout(request, &mut interaction)? {
-        rimz::launcher::Preparation::Prepared(prepared) => {
-            rimz::launcher::execute(*prepared, &mut interaction)?
-        }
-        rimz::launcher::Preparation::Handled(outcome) => outcome,
-    };
+    let outcome =
+        rimz::launcher::launch_layout(&room, layout, allow_in_place, &mut CliInteraction)?;
     if let rimz::launcher::LaunchOutcome::Opened(launched) = outcome {
-        launched.write_receipt(&mut render::out(), &ctx.store)?;
+        launched.write_receipt(&mut render::out(), &room.store)?;
     }
     Ok(())
 }

@@ -81,6 +81,8 @@ fn hot_cli_preserves_values_and_defers_help_and_errors() {
 
 #[test]
 fn caller_launch_anchors_at_the_recorded_checkout() {
+    use rimz::launcher::checkout::anchor_caller_workspace;
+
     let checkout = tempfile::tempdir().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     assert!(
@@ -96,7 +98,8 @@ fn caller_launch_anchors_at_the_recorded_checkout() {
     let mut caller =
         rimz::agents::AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Idle);
     caller.worktree_path = Some(checkout.path().display().to_string());
-    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), &globals).unwrap();
+    let root = globals.root.as_deref();
+    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), root).unwrap();
     assert_eq!(
         anchored.worktree_root,
         checkout.path().canonicalize().unwrap()
@@ -108,7 +111,7 @@ fn caller_launch_anchors_at_the_recorded_checkout() {
     let subdir = checkout.path().join("packages/web");
     std::fs::create_dir_all(&subdir).unwrap();
     caller.checkout = Some(subdir.display().to_string());
-    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), &globals).unwrap();
+    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), root).unwrap();
     assert_eq!(anchored.worktree_root, subdir.canonicalize().unwrap());
     let launch = rimz::worktree::resolve_launch_checkout(
         &anchored,
@@ -128,12 +131,12 @@ fn caller_launch_anchors_at_the_recorded_checkout() {
     caller.checkout = None;
     caller.worktree_path = None;
     for caller in [Some(&caller), None] {
-        let anchored = anchor_caller_workspace(shell.clone(), caller, &globals).unwrap();
+        let anchored = anchor_caller_workspace(shell.clone(), caller, root).unwrap();
         assert_eq!(anchored.worktree_root, shell.worktree_root);
     }
     let missing = checkout.path().join("gone");
     caller.worktree_path = Some(missing.display().to_string());
-    let error = anchor_caller_workspace(shell, Some(&caller), &globals).unwrap_err();
+    let error = anchor_caller_workspace(shell, Some(&caller), root).unwrap_err();
     assert!(error.to_string().contains(&missing.display().to_string()));
 }
 

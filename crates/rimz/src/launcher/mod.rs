@@ -6,6 +6,7 @@ pub mod checkout;
 pub mod child_resume;
 pub mod context;
 mod execute;
+mod layout_launch;
 pub mod lsp_admission;
 pub mod molt;
 pub mod placement;
@@ -21,6 +22,7 @@ use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
     LeaderRun, OpenedRun, PreparedLaunch, RunCompletion, SupervisedContext, execute,
 };
+pub use layout_launch::{LayoutEntry, LayoutRoom, launch_layout, require_named_worktree};
 pub use supervised::{
     BackgroundLaunch, BackgroundLaunchOutcome, launch_background, prepare_supervised,
 };
