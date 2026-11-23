@@ -235,7 +235,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
 
-Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. Spend that grew while you were on another tab shows its current figure when you arrive, without counting up. It never decreases inside one window and resets when the window rolls. Antigravity's share moves only when one of its turns ends. How every figure is computed is [Token Insight](../guide/insight.md).
+Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. Spend that grew while you were on another tab shows its current figure when you arrive, without counting up. It never decreases inside one window and resets when the window rolls. How every figure is computed is [Token Insight](../guide/insight.md).
 
 The spend scope uses the project root, listed worktree roots, and the configured worktree home, so cleaned-up checkouts still count. Grouping instead uses the deepest known place and follows no symlinks: a shell whose cwd resolves outside those places goes to `external`.
 
