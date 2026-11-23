@@ -555,7 +555,7 @@ Entries follow the subagents and waits and use the same layout. A waiting launch
 | entry | lead | type · headline | second line |
 |-------|------|-----------------|-------------|
 | needs a fix | `⚠`, warning tone | profile or team · task | the loop's reason |
-| waiting on a sibling launch | `▷` | profile or team · text | `after <sibling>`, `<sibling> starting` while its fire has launched nothing yet, or `<sibling> ended` once it ended, then the blocking term's reading (`#1640 open`, `no PR`) and ` +N` for further unmet terms |
+| waiting on a sibling launch | `▷` | profile or team · text | `after <sibling>`, `<sibling> starting` while nothing its fire launched has registered yet, or `<sibling> ended` once it ended, then the blocking term's reading (`#1640 open`, `no PR`) and ` +N` for further unmet terms |
 | waiting on any other term | `▷` | profile or team · text | the term as written, then its reading: `pr[workflow-language]: #1640 open` |
 | waiting on a time | `▷` | profile or team · text | the loop's timing words: `once at 2026-11-14 03:00` |
 | fired, starting | `▷` | profile or team · text | `starting`, until the launched agent's first row or the launch's end |

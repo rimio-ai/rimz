@@ -850,12 +850,14 @@ pub struct BookingFire {
     /// What the launch has alive in this fold; `None` once nothing is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<BookingLive>,
-    /// The latest end stamp the room's records hold for the launch; read only when
-    /// `live` is `None`, and `None` there means the line reads `ended`.
+    /// The latest end stamp the room's records hold for the launch, else, once its rows
+    /// are pruned, the one last published; read only when `live` is `None`, and `None`
+    /// there means the line reads `ended`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<Timestamp>,
-    /// Fired, nothing it launched has a row yet and the room's records hold no end for
-    /// the launch: the line reads `starting`, and the entry is neither ended nor older.
+    /// Fired, nothing it launched has a row yet, no bookings pass recorded a launch of its
+    /// rows, and the room's records hold no end for the launch: the line reads `starting`,
+    /// and the entry is neither ended nor older.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub starting: bool,
     /// The pull request of the launch's own destination branch.

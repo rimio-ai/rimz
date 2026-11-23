@@ -888,6 +888,58 @@ fn a_sibling_still_starting_is_starting_in_the_after_text() {
     );
 }
 
+/// A fire whose rows registered (its `launches` recorded) and of which nothing is alive, no
+/// row carrying its id and no end published (the agent ended before the lane's next pass, or
+/// its rows were pruned) is ended, never starting: as its own entry, finished when treeless and
+/// nothing waits on it, and in the after-text of an entry waiting on it.
+#[test]
+fn a_registered_fire_with_nothing_alive_reads_ended_not_starting() {
+    for (team, worktree) in [(false, false), (false, true), (true, false), (true, true)] {
+        let name = format!("gap-{team}-{worktree}");
+        let mut gap = fired("gap", &["booker"], &name, ago(100));
+        gap.fire.as_mut().unwrap().launches = vec!["gone".to_owned()];
+        gap.worktree = worktree;
+        if team {
+            gap.starts = BookingStarts::Team("forge".to_owned());
+        }
+        let mut fold = snapshot(vec![agent("booker")]);
+        attach(&mut fold, &cache(vec![gap.clone()]));
+        let list = &on_cards(&fold)["booker"];
+        let BookingState::Fired(fire) = &list[0].state else {
+            panic!("fired: {list:?}");
+        };
+        assert!(
+            !fire.starting,
+            "{name}: registered, nothing alive: not starting"
+        );
+        assert_eq!(fire.ended_at, None, "{name}: no end time known yet");
+        assert_eq!(
+            list[0].is_finished(),
+            !worktree,
+            "{name}: treeless and nothing waits"
+        );
+
+        gap.branch = Some("gap".to_owned());
+        let mut fold = snapshot(vec![agent("booker")]);
+        attach(
+            &mut fold,
+            &cache(vec![gap, waiting_on("down", &["booker"], &["pr[gap]"])]),
+        );
+        let list = &on_cards(&fold)["booker"];
+        let BookingState::Waiting(wait) = &list[1].state else {
+            panic!("down waits: {list:?}");
+        };
+        assert_eq!(
+            wait.blocker
+                .as_ref()
+                .and_then(|blocker| blocker.after.as_ref())
+                .map(|after| after.state),
+            Some(SiblingState::Ended),
+            "{name}: ended in the after-text"
+        );
+    }
+}
+
 #[test]
 fn a_team_focus_tie_picks_the_pane_rimz_teams_focus_picks() {
     let member = |id: &str, role: &str, task: Option<&str>| AgentState {
