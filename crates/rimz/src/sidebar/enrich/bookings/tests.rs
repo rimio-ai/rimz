@@ -483,9 +483,13 @@ fn ended_entries_past_the_newest_five_fold_older_unless_depended_on() {
     // The oldest end of all, yet listed: a waiting sibling reads its branch.
     let mut kept = ended("kept", 99_000);
     kept.branch = Some("kept".to_owned());
+    // Ended with no end published yet (its rows registered, nothing alive): the newest end.
+    let mut gap = fired("gap", &["booker"], "gap", ago(100_000));
+    gap.fire.as_mut().unwrap().launches = vec!["gone".to_owned()];
     attach(
         &mut fold,
         &cache(vec![
+            gap,
             ended("e7", 95_000),
             ended("e6", 90_000),
             ended("e5", 85_000),
@@ -505,9 +509,10 @@ fn ended_entries_past_the_newest_five_fold_older_unless_depended_on() {
             ("e2", BookingBand::Fired),
             ("e3", BookingBand::Fired),
             ("e4", BookingBand::Fired),
-            ("e5", BookingBand::Fired),
+            ("gap", BookingBand::Fired),
             ("kept", BookingBand::Fired),
             ("needs-kept", BookingBand::Next),
+            ("e5", BookingBand::Older),
             ("e6", BookingBand::Older),
             ("e7", BookingBand::Older),
         ],

@@ -364,7 +364,8 @@ const MAX_LISTED_ENDED: usize = 5;
 
 /// The section's finished rule over ended entries: an entry nothing alive, not starting,
 /// nothing waiting on it, and no unfinished adopted entry below it at any depth, folds
-/// into `Older` past the newest `MAX_LISTED_ENDED` by end time.
+/// into `Older` past the newest `MAX_LISTED_ENDED` by end time, an end with no time yet
+/// being the newest.
 fn fold_older(
     mut built: Vec<(SidebarBooking, Option<usize>)>,
 ) -> Vec<(SidebarBooking, Option<usize>)> {
@@ -398,7 +399,7 @@ fn fold_older(
             _ => None,
         })
         .collect();
-    ended.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    ended.sort_by_key(|entry| std::cmp::Reverse((entry.0.is_none(), entry.0)));
     for (_, index) in ended.into_iter().skip(MAX_LISTED_ENDED) {
         built[index].0.band = BookingBand::Older;
     }
