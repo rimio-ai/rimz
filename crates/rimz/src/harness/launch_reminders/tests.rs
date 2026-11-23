@@ -461,7 +461,7 @@ You are @coder, running on Opus.
 
 ### Subagents
 
-Subagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.
+No subagent profile is configured for you, so none is listed here. Do the work yourself with your direct tools.
 
 ### Skills
 
@@ -756,7 +756,7 @@ fn environment_follows_identity_and_precedes_policy() {
                 .find(if subagent {
                     SUBAGENT_REMINDER_BODY
                 } else {
-                    "Subagents are disabled"
+                    "No subagent profile is configured"
                 })
                 .expect("policy paragraph");
             assert!(identity < env && env < tmp && tmp < policy);

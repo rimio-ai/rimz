@@ -1916,7 +1916,10 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 assert!(!text.contains("high effort"));
                 assert_eq!(text.contains("You are a subagent:"), subagent);
                 assert_eq!(text.contains("team `forge`"), !subagent);
-                assert_eq!(text.contains("Subagents are disabled"), !subagent);
+                assert_eq!(
+                    text.contains("No subagent profile is configured"),
+                    !subagent
+                );
                 if subagent && model {
                     assert!(text.contains("You are @coder, running on GPT 6 Astra"));
                     assert!(
