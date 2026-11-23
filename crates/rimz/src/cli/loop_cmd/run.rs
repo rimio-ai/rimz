@@ -168,7 +168,7 @@ pub(super) fn run_one(
             TaskSource::Config,
             Some(now),
             None,
-            &now.to_zoned(config.time_zone()),
+            &now.to_zoned_datetime(config.time_zone()),
         );
         let timing = condition::observe((&loaded.key(name), name), &observed_entry, timing, now);
         write_condition_notice(&mut ui::out(), &timing)?;

@@ -275,7 +275,7 @@ pub(super) fn load_catalog(
         rimz::harness::team_stage::stage_flips(&ctx.store).context("reading team stage flips")?;
     let runs = run_log::stats(
         &rimz::disk::paths::logs_dir(),
-        &jiff::Timestamp::now().to_zoned(machine.time_zone()),
+        &jiff::Timestamp::now().to_zoned_datetime(machine.time_zone()),
         Some(&ctx.workspace.project_root),
     );
     let sources = rimz::config::definitions::load(

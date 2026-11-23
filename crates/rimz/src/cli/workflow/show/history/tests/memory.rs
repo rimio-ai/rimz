@@ -23,10 +23,13 @@ fn terminal_history_dates_its_end_and_every_row_clock() {
     let text = String::from_utf8(out.into_inner()).unwrap();
     let zone = jiff::tz::TimeZone::system();
     let end = at(12)
-        .to_zoned(zone.clone())
+        .to_zoned_datetime(zone.clone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string();
-    let row = at(10).to_zoned(zone).strftime("%Y-%m-%d %H:%M").to_string();
+    let row = at(10)
+        .to_zoned_datetime(zone)
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string();
     assert!(
         text.lines()
             .nth(1)

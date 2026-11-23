@@ -5487,12 +5487,12 @@ fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
     .unwrap();
     let started = jiff::Timestamp::now() - std::time::Duration::from_secs(4_000);
     let stamp = started
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .strftime("%Y-%m-%d %H:%M")
         .to_string();
     let visit = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M", &stamp)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .unwrap()
         .timestamp();
     std::fs::write(
@@ -5587,12 +5587,12 @@ fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
     // stage ends the first notice's visit, and a prompt to the lead withdraws the second.
     let minute = |at: jiff::Timestamp| {
         let stamp = at
-            .to_zoned(jiff::tz::TimeZone::system())
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
             .strftime("%Y-%m-%d %H:%M")
             .to_string();
         let parsed = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M", &stamp)
             .unwrap()
-            .to_zoned(jiff::tz::TimeZone::system())
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
             .unwrap()
             .timestamp();
         (stamp, parsed)

@@ -313,7 +313,7 @@ pub fn publish_claude_5h(env: &Env, used: u8) -> jiff::Timestamp {
 
 /// A reset instant as a window reading's `(resets <time>)` names it, in the fixture's zone.
 pub fn reset_minute(at: jiff::Timestamp) -> String {
-    at.to_zoned(jiff::tz::TimeZone::system())
+    at.to_zoned_datetime(jiff::tz::TimeZone::system())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }

@@ -567,7 +567,7 @@ fn attribution_only_panel_shows_the_lane_boundary() {
     let timestamp = "2026-09-06T13:26:00.155953104Z"
         .parse::<jiff::Timestamp>()
         .unwrap();
-    let local = timestamp.to_zoned(crate::cli::machine_config().time_zone());
+    let local = timestamp.to_zoned_datetime(crate::cli::machine_config().time_zone());
     let boundary = format!(
         "since {} {:02}:{:02}",
         local.date(),

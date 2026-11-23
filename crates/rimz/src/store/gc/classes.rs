@@ -418,7 +418,8 @@ fn owned_expired(
     }
     agent
         .ended_at
-        .is_some_and(|ended| expired(ended.into(), now, retention::OWNED_GRACE))
+        .and_then(|ended| SystemTime::try_from(ended).ok())
+        .is_some_and(|ended| expired(ended, now, retention::OWNED_GRACE))
 }
 
 /// Remove each per-handle directory under `dir` by [`owned_expired`] against

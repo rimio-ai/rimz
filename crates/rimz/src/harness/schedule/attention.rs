@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 use serde::Serialize;
 
 use crate::config::TaskEntry;
@@ -554,7 +554,7 @@ pub struct ReadContext<'a> {
     pub open: bool,
     /// Each task's run-log stats by name, from the caller's fold over the room's run log.
     pub stats: &'a BTreeMap<String, LoopRunStats>,
-    pub now: &'a Zoned,
+    pub now: &'a ZonedDateTime,
 }
 
 /// The verdict of every visible task of the room at `root`, whose state and runtime trees

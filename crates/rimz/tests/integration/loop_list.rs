@@ -2806,7 +2806,7 @@ fn read_causes_in_child(path: &Path) {
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let home = PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
     let runtime_root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let reads = rooms
         .iter()
         .map(|(name, root)| {
@@ -3158,7 +3158,7 @@ fn forge_conditions_refuse_and_need_you_without_a_supported_forge() {
     let (_, listed) = json_tasks(&loop_ok(&env, &["loop", "list", "--json"]));
     assert!(!listed.contains_key("refused"), "nothing was stored");
     let text = loop_ok(&env, &["loop", "list"]);
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let read = |name: &str| {
         rimz::harness::schedule::attention::read_room(
             &env.project_root,
@@ -3219,7 +3219,7 @@ fn read_d9_in_child(path: &Path) {
     let runtime_root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
     let state = rimz::StatePaths::for_project_root_under(&root, &home).unwrap();
     let runtime = rimz::RuntimePaths::for_state_under(&state, &runtime_root);
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let reads = attention::read_room(
         &root,
         &state,

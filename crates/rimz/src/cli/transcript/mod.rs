@@ -664,7 +664,7 @@ pub(crate) fn render_lines_to(
         view.lane_label.as_deref(),
         &entries_for_view(view),
         tz,
-        jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+        jiff::Timestamp::now().to_zoned_datetime(tz.clone()).date(),
         prose,
     )
 }
@@ -695,7 +695,7 @@ fn render_selected_lines_to(
         view.lane_label.as_deref(),
         &entries,
         tz,
-        jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+        jiff::Timestamp::now().to_zoned_datetime(tz.clone()).date(),
         prose,
     )
 }
@@ -905,7 +905,7 @@ fn write_archive_hint(
     );
     let when = newest_archived_at
         .map(|at| {
-            let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
+            let today = jiff::Timestamp::now().to_zoned_datetime(tz.clone()).date();
             format!(" ({})", format_marker_when(at, tz, today))
         })
         .unwrap_or_default();

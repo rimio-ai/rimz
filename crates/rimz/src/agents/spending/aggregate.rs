@@ -172,7 +172,7 @@ impl WindowStarts {
         let now = i64::try_from(now_secs)
             .ok()
             .and_then(|second| Timestamp::from_second(second).ok())
-            .map(|now| now.to_zoned(crate::config::resolve_time_zone(Some(timezone))));
+            .map(|now| now.to_zoned_datetime(crate::config::resolve_time_zone(Some(timezone))));
         let start = |days: u32| {
             now.as_ref()
                 .and_then(|now| {
@@ -1439,18 +1439,18 @@ fn trailing_window_cutoff(now_secs: u64, span_secs: u64) -> u64 {
 pub fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
     let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
     let zone = crate::config::resolve_time_zone(tz);
-    let start = now.to_zoned(zone).start_of_day().ok()?.timestamp();
+    let start = now.to_zoned_datetime(zone).start_of_day().ok()?.timestamp();
     u64::try_from(start.as_second()).ok()
 }
 
 /// Epoch second of 00:00 UTC on the current month's first day.
 pub fn utc_month_start_secs(now_secs: u64) -> Option<u64> {
     let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
-    let utc = now.to_zoned(jiff::tz::TimeZone::UTC);
+    let utc = now.to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let start = jiff::civil::Date::new(utc.year(), utc.month(), 1)
         .ok()?
         .at(0, 0, 0, 0)
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .ok()?;
     u64::try_from(start.timestamp().as_second()).ok()
 }
@@ -1458,7 +1458,7 @@ pub fn utc_month_start_secs(now_secs: u64) -> Option<u64> {
 /// Local civil date expressed as days since 1970-01-01, for published history.
 pub fn local_day_index(now_secs: u64, tz: Option<&str>) -> Option<i64> {
     let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
-    let local = now.to_zoned(crate::config::resolve_time_zone(tz));
+    let local = now.to_zoned_datetime(crate::config::resolve_time_zone(tz));
     Some((now.as_second() + i64::from(local.offset().seconds())).div_euclid(86_400))
 }
 
@@ -1478,7 +1478,7 @@ fn local_day_boundaries(first: u64, last: u64, zone: jiff::tz::TimeZone) -> Vec<
     let Some(mut day) = i64::try_from(first)
         .ok()
         .and_then(|second| Timestamp::from_second(second).ok())
-        .and_then(|first| first.to_zoned(zone).start_of_day().ok())
+        .and_then(|first| first.to_zoned_datetime(zone).start_of_day().ok())
     else {
         return Vec::new();
     };

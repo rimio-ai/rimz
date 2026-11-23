@@ -210,7 +210,7 @@ fn stats_counts_fires_not_heard_siblings() {
     );
     let now = Timestamp::from_second(30)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = stats(dir.path(), &now, None);
     assert_eq!(stats["wait"].runs, 1);
 }
@@ -269,7 +269,7 @@ fn skipped_check_cost_counts_and_old_check_rows_still_parse() {
     append_to(dir.path(), &row);
     let now = Timestamp::from_second(10)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     assert_eq!(
         spend_on_local_day(&task_records(dir.path(), &id("guard"), None), &now),
         0.25
@@ -405,7 +405,7 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
     append_to(dir.path(), &foreign);
     let now = Timestamp::from_second(10)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = stats(dir.path(), &now, Some(Path::new("/project")));
     let task = &stats["task"];
     assert_eq!(
@@ -588,7 +588,7 @@ fn append_then_stats_round_trips_records() {
 
     let now = Timestamp::from_second(20)
         .expect("timestamp")
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
@@ -703,7 +703,7 @@ fn task_records_folds_log_generations() {
 #[test]
 fn daily_spend_uses_the_configured_local_day() {
     let now = "2026-06-02T00:30:00-04:00[America/New_York]"
-        .parse::<Zoned>()
+        .parse::<ZonedDateTime>()
         .expect("zoned");
     let mut prior = record("wait", 0, LoopRunResult::Completed);
     prior.at = "2026-06-01T23:30:00Z".parse().expect("timestamp");
@@ -750,7 +750,7 @@ fn stats_accumulates_only_same_local_day_spend() {
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let now = "2026-06-02T12:00:00-04:00[America/New_York]"
-        .parse::<Zoned>()
+        .parse::<ZonedDateTime>()
         .expect("zoned");
     let path = dir.path().join("loop-runs.log.jsonl");
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
@@ -778,7 +778,9 @@ fn held_stats_match_fresh_across_appends_rotation_and_roots() {
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new("/room");
     let other = Path::new("/other");
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let now = "2026-06-02T12:00:00Z[UTC]"
+        .parse::<ZonedDateTime>()
+        .unwrap();
     let mut held = HeldStats::new(dir.path());
     for (i, cap) in [u64::MAX, u64::MAX, 1, u64::MAX].into_iter().enumerate() {
         let mut row = record("task", i as i64, LoopRunResult::Completed);
@@ -820,7 +822,7 @@ fn held_stats_reset_on_local_day_and_time_zone_change() {
         ("2026-06-03T12:00:00Z[UTC]", 4.0),
         ("2026-06-03T12:00:00+02:00[Europe/Berlin]", 7.0),
     ] {
-        let now = time.parse::<Zoned>().unwrap();
+        let now = time.parse::<ZonedDateTime>().unwrap();
         assert_eq!(
             held.stats(root, &now)
                 .get("task")
@@ -858,7 +860,7 @@ fn stats_folds_rotated_sibling_and_keeps_newest_last() {
 
     let now = Timestamp::from_second(30)
         .expect("timestamp")
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
@@ -888,7 +890,7 @@ fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
 
     let now = Timestamp::from_second(30)
         .expect("timestamp")
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
@@ -1068,7 +1070,9 @@ fn history_drops_named_launch_rows_and_keeps_each_runs_first_report() {
         "a launch row naming a run is dropped, early or late, a skip naming the run is kept, \
          and the run's first report wins"
     );
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let now = "2026-06-02T12:00:00Z[UTC]"
+        .parse::<ZonedDateTime>()
+        .unwrap();
     let stats = &stats(dir.path(), &now, None)["wf"];
     assert_eq!(stats.runs, 2, "the skip and the run's report are two fires");
     assert_eq!(stats.last.as_ref().map(|row| row.at.as_second()), Some(3));

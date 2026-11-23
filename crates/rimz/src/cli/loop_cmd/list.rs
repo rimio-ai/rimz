@@ -547,7 +547,7 @@ fn load(
     };
     let now = Timestamp::now();
     let config = MachineConfig::load_lenient();
-    let now_zoned = now.to_zoned(config.time_zone());
+    let now_zoned = now.to_zoned_datetime(config.time_zone());
     let timer_active = std::cell::OnceCell::new();
     let mut rooms = Vec::new();
     let mut warnings = config
@@ -886,7 +886,7 @@ impl TaskRow {
     pub(super) fn subscription_last(
         task: &LoadedTask,
         stats: Option<&run_log::LoopRunStats>,
-        now: &jiff::Zoned,
+        now: &jiff::ZonedDateTime,
     ) -> String {
         let last = stats
             .and_then(|stats| stats.acting.as_ref())

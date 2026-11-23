@@ -12,7 +12,7 @@ pub(super) fn run(command: TimerSubcmd) -> Result<()> {
 }
 
 pub(super) fn tick() -> Result<()> {
-    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     os_timer::tick(&now)?;
     Ok(())
 }

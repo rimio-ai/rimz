@@ -731,7 +731,7 @@ fn append_day(hold: &Maintenance, record: &SpendDay) -> Result<(), AtomicErr> {
 pub(super) fn utc_day(ts: u64) -> Option<Date> {
     Timestamp::from_second(i64::try_from(ts).ok()?)
         .ok()
-        .map(|ts| ts.to_zoned(TimeZone::UTC).date())
+        .map(|ts| ts.to_zoned_datetime(TimeZone::UTC).date())
 }
 
 fn is_closed_day(ts_secs: u64, now_secs: u64) -> bool {
@@ -824,7 +824,7 @@ fn grouped_days<'a>(
         let Some(day) = i64::try_from(day * DAY_SECS)
             .ok()
             .and_then(|ts| Timestamp::from_second(ts).ok())
-            .map(|ts| ts.to_zoned(TimeZone::UTC).date())
+            .map(|ts| ts.to_zoned_datetime(TimeZone::UTC).date())
         else {
             continue;
         };
@@ -841,7 +841,7 @@ fn grouped_days<'a>(
 fn day_start(day: Date) -> Option<u64> {
     u64::try_from(
         day.at(0, 0, 0, 0)
-            .to_zoned(TimeZone::UTC)
+            .to_zoned_datetime(TimeZone::UTC)
             .ok()?
             .timestamp()
             .as_second(),

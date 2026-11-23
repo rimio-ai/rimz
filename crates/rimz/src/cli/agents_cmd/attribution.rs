@@ -403,7 +403,7 @@ fn since_label(since: jiff::Timestamp) -> String {
     format!(
         "since {}",
         since
-            .to_zoned(crate::cli::machine_config().time_zone())
+            .to_zoned_datetime(crate::cli::machine_config().time_zone())
             .strftime("%Y-%m-%d %H:%M")
     )
 }

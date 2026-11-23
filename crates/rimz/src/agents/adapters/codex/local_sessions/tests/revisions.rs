@@ -97,7 +97,9 @@ fn cold_discovery_reads_one_header_for_all_thread_revisions() {
     let key = DiscoveryKey {
         home: temp.path().to_path_buf(),
         workspaces: vec![PathBuf::from("/workspace/project")],
-        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        today: Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date(),
     };
     let mut snapshot = CodexDiscoverySnapshot::default();
 
@@ -113,7 +115,9 @@ fn full_scan(home: &Path) -> (Vec<LocalSessionObservation>, usize) {
     let key = DiscoveryKey {
         home: home.to_path_buf(),
         workspaces: vec![PathBuf::from("/workspace/project")],
-        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        today: Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date(),
     };
     let mut snapshot = CodexDiscoverySnapshot::default();
     let observations = snapshot.refresh(key, Instant::now());

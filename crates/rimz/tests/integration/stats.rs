@@ -7,7 +7,7 @@ use crate::common::Env;
 
 fn seed_rebuild_history(env: &Env) -> (jiff::civil::Date, jiff::civil::Date) {
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let day = today.checked_sub(jiff::Span::new().days(20)).unwrap();
     let kept = day.checked_sub(jiff::Span::new().days(1)).unwrap();
@@ -85,7 +85,7 @@ fn stats_rebuild_refuses_incomplete_discovery_without_republishing() {
     }
     let env = Env::new();
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let projects = env.home_root.join(".claude/projects/repo");
     std::fs::create_dir_all(&projects).unwrap();

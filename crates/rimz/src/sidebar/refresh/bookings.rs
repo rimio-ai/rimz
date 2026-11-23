@@ -154,7 +154,7 @@ pub(super) fn refresh_bookings_for(
                 state: state_paths,
                 runtime,
                 prior: &prior,
-                now: snapshot.now.to_zoned(config.time_zone()),
+                now: snapshot.now.to_zoned_datetime(config.time_zone()),
                 window_secs: CONSUMED_TREELESS_SECS,
                 store,
                 worktrees: &config.agents.worktree,
@@ -192,7 +192,7 @@ struct Lane<'a> {
     state: &'a StatePaths,
     runtime: &'a RuntimePaths,
     prior: &'a BookingsCache,
-    now: jiff::Zoned,
+    now: jiff::ZonedDateTime,
     window_secs: u64,
     /// The room's store, whose Audit rows a fired booking reads; `None` when it cannot be
     /// opened.

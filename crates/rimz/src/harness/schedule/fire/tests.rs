@@ -853,7 +853,7 @@ fn condition_tick(
     state: Option<WhenState>,
     verdict: Option<bool>,
     paused: bool,
-    now: &Zoned,
+    now: &ZonedDateTime,
 ) -> PlannedTasks {
     let task = loaded(TaskEntry {
         args: vec!["true".to_owned()],
@@ -1772,7 +1772,7 @@ impl Tick {
     }
 
     /// The task's action this tick and the stamp carried into the next one.
-    fn run(self, task: &LoadedTask, now: &Zoned) -> (Option<Action>, Option<Timestamp>) {
+    fn run(self, task: &LoadedTask, now: &ZonedDateTime) -> (Option<Action>, Option<Timestamp>) {
         let (actions, next, _) = plan(
             &one(task.clone()),
             &self.state.map(one).unwrap_or_default(),

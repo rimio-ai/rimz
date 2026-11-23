@@ -7,8 +7,8 @@ use crate::agents::RateLimitWindow;
 /// Local HH:MM today, a weekday within six days, or a full date beyond that.
 pub fn local_clock(at: Timestamp, now: Timestamp) -> String {
     let zone = jiff::tz::TimeZone::system();
-    let at = at.to_zoned(zone.clone());
-    let today = now.to_zoned(zone).date();
+    let at = at.to_zoned_datetime(zone.clone());
+    let today = now.to_zoned_datetime(zone).date();
     let format = if at.date() == today {
         "%H:%M"
     } else if at
@@ -478,7 +478,7 @@ mod tests {
         let zone = jiff::tz::TimeZone::system();
         let now = jiff::civil::date(2026, 10, 30)
             .at(12, 56, 0, 0)
-            .to_zoned(zone)
+            .to_zoned_datetime(zone)
             .unwrap();
         let readings = [-7, -6, -1, 0, 1, 6, 7].map(|days| {
             let at = now.checked_add(jiff::Span::new().days(days)).unwrap();
@@ -503,11 +503,15 @@ mod tests {
         let local = jiff::tz::TimeZone::system();
         let since = jiff::civil::date(2026, 6, 1)
             .at(15, 2, 0, 0)
-            .to_zoned(local.clone())
+            .to_zoned_datetime(local.clone())
             .unwrap()
             .timestamp();
         let until = since + jiff::SignedDuration::from_hours(6);
-        let clock = |at: Timestamp| at.to_zoned(local.clone()).strftime("%H:%M").to_string();
+        let clock = |at: Timestamp| {
+            at.to_zoned_datetime(local.clone())
+                .strftime("%H:%M")
+                .to_string()
+        };
         assert_eq!(
             [
                 held_start(since, Some(until), since,),
@@ -525,7 +529,7 @@ mod tests {
         let zone = jiff::tz::TimeZone::system();
         let now = jiff::civil::date(2026, 10, 30)
             .at(12, 56, 0, 0)
-            .to_zoned(zone)
+            .to_zoned_datetime(zone)
             .unwrap();
         let since = now.checked_sub(jiff::Span::new().days(1)).unwrap();
         let until = now.checked_add(jiff::Span::new().days(7)).unwrap();

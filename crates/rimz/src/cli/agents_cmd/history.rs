@@ -89,11 +89,14 @@ fn render_history(
     let rows = &rows[rows.len().saturating_sub(tail.unwrap_or(rows.len()))..];
     let count = rows.iter().map(|row| row.len()).sum::<usize>();
     let turns = &turns[turns.len() - count..];
-    let today = now.to_zoned(time_zone.clone()).date();
-    let format = if rows
-        .iter()
-        .all(|row| row[0].started_at.to_zoned(time_zone.clone()).date() == today)
-    {
+    let today = now.to_zoned_datetime(time_zone.clone()).date();
+    let format = if rows.iter().all(|row| {
+        row[0]
+            .started_at
+            .to_zoned_datetime(time_zone.clone())
+            .date()
+            == today
+    }) {
         "%H:%M"
     } else {
         "%Y-%m-%d %H:%M"
@@ -161,7 +164,7 @@ fn render_history(
             render::cell(
                 first
                     .started_at
-                    .to_zoned(time_zone.clone())
+                    .to_zoned_datetime(time_zone.clone())
                     .strftime(format)
                     .to_string(),
             ),

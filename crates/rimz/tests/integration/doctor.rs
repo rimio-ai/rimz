@@ -3360,7 +3360,7 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
     // a daylight-saving change repeats names two instants.
     let stamp = |offset: jiff::Span| {
         jiff::Timestamp::now()
-            .to_zoned(jiff::tz::TimeZone::UTC)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
             .checked_add(offset)
             .expect("shifted time")
             .strftime("%Y-%m-%d %H:%M:%S%.3f")

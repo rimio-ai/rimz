@@ -89,7 +89,7 @@ fn source_description(source: TaskSource, entry: &TaskEntry) -> String {
     }
 }
 
-fn spend_label(records: &[LoopRunRecord], now: &jiff::Zoned) -> Option<String> {
+fn spend_label(records: &[LoopRunRecord], now: &jiff::ZonedDateTime) -> Option<String> {
     let spend_today_usd = run_log::spend_on_local_day(records, now);
     let mut segments = Vec::new();
     if run_log::has_cost_on_local_day(records, now) {
@@ -129,7 +129,7 @@ struct ShowView {
     entry: TaskEntry,
     source: TaskSource,
     timing: schedule::TaskTiming,
-    now_zoned: jiff::Zoned,
+    now_zoned: jiff::ZonedDateTime,
     records: Vec<LoopRunRecord>,
     heard: Option<run_log::HeardSummary>,
     /// The task's quiet fires, which leave no row in `records`.
@@ -1197,7 +1197,7 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
         writeln!(ui::out(), "{}", lines.join("\n"))?;
         return Err(ui::AlreadyReported.into());
     }
-    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     let mut owners = Vec::new();
     for (root, catalog) in &catalogs {
         if catalog
@@ -1360,7 +1360,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let arming = task_records
         .live(&key)
         .and_then(|(_, record)| record.arming);
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let now_zoned = now.to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     let timing = if entry.each_worktree {
         schedule::TaskTiming::evaluate(
             task.trigger(),
@@ -1675,7 +1675,7 @@ fn write_workflow_runs(
 
 fn load_subscriptions(
     root: &Path,
-    now: &jiff::Zoned,
+    now: &jiff::ZonedDateTime,
     owns: impl Fn(&TaskEntry) -> bool,
 ) -> Result<Vec<SubscriptionView>> {
     let catalog = TaskCatalog::load_room(root)?;

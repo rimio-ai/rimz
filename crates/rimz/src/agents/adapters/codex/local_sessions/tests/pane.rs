@@ -38,7 +38,9 @@ fn key(home: &Path) -> DiscoveryKey {
     DiscoveryKey {
         home: home.to_path_buf(),
         workspaces: vec![PathBuf::from("/workspace/project")],
-        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        today: Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date(),
     }
 }
 

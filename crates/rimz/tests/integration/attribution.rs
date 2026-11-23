@@ -938,7 +938,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         "since {}",
         marker
             .created_at
-            .to_zoned(rimz::config::MachineConfig::default().time_zone())
+            .to_zoned_datetime(rimz::config::MachineConfig::default().time_zone())
             .strftime("%Y-%m-%d %H:%M")
     );
     let panel = String::from_utf8(run(&["agents", "attribution", "#demo"]))

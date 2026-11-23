@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::paths::logs_dir;
@@ -1596,7 +1596,7 @@ fn append_to(state_root: &Path, record: &LoopRunRecord) {
 
 pub fn stats(
     state_root: &Path,
-    now: &Zoned,
+    now: &ZonedDateTime,
     root: Option<&Path>,
 ) -> BTreeMap<String, LoopRunStats> {
     StatsFold::new(state_root, now).refresh(root, now).clone()
@@ -1616,7 +1616,7 @@ impl HeldStats {
         }
     }
 
-    pub fn stats(&mut self, root: &Path, now: &Zoned) -> &BTreeMap<String, LoopRunStats> {
+    pub fn stats(&mut self, root: &Path, now: &ZonedDateTime) -> &BTreeMap<String, LoopRunStats> {
         let fold = self
             .roots
             .entry(root.into())
@@ -1660,7 +1660,7 @@ struct StatsFold {
 }
 
 impl StatsFold {
-    fn new(state_root: &Path, now: &Zoned) -> Self {
+    fn new(state_root: &Path, now: &ZonedDateTime) -> Self {
         Self {
             reader: crate::disk::rotating::IncrementalFold::new(log_path(state_root)),
             merged: BTreeMap::new(),
@@ -1669,7 +1669,11 @@ impl StatsFold {
         }
     }
 
-    fn refresh(&mut self, root: Option<&Path>, now: &Zoned) -> &BTreeMap<String, LoopRunStats> {
+    fn refresh(
+        &mut self,
+        root: Option<&Path>,
+        now: &ZonedDateTime,
+    ) -> &BTreeMap<String, LoopRunStats> {
         let folded = self.reader.refresh(|state, record: LoopRunRecord| {
             if matches_root(&record, root) && is_history(&record, &mut state.reported) {
                 fold_record(record, now, state);
@@ -2038,7 +2042,7 @@ fn matches_root(record: &LoopRunRecord, root: Option<&Path>) -> bool {
         .is_none_or(|(root, recorded)| root == recorded)
 }
 
-pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
+pub fn spend_on_local_day(records: &[LoopRunRecord], now: &ZonedDateTime) -> f64 {
     records
         .iter()
         .filter_map(|record| cost_on_local_day(record, now))
@@ -2046,7 +2050,7 @@ pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
         .fold(0.0, |total, cost| total + cost)
 }
 
-pub fn has_cost_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> bool {
+pub fn has_cost_on_local_day(records: &[LoopRunRecord], now: &ZonedDateTime) -> bool {
     records
         .iter()
         .any(|record| cost_on_local_day(record, now).is_some())
@@ -2075,8 +2079,8 @@ pub fn cost_summary(records: &[LoopRunRecord]) -> TaskCostSummary {
     }
 }
 
-fn cost_on_local_day(record: &LoopRunRecord, now: &Zoned) -> Option<f64> {
-    (record.at.to_zoned(now.time_zone().clone()).date() == now.date())
+fn cost_on_local_day(record: &LoopRunRecord, now: &ZonedDateTime) -> Option<f64> {
+    (record.at.to_zoned_datetime(now.time_zone().clone()).date() == now.date())
         .then_some(record.cost_usd)
         .flatten()
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
@@ -2092,7 +2096,7 @@ fn last_kind_after(
     }
 }
 
-fn fold_record(record: LoopRunRecord, now: &Zoned, state: &mut FoldState) {
+fn fold_record(record: LoopRunRecord, now: &ZonedDateTime, state: &mut FoldState) {
     let Some(task) = record.task_id.clone() else {
         return;
     };

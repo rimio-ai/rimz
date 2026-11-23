@@ -772,8 +772,8 @@ pub(crate) fn refill_in(at: Timestamp, now: Timestamp, tz: &jiff::tz::TimeZone) 
         (hours @ 24.., _) => format!("{hours}h"),
         (hours, minutes) => format!("{hours}h{minutes:02}m"),
     };
-    let local = at.to_zoned(tz.clone());
-    let today = now.to_zoned(tz.clone()).date();
+    let local = at.to_zoned_datetime(tz.clone());
+    let today = now.to_zoned_datetime(tz.clone()).date();
     let day = match today.tomorrow() {
         Ok(tomorrow) if local.date() == tomorrow => " tomorrow".to_owned(),
         _ if local.date() > today => format!(" on {}", local.strftime("%Y-%m-%d")),

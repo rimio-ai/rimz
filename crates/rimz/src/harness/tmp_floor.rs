@@ -230,7 +230,7 @@ fn rejudge(candidate: &Candidate) -> Result<Option<TmpUnit>, TmpFloorErr> {
 
 fn eviction_time(unit: &TmpUnit) -> Option<SystemTime> {
     match unit.hold {
-        TmpHold::Ended(at) => Some(at.into()),
+        TmpHold::Ended(at) => SystemTime::try_from(at).ok(),
         TmpHold::Unowned => Some(unit.modified),
         TmpHold::Live | TmpHold::Open => None,
     }

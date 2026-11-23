@@ -2152,7 +2152,7 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
     let agents = BTreeMap::from([(key, idle(3)), ("claude@work".parse().unwrap(), idle(7))]);
     let context = ReportContext {
         day_cutoff_secs: now
-            .to_zoned(config.time_zone())
+            .to_zoned_datetime(config.time_zone())
             .start_of_day()
             .ok()
             .map(|day| day.timestamp().as_second().max(0) as u64),

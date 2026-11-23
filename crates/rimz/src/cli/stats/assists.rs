@@ -1268,7 +1268,7 @@ pub(super) fn panel_lines(
 
 pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bool) -> Result<()> {
     if json {
-        let as_of = Timestamp::now().to_zoned(crate::cli::machine_config().time_zone());
+        let as_of = Timestamp::now().to_zoned_datetime(crate::cli::machine_config().time_zone());
         return render::json_pretty(&super::json::assists_value(stats, limit, all, &as_of));
     }
     let mut out = render::out();
@@ -1828,7 +1828,7 @@ fn row_benefit_line(
     duration: Option<(u64, u64)>,
     recovered: Option<u64>,
 ) -> String {
-    let at = event.at().to_zoned(zone.clone());
+    let at = event.at().to_zoned_datetime(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
         AssistEvent::SpendRebuild { rebuilt, .. } => {
@@ -2037,8 +2037,8 @@ fn row_benefit_line(
                 parked_since.map(|parked| {
                     format!(
                         ", {}→{} ({} recovered)",
-                        parked.to_zoned(zone.clone()).strftime("%H:%M"),
-                        at.to_zoned(zone.clone()).strftime("%H:%M"),
+                        parked.to_zoned_datetime(zone.clone()).strftime("%H:%M"),
+                        at.to_zoned_datetime(zone.clone()).strftime("%H:%M"),
                         format_hours(recovered_secs(Some(parked), *at))
                     )
                 })
@@ -2352,7 +2352,10 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
 }
 
 fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &str) -> String {
-    let at = event.at().to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M");
+    let at = event
+        .at()
+        .to_zoned_datetime(zone.clone())
+        .strftime("%Y-%m-%d %H:%M");
     let benefit = benefit.split_once(' ').map_or(benefit, |(_, rest)| rest);
     match event {
         AssistEvent::SpendRebuild {
@@ -2592,7 +2595,7 @@ fn reset_facts(windows: &[AssistWindowReset], zone: &jiff::tz::TimeZone) -> Stri
                 .resets_at
                 .map(|reset| {
                     reset
-                        .to_zoned(zone.clone())
+                        .to_zoned_datetime(zone.clone())
                         .strftime("%Y-%m-%d %H:%M")
                         .to_string()
                 })
@@ -2612,7 +2615,9 @@ fn timestamp_fact(label: &str, timestamp: Option<Timestamp>, zone: &jiff::tz::Ti
         .map(|timestamp| {
             format!(
                 " · {label} {}",
-                timestamp.to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M")
+                timestamp
+                    .to_zoned_datetime(zone.clone())
+                    .strftime("%Y-%m-%d %H:%M")
             )
         })
         .unwrap_or_default()

@@ -902,7 +902,7 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
         let path = store
             .runtime_paths()
             .spending_history
-            .roles(frame.ts.to_zoned(jiff::tz::TimeZone::UTC).year());
+            .roles(frame.ts.to_zoned_datetime(jiff::tz::TimeZone::UTC).year());
         assert!(path.exists(), "hook must persist session provenance");
         let before = std::fs::read(&path).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
@@ -1056,7 +1056,7 @@ fn lifecycle_records_subagent_owners_for_the_pane_and_native_children() {
         }
         let path = store.runtime_paths().spending_history.roles(
             jiff::Timestamp::now()
-                .to_zoned(jiff::tz::TimeZone::UTC)
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
                 .year(),
         );
         let records = std::fs::read_to_string(path).unwrap();

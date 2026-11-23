@@ -377,7 +377,7 @@ fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
             pause_until: None,
             strikes: Some(3),
         }),
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     ));
     assert_eq!(row.state_text(now), "off");
 }
