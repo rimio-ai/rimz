@@ -13,7 +13,7 @@ Launching, joining, and stopping need a calling agent that RimZ can identify, th
 | `list` (alias `ls`) | any shell | [List](#list-children) children |
 | `profiles` | any shell | [List the profiles](#discover-profiles) a child can launch from |
 
-From a user shell, an agent-only verb fails before it touches the room, and the error points at `rimz subagents list`, `rimz agents`, and `rimz teams`. A child cannot launch anything itself ([Children cannot delegate](#children-cannot-delegate)).
+From a user shell, an agent-only verb fails before it touches the room, and the error points at `rimz subagents list`, `rimz agents`, and `rimz teams`. To try a subagent profile from your own shell, [`rimz agents <profile> --subagent-profile`](./agents.md#launch-a-subagent-profile) runs it as a top-level agent, not a child. A child cannot launch anything itself ([Children cannot delegate](#children-cannot-delegate)).
 
 ## Launch one child
 
