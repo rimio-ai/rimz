@@ -5,8 +5,8 @@
 use serde::Serialize;
 
 use super::Tools;
+use super::notices::CollectedNotices;
 use super::room::Room;
-use super::start::CollectedNotices;
 use crate::address::{LaneSelector, TargetErr};
 use crate::launcher::child_resume::{ResumeChildOutcome, resume_child};
 use crate::launcher::context::{current_channel, resolve_caller, resolve_me, sender_for};
@@ -151,7 +151,7 @@ pub(super) fn send(tools: &Tools, args: &MessageArgs) -> Result<Answer, Failure>
         }
         Err(err) => return Err(dispatch_failure(&room, &lane, err)),
     };
-    Ok(Answer::data(&answer(result, notices.0)))
+    Ok(Answer::data(&answer(result, notices.into_lines())))
 }
 
 /// The dispatch's outcomes as rows, each interrupt the receiver did not confirm a warning.

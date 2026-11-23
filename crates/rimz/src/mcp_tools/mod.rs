@@ -15,6 +15,7 @@ mod join;
 mod lsp;
 mod message;
 mod notes;
+mod notices;
 mod owned;
 mod room;
 mod schedule;
