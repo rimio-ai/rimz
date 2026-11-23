@@ -3264,14 +3264,21 @@ fn a_server_follows_its_rooms_build_in_place_and_announces_its_tools() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_in_room_at(&env, &builds.first);
     server.initialize();
-    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "run", "value": "sleep 3"}));
+    let checkout = checkout_with_fifo(&env, "follow-7c2d");
+    let command = format!("cat {}", checkout.join("held.md").display());
+    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "run", "value": command}));
     assert!(!is_error, "{start}");
-    // The call's thread may still be handing its children to the main thread.
+    let held = HeldFifo::when_read(&checkout);
+    // A read that overlaps the call thread's exit can miss the child as it moves to the main
+    // thread, so the read that found it is the one kept.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while children(server.pid()).is_empty() && Instant::now() < deadline {
+    let watchers = loop {
+        let found = children(server.pid());
+        if !found.is_empty() || Instant::now() >= deadline {
+            break found;
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
-    let watchers = children(server.pid());
+    };
     assert_eq!(
         watchers.len(),
         1,
@@ -3293,7 +3300,13 @@ fn a_server_follows_its_rooms_build_in_place_and_announces_its_tools() {
     );
     server.list_changed();
     assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+    assert_eq!(
+        children(server.pid()),
+        watchers,
+        "the watcher did not outlive the swap"
+    );
 
+    held.release("");
     let deadline = Instant::now() + REPLY_DEADLINE;
     while !children(server.pid()).is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
