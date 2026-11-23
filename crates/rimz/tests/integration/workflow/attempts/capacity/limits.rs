@@ -229,7 +229,7 @@ fn off_steps_still_hold_at_the_machine_automation_cap() {
     );
     assert_eq!(
         value["record"]["wait"]["detail"],
-        "1 of 1 automated agents open (@codex)"
+        "1 of 1 automated agents open (@codex (@existing))"
     );
     assert_eq!(value["record"]["visits"], json!({}));
     assert!(tickets(&room).is_empty());

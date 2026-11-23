@@ -738,7 +738,7 @@ fn model_line_names_handle_and_model_without_effort() {
         ..LaunchParams::default()
     };
     let line = |params: &LaunchParams| {
-        model_fragment(params).map(|fragment| model_line(params, &fragment))
+        model_fragment(params).map(|fragment| model_line(params, None, &fragment))
     };
     for (params, expected) in [
         (
@@ -778,6 +778,19 @@ fn model_line_names_handle_and_model_without_effort() {
     ] {
         assert_eq!(line(&params).as_deref(), expected);
     }
+    // The agent's own name joins its handle when the two differ.
+    let params = LaunchParams {
+        role: Some("planner".to_owned()),
+        ..LaunchParams::default()
+    };
+    assert_eq!(
+        model_line(&params, Some("round-binder"), "on Fable 5.1"),
+        "You are @planner (@round-binder), running on Fable 5.1."
+    );
+    assert_eq!(
+        model_line(&params, Some("planner"), "on Fable 5.1"),
+        "You are @planner, running on Fable 5.1."
+    );
 }
 
 #[test]

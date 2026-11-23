@@ -153,7 +153,7 @@ impl<'a> Host<'a> {
                 self.notify(notices)?;
                 let results = results?;
                 for (agent, stop) in agents.iter().zip(results) {
-                    stop.into_result(&crate::address::agent_handle(agent, &peers, true))?;
+                    stop.into_result(&crate::address::named_handle(agent, &peers, true))?;
                 }
                 rounds += 1;
                 continue;
@@ -740,7 +740,7 @@ impl workflow::AttemptHost for Host<'_> {
             self.notify(notices)?;
             let stops = stops?.unwrap_or_default();
             for (root, stop) in cohort.agents.iter().zip(stops) {
-                let handle = crate::address::agent_handle(root, &peers, true);
+                let handle = crate::address::named_handle(root, &peers, true);
                 stop.into_result(&handle)
                     .context("stopping workflow attempt")?;
             }

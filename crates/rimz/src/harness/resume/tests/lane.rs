@@ -877,7 +877,7 @@ fn lane_split_warns_with_the_missing_teams_definition_cause() {
         actual.push(warnings);
         let cause =
             cause.unwrap_or("the config read for recovery has no definition for team `forge`");
-        let consequence = "members @planner#lane resume as individual sessions \
+        let consequence = "members @planner#lane (@closed) resume as individual sessions \
                            without the team's prompt layers";
         expected.push(vec![if cause.contains('\n') {
             format!("cannot restore team `forge` in #lane: {consequence}\n{cause}")
@@ -907,7 +907,7 @@ fn lane_split_warns_when_the_recorded_role_is_no_longer_bound() {
         warnings,
         [
             "cannot restore team `forge` in #lane: team `forge` has no role `retired`; \
-         declared roles: planner, coder; members @retired#lane resume as individual sessions \
+         declared roles: planner, coder; members @retired#lane (@closed) resume as individual sessions \
          without the team's prompt layers"
         ]
     );
@@ -940,7 +940,7 @@ fn lane_split_rejected_team_prompt_keeps_the_solo_profile() {
          or append-system-prompt-files but role `planner` (claude) has no base system prompt to \
          compose them onto; add system-prompt-file to role planner or its profile, or write {} \
          with a nonempty body as the claude kind base (run `rimz agents validate` if it did not \
-         load); members @planner#lane resume as individual sessions \
+         load); members @planner#lane (@closed) resume as individual sessions \
          without the team's prompt layers",
             crate::disk::paths::agents_home()
                 .join("agents/claude.md")
@@ -1072,11 +1072,11 @@ fn lane_split_notices_follow_solo_warnings_in_first_affected_member_order() {
         [
             format!("{reason}; resuming bare"),
             "cannot restore team `forge` in #lane: team `forge` has no role `retired`; \
-         declared roles: planner, coder; members @retired#lane resume as individual sessions \
+         declared roles: planner, coder; members @retired#lane (@newer) resume as individual sessions \
          without the team's prompt layers"
                 .into(),
             "cannot restore team `unavailable` in #lane: the config read for recovery has no \
-         definition for team `unavailable`; members @planner#lane resume as individual \
+         definition for team `unavailable`; members @planner#lane (@older) resume as individual \
          sessions without the team's prompt layers"
                 .into(),
         ]

@@ -63,7 +63,7 @@ pub(super) fn reconcile_cohort_launch(
                     .map(|agent| {
                         format!(
                             ", leader {}",
-                            crate::address::agent_handle(agent, &peers, true)
+                            crate::address::named_handle(agent, &peers, true)
                         )
                     })
                     .unwrap_or_default();

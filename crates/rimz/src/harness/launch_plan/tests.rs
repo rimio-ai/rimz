@@ -2655,6 +2655,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
     // The effective team supplies the member identities, not model names.
     let context = crate::harness::launch_context::team_launch_context(
         &request.identity.params,
+        request.identity.name.as_deref(),
         &request.action,
         &team,
         project.path(),
