@@ -21,6 +21,7 @@ mod stop;
 mod subagent;
 mod tasks;
 mod wait;
+mod workflow;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -88,6 +89,7 @@ impl Runner for Tools {
             Call::Lsp(args) => lsp::run(self, &args),
             Call::Wait(args) => wait::arm(self, &args),
             Call::Subagent(args) => subagent::launch(self, &args),
+            Call::Workflow(args) => workflow::start(self, &args),
             Call::Tasks(args) => tasks::tasks(self, &args),
             Call::Join(args) => join::join(self, &args, cancelled),
             Call::Stop(args) => stop::stop(self, &args),

@@ -6,7 +6,7 @@ use anyhow::Context;
 
 use crate::mcp::Failure;
 use crate::store::snapshot::SidebarSnapshot;
-use crate::workspace::{WorkspaceErr, WorkspaceResolver};
+use crate::workspace::WorkspaceResolver;
 use crate::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 /// The room `dir` takes part in, with its existing store.
@@ -24,12 +24,10 @@ impl Room {
         let paths = StatePaths::for_project_root(&workspace.project_root)
             .context("preparing store paths")?;
         let no_room = || {
-            Failure::new(
-                WorkspaceErr::NoRoom {
-                    location: format!("at {}", workspace.project_root.display()),
-                }
-                .to_string(),
-            )
+            Failure::new(format!(
+                "no room at {}: run `rimz start` there",
+                workspace.project_root.display()
+            ))
         };
         if crate::workspace::record::read(&paths.workspace_record).is_err() {
             return Err(no_room());

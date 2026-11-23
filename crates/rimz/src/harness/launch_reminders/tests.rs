@@ -1009,6 +1009,7 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
 - rimz-lsp: the `lsp` tool of the `{server}` MCP server
 - rimz-wait: the `wait` tool of the `{server}` MCP server
 - rimz-subagents: the `subagent` tool of the `{server}` MCP server
+- rimz-workflow: the `workflow` tool of the `{server}` MCP server
 - rimz-control: the {control} of the `{server}` MCP server
 - rimz-notes: the `notes` tool of the `{server}` MCP server
 - rimz-message: Skill(rimz-message)"

@@ -3,45 +3,16 @@
 
 use super::Tools;
 use super::room::Room;
-use super::start::{Start, TaskKind};
+use super::start::{CollectedNotices, Start, TaskKind, with_warnings};
 use crate::harness::run::SupervisedRunRequest;
 use crate::launcher::context::resolve_caller;
-use crate::launcher::{
-    BackgroundLaunchOutcome, ClosedCohort, CohortChoice, Interaction, Notice, RunCompletion,
-    SupervisedContext, Unattended,
-};
+use crate::launcher::{BackgroundLaunchOutcome, RunCompletion, SupervisedContext};
 use crate::mcp::catalog::SubagentArgs;
 use crate::mcp::{Answer, Failure};
 
 /// How a subagent's result reaches the agent that launched it.
 const REPORT: &str =
     "a SUBAGENT_REPORT message to you once every subagent you have running settles";
-
-/// `Unattended`'s refusals, keeping the text of each notice for the answer.
-#[derive(Default)]
-struct CollectedNotices(Vec<String>);
-
-impl Interaction for CollectedNotices {
-    fn cross_repo(&mut self, workspace: &crate::ResolvedWorkspace) -> anyhow::Result<bool> {
-        Unattended.cross_repo(workspace)
-    }
-    fn pr_branch(
-        &mut self,
-        facts: &crate::worktree::WorktreeErr,
-    ) -> anyhow::Result<Option<crate::worktree::PrBranchChoice>> {
-        Unattended.pr_branch(facts)
-    }
-    fn unmanaged_checkout(&mut self, name: &str, cwd: &std::path::Path) -> anyhow::Result<bool> {
-        Unattended.unmanaged_checkout(name, cwd)
-    }
-    fn closed_cohort(&mut self, cohort: ClosedCohort<'_>) -> anyhow::Result<CohortChoice> {
-        Unattended.closed_cohort(cohort)
-    }
-    fn notice(&mut self, notice: Notice<'_>) -> anyhow::Result<()> {
-        self.0.extend(notice.line());
-        Ok(())
-    }
-}
 
 /// Launch the subagent in the caller's room. A call without `cwd` leaves the child's
 /// directory to the launch, as the command does: the caller's own checkout, or the profile's
@@ -99,15 +70,4 @@ pub(super) fn launch(tools: &Tools, args: &SubagentArgs) -> Result<Answer, Failu
         Err(err) => Failure::from(err),
     };
     Err(with_warnings(failure, warnings))
-}
-
-/// `failure` with the notices collected before it, which the command would already have
-/// printed; a failure with none keeps its plain shape.
-fn with_warnings(mut failure: Failure, warnings: Vec<String>) -> Failure {
-    if !warnings.is_empty() {
-        failure
-            .extra
-            .insert("warnings".to_owned(), serde_json::json!(warnings));
-    }
-    failure
 }

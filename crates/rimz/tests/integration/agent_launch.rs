@@ -6680,6 +6680,7 @@ fn explain_prints_the_plan_without_side_effects() {
           "rimz-lsp",
           "rimz-wait",
           "rimz-subagents",
+          "rimz-workflow",
           "rimz-control",
           "rimz-notes"
         ],
@@ -7366,7 +7367,13 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             false,
             serde_json::json!(["researcher", "claude"]),
             serde_json::json!([]),
-            serde_json::json!(["rimz-lsp", "rimz-wait", "rimz-control", "rimz-notes"]),
+            serde_json::json!([
+                "rimz-lsp",
+                "rimz-wait",
+                "rimz-workflow",
+                "rimz-control",
+                "rimz-notes"
+            ]),
             serde_json::json!([]),
             true,
             false,

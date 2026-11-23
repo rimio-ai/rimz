@@ -101,6 +101,25 @@ pub enum DefinitionSource<'a> {
     },
 }
 
+/// Refuses a start's input that is not a string `outcome` with, when given, a `key` a run's key
+/// decodes (a string or an integer).
+pub fn check_start_input(
+    input: &serde_json::Map<String, serde_json::Value>,
+) -> std::result::Result<(), String> {
+    if !input
+        .get("outcome")
+        .is_some_and(serde_json::Value::is_string)
+    {
+        return Err("expected an object with a string `outcome`".into());
+    }
+    if let Some(key) = input.get("key")
+        && serde_json::from_value::<workflow::Key>(key.clone()).is_err()
+    {
+        return Err("expected a `key` that is a string or an integer".into());
+    }
+    Ok(())
+}
+
 /// The arguments a start gives its run, whatever started it.
 #[derive(Clone, Debug, Default)]
 pub struct StartArgs {

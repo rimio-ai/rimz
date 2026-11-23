@@ -686,17 +686,7 @@ fn parse_deadline(raw: &str) -> Result<String, String> {
 /// that a run's key decodes (a string or an integer).
 fn start_input(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let object = answer_object(raw)?;
-    if !object
-        .get("outcome")
-        .is_some_and(serde_json::Value::is_string)
-    {
-        return Err("expected an object with a string `outcome`".into());
-    }
-    if let Some(key) = object.get("key")
-        && serde_json::from_value::<records::Key>(key.clone()).is_err()
-    {
-        return Err("expected a `key` that is a string or an integer".into());
-    }
+    workflow::check_start_input(&object)?;
     Ok(object)
 }
 
@@ -755,6 +745,7 @@ fn start(
             name: &name,
             dir,
             worktree: worktree.as_deref(),
+            worktree_arg: "-w",
             prompt,
             args,
             origin,

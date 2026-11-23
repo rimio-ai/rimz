@@ -57,6 +57,11 @@ fn capability_names_round_trip_and_become_only_arguments() {
     );
     assert!(Capability::Subagents.starts_things());
     assert_eq!(
+        names(&[Capability::Workflow]),
+        ["workflow", "tasks", "join", "stop", "guide"]
+    );
+    assert!(Capability::Workflow.starts_things());
+    assert_eq!(
         names(&[Capability::Lsp, Capability::Notes]),
         ["lsp", "notes"]
     );
@@ -225,6 +230,15 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
+        ("workflow", json!({"prompt": "p"})),
+        ("workflow", json!({"name": ""})),
+        ("workflow", json!({"name": "./ship"})),
+        ("workflow", json!({"name": "../ship"})),
+        ("workflow", json!({"name": "/srv/ship"})),
+        ("workflow", json!({"name": "a/b"})),
+        ("workflow", json!({"name": "ship", "worktree": " "})),
+        ("workflow", json!({"name": "ship", "once": true})),
+        ("workflow", json!({"name": "ship", "input": "{}"})),
         ("subagent", json!({"prompt": "p"})),
         ("subagent", json!({"profile": "general"})),
         ("subagent", json!({"profile": " ", "prompt": "p"})),
