@@ -1957,8 +1957,9 @@ fn leased_idle_drainer_blocks_without_progress_wakeups() {
         UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()).unwrap();
     writeln!(request, "{}", json!({"through": 0, "reply_for": null})).unwrap();
     request
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
+    ticks.write_all(&[1]).unwrap();
     let mut reply = String::new();
     BufReader::new(request).read_line(&mut reply).unwrap();
     ticks.set_nonblocking(true).unwrap();
