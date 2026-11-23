@@ -1011,6 +1011,40 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
 }
 
 #[test]
+fn handle_with_name_pairs_a_name_only_where_it_differs() {
+    for (handle, name, expected) in [
+        ("@round-binder", Some("round-binder"), "@round-binder"),
+        ("round-binder", Some("round-binder"), "round-binder"),
+        ("@coder", Some("round-binder"), "@coder (@round-binder)"),
+        ("coder", Some("round-binder"), "coder (@round-binder)"),
+        (
+            "@round-binder#auth",
+            Some("round-binder"),
+            "@round-binder#auth",
+        ),
+        (
+            "@sol#main",
+            Some("proud-garden"),
+            "@sol#main (@proud-garden)",
+        ),
+        // A role with an explicit name: the handle is the role.
+        ("@coder", Some("writer"), "@coder (@writer)"),
+        ("@agent", None, "@agent"),
+    ] {
+        assert_eq!(
+            handle_with_name(handle, name),
+            expected,
+            "{handle} {name:?}"
+        );
+        assert_eq!(
+            name.is_some_and(|name| name_differs(handle, name)),
+            expected != handle,
+            "{handle} {name:?}"
+        );
+    }
+}
+
+#[test]
 fn message_header_parser_round_trips_attributed_senders() {
     let body = "ship it";
     for (role, name, profile, expected) in [

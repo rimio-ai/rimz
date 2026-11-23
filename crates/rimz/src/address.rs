@@ -1601,6 +1601,24 @@ pub fn paste_address(
     Roster::of(snapshot).paste_address(agent, reader)
 }
 
+/// Whether an agent's name differs from its handle, the handle read without its `@`
+/// and any `#lane` suffix.
+pub fn name_differs(handle: &str, name: &str) -> bool {
+    let handle = handle.trim_start_matches('@');
+    let base = handle.split_once('#').map_or(handle, |(base, _)| base);
+    base != name
+}
+
+/// `handle` as a reader sees it: `@handle (@name)` when the agent's name
+/// [differs](name_differs) from it, the bare handle otherwise or when there is no
+/// name. The result is prose, never an address to paste or parse.
+pub fn handle_with_name(handle: &str, name: Option<&str>) -> String {
+    match name {
+        Some(name) if name_differs(handle, name) => format!("{handle} (@{name})"),
+        _ => handle.to_owned(),
+    }
+}
+
 /// The structured header for an agent-, subagent-, or harness-authored record.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,

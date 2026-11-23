@@ -267,7 +267,10 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         .collect::<Vec<_>>();
     let subject = match (team, members.as_slice()) {
         (Some(team), _) => team.to_owned(),
-        (None, [(identity, handle)]) => format!("@{}", receipt_label(handle, identity)),
+        (None, [(identity, handle)]) => format!(
+            "@{}",
+            rimz::address::handle_with_name(handle, Some(&identity.name))
+        ),
         (None, members) => format!("{} agents", members.len()),
     };
     let lane = channel.map_or_else(String::new, |channel| {
@@ -308,7 +311,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         .iter()
         .enumerate()
         .map(|(index, (identity, handle))| render::RosterRow {
-            handle: receipt_label(handle, identity),
+            handle: rimz::address::handle_with_name(handle, Some(&identity.name)),
             kind: identity.kind.as_str().to_owned(),
             login: identity.launch.login.clone(),
             model: identity.launch.model.clone(),
@@ -369,15 +372,6 @@ fn receipt_handles(
                 .unwrap_or_else(|| launch_identity_handle(identity).to_owned())
         })
         .collect()
-}
-
-/// A receipt handle with the pet name beside it when the two differ.
-fn receipt_label(handle: &str, identity: &AgentLaunchIdentity) -> String {
-    if handle == identity.name {
-        handle.to_owned()
-    } else {
-        format!("{handle} ({})", identity.name)
-    }
 }
 
 fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
