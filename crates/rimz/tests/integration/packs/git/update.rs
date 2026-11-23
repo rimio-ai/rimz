@@ -239,6 +239,25 @@ fn one_update_retains_every_sources_retired_checkout_until_the_next_command() {
 }
 
 #[test]
+fn an_update_that_breaks_a_workflow_lists_it_failed_and_applies_without_a_terminal() {
+    let fixture = Fixture::new();
+    install(&fixture, "crew");
+    write(
+        fixture.crew.join("workflows/ship/workflow.toml"),
+        "this is not toml\n",
+    );
+    let commit = publish(&fixture.crew);
+    let output = fixture.run(&["packs", "update", "crew"]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for text in ["workflows/ship: failed: workflow: ", "Updated crew"] {
+        assert!(stdout.contains(text), "missing {text:?}: {stdout}");
+    }
+    assert!(!stdout.contains("this is not toml"), "{stdout}");
+    assert_eq!(fixture.record()["sources"][0]["commit"], commit);
+}
+
+#[test]
 fn widening_updates_hold_without_a_terminal_until_yes_and_leave_no_hold_record() {
     let fixture = Fixture::new();
     install(&fixture, "crew");

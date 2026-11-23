@@ -3,7 +3,8 @@
 //! [`packs::resolve_claims`], so a home directory wins by name, an excluded pack workflow resolves
 //! nowhere, and two packs claiming one name conflict until one is excluded or the home claims it.
 //! A pack workflow's directory is spelled through the pack's stable entry link, never its
-//! commit's checkout, so a run that records it reads the pack's next update live.
+//! commit's checkout, so a run that records it reads the pack's next update live. A name lookup
+//! reads no `workflow.toml`; only [`Deployed::into_pack_items`] does, for the pack inventory.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -163,8 +164,19 @@ impl Deployed {
     }
 
     /// Each pack's workflow items with their fates, and each pack whose `workflows/` could not
-    /// be read.
-    pub(crate) fn into_pack_items(self) -> (Vec<PackItem>, Vec<(PackName, Problem)>) {
+    /// be read. An item that holds its name is read through the loader and is `Failed` when
+    /// refused; an excluded, overridden, or conflicting one is not read.
+    pub(crate) fn into_pack_items(mut self) -> (Vec<PackItem>, Vec<(PackName, Problem)>) {
+        for item in &mut self.items {
+            if item.fate != ItemFate::Loads {
+                continue;
+            }
+            if let Err(error) = super::spec::load(&item.path) {
+                item.fate = ItemFate::Failed {
+                    message: error.one_line(),
+                };
+            }
+        }
         (self.items, self.problems)
     }
 }
@@ -188,6 +200,8 @@ mod tests {
     use super::*;
 
     const SPEC: &str = "[workflow]\nstart = 'a'\n";
+    const LOADABLE: &str = "[workflow]\nscope = 'worktree'\nstart = 'a'\n\
+                            [script.a]\ntimeout = '1m'\nrun = 'true'\non.ok = '@done'\n";
 
     fn write(path: &Path) {
         std::fs::create_dir_all(path).unwrap();
@@ -266,6 +280,14 @@ mod tests {
         assert_eq!(deployed.claim(&home.join("workflows")), None);
         assert_eq!(deployed.claim(&entry.join("crew/workflows/mine")), None);
         assert_eq!(deployed.claim(&source.join("tools/workflows/both")), None);
+        let conflicting = Deployed::load(&home).unwrap().into_pack_items().0;
+        assert!(
+            conflicting
+                .iter()
+                .filter(|item| item.name == "both")
+                .all(|item| matches!(item.fate, ItemFate::Conflict { .. })),
+            "{conflicting:?}"
+        );
 
         crate::packs::exclude(
             &home,
@@ -288,12 +310,37 @@ mod tests {
             Ok(Some(entry.join("crew/workflows/both").as_path()))
         );
         assert_eq!(deployed.find("ship"), Ok(None));
-        let fates: Vec<_> = deployed
+        std::fs::write(source.join("crew/workflows/both/workflow.toml"), LOADABLE).unwrap();
+        for (name, text) in [
+            ("syntax", b"this is not toml\n".as_slice()),
+            ("unknown", b"[workflow]\n\"bad\\nkey\" = 1\n"),
+            ("binary", b"\xff\xfe"),
+        ] {
+            let dir = source.join("crew/workflows").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("workflow.toml"), text).unwrap();
+        }
+        let deployed = Deployed::load(&home).unwrap();
+        assert!(deployed.find("syntax").unwrap().is_some());
+        let (failed, fates): (Vec<_>, Vec<_>) = deployed
             .into_pack_items()
             .0
             .into_iter()
             .map(|item| (item.pack.as_str().to_owned(), item.name, item.fate))
+            .partition(|(_, _, fate)| matches!(fate, ItemFate::Failed { .. }));
+        let failed: Vec<_> = failed
+            .iter()
+            .map(|(_, name, fate)| (name.as_str(), fate.problem().unwrap()))
             .collect();
+        assert_eq!(
+            failed.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            ["binary", "syntax", "unknown"],
+            "{failed:?}"
+        );
+        for (_, message) in &failed {
+            assert_eq!(message.lines().count(), 1, "{message:?}");
+            assert!(!message.contains("this is not toml"), "{message:?}");
+        }
         assert_eq!(
             fates,
             [

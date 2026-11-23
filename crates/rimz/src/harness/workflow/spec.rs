@@ -626,6 +626,28 @@ pub enum SpecErr {
     SelfSignal,
 }
 
+impl SpecErr {
+    /// This refusal on one line, without the parser's source snippet: a pack review prints it
+    /// before the user approves the pack, so the file's text must not reach it as its own line.
+    /// A refused key or value can still appear inside the line.
+    pub(super) fn one_line(&self) -> String {
+        let message = match self {
+            Self::Toml { path, source } => format!("{path}: {}", source.message()),
+            other => other.to_string(),
+        };
+        message
+            .chars()
+            .map(|c| {
+                if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+}
+
 pub fn load(dir: &Path) -> Result<Definition, SpecErr> {
     let path = crate::disk::paths::workflow_spec_file(dir);
     let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io {
