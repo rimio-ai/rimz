@@ -405,13 +405,9 @@ fn scan_pack(
 /// The `; run ...` tail naming the command that excludes one pack skill, the
 /// same tail a failed pack definition carries.
 fn exclusion_fix(pack: &str, skill: &str) -> String {
-    let target = format!("{pack}:{skill}");
-    // A file name cannot carry NUL, so quoting fails only in theory; the
-    // pack-wide `--type skills` exclusion still sets the skill aside then.
-    let target = shlex::try_quote(&target).unwrap_or_else(|_| pack.into());
     format!(
-        "; run `rimz packs exclude {target} --type {}`",
-        ItemType::Skills.as_str()
+        "; run `{}`",
+        crate::packs::exclude_command(pack, skill, ItemType::Skills)
     )
 }
 

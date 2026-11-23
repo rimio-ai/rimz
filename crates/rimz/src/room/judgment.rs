@@ -82,7 +82,10 @@ pub(super) fn judge(
         warn(setting.clone(), message.clone());
     }
     for warning in &machine.notices.definition_warnings {
-        warn(warning.path.display().to_string(), warning.to_string());
+        warn(
+            crate::packs::one_line(&warning.path.display().to_string()),
+            warning.to_string(),
+        );
     }
     if crate::trust::project_throttle(&workspace.project_root).unwrap_or(false) {
         warn(
@@ -315,8 +318,8 @@ fn definition_summary(
             DefinitionCause::PackProblem => {
                 pack_problems.insert(format!(
                     "pack problem at {}: {}; unrelated launches remain available",
-                    home_relative_path_to(home, &error.path),
-                    error.message
+                    crate::packs::one_line(&home_relative_path_to(home, &error.path)),
+                    crate::packs::one_line(&error.message)
                 ));
             }
         }
@@ -359,13 +362,15 @@ fn definition_group(
     let mut names: Vec<_> = paths
         .iter()
         .map(|path| {
-            path.strip_prefix(agents_home)
+            let name = path
+                .strip_prefix(agents_home)
                 .ok()
                 .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
                 .map_or_else(
                     || home_relative_path_to(home, path),
                     |path| path.with_extension("").display().to_string(),
-                )
+                );
+            crate::packs::one_line(&name)
         })
         .collect();
     names.sort();

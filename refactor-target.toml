@@ -1734,7 +1734,9 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # Transaction::stage_update preserves and validates the installed selection (+1).
 # CheckoutReport, Checkout, CheckoutState and inspect_checkouts share read-only health (+4).
 # expectation_warnings checks non-executing project metadata at room entry (+1).
-surface-budget = 52
+# one_line renders pack-supplied text on one terminal line for the CLI, definition errors, and room
+# warnings; exclude_command is the one quoted exclude command the three item producers advertise (+2).
+surface-budget = 54
 
 [[verdict]]
 kind = "item"
@@ -1940,6 +1942,16 @@ reason = "Both loaders share home precedence, sole-pack winners, and diagnosed c
 kind = "item"
 key = "packs::resolve_claims"
 reason = "One pure resolver owns the precedence rule and actionable conflict wording."
+
+[[verdict]]
+kind = "item"
+key = "packs::one_line"
+reason = "Every human surface that prints a pack item name, path, or message escapes it by one rule while the domain and JSON keep it raw."
+
+[[verdict]]
+kind = "item"
+key = "packs::exclude_command"
+reason = "Definitions, skills, and claim conflicts advertise one shell-quoted exclude command."
 
 [[verdict]]
 kind = "item"

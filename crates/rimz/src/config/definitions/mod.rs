@@ -163,7 +163,7 @@ pub struct LoadedDefinitions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{path}: {message}")]
+#[error("{}: {}", crate::packs::one_line(&.path.display().to_string()), crate::packs::one_line(.message))]
 pub struct DefinitionErr {
     pub path: PathBuf,
     pub message: String,

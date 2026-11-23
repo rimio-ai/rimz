@@ -17,7 +17,7 @@ use rimz::disk::paths;
 use rimz::packs::transaction::{PackChange, RetiredCheckouts, Transaction};
 use rimz::packs::{
     self, ExclusionOutcome, ExclusionTarget, GitSource, InstallSource, InstallStatus, ItemFate,
-    ItemType, PackErr, PackName, Problem,
+    ItemType, PackErr, PackName, Problem, one_line,
 };
 
 use super::render::{self, palette, status::StateRole};
@@ -534,7 +534,13 @@ fn update_source(
                     .profiles
                     .iter()
                     .filter(|profile| !profile.widened.is_empty())
-                    .map(|profile| format!("{}: {}", profile.name, profile.widened.join(", ")))
+                    .map(|profile| {
+                        format!(
+                            "{}: {}",
+                            one_line(&profile.name),
+                            profile.widened.join(", ")
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("; ");
                 writeln!(stdout, "Held {names}: {fields}.")?;
@@ -638,7 +644,7 @@ fn summary(
                     out,
                     "  {}/{}: {}",
                     kind.as_str(),
-                    item.name,
+                    one_line(&item.name),
                     fate_label(&item.fate, &pack.name)
                 )?;
             }
@@ -650,7 +656,7 @@ fn summary(
         writeln!(out, "No changed profiles.")?;
     }
     for profile in &preview.profiles {
-        writeln!(out, "{} ({})", profile.name, profile.namespace)?;
+        writeln!(out, "{} ({})", one_line(&profile.name), profile.namespace)?;
         let grants = &profile.grants;
         let tools = grants.tools.as_ref().map_or_else(
             || "all".to_owned(),
@@ -697,7 +703,7 @@ fn summary(
             } else {
                 String::new()
             };
-            writeln!(out, "  {field}: {value}{mark}")?;
+            writeln!(out, "  {field}: {}{mark}", one_line(&value))?;
         }
     }
     write_problems(out, &preview.inventory.problems)?;
@@ -798,27 +804,34 @@ fn customize(
     let mut edit_paths = Vec::new();
     for (item, path) in items.into_iter().zip(paths) {
         let key = format!("{}:{}", item.pack, item.name);
+        let shown_path = one_line(&path.display().to_string());
         if copy {
             writeln!(
                 out,
-                "Created {} (copy, no longer follows {}).",
-                path.display(),
+                "Created {shown_path} (copy, no longer follows {}).",
                 item.pack
             )?;
         } else {
-            writeln!(out, "Created {} (inherits {key}).", path.display())?;
+            writeln!(out, "Created {shown_path} (inherits {}).", one_line(&key))?;
         }
         writeln!(
             out,
             "Next: {}",
-            shell_command(["rimz", "packs", "diff", &key, "--type", item.kind.as_str()])
+            one_line(&shell_command([
+                "rimz",
+                "packs",
+                "diff",
+                &key,
+                "--type",
+                item.kind.as_str()
+            ]))
         )?;
         match item.kind {
             ItemType::Skills => {}
             ItemType::Workflows => writeln!(
                 out,
                 "Next: {}",
-                shell_command(["rimz", "workflow", "validate", &item.name])
+                one_line(&shell_command(["rimz", "workflow", "validate", &item.name]))
             )?,
             _ => writeln!(out, "Next: rimz agents validate")?,
         }
@@ -862,14 +875,14 @@ fn edit(paths: &[PathBuf]) -> Result<()> {
     let mut out = render::out();
     let write = paths
         .iter()
-        .try_for_each(|path| writeln!(out, "Edit {}", path.display()));
+        .try_for_each(|path| writeln!(out, "Edit {}", one_line(&path.display().to_string())));
     render::finish(write)
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()
-        .map(|path| path.display().to_string())
+        .map(|path| one_line(&path.display().to_string()))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -878,34 +891,33 @@ fn diff(home: &Path, selection: ItemSelection) -> Result<()> {
     let inventory = load_inventory(home);
     let item = selected_item(&inventory, &selection.target, selection.kind)?;
     let mut out = render::out();
+    let name = one_line(&item.name);
+    let shown = |path: &Path| one_line(&path.display().to_string());
     match PackOverride::new(home, item).diff()? {
         OverrideDiff::None => writeln!(
             out,
-            "{}:{} has no override; shipped at {}.",
+            "{}:{name} has no override; shipped at {}.",
             item.pack,
-            item.name,
-            item.path.display()
+            shown(&item.path)
         )?,
         OverrideDiff::Inherits { text } => {
             writeln!(
                 out,
-                "Override inherits {}:{}; fields replace shipped settings, body follows the shipped prompt:",
-                item.pack, item.name
+                "Override inherits {}:{name}; fields replace shipped settings, body follows the shipped prompt:",
+                item.pack
             )?;
             write!(out, "{text}")?;
         }
         OverrideDiff::Command { path } => writeln!(
             out,
-            "Overridden by configured command {} in {}.",
-            item.name,
-            path.display()
+            "Overridden by configured command {name} in {}.",
+            shown(&path)
         )?,
         OverrideDiff::Files { path, changed } if changed.is_empty() => writeln!(
             out,
-            "{}:{} override at {} matches the shipped item.",
+            "{}:{name} override at {} matches the shipped item.",
             item.pack,
-            item.name,
-            path.display()
+            shown(&path)
         )?,
         OverrideDiff::Files { changed, .. } => {
             for file in changed {
@@ -917,7 +929,7 @@ fn diff(home: &Path, selection: ItemSelection) -> Result<()> {
                         original.map(|text| (file.shipped_path.as_path(), text)),
                         candidate.map(|text| (file.path.as_path(), text)),
                     )?,
-                    _ => writeln!(out, "Binary files differ: {}", file.path.display())?,
+                    _ => writeln!(out, "Binary files differ: {}", shown(&file.path))?,
                 }
             }
         }
@@ -961,7 +973,7 @@ fn reset(
         writeln!(
             out,
             "{} already has no eligible override to reset.",
-            selection.target
+            one_line(&selection.target)
         )?;
     }
     let mut failures = Vec::new();
@@ -970,7 +982,7 @@ fn reset(
         match outcome {
             ResetOutcome::Removed { item, path } => {
                 if removed.insert(path.clone()) {
-                    writeln!(out, "Removed {}.", path.display())?;
+                    writeln!(out, "Removed {}.", one_line(&path.display().to_string()))?;
                 }
                 let Some(item) = pack.and_then(|pack| {
                     pack.items.iter().find(|current| {
@@ -985,36 +997,43 @@ fn reset(
                     out,
                     "  {}/{}: {}",
                     item.kind.as_str(),
-                    item.name,
+                    one_line(&item.name),
                     fate_label(&item.fate, &pack_name)
                 )?;
             }
             ResetOutcome::Kept { item, reason } => {
                 let key = format!("{pack_name}:{}", item.name);
                 if let Some(reason) = reason {
-                    writeln!(out, "Kept {key} ({}): {reason}", item.kind.as_str())?;
+                    writeln!(
+                        out,
+                        "Kept {} ({}): {}",
+                        one_line(&key),
+                        item.kind.as_str(),
+                        one_line(&reason)
+                    )?;
                 } else {
                     writeln!(
                         out,
-                        "Kept {key} ({}); diff: {}",
+                        "Kept {} ({}); diff: {}",
+                        one_line(&key),
                         item.kind.as_str(),
-                        shell_command([
+                        one_line(&shell_command([
                             "rimz",
                             "packs",
                             "diff",
                             &key,
                             "--type",
                             item.kind.as_str()
-                        ])
+                        ]))
                     )?;
                 }
             }
             ResetOutcome::Failed { item, error } => {
-                failures.push(format!(
+                failures.push(one_line(&format!(
                     "{pack_name}:{} ({}): {error}",
                     item.name,
                     item.kind.as_str()
-                ));
+                )));
             }
         }
     }
@@ -1038,11 +1057,11 @@ fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write
     };
     let label = match &target {
         ExclusionTarget::Type(kind) => format!("{name} --type {}", kind.as_str()),
-        ExclusionTarget::Item(item) => shell_command([
+        ExclusionTarget::Item(item) => one_line(&shell_command([
             &format!("{name}:{}", item.name),
             "--type",
             item.kind.as_str(),
-        ]),
+        ])),
     };
     match outcome {
         ExclusionOutcome::AlreadyExcluded => writeln!(out, "{label} is already excluded.")?,
@@ -1064,7 +1083,7 @@ fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write
                 out,
                 "  {}/{}: {}",
                 item.kind.as_str(),
-                item.name,
+                one_line(&item.name),
                 fate_label(&item.fate, &name)
             )?;
         }
@@ -1072,10 +1091,10 @@ fn change(home: &Path, selection: Selection, include: bool, out: &mut impl Write
     let old = before.conflicts();
     let new = after.conflicts();
     for message in old.difference(&new) {
-        writeln!(out, "conflict resolved: {message}")?;
+        writeln!(out, "conflict resolved: {}", one_line(message))?;
     }
     for message in new.difference(&old) {
-        writeln!(out, "conflict opened: {message}")?;
+        writeln!(out, "conflict opened: {}", one_line(message))?;
     }
     Ok(())
 }
@@ -1115,7 +1134,7 @@ fn prune(home: &Path, out: &mut impl Write) -> Result<()> {
                 out,
                 "Skill links removed from {}: {}",
                 root.display(),
-                outcome.unlinked_names.join(", ")
+                one_line(&outcome.unlinked_names.join(", "))
             )?,
             Ok(_) => {}
             Err(error) => errors.push(error.to_string()),
@@ -1162,7 +1181,7 @@ fn skill_check(
 }
 
 fn fate_label(fate: &ItemFate, pack: &PackName) -> String {
-    match fate {
+    let label = match fate {
         ItemFate::Loads => "loads".to_owned(),
         ItemFate::Overridden { path } => format!("overridden by {}", path.display()),
         ItemFate::Excluded => "excluded".to_owned(),
@@ -1179,7 +1198,8 @@ fn fate_label(fate: &ItemFate, pack: &PackName) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-    }
+    };
+    one_line(&label)
 }
 
 fn fate_role(fate: &ItemFate) -> StateRole {
@@ -1283,7 +1303,7 @@ fn show(pack: &PackView) -> Result<()> {
             writeln!(
                 out,
                 "  {}: {}",
-                item.name,
+                one_line(&item.name),
                 render::paint(
                     render::status::role(fate_role(&item.fate)),
                     &fate_label(&item.fate, &pack.name)
@@ -1308,7 +1328,7 @@ fn show(pack: &PackView) -> Result<()> {
             out,
             "{}/{}: excluded (no longer shipped)",
             item.kind.as_str(),
-            item.name
+            one_line(&item.name)
         )?;
     }
     write_problems(&mut out, &pack.problems)?;

@@ -93,8 +93,8 @@ pub(super) fn run(json: bool) -> Result<()> {
             writeln!(
                 out,
                 "{}: warning: {}",
-                warning.path.display(),
-                warning.message
+                rimz::packs::one_line(&warning.path.display().to_string()),
+                rimz::packs::one_line(&warning.message)
             )?;
         }
     }
@@ -275,7 +275,7 @@ fn rows<'a>(
     ]);
     for row in rows {
         table.row([
-            render::cell(&row.name).fg(render::palette::identity(&row.kind)),
+            render::cell(rimz::packs::one_line(&row.name)).fg(render::palette::identity(&row.kind)),
             render::cell(&row.kind).fg(render::palette::identity(&row.kind)),
             render::cell(crate::cli::profile_report::model_label(
                 row.model.as_deref().unwrap_or("—"),
@@ -296,7 +296,7 @@ fn rows<'a>(
                 },
             )),
             render::cell(crate::cli::profile_report::origin_label(&row.origin)),
-            render::cell(row.source.display().to_string()),
+            render::cell(rimz::packs::one_line(&row.source.display().to_string())),
         ]);
     }
     table.render(out)?;

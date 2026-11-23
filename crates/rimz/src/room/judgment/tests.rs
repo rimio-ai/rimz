@@ -531,6 +531,40 @@ fn definition_summary_caps_names_and_handles_other_errors() {
 }
 
 #[test]
+fn definition_summary_escapes_a_pack_file_name_in_every_group() {
+    let home = PathBuf::from("/definitions");
+    let causes = [
+        DefinitionCause::Invalid,
+        DefinitionCause::DependsOnFailed {
+            name: "worker".to_owned(),
+        },
+        DefinitionCause::MissingSkill {
+            skill: "one".parse().unwrap(),
+            roots: vec![home.join("skills")],
+        },
+    ];
+    let errors: Vec<_> = causes
+        .into_iter()
+        .zip([
+            "/packs/crew/agents/x\ny.md",
+            "/definitions/agents/x\ny.md",
+            "/packs/crew/agents/x\ny.md",
+        ])
+        .map(|(cause, path)| DefinitionErr {
+            path: PathBuf::from(path),
+            message: "detail".to_owned(),
+            cause,
+        })
+        .collect();
+    let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home, None);
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    for line in &lines[..3] {
+        assert!(!line.contains('\n'), "{lines:?}");
+        assert!(line.contains(r"x\ny"), "{lines:?}");
+    }
+}
+
+#[test]
 fn definition_summary_unions_roots_per_skill() {
     let home = PathBuf::from("/definitions");
     let errors: Vec<_> = [("one", "/a"), ("one", "/b"), ("two", "/a")]

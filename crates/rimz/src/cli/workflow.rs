@@ -8,6 +8,7 @@ use rimz::harness::schedule::run_log;
 use rimz::harness::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
 use rimz::ids::{EventId, WorkflowRunId};
+use rimz::packs::one_line;
 use rimz::store::workflow::{self as records, RunRecord};
 
 use super::render;
@@ -1288,7 +1289,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                 Ok(dir) => dirs.push(dir.to_owned()),
                 Err(conflict) => report.errors.push(workflow::Issue {
                     path: "workflow".into(),
-                    message: format!("workflow: {name}: {conflict}"),
+                    message: format!("workflow: {}: {}", one_line(name), one_line(conflict)),
                 }),
             }
         }
@@ -1309,7 +1310,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
             render::Table::new(["WORKFLOW", "NODE", "KIND", "RUNNER", "BACKGROUND", "EDGES"]);
         for row in &report.rows {
             table.row([
-                render::cell(&row.workflow),
+                render::cell(one_line(&row.workflow)),
                 render::cell(&row.node),
                 render::cell(&row.kind),
                 render::cell(match row.runner.as_str() {
@@ -1345,10 +1346,10 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         let mut out = render::out();
         table.render(&mut out)?;
         for error in &report.errors {
-            writeln!(out, "{}", error.message)?;
+            writeln!(out, "{}", each_line(&error.message))?;
         }
         for warning in &report.warnings {
-            writeln!(out, "warning: {}", warning.message)?;
+            writeln!(out, "warning: {}", each_line(&warning.message))?;
         }
     }
     drop(scratch);
@@ -1356,6 +1357,17 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         bail!("{} workflow error(s)", report.errors.len());
     }
     Ok(())
+}
+
+/// Escapes each line of a diagnostic on its own, so a parser excerpt keeps its line breaks
+/// while a control character inside a line still shows. The workflow name a message carries
+/// is escaped where the message interpolates it, so it cannot break a line here.
+fn each_line(message: &str) -> String {
+    message
+        .split('\n')
+        .map(one_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
