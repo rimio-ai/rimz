@@ -409,6 +409,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
             pins: Default::default(),
             remote_control_off: Default::default(),
             agent_shell: None,
+            terminal_path: None,
             skipped: Vec::new(),
             updated_at: Timestamp::UNIX_EPOCH,
         },

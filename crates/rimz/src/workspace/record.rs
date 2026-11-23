@@ -100,6 +100,11 @@ pub struct WorkspaceRecord {
     /// Re-records keep it; a new session replaces it and reset clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_shell: Option<AgentShell>,
+    /// The `PATH` of the terminal that last ran `rimz start` or `rimz attach` here, verbatim:
+    /// the one hosted workflow checks, tests, and command steps search. Re-records keep it;
+    /// reset clears it, and no other entry writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_path: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedSetting>,
     pub updated_at: Timestamp,
@@ -128,6 +133,8 @@ struct WorkspaceRecordRead {
     remote_control_off: BTreeSet<AgentKind>,
     #[serde(default)]
     agent_shell: Option<AgentShell>,
+    #[serde(default)]
+    terminal_path: Option<String>,
     #[serde(default)]
     skipped: Vec<SkippedSetting>,
     updated_at: Timestamp,
@@ -160,6 +167,7 @@ impl TryFrom<WorkspaceRecordRead> for WorkspaceRecord {
             pins,
             remote_control_off: record.remote_control_off,
             agent_shell: record.agent_shell,
+            terminal_path: record.terminal_path,
             skipped: record.skipped,
             updated_at: record.updated_at,
         })
@@ -190,6 +198,7 @@ impl WorkspaceRecord {
             pins: RoomLogins::new(),
             remote_control_off: BTreeSet::new(),
             agent_shell: None,
+            terminal_path: None,
             skipped: Vec::new(),
             updated_at: Timestamp::now(),
         }
@@ -314,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_shell_round_trips_and_defaults_absent() {
+    fn agent_shell_and_terminal_path_round_trip_and_default_absent() {
         let legacy = serde_json::json!({
             "workspace_id": "ws_0123456789abcdef01234567",
             "project_root": "/repo", "session_name": "rimz-repo",
@@ -322,16 +331,15 @@ mod tests {
         });
         let mut record: WorkspaceRecord = serde_json::from_value(legacy).unwrap();
         assert_eq!(record.agent_shell, None);
-        assert!(
-            serde_json::to_value(&record)
-                .unwrap()
-                .get("agent_shell")
-                .is_none()
-        );
+        assert_eq!(record.terminal_path, None);
+        let written = serde_json::to_value(&record).unwrap();
+        assert!(written.get("agent_shell").is_none());
+        assert!(written.get("terminal_path").is_none());
         record.agent_shell = Some(AgentShell {
             name: "bash".into(),
             path: "/usr/bin/bash".into(),
         });
+        record.terminal_path = Some("/home/u/.local/bin:/usr/bin".to_owned());
         let written = serde_json::to_value(&record).unwrap();
         assert_eq!(
             written["agent_shell"],
@@ -339,6 +347,7 @@ mod tests {
                 "name": "bash", "path": "/usr/bin/bash"
             })
         );
+        assert_eq!(written["terminal_path"], "/home/u/.local/bin:/usr/bin");
         assert_eq!(
             serde_json::from_value::<WorkspaceRecord>(written).unwrap(),
             record

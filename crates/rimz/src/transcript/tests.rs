@@ -153,6 +153,7 @@ fn workspaces_with_channel_finds_transcript_evidence() {
                 pins: Default::default(),
                 remote_control_off: Default::default(),
                 agent_shell: None,
+                terminal_path: None,
                 skipped: Vec::new(),
                 updated_at: Timestamp::UNIX_EPOCH,
             },

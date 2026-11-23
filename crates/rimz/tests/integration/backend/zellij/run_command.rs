@@ -42,6 +42,32 @@ fn workflow_layout_closes_all_cells_and_preserves_unrelated_panes() {
 }
 
 #[test]
+fn closed_card_runs_its_check_on_the_room_path() {
+    require_zellij!();
+    let env = Env::new();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let room = LiveZellijSession::from_namespace(ZellijNamespace::new(), &session);
+    crate::backend::workflow::check_closed_card_runs_its_check_on_the_room_path(
+        &env,
+        "zellij",
+        &session,
+        || {
+            let mut command = env.rimz();
+            command
+                .args(["--mux", "zellij"])
+                .env("XDG_RUNTIME_DIR", room.path())
+                .env("ZELLIJ_CONFIG_DIR", room.path().join(".config/zellij"));
+            command
+        },
+        || {
+            let mut client = AttachedClient::attach(&room, 160, 50);
+            client.send_line("true");
+            client
+        },
+    );
+}
+
+#[test]
 fn terminal_run_closes_only_its_command_pane() {
     require_zellij!();
     let env = Env::new();

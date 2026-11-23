@@ -782,6 +782,7 @@ fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
         pins: Default::default(),
         remote_control_off: Default::default(),
         agent_shell: None,
+        terminal_path: None,
         skipped: Vec::new(),
         updated_at: jiff::Timestamp::from_second(1_750_000_000).unwrap(),
     };

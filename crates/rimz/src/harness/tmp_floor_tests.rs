@@ -62,6 +62,7 @@ fn inventory_preview_preserves_records_and_eviction_repairs_them() {
             pins: Default::default(),
             remote_control_off: Default::default(),
             agent_shell: None,
+            terminal_path: None,
             skipped: Vec::new(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },

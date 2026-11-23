@@ -390,6 +390,61 @@ fn birth_saves_the_shell_before_panes_and_live_reentry_keeps_it() {
     );
 }
 
+/// `start`, `attach`, and `attach <session>` each save their own PATH, in a new room and a live
+/// one alike, for the room's hosted workflow children.
+#[test]
+fn start_and_every_attach_save_the_terminal_path() {
+    let env = Env::new();
+    let bin = seed_actionable_agent(&env);
+    let trace = env.home_root.join("zellij-terminal-path.log");
+    let _room = ShimRoom::watch(&env, &trace);
+    let record_path = env.state_path_for(&env.project_root).workspace_record;
+    let saved = || {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        record.get("terminal_path").cloned()
+    };
+    let entry_path = |entry: &str| {
+        std::env::join_paths([env.home_root.join(format!("{entry}-bin")), bin.clone()])
+            .unwrap()
+            .into_string()
+            .unwrap()
+    };
+    let (mut actual, mut expected) = (Vec::new(), Vec::new());
+    let mut session = String::new();
+    for entry in ["start", "attach", "attach-session", "start-live"] {
+        let mut command = env.rimz();
+        if entry.starts_with("start") {
+            configure_actionable_hooks(&mut command, &env, &bin, &trace, &session);
+        } else {
+            command.args(["--mux", "zellij", "attach"]);
+            if entry == "attach-session" {
+                command.arg(&session);
+            }
+            command
+                .arg("--print")
+                .env("TERM", "dumb")
+                .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+                .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+                .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &session)
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+        }
+        let output = command
+            .env("PATH", entry_path(entry))
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{entry}: {output:?}");
+        if session.is_empty() {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+            session = record["session_name"].as_str().unwrap().to_owned();
+        }
+        actual.push((entry, saved()));
+        expected.push((entry, Some(serde_json::json!(entry_path(entry)))));
+    }
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn new_birth_clears_a_previous_shell_for_unset_absolute_or_missing_values() {
     use std::os::unix::ffi::OsStrExt;
