@@ -56,6 +56,8 @@ const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Frames one stream apply child applies before it is closed: it bounds how long a child keeps
 /// state it loaded once, such as the plugin registry.
 const APPLY_RUN_CAP: usize = 256;
+/// The most idle stream apply children one applier keeps, whatever the core count.
+const APPLY_POOL_CAP_MAX: usize = 64;
 #[derive(Debug, Args)]
 pub struct HooksArgs {
     #[command(subcommand)]
@@ -309,12 +311,15 @@ fn receive_descriptors() -> Result<(u8, Vec<std::os::fd::OwnedFd>)> {
     Ok((byte[0], fds))
 }
 
-/// The production applier: consecutive first attempts whose child environment and cwd are equal
-/// go to one `hooks apply --stream` child, up to [`APPLY_RUN_CAP`] frames. At most one apply
-/// child runs at a time, and none outlives the applier.
+/// The production applier: each first attempt goes to an idle `hooks apply --stream` child
+/// spawned under an equal child environment, cwd, and cwd directory, or to a new one. Idle
+/// children wait in a pool of at most [`apply_pool_cap`], which closes the child unused longest
+/// to make room, and each child applies up to [`APPLY_RUN_CAP`] frames. Frames are applied one
+/// at a time, a recovery runs with the pool empty, and no child outlives the applier.
 #[derive(Default)]
 struct RunApplier {
-    child: Option<StreamChild>,
+    /// The idle children, the one unused longest first.
+    pool: Vec<StreamChild>,
 }
 
 impl hook_drain::FrameApplier for RunApplier {
@@ -327,11 +332,11 @@ impl hook_drain::FrameApplier for RunApplier {
         deadline: std::time::Instant,
     ) -> Result<rimz::agents::HookReply> {
         // Each attempt is timed alone: the caller's window is re-anchored at the start of each
-        // one, so closing the previous child or a failed stream attempt spends none of it.
+        // one, so closing pooled children or a failed stream attempt spends none of it.
         let budget = deadline.saturating_duration_since(std::time::Instant::now());
         let attempt_deadline = || std::time::Instant::now() + budget;
         if claim.recovering {
-            self.close();
+            close_children(std::mem::take(&mut self.pool));
             return process_in_child(
                 store,
                 frame,
@@ -342,28 +347,46 @@ impl hook_drain::FrameApplier for RunApplier {
         }
         let mapped = child_frame(store, frame)?;
         let directory = directory_id(&mapped.cwd)?;
-        if self.child.as_ref().is_some_and(|child| {
-            child.applied >= apply_run_cap()
-                || child.env != mapped.env
-                || child.cwd != mapped.cwd
-                || child.directory != directory
-        }) {
-            self.close();
-        }
         let timeout = apply_timeout().min(budget);
         anyhow::ensure!(!timeout.is_zero(), "hook drain deadline reached");
-        let child = match &mut self.child {
+        let pooled = self.pool.iter().position(|child| {
+            child.env == mapped.env && child.cwd == mapped.cwd && child.directory == directory
+        });
+        let mut pooled = pooled.map(|index| self.pool.remove(index));
+        if pooled
+            .as_ref()
+            .is_some_and(|child| child.applied >= apply_run_cap())
+        {
+            close_children(pooled.take().into_iter().collect());
+        }
+        let mut child = match pooled {
             Some(child) => child,
-            slot @ None => slot.insert(StreamChild::spawn(store, &mapped, directory, lifetime)?),
+            None => {
+                let excess = self
+                    .pool
+                    .len()
+                    .saturating_sub(apply_pool_cap().saturating_sub(1));
+                close_children(self.pool.drain(..excess).collect());
+                StreamChild::spawn(store, &mapped, directory, lifetime)?
+            }
         };
-        match child.exchange(&mapped, std::time::Instant::now() + timeout)? {
+        let exchange = child.exchange(&mapped, std::time::Instant::now() + timeout);
+        let exchange = match exchange {
+            Ok(exchange) => exchange,
+            Err(error) => {
+                self.pool.push(child);
+                return Err(error);
+            }
+        };
+        match exchange {
             Exchange::Reply(reply) => {
                 child.applied += 1;
+                self.pool.push(child);
                 Ok(reply)
             }
             Exchange::TimedOut => {
                 let pid = child.process.id();
-                self.kill();
+                child.kill();
                 Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("hook apply child {pid} timed out"),
@@ -374,7 +397,9 @@ impl hook_drain::FrameApplier for RunApplier {
             // its claim as a crashed attempt does. A child that ended its stream is exiting and
             // is reaped first, so its own error report reaches the drainer log.
             Exchange::Ended => {
-                self.close();
+                let mut closing = std::mem::take(&mut self.pool);
+                closing.push(child);
+                close_children(closing);
                 process_in_child(
                     store,
                     frame,
@@ -384,7 +409,8 @@ impl hook_drain::FrameApplier for RunApplier {
                 )
             }
             Exchange::Garbled => {
-                self.kill();
+                child.kill();
+                close_children(std::mem::take(&mut self.pool));
                 process_in_child(
                     store,
                     frame,
@@ -397,40 +423,27 @@ impl hook_drain::FrameApplier for RunApplier {
     }
 }
 
-impl RunApplier {
-    /// Close the child's stream and reap it, killing it if it has not exited within the apply
-    /// timeout.
-    fn close(&mut self) {
-        let Some(StreamChild {
-            process, stream, ..
-        }) = self.child.take()
-        else {
-            return;
-        };
-        drop(stream);
-        let deadline = std::time::Instant::now() + apply_timeout();
+/// Close every child's stream, then reap each, killing those that have not exited within one
+/// apply timeout shared by all.
+fn close_children(children: Vec<StreamChild>) {
+    let processes: Vec<_> = children
+        .into_iter()
+        .map(|child| {
+            drop(child.stream);
+            child.process
+        })
+        .collect();
+    let deadline = std::time::Instant::now() + apply_timeout();
+    for process in processes {
         if let Err(error) = hook_drain::wait_for_apply(process, deadline) {
             warn!(%error, "hook apply stream child did not exit at end of stream");
-        }
-    }
-
-    fn kill(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        if let Err(error) = child
-            .process
-            .kill()
-            .and_then(|()| child.process.wait().map(drop))
-        {
-            warn!(%error, "hook apply stream child could not be reaped");
         }
     }
 }
 
 impl Drop for RunApplier {
     fn drop(&mut self) {
-        self.close();
+        close_children(std::mem::take(&mut self.pool));
     }
 }
 
@@ -510,6 +523,16 @@ impl StreamChild {
         })
     }
 
+    fn kill(mut self) {
+        if let Err(error) = self
+            .process
+            .kill()
+            .and_then(|()| self.process.wait().map(drop))
+        {
+            warn!(%error, "hook apply stream child could not be reaped");
+        }
+    }
+
     /// Send one frame and read its reply line by `deadline`.
     fn exchange(&mut self, frame: &HookIngress, deadline: std::time::Instant) -> Result<Exchange> {
         use std::io::{BufRead as _, Write as _};
@@ -572,6 +595,27 @@ fn apply_run_cap() -> usize {
         return cap;
     }
     APPLY_RUN_CAP
+}
+
+/// The most idle stream children one applier keeps: [`pool_cap`] of the cores this process may
+/// run on.
+fn apply_pool_cap() -> usize {
+    #[cfg(feature = "testkit")]
+    if let Some(cap) = std::env::var("RIMZ_TEST_HOOK_APPLY_POOL_CAP")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+    {
+        return cap;
+    }
+    pool_cap(
+        std::thread::available_parallelism()
+            .map(|cores| cores.get())
+            .unwrap_or(4),
+    )
+}
+
+fn pool_cap(cores: usize) -> usize {
+    (2 * cores + 1).min(APPLY_POOL_CAP_MAX)
 }
 
 fn apply_timeout() -> std::time::Duration {
