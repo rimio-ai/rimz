@@ -1243,10 +1243,11 @@ fn the_tick_settles_a_dead_fire_in_a_room_nothing_else_names() {
     );
 }
 
-/// Seeds a room agent stamped with `fire`, alive by its durable rows.
+/// Seeds a room agent stamped with `fire`, alive by its durable rows until `end_agent` ends it.
+/// Its session id is bound, not a `launch_` reservation: a stop cancels a never-bound
+/// reservation, but with no pane and no owner it can confirm nothing here and writes nothing.
 fn seed_stamped_agent(env: &Env, name: &str, fire: &rimz::ids::FireId) {
     let workspace = env.resolve_workspace(&env.project_root);
-    let id = format!("launch_{name}");
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
             workspace.workspace_id.clone(),
@@ -1254,8 +1255,8 @@ fn seed_stamped_agent(env: &Env, name: &str, fire: &rimz::ids::FireId) {
             &AgentKind::new_unchecked("claude"),
             rimz::store::event::AgentLaunchPayload {
                 system_prompt_digest: None,
-                agent_id: AgentSessionId::from(id.as_str()),
-                launch_id: Some(AgentSessionId::from(id.as_str())),
+                agent_id: AgentSessionId::from(format!("session_{name}")),
+                launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
                 agent_name: name.to_owned(),
                 agent_name_explicit: true,
                 launch: rimz::agents::LaunchParams {
@@ -1284,7 +1285,7 @@ fn end_agent(env: &Env, name: &str) {
             "claude",
             "rimz.agent-ended",
             &rimz::agents::AgentLifecycleObservation::new(
-                Some(format!("launch_{name}").into()),
+                Some(format!("session_{name}").into()),
                 rimz::agents::LifecycleSignal::Ended,
             ),
         ))
@@ -1370,7 +1371,8 @@ fn a_launched_agent_holds_skip_and_replace_launches_only_after_it_ends() {
         "{rows:?}"
     );
     assert!(!seen.exists(), "the replacement waits for the old launch");
-    // The detached stop cannot end a paneless fixture agent, so its durable row stays open.
+    // The detached stop finds no pane and no owner for the bound fixture agent, so it writes
+    // nothing and the durable row stays open.
     let rows = run(&["loop", "run", "swap", "--drain"]);
     assert!(rows.is_empty(), "{rows:?}");
     assert!(!seen.exists(), "the old agent is still alive");
