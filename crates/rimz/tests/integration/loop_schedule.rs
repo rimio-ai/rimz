@@ -6202,13 +6202,15 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
             .0
             .contains_key("dispatch-fails")
     );
-    // The spent one-shot's row is gone; the run it started holds the fire until it reports.
+    // The spent one-shot's row is gone; the run it started holds the fire until it reports. The
+    // detached run may already have ended, so a live run counts in any state. Its report row is
+    // written before its home leaves the live directory, so reading the row second misses neither.
     let state = dispatch.state_path_for(&dispatch.project_root);
     let runs = rimz::store::workflow::live(&state).unwrap();
     assert!(
         runs.iter().any(|run| matches!(
             rimz::store::workflow::load(&run.paths),
-            Ok(record) if record.started_by(&task_id(&dispatch, "dispatch-fails"))
+            Ok(record) if record.ran_for(&task_id(&dispatch, "dispatch-fails"))
         )) || read_loop_run_records(&dispatch)
             .iter()
             .any(|row| row.task == "dispatch-fails" && row.run_id.is_some()),
