@@ -695,7 +695,6 @@ fn wait_and_decide(
     let head = batch
         .first()
         .expect("wait_and_decide requires at least one message");
-    debug_assert!(batch.iter().all(|message| message.enter == head.enter));
     send.pacer.tick();
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
@@ -962,18 +961,16 @@ fn write_text(
             "text written for messages finalized during the write"
         );
     }
-    if head.enter {
-        // Raw-typed commands carry no paste close marker, so wait for composer
-        // paste-burst state to flush before submitting.
-        send.pause_raw_typing(head.body);
-        let keys = receiver_keys(head, receiver);
-        writer.press_keys(match (head.body, send.kind) {
-            (MessageBody::Command, _) => keys.command,
-            (MessageBody::Prompt, DeliveryKind::Boundary) if slash_led => keys.command,
-            (MessageBody::Prompt, DeliveryKind::Boundary) => keys.queue,
-            (MessageBody::Prompt, DeliveryKind::Steer | DeliveryKind::Interrupt) => keys.send_now,
-        })?;
-    }
+    // Raw-typed commands carry no paste close marker, so wait for composer
+    // paste-burst state to flush before submitting.
+    send.pause_raw_typing(head.body);
+    let keys = receiver_keys(head, receiver);
+    writer.press_keys(match (head.body, send.kind) {
+        (MessageBody::Command, _) => keys.command,
+        (MessageBody::Prompt, DeliveryKind::Boundary) if slash_led => keys.command,
+        (MessageBody::Prompt, DeliveryKind::Boundary) => keys.queue,
+        (MessageBody::Prompt, DeliveryKind::Steer | DeliveryKind::Interrupt) => keys.send_now,
+    })?;
     Ok(())
 }
 
@@ -1063,7 +1060,6 @@ fn compact_message_for_target<'a>(
         about_run: None,
         premises: crate::store::message::Premise::NONE,
         body: MessageBody::Command,
-        enter: true,
         gate: prompt.gate,
         sender: MessageSender::System,
         automated: true,

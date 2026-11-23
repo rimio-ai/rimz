@@ -153,7 +153,6 @@ mod tests {
         assert_eq!(message.text, "continue");
         assert_eq!(message.gate, DeliveryGate::Resume);
         assert_eq!(message.status, MessageStatus::Queued);
-        assert!(message.enter);
         assert!(!message.is_user_input());
     }
 
@@ -182,6 +181,5 @@ mod tests {
         );
         assert_eq!(message.pane_id, None);
         assert_eq!(message.gate, DeliveryGate::Done);
-        assert!(message.enter);
     }
 }

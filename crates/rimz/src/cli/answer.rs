@@ -282,7 +282,6 @@ fn answer_raised(
             automated: false,
             allow_fanout: false,
             mux: globals.mux,
-            enter: true,
             force: false,
             auto_compact: None,
             mode: DispatchMode::Boundary {

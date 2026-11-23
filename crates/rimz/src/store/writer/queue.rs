@@ -95,7 +95,6 @@ pub struct MessageEdit {
     pub gate: Option<DeliveryGate>,
     pub not_before: Option<Option<Timestamp>>,
     pub force: Option<bool>,
-    pub enter: Option<bool>,
     pub auto_compact: Option<Option<AutoCompact>>,
 }
 
@@ -138,9 +137,6 @@ impl MessageEdit {
         if let Some(force) = self.force {
             record.force = force;
         }
-        if let Some(enter) = self.enter {
-            record.enter = enter;
-        }
         if let Some(auto_compact) = self.auto_compact {
             record.auto_compact = auto_compact;
             record.compacted_context_tokens = None;
@@ -160,9 +156,6 @@ impl MessageEdit {
         }
         if self.force.is_some() {
             fields.push("force");
-        }
-        if self.enter.is_some() {
-            fields.push("enter");
         }
         if self.auto_compact.is_some() {
             fields.push("smart_compact");
@@ -1071,9 +1064,7 @@ impl Store {
     }
 
     /// Marks live `Queued`, `Claimed`, or `Sent` records `Sent`. A record that is not live is skipped
-    /// and absent from the result. A command keeps the text the supplied copy says was typed. A
-    /// record that `MessageRecord::settles_at_write` is settled `Delivered` in the same commit and
-    /// returned terminal, so no crash leaves it `Sent` for reconciliation to paste again.
+    /// and absent from the result. A command keeps the text the supplied copy says was typed.
     #[must_use = "durability barrier; check the result"]
     pub fn record_sent_batch(
         &self,
@@ -1110,15 +1101,6 @@ impl Store {
                     MessageEventMethod::Sent,
                     None,
                 ));
-                if message.settles_at_write() {
-                    message = queue.terminalize(
-                        message,
-                        MessageStatus::Delivered,
-                        session_name,
-                        Some(NO_ENTER_SETTLED),
-                        now,
-                    );
-                }
                 sent.push(message);
             }
             Ok(sent)
@@ -1493,8 +1475,7 @@ impl Store {
     /// delivery windows from the resume, whichever comes first.
     /// Steer-only reminders instead cancel after their claim or unclaimed queue
     /// time reaches the claim TTL, hold during an open turn once sent, and settle
-    /// from the receiver's turn end without ever requeueing. A stale `Sent` record that
-    /// `MessageRecord::settles_at_write` is settled `Delivered` without a hold or a resend.
+    /// from the receiver's turn end without ever requeueing.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_messages(
         &self,
@@ -1630,14 +1611,6 @@ impl Store {
                 };
                 if now < deadline {
                     return MessageUpdate::Keep;
-                }
-                // An older binary or a crash can leave a `--no-enter` prompt `Sent`. Its write
-                // was the whole delivery, so it is settled rather than pasted again.
-                if message.settles_at_write() {
-                    return MessageUpdate::Finalize {
-                        status: MessageStatus::Delivered,
-                        reason: Some(NO_ENTER_SETTLED.to_owned()),
-                    };
                 }
                 if message.soft_compact == Some(SoftCompactStep::WrapUp) {
                     return settle_wrap_up(message, &agents, now, &mut report);
@@ -2090,9 +2063,6 @@ impl Store {
         Ok(archived.len())
     }
 }
-
-/// Why a `--no-enter` prompt settles `Delivered` at its write: no turn is owed.
-const NO_ENTER_SETTLED: &str = "written to the composer and left unsubmitted, as --no-enter asks";
 
 fn settle_wrap_up(
     message: &mut MessageRecord,

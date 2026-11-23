@@ -20,9 +20,6 @@ pub(crate) struct SendFlags {
     /// Restrict matches to one named channel.
     #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
     pub(crate) channel: Option<String>,
-    /// Type the text but leave it unsubmitted — no Enter after it lands.
-    #[arg(long)]
-    pub(crate) no_enter: bool,
     /// Type the text into the pane even while a prompt is open there. The prompt
     /// receives the keystrokes.
     #[arg(long)]

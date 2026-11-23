@@ -351,7 +351,6 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
                 "leader-session"
             }
         );
-        assert!(message.enter);
     }
 }
 

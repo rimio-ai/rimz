@@ -259,12 +259,6 @@ struct EditFlags {
     /// Hold delivery while a prompt is open, as by default.
     #[arg(long, conflicts_with = "force")]
     no_force: bool,
-    /// Submit the message with Enter after paste.
-    #[arg(long, conflicts_with = "no_enter")]
-    enter: bool,
-    /// Paste the text but leave it unsubmitted.
-    #[arg(long, conflicts_with = "enter")]
-    no_enter: bool,
     /// Compact first when context is at least this full.
     #[arg(long, value_name = "PCT|TOKENS", value_parser = AutoCompact::parse, conflicts_with = "no_smart_compact")]
     smart_compact: Option<AutoCompact>,
@@ -468,7 +462,6 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
             SendFlags {
                 worktree,
                 channel,
-                no_enter,
                 force,
                 all,
                 create,
@@ -489,7 +482,6 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         (ttl.is_some(), "--ttl <DUR>"),
         (*unless_prompted, "--unless-prompted"),
         (worktree.is_some(), "--worktree <WORKTREE>"),
-        (*no_enter, "--no-enter"),
         (*force, "--force"),
         (*create, "--create"),
         (smart_compact.is_some(), "--smart-compact <PCT|TOKENS>"),

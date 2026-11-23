@@ -434,7 +434,8 @@ pub struct MessageEventPayload {
     pub pane_id: Option<PaneId>,
     pub forced: bool,
     pub text_len: usize,
-    pub enter: bool,
+    #[serde(default)]
+    pub enter: crate::store::message::RetiredEnter,
     pub attempts: u32,
     #[serde(default)]
     pub unconfirmed_sends: u32,
@@ -501,7 +502,7 @@ impl MessageEventPayload {
             pane_id: None,
             forced: false,
             text_len,
-            enter: true,
+            enter: crate::store::message::RetiredEnter,
             attempts: 0,
             unconfirmed_sends: 0,
             sender: attributed_sender(&sender),

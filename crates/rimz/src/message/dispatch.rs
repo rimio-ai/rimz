@@ -91,7 +91,6 @@ pub struct DispatchRequest {
     pub automated: bool,
     pub allow_fanout: bool,
     pub mux: Option<MuxName>,
-    pub enter: bool,
     pub force: bool,
     /// An explicit threshold for this dispatch; `None` inherits the
     /// recipient's seat line at enqueue, falling back to `[harness] smart_compact`.
@@ -847,7 +846,6 @@ fn prepare_mode(
         resuming,
         draft: MessageDraft {
             body: MessageBody::Prompt,
-            enter: request.enter,
             gate,
             sender: request.sender.clone(),
             automated: request.automated,

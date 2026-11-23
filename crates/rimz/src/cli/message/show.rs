@@ -181,9 +181,6 @@ fn render_message_kv(
     if message.gate != DeliveryGate::Done {
         kv.push("gate", render::cell(message.gate.as_str()));
     }
-    if !message.enter {
-        kv.push("enter", render::cell("false"));
-    }
     if message.force {
         kv.push("force", render::cell("true"));
     }

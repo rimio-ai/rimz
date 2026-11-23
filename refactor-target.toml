@@ -4769,8 +4769,10 @@ path = "crates/rimz/src/store"
 # ingress::peek_pending and Wait::answered_by_check let the limit census read rest lock-free (+2).
 # Store::set_terminal_path saves the terminal PATH a user's room entry ran on, for hosted workflow children (+1).
 # AgentCard carries background scripts as CardScript labels, admitted at the view clock by shown_scripts (+1).
+# message::RetiredEnter keeps the retired "enter": true key that binaries through 0.4.3
+# require on queue rows and message events (+1).
 # message::opens_slash_command is the one slash-led test batching and the submit keys share (+1).
-surface-budget = 696
+surface-budget = 697
 
 [[verdict]]
 kind = "item"

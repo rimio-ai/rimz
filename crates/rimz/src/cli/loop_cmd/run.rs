@@ -613,7 +613,6 @@ fn dispatch_wake(
             automated: true,
             allow_fanout: false,
             mux: globals.mux,
-            enter: true,
             force: false,
             // Domain dispatch resolves the recipient's seat line, then the harness default.
             auto_compact: None,

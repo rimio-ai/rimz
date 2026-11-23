@@ -1742,7 +1742,6 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         agent_id.into(),
         bound.name.clone(),
         "anything".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     assert_eq!(

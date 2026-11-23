@@ -568,6 +568,26 @@ impl TypingHold {
     }
 }
 
+/// The `"enter": true` key every message record and message audit event writes, which nothing
+/// reads. Binaries through 0.4.3, and builds before the key was retired, require it and fail to
+/// decode a queue row or a message event without it, and worktrees share one store. Any stored
+/// value decodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetiredEnter;
+
+impl Serialize for RetiredEnter {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for RetiredEnter {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Ok(Self)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
@@ -615,7 +635,8 @@ pub struct MessageRecord {
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
-    pub enter: bool,
+    #[serde(default)]
+    pub enter: RetiredEnter,
     pub gate: DeliveryGate,
     /// Deliver even when Waiting reserves the agent's next input. Mirrors
     /// `message --steer --force`; without it Waiting defers delivery to a later
@@ -780,7 +801,7 @@ impl MessageRecord {
             && self.gate != DeliveryGate::Resume
     }
 
-    /// A record addressed to a live agent card, submitted with Enter.
+    /// A record addressed to a live agent card.
     pub fn new(
         workspace_id: WorkspaceId,
         agent: &AgentState,
@@ -793,7 +814,6 @@ impl MessageRecord {
             agent.agent_id.clone(),
             agent.name.clone(),
             text,
-            true,
             gate,
         )
         .with_launch_id(agent.launch_id.clone())
@@ -805,7 +825,6 @@ impl MessageRecord {
         agent_id: AgentSessionId,
         agent_name: Option<String>,
         text: String,
-        enter: bool,
         gate: DeliveryGate,
     ) -> Self {
         let now = Timestamp::now();
@@ -826,7 +845,7 @@ impl MessageRecord {
             reply_wanted: false,
             body: MessageBody::Prompt,
             text,
-            enter,
+            enter: RetiredEnter,
             gate,
             force: false,
             pane_id: None,
@@ -867,7 +886,6 @@ impl MessageRecord {
             record.agent_id.clone(),
             record.agent_name.clone(),
             record.text.clone(),
-            record.enter,
             record.gate,
         )
         .with_launch_id(record.launch_id.clone())
@@ -1339,16 +1357,8 @@ impl MessageRecord {
         }
     }
 
-    /// Whether the write alone completes this record's delivery: a `--no-enter` prompt asks
-    /// for text in the composer and no turn, so no acknowledgement follows it. A command is
-    /// excluded, since readers of a delivered command take it as run.
-    pub(in crate::store) fn settles_at_write(&self) -> bool {
-        self.body == MessageBody::Prompt && !self.enter
-    }
-
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt
-            && self.enter
             && !self.forced_keepalive
             && !opens_slash_command(&self.text)
     }

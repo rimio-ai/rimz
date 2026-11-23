@@ -140,7 +140,6 @@ fn message_record() -> MessageRecord {
         AgentSessionId::from("sess-1"),
         Some("amber-atlas".to_owned()),
         "secret prompt body".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     message.message_id = MessageId::parse("msg_0123456789abcdef").expect("fixed message id");
@@ -625,6 +624,27 @@ fn message_event_redacts_text_and_preserves_audit_metadata() {
     assert_eq!(
         payload,
         MessageEventPayload::from_record(&message, Some(reason))
+    );
+
+    let mut legacy = event.params_value();
+    legacy["enter"] = json!(false);
+    assert_eq!(
+        serde_json::from_value::<MessageEventPayload>(legacy).unwrap(),
+        payload,
+        "a stored event carrying the retired enter key still decodes"
+    );
+
+    // A binary that still requires the key decodes a fresh event.
+    #[derive(serde::Deserialize)]
+    struct BeforeEnterRetired {
+        text_len: usize,
+        enter: bool,
+        attempts: u32,
+    }
+    let old: BeforeEnterRetired = serde_json::from_value(event.params_value()).unwrap();
+    assert_eq!(
+        (old.text_len, old.enter, old.attempts),
+        ("secret prompt body".len(), true, 2)
     );
 }
 

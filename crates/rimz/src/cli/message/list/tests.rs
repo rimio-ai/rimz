@@ -96,7 +96,6 @@ fn machine_repeat_keys_ignore_unrendered_fields_and_match_receiver_cards() {
     cases[3].about_run = Some(rimz::ids::RunId::new());
     cases[4].gate = DeliveryGate::Any;
     cases[4].force = true;
-    cases[4].enter = false;
     cases[5].agent_name = Some("renamed-same-session".to_owned());
     cases[6].agent_id = "new-session-same-name".into();
     let outputs = cases

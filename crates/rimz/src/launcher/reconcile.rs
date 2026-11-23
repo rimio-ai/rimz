@@ -111,7 +111,6 @@ pub(super) fn reconcile_cohort_launch(
                         automated: false,
                         allow_fanout: false,
                         mux: Some(backend.name()),
-                        enter: true,
                         force: false,
                         auto_compact: None,
                         mode: DispatchMode::Boundary {

@@ -965,7 +965,6 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
             automated: true,
             allow_fanout: false,
             mux: opening.mux,
-            enter: true,
             force: false,
             auto_compact: None,
             mode: DispatchMode::Boundary {

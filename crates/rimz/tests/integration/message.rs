@@ -124,7 +124,6 @@ fn targetless_send_flags_refuse_with_usage_error() {
         vec!["--unless-prompted"],
         vec!["--worktree", "auth"],
         vec!["--channel", "auth"],
-        vec!["--no-enter"],
         vec!["--force"],
         vec!["--all"],
         vec!["--create"],
@@ -267,7 +266,6 @@ fn interrupt_stop_case(
                 AgentSessionId::from(agent_id),
                 Some("swift-otter".into()),
                 "new direction".into(),
-                true,
                 DeliveryGate::Done,
             );
             env.store()
@@ -872,17 +870,6 @@ fn steer_presses_send_now_and_a_boundary_send_presses_queue() {
             "{kind}: {lines:?}"
         );
     }
-
-    let lines = steer_key_case(
-        "antigravity",
-        false,
-        &["--steer", "--no-enter"],
-        "new direction",
-    );
-    assert!(
-        keys_after_text(&lines, "new direction").is_empty(),
-        "{lines:?}"
-    );
 }
 
 #[test]
@@ -1948,7 +1935,6 @@ fn message_requeue_refuses_a_steer_only_wrap_up() {
         "soft-cli".into(),
         None,
         "wrap up".into(),
-        true,
         DeliveryGate::Any,
     );
     record.soft_compact = Some(rimz::store::message::SoftCompactStep::WrapUp);
@@ -1991,7 +1977,6 @@ fn message_json_preserves_soft_compaction_tags_and_omits_absent_tags() {
                 "soft-cli".into(),
                 None,
                 "soft compaction".into(),
-                true,
                 DeliveryGate::Any,
             );
             record.soft_compact = tag;
@@ -3833,7 +3818,6 @@ fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
         .expect("queued resume event");
     assert_eq!(queued.pane_id, None);
     assert_eq!(message.text, "continue");
-    assert!(message.enter);
     assert_eq!(message.status, MessageStatus::Queued);
     let wake_after_miss = wake_stamp_path(&env).exists();
     assert_eq!(message.last_error.as_deref(), Some("resuming"));
@@ -9427,9 +9411,9 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
     assert_eq!(pending[0].agent_id.as_str(), "sess-steer-audit");
 }
 
-/// Enter stays a discrete key event after bracketed paste.
+/// The submit keys stay discrete key events after the bracketed paste.
 #[test]
-fn steer_enter_modes_respect_discrete_submit_key() {
+fn steer_submit_keys_are_discrete_writes() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -9456,118 +9440,6 @@ fn steer_enter_modes_respect_discrete_submit_key() {
             .filter(|line| line.contains("\taction\twrite\t"))
             .all(|line| line.contains(&format!("\t--session\t{session}\taction\twrite\t"))),
         "the paste and the submit key name the room's session {session}; trace: {lines:?}"
-    );
-
-    let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
-    let quiet = run_success(
-        traced_rimz(&env, "zellij-steer-quiet-trace.log").args([
-            "message",
-            "--steer",
-            "@claude",
-            "--no-enter",
-            "--",
-            "y",
-        ]),
-        "no-enter steer",
-    );
-
-    let lines = trace_lines(&trace_log);
-    assert!(
-        lines.iter().any(|line| is_paste(line, &user_message("y"))),
-        "expected a bracketed paste of `y`; trace: {lines:?}"
-    );
-    assert!(
-        !lines.iter().any(|line| is_enter_key(line)),
-        "--no-enter must not press Enter; trace: {lines:?}"
-    );
-    assert_no_enter_settled(&env, &sent_id_from_stdout(&quiet.stdout));
-
-    // A plain --no-enter write to the resting receiver settles the same way, and a later
-    // boundary send goes straight to the pane rather than queueing behind either draft. The
-    // submitted steer is acknowledged first, so only a draft could hold the card's lane.
-    for hook in [
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-steer-enter",
-            "prompt": user_message("y"),
-        }),
-        json!({"hook_event_name": "Stop", "session_id": "sess-steer-enter"}),
-    ] {
-        run_hook(&env, hook, &[("ZELLIJ_PANE_ID", "3")]);
-    }
-    let plain = run_success(
-        traced_rimz(&env, "zellij-plain-quiet-trace.log").args([
-            "message",
-            "@claude",
-            "--no-enter",
-            "--",
-            "z",
-        ]),
-        "no-enter boundary send",
-    );
-    let lines = trace_lines(&env.project_root.join("zellij-plain-quiet-trace.log"));
-    assert!(
-        lines.iter().any(|line| is_paste(line, &user_message("z"))),
-        "{lines:?}"
-    );
-    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
-    assert_no_enter_settled(&env, &sent_id_from_stdout(&plain.stdout));
-
-    let sweep_log = env.project_root.join("zellij-no-enter-sweep-trace.log");
-    run_success(
-        traced_rimz(&env, "zellij-no-enter-sweep-trace.log")
-            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
-            .args(["message", "sweep"]),
-        "sweep past the delivery window",
-    );
-    let lines = trace_lines(&sweep_log);
-    assert!(
-        !lines.iter().any(|line| line.contains("\taction\twrite")),
-        "a settled --no-enter draft is never pasted again; trace: {lines:?}"
-    );
-
-    let next = run_success(
-        traced_rimz(&env, "zellij-after-quiet-trace.log").args(["message", "@claude", "--", "w"]),
-        "boundary send after the drafts",
-    );
-    sent_id_from_stdout(&next.stdout);
-}
-
-/// A `--no-enter` prompt is settled `delivered` at its write, with the reason on its event.
-fn assert_no_enter_settled(env: &Env, message_id: &str) {
-    let settled = env
-        .store()
-        .list_message_history()
-        .expect("message history")
-        .into_iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .unwrap_or_else(|| panic!("{message_id} not settled"));
-    assert_eq!(settled.status, MessageStatus::Delivered);
-    let events = env.read_events();
-    let methods = events
-        .iter()
-        .filter(|event| event.params_value()["message_id"].as_str() == Some(message_id))
-        .map(|event| event.method.as_str())
-        .collect::<Vec<_>>();
-    for method in ["message.sent", "message.delivered"] {
-        assert_eq!(
-            methods.iter().filter(|seen| **seen == method).count(),
-            1,
-            "{method}: {methods:?}"
-        );
-    }
-    let delivered = events
-        .iter()
-        .find(|event| {
-            event.method == "message.delivered"
-                && event.params_value()["message_id"].as_str() == Some(message_id)
-        })
-        .expect("delivered event");
-    assert!(
-        delivered.params_value()["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("unsubmitted")),
-        "{delivered:?}"
     );
 }
 
@@ -10299,28 +10171,6 @@ fn reply_wanted_marks_the_header_and_confirms_under_its_sender() {
             .collect::<Vec<_>>(),
         vec![message_id]
     );
-
-    let draft = run_success(
-        from_agent("zellij-marked-no-enter.log").args([
-            "message",
-            "--steer",
-            "--no-enter",
-            "--reply-wanted",
-            "@claude",
-            "--",
-            "draft",
-        ]),
-        "marked --no-enter steer",
-    );
-    sent_id_from_stdout(&draft.stdout);
-    let lines = trace_lines(&env.project_root.join("zellij-marked-no-enter.log"));
-    assert!(
-        lines
-            .iter()
-            .any(|line| is_paste(line, &format!("{marked}draft"))),
-        "{lines:?}"
-    );
-    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
 }
 
 #[test]

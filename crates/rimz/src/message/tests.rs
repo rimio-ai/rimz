@@ -664,7 +664,6 @@ fn draft(not_before: Option<Timestamp>) -> MessageDraft {
         about_run: None,
         premises: crate::store::message::Premise::NONE,
         body: MessageBody::Prompt,
-        enter: true,
         gate: DeliveryGate::Done,
         sender: MessageSender::Human,
         automated: false,

@@ -9,8 +9,6 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
         no_schedule,
         force,
         no_force,
-        enter,
-        no_enter,
         smart_compact,
         no_smart_compact,
     } = flags;
@@ -32,7 +30,6 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
             .map(Some)
     };
     let force = force.then_some(true).or_else(|| no_force.then_some(false));
-    let enter = enter.then_some(true).or_else(|| no_enter.then_some(false));
     let auto_compact = smart_compact
         .map(Some)
         .or_else(|| no_smart_compact.then_some(None));
@@ -41,7 +38,6 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
         gate: on,
         not_before,
         force,
-        enter,
         auto_compact,
     })
 }

@@ -1429,7 +1429,6 @@ fn queue_resume_prompt(
         agent_id.clone(),
         name,
         prompt.to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_launch_id(launch)

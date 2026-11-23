@@ -66,7 +66,6 @@ pub(super) fn send_message_to(
     let SendFlags {
         worktree,
         channel: channel_flag,
-        no_enter,
         force,
         all,
         create,
@@ -138,7 +137,6 @@ pub(super) fn send_message_to(
         automated: false,
         allow_fanout: all,
         mux: globals.mux,
-        enter: !no_enter,
         force,
         auto_compact: smart_compact,
         mode: mode.clone(),
