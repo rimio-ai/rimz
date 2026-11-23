@@ -544,7 +544,7 @@
           "key": "c",
           "steps": [
             {
-              "run": 17
+              "run_focused": 17
             },
             {
               "mode": "locked"
@@ -676,7 +676,7 @@
           "key": "q",
           "steps": [
             {
-              "run": 21
+              "run_focused": 21
             },
             {
               "mode": "locked"

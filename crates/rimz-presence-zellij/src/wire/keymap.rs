@@ -145,6 +145,12 @@ impl Keymap {
                     "MessagePluginId {plugin_id} {{ name \"rimz:key\"; payload \"{index}\"; }}"
                 ))
             }
+            Step::RunFocused(index) => {
+                self.commands.get(*index)?;
+                Some(format!(
+                    "MessagePluginId {plugin_id} {{ name \"rimz:focused-key\"; payload \"{index}\"; }}"
+                ))
+            }
             Step::Palette(mode) if matches!(mode.as_str(), "cards" | "commands" | "new") => {
                 Some(format!(
                     "MessagePluginId {plugin_id} {{ name \"rimz:palette\"; payload {}; }}",
@@ -205,6 +211,9 @@ struct Bind {
 #[serde(rename_all = "snake_case")]
 enum Step {
     Run(usize),
+    /// An indexed command the plugin runs with `--from-pane` and the pressing client's
+    /// focused pane appended.
+    RunFocused(usize),
     Action(Vec<String>),
     Mode(String),
     Palette(String),
@@ -342,6 +351,7 @@ mod tests {
     fn renders_allowlisted_steps_and_quotes_commands_without_raw_kdl() {
         let map = map(json!([{"mode":"locked","clear":true,"binds":[
             {"key":"Alt j","steps":[{"run":0}]},
+            {"key":"Alt x","steps":[{"run_focused":0}]},
             {"key":"Alt h","steps":[{"action":["MoveFocus","Left"]}]},
             {"key":"Alt n","steps":[{"palette":"new"}]},
             {"key":"Alt p","steps":[{"mode":"tmux"}]},
@@ -351,6 +361,10 @@ mod tests {
         assert!(kdl.contains("locked clear-defaults=true {"), "{kdl}");
         assert!(
             kdl.contains("MessagePluginId 42 { name \"rimz:key\"; payload \"0\"; }"),
+            "{kdl}"
+        );
+        assert!(
+            kdl.contains("MessagePluginId 42 { name \"rimz:focused-key\"; payload \"0\"; }"),
             "{kdl}"
         );
         assert!(kdl.contains("MoveFocus \"Left\";"));
@@ -372,6 +386,7 @@ mod tests {
                 {"key":"Alt x","steps":[{"action":["Run","sh"]}]},
                 {"key":"Alt y","steps":[{"mode":"bogus"}]},
                 {"key":"Alt z","steps":[{"run":999}]},
+                {"key":"Alt f","steps":[{"run_focused":999}]},
                 {"key":"Alt a","steps":[{"action":["MoveFocus","Left; Run sh"]}]},
                 {"key":"Alt b","steps":[{"palette":"raw kdl"}]},
                 {"key":"Alt c","steps":[{"run":0},{"action":["raw kdl"]}]},

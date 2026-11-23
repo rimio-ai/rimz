@@ -12,6 +12,10 @@ pub use keymap::{Direction, Guard, GuardedAction, Keymap};
 /// Keybind payloads index the complete command vectors supplied by the host.
 pub const KEY_PIPE: &str = "rimz:key";
 
+/// A keybind's indexed command, run with the pressing client's focused pane as its
+/// `--from-pane`; the payload is the command index.
+pub const FOCUSED_KEY_PIPE: &str = "rimz:focused-key";
+
 /// A keybind's guarded split, close, or swap, decided against the pressing
 /// client's focused pane; the payload is the step `Keymap::guard` decodes.
 pub const GUARD_PIPE: &str = "rimz:guard";

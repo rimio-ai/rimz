@@ -389,7 +389,6 @@ fn rimz_actions_carry_commands_and_typed_palette_modes() {
             "filter.needs_you",
             vec!["sidebar", "filter", "needs-you", "--toggle"],
         ),
-        ("card.close", vec!["sidebar", "close"]),
         ("tab.close", vec!["sidebar", "close", "--tab"]),
         ("card.reopen", vec!["sidebar", "reopen"]),
         ("sidebar.focus", vec!["sidebar", "focus", "--toggle"]),
@@ -415,6 +414,10 @@ fn rimz_actions_carry_commands_and_typed_palette_modes() {
             if args == ["tab", "terminal", slot.as_str()]));
         assert!(!action.is_motion());
     }
+    assert_eq!(
+        KeyActionName::parse("card.close"),
+        Some(KeyActionName::CardClose)
+    );
     let dashboard = KeyActionName::parse("tab.dashboard").unwrap();
     assert!(matches!(dashboard, KeyActionName::Command { args, .. }
         if args == ["tab", "dashboard"]));

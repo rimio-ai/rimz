@@ -958,6 +958,32 @@ impl Engine {
         }]
     }
 
+    /// An indexed command key (`rimz:focused-key`) pressed by this replica's client,
+    /// with the pane Zellij reports that client focusing.
+    pub fn on_focused_key_pipe(
+        &mut self,
+        payload: Option<&str>,
+        focus: Option<ProjectedPaneId>,
+    ) -> Vec<Effect> {
+        // Like `on_key_pipe`, this reaches the pressing client's replica alone, so
+        // topology muting must not silence it. A press with no focused pane does
+        // nothing: the command acts on the pane it names.
+        let (Some(keymap), Some(focus)) = (self.config.keymap.as_ref(), focus) else {
+            return Vec::new();
+        };
+        if !self.granted {
+            return Vec::new();
+        }
+        keymap
+            .command_argv(payload, self.config.rimz_bin.as_deref())
+            .map(|mut argv| {
+                argv.extend(["--from-pane".to_owned(), wire::pane_id_arg(focus)]);
+                Effect::RunKeyCommand { argv }
+            })
+            .into_iter()
+            .collect()
+    }
+
     /// A guarded key (`rimz:guard`) pressed by this replica's client, with the
     /// pane Zellij reports that client focusing.
     pub fn on_guard_pipe(

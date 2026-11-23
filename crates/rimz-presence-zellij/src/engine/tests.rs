@@ -590,6 +590,52 @@ fn guard_does_nothing_without_focus_a_valid_payload_or_permission() {
     assert!(engine.on_guard_pipe(Some("CloseFocus"), work).is_empty());
 }
 
+#[test]
+fn focused_key_runs_its_command_with_the_focused_pane_and_nothing_without_one() {
+    let host = FakeHost::default();
+    let mut config = config();
+    config.keymap = Some(
+        serde_json::from_value(serde_json::json!({
+            "report_modes":false,
+            "commands":[["sidebar","close","--session-name","session-1"]],
+            "modes":[]
+        }))
+        .unwrap(),
+    );
+    let mut engine = Engine::new(0, config);
+    let focus = Some(ProjectedPaneId::Terminal(3));
+    assert!(engine.on_focused_key_pipe(Some("0"), focus).is_empty());
+    grant(&mut engine, 1, &host);
+    let close = vec![Effect::RunKeyCommand {
+        argv: strings(&[
+            "/bin/rimz",
+            "sidebar",
+            "close",
+            "--session-name",
+            "session-1",
+            "--from-pane",
+            "zellij:terminal_3",
+        ]),
+    }];
+    assert_eq!(engine.on_focused_key_pipe(Some("0"), focus), close);
+    assert!(engine.on_focused_key_pipe(Some("0"), None).is_empty());
+    for payload in [None, Some("1"), Some("0; sh")] {
+        assert!(
+            engine.on_focused_key_pipe(payload, focus).is_empty(),
+            "{payload:?}"
+        );
+    }
+    engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    assert!(engine.muted);
+    assert_eq!(
+        engine.on_focused_key_pipe(Some("0"), focus),
+        close,
+        "topology retirement must not drop this client's key"
+    );
+    engine.on_permission_denied(3, &host);
+    assert!(engine.on_focused_key_pipe(Some("0"), focus).is_empty());
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }

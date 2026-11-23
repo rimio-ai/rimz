@@ -634,7 +634,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 18
+              "run_focused": 18
             },
             {
               "mode": "locked"
@@ -806,7 +806,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 23
+              "run_focused": 23
             },
             {
               "mode": "locked"

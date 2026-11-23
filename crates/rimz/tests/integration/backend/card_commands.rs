@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -15,12 +15,25 @@ use crate::common::{
     write_path_shim,
 };
 
+/// The room style whose keymap binds Alt+x to `card.close`; written before the room starts,
+/// since the keymap installs at room entry.
+pub(super) fn write_rimz_style(env: &Env) {
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[room]\nstyle = 'rimz'\n",
+    )
+    .unwrap();
+}
+
+/// Drives the card commands, then the bundled Alt+x through `press_close`, which presses it
+/// on the room's attached client; the room was started after `write_rimz_style`.
 pub(super) fn check_cards(
     env: &Env,
     backend: &dyn MuxBackend,
     session: &str,
     runtime_root: &Path,
     command: impl Fn() -> Command,
+    press_close: &mut dyn FnMut(),
 ) {
     env.install_agent_hooks("claude");
     let bin = write_hook_firing_agent(env, "claude");
@@ -40,7 +53,10 @@ pub(super) fn check_cards(
     let shell = write_fake_login_shell(env, "card-shell", &[]);
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        toml::to_string(&serde_json::json!({"agents": {"shell": shell}})).unwrap(),
+        toml::to_string(
+            &serde_json::json!({"agents": {"shell": shell}, "room": {"style": "rimz"}}),
+        )
+        .unwrap(),
     )
     .unwrap();
     env.write_config(
@@ -65,15 +81,7 @@ pub(super) fn check_cards(
         |frame| !frame.client_views.is_empty(),
         "attached client",
     );
-    let first_born = backend
-        .client_view(ClientFocusOptions {
-            session_name: Some(session.into()),
-            ..Default::default()
-        })
-        .unwrap()
-        .clients[0]
-        .pane_id
-        .clone();
+    let first_born = client_focus(backend, session);
     let store = rimz::Store::open(env.state_path_for(&env.project_root), runtime.clone()).unwrap();
     let mut agents = Vec::new();
     for (name, id) in [
@@ -194,6 +202,11 @@ pub(super) fn check_cards(
     let a = &agents[0].pane.as_ref().unwrap().pane_id;
     let b = &agents[1].pane.as_ref().unwrap().pane_id;
     let focus = |pane: &PaneId| {
+        // Zellij refuses to focus the pane its client already focuses, and a card launched
+        // into a new tab may leave the client there.
+        if client_focus(backend, session) == *pane {
+            return;
+        }
         command()
             .args(["pane", "focus", &pane.to_string()])
             .assert_success_within_timeout("external pane focus");
@@ -327,19 +340,71 @@ pub(super) fn check_cards(
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+
+    // Alt+x on a card's sidebar closes nothing; in the card's own pane it closes that card, and
+    // its tab with it as the tab's last working pane.
+    let views = pane_views(backend, session, &runtime);
+    let a_view = views[a].clone();
+    let a_tab: Vec<_> = views
+        .iter()
+        .filter(|(_, view)| **view == a_view)
+        .map(|(pane, _)| pane.clone())
+        .collect();
+    let [sidebar] = &a_tab.iter().filter(|pane| *pane != a).collect::<Vec<_>>()[..] else {
+        panic!("the first card's tab holds it and its sidebar: {views:?}");
+    };
+    backend.focus_pane(sidebar, Some(session)).unwrap();
+    wait_client_focus(backend, session, sidebar);
+    press_close();
+    // A close the sidebar press wrongly ran would take this long at most on a loaded host;
+    // nothing reports a press that did nothing.
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(
+        pane_views(backend, session, &runtime),
+        views,
+        "Alt+x on the sidebar closed nothing"
+    );
+    focus(a);
+    press_close();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let closed = loop {
+        let now = pane_views(backend, session, &runtime);
+        if a_tab.iter().all(|pane| !now.contains_key(pane)) {
+            break now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Alt+x in the first card's pane never closed its tab: {now:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // Zellij names a view by its tab's position, which the closed tab shifts.
+    let left: HashSet<_> = closed.into_keys().collect();
+    let others: HashSet<_> = views
+        .into_keys()
+        .filter(|pane| !a_tab.contains(pane))
+        .collect();
+    assert_eq!(left, others, "Alt+x closed the pressed card alone");
 }
 
 fn quiet(output: Output) {
     assert!(output.stderr.is_empty(), "unexpected refusal: {output:?}");
 }
 
+fn client_focus(backend: &dyn MuxBackend, session: &str) -> PaneId {
+    backend
+        .client_view(ClientFocusOptions {
+            session_name: Some(session.into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .clients[0]
+        .pane_id
+        .clone()
+}
+
 #[track_caller]
-fn wait_focus(
-    backend: &dyn MuxBackend,
-    session: &str,
-    runtime: &rimz::RuntimePaths,
-    pane: &PaneId,
-) {
+fn wait_client_focus(backend: &dyn MuxBackend, session: &str, pane: &PaneId) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let view = backend
@@ -349,11 +414,21 @@ fn wait_focus(
             })
             .unwrap();
         if view.clients.len() == 1 && view.clients[0].pane_id == *pane {
-            break;
+            return;
         }
         assert!(Instant::now() < deadline, "focus {pane}: {view:?}");
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[track_caller]
+fn wait_focus(
+    backend: &dyn MuxBackend,
+    session: &str,
+    runtime: &rimz::RuntimePaths,
+    pane: &PaneId,
+) {
+    wait_client_focus(backend, session, pane);
     wait_frame(
         runtime,
         |frame| frame.focused_pane.as_ref() == Some(pane),

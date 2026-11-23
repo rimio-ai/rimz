@@ -80,6 +80,10 @@ enum SidebarSubcmd {
         /// Close every card in the focused tab instead, and with them the tab.
         #[arg(long, conflicts_with = "pane")]
         tab: bool,
+        /// Close the card that owns the pane a key was pressed in; a sidebar pane, or a pane
+        /// in the dashboard, closes nothing.
+        #[arg(long, conflicts_with_all = ["pane", "tab"])]
+        from_pane: Option<PaneId>,
         #[arg(long)]
         session_name: Option<String>,
     },
@@ -514,6 +518,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             ..
         } => cards::close_tab(globals, session_name),
+        SidebarSubcmd::Close {
+            from_pane: Some(pane),
+            session_name,
+            ..
+        } => cards::close_from_pane(globals, session_name, pane),
         SidebarSubcmd::Close {
             pane, session_name, ..
         } => cards::request(globals, session_name, CardRequest::CloseTarget { pane }),

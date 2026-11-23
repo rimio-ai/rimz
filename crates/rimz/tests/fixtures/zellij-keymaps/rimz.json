@@ -494,7 +494,7 @@
           "key": "Alt x",
           "steps": [
             {
-              "run": 18
+              "run_focused": 18
             }
           ]
         },
@@ -784,7 +784,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 24
+              "run_focused": 24
             },
             {
               "mode": "locked"
