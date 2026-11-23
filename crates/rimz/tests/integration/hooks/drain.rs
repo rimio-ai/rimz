@@ -1440,6 +1440,9 @@ fn queued_codex_stops_decode_each_captured_provider_home() {
     }
 }
 
+/// Each apply attempt's deadline, which also covers its child's process start under gate load.
+const APPLY_TIMEOUT_MS: &str = "3000";
+
 fn drain_command(env: &Env) -> Command {
     let mut command = env.rimz();
     command
@@ -1866,7 +1869,7 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
     let (hung, _) = append_frame(&env, frame);
     let (next, through) = append_stop(&env);
     let mut drainer = drain_command(&env)
-        .env("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", "1000")
+        .env("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", APPLY_TIMEOUT_MS)
         .stderr(
             std::fs::OpenOptions::new()
                 .create(true)
@@ -4142,7 +4145,7 @@ fn a_hung_second_frame_of_a_run_is_killed_and_the_next_frame_applied() {
     let (mut drainer, listener) = barrier_drainer(
         &env,
         "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY",
-        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", "1000")],
+        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", APPLY_TIMEOUT_MS)],
     );
     // The drainer holds here after the first frame, outside any apply window.
     let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
@@ -4380,7 +4383,7 @@ fn a_timed_out_apply_leaves_no_pooled_child_alive() {
     let (mut drainer, listener) = barrier_drainer(
         &env,
         "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY",
-        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", "2000")],
+        &[("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", APPLY_TIMEOUT_MS)],
     );
     let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "a's frame");
     let idle = rimz::proc::children(drainer.id());
