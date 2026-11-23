@@ -68,7 +68,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 
 **Subsystems** in `crates/rimz/src/`, each carrying its own `AGENTS.md` contract:
 
-- `cli/`: command parsing, one `run(...)` per subcommand, shared `cli/render/` output. Declared in `main.rs`, it calls the library as `rimz::` and reaches only `pub` items.
+- `cli/`: command parsing, one `run(...)` per subcommand, shared `cli/render/` output.
 - `agents/`: the provider-neutral `AgentDefinition` catalog, capability contracts, `state.rs` rollup, handle minting (`petname`), private `adapters/`, spend/pricing/account machinery, provider login resolution (`login`).
 - `room/`: managed-room context, birth/reset/teardown lifecycle, health gating.
 - `sandbox/`: Linux bubblewrap mount views, provider-home binds, per-agent temp units, skill views, capability preflight.
