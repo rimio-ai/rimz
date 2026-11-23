@@ -1190,27 +1190,27 @@ fn create_and_validate_agree_on_refusals() {
 
 #[test]
 fn an_outcome_key_takes_the_node_name_grammar() {
-    for (path, text) in [
+    for (paths, text) in [
         (
-            "script.pick.on.x\nforged",
+            &["script.pick.on.x\nforged"][..],
             SIMPLE.replace("on.ok='@done'", "on.ok='@done'\non.\"x\\nforged\"='@done'"),
         ),
         (
-            "script.pick.on.ci.green",
+            &["script.pick.on.ci.green"],
             SIMPLE.replace("on.ok='@done'", "on.ok='@done'\non.'ci.green'='@done'"),
         ),
         (
-            "script.pick.on.a b",
+            &["script.pick.on.a b"],
             SIMPLE.replace("on.ok='@done'", "on.ok='@done'\non.'a b'='@done'"),
         ),
         (
-            "condition.pick.else",
+            &["condition.pick.else", "condition.pick.on.n o"],
             CONDITION
                 .replace("else='no'", "else='n o'")
                 .replace("no='@done'", "'n o'='@done'"),
         ),
         (
-            "condition.pick.cases.0.outcome",
+            &["condition.pick.cases.0.outcome", "condition.pick.on.y\tes"],
             CONDITION
                 .replace("outcome='yes'", "outcome='y\tes'")
                 .replace("yes='@done'", "'y\tes'='@done'"),
@@ -1219,12 +1219,15 @@ fn an_outcome_key_takes_the_node_name_grammar() {
         let (_home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
-        let issue = report
+        let errors: Vec<&str> = report
             .errors
             .iter()
-            .find(|issue| issue.path == path)
-            .unwrap_or_else(|| panic!("{path}: {report:?}"));
-        assert!(issue.message.contains("letters, digits"), "{issue:?}");
-        assert!(!issue.message.contains(['\n', '\t']), "{issue:?}");
+            .map(|issue| issue.path.as_str())
+            .collect();
+        assert_eq!(errors, paths, "{report:?}");
+        for issue in &report.errors {
+            assert!(issue.message.contains("letters, digits"), "{issue:?}");
+            assert!(!issue.message.contains(['\n', '\t']), "{issue:?}");
+        }
     }
 }
