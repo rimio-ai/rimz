@@ -773,6 +773,23 @@ fn steer_antigravity_presses_alt_m_after_enter_only_into_a_running_turn() {
     }
 }
 
+/// agy's Escape returns only submitted text to its composer for the Enter after it. An
+/// unsubmitted draft is already there, so that Enter would submit what `--no-enter` holds back.
+#[test]
+fn interrupt_antigravity_resubmits_only_submitted_text() {
+    let enters = |lines: &[String]| lines.iter().filter(|line| is_enter_key(line)).count();
+
+    let lines = steer_key_case("antigravity", false, &["--interrupt", "--no-enter"]);
+    assert!(lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+    assert_eq!(enters(&lines), 0, "{lines:?}");
+
+    let lines = steer_key_case("antigravity", false, &["--interrupt"]);
+    let escape = lines.iter().position(|line| is_escape_key(line));
+    let last_enter = lines.iter().rposition(|line| is_enter_key(line));
+    assert!(escape.is_some() && escape < last_enter, "{lines:?}");
+    assert_eq!(enters(&lines), 2, "{lines:?}");
+}
+
 #[test]
 fn interrupt_queued_record_pastes_then_presses_escape() {
     interrupt_order_case("codex", Some("sess-interrupt"), false);

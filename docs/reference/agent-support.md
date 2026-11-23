@@ -456,7 +456,7 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 | --- | :--: | --- |
 | Claude Code | Esc | Supported, without stop confirmation |
 | Codex | Esc | Supported. The Interrupt hook confirms the stop, otherwise RimZ warns |
-| Antigravity | Esc | Supported, without stop confirmation. Escape returns the typed text to the composer, so RimZ presses Enter half a second later to send it |
+| Antigravity | Esc | Supported, without stop confirmation. Escape returns queued text to the composer, so RimZ presses Enter half a second later to send it. With `--no-enter` it presses no Enter, and the text stays unsubmitted in the composer |
 | Every other agent and process plugins | none | `--interrupt` refused. Use `--steer` or park |
 
 ### Steer key

@@ -255,9 +255,10 @@ pub struct LaunchSpec {
     pub interrupt_key: Option<crate::pane::keys::NamedKey>,
     pub confirm_interrupt: bool,
     /// The interrupt key moves text queued behind the running turn back into the composer,
-    /// so an interrupt presses Enter after the key to submit it. Such a kind opens no turn
-    /// for queued text until the running one ends, so an interrupt also withholds both keys
-    /// when the receiver's turn start moved during the delay: that turn is the paste's own.
+    /// so an interrupt presses Enter after the key to submit it, unless the text was typed
+    /// with `enter` off. Such a kind opens no turn for queued text until the running one ends,
+    /// so an interrupt also withholds both keys when the receiver's turn start moved during
+    /// the delay: that turn is the paste's own.
     pub interrupt_returns_queued_text: bool,
     /// The key that takes a message typed behind a running turn into that turn. A steer
     /// presses it after its Enter when the receiver is mid-turn.
