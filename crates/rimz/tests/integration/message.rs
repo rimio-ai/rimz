@@ -4691,6 +4691,27 @@ fn term_ignoring_process(env: &Env) -> std::process::Child {
     child
 }
 
+/// An agent process that exits a second after its SIGTERM, as a loaded host can delay one.
+fn slow_term_process(env: &Env) -> std::process::Child {
+    let ready = env.project_root.join("slow-term.ready");
+    let mut cmd = std::process::Command::new("sh");
+    scrub_launch_identity(&mut cmd);
+    let child = cmd
+        .args([
+            "-c",
+            r#"trap 'sleep 1; kill "$!"; exit 0' TERM; sleep 347 & : > "$0"; wait"#,
+        ])
+        .arg(&ready)
+        .spawn()
+        .expect("spawn a slow-to-exit process");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "the process never got ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child
+}
+
 fn register_stop_agent(env: &Env, id: &str, pane: &str, owner: Option<rimz::pane::RuntimeOwner>) {
     append_lifecycle(
         env,
@@ -5452,17 +5473,18 @@ fn stop_and_focus_print_paste_ready_receipts() {
 }
 
 /// A process that outlives the wait after its pane closed gets one SIGTERM: one that dies
-/// on it is stopped and offered a resume; one that ignores it fails the stop, naming its
-/// pid, and is left running.
+/// on it is stopped and offered a resume, even when it dies later than the test override
+/// of the wait before the signal; one that ignores it fails the stop, naming its pid, and
+/// is left running.
 #[test]
 fn stop_terms_a_process_that_outlives_its_closed_pane() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let mut dies = dummy_agent_process();
+    let mut dies = slow_term_process(&env);
     register_stop_agent(&env, "dies", TRACE_PANE, Some(agent_owner("dies", &dies)));
     let panes = list_stop_panes(&env, &[3]);
-    let stop = stop_command(&env, &panes, 1000)
+    let stop = stop_command(&env, &panes, 100)
         .args(["agents", "stop", "@dies"])
         .output()
         .unwrap();
