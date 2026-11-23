@@ -171,6 +171,7 @@ fn sample_snapshot(
             AgentSample {
                 kind: agent.kind.to_string(),
                 handle,
+                name: agent.name.clone(),
                 status: card_status(
                     agent,
                     row,
@@ -208,6 +209,7 @@ struct AgentSample {
     parent_id: Option<String>,
     kind: String,
     handle: String,
+    name: Option<String>,
     status: AgentStatus,
     context_pct: Option<f64>,
     tokens: u64,
@@ -221,6 +223,8 @@ struct TopRow {
     parent_id: Option<String>,
     kind: String,
     handle: String,
+    /// The NAME cell, read against the handle before a tree prefix pads it.
+    name: String,
     status: AgentStatus,
     cpu_pct: Option<f64>,
     mem_bytes: Option<u64>,
@@ -265,6 +269,7 @@ fn top_rows(previous: &TopSample, current: &TopSample, elapsed_hint: Duration) -
                 parent_id: current.parent_id.clone(),
                 kind: current.kind.clone(),
                 handle: current.handle.clone(),
+                name: rimz::address::name_column(&current.handle, current.name.as_deref()),
                 status: current.status,
                 cpu_pct,
                 mem_bytes: current
@@ -356,16 +361,17 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
     )?;
     let show_io = rows.iter().any(|row| row.io_bps.is_some());
     let mut headers = vec![
-        "AGENT", "STATUS", "CPU", "MEM", "PROCS", "CTX", "SPENT", "AGE",
+        "AGENT", "NAME", "STATUS", "CPU", "MEM", "PROCS", "CTX", "SPENT", "AGE",
     ];
     if show_io {
-        headers.insert(4, "IO/S");
+        headers.insert(5, "IO/S");
     }
-    let right = (2..headers.len() - 1).collect::<Vec<_>>();
+    let right = (3..headers.len() - 1).collect::<Vec<_>>();
     let mut table = render::Table::new(headers).right(&right);
     for row in rows {
         let mut cells = vec![
             render::cell(row.handle.as_str()).fg(render::palette::identity(&row.kind)),
+            render::cell(row.name.as_str()).dash(),
             render::cell(row.status.as_str()).fg(render::status::agent(
                 row.status,
                 rimz::agents::TurnPhase::Idle,
@@ -394,7 +400,7 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
         ];
         if show_io {
             cells.insert(
-                4,
+                5,
                 render::cell(
                     row.io_bps
                         .map(|bytes| format!("{}/s", render::fmt_bytes(bytes)))
@@ -684,12 +690,34 @@ mod tests {
             parent_id: None,
             kind: "claude".to_owned(),
             handle: handle.to_owned(),
+            name: None,
             status: AgentStatus::Running,
             context_pct: Some(25.0),
             tokens,
             age: "1s".to_owned(),
             metrics,
         }
+    }
+
+    #[test]
+    fn top_names_a_differing_name_in_its_own_column() {
+        let mut named = row("@coder", 1, None);
+        named.name = Some("round-binder".into());
+        let mut plain = row("@sol", 1, None);
+        plain.name = Some("sol".into());
+        let sample = TopSample {
+            sampled_at: Instant::now(),
+            rows: BTreeMap::from([("a".into(), named), ("b".into(), plain)]),
+        };
+        let rows = top_rows(&sample, &sample, Duration::from_secs(1));
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_top(&mut out, &sample, &rows).unwrap();
+        let text = String::from_utf8(out.into_inner()).unwrap();
+        let under = |header, key| crate::cli::render::cell_under(&text, header, key);
+        assert_eq!(under("AGENT", "@coder"), "@coder", "{text}");
+        assert_eq!(under("NAME", "@coder"), "@round-binder", "{text}");
+        assert_eq!(under("NAME", "@sol"), "-", "{text}");
+        assert_eq!(under("STATUS", "@sol"), "running", "{text}");
     }
 
     #[test]

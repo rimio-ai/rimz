@@ -48,6 +48,8 @@ const WIRE_RX_LABEL: &str = "ssh ingress ← client(s)";
 struct PaneProfile {
     pane_id: PaneId,
     label: String,
+    /// The NAME cell beside `label`.
+    name: String,
     pids: Vec<u32>,
 }
 
@@ -130,7 +132,11 @@ pub(super) fn run(secs: u64, json: bool, all: bool, globals: &GlobalFlags) -> Re
     if json {
         print_json(true, secs as f64, total, wire, &rows, None)
     } else {
-        let report = format_report(&rows, total, wire, secs as f64, all);
+        let names = profiles
+            .into_iter()
+            .map(|profile| (profile.pane_id, profile.name))
+            .collect();
+        let report = format_report(&rows, &names, total, wire, secs as f64, all);
         let mut out = render::out();
         out.write_all(report.as_bytes())
             .context("writing bandwidth report")
@@ -149,8 +155,13 @@ fn pane_profiles(
             let root = pane.pane_pid?;
             let agent = overlay.and_then(|snapshot| snapshot.agent_bound_to_pane(&pane));
             let label = pane_label(&pane, agent, &peers);
+            let name = match agent.filter(|_| !pane.is_rimz_sidebar()) {
+                Some(agent) => rimz::address::name_column(&label, agent.name.as_deref()),
+                None => "-".to_owned(),
+            };
             Some(PaneProfile {
                 pane_id: pane.pane_id,
+                name,
                 label,
                 pids: subtree_pids(children, root),
             })
@@ -282,6 +293,7 @@ fn fmt_bps(bps: u64) -> String {
 
 fn format_report(
     rows: &[PaneRate],
+    names: &HashMap<PaneId, String>,
     total: u64,
     wire: Option<(u64, u64)>,
     secs: f64,
@@ -314,6 +326,13 @@ fn format_report(
         .max()
         .unwrap_or(0)
         .max("LABEL".len());
+    let name_of = |row: &PaneRate| names.get(&row.pane_id).map_or("-", String::as_str);
+    let name_w = rows
+        .iter()
+        .map(|row| name_of(row).len())
+        .max()
+        .unwrap_or(0)
+        .max("NAME".len());
     let rate_w = rate_text
         .iter()
         .map(String::len)
@@ -322,33 +341,24 @@ fn format_report(
         .unwrap_or(0)
         .max("WRITE/S".len())
         .max(fmt_bps(total).len());
+    let widths = [pane_w, label_w, name_w, rate_w];
 
     let mut out = String::new();
-    write_report_row(
-        &mut out, "PANE", "LABEL", "WRITE/S", pane_w, label_w, rate_w,
-    );
+    write_report_row(&mut out, ["PANE", "LABEL", "NAME", "WRITE/S"], widths);
     for (row, rate) in rows.iter().zip(&rate_text) {
         write_report_row(
             &mut out,
-            row.pane_id.as_str(),
-            &row.label,
-            rate,
-            pane_w,
-            label_w,
-            rate_w,
+            [row.pane_id.as_str(), &row.label, name_of(row), rate],
+            widths,
         );
     }
     for (pane, label, rate) in &wire_rows {
-        write_report_row(&mut out, pane, label, rate, pane_w, label_w, rate_w);
+        write_report_row(&mut out, [pane, label, "", rate], widths);
     }
     write_report_row(
         &mut out,
-        "TOTAL",
-        &total_label,
-        &fmt_bps(total),
-        pane_w,
-        label_w,
-        rate_w,
+        ["TOTAL", &total_label, "", &fmt_bps(total)],
+        widths,
     );
     if hidden > 0 {
         let noun = if hidden == 1 { "pane" } else { "panes" };
@@ -367,15 +377,14 @@ fn format_report(
 
 fn write_report_row(
     out: &mut String,
-    pane: &str,
-    label: &str,
-    rate: &str,
-    pane_w: usize,
-    label_w: usize,
-    rate_w: usize,
+    [pane, label, name, rate]: [&str; 4],
+    [pane_w, label_w, name_w, rate_w]: [usize; 4],
 ) {
-    writeln!(out, "{pane:<pane_w$}  {label:<label_w$}  {rate:>rate_w$}")
-        .expect("writing to String cannot fail");
+    writeln!(
+        out,
+        "{pane:<pane_w$}  {label:<label_w$}  {name:<name_w$}  {rate:>rate_w$}"
+    )
+    .expect("writing to String cannot fail");
 }
 
 fn fmt_secs(secs: f64) -> String {
@@ -488,7 +497,7 @@ mod tests {
             pane_rate("tmux:%1", "btop", 40_000),
             pane_rate("tmux:%3", "quiet", 0),
         ];
-        let report = format_report(&rows, 40_012, None, 5.0, false);
+        let report = format_report(&rows, &HashMap::new(), 40_012, None, 5.0, false);
 
         let header = report.lines().next().expect("header");
         assert!(header.contains("PANE"));
@@ -499,15 +508,49 @@ mod tests {
         assert!(!report.contains(REPORT_CAVEAT));
         assert!(!report.contains("tmux:%3"));
         assert!(report.contains("1 quiet pane not shown · --all lists them"));
-        let report = format_report(&rows, 40_012, None, 5.0, true);
+        let report = format_report(&rows, &HashMap::new(), 40_012, None, 5.0, true);
         assert!(report.contains("tmux:%3"));
         assert!(!report.contains("not shown"));
     }
 
     #[test]
+    fn format_report_names_a_differing_agent_name_in_its_own_column() {
+        let rows = [
+            pane_rate("tmux:%1", "@coder#auth", 40_000),
+            pane_rate("tmux:%2", "@sol#auth", 20_000),
+            pane_rate("tmux:%3", "btop", 12),
+        ];
+        let names = HashMap::from([
+            (
+                PaneId::parse("tmux:%1").unwrap(),
+                "@round-binder".to_owned(),
+            ),
+            (PaneId::parse("tmux:%2").unwrap(), "-".to_owned()),
+        ]);
+        let report = format_report(&rows, &names, 60_012, None, 5.0, false);
+        let under = |header, key| crate::cli::render::cell_under(&report, header, key);
+        assert_eq!(under("LABEL", "tmux:%1"), "@coder#auth", "{report}");
+        assert_eq!(under("NAME", "tmux:%1"), "@round-binder", "{report}");
+        assert_eq!(under("NAME", "tmux:%2"), "-", "{report}");
+        assert_eq!(under("NAME", "tmux:%3"), "-", "{report}");
+        let ends = report.lines().take(5).map(|line| line.chars().count());
+        assert!(
+            ends.collect::<std::collections::BTreeSet<_>>().len() == 1,
+            "WRITE/S is right-aligned under its header: {report}"
+        );
+    }
+
+    #[test]
     fn format_report_includes_wire_rows_before_total() {
         let rows = [pane_rate("tmux:%1", "codex", 40_000)];
-        let report = format_report(&rows, 40_000, Some((8_192, 1_024)), 5.0, false);
+        let report = format_report(
+            &rows,
+            &HashMap::new(),
+            40_000,
+            Some((8_192, 1_024)),
+            5.0,
+            false,
+        );
 
         assert!(report.contains(WIRE_TX_PANE));
         assert!(report.contains(WIRE_TX_LABEL));

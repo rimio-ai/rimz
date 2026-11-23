@@ -577,7 +577,7 @@ fn pane_row_labels_a_calling_sidebar_before_any_agent_overlay() {
     );
     let agent = agent_on("terminal_3", "codex", "main");
     let peers = vec![&agent];
-    let mut table = render::Table::new(["AGENT", "STATUS", "COMMAND", "CWD", "PANE"]);
+    let mut table = render::Table::new(["AGENT", "NAME", "STATUS", "COMMAND", "CWD", "PANE"]);
     table.row(pane_row(
         &pane,
         Some(&agent),
@@ -673,4 +673,33 @@ fn overlay_refuses_an_agent_whose_pane_was_reused() {
         .agent_bound_to_pane(&live)
         .expect("the live codex pane still binds");
     assert_eq!(bound.kind.as_str(), "codex");
+}
+
+#[test]
+fn pane_table_names_a_differing_agent_name_in_its_own_column() {
+    let panes = vec![
+        pane("terminal_1", "tab_0", "#main", "codex", "/repo/main"),
+        pane("terminal_2", "tab_0", "#main", "claude", "/repo/main"),
+        pane("terminal_3", "tab_0", "#main", "zsh", "/repo/main"),
+    ];
+    let mut named = agent_on("terminal_1", "codex", "main");
+    named.name = Some("round-binder".to_owned());
+    let mut plain = agent_on("terminal_2", "claude", "main");
+    plain.name = Some("claude".to_owned());
+    let snapshot = SidebarSnapshot::build_with_agents(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
+        vec![named, plain],
+        Timestamp::now(),
+    )
+    .with_live_panes(panes.clone(), None);
+    let (table, _) = pane_table(&panes, Some(&snapshot), None, false);
+    let mut out = anstream::StripStream::new(Vec::new());
+    table.render(&mut out).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    let under = |header, key| crate::cli::render::cell_under(&text, header, key);
+    assert_eq!(under("AGENT", "terminal_1"), "@codex#main", "{text}");
+    assert_eq!(under("NAME", "terminal_1"), "@round-binder", "{text}");
+    assert_eq!(under("NAME", "terminal_2"), "-", "{text}");
+    assert_eq!(under("NAME", "terminal_3"), "-", "{text}");
+    assert_eq!(under("STATUS", "terminal_3"), "-", "{text}");
 }

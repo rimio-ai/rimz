@@ -86,7 +86,7 @@ $ rimz agents list --all
 4 agents · 2 lanes · 1 needs you · 1 running · 2 at rest · whole room
 
 needs you
-  @planner  waiting  2m  which rotation strategy should we use?
+  @planner (@stable-haven)  waiting  2m  which rotation strategy should we use?
 
 HANDLE        NAME           PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
@@ -216,12 +216,12 @@ The report covers the agents that worked the checkout's current branch within th
 ```console
 $ rimz agents top --once --all
 5 agents · 143.0% CPU · 1.9 GB MEM · 3M spent
-AGENT             STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
-@coder            running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
-  └ @swift-otter  running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
-@planner          waiting   2.0%  410 MB       -      6  42%   200k  2m
-@reviewer         idle      1.0%   50 MB       -      4   3%    12k  15m
-@claude#main      success      -       -       -      -  78%   240k  8m
+AGENT             NAME           STATUS     CPU     MEM    IO/S  PROCS  CTX  SPENT  AGE
+@coder            @round-binder  running  96.0%  892 MB  4 MB/s     12  31%     1M  0s
+  └ @swift-otter  -              running  44.0%  600 MB  2 MB/s      8  62%     2M  1s
+@planner          @stable-haven  waiting   2.0%  410 MB       -      6  42%   200k  2m
+@reviewer         @quiet-otter   idle      1.0%   50 MB       -      4   3%    12k  15m
+@claude#main      @calm-fox      success      -       -       -      -  78%   240k  8m
 ```
 
 `SPENT` is each provider session's cumulative token usage, not its current window occupancy. Children nest under their parent; here `@coder` has spent 1M and its child 2M, so `show @coder` reports 3M for the whole seat. `--all` includes the same channels as the room-wide `list` above.
@@ -234,7 +234,7 @@ rimz agents stop @reviewer      # close the idle reviewer's pane
 rimz agents stop @claude --all  # close every Claude in scope
 ```
 
-`focus` confirms the destination with `focused <address>`. `stop` closes the agent's pane, ending the CLI process after its cleanup, and stops any supervised children that agent launched. If that leaves only the sidebar in the tab, the tab closes on the next refresh without waiting for the agent's cleanup. Its receipt names the stopped agent and, for a resumable solo agent or team seat, the command to resume it. Sessions stay on disk in the provider's own format. To reopen one stopped solo agent, use [`rimz agents resume @swift-otter`](../reference/cli/agents.md#resume-one-closed-session). Its exit hint names that exact handle: `resume with rimz agents resume @swift-otter`. Run it from the recorded directory to take over the current pane again; from elsewhere it opens a tab. Team members keep their team-role resume command, pinned to the stopped lane.
+`focus` confirms the destination with `focused <address>`, adding the agent's name when it differs (`focused @coder (@round-binder)`). `stop` closes the agent's pane, ending the CLI process after its cleanup, and stops any supervised children that agent launched. If that leaves only the sidebar in the tab, the tab closes on the next refresh without waiting for the agent's cleanup. Its receipt names the stopped agent and, for a resumable solo agent or team seat, the command to resume it. Sessions stay on disk in the provider's own format. To reopen one stopped solo agent, use [`rimz agents resume @swift-otter`](../reference/cli/agents.md#resume-one-closed-session). Its exit hint names that exact handle: `resume with rimz agents resume @swift-otter`. Run it from the recorded directory to take over the current pane again; from elsewhere it opens a tab. Team members keep their team-role resume command, pinned to the stopped lane.
 
 A peer launched by another agent can reopen this way too. It keeps its launch-chain budget, but resuming does not reconnect result reporting to its original launcher. The [single-session resume rules](../reference/cli/agents.md#resume-one-closed-session) distinguish these peers from children.
 
