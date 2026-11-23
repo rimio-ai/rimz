@@ -57,9 +57,14 @@ impl EffectiveGrants {
                 .unwrap_or(PermissionMode::Ask),
             isolation: profile.isolation_default.unwrap_or(machine),
             tools: profile.tools.as_ref().map(|tools| {
+                // Beside `skills: []`, a grant's `Skill` reaches only RimZ's skills, which
+                // the review leaves alone as it does a skills or mcps gain.
+                let grant_skill_only = tools.rimz().is_some_and(|grant| !grant.is_empty())
+                    && profile.skills.as_ref().is_some_and(Vec::is_empty);
                 tools
                     .bases()
                     .iter()
+                    .filter(|base| !(grant_skill_only && *base == "Skill"))
                     .map(|base| {
                         let types = if base == "Agent" {
                             tools.agent_types().iter().cloned().collect()

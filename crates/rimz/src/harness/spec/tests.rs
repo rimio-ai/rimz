@@ -163,6 +163,24 @@ fn mini_allowlist_is_a_literal_runtime_not_its_whole_kind() {
 }
 
 #[test]
+fn a_toml_plus_subagent_entry_is_refused_as_markdown_only() {
+    let profiles: ProfilesConfig =
+        toml::from_str("[caller]\nagent = 'claude'\nsubagents = ['+general']").unwrap();
+    let error = validate_subagent_allowlists(
+        &profiles,
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        "profile `caller` allows subagent `+general`: `+` entries add to an inherited list in \
+         Markdown definitions only; list the bare name"
+    );
+}
+
+#[test]
 fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
     let profiles = profiles([
         ("perf", profile("claude")),
@@ -4233,4 +4251,86 @@ fn markdown_kind_base_fields_reach_bare_kind_launches() {
             "{word}"
         );
     }
+}
+
+#[test]
+fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_user_lists() {
+    let granted = |name: &str| {
+        crate::agents::ToolSet::parse(&["Bash".into(), "Skill".into()])
+            .unwrap()
+            .with_rimz(vec![name.parse().unwrap()])
+    };
+    let profiles = profiles([
+        (
+            "claude",
+            Profile {
+                kind_base: true,
+                tools: Some(granted("rimz-lsp")),
+                ..profile("claude")
+            },
+        ),
+        ("child", profile("claude")),
+        (
+            "own",
+            Profile {
+                skills: Some(vec!["rimz".parse().unwrap()]),
+                ..profile("claude")
+            },
+        ),
+        (
+            "served",
+            Profile {
+                mcps: Some(vec!["rimz".parse().unwrap()]),
+                ..profile("claude")
+            },
+        ),
+        (
+            "listed",
+            Profile {
+                skills: Some(vec!["work".parse().unwrap(), "rimz-wait".parse().unwrap()]),
+                ..profile("claude")
+            },
+        ),
+        (
+            "switched",
+            Profile {
+                tools: Some(granted("rimz-wait")),
+                ..profile("codex")
+            },
+        ),
+    ]);
+    let grant = |resolved: ResolvedProfile| {
+        resolved
+            .tools
+            .as_ref()
+            .and_then(crate::agents::ToolSet::rimz)
+            .map(|grant| grant.iter().map(ToString::to_string).collect::<Vec<_>>())
+    };
+    let lsp = Some(vec!["rimz-lsp".to_owned()]);
+    assert_eq!(grant(resolve_profile("child", &profiles).unwrap()), lsp);
+    assert_eq!(
+        grant(resolve_profile_rebased("switched", Some("claude"), &profiles).unwrap()),
+        Some(vec!["rimz-wait".to_owned()])
+    );
+    // A skill named exactly `rimz` is the user's own; in `mcps`, `rimz` is RimZ's server.
+    assert_eq!(grant(resolve_profile("own", &profiles).unwrap()), lsp);
+    let error = resolve_profile("served", &profiles)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(
+            "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz`;"
+        ),
+        "{error}"
+    );
+    let error = resolve_profile("listed", &profiles)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(
+            "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz-wait`; \
+             beside `capabilities:` those lists hold only your own"
+        ),
+        "{error}"
+    );
 }

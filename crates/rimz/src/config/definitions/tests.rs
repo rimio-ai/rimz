@@ -3004,7 +3004,10 @@ fn invalid_chain_targets_and_cycles_are_diagnosed() {
             "agent: claude\nmodel: astra\ntools: []",
             "runs on 'claude' but model 'astra' runs on 'codex'",
         ),
-        ("model: astra", "lists no `tools`, which codex needs"),
+        (
+            "model: astra",
+            "lists neither `capabilities` nor `tools`, which codex needs; write one",
+        ),
     ] {
         definition(root.path(), "agents/probe.md", fields, "");
         error(root.path(), expected);
@@ -3315,7 +3318,10 @@ fn antigravity_definitions_take_a_base_a_craft_body_tools_and_team_seats() {
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("worker"));
     definition(root.path(), "agents/worker.md", "agent: antigravity", "");
-    error(root.path(), "lists no `tools`, which antigravity needs");
+    error(
+        root.path(),
+        "lists neither `capabilities` nor `tools`, which antigravity needs; write one",
+    );
     definition(
         root.path(),
         "agents/antigravity.md",
@@ -5487,6 +5493,525 @@ fn plus_lists_refuse_a_mix_a_bare_plus_and_nothing_below_a_required_list() {
             .message
             .contains("role 'lead' sets `mcps:` mixing `+` entries")),
         "{:#?}",
+        loaded.errors
+    );
+}
+
+#[test]
+fn plus_lists_match_only_inherited_entries_and_refuse_conflicts_inside_one_list() {
+    let root = fixture();
+    for (path, fields) in [
+        (
+            "agents/parent.md",
+            "agent: claude\ntools: [Bash, 'Agent(Explore)', 'Agent(Plan)']\n\
+             allowed-tools: [Read]\nmcps: [github]",
+        ),
+        (
+            "agents/child.md",
+            "agent: parent\ntools: ['+Agent(general-purpose)']\n\
+             allowed-tools: [+Write, +Write]\nmcps: [+linear, +linear]",
+        ),
+    ] {
+        definition(root.path(), path, fields, "");
+    }
+    let loaded = clean(root.path());
+    let child = &loaded.agent_profiles.0["child"];
+    let tools = child.tools.as_ref().unwrap();
+    assert_eq!(tools.bases(), ["Bash", "Agent"]);
+    assert_eq!(tools.agent_types(), ["general-purpose"]);
+    assert_eq!(
+        child
+            .allowed_tools
+            .iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["Read", "Write"]
+    );
+    assert_eq!(
+        child
+            .mcps
+            .iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["github", "linear"]
+    );
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [Bash]\nsubagents: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/child.md",
+        "agent: parent\nsubagents: [+general, +general]",
+        "",
+    );
+    let loaded = clean(root.path());
+    assert_eq!(
+        loaded.agent_profiles.0["child"].subagents,
+        Some(vec!["general".to_owned()])
+    );
+    for (fields, needle) in [
+        (
+            "agent: parent\ncapabilities: [+rimz-lsp:always, +rimz-lsp:deferred]",
+            "lists `rimz-lsp` in `capabilities:` with two different marks; keep one",
+        ),
+        (
+            "agent: parent\nmcps: [+github, +github:deferred]",
+            "lists `github` in `mcps:` with two different marks; keep one",
+        ),
+        (
+            "agent: parent\nmcps: ['+ +github']",
+            "sets `mcps:` with `+ +github`, which starts with `+` after its own; write one `+`",
+        ),
+        (
+            "agent: parent\nmcps: ['++github']",
+            "sets `mcps:` with `++github`, which starts with `+` after its own; write one `+`",
+        ),
+        (
+            "agent: parent\ncapabilities: ['++read']",
+            "sets `capabilities:` with `++read`, which starts with `+` after its own",
+        ),
+        (
+            "agent: parent\ntools: ['++Edit']",
+            "sets `tools:` with `++Edit`, which starts with `+` after its own",
+        ),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/parent.md",
+            "agent: claude\ncapabilities: [read]\nmcps: []",
+            "",
+        );
+        definition(root.path(), "agents/probe.md", fields, "");
+        error(root.path(), needle);
+    }
+}
+
+#[test]
+fn a_seat_with_no_role_list_resolves_its_lists_as_its_definition_does_alone() {
+    let root = fixture();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\ntools: [Bash]\n---\nBase.",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\ncapabilities: [bash]\n---\nBase.",
+    );
+    for (path, fields) in [
+        ("agents/grand.md", "agent: claude\ntools: [Write]"),
+        ("agents/parent.md", "agent: grand\ncapabilities: [read]"),
+        ("agents/leaf.md", "agent: parent\ntools: [+Edit]"),
+        ("agents/root.md", "agent: codex\ncapabilities: [read]"),
+        ("agents/middle.md", "agent: root\ntools: [Bash]"),
+        ("agents/twig.md", "agent: middle\ncapabilities: [+write]"),
+    ] {
+        definition(root.path(), path, fields, "");
+    }
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: leaf\n    role: lead\n    owns: [Plan, Implement]\n  - agent: twig\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let agents = &loaded.agent_profiles.0;
+    let bases = |name: &str| agents[name].tools.as_ref().unwrap().bases().join(",");
+    assert_eq!(bases("leaf"), "Bash,Edit");
+    assert_eq!(bases("probe.lead"), bases("leaf"));
+    assert_eq!(bases("twig"), "Bash,Edit,Write,Skill");
+    assert_eq!(bases("probe.judge"), bases("twig"));
+}
+
+#[test]
+fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
+    let root = fixture();
+    for kind in ["claude", "antigravity"] {
+        write(
+            root.path(),
+            &format!("agents/{kind}.md"),
+            "---\ndescription: Base\ncapabilities: [bash, rimz-lsp]\nskills: [work]\n---\nBase.",
+        );
+    }
+    for (path, fields) in [
+        (
+            "agents/all.md",
+            "agent: claude\ncapabilities: [bash, read, write, ask, web, rimz-lsp:deferred, \
+             rimz-message, read]",
+        ),
+        (
+            "agents/quiet.md",
+            "agent: claude\ncapabilities: [read]\nskills: []",
+        ),
+        (
+            "agents/granted.md",
+            "agent: claude\ncapabilities: [read, rimz-wait]\nskills: []",
+        ),
+        (
+            "agents/own.md",
+            "agent: claude\ncapabilities: [read]\nskills: [review]\nmcps: [github]",
+        ),
+        ("agents/added.md", "agent: claude\nskills: [+review]"),
+        ("agents/heir.md", "agent: all"),
+        ("agents/back.md", "agent: all\ntools: [Bash, Skill]"),
+        (
+            "agents/more.md",
+            "agent: all\ncapabilities: [+rimz-lsp, +rimz-wait:always]",
+        ),
+        ("agents/old.md", "agent: codex\ntools: [Bash]"),
+        ("agents/new.md", "agent: old\ncapabilities: [bash]"),
+        (
+            "agents/pi-seat.md",
+            "agent: pi\ncapabilities: [read, write, rimz-lsp]",
+        ),
+        (
+            "agents/codex-seat.md",
+            "agent: codex\ncapabilities: [read, write, rimz-lsp]",
+        ),
+        (
+            "agents/agy-seat.md",
+            "agent: antigravity\ncapabilities: [read, write, rimz-lsp]",
+        ),
+    ] {
+        definition(root.path(), path, fields, "");
+    }
+    let loaded = clean(root.path());
+    let agents = &loaded.agent_profiles.0;
+    let form = |name: &str| {
+        let tools = agents[name].tools.as_ref().unwrap();
+        (
+            tools.bases().join(","),
+            tools
+                .rimz()
+                .map(|grant| grant.iter().map(ToString::to_string).collect::<Vec<_>>()),
+        )
+    };
+    let every = "Bash,Read,Grep,Glob,LS,Edit,Write,AskUserQuestion,WebSearch,WebFetch,Skill";
+    let grant = |names: &[&str]| Some(names.iter().map(|name| (*name).to_owned()).collect());
+    assert_eq!(
+        form("all"),
+        (
+            every.to_owned(),
+            grant(&["rimz-lsp:deferred", "rimz-message"])
+        )
+    );
+    assert_eq!(form("heir"), form("all"));
+    assert_eq!(
+        form("more"),
+        (
+            every.to_owned(),
+            grant(&["rimz-lsp", "rimz-message", "rimz-wait:always"])
+        )
+    );
+    assert_eq!(form("quiet"), ("Read,Grep,Glob,LS".to_owned(), grant(&[])));
+    assert_eq!(seat_skills(&loaded, "quiet"), Some(Vec::new()));
+    assert_eq!(
+        form("granted"),
+        ("Read,Grep,Glob,LS,Skill".to_owned(), grant(&["rimz-wait"]))
+    );
+    assert_eq!(
+        form("own"),
+        ("Read,Grep,Glob,LS,Skill".to_owned(), grant(&[]))
+    );
+    assert_eq!(seat_skills(&loaded, "own"), Some(vec!["review".to_owned()]));
+    assert_eq!(
+        agents["own"]
+            .mcps
+            .iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["github"]
+    );
+    assert_eq!(
+        form("added"),
+        ("Bash,Skill".to_owned(), grant(&["rimz-lsp"]))
+    );
+    assert_eq!(
+        seat_skills(&loaded, "added"),
+        Some(vec!["work".to_owned(), "review".to_owned()])
+    );
+    assert_eq!(form("back"), ("Bash,Skill".to_owned(), None));
+    assert_eq!(form("new"), ("Bash,Skill".to_owned(), grant(&[])));
+    for seat in ["pi-seat", "codex-seat", "agy-seat"] {
+        assert_eq!(
+            form(seat),
+            (
+                "Read,Grep,Glob,LS,Edit,Write,Skill".to_owned(),
+                grant(&["rimz-lsp"])
+            ),
+            "{seat}"
+        );
+    }
+}
+
+#[test]
+fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_user_lists() {
+    let mark = "but a load mark applies only to a capability with MCP tools (rimz-lsp";
+    for (fields, needle) in [
+        (
+            "agent: claude\ncapabilities: [bash]\ntools: [Bash]",
+            "sets both `capabilities:` and `tools:`; keep one".to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [Bash]",
+            "lists `Bash` in `capabilities:`, which is neither one of the words bash, read, \
+             write, ask, and web nor a RimZ capability `rimz-<name>`; a provider's own tool \
+             names go in `tools:`"
+                .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [read:always]",
+            format!("lists `read:always` in `capabilities:`, {mark}"),
+        ),
+        (
+            "agent: claude\ncapabilities: [rimz-message:deferred]",
+            format!("lists `rimz-message:deferred` in `capabilities:`, {mark}"),
+        ),
+        (
+            "agent: claude\ncapabilities: [rimz-lsp:always, rimz-lsp:deferred]",
+            "lists `rimz-lsp` in `capabilities:` with two different marks; keep one".to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash]\nskills: [work, rimz-lsp]",
+            "sets `capabilities:`, and its `skills:` lists `rimz-lsp`; beside `capabilities:` that \
+             list holds only your own, so list RimZ's in `capabilities:` instead"
+                .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash]\nmcps: [github, 'rimz:always']",
+            "sets `capabilities:`, and its `mcps:` lists `rimz:always`".to_owned(),
+        ),
+        (
+            "agent: legacy\ncapabilities: [bash]",
+            "sets `capabilities:`, and its `skills:` lists `rimz-wait`".to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [+bash]",
+            "sets `capabilities:` with `+` entries, but neither its chain nor the claude kind \
+             base lists `capabilities`; write the full list"
+                .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash, +read]",
+            "sets `capabilities:` mixing `+` entries with plain ones".to_owned(),
+        ),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/legacy.md",
+            "agent: claude\ntools: [Bash, Skill]\nskills: [rimz-wait]",
+            "",
+        );
+        definition(root.path(), "agents/probe.md", fields, "");
+        error(root.path(), &needle);
+    }
+    let root = fixture();
+    write(
+        root.path(),
+        "skills/rimz-present/SKILL.md",
+        "---\nname: probe\n---\nSkill.",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ncapabilities: [rimz-present, rimz-lsp, rimz-nope]",
+        "",
+    );
+    let loaded = load_checked(root.path());
+    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+    assert!(
+        loaded.errors[0].message.starts_with(
+            "lists `rimz-nope` in `capabilities:`, which is neither a capability of RimZ's MCP \
+             server nor a skill on disk for claude; missing at "
+        ),
+        "{}",
+        loaded.errors[0]
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ncapabilities: [rimz-present, rimz-lsp]",
+        "",
+    );
+    assert!(load_checked(root.path()).errors.is_empty());
+}
+
+/// A pending `+` subagents list meets the namespace and delegation refusals a plain list meets,
+/// and a skill named exactly `rimz` is the user's own beside `capabilities:`.
+#[test]
+fn plus_subagents_meet_the_plain_refusals_and_a_bare_rimz_skill_is_the_users() {
+    for (path, fields, needle) in [
+        (
+            "subagents/probe.md",
+            "agent: claude\ntools: [Bash]\nsubagents: [+general]",
+            "sets `subagents:`, which only a direct profile takes; a child cannot launch again",
+        ),
+        (
+            "agents/probe.md",
+            "agent: claude\ntools: [Bash, Agent]\nsubagents: [+general]",
+            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one",
+        ),
+    ] {
+        let root = fixture();
+        definition(root.path(), path, fields, "");
+        error(root.path(), needle);
+    }
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ncapabilities: [bash]\nskills: [rimz]",
+        "",
+    );
+    let loaded = clean(root.path());
+    assert_eq!(seat_skills(&loaded, "probe"), Some(vec!["rimz".to_owned()]));
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ncapabilities: [bash]\nmcps: [rimz]",
+        "",
+    );
+    error(
+        root.path(),
+        "sets `capabilities:`, and its `mcps:` lists `rimz`; beside `capabilities:` that list \
+         holds only your own",
+    );
+}
+
+/// A grant of words and MCP capabilities reads no skill root, so a broken unrelated root does not
+/// stop it loading, as it does not stop an old-form profile with no `skills` list.
+#[test]
+fn a_grant_of_catalog_capabilities_loads_beside_an_unreadable_skill_root() {
+    let root = fixture();
+    std::fs::create_dir_all(root.path().join(".claude")).unwrap();
+    std::fs::write(root.path().join(".claude/skills"), "not a directory\n").unwrap();
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ncapabilities: [bash, rimz-lsp]",
+        "",
+    );
+    let loaded = load_checked(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+}
+
+#[test]
+fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill_is_implied() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/seat.md",
+        "agent: claude\ncapabilities: [bash, ask]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/mute.md",
+        "agent: claude\ncapabilities: [bash, ask]\nskills: []",
+        "",
+    );
+    team_definition(
+        root.path(),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: mute\n    role: aide\n  - agent: seat\n    role: judge\n    owns: [Review, Reflect]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let form = |name: &str| {
+        let tools = loaded.agent_profiles.0[name].tools.as_ref().unwrap();
+        (
+            tools.bases().join(","),
+            tools
+                .rimz()
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let consensus = vec!["rimz-message".to_owned(), "rimz-reflect".to_owned()];
+    assert_eq!(
+        form("probe.lead"),
+        ("Bash,AskUserQuestion,Skill".to_owned(), consensus.clone())
+    );
+    assert_eq!(form("probe.judge"), ("Bash,Skill".to_owned(), consensus));
+    assert_eq!(form("probe.aide"), ("Bash".to_owned(), Vec::new()));
+    // A team that does not reflect still runs the built-in consensus, which names
+    // `rimz-message`.
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: seat\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let grant = |name: &str| {
+        loaded.agent_profiles.0[name]
+            .tools
+            .as_ref()
+            .unwrap()
+            .rimz()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(grant("probe.judge"), ["rimz-message"]);
+}
+
+/// The `rimz-message` a seat gains loads with no such skill on disk, where it reaches nothing,
+/// while the same name written by the user is checked as any `rimz-` entry is.
+#[test]
+fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/seat.md",
+        "agent: claude\ncapabilities: [bash, read]",
+        "",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: seat\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = load_checked(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert!(!loaded.teams.0.is_empty());
+    let grant = loaded.agent_profiles.0["probe.judge"]
+        .tools
+        .as_ref()
+        .unwrap()
+        .rimz()
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(grant, ["rimz-message"]);
+    definition(
+        root.path(),
+        "agents/seat.md",
+        "agent: claude\ncapabilities: [bash, read, rimz-message]",
+        "",
+    );
+    let loaded = load_checked(root.path());
+    assert!(loaded.teams.0.is_empty());
+    assert!(
+        loaded.errors.iter().any(|error| error
+            .message
+            .starts_with("lists `rimz-message` in `capabilities:`, which is neither")),
+        "{:?}",
         loaded.errors
     );
 }

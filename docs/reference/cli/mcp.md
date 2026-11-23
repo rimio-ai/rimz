@@ -119,7 +119,7 @@ A server started with a room pin (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, w
 
 ## Launch registration
 
-RimZ hands its server to a Claude, Codex, or Antigravity launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `mcps` list is absent or holds `*`, `rimz`, or at least one capability. On Claude and Codex the server's command is the room's `rimz` link, so it survives `rimz update`, and a running server in a room follows the update ([protocol](#protocol)). Every spawn path does the same, and `rimz agents explain <profile> --mcps` prints the servers, tools, load modes, and arguments one launch gets, then the instructions and each tool's description and schema as the server sends them ([explain a launch](./agents.md#explain-a-launch)).
+RimZ hands its server to a Claude, Codex, or Antigravity launch when `[agents] rimz-mcp-server` is on (the default, set in the [machine config](../../guide/configuration.md#rimz-tools-over-mcp)) and the profile's `capabilities:` grant names a capability with MCP tools or, for a profile with no grant, its `mcps` list is absent or holds `*`, `rimz`, or at least one capability. On Claude and Codex the server's command is the room's `rimz` link, so it survives `rimz update`, and a running server in a room follows the update ([protocol](#protocol)). Every spawn path does the same, and `rimz agents explain <profile> --mcps` prints the servers, tools, load modes, and arguments one launch gets, then the instructions and each tool's description and schema as the server sends them ([explain a launch](./agents.md#explain-a-launch)).
 
 - **Claude** gets one `--mcp-config` holding the `rimz` server, after every other provider argument and before the `--` that precedes a prompt, since the flag takes several values. With [`allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) on, `mcp__rimz__*` joins `permissions.allow` in the launch's `--settings`, so the tools run without asking; with it off, Claude asks before each call.
 - **Codex** gets `-c mcp_servers.rimz.*` overrides: the command and its arguments, `--parent-env` among them, `env_vars` naming every variable RimZ spawns Codex with (Codex clears a server's environment to a few names otherwise), `tool_timeout_sec=600`, and `default_tools_approval_mode` set to `"approve"` with `allow-routine-rimz` on and `"prompt"` with it off. The `env_vars` names are collected before the user's login shell runs its startup files, so on Linux and macOS `--parent-env` takes what those files export from Codex's own environment; elsewhere the server has the `env_vars` set alone.
@@ -128,7 +128,7 @@ RimZ hands its server to a Claude, Codex, or Antigravity launch when `[agents] r
 
 ### The `mcps` profile key
 
-A profile's [`mcps`](../definitions.md) list chooses both RimZ's capabilities and the user's own MCP servers:
+For a profile that writes `capabilities:`, the grant chooses RimZ's capabilities ([capabilities to tools](../definitions.md#capabilities-to-tools)) and `mcps` only the user's own servers, absent keeping every one. For any other profile, its [`mcps`](../definitions.md) list chooses both RimZ's capabilities and the user's own MCP servers:
 
 | `mcps` | RimZ's server | The user's servers |
 | --- | --- | --- |

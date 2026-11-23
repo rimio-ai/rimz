@@ -360,3 +360,39 @@ fn a_new_kind_base_is_reported_once_for_both_launch_surfaces() {
     assert_eq!(review.profiles[0].namespace, "agents/subagents");
     assert_eq!(review.profiles[0].widened, ["mode"]);
 }
+
+/// A `capabilities:` word lowers to tool bases, so a word gained widens `tools`; a RimZ
+/// capability rides the grant, which the review leaves alone, as a skills or mcps gain, and so
+/// does the `Skill` base a grant alone implies beside `skills: []`.
+#[test]
+fn a_capabilities_word_gained_widens_tools_and_a_rimz_capability_gained_does_not() {
+    let read = ["Read", "Grep", "Glob", "LS", "Skill"];
+    let lowered = |tools: &[&str], grant: &[&str]| {
+        let mut declared = profile(None, None, Some(tools), &[]);
+        declared.tools = declared.tools.map(|tools| {
+            tools.with_rimz(grant.iter().map(|entry| entry.parse().unwrap()).collect())
+        });
+        grants(declared, Isolation::Host)
+    };
+    let previous = lowered(&read, &[]);
+    assert_eq!(
+        lowered(&read, &["rimz-lsp"]).widened_from(&previous),
+        Vec::<&str>::new()
+    );
+    let bash: Vec<&str> = ["Bash"].into_iter().chain(read).collect();
+    assert_eq!(lowered(&bash, &[]).widened_from(&previous), ["tools"]);
+    let quiet = |tools: &[&str], grant: &[&str]| {
+        let mut declared = profile(None, None, Some(tools), &[]);
+        declared.skills = Some(Vec::new());
+        declared.tools = declared.tools.map(|tools| {
+            tools.with_rimz(grant.iter().map(|entry| entry.parse().unwrap()).collect())
+        });
+        grants(declared, Isolation::Host)
+    };
+    let previous = quiet(&read[..4], &[]);
+    assert_eq!(
+        quiet(&read, &["rimz-lsp"]).widened_from(&previous),
+        Vec::<&str>::new()
+    );
+    assert_eq!(quiet(&read, &[]).widened_from(&previous), ["tools"]);
+}

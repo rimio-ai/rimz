@@ -42,6 +42,8 @@ pub(super) struct AgentFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub subagents: Option<Vec<String>>,
@@ -52,16 +54,24 @@ pub(super) struct AgentFrontmatter {
 }
 
 /// Whether a list entry adds to the inherited list rather than replacing it.
-fn is_plus(entry: &str) -> bool {
+pub(super) fn is_plus(entry: &str) -> bool {
     entry.trim_start().starts_with('+')
 }
 
-/// Fills `list` from `below` when unset. A `+` list adds its entries to `below`: an entry
-/// whose `key` `below` already holds replaces it in place, and the rest follow in written
-/// order. Over a `+` list the result is still `+`, pending the next list further down.
+/// An entry less the one `+` that marks it added.
+fn added(entry: &str) -> &str {
+    let entry = entry.trim();
+    entry.strip_prefix('+').unwrap_or(entry).trim()
+}
+
+/// Fills `list` from `below` when unset. A `+` list adds its entries to `below`: the added
+/// entries with a `key` `below` already holds replace every entry of `below` with that key, in
+/// the place of the first, and the rest follow in written order. An added entry is matched only
+/// against `below`, and an exact repeat collapses. Over a `+` list the result is still `+`,
+/// pending the next list further down.
 fn merge_list(list: &mut Option<Vec<String>>, below: Option<&Vec<String>>, key: fn(&str) -> &str) {
     let Some(below) = below else { return };
-    let Some(added) = list
+    let Some(written) = list
         .as_ref()
         .filter(|list| list.iter().any(|entry| is_plus(entry)))
     else {
@@ -70,24 +80,42 @@ fn merge_list(list: &mut Option<Vec<String>>, below: Option<&Vec<String>>, key: 
         }
         return;
     };
-    let pending = below.iter().any(|entry| is_plus(entry));
-    let bare = |entry: &str| entry.trim().trim_start_matches('+').trim().to_owned();
-    let mut merged = below.clone();
-    for entry in added {
-        let entry = bare(entry);
-        let written = if pending {
-            format!("+{entry}")
-        } else {
-            entry.clone()
-        };
-        match merged
-            .iter_mut()
-            .find(|held| key(&bare(held)) == key(&entry))
-        {
-            Some(held) => *held = written,
-            None => merged.push(written),
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in written.iter().map(|entry| added(entry)) {
+        if !entries.contains(&entry) {
+            entries.push(entry);
         }
     }
+    let pending = below.iter().any(|entry| is_plus(entry));
+    let spell = |entry: &&str| {
+        if pending {
+            format!("+{entry}")
+        } else {
+            (*entry).to_owned()
+        }
+    };
+    let mut merged = Vec::new();
+    let mut replaced: Vec<&str> = Vec::new();
+    for held in below {
+        let held_key = key(added(held));
+        if !entries.iter().any(|entry| key(entry) == held_key) {
+            merged.push(held.clone());
+        } else if !replaced.contains(&held_key) {
+            replaced.push(held_key);
+            merged.extend(
+                entries
+                    .iter()
+                    .filter(|entry| key(entry) == held_key)
+                    .map(spell),
+            );
+        }
+    }
+    merged.extend(
+        entries
+            .iter()
+            .filter(|entry| !replaced.contains(&key(entry)))
+            .map(spell),
+    );
     *list = Some(merged);
 }
 
@@ -96,8 +124,8 @@ fn tool_key(entry: &str) -> &str {
     crate::agents::canonical_tool_name(entry.split('(').next().unwrap_or("").trim())
 }
 
-/// An `mcps` entry's name before its load mark.
-fn marked_name(entry: &str) -> &str {
+/// An `mcps` or `capabilities` entry's name before its load mark.
+pub(super) fn marked_name(entry: &str) -> &str {
     entry
         .rsplit_once(':')
         .map_or(entry, |(name, _)| name)
@@ -164,8 +192,21 @@ impl AgentFrontmatter {
     }
 
     /// Fills each list key left unset from `below`, and adds a `+` list to the list below it.
+    /// `tools` and `capabilities` fill as one choice: a layer that writes either, `+` list
+    /// included, takes neither from below, except that its `+` list adds to its own key.
     fn merge_lists(&mut self, below: &Self) {
-        merge_list(&mut self.tools, below.tools.as_ref(), tool_key);
+        if self.tools.is_none() && self.capabilities.is_none() {
+            self.tools.clone_from(&below.tools);
+            self.capabilities.clone_from(&below.capabilities);
+        } else if self.tools.is_some() {
+            merge_list(&mut self.tools, below.tools.as_ref(), tool_key);
+        } else {
+            merge_list(
+                &mut self.capabilities,
+                below.capabilities.as_ref(),
+                marked_name,
+            );
+        }
         merge_list(
             &mut self.allowed_tools,
             below.allowed_tools.as_ref(),
@@ -176,9 +217,10 @@ impl AgentFrontmatter {
         merge_list(&mut self.subagents, below.subagents.as_ref(), str::trim);
     }
 
-    fn lists(&self) -> [(&'static str, Option<&Vec<String>>); 5] {
+    fn lists(&self) -> [(&'static str, Option<&Vec<String>>); 6] {
         [
             ("tools", self.tools.as_ref()),
+            ("capabilities", self.capabilities.as_ref()),
             ("allowed-tools", self.allowed_tools.as_ref()),
             ("skills", self.skills.as_ref()),
             ("mcps", self.mcps.as_ref()),
@@ -186,8 +228,17 @@ impl AgentFrontmatter {
         ]
     }
 
-    /// Refuses a written list that mixes `+` entries with plain ones, or holds a bare `+`.
+    /// Refuses a layer that writes both `capabilities:` and `tools:`, and a written list that
+    /// mixes `+` entries with plain ones, holds a bare `+` or an entry with two, or, in
+    /// `capabilities` or `mcps`, adds one name under two marks.
     pub(super) fn check_plus(&self) -> Result<(), String> {
+        if self.tools.is_some() && self.capabilities.is_some() {
+            return Err(
+                "sets both `capabilities:` and `tools:`; keep one: `capabilities:` names what \
+                 the agent may do, `tools:` the provider's own tool names"
+                    .to_owned(),
+            );
+        }
         for (key, list) in self.lists() {
             let Some(list) = list else { continue };
             if list.iter().any(|entry| entry.trim() == "+") {
@@ -201,17 +252,45 @@ impl AgentFrontmatter {
                      to add to the inherited list, or none to replace it"
                 ));
             }
+            if !list.iter().any(|entry| is_plus(entry)) {
+                continue;
+            }
+            if let Some(entry) = list.iter().find(|entry| added(entry).starts_with('+')) {
+                return Err(format!(
+                    "sets `{key}:` with `{}`, which starts with `+` after its own; write one `+` \
+                     and the entry it adds",
+                    entry.trim()
+                ));
+            }
+            if !matches!(key, "capabilities" | "mcps") {
+                continue;
+            }
+            for (at, entry) in list.iter().enumerate() {
+                let entry = added(entry);
+                if list[..at]
+                    .iter()
+                    .map(|earlier| added(earlier))
+                    .any(|earlier| earlier != entry && marked_name(earlier) == marked_name(entry))
+                {
+                    return Err(format!(
+                        "lists `{}` in `{key}:` with two different marks; keep one",
+                        marked_name(entry)
+                    ));
+                }
+            }
         }
         Ok(())
     }
 
     /// Settles each `+` list nothing below added to, once the whole chain and the kind base are
-    /// in: `skills`, `mcps`, and `subagents` stay absent, which already means everything, and
-    /// `tools` and `allowed-tools` have no list to add to.
+    /// in: `skills` and `mcps` stay absent, which already means everything, and `tools`,
+    /// `capabilities`, and `allowed-tools` have no list to add to. A pending `subagents` list
+    /// stays for `Resolver::finish`, which refuses it where a plain list is refused before it
+    /// reads it as absent.
     pub(super) fn settle_plus(&mut self, kind: &str) -> Result<(), String> {
         for (key, list) in self.lists() {
             if list.is_some_and(|list| list.iter().any(|entry| is_plus(entry)))
-                && matches!(key, "tools" | "allowed-tools")
+                && matches!(key, "tools" | "capabilities" | "allowed-tools")
             {
                 return Err(format!(
                     "sets `{key}:` with `+` entries, but neither its chain nor the {kind} kind \
@@ -219,7 +298,7 @@ impl AgentFrontmatter {
                 ));
             }
         }
-        for list in [&mut self.skills, &mut self.mcps, &mut self.subagents] {
+        for list in [&mut self.skills, &mut self.mcps] {
             if list
                 .as_ref()
                 .is_some_and(|list| list.iter().any(|entry| is_plus(entry)))
@@ -292,6 +371,8 @@ pub(super) struct RoleFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub subagents: Option<Vec<String>>,
@@ -319,6 +400,7 @@ impl RoleFrontmatter {
             budget: self.budget.clone(),
             model_reminder: self.model_reminder,
             tools: self.tools.clone(),
+            capabilities: self.capabilities.clone(),
             allowed_tools: self.allowed_tools.clone(),
             subagents: self.subagents.clone(),
             skills: self.skills.clone(),
