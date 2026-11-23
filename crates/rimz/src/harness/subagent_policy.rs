@@ -32,7 +32,7 @@ pub enum SubagentCatalog {
 }
 
 /// Kind bases serve both namespaces. Their variants are listed beside them, or when explicitly
-/// allowed; a home with neither profiles nor commands otherwise keeps delegation disabled.
+/// allowed; a home with neither profiles nor commands otherwise lists nothing.
 pub fn catalog(
     caller_profile: Option<&str>,
     profiles: &ProfilesConfig,
@@ -110,7 +110,8 @@ const AVAILABLE_PREAMBLE: &str = concat!(
 /// through.
 pub(super) fn reminder(catalog: &SubagentCatalog, via: &str) -> String {
     match catalog {
-        SubagentCatalog::Disabled | SubagentCatalog::NoneAllowed => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.".to_owned(),
+        SubagentCatalog::Disabled => "### Subagents\n\nNo subagent profile is configured for you, so none is listed here. Do the work yourself with your direct tools.".to_owned(),
+        SubagentCatalog::NoneAllowed => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
@@ -454,6 +455,10 @@ mod tests {
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled, "Skill(rimz-subagents)"),
+            "### Subagents\n\nNo subagent profile is configured for you, so none is listed here. Do the work yourself with your direct tools."
+        );
+        assert_eq!(
+            reminder(&SubagentCatalog::NoneAllowed, "Skill(rimz-subagents)"),
             "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools."
         );
     }
