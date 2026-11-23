@@ -470,8 +470,9 @@ fn shut_out(
     name: &str,
 ) -> (Vec<String>, Vec<String>) {
     use rimz::mcp::catalog::Capability;
-    if subagent && name == Capability::Subagents.name() {
-        let reason = vec!["a subagent cannot launch subagents".to_owned()];
+    if subagent && Capability::from_name(name).is_some_and(Capability::launches_agents) {
+        let launched = name.trim_start_matches("rimz-");
+        let reason = vec![format!("a subagent cannot launch {launched}")];
         return (reason.clone(), reason);
     }
     let grant = profile.tools.as_ref().and_then(rimz::agents::ToolSet::rimz);

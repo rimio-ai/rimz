@@ -14,6 +14,9 @@ pub struct LayoutEntry<'a> {
     pub cwd: Option<&'a Path>,
     /// A launch under a loop fire resolves no caller.
     pub under_fire: bool,
+    /// Act on the repository of the caller's recorded checkout, as the command run from the
+    /// caller's pane with no `--root` does, while `root` still names the room.
+    pub caller_repo: bool,
 }
 
 /// The room a layout launch runs in, anchored at its caller's checkout.
@@ -41,8 +44,14 @@ impl LayoutRoom {
         let caller = (!entry.under_fire)
             .then(|| crate::harness::ancestry::resolve_calling_agent(&snapshot.agents).ok())
             .flatten();
-        let workspace =
+        let anchored = caller
+            .and_then(crate::agents::AgentState::lane_path)
+            .is_some();
+        let mut workspace =
             checkout::anchor_caller_workspace(workspace, caller, entry.root.as_deref())?;
+        if entry.caller_repo && anchored {
+            workspace = workspace.at_launch_dir(&workspace.worktree_root.clone())?;
+        }
         let cwd = checkout::resolve_launch_cwd(entry.cwd, store.paths())?;
         Ok(Self {
             workspace,

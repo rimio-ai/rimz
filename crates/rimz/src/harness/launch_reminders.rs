@@ -114,15 +114,30 @@ impl LaunchReminders {
         if self.mcp_server.is_none() || self.mcp_switched_off.is_some() {
             return Vec::new();
         }
-        request.mcp_capabilities(self.no_subagents(request))
+        request.mcp_capabilities(&self.denied_capabilities(request))
     }
 
     /// The launch gets no subagent surface (no `subagent` tool, no `rimz-subagents` skill, no
     /// Subagents paragraph): a child, whose every launch would be refused; a judge, whose child
     /// would get a writable checkout; and a caller whose profile allows no subagents.
-    pub(super) fn no_subagents(&self, request: &ExecRequest) -> bool {
+    fn no_subagents(&self, request: &ExecRequest) -> bool {
         request.cannot_delegate()
             || matches!(self.subagent_catalog, Some(SubagentCatalog::NoneAllowed))
+    }
+
+    /// The capabilities the launch is denied whatever its lists say: every capability that
+    /// launches agents where `ExecRequest::cannot_delegate` holds, and `rimz-subagents` on a
+    /// launch with no subagent surface. A profile's `subagents = []` limits its children only,
+    /// so it keeps `rimz-agents` and `rimz-teams`.
+    pub(super) fn denied_capabilities(&self, request: &ExecRequest) -> Vec<Capability> {
+        let no_subagents = self.no_subagents(request);
+        Capability::ALL
+            .into_iter()
+            .filter(|capability| {
+                (request.cannot_delegate() && capability.launches_agents())
+                    || (no_subagents && *capability == Capability::Subagents)
+            })
+            .collect()
     }
 
     /// The variables that hand the launch's selection to a server its provider starts itself
@@ -168,12 +183,12 @@ impl LaunchReminders {
             .collect()
     }
 
-    /// The skills withheld from the model: the hidden ones, and `rimz-subagents` on a launch
-    /// that gets no subagent surface, on every host kind.
+    /// The skills withheld from the model, on every host kind: the skill of each capability
+    /// the launch is denied (`LaunchReminders::denied_capabilities`), then the hidden ones.
     pub(super) fn withheld_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
-        self.no_subagents(request)
-            .then_some("rimz-subagents")
+        self.denied_capabilities(request)
             .into_iter()
+            .map(Capability::name)
             .chain(self.hidden_skills(request))
             .collect()
     }

@@ -4,7 +4,7 @@
 use super::Tools;
 use super::notices::{CollectedNotices, with_warnings};
 use super::room::Room;
-use super::start::{CollectedNotices, Start, TaskKind, with_warnings};
+use super::start::{Start, TaskKind};
 use crate::harness::run::SupervisedRunRequest;
 use crate::launcher::context::resolve_caller;
 use crate::launcher::{BackgroundLaunchOutcome, RunCompletion, SupervisedContext};

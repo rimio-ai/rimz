@@ -89,6 +89,8 @@ pub struct LayoutLaunch {
     /// `--subagent-profile`: resolve the spec, one `[subagents.profiles]` name, from that table
     /// and record the scope on the launched agent, which stays top-level.
     pub subagent_profile: bool,
+    /// `agent`'s launch: refuse a spec whose resolved layout is other than one agent seat.
+    pub one_seat: bool,
 }
 
 impl LayoutLaunch {
@@ -164,8 +166,14 @@ pub enum Preparation {
 
 pub enum LaunchOutcome {
     Declined,
-    Existing,
-    BudgetExceeded { reason: String },
+    /// The launch landed on a cohort that already exists and opened nothing;
+    /// `prompt_delivered` when its prompt went to that cohort.
+    Existing {
+        prompt_delivered: bool,
+    },
+    BudgetExceeded {
+        reason: String,
+    },
     Opened(Box<OpenedLayout>),
 }
 
@@ -429,6 +437,22 @@ struct PreparedLayout {
     reported_warnings: Vec<crate::harness::plan::LaunchFinalizeWarning>,
 }
 
+/// `agent` launches what the command resolves to one agent seat, a `team.role` and a bare role
+/// of the caller's lane included; a layout of several cells and a command cell are refused.
+fn require_one_seat(spec: &str, layout: &LayoutSpec) -> Result<()> {
+    let cells: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
+    if cells > 1 {
+        bail!("`{spec}` is a layout of several seats; `agent` launches one");
+    }
+    if layout.agent_cells().count() != 1 {
+        bail!(
+            "`{spec}` is not an agent profile; `rimz agents profiles` lists the launchable \
+             profiles"
+        );
+    }
+    Ok(())
+}
+
 pub fn prepare_layout(
     mut request: LayoutRequest,
     interaction: &mut dyn Interaction,
@@ -565,6 +589,12 @@ pub fn prepare_layout(
             }
         }
     })?;
+    if args.launch.one_seat {
+        require_one_seat(
+            args.launch.spec.as_deref().unwrap_or_default(),
+            &resolved.layout,
+        )?;
+    }
     if let Some(spec) = qualified_spec {
         args.launch.spec = Some(spec);
     }
@@ -826,6 +856,13 @@ fn resident_leader(request: &LayoutRequest, leader: &LeaderRun) -> bool {
     .is_ok_and(|resolved| resolved.team_name.is_some())
 }
 
+fn carries_prompt(launch: &LayoutLaunch) -> bool {
+    launch
+        .prompt
+        .as_deref()
+        .is_some_and(|prompt| !prompt.trim().is_empty())
+}
+
 fn settle_layout(
     prepared: PreparedLayout,
     interaction: &mut dyn Interaction,
@@ -890,7 +927,9 @@ fn settle_layout(
             reported_warnings,
             interaction,
         )?;
-        return Ok(SettledLayout::Handled(LaunchOutcome::Existing));
+        return Ok(SettledLayout::Handled(LaunchOutcome::Existing {
+            prompt_delivered: carries_prompt(&args.launch),
+        }));
     }
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     let prompt = args
@@ -1059,8 +1098,15 @@ fn settle_layout(
             args.launch.subagent_profile,
             interaction,
         )? {
-            reconcile::Reconciled::Done | reconcile::Reconciled::PromptDispatched => {
-                return Ok(SettledLayout::Handled(LaunchOutcome::Existing));
+            reconcile::Reconciled::Done => {
+                return Ok(SettledLayout::Handled(LaunchOutcome::Existing {
+                    prompt_delivered: false,
+                }));
+            }
+            reconcile::Reconciled::PromptDispatched => {
+                return Ok(SettledLayout::Handled(LaunchOutcome::Existing {
+                    prompt_delivered: true,
+                }));
             }
             reconcile::Reconciled::Resume(path) => {
                 validate_resume_inputs(&args.launch.overrides, ResumeEntrance::Reconcile)?;
@@ -1111,7 +1157,11 @@ fn settle_layout(
                     reported_warnings,
                     interaction,
                 )
-                .map(|()| SettledLayout::Handled(LaunchOutcome::Existing));
+                .map(|()| {
+                    SettledLayout::Handled(LaunchOutcome::Existing {
+                        prompt_delivered: carries_prompt(&args.launch),
+                    })
+                });
             }
             reconcile::Reconciled::Absent => check_entry = true,
             reconcile::Reconciled::Continue => {}

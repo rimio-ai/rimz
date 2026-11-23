@@ -483,7 +483,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -525,8 +525,9 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         Some(&["rimz:deferred", "rimz-lsp:always", "github:always"]),
         &[],
     ));
-    let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,\
-                 rimz-workflow:deferred,rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,rimz-notes:deferred";
+    let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,rimz-agents:deferred,\
+                 rimz-teams:deferred,rimz-workflow:deferred,rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,\
+                 rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -566,7 +567,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes",
+            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -856,15 +857,53 @@ fn antigravity_hides_the_skills_of_the_capabilities_it_serves_only_when_scoped()
 }
 
 #[test]
+fn a_child_and_a_judge_are_served_no_capability_that_launches() {
+    use crate::mcp::catalog::Capability;
+
+    let room = Room::new();
+    let served = |request: &ExecRequest| {
+        room.compile(&switches(true, true), request)
+            .mcp_capabilities
+    };
+    let peer = served(&launch("claude", None, &[]));
+    for capability in [Capability::Subagents, Capability::Agents, Capability::Teams] {
+        assert!(peer.contains(&capability), "{peer:?}");
+    }
+    let mut child = launch("claude", None, &[]);
+    child.subagent = true;
+    let mut judge = launch("claude", None, &[]);
+    judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
+    });
+    for request in [child, judge] {
+        assert_eq!(
+            served(&request),
+            [
+                Capability::Lsp,
+                Capability::Wait,
+                Capability::Workflow,
+                Capability::Message,
+                Capability::Control,
+                Capability::Notes
+            ]
+        );
+    }
+}
+
+#[test]
 fn a_registered_capability_hides_its_skill_from_the_host_view() {
     let room = Room::new();
     let home = Path::new(&room.ambient["HOME"]);
     let names = [
         "commit",
+        "rimz-agents",
         "rimz-control",
         "rimz-lsp",
         "rimz-notes",
         "rimz-subagents",
+        "rimz-teams",
         "rimz-wait",
     ];
     for root in [home.join(".claude/skills"), home.join(".agents/skills")] {
@@ -878,10 +917,12 @@ fn a_registered_capability_hides_its_skill_from_the_host_view() {
         }
     }
     let all = [
+        "rimz-agents",
         "rimz-control",
         "rimz-lsp",
         "rimz-notes",
         "rimz-subagents",
+        "rimz-teams",
         "rimz-wait",
     ];
     let mut actual = Vec::new();
@@ -965,13 +1006,20 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         "[mute]\nagent = 'claude'\nsubagents = []\n[agy-mute]\nagent = 'antigravity'\nsubagents = []\n",
     )
     .unwrap();
-    // A child and a judge are not served `rimz-loop` either; a profile allowing none is.
+    // `subagents = []` limits a launch's children only, so it keeps the agent and team tools;
+    // a child and a judge lose every capability that launches agents, and `rimz-loop` too.
     let served = |withheld: &[Capability]| -> Vec<Capability> {
         Capability::ALL
             .into_iter()
             .filter(|capability| !withheld.contains(capability))
             .collect()
     };
+    let launchers = [
+        Capability::Subagents,
+        Capability::Agents,
+        Capability::Teams,
+        Capability::Loop,
+    ];
     let mute = |kind: &str, profile: &str| {
         let mut request = launch(kind, None, &[]);
         request.identity.params.profile = Some(profile.to_owned());
@@ -991,16 +1039,8 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
             mute("claude", "mute"),
             served(&[Capability::Subagents]),
         ),
-        (
-            "child",
-            child,
-            served(&[Capability::Subagents, Capability::Loop]),
-        ),
-        (
-            "judge",
-            judge,
-            served(&[Capability::Subagents, Capability::Loop]),
-        ),
+        ("child", child, served(&launchers)),
+        ("judge", judge, served(&launchers)),
     ] {
         let only: Vec<_> = served
             .iter()
@@ -1040,7 +1080,10 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     assert_eq!(plan.mcp_capabilities, served(&[Capability::Subagents]));
     assert_eq!(
         plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
-        Some("rimz-lsp,rimz-wait,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes")
+        Some(
+            "rimz-lsp,rimz-wait,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,\
+             rimz-notes"
+        )
     );
 }
 

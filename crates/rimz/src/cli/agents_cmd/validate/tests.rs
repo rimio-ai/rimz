@@ -788,7 +788,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "child",
             "subagents",
             "tools: [Bash, Skill]\n",
-            "Use rimz(subagents) and rimz(wait).",
+            "Use rimz(subagents), rimz(agents), rimz(teams), and rimz(wait).",
         ),
     ] {
         std::fs::write(
@@ -826,8 +826,12 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
              a RimZ capability nor a skill on disk for claude",
             "agents/unlisted.md: profile unlisted: rimz(chat) names `rimz-chat`, which \
              this profile cannot reach: its skills leave out rimz-chat",
+            "subagents/child.md: profile child: rimz(agents) names `rimz-agents`, which this \
+             profile cannot reach: a subagent cannot launch agents",
             "subagents/child.md: profile child: rimz(subagents) names `rimz-subagents`, which \
              this profile cannot reach: a subagent cannot launch subagents",
+            "subagents/child.md: profile child: rimz(teams) names `rimz-teams`, which this \
+             profile cannot reach: a subagent cannot launch teams",
         ]
     );
     // With the server off, a capability is reached only as a skill on disk.

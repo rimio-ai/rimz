@@ -28,7 +28,8 @@ pub struct LaunchSelection {
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[error(
     "{ENV_SERVE} entry `{0}` is not a RimZ capability (rimz-lsp, rimz-wait, rimz-subagents, \
-     rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+     rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) \
+     with an optional `:always` or `:deferred`, named once"
 )]
 pub struct LaunchEnvErr(String);
 
@@ -108,7 +109,8 @@ mod tests {
         assert_eq!(
             LaunchEnvErr("rimz-x".to_owned()).to_string(),
             "RIMZ_MCP_SERVE entry `rimz-x` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
+             rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
         );
     }
 

@@ -1337,6 +1337,46 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
 }
 
 #[test]
+fn a_child_is_withheld_the_skill_of_every_capability_that_launches_agents() {
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.skills = Some(
+        [
+            "commit",
+            "rimz-subagents",
+            "rimz-agents",
+            "rimz-teams",
+            "rimz-lsp",
+        ]
+        .map(|name| name.parse().unwrap())
+        .to_vec(),
+    );
+    let names = |skills: Option<Vec<crate::config::SkillName>>| -> Vec<String> {
+        skills
+            .unwrap_or_default()
+            .iter()
+            .map(|skill| skill.as_str().to_owned())
+            .collect()
+    };
+    let reminders = super::super::launch_reminders::LaunchReminders::default();
+    let withheld = reminders.withheld_skills(&invocation);
+    assert!(withheld.is_empty(), "{withheld:?}");
+    assert_eq!(names(invocation.launch_skills(&withheld)).len(), 5);
+    invocation.subagent = true;
+    let withheld = reminders.withheld_skills(&invocation);
+    assert_eq!(withheld, ["rimz-subagents", "rimz-agents", "rimz-teams"]);
+    assert_eq!(
+        names(invocation.launch_skills(&withheld)),
+        ["commit", "rimz-lsp"]
+    );
+}
+
+#[test]
 fn child_host_skill_views_withhold_delegation_without_configuring_a_list() {
     let project = tempfile::tempdir().unwrap();
     let library = project.path().join("agents/skills");

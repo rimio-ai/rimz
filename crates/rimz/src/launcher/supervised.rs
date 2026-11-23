@@ -102,7 +102,7 @@ pub fn launch_background(
         LaunchOutcome::BudgetExceeded { reason } => {
             return Ok(BackgroundLaunchOutcome::BudgetExceeded { reason });
         }
-        LaunchOutcome::Declined | LaunchOutcome::Existing => {
+        LaunchOutcome::Declined | LaunchOutcome::Existing { .. } => {
             return Ok(BackgroundLaunchOutcome::Aborted);
         }
     };
