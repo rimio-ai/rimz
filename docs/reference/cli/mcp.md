@@ -137,7 +137,7 @@ A profile's [`mcps`](../definitions.md) list chooses both RimZ's capabilities an
 | Any other list | Every capability when it names `rimz`, else only the named capabilities, as `--only` arguments; none when it names neither | Only the named servers, within each provider's reach below |
 | `[]` | Not handed over | None, within each provider's reach below |
 
-A subagent child and a workflow judge are never served `rimz-subagents`, whatever the list says: every capability is the other four there, and a list that names only `rimz-subagents` hands such a launch no RimZ server.
+A subagent child, a workflow judge, and a launch whose profile sets `subagents: []` are never served `rimz-subagents`, whatever the list says: every capability is the other four there, and a list that names only `rimz-subagents` hands such a launch no RimZ server.
 
 A list's entries are `*` (every server), `rimz` (every capability), the capability names (`rimz-lsp`, `rimz-wait`, `rimz-subagents`, `rimz-control`, `rimz-notes`), and the names of the user's servers. Every entry but `*` takes an optional mark, `:always` or `:deferred`, written without a space (`rimz-lsp:always`); a Markdown definition quotes `'*'`, since YAML reads a bare `*` as an alias. A name that matches no configured server is ignored, since accounts and projects define different servers. An empty entry, a mark on `*`, any other mark, any other name starting `rimz-`, and one name listed with two different marks refuse the definition at load. The same entry listed twice refuses in TOML and counts once in a Markdown definition. RimZ never switches a server on: a listed server the user's config disables stays off.
 

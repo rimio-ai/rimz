@@ -290,6 +290,42 @@ fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_i
     );
 }
 
+#[test]
+fn a_profile_that_allows_no_subagents_gets_no_subagents_paragraph() {
+    let mut actual = Vec::new();
+    for (skills, server) in [
+        (
+            Some(vec![
+                "rimz-message".parse().unwrap(),
+                "rimz-subagents".parse().unwrap(),
+            ]),
+            false,
+        ),
+        (None, false),
+        (None, true),
+    ] {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.skills = skills;
+        let reminders = LaunchReminders {
+            mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
+            subagent_catalog: Some(SubagentCatalog::NoneAllowed),
+            rimz_skills: rimz_skills(&["rimz-message", "rimz-subagents"]),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        let capabilities = capabilities_paragraph_of(&text).unwrap_or_default();
+        actual.push((
+            text.contains("### Subagents"),
+            capabilities.contains("rimz-message") && !capabilities.contains("rimz-subagents"),
+            reminders
+                .mcp_capabilities(&request)
+                .contains(&Capability::Subagents),
+        ));
+    }
+    assert_eq!(actual, [(false, true, false); 3]);
+}
+
 fn team_reminder(team: Team) -> TeamReminder {
     TeamReminder::new(team)
 }

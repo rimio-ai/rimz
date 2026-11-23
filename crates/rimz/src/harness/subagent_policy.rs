@@ -22,6 +22,10 @@ pub struct SubagentProfile {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubagentCatalog {
+    /// The caller's profile names no subagent (`subagents = []`), so every launch is refused.
+    NoneAllowed,
+    /// Nothing to list: an allowlist naming nothing loaded, or no allowlist and nothing in the
+    /// home to launch.
     Disabled,
     /// Never empty: `catalog` returns `Disabled` when nothing survives its filter.
     Available(Vec<SubagentProfile>),
@@ -37,7 +41,7 @@ pub fn catalog(
 ) -> SubagentCatalog {
     let allowed = allowed_specs(caller_profile, profiles);
     if allowed.is_some_and(|allowed| allowed.is_empty()) {
-        return SubagentCatalog::Disabled;
+        return SubagentCatalog::NoneAllowed;
     }
 
     let mut specs = subagent_profiles
@@ -106,7 +110,7 @@ const AVAILABLE_PREAMBLE: &str = concat!(
 /// through.
 pub(super) fn reminder(catalog: &SubagentCatalog, via: &str) -> String {
     match catalog {
-        SubagentCatalog::Disabled => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.".to_owned(),
+        SubagentCatalog::Disabled | SubagentCatalog::NoneAllowed => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
@@ -373,15 +377,17 @@ mod tests {
         );
 
         let (_, profiles) = caller(Some(Vec::new()));
-        assert_eq!(
-            catalog(
-                Some("planner"),
-                &profiles,
-                &ProfilesConfig::default(),
-                &CommandsConfig::default()
-            ),
-            SubagentCatalog::Disabled
-        );
+        for commands in [CommandsConfig::default(), commands] {
+            assert_eq!(
+                catalog(
+                    Some("planner"),
+                    &profiles,
+                    &ProfilesConfig::default(),
+                    &commands
+                ),
+                SubagentCatalog::NoneAllowed
+            );
+        }
     }
 
     #[test]
