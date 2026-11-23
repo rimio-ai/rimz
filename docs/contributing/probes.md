@@ -115,7 +115,7 @@ kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
 
 ## Provider CLIs
 
-- A check of Claude alone (a mod, a flag, a hook payload) needs no room. Run it from a Claude agent's pane, on the login its shell already exports: start `claude` under `env -i` with `PATH`, `HOME`, `TERM` and that `CLAUDE_CONFIG_DIR`, from a scratch directory under `$TMPDIR`, with `--model haiku` and one-line prompts.
+- A check of Claude alone (a mod, a flag, a hook payload) needs no room. Run it from a Claude agent's pane, on the login its shell already exports: start `claude` under `env -i` with `PATH`, `HOME`, `TERM` and that `CLAUDE_CONFIG_DIR`, from a scratch directory under `$TMPDIR`, with `--model haiku` and one-line prompts. Put the prompt before a variadic flag such as `--tools`, which otherwise takes the prompt as a value.
 - Pass `--setting-sources project,local`, so the account's own hooks, `env`, and permission rules (which may deny the native `Agent` tool) stay out.
 - A dialog check drives the same command in a private tmux server (`tmux -L <name> -f /dev/null`, short `TMUX_TMPDIR`).
 - A check that needs `ExitPlanMode` drives an interactive session started with `--permission-mode plan` in the private tmux server: print mode (`-p`) does not offer the tool. A scratch directory whose `.claude/settings.json` declares hooks asks for folder trust first. Approving the plan writes a plan file under the account's `plans/` directory: remove it afterwards.
