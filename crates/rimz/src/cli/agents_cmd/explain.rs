@@ -45,6 +45,9 @@ pub(super) struct ExplainArgs {
     /// RimZ's tools.
     #[arg(long, conflicts_with_all = ["json", "prompt"])]
     mcps: bool,
+    /// Explain PROFILE from [subagents.profiles], as `rimz agents --subagent-profile` launches it.
+    #[arg(long)]
+    subagent_profile: bool,
 }
 
 pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
@@ -112,17 +115,27 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             posture.launch.tuning.clone(),
         )
     } else {
+        let scope = if args.subagent_profile {
+            rimz::harness::plan::check_subagent_profile_spec(
+                &effective,
+                &machine.agents.commands,
+                Some(&args.target),
+            )?;
+            ProfileScope::Subagents
+        } else {
+            ProfileScope::Agents
+        };
         let finalized = launch_resolve::resolve_finalized_layout(
             snapshot.as_ref(),
             &machine,
             &effective,
-            ProfileScope::Agents,
+            scope,
             Some(&args.target),
             None,
             &args.overrides,
             args.budget,
             None,
-            channel.as_deref(),
+            channel.as_deref().filter(|_| !args.subagent_profile),
             false,
             Some((&runtime, &state)),
         )?;
@@ -198,6 +211,9 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .next()
             .expect("one cell yields one identity request")
             .launch;
+        if args.subagent_profile {
+            params.profile_scope = Some(scope);
+        }
         // A preview has no allocating batch; resolve its prospective account without writing a launch.
         let accounts = rimz::agents::room_accounts(
             &state.workspace_record,
@@ -648,6 +664,12 @@ fn mcp_arguments(argv: &[String]) -> Vec<(&str, &str)> {
 }
 
 fn validate_target_overrides(args: &ExplainArgs) -> Result<()> {
+    if args.target.starts_with('@') && args.subagent_profile {
+        bail!(
+            "--subagent-profile applies to a profile name; `{}` explains the profile table its launch recorded; drop the flag",
+            args.target
+        );
+    }
     if args.target.starts_with('@')
         && (args.overrides != LaunchOverrideArgs::default() || args.budget.is_some())
     {

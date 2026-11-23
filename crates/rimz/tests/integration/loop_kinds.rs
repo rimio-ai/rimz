@@ -186,6 +186,54 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
             && stderr.contains("no team, profile, or command named `reviewer`"),
         "{stderr}"
     );
+
+    // A --subagent-profile tail names the subagent profile even where the lane's team has a
+    // role of that name, and it takes one profile, never a team.
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "reviewer",
+        "description: Reviewer\nagent: claude\ntools: []",
+        "",
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "sub-inlane",
+            "--agent",
+            "reviewer",
+            "--every",
+            "1h",
+            "--",
+            "--subagent-profile",
+            "--channel",
+            "forge",
+            "go",
+        ],
+    );
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "sub-team",
+            "--agent",
+            "forge",
+            "--every",
+            "1h",
+            "--",
+            "--subagent-profile",
+            "go",
+        ],
+    );
+    assert!(
+        error.contains(
+            "loop task `sub-team`: --agent `forge`: --subagent-profile takes one profile name defined under [subagents.profiles], and `forge` is a team\n"
+        ),
+        "{error}"
+    );
 }
 
 /// Each tail or flag a task of a launch kind cannot carry is refused at add, naming the task,

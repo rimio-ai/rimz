@@ -32,6 +32,7 @@ pub(super) fn reconcile_cohort_launch(
     fresh: bool,
     focus: LaunchFocus,
     task_step: bool,
+    subagent_profile: bool,
     interaction: &mut dyn Interaction,
 ) -> Result<Reconciled> {
     if !path.exists() {
@@ -171,6 +172,7 @@ pub(super) fn reconcile_cohort_launch(
                 channel.as_ref().map(crate::ids::LaneName::as_str),
                 prompt,
                 None,
+                subagent_profile,
             );
             // A task-started workflow step refuses with guidance even when fired from a terminal.
             let mut unattended = Unattended;
@@ -183,7 +185,7 @@ pub(super) fn reconcile_cohort_launch(
                 name,
                 subject: &subject,
                 facts: &facts,
-                resume_command: Some(&resume_command),
+                resume_command: resume_command.as_deref(),
                 fresh_command: &fresh_command,
             })? {
                 CohortChoice::Fresh => launch_fresh(name, &subject, interaction),
@@ -202,9 +204,9 @@ pub(super) fn reconcile_cohort_launch(
                     )?;
                     Ok(Reconciled::Removed)
                 }
-                CohortChoice::Cancel => bail!(
-                    "canceled; nothing launched; resume with `{resume_command}` or launch fresh with `{fresh_command}`"
-                ),
+                CohortChoice::Cancel => {
+                    worktree_entry::canceled(resume_command.as_deref(), &fresh_command)
+                }
             }
         }
     }

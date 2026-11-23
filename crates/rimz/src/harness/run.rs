@@ -167,6 +167,9 @@ pub struct SupervisedRunRequest {
     /// Apply provider-native delegation restrictions to a `rimz subagents`
     /// child.
     pub subagent: bool,
+    /// Resolve the spec from `[subagents.profiles]` (`--subagent-profile`) as a top-level
+    /// launch: no child treatment applies.
+    pub subagent_profile: bool,
     pub force_new_tab: bool,
     pub agent_shell_persistence: crate::harness::launch::AgentShellPersistence,
     pub permission_mode: Option<PermissionMode>,
@@ -235,6 +238,7 @@ impl SupervisedRunRequest {
             background: false,
             self_cleanup_on_completion: false,
             subagent: false,
+            subagent_profile: false,
             force_new_tab: false,
             agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
             permission_mode,

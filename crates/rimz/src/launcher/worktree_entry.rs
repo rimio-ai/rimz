@@ -40,6 +40,7 @@ pub(super) fn check(
     prompt: Option<&str>,
     fresh: bool,
     fresh_command: Option<&str>,
+    subagent_profile: bool,
     interaction: &mut dyn Interaction,
 ) -> Result<()> {
     let path = crate::worktree::worktree_path(
@@ -60,7 +61,7 @@ pub(super) fn check(
         return launch_fresh(name, &subject, interaction);
     }
     let facts = inspect(store, &path, &marker)?;
-    let (_, command) = relaunch_commands(name, spec, team, None, prompt, None);
+    let (_, command) = relaunch_commands(name, spec, team, None, prompt, None, subagent_profile);
     let choice = interaction.closed_cohort(ClosedCohort {
         name,
         subject: &subject,
@@ -128,7 +129,7 @@ pub(super) fn launch_fresh(
     )))
 }
 
-fn canceled<T>(resume_command: Option<&str>, fresh_command: &str) -> Result<T> {
+pub(super) fn canceled<T>(resume_command: Option<&str>, fresh_command: &str) -> Result<T> {
     let resume = resume_command
         .map(|command| format!("resume with `{command}` or "))
         .unwrap_or_default();
@@ -220,7 +221,8 @@ pub fn relaunch_commands(
     channel: Option<&str>,
     prompt: Option<&str>,
     print_input: Option<PrintInput>,
-) -> (String, String) {
+    subagent_profile: bool,
+) -> (Option<String>, String) {
     let target = team.map(|team| format!("{team}#{name}"));
     let resume_target = team
         .zip(channel)
@@ -237,6 +239,9 @@ pub fn relaunch_commands(
         ),
         None => {
             let mut fresh = vec!["rimz", "agents", spec_display];
+            if subagent_profile {
+                fresh.push("--subagent-profile");
+            }
             if print_input.is_some() {
                 fresh.push("-p");
             }
@@ -260,7 +265,11 @@ pub fn relaunch_commands(
         resume.push(prompt);
         fresh.push(prompt);
     }
-    (shell_command(resume), shell_command(fresh))
+    // A cohort resume restores from `[agents.profiles]`, so a subagent profile has none.
+    (
+        (!subagent_profile).then(|| shell_command(resume)),
+        shell_command(fresh),
+    )
 }
 
 pub(super) fn refuse<T>(offer: &ClosedCohort<'_>) -> Result<T> {

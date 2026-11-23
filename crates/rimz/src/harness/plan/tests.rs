@@ -2922,6 +2922,10 @@ fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
             ..
         }) if name == "main-only"
     ));
+    assert_eq!(
+        err.to_string(),
+        "profile `main-only` is defined under [agents.profiles], but `rimz subagents` resolves [subagents.profiles]; move or copy the profile to the expected section"
+    );
 
     let err = super::resolve_launch(
         &launch,
@@ -2940,6 +2944,102 @@ fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
             ..
         }) if name == "child-only"
     ));
+    assert_eq!(
+        err.to_string(),
+        "profile `child-only` is defined under [subagents.profiles], but `rimz agents` resolves [agents.profiles]; launch it with `rimz agents child-only --subagent-profile`, or move or copy the profile to the expected section"
+    );
+}
+
+#[test]
+fn subagent_profile_flag_takes_exactly_one_subagent_profile() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    for name in ["main-only", "both"] {
+        machine.agents.profiles.0.insert(
+            name.to_owned(),
+            configured_profile("claude", None, None, None, None, None),
+        );
+    }
+    for name in ["scout", "both"] {
+        machine.subagents.profiles.0.insert(
+            name.to_owned(),
+            configured_profile("codex", None, None, None, None, None),
+        );
+    }
+    let mut kind_base = configured_profile("codex", None, None, None, None, None);
+    kind_base.kind_base = true;
+    machine
+        .subagents
+        .profiles
+        .0
+        .insert("codex".to_owned(), kind_base);
+    machine.agents.teams =
+        toml::from_str("[forge]\nroles = [{ role = 'reviewer', profile = 'main-only' }]\n")
+            .expect("team table");
+    machine
+        .agents
+        .commands
+        .0
+        .insert("lint".to_owned(), "cargo clippy".to_owned());
+    let launch = effective_launch(&machine, dir.path());
+    let check = |spec| {
+        check_subagent_profile_spec(&launch, &machine.agents.commands, spec)
+            .map_err(|err| err.to_string())
+    };
+
+    for spec in ["scout", " both ", "never-defined"] {
+        assert_eq!(check(Some(spec)), Ok(()), "{spec}");
+    }
+    let takes = "--subagent-profile takes one profile name defined under [subagents.profiles]";
+    for (spec, refusal) in [
+        (
+            None,
+            format!("{takes}; name one (`rimz subagents profiles` lists them)"),
+        ),
+        (
+            Some("main-only"),
+            format!(
+                "{takes}, and `main-only` is defined only under [agents.profiles]; drop --subagent-profile to launch it"
+            ),
+        ),
+        (Some("forge"), format!("{takes}, and `forge` is a team")),
+        (
+            Some("forge.reviewer"),
+            format!("{takes}, and `forge.reviewer` is a team role"),
+        ),
+        (
+            Some("codex"),
+            format!("{takes}, and `codex` is an agent kind"),
+        ),
+        (
+            Some("lint"),
+            format!("{takes}, and `lint` is an [agents.commands] entry"),
+        ),
+        (
+            Some("codex-fast"),
+            format!(
+                "{takes}, and `codex-fast` is a built-in cell or a kind or profile variant, not a profile name"
+            ),
+        ),
+        (
+            Some("scout-fast"),
+            format!(
+                "{takes}, and `scout-fast` is a built-in cell or a kind or profile variant, not a profile name"
+            ),
+        ),
+        (
+            Some("term"),
+            format!(
+                "{takes}, and `term` is a built-in cell or a kind or profile variant, not a profile name"
+            ),
+        ),
+        (
+            Some("scout,scout"),
+            format!("{takes}, and `scout,scout` is not a single profile name"),
+        ),
+    ] {
+        assert_eq!(check(spec), Err(refusal), "{spec:?}");
+    }
 }
 
 #[test]
@@ -5510,6 +5610,70 @@ fn planned_cell(launch: &SupervisedLaunch) -> &AgentCell {
 }
 
 #[test]
+fn subagent_profile_print_plan_resolves_the_subagent_table_as_a_top_level_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "both".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    machine.subagents.profiles.0.insert(
+        "both".to_owned(),
+        configured_profile(
+            "codex",
+            Some(PermissionMode::Yolo),
+            Some("gpt-5"),
+            None,
+            None,
+            None,
+        ),
+    );
+    let mut request = supervised_request("both", "check");
+    let plain = plan_one(&request, &machine, root.path());
+    let plain = planned_cell(&plain);
+    assert_eq!(plain.kind.as_str(), "claude");
+    assert_eq!(plain.launch.profile_scope, None);
+
+    request.subagent_profile = true;
+    let parent = crate::testkit::agent_state("claude", "parent", Timestamp::UNIX_EPOCH);
+    let (planned, _) = SupervisedPlan {
+        request: &request,
+        caller: Some(&parent),
+        lane: None,
+        parent_isolation: Some(crate::config::Isolation::Host),
+        machine: &machine,
+    }
+    .run(root.path());
+    let planned = planned.expect("flagged plan");
+    let cell = planned_cell(&planned);
+    assert_eq!(cell.kind.as_str(), "codex");
+    assert_eq!(cell.launch.model.as_deref(), Some("gpt-5"));
+    assert_eq!(
+        cell.launch.profile_scope,
+        Some(crate::config::effective::ProfileScope::Subagents)
+    );
+    // A top-level launch: the caller's mode and isolation clamp nothing.
+    assert_eq!(cell.launch.mode, Some(PermissionMode::Yolo));
+    assert!(planned.permission_clamp.is_none());
+    assert!(planned.clamped.is_none());
+    assert!(!planned.yolo_sandbox);
+
+    request.spec = "codex".to_owned();
+    let (refused, _) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(root.path());
+    assert_eq!(
+        refused.map(|_| ()).map_err(|err| err.to_string()),
+        Err("--subagent-profile takes one profile name defined under [subagents.profiles], and `codex` is an agent kind".to_owned())
+    );
+}
+
+#[test]
 fn profile_agent_override_replaces_the_tier_model_and_is_recorded() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -5915,6 +6079,51 @@ fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
     }
     .run(dir.path());
     assert_eq!(planned.expect("kind launch").inferred_lane, None);
+
+    // --subagent-profile names one subagent profile, so the lane's team role of that name
+    // neither shadows it nor makes it ambiguous; a child launch keeps the qualification.
+    machine.subagents.profiles.0.insert(
+        "reviewer".to_owned(),
+        configured_profile("codex", None, Some("gpt-5"), None, None, None),
+    );
+    let plan = |machine: &MachineConfig, subagent_profile: bool| {
+        let mut request = supervised_request("reviewer", "Review the diff.");
+        request.subagent_profile = subagent_profile;
+        request.subagent = !subagent_profile;
+        SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: Some(("forge".parse().unwrap(), "forge")),
+            parent_isolation: None,
+            machine,
+        }
+        .run(dir.path())
+        .0
+    };
+    assert!(matches!(
+        plan(&machine, false)
+            .expect_err("a child's bare name is ambiguous in the lane")
+            .downcast_ref::<crate::harness::spec::LayoutErr>(),
+        Some(crate::harness::spec::LayoutErr::AmbiguousInChannel { .. })
+    ));
+    let mut same_name = machine.clone();
+    same_name.agents.profiles.0.insert(
+        "reviewer".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    same_name.agents.teams.0.get_mut("forge").unwrap().roles[0].profile = "reviewer".to_owned();
+    for machine in [&machine, &same_name] {
+        let launch = plan(machine, true).expect("flagged launch in the lane");
+        assert_eq!(launch.inferred_lane, None);
+        assert_eq!(launch.team_name, None);
+        let cell = planned_cell(&launch);
+        assert_eq!(cell.kind.as_str(), "codex");
+        assert_eq!(cell.launch.role, None);
+        assert_eq!(
+            cell.launch.profile_scope,
+            Some(crate::config::effective::ProfileScope::Subagents)
+        );
+    }
 }
 
 #[test]

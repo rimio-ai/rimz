@@ -5019,6 +5019,201 @@ fn user_shell_subagent_entrypoints_do_not_create_room_state() {
 
 #[cfg(unix)]
 #[test]
+fn user_shell_launches_a_subagent_profile_as_a_top_level_agent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    // One tree refuses a name in both namespaces, so the planner tests own that case.
+    for (namespace, name, front, body) in [
+        (
+            "agents",
+            "claude",
+            "description: Claude base",
+            "Base instructions.",
+        ),
+        (
+            "agents",
+            "main-only",
+            "description: Main\nagent: claude\ntools: []",
+            "",
+        ),
+        (
+            "subagents",
+            "scout",
+            "description: Scout\nagent: claude\nmodel: sonnet\ntools: []",
+            "",
+        ),
+    ] {
+        crate::common::write_definition(&env, namespace, name, front, body);
+    }
+    let explained_model = |args: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["agents", "explain"])
+            .args(args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("explain JSON");
+        let argv = report["provider_argv"].as_array().unwrap().clone();
+        argv.windows(2)
+            .find(|pair| pair[0] == "--model")
+            .map(|pair| pair[1].as_str().unwrap().to_owned())
+    };
+    let wrong_doorway = env
+        .rimz()
+        .args(["agents", "explain", "scout"])
+        .output()
+        .unwrap();
+    assert!(!wrong_doorway.status.success());
+    assert!(
+        String::from_utf8_lossy(&wrong_doorway.stderr).contains(
+            "profile `scout` is defined under [subagents.profiles], but `rimz agents` resolves [agents.profiles]; launch it with `rimz agents scout --subagent-profile`, or move or copy the profile to the expected section"
+        ),
+        "{}",
+        String::from_utf8_lossy(&wrong_doorway.stderr)
+    );
+    assert_eq!(
+        explained_model(&["scout", "--subagent-profile"]).as_deref(),
+        Some("sonnet")
+    );
+
+    let shim = write_env_dump_shim(&env, "claude");
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
+    let launch = |spec: &str, place: &[&str]| {
+        env.rimz()
+            .args(["--mux", "zellij", "agents", spec, "--subagent-profile"])
+            .args(["--bg", "--new-pane"])
+            .args(place)
+            .arg("task")
+            .env("SHELL", write_fake_login_shell(&env, "probe-sh", &[]))
+            .env("ZELLIJ_PANE_ID", "1")
+            .env("ZELLIJ_SESSION_NAME", &session_name)
+            .env("PATH", path_with_front(&shim))
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session_name} [Created 1s ago]\n"),
+            )
+            .bounded_output()
+            .unwrap()
+    };
+    let events = env.state_path_for(&env.project_root).events_log;
+    let events_before = std::fs::read(&events).unwrap_or_default();
+    let refused = launch("main-only", &["--name", "probe"]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(
+            "--subagent-profile takes one profile name defined under [subagents.profiles], and `main-only` is defined only under [agents.profiles]; drop --subagent-profile to launch it"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&events).unwrap_or_default(), events_before);
+    assert!(
+        !env.home_root.join("mux.log").exists(),
+        "a refused launch must not reach the mux"
+    );
+
+    let out = launch("scout", &["--name", "probe"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let row = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("probe"))
+        .expect("the launched row");
+    assert_eq!(row.profile.as_deref(), Some("scout"));
+    assert_eq!(
+        row.profile_scope,
+        Some(rimz::config::effective::ProfileScope::Subagents)
+    );
+    assert_eq!(row.parent_agent_id, None);
+    assert_eq!(row.launch_depth, None);
+    // The relaunch of the row replays the subagent definition.
+    assert_eq!(explained_model(&["@probe"]).as_deref(), Some("sonnet"));
+    let refused = env
+        .rimz()
+        .args(["agents", "explain", "@probe", "--subagent-profile"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains(
+            "--subagent-profile applies to a profile name; `@probe` explains the profile table its launch recorded; drop the flag"
+        ),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // In a team's lane, a role named like the profile does not take the flagged name over.
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        "leader: scout\nstages: [Build]\nroles:\n  - {role: scout, agent: main-only, owns: [Build]}",
+        "Ship it.",
+    );
+    crate::channel::register_idle_lane_agent(&env, "sess-forge", "forge", Some("forge"));
+    let explained = env
+        .rimz()
+        .env(rimz::workspace::ENV_CHANNEL, "forge")
+        .args(["agents", "explain", "scout", "--subagent-profile", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&explained.stdout).unwrap();
+    assert!(
+        report["provider_argv"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "sonnet"),
+        "{report}"
+    );
+    let out = launch("scout", &["--name", "laned", "--channel", "forge"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let row = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("laned"))
+        .expect("the lane launch's row");
+    assert_eq!(row.profile.as_deref(), Some("scout"));
+    assert_eq!((row.team.as_deref(), row.role.as_deref()), (None, None));
+    assert_eq!(
+        row.profile_scope,
+        Some(rimz::config::effective::ProfileScope::Subagents)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
     use rimz::harness::assist_log::AssistRecord;
     use rimz::harness::stall_notice::StallNoticeRequest;
@@ -8850,6 +9045,86 @@ fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude","pane_command":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap()
+}
+
+/// One profile is one cell, so a flagged launch into a closed worktree holding its recorded
+/// agent takes the entry check: the refusal names no resume, and its fresh command keeps the flag.
+#[cfg(unix)]
+#[test]
+fn subagent_profile_launch_into_a_closed_worktree_offers_only_a_flagged_fresh() {
+    let env = team_worktree_launch_env();
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "scout",
+        "description: Scout\nagent: claude\ntools: []",
+        "",
+    );
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let tree = env.home_root.join("project-worktrees/demo");
+    crate::common::trust_claude_project(&env, &tree);
+    std::fs::write(tree.join("unfinished.txt"), "keep this\n").unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    for (signal, source) in [
+        (LifecycleSignal::Registered, "test"),
+        (LifecycleSignal::Ended, "rimz.agent-ended"),
+    ] {
+        let mut observation = AgentLifecycleObservation::new(Some("closed-scout".into()), signal);
+        observation.worktree_path = Some(tree.display().to_string());
+        observation.launch = LaunchParams {
+            profile: Some("scout".to_owned()),
+            profile_scope: Some(rimz::config::effective::ProfileScope::Subagents),
+            lane: Some(rimz::worktree::own_lane(&env.project_root, &tree)),
+            ..LaunchParams::default()
+        };
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                source,
+                &observation,
+            ))
+            .unwrap();
+    }
+    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+    for (args, command) in [
+        (
+            vec!["agents", "scout", "--subagent-profile", "-w", "demo"],
+            "launch fresh with `rimz agents scout --subagent-profile -w demo --fresh`",
+        ),
+        (
+            vec![
+                "agents",
+                "scout",
+                "--subagent-profile",
+                "-p",
+                "ship",
+                "-w",
+                "demo",
+                "--timeout",
+                "1s",
+            ],
+            "launch fresh with `rimz agents scout --subagent-profile -p -w demo --fresh ship`",
+        ),
+    ] {
+        let output = launch_team_worktree(&env, &args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains(&format!("worktree `demo` has work in progress; {command}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("--continue"), "{stderr}");
+        assert!(!stderr.contains("resume with"), "{stderr}");
+        assert_eq!(
+            serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+            before
+        );
+    }
 }
 
 #[cfg(unix)]

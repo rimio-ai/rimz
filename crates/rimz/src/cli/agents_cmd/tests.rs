@@ -85,6 +85,20 @@ fn launch_account_conflicts_with_provider_resume() {
 }
 
 #[test]
+fn subagent_profile_conflicts_with_cohort_and_provider_resume() {
+    for resume in ["--continue", "--resume", "--resume=session-id"] {
+        let error =
+            AgentsHarness::try_parse_from(["agents", "scout", "--subagent-profile", resume])
+                .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{resume}"
+        );
+    }
+}
+
+#[test]
 fn launch_account_rejects_a_qualified_name() {
     let error = AgentsHarness::try_parse_from(["agents", "claude", "--account", "claude@rimio"])
         .unwrap_err();
@@ -1741,6 +1755,17 @@ mod launch_options {
         assert_eq!(cell.kind.as_str(), "claude");
         assert_eq!(cell.launch.model.as_deref(), Some("fable"));
         assert!(cell.args.iter().any(|arg| arg == "--tools"));
+    }
+
+    #[test]
+    fn a_subagent_profile_print_run_takes_the_subagent_table_without_child_treatment() {
+        let argv = ["rimz", "scout", "--subagent-profile", "-p", "check"];
+        let (request, _) = into_supervised_request(parse_agents(&argv)).unwrap();
+        assert!(request.subagent_profile);
+        assert!(!request.subagent);
+        let (plain, _) =
+            into_supervised_request(parse_agents(&["rimz", "scout", "-p", "check"])).unwrap();
+        assert!(!plain.subagent_profile);
     }
 
     #[test]

@@ -998,6 +998,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         background: false,
         self_cleanup_on_completion: false,
         subagent,
+        subagent_profile: false,
         force_new_tab: false,
         agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
         permission_mode: None,

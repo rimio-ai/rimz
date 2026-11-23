@@ -609,6 +609,14 @@ pub fn team_summary(team: &Team, profiles: &ProfilesConfig) -> Option<String> {
     (!kinds.is_empty()).then(|| kinds.join(","))
 }
 
+fn subagent_profile_hint(name: &str, names_flag: bool) -> String {
+    if names_flag {
+        format!("launch it with `rimz agents {name} --subagent-profile`, or ")
+    } else {
+        String::new()
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LayoutErr {
     #[error("{definition} keep-warm while `{clause}`: {reason}")]
@@ -628,13 +636,16 @@ pub enum LayoutErr {
     #[error("{0}")]
     UnknownSpec(Box<UnknownSpec>),
     #[error(
-        "profile `{name}` is defined under [{defined_in}.profiles], but {command} resolves [{expected_in}.profiles]; move or copy the profile to the expected section"
+        "profile `{name}` is defined under [{defined_in}.profiles], but {command} resolves [{expected_in}.profiles]; {}move or copy the profile to the expected section",
+        subagent_profile_hint(.name, *.names_flag)
     )]
     ProfileWrongDoorway {
         name: String,
         defined_in: &'static str,
         command: &'static str,
         expected_in: &'static str,
+        /// The refusal names `rimz agents <name> --subagent-profile`.
+        names_flag: bool,
     },
     #[error("team `{team}` has no role `{role}`; declared roles: {valid_roles}{suggestion}")]
     UnknownRoleInTeam {
@@ -1712,7 +1723,11 @@ fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfi
     role.is_some() && is_cell_word(cell, profiles, commands)
 }
 
-fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
+pub(super) fn is_cell_word(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> bool {
     commands.0.contains_key(raw)
         || profiles.0.contains_key(raw)
         || raw == "term"
