@@ -557,7 +557,10 @@ fn render_message_rows(
     for row in rows {
         let message = row.latest;
         let lane = message.channel.as_ref().map(LaneName::as_str);
-        let target = scoped_handle(message_target(message, agents), lane);
+        let target = rimz::address::handle_with_name(
+            &scoped_handle(message_target(message, agents), lane),
+            message.agent_name.as_deref(),
+        );
         let sender = scoped_handle(message_sender(&message.sender, agents), lane);
         let status = if row.count > 1 {
             format!("{} ×{}", message.status.as_str(), row.count)
