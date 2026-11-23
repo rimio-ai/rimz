@@ -204,6 +204,14 @@ fn a_try_whose_definition_stops_fitting_it_ends_failed_and_exits_one() {
     );
 }
 
+fn signal(child: &std::process::Child, signal: &str) {
+    let sent = std::process::Command::new("kill")
+        .args([signal, &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+}
+
 /// A first pass returns as soon as a command attempt is published, so the try can end and its
 /// home can move on either side of the receipt's work-dir line.
 #[test]
@@ -252,15 +260,19 @@ fn a_try_names_its_finished_work_once_whether_its_home_moves_before_or_after_the
         let run = id.parse().unwrap();
         let mut stdout = format!("{id}\n");
         if moved_first {
+            // Stopped, the command cannot reach the hold's limit however long the move takes.
+            signal(&child, "-STOP");
             fs::write(&go, "").unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             while !state.finished_workflow(&run).work.is_dir() {
                 assert!(std::time::Instant::now() < deadline, "the home never moved");
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
         held.write_all(&[1]).unwrap();
-        if !moved_first {
+        if moved_first {
+            signal(&child, "-CONT");
+        } else {
             for line in lines.by_ref() {
                 let line = line.unwrap();
                 stdout.push_str(&line);
