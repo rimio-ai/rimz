@@ -463,6 +463,79 @@ fn a_replacement_failing_after_bind_retires_the_agents_waits_in_either_order() {
     }
 }
 
+/// An end appended by a producer that reached no hook (the reaper, the exec
+/// wrapper, rebirth) is retired by the next frame that appends a tool use.
+#[test]
+fn a_tool_frame_retires_a_session_another_producer_ended() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root(temp.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let store = crate::Store::open(state.clone(), runtime).unwrap();
+    let workspace = crate::workspace::ResolvedWorkspace {
+        workspace_id: state.workspace_id.clone(),
+        project_root: temp.path().to_path_buf(),
+        cwd_project_root: None,
+        root_class: crate::workspace::RootClass::Directory,
+        worktree_root: temp.path().to_path_buf(),
+        worktree_branch: None,
+        session_name: "test".into(),
+        mux_hint: None,
+    };
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let append = |session: &str, signal: crate::agents::LifecycleSignal| {
+        let observation =
+            crate::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+        store
+            .for_hook_ingress(crate::EventId::new(), Timestamp::now())
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "test",
+                agent_kind: kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap()
+    };
+    for session in ["ended", "worker"] {
+        append(session, crate::agents::LifecycleSignal::Registered);
+    }
+    append("ended", crate::agents::LifecycleSignal::Ended);
+    crate::store::idle_stop::arm(
+        &state,
+        crate::store::idle_stop::IdleStopRequest {
+            kind: kind.clone(),
+            agent_id: "ended".into(),
+            stop: crate::agents::state::IdleStop {
+                after_secs: 180,
+                requested_at: Timestamp::now(),
+                requested_by: None,
+            },
+        },
+    )
+    .unwrap();
+    append(
+        "worker",
+        crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    let tool = append(
+        "worker",
+        crate::agents::LifecycleSignal::ToolUsed {
+            effect: crate::agents::lifecycle::ToolEffect::Mutating,
+            name: Some("Bash".into()),
+            native_key: None,
+            turn_id: None,
+        },
+    );
+    assert!(
+        tool.primary_event_id.is_some(),
+        "the tool use appended an event"
+    );
+
+    crate::harness::team_stage::react_to_lifecycle(&workspace, &store, &tool, None);
+
+    assert!(crate::store::idle_stop::read(&state).is_empty());
+}
+
 /// The retirement predicate: a pinned session is retired on positive
 /// evidence of its own durable end, and on nothing else.
 #[test]
@@ -485,6 +558,9 @@ fn ended_pinned_sessions_selects_only_durably_ended_pinned_targets() {
         "molted",
         "launch-failed",
         "launch-held",
+        "aliased",
+        "launch-prior",
+        "no-row",
     ]
     .map(|id| (kind("claude"), session(id)))
     .into();
@@ -525,9 +601,37 @@ fn ended_pinned_sessions_selects_only_durably_ended_pinned_targets() {
         // One that failed before binding leaves the old session the agent.
         member("claude", "held-0", "launch-held", 0, false),
         failed_reservation("launch_held_1", "launch-held", false),
+        // A session pin reaches its launch's later sessions through its row's
+        // launch alias.
+        member("claude", "aliased", "launch-alias", 0, false),
+        member("claude", "alias-1", "launch-alias", 1, true),
+        // A launch pin answers to an earlier launch id of its row.
+        {
+            let mut agent = member("claude", "prior-0", "launch-new", 0, true);
+            agent.prior_launch_ids = vec![session("launch-prior")];
+            agent
+        },
     ];
 
     let selected = ended_pinned_sessions(&agents, &pinned);
+    let per_pin = pinned
+        .iter()
+        .filter_map(|key| {
+            let end = crate::agents::state::agent_end(&agents, &key.0, &key.1);
+            let session_ended = agents.iter().any(|agent| {
+                agent.ended_at.is_some()
+                    && !agent.is_provider_subagent()
+                    && agent.kind == key.0
+                    && agent.agent_id == key.1
+            });
+            (session_ended || end == crate::agents::state::AgentEnd::Ended)
+                .then_some((key, end != crate::agents::state::AgentEnd::Live))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected, per_pin,
+        "one pass answers each pin as agent_end does"
+    );
 
     assert_eq!(
         selected
@@ -535,9 +639,11 @@ fn ended_pinned_sessions_selects_only_durably_ended_pinned_targets() {
             .map(|((kind, session), agent_ended)| (kind.as_str(), session.as_str(), *agent_ended))
             .collect::<Vec<_>>(),
         vec![
+            ("claude", "aliased", true),
             ("claude", "ended", true),
             ("claude", "launch-failed", true),
             ("claude", "launch-gone", true),
+            ("claude", "launch-prior", true),
             ("claude", "molted", false),
         ]
     );
