@@ -997,9 +997,9 @@ fn codex_post_tool_use(tool_name: &str, tool_input: Value, tool_response: Option
 }
 
 /// Synthetic values in the key shapes Codex sends: both question tools (the
-/// blocking one in its documented string form and the object form its reader
-/// parses), a large shell and patch output, an MCP content array, and a
-/// response that is absent and one that is null.
+/// blocking one with a plain answer and with a user note), a large shell and
+/// patch output, an MCP content array, and a response that is absent and one
+/// that is null.
 fn codex_guard_payloads() -> Vec<Value> {
     let body = "fn main() {}\n".repeat(2_000);
     let questions = json!({"questions": [{"id": "path", "header": "Migration", "question": "Pick a path?", "options": [{"label": "Blue", "description": "Safer"}]}]});
@@ -1014,7 +1014,9 @@ fn codex_guard_payloads() -> Vec<Value> {
         codex_post_tool_use(
             "request_user_input",
             questions,
-            Some(json!({"answers": {"path": {"answers": ["Blue"]}}})),
+            Some(json!(
+                "{\"answers\":{\"path\":{\"answers\":[\"Blue\",\"user_note: gradual\"]}}}"
+            )),
         ),
         codex_post_tool_use(
             "request_user_input_async",
