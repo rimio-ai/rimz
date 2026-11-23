@@ -170,6 +170,7 @@ pub struct RoomContext {
     birth_logins: Option<crate::ids::RoomLogins>,
     birth_agent_shell: OnceLock<Option<crate::harness::launch::AgentShellResolution>>,
     agent_shell_persistence: AgentShellPersistence,
+    saves_terminal_path: bool,
     birth_admission: Option<birth::BirthAdmission>,
 }
 
@@ -301,6 +302,7 @@ impl RoomContext {
             birth_logins: None,
             birth_agent_shell: OnceLock::new(),
             agent_shell_persistence: AgentShellPersistence::Room,
+            saves_terminal_path: false,
             birth_admission: None,
         })
     }
@@ -335,6 +337,24 @@ impl RoomContext {
     pub fn with_agent_shell_persistence(mut self, persistence: AgentShellPersistence) -> Self {
         self.agent_shell_persistence = persistence;
         self
+    }
+
+    /// Select whether this birth saves this process's `PATH` as the room's terminal PATH: only a
+    /// user's terminal entry does, since a detached or supervised birth may run on a thinner one.
+    pub fn saving_terminal_path(mut self, saves: bool) -> Self {
+        self.saves_terminal_path = saves;
+        self
+    }
+
+    fn record_terminal_path(&self) -> Result<()> {
+        let paths = StatePaths::for_project_root(&self.workspace.project_root)
+            .context("preparing store paths")?;
+        let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
+        let terminal_path = std::env::var("PATH").ok().filter(|path| !path.is_empty());
+        store
+            .set_terminal_path(&self.workspace, terminal_path)
+            .context("recording the terminal PATH")?;
+        Ok(())
     }
 
     fn record_birth_settings(
