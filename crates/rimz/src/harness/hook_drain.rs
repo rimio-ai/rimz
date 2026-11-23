@@ -617,6 +617,11 @@ fn ask_drainer(store: &Store, through: u64, may_spawn: bool) -> DrainOutcome {
     }
 }
 
+/// Apply the pending hooks through `through` and return the drainer's receipt, waiting up to
+/// `wait` for a running drainer. Host callers only: when no drainer answers, this spawns one
+/// and drains inline under the workspace lock, which can outlast `wait`. A caller that can
+/// run inside a scoped sandbox view asks through `Connection` and never drains inline, as
+/// `provider_rest_settle` does.
 pub fn drain_through(
     store: &Store,
     through: u64,
