@@ -82,10 +82,12 @@ pub fn attempt_now(
             None
         }
         Ok(DeliveryReport::Refused(verdict)) => Some(verdict.reason()),
-        Ok(DeliveryReport::Stopped) if on_miss == DeliveryFailureDisposition::Terminal => {
+        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. })
+            if on_miss == DeliveryFailureDisposition::Terminal =>
+        {
             Some(fallback_reason.to_owned())
         }
-        Ok(DeliveryReport::Stopped) => None,
+        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. }) => None,
         Err(err) => Some(err.to_string()),
     };
     let head_sent = match reason {

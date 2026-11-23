@@ -124,14 +124,24 @@ pub(super) fn push_queued_message(
         send::report_interrupt_confirmation(&label, &named, interrupt);
         return Ok(());
     }
-    if let deliver::DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { until }) =
-        delivered
-    {
+    let parked = match &delivered {
+        deliver::DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { until }) => {
+            Some(rimz::message::dispatch::ParkReason::TypingHeld { until: *until })
+        }
+        deliver::DeliveryReport::InterruptWithheld { cause, pressed } => {
+            Some(rimz::message::dispatch::ParkReason::InterruptWithheld {
+                cause,
+                pressed: *pressed,
+            })
+        }
+        _ => None,
+    };
+    if let Some(reason) = parked {
         let outcome = rimz::message::dispatch::DispatchOutcome::Queued {
             label,
             name: record.agent_name.clone(),
             message_id,
-            reason: Some(rimz::message::dispatch::ParkReason::TypingHeld { until }),
+            reason: Some(reason),
         };
         if let Some(line) =
             send::render_dispatch_outcome(rimz::message::DeliveryKind::Steer, &outcome)

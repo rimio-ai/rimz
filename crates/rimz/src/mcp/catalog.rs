@@ -1244,7 +1244,7 @@ pub struct MessageArgs {
     /// The message, delivered as written.
     pub text: String,
     /// `park` (default) lands it now or at the next turn boundary, `steer` into the running
-    /// turn, `interrupt` types it and stops the turn.
+    /// turn, `interrupt` stops the turn and then types it.
     #[serde(default)]
     pub mode: MessageMode,
     /// Send to each agent `to` matches, where it matches several.

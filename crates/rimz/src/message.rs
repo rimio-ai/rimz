@@ -65,15 +65,40 @@ impl std::fmt::Display for InputWait {
 /// Transient stop evidence, independent of the durable message receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InterruptConfirmation {
+    /// No interrupt key was pressed: the receiver was resting, or the send was no interrupt.
     NotChecked,
+    /// The receiver's row showed the stop before the text was typed.
     Confirmed,
-    NotConfirmed {
-        window: Duration,
-    },
-    /// The key was not pressed: the receiver was no longer where the paste decided it was.
-    NotSent {
-        cause: &'static str,
-    },
+    /// No stop showed within `window`; the text was typed anyway.
+    NotConfirmed { window: Duration },
+}
+
+impl InterruptConfirmation {
+    /// The sender's warning for a stop that did not show, as every surface words it; `label` is
+    /// the receiver's address in the command it names.
+    pub fn warning(self, label: &str) -> Option<String> {
+        let Self::NotConfirmed { window } = self else {
+            return None;
+        };
+        Some(format!(
+            "interrupt not confirmed within {} ms, so the message was typed anyway; its turn may still be running (rimz pane capture {label}), or its stop went unreported, as from an untrusted Codex Interrupt hook (rimz doctor)",
+            window.as_millis()
+        ))
+    }
+}
+
+/// Why an interrupt's text was withheld, as every surface words it: whether its key went
+/// (`pressed`), the `cause`, and the command that sends the text.
+pub fn interrupt_withheld_detail(
+    cause: &str,
+    pressed: bool,
+    message_id: &crate::ids::MessageId,
+) -> String {
+    if pressed {
+        format!("interrupted, text not sent: {cause}; send it: rimz message steer {message_id}")
+    } else {
+        format!("not interrupted: {cause}; send now: rimz message interrupt {message_id}")
+    }
 }
 
 use crate::address::recipient_channel;
@@ -361,11 +386,7 @@ pub fn settle_duration_from_env() -> Duration {
     env_ms(SETTLE_ENV).unwrap_or(DEFAULT_SETTLE)
 }
 
-/// Gap between an interrupt's paste and its interrupt key.
-fn interrupt_delay_from_env() -> Duration {
-    env_ms("RIMZ_MESSAGE_INTERRUPT_DELAY_MS").unwrap_or(Duration::from_secs(3))
-}
-
+/// How long an interrupt waits after its key for the receiver's row to show the stop.
 fn interrupt_confirmation_window_from_env() -> Duration {
     env_ms("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS").unwrap_or(Duration::from_secs(5))
 }

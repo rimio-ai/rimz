@@ -4,12 +4,16 @@ use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccou
 
 use crate::common::{Env, write_path_shim};
 
+/// A Claude stand-in that echoes what reaches its pane. Claude reads its tty raw, so the shim
+/// turns flow control off: Claude's send-now ends in Ctrl+S, which a cooked tty takes as XOFF
+/// and stops the pane's output on.
 pub(in crate::backend::zellij) fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("zellij-agent-bin");
     write_path_shim(
         &dir,
         agent,
         "if [ \"$1\" = --version ]; then printf '2.1.296 (Claude Code)\\n'; exit 0; fi\n\
+         stty -ixon 2>/dev/null\n\
          printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
          trap 'exit 0' HUP TERM INT\n\
          while :; do sleep 1; done",

@@ -157,6 +157,13 @@ pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
 }
 
+/// The message keys `kind` declares; an unknown kind takes the defaults.
+pub fn message_keys(kind: &crate::ids::AgentKind) -> super::MessageKeys {
+    spec_by_kind(kind.as_str()).map_or(super::MessageKeys::NOT_YET_IMPLEMENTED, |spec| {
+        spec.launch.message_keys
+    })
+}
+
 /// The native trigger and model capacity, with any configured count the provider lowered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeCompaction {

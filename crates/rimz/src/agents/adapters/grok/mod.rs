@@ -110,7 +110,6 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: Some("--max-turns"),
-        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,

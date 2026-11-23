@@ -1350,8 +1350,15 @@ impl MessageRecord {
         self.body == MessageBody::Prompt
             && self.enter
             && !self.forced_keepalive
-            && !self.text.trim_start().starts_with('/')
+            && !opens_slash_command(&self.text)
     }
+}
+
+/// Whether pasted text reaches the composer as a slash command: a slash-led message rides alone
+/// and is submitted with its receiver's command keys, since a queue key can complete it in the
+/// slash popup instead.
+pub(crate) fn opens_slash_command(text: &str) -> bool {
+    text.trim_start().starts_with('/')
 }
 
 /// Idle-compaction edge shared by stamping and lapse checks, excluding keepalive pings.

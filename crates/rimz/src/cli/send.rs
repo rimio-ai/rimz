@@ -216,6 +216,10 @@ pub(crate) fn render_dispatch_outcome(
                 format!("queued for {named} ({message_id}) — {hold}")
             }
             Some(ParkReason::NoPane) => format!("queued for {named} ({message_id}) — no live pane"),
+            Some(ParkReason::InterruptWithheld { cause, pressed }) => format!(
+                "queued for {named} ({message_id}) — {}",
+                rimz::message::interrupt_withheld_detail(cause, *pressed, message_id)
+            ),
             Some(ParkReason::NotHosted { blocker }) => format!(
                 "queued for {named} ({message_id}) — {}",
                 blocker.strip_prefix("stuck: ").unwrap_or(blocker)
@@ -321,19 +325,11 @@ pub(crate) fn report_interrupt_confirmation(
 ) {
     use std::io::Write as _;
 
-    let warning = super::render::paint(super::render::palette::warn().bold(), "warning:");
-    let _ = match confirmation {
-        InterruptConfirmation::NotConfirmed { window } => writeln!(
-            super::render::err(),
-            "{warning} {named}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
-            window.as_millis(),
-        ),
-        InterruptConfirmation::NotSent { cause } => writeln!(
-            super::render::err(),
-            "{warning} {named}: the message was sent, but its interrupt key was not: {cause}"
-        ),
-        InterruptConfirmation::NotChecked | InterruptConfirmation::Confirmed => Ok(()),
+    let Some(detail) = confirmation.warning(label) else {
+        return;
     };
+    let warning = super::render::paint(super::render::palette::warn().bold(), "warning:");
+    let _ = writeln!(super::render::err(), "{warning} {named}: {detail}");
 }
 
 fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {

@@ -241,16 +241,16 @@ pub enum SkippedPresetField {
 pub struct MessageKeys {
     /// Submits typed text at once: opens a turn on a resting agent and takes the text into a
     /// running one. A steer, and an interrupt after its stop, press it.
-    pub(crate) send_now: &'static [KeyStep],
+    pub send_now: &'static [KeyStep],
     /// Submits typed text behind a running turn, or opens a turn on a resting agent. A boundary
     /// delivery presses it.
-    pub(crate) queue: &'static [KeyStep],
+    pub queue: &'static [KeyStep],
     /// Stops the running turn.
-    pub(crate) interrupt: &'static [KeyStep],
+    pub interrupt: &'static [KeyStep],
     /// Submits a typed slash command.
-    pub(crate) command: &'static [KeyStep],
+    pub command: &'static [KeyStep],
     /// Whether these keys were checked against the agent; `false` takes the defaults.
-    pub(crate) implemented: bool,
+    pub implemented: bool,
 }
 
 impl MessageKeys {
@@ -281,17 +281,6 @@ pub struct LaunchSpec {
     pub permission: LaunchPermissionArgs,
     pub max_turn_flag: Option<&'static str>,
     pub compact_command: Option<CompactCommand>,
-    pub interrupt_key: Option<crate::pane::keys::NamedKey>,
-    pub confirm_interrupt: bool,
-    /// The interrupt key moves text queued behind the running turn back into the composer,
-    /// so an interrupt presses Enter after the key to submit it, unless the text was typed
-    /// with `enter` off. Such a kind opens no turn for queued text until the running one ends,
-    /// so an interrupt also withholds both keys when the receiver's turn start moved during
-    /// the delay: that turn is the paste's own, or with `enter` off one it did not submit.
-    pub interrupt_returns_queued_text: bool,
-    /// The key that takes a message typed behind a running turn into that turn. A steer
-    /// presses it after its Enter when the receiver is mid-turn.
-    pub steer_key: Option<crate::pane::keys::NamedKey>,
     pub message_keys: MessageKeys,
     pub presets: PresetMatchers,
     /// Provider env pair requesting long prompt-cache retention for a keep-warm launch.
@@ -313,10 +302,6 @@ impl LaunchSpec {
         permission: LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
         compact_command: None,
-        interrupt_key: None,
-        confirm_interrupt: false,
-        interrupt_returns_queued_text: false,
-        steer_key: None,
         message_keys: MessageKeys::NOT_YET_IMPLEMENTED,
         presets: PresetMatchers::EMPTY,
         long_cache_env: None,

@@ -4,7 +4,6 @@ use anyhow::{Context, Result, bail};
 
 use rimz::harness::budget::BudgetParkRequest;
 use rimz::launcher::agent_pane::FindErr;
-use rimz::pane::keys::NamedKey;
 
 use super::Ctx;
 
@@ -43,7 +42,8 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         rimz::harness::budget::read_ledger(store.runtime_paths(), &request.kind, &request.agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });
-    let interrupted = writer.and_then(|writer| writer.press(NamedKey::Escape));
+    let interrupted = writer
+        .and_then(|writer| writer.press_keys(rimz::agents::message_keys(&agent.kind).interrupt));
 
     for record in rimz::harness::run::list(store.paths())? {
         if record.kind != request.kind

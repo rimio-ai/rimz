@@ -207,47 +207,6 @@ fn prompt_context_capability_agrees_with_native_reply_support() {
     }
 }
 
-#[test]
-fn interrupt_keys_are_declared_only_for_verified_builtins() {
-    use crate::pane::keys::NamedKey;
-
-    assert_eq!(super::LaunchSpec::EMPTY.interrupt_key, None);
-    const { assert!(!super::LaunchSpec::EMPTY.confirm_interrupt) };
-    const { assert!(!super::LaunchSpec::EMPTY.interrupt_returns_queued_text) };
-    for adapter in BUILTINS {
-        let spec = adapter.spec();
-        let expected = match spec.kind {
-            "claude" | "codex" | "antigravity" => Some(NamedKey::Escape),
-            _ => None,
-        };
-        assert_eq!(spec.launch.interrupt_key, expected, "{}", spec.kind);
-        assert_eq!(
-            spec.launch.confirm_interrupt,
-            spec.kind == "codex",
-            "{}",
-            spec.kind
-        );
-        assert_eq!(
-            spec.launch.interrupt_returns_queued_text,
-            spec.kind == "antigravity",
-            "{}",
-            spec.kind
-        );
-    }
-}
-
-#[test]
-fn steer_keys_are_declared_only_for_antigravity() {
-    use crate::pane::keys::NamedKey;
-
-    assert_eq!(super::LaunchSpec::EMPTY.steer_key, None);
-    for adapter in BUILTINS {
-        let spec = adapter.spec();
-        let expected = (spec.kind == "antigravity").then_some(NamedKey::AltM);
-        assert_eq!(spec.launch.steer_key, expected, "{}", spec.kind);
-    }
-}
-
 fn message_keys_of(kind: &str) -> super::MessageKeys {
     BUILTINS
         .iter()
@@ -799,7 +758,6 @@ system-prompt-file-flag = "--system-prompt-file"
     .expect("manifest");
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    assert_eq!(loaded.definitions[0].spec().launch.interrupt_key, None);
     assert_eq!(
         loaded.definitions[0].spec().launch.message_keys,
         super::MessageKeys::NOT_YET_IMPLEMENTED
@@ -1618,7 +1576,6 @@ setup-doc = "README.md"
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let adapter = loaded.definitions[0];
-    assert_eq!(adapter.spec().launch.interrupt_key, None);
     assert_eq!(
         adapter.spec().launch.message_keys,
         super::MessageKeys::NOT_YET_IMPLEMENTED

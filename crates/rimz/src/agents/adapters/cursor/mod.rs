@@ -116,7 +116,6 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             ..super::LaunchPermissionArgs::EMPTY
         },
         max_turn_flag: None,
-        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/summarize",
             instruction: super::CompactInstruction::Unsupported,

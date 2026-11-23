@@ -795,52 +795,80 @@ fn a_receiver_whose_owner_died_waits_as_no_live_pane() {
     assert_eq!(waiting.attempts, 0, "{waiting:?}");
 }
 
-/// A restart's session replaces the receiver in another pane during the interrupt delay:
-/// the paste stays sent, the key is withheld, and the send says so apart from an
-/// unconfirmed stop.
-#[test]
-fn an_interrupt_key_is_withheld_when_the_session_is_replaced_during_the_delay() {
-    let env = Env::new();
-    let reservation = planner_with_swap(&env);
-    append_lifecycle(
-        &env,
-        "claude",
-        "UserPromptSubmit",
-        "sess-old",
-        LifecycleSignal::TurnStarted { turn_id: None },
-        |_| {},
-    );
-    let hold = DeliveryRendezvous::new(&env, "before-key");
-    let send = acting(&env, &[3, 4])
-        .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
-        .args(["message", "--interrupt", "@planner", "--", "stop there"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    if let Some(mut held) = hold.arrive_timeout(Duration::from_secs(10)) {
-        bind_swap(&env, &reservation, NEW);
-        held.write_all(&[0]).unwrap();
-    }
-    let output = send.wait_with_output().unwrap();
+/// The interrupt's queued outcome after a withheld key or text: nothing typed, the record
+/// back in the queue with no attempt counted, and the sender told whether the key went and how
+/// to send it now.
+fn assert_interrupt_withheld(env: &Env, output: &std::process::Output, cause: &str, pressed: bool) {
     assert!(output.status.success(), "{output:?}");
-    let lines = trace(&env);
+    let lines = trace(env);
     assert!(
-        lines
+        !lines
             .iter()
             .any(|line| is_paste(line, &user_message("stop there"))),
         "{lines:#?}"
     );
-    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:#?}");
+    let queued = only_message(env);
+    assert_eq!(queued.status, MessageStatus::Queued, "{queued:?}");
+    assert_eq!(queued.attempts, 0, "{queued:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let id = &queued.message_id;
+    let (said, denied) = if pressed {
+        (
+            format!("interrupted, text not sent: {cause}; send it: rimz message steer {id}"),
+            "not interrupted",
+        )
+    } else {
+        (
+            format!("not interrupted: {cause}; send now: rimz message interrupt {id}"),
+            "text not sent",
+        )
+    };
     assert!(
-        stderr(&output).contains(
-            "the message was sent, but its interrupt key was not: the receiver left its pane \
-             during the interrupt delay"
-        ),
-        "{}",
-        stderr(&output)
+        stdout.contains(&said) && !stdout.contains(denied),
+        "{stdout}"
     );
+}
+
+/// A restart's session replaces the receiver in another pane before the interrupt key, or
+/// during the stop wait after it: the send types nothing and queues the message.
+#[test]
+fn an_interrupt_is_withheld_when_the_session_is_replaced_before_its_key_or_after_its_wait() {
+    for (rendezvous, escapes) in [
+        ("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", 0),
+        ("RIMZ_TEST_MESSAGE_AFTER_INTERRUPT_STOP", 1),
+    ] {
+        let env = Env::new();
+        let reservation = planner_with_swap(&env);
+        append_lifecycle(
+            &env,
+            "claude",
+            "UserPromptSubmit",
+            "sess-old",
+            LifecycleSignal::TurnStarted { turn_id: None },
+            |_| {},
+        );
+        let hold = DeliveryRendezvous::new(&env, "interrupt-hold");
+        let send = acting(&env, &[3, 4])
+            .env(rendezvous, &hold.path)
+            .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "50")
+            .args(["message", "--interrupt", "@planner", "--", "stop there"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if let Some(mut held) = hold.arrive_timeout(Duration::from_secs(10)) {
+            bind_swap(&env, &reservation, NEW);
+            held.write_all(&[0]).unwrap();
+        }
+        let output = send.wait_with_output().unwrap();
+        assert_interrupt_withheld(&env, &output, "the receiver left its pane", escapes == 1);
+        let lines = trace(&env);
+        assert_eq!(
+            lines.iter().filter(|line| is_escape_key(line)).count(),
+            escapes,
+            "{rendezvous}: {lines:#?}"
+        );
+    }
 }
 
 /// A pane no registered session holds (an agent RimZ found running, unbound) asks no lookup:
@@ -1122,10 +1150,10 @@ fn planner(env: &Env) {
     launched_in(env, "sess-old", OLD);
 }
 
-/// A session that registers in the receiver's pane during the interrupt delay holds it now:
-/// the paste stays sent and the key is withheld.
+/// A session that registers in the receiver's pane before the interrupt key holds it now:
+/// the key and the text are withheld and the message is queued.
 #[test]
-fn an_interrupt_key_is_withheld_when_another_session_holds_the_pane_after_the_delay() {
+fn an_interrupt_is_withheld_when_another_session_holds_the_pane_before_its_key() {
     let env = Env::new();
     planner(&env);
     append_lifecycle(
@@ -1139,7 +1167,6 @@ fn an_interrupt_key_is_withheld_when_another_session_holds_the_pane_after_the_de
     let hold = DeliveryRendezvous::new(&env, "before-key");
     let send = acting(&env, &[3, 4])
         .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
         .args(["message", "--interrupt", "@planner", "--", "stop there"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1163,22 +1190,16 @@ fn an_interrupt_key_is_withheld_when_another_session_holds_the_pane_after_the_de
         held.write_all(&[0]).unwrap();
     }
     let output = send.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let lines = trace(&env);
-    assert!(
-        lines
-            .iter()
-            .any(|line| is_paste(line, &user_message("stop there"))),
-        "{lines:#?}"
+    assert_interrupt_withheld(
+        &env,
+        &output,
+        "another session of the receiver holds its pane now",
+        false,
     );
-    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:#?}");
     assert!(
-        stderr(&output).contains(
-            "the message was sent, but its interrupt key was not: another session of the \
-             receiver holds its pane now"
-        ),
-        "{}",
-        stderr(&output)
+        !trace(&env).iter().any(|line| is_escape_key(line)),
+        "{:#?}",
+        trace(&env)
     );
 }
 

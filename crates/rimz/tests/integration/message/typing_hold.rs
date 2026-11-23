@@ -1371,7 +1371,7 @@ fn terminal_record_failures_send_without_falling_back_to_the_client_clock() {
 
 /// Runs the hidden timeout helper on `kind`'s overdue subagent run while the
 /// child's pane is being typed in, and returns the run and the stop the typing
-/// hold queued: claude replays it as an interrupt, kimi as a steer.
+/// hold queued, which replays as an interrupt.
 fn held_deadline_stop(kind: &str) -> (Fixture, rimz::store::run::RunRecord, MessageRecord) {
     let fixture = Fixture::for_kind(kind, true);
     fixture.short_hold();
@@ -1409,13 +1409,8 @@ fn held_deadline_stop(kind: &str) -> (Fixture, rimz::store::run::RunRecord, Mess
     let stop = fixture.record();
     assert!(stop.text.starts_with("Time is up."), "{stop:?}");
     assert_eq!(stop.status, MessageStatus::Queued, "{kind}");
-    let replay = if kind == "claude" {
-        "interrupt"
-    } else {
-        "steer"
-    };
     let value = serde_json::to_value(&stop).unwrap();
-    assert_eq!(value["typing_hold"]["replay"], replay, "{kind}");
+    assert_eq!(value["typing_hold"]["replay"], "interrupt", "{kind}");
     assert_eq!(fixture.writes(), 0, "{kind}");
     (fixture, run, stop)
 }

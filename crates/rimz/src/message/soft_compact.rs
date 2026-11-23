@@ -33,7 +33,7 @@ pub fn send_reminder(
     let reason = match &outcome {
         Ok(DeliveryReport::Sent { .. }) => return Ok(ReminderOutcome::Sent),
         Ok(DeliveryReport::Refused(verdict)) => verdict.reason(),
-        Ok(DeliveryReport::Stopped) => store
+        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. }) => store
             .list_messages()?
             .into_iter()
             .find(|live| live.message_id == message.message_id)

@@ -204,7 +204,50 @@ fn is_escape_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t27"))
 }
 
+/// The trace bytes of each key `kind`'s send-now sequence presses, in order.
+fn send_now_keys(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "claude" => &["24", "19"],
+        "antigravity" => &["27\t109"],
+        _ => &["13"],
+    }
+}
+
+/// The bytes of each pane write after the trace line `at`.
+fn keys_after(lines: &[String], at: usize) -> Vec<String> {
+    let prefix = format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t");
+    lines[at + 1..]
+        .iter()
+        .filter_map(|line| line.split_once(&prefix).map(|(_, keys)| keys.to_owned()))
+        .collect()
+}
+
+/// The bytes of each pane write after the paste of `text`.
+fn keys_after_text(lines: &[String], text: &str) -> Vec<String> {
+    let paste = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message(text)))
+        .unwrap_or_else(|| panic!("no paste of `{text}`: {lines:?}"));
+    keys_after(lines, paste)
+}
+
 fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) {
+    interrupt_stop_case(
+        kind,
+        queued_agent_id,
+        force,
+        ("Stop", LifecycleSignal::TurnInterrupted { turn_id: None }),
+    );
+}
+
+/// An interrupt to `kind`'s running receiver presses Escape, types nothing until `stop` is
+/// appended, then types the text and presses send-now, and reads the stop as confirmed.
+fn interrupt_stop_case(
+    kind: &str,
+    queued_agent_id: Option<&str>,
+    force: bool,
+    stop: (&str, LifecycleSignal),
+) {
     let (env, panes) = interrupt_fixture(kind);
     let message_id = match queued_agent_id {
         None => None,
@@ -256,7 +299,6 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
     let mut command = traced_rimz(&env, &trace);
     command
         .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50")
         .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000");
     if let Some(id) = &message_id {
         command.args(["message", "interrupt", id]);
@@ -281,78 +323,34 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
         assert!(started.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(10));
     }
-    let key_pressed = Instant::now();
-    if kind == "codex" {
-        let pane = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
-        // The trace is written inside the mux child, before press() returns.
-        // Wait for the lock handoff, not a guessed subprocess scheduling delay.
-        let lock = loop {
-            let lock = rimz::disk::lock::WorkspaceLock::try_acquire(
-                &env.runtime_paths().pane_write_lock(&pane),
-            )
-            .unwrap();
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "confirmation must release the pane writer while waiting for evidence"
-            );
-            if let Some(lock) = lock {
-                break lock;
-            }
-            assert!(key_pressed.elapsed() < Duration::from_secs(10));
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(
-            child.try_wait().unwrap().is_none(),
-            "must wait for interrupt evidence"
-        );
-        drop(lock);
-        append_lifecycle(
-            &env,
-            kind,
-            "Interrupt",
-            "sess-interrupt",
-            LifecycleSignal::TurnInterrupted { turn_id: None },
-            |_| {},
-        );
-        append_lifecycle(
-            &env,
-            kind,
-            "UserPromptSubmit",
-            "sess-interrupt",
-            LifecycleSignal::TurnStarted { turn_id: None },
-            |_| {},
-        );
-    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the send waits for the stop"
+    );
+    assert!(
+        !trace_lines(&trace).iter().any(|line| is_paste_start(line)),
+        "nothing is typed before the stop"
+    );
+    let (event, signal) = stop;
+    append_lifecycle(&env, kind, event, "sess-interrupt", signal, |_| {});
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     assert!(
         !String::from_utf8_lossy(&output.stderr).contains("interrupt not confirmed"),
         "{output:?}"
     );
-    if kind == "claude" {
-        assert!(
-            key_pressed.elapsed() < Duration::from_secs(5),
-            "Claude must not wait for confirmation"
-        );
-    }
     let lines = trace_lines(&trace);
-    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
-    assert!(!lines.iter().any(|line| is_alt_m_key(line)), "{lines:?}");
-    let paste = lines
-        .iter()
-        .position(|line| is_paste(line, &user_message("new direction")))
-        .expect("prompt pasted");
-    let enter = lines.iter().position(|line| is_enter_key(line)).unwrap();
-    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
-    assert!(paste < enter && enter < escape, "{lines:?}");
     assert_eq!(
-        lines[escape..]
-            .iter()
-            .filter(|line| is_enter_key(line))
-            .count(),
-        usize::from(kind == "antigravity"),
-        "only Antigravity resubmits the text its key returned to the composer: {lines:?}"
+        lines.iter().filter(|line| is_escape_key(line)).count(),
+        1,
+        "{lines:?}"
+    );
+    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
+    assert_eq!(
+        keys_after_text(&lines[escape..], "new direction"),
+        send_now_keys(kind),
+        "{lines:?}"
     );
     let records = env.store().list_messages().unwrap();
     assert_eq!(records.len(), 1);
@@ -404,7 +402,7 @@ fn deadline_stop_trace(kind: &str, waiting: bool) -> (Env, Vec<String>) {
     let trace = env.project_root.join("deadline-stop-trace.log");
     let output = traced_rimz(&env, &trace)
         .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50")
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "200")
         .args(rimz::child_process::agent_helper_argv(
             "run-timeout",
             &request,
@@ -438,36 +436,29 @@ fn is_paste_start(line: &str) -> bool {
     ))
 }
 
+/// A deadline stop interrupts every kind with its declared keys: Escape, the stop wait, then
+/// the text and send-now; a child waiting on input gets no key.
 #[test]
-fn deadline_stop_interrupts_a_key_kind_steers_a_pane_kind_and_spares_a_waiting_child() {
-    let (_env, lines) = deadline_stop_trace("claude", false);
-    let paste = lines.iter().position(|line| is_paste_start(line));
-    let enter = lines.iter().position(|line| is_enter_key(line));
-    let escape = lines.iter().position(|line| is_escape_key(line));
-    assert!(
-        matches!((paste, enter, escape), (Some(p), Some(n), Some(e)) if p < n && n < e),
-        "{lines:?}"
-    );
-    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
-
-    let (_env, lines) = deadline_stop_trace("antigravity", false);
-    let escape = lines.iter().position(|line| is_escape_key(line));
-    let enters: Vec<_> = (0..lines.len())
-        .filter(|&at| is_enter_key(&lines[at]))
-        .collect();
-    assert!(
-        matches!((escape, enters.as_slice()), (Some(e), [n, r]) if n < &e && e < *r),
-        "{lines:?}"
-    );
-
-    let (_env, lines) = deadline_stop_trace("kimi", false);
-    let paste = lines.iter().position(|line| is_paste_start(line));
-    let enter = lines.iter().position(|line| is_enter_key(line));
-    assert!(
-        matches!((paste, enter), (Some(p), Some(n)) if p < n),
-        "{lines:?}"
-    );
-    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+fn deadline_stop_interrupts_every_kind_and_spares_a_waiting_child() {
+    for kind in ["claude", "antigravity", "kimi"] {
+        let (_env, lines) = deadline_stop_trace(kind, false);
+        assert_eq!(
+            lines.iter().filter(|line| is_escape_key(line)).count(),
+            1,
+            "{kind}: {lines:?}"
+        );
+        let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
+        let paste = lines.iter().position(|line| is_paste_start(line));
+        assert!(
+            paste.is_some_and(|paste| escape < paste),
+            "{kind}: {lines:?}"
+        );
+        assert_eq!(
+            keys_after(&lines, paste.unwrap()),
+            send_now_keys(kind),
+            "{kind}: {lines:?}"
+        );
+    }
 
     let (_env, lines) = deadline_stop_trace("claude", true);
     assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
@@ -568,7 +559,6 @@ fn interrupt_without_signal(queued: bool) {
     let mut command = traced_rimz(&env, &trace);
     command
         .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
         .env(
             "RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS",
             window.as_millis().to_string(),
@@ -594,6 +584,11 @@ fn interrupt_without_signal(queued: bool) {
     // Start before releasing the key so scheduling lag cannot shorten the measured window.
     let confirmation_started = Instant::now();
     std::fs::write(released, b"").unwrap();
+    std::thread::sleep(window / 2);
+    assert!(
+        !trace_lines(&trace).iter().any(|line| is_paste_start(line)),
+        "nothing is typed before the bound"
+    );
     let output = child.wait_with_output().unwrap();
     let confirmation_wait = confirmation_started.elapsed();
     assert!(output.status.success(), "{output:?}");
@@ -623,142 +618,212 @@ fn interrupt_without_signal(queued: bool) {
         "{confirmation_wait:?}"
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("sent to @codex"));
+    let lines = trace_lines(&trace);
+    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
+    assert_eq!(
+        keys_after_text(&lines[escape..], "new direction"),
+        send_now_keys("codex"),
+        "the bound elapsing still types the text and submits it: {lines:?}"
+    );
     assert_eq!(
         env.store().list_messages().unwrap()[0].status,
         MessageStatus::Sent
     );
 }
 
+/// A running Codex's interrupt held after its stop wait while `during` acts on the store,
+/// given the message id; returns the send's output and its trace.
+fn interrupt_held_after_its_stop(
+    force: bool,
+    during: impl FnOnce(&Env, &str),
+) -> (Env, std::process::Output, Vec<String>) {
+    let (env, panes) = interrupt_fixture("codex");
+    let hold = DeliveryRendezvous::new(&env, "after-interrupt-stop");
+    let trace = env.project_root.join("interrupt-held.log");
+    let mut command = traced_rimz(&env, &trace);
+    command
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "50")
+        .env("RIMZ_TEST_MESSAGE_AFTER_INTERRUPT_STOP", &hold.path)
+        .args(["message", "--interrupt", "@codex", "new direction"]);
+    if force {
+        command.arg("--force");
+    }
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut held = hold.arrive();
+    let id = env.store().list_messages().unwrap()[0]
+        .message_id
+        .to_string();
+    during(&env, &id);
+    held.write_all(&[0]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let lines = trace_lines(&trace);
+    assert_eq!(
+        lines.iter().filter(|line| is_escape_key(line)).count(),
+        1,
+        "{lines:?}"
+    );
+    (env, output, lines)
+}
+
+/// A message canceled while its interrupt waits for the stop is never typed.
 #[test]
-fn interrupt_codex_pastes_then_presses_escape() {
+fn an_interrupt_canceled_during_its_stop_wait_types_nothing() {
+    let (env, output, lines) = interrupt_held_after_its_stop(false, |env, id| {
+        run_success(env.rimz().args(["message", "cancel", id]), "cancel");
+    });
+    assert!(
+        !lines.iter().any(|line| is_paste_start(line)),
+        "{output:?}\n{lines:?}"
+    );
+    let history = env.store().list_message_history().unwrap();
+    assert_eq!(history.len(), 1, "{history:?}");
+    assert_eq!(history[0].status, MessageStatus::Canceled, "{history:?}");
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
+/// A permission prompt raised while an interrupt waits for the stop holds the text back from
+/// an unforced interrupt; a forced one still types it and presses send-now.
+#[test]
+fn a_prompt_raised_during_the_stop_wait_holds_only_an_unforced_interrupt() {
+    for force in [false, true] {
+        let (_env, output, lines) = interrupt_held_after_its_stop(force, |env, _| {
+            append_lifecycle(
+                env,
+                "codex",
+                "PermissionRequest",
+                "sess-interrupt",
+                LifecycleSignal::AwaitingInput {
+                    extra_questions: 0,
+                    kind: AskKind::Permission,
+                    ask_id: None,
+                    detail: None,
+                    native_key: None,
+                },
+                |_| {},
+            );
+        });
+        if force {
+            assert_eq!(
+                keys_after_text(&lines, "new direction"),
+                send_now_keys("codex"),
+                "{output:?}\n{lines:?}"
+            );
+        } else {
+            assert!(
+                !lines.iter().any(|line| is_paste_start(line)),
+                "{output:?}\n{lines:?}"
+            );
+        }
+    }
+}
+
+/// An interrupt that pressed its key never compacts first; one to a resting receiver, which
+/// presses no key, still does.
+#[test]
+fn only_a_keyless_interrupt_compacts_first() {
+    for resting in [false, true] {
+        let (env, panes) = interrupt_fixture("claude");
+        if resting {
+            append_lifecycle(
+                &env,
+                "claude",
+                "Stop",
+                "sess-interrupt",
+                LifecycleSignal::TurnInterrupted { turn_id: None },
+                |_| {},
+            );
+        }
+        seed_context_fill(&env, "sess-interrupt", 80);
+        let trace = env.project_root.join("interrupt-compact.log");
+        let started = Instant::now();
+        let child = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000")
+            .args([
+                "message",
+                "--interrupt",
+                "@claude",
+                "--smart-compact",
+                "70%",
+                "--",
+                "go",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if !resting {
+            while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
+                assert!(started.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            append_lifecycle(
+                &env,
+                "claude",
+                "Stop",
+                "sess-interrupt",
+                LifecycleSignal::TurnInterrupted { turn_id: None },
+                |_| {},
+            );
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let lines = trace_lines(&trace);
+        assert_eq!(
+            lines.iter().filter(|line| is_compact_command(line)).count(),
+            usize::from(resting),
+            "resting={resting}: {lines:?}"
+        );
+        assert_eq!(
+            keys_after_text(&lines, "go"),
+            send_now_keys("claude"),
+            "resting={resting}: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn interrupt_codex_presses_escape_then_types() {
     interrupt_order_case("codex", None, false);
 }
 
 #[test]
-fn interrupt_claude_pastes_then_presses_escape() {
+fn interrupt_claude_presses_escape_then_types() {
     interrupt_order_case("claude", None, false);
 }
 
 #[test]
-fn interrupt_antigravity_presses_escape_then_enter() {
+fn interrupt_antigravity_presses_escape_then_types() {
     interrupt_order_case("antigravity", None, false);
 }
 
-/// An Antigravity row can read Running from a turn agy already left (a user's Escape fires no
-/// hook), so the paste opens a fresh turn whose start lands during the interrupt delay: neither
-/// Escape nor the resubmitting Enter may cancel the turn the paste opened.
 #[test]
-fn interrupt_antigravity_spares_the_turn_its_paste_opened() {
-    let (env, panes) = interrupt_fixture("antigravity");
-    let hold = DeliveryRendezvous::new(&env, "before-key");
-    let trace = env.project_root.join("interrupt-own-turn.log");
-    let send = traced_rimz(&env, &trace)
-        .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
-        .args(["message", "--interrupt", "@antigravity", "new direction"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut held = hold.arrive();
-    append_lifecycle(
-        &env,
-        "antigravity",
-        "PreInvocation",
-        "sess-interrupt",
-        LifecycleSignal::TurnStarted { turn_id: None },
-        |_| {},
-    );
-    held.write_all(&[0]).unwrap();
-    let output = send.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let lines = trace_lines(&trace);
-    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
-    assert_eq!(
-        lines.iter().filter(|line| is_enter_key(line)).count(),
-        1,
-        "{lines:?}"
-    );
-    assert_text_then_enter(&trace, &user_message("new direction"));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(
-            "the message was sent, but its interrupt key was not: the message \
-             opened a new turn during the interrupt delay, and the key would cancel it"
-        ),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("left its pane"), "{stderr}");
-    assert_eq!(
-        env.store().list_messages().unwrap()[0].status,
-        MessageStatus::Sent
-    );
+fn interrupt_pi_presses_escape_then_types() {
+    interrupt_order_case("pi", None, false);
 }
 
-/// A `--no-enter` paste submits nothing, so a turn that starts during the delay is withheld from
-/// the key under a cause that does not name the message as its opener.
+/// Another turn starting reads as the stop even while a turn stays open.
 #[test]
-fn interrupt_antigravity_no_enter_names_a_turn_it_did_not_open() {
-    let (env, panes) = interrupt_fixture("antigravity");
-    let hold = DeliveryRendezvous::new(&env, "before-key");
-    let trace = env.project_root.join("interrupt-no-enter-turn.log");
-    let send = traced_rimz(&env, &trace)
-        .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY", &hold.path)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
-        .args([
-            "message",
-            "--interrupt",
-            "--no-enter",
-            "@antigravity",
-            "draft text",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut held = hold.arrive();
-    append_lifecycle(
-        &env,
-        "antigravity",
-        "PreInvocation",
-        "sess-interrupt",
-        LifecycleSignal::TurnStarted { turn_id: None },
-        |_| {},
-    );
-    held.write_all(&[0]).unwrap();
-    let output = send.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let lines = trace_lines(&trace);
-    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
-    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(
-            "the message was sent, but its interrupt key was not: a new turn \
-             started during the interrupt delay, and the key would cancel it"
+fn interrupt_confirms_on_a_new_turn() {
+    interrupt_stop_case(
+        "codex",
+        None,
+        false,
+        (
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
-        "{stderr}"
     );
-    assert!(!stderr.contains("the message opened"), "{stderr}");
-    // A `--no-enter` prompt settles at its write, so its record is in the history.
-    assert!(env.store().list_messages().unwrap().is_empty());
-    assert_eq!(
-        env.store().list_message_history().unwrap()[0].status,
-        MessageStatus::Delivered
-    );
-}
-
-fn is_alt_m_key(line: &str) -> bool {
-    line.ends_with(&format!(
-        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t109"
-    ))
 }
 
 /// One send to a fresh `interrupt_fixture` receiver, resting first when `resting`; returns
 /// its trace.
-fn steer_key_case(kind: &str, resting: bool, args: &[&str]) -> Vec<String> {
+fn steer_key_case(kind: &str, resting: bool, args: &[&str], text: &str) -> Vec<String> {
     let (env, panes) = interrupt_fixture(kind);
     if resting {
         append_lifecycle(
@@ -776,76 +841,52 @@ fn steer_key_case(kind: &str, resting: bool, args: &[&str]) -> Vec<String> {
             .env("RIMZ_TEST_PANE_LIST", panes)
             .args(["message"])
             .args(args)
-            .args([&format!("@{kind}"), "--", "new direction"]),
+            .args([&format!("@{kind}"), "--", text]),
         "steer",
     );
     trace_lines(&trace)
 }
 
-/// agy queues a message typed during a running turn and takes it into that turn on Alt+M,
-/// so a steer to a running Antigravity receiver presses Enter, then Alt+M. No other send,
-/// receiver, or kind gets the key.
+/// A steer presses its receiver's send-now keys after the text, to a running receiver and a
+/// resting one; a boundary send to a resting receiver presses its queue keys.
 #[test]
-fn steer_antigravity_presses_alt_m_after_enter_only_into_a_running_turn() {
-    let lines = steer_key_case("antigravity", false, &["--steer"]);
-    let enter = lines.iter().position(|line| is_enter_key(line));
-    let alt_m = lines.iter().position(|line| is_alt_m_key(line));
-    assert!(
-        enter.is_some() && alt_m.is_some() && enter < alt_m,
-        "{lines:?}"
-    );
-    assert_eq!(
-        lines.iter().filter(|line| is_alt_m_key(line)).count(),
-        1,
-        "{lines:?}"
-    );
-
-    let lines = steer_key_case("antigravity", false, &["--steer", "--no-enter"]);
-    assert!(
-        !lines
-            .iter()
-            .any(|line| is_enter_key(line) || is_alt_m_key(line)),
-        "{lines:?}"
-    );
-
-    for (kind, resting, args) in [
-        ("antigravity", true, &["--steer"][..]),
-        ("antigravity", true, &[][..]),
-        ("claude", false, &["--steer"][..]),
-        ("codex", false, &["--steer"][..]),
+fn steer_presses_send_now_and_a_boundary_send_presses_queue() {
+    for (kind, queue) in [
+        ("claude", "13"),
+        ("codex", "9"),
+        ("pi", "27\t91\t49\t51\t59\t51\t117"),
+        ("antigravity", "13"),
     ] {
-        let lines = steer_key_case(kind, resting, args);
-        assert!(
-            !lines.iter().any(|line| is_alt_m_key(line)),
-            "{kind} {args:?}: {lines:?}"
-        );
+        for resting in [false, true] {
+            let lines = steer_key_case(kind, resting, &["--steer"], "new direction");
+            assert_eq!(
+                keys_after_text(&lines, "new direction"),
+                send_now_keys(kind),
+                "{kind} resting={resting}: {lines:?}"
+            );
+        }
+        let lines = steer_key_case(kind, true, &[], "new direction");
         assert_eq!(
-            lines.iter().filter(|line| is_enter_key(line)).count(),
-            1,
-            "{kind} {args:?}: {lines:?}"
+            keys_after_text(&lines, "new direction"),
+            [queue],
+            "{kind}: {lines:?}"
         );
     }
-}
 
-/// agy's Escape returns only submitted text to its composer for the Enter after it. An
-/// unsubmitted draft is already there, so that Enter would submit what `--no-enter` holds back.
-#[test]
-fn interrupt_antigravity_resubmits_only_submitted_text() {
-    let enters = |lines: &[String]| lines.iter().filter(|line| is_enter_key(line)).count();
-
-    let lines = steer_key_case("antigravity", false, &["--interrupt", "--no-enter"]);
-    assert!(lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
-    assert_eq!(enters(&lines), 0, "{lines:?}");
-
-    let lines = steer_key_case("antigravity", false, &["--interrupt"]);
-    let escape = lines.iter().position(|line| is_escape_key(line));
-    let last_enter = lines.iter().rposition(|line| is_enter_key(line));
-    assert!(escape.is_some() && escape < last_enter, "{lines:?}");
-    assert_eq!(enters(&lines), 2, "{lines:?}");
+    let lines = steer_key_case(
+        "antigravity",
+        false,
+        &["--steer", "--no-enter"],
+        "new direction",
+    );
+    assert!(
+        keys_after_text(&lines, "new direction").is_empty(),
+        "{lines:?}"
+    );
 }
 
 #[test]
-fn interrupt_queued_record_pastes_then_presses_escape() {
+fn interrupt_queued_record_presses_escape_then_types() {
     interrupt_order_case("codex", Some("sess-interrupt"), false);
 }
 
@@ -955,11 +996,10 @@ fn interrupt_idle_skips_escape() {
         let lines = trace_lines(&trace);
         assert!(!lines.iter().any(|line| is_escape_key(line)), "{kind}");
         assert_eq!(
-            lines.iter().filter(|line| is_enter_key(line)).count(),
-            1,
+            keys_after_text(&lines, "new direction"),
+            send_now_keys(kind),
             "{kind}: {lines:?}"
         );
-        assert_text_then_enter(&trace, &user_message("new direction"));
         assert_eq!(
             env.store().list_messages().unwrap()[0].status,
             MessageStatus::Sent
@@ -987,60 +1027,22 @@ fn interrupt_failed_turn_skips_escape_while_running_gets_it() {
         run_success(
             traced_rimz(&env, &trace)
                 .env("RIMZ_TEST_PANE_LIST", &panes)
-                .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+                .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "200")
                 .args(["message", "--interrupt", "@claude", "new direction"]),
             "interrupt provider error",
         );
-        assert_text_then_enter(&trace, &user_message("new direction"));
         let lines = trace_lines(&trace);
+        assert_eq!(
+            keys_after_text(&lines, "new direction"),
+            send_now_keys("claude"),
+            "failed={failed}: {lines:?}"
+        );
         assert_eq!(
             lines.iter().filter(|line| is_escape_key(line)).count(),
             usize::from(!failed),
             "failed={failed}: {lines:?}"
         );
     }
-}
-
-#[test]
-fn interrupt_keyless_refuses_before_record() {
-    let (env, panes) = interrupt_fixture("pi");
-    let output = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", panes)
-        .args(["message", "--interrupt", "@pi", "new direction"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "keyless kind must refuse");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("has no interrupt key") && stderr.contains("--steer"),
-        "{stderr}"
-    );
-    assert!(env.store().list_messages().unwrap().is_empty());
-}
-
-#[test]
-fn interrupt_fanout_keyless_refuses_entire_send() {
-    let (env, _) = interrupt_fixture("claude");
-    append_lifecycle(
-        &env,
-        "pi",
-        "SessionStart",
-        "sess-keyless",
-        LifecycleSignal::Registered,
-        |_| {},
-    );
-    let output = env
-        .rimz()
-        .args(["message", "--interrupt", "@all", "new direction"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("has no interrupt key"));
-    assert!(
-        env.store().list_messages().unwrap().is_empty(),
-        "whole fanout preflight"
-    );
 }
 
 #[test]
@@ -9128,7 +9130,11 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
         "sent to {} ({message_id})",
         named(&env, "sess-steer-queued", "@claude")
     )));
-    assert_text_then_enter(&trace_log, &user_message("push now"));
+    assert_text_then_keys(
+        &trace_log,
+        &user_message("push now"),
+        send_now_keys("claude"),
+    );
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Sent
@@ -9441,7 +9447,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
         "steer",
     );
 
-    assert_text_then_enter(&trace_log, &user_message("y"));
+    assert_text_then_keys(&trace_log, &user_message("y"), send_now_keys("claude"));
     let session = env.resolve_workspace(&env.project_root).session_name;
     let lines = trace_lines(&trace_log);
     assert!(
@@ -9694,9 +9700,10 @@ fn steer_sends_a_file_with_cr_newlines_inside_the_paste() {
 
     // Header and body newlines are logical text: the independent trace matcher
     // below requires each one to arrive as CR inside the bracketed paste.
-    assert_text_then_enter(
+    assert_text_then_keys(
         &trace_log,
         &user_message("keep \\n literal\nand a real break"),
+        send_now_keys("claude"),
     );
 }
 
@@ -9727,9 +9734,10 @@ fn steer_combines_inline_text_with_piped_stdin() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    assert_text_then_enter(
+    assert_text_then_keys(
         &trace_log,
         &user_message("review this\n\n<stdin>\ndiff --git a/file b/file\n-old\n+new\n</stdin>"),
+        send_now_keys("claude"),
     );
 }
 
@@ -10147,7 +10155,11 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
         ]),
         "steer from human",
     );
-    assert_text_then_enter(&trace_log, &user_message("from human"));
+    assert_text_then_keys(
+        &trace_log,
+        &user_message("from human"),
+        send_now_keys("claude"),
+    );
 
     let trace_log = env.project_root.join("zellij-from-steer-agent-trace.log");
     let out = run_success(
@@ -10158,9 +10170,10 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
         "steer from agent",
     );
     assert_single_sigil_sent(&out.stdout);
-    assert_text_then_enter(
+    assert_text_then_keys(
         &trace_log,
         "Type: AGENT_MESSAGE\nFrom: @swift-otter (codex)\nContent:\nping",
+        send_now_keys("claude"),
     );
     let sent = env
         .read_events()
@@ -10183,7 +10196,7 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
             .args(["message", "--steer", "@claude", "--no-from", "--", "exact"]),
         "steer --no-from from agent",
     );
-    assert_text_then_enter(&trace_log, "exact");
+    assert_text_then_keys(&trace_log, "exact", send_now_keys("claude"));
     let sent = env
         .read_events()
         .into_iter()
@@ -10222,7 +10235,11 @@ fn reply_wanted_marks_the_header_and_confirms_under_its_sender() {
     );
     let message_id = sent_id_from_stdout(&out.stdout);
     let payload = format!("{marked}Did it land?");
-    assert_text_then_enter(&env.project_root.join("zellij-marked-steer.log"), &payload);
+    assert_text_then_keys(
+        &env.project_root.join("zellij-marked-steer.log"),
+        &payload,
+        send_now_keys("claude"),
+    );
 
     let shown = run_success(
         env.rimz().args(["message", "show", &message_id, "--json"]),
@@ -10551,9 +10568,10 @@ fn steer_sender_header_ignores_shadowed_co_resident_session() {
             .args(["message", "--steer", "@reviewer", "--", "re-review"]),
         "steer from reborn agent",
     );
-    assert_text_then_enter(
+    assert_text_then_keys(
         &trace_log,
         "Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\nre-review",
+        send_now_keys("claude"),
     );
 }
 
@@ -10866,7 +10884,11 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
             named(&env, "sess-queue-hint", "@claude")
         )
     );
-    assert_text_then_enter(&trace_log, &user_message("send this exact record"));
+    assert_text_then_keys(
+        &trace_log,
+        &user_message("send this exact record"),
+        send_now_keys("claude"),
+    );
 }
 
 /// Steer skips the FIFO check, so an unacknowledged prompt ahead of the record does not hold it.
@@ -12199,7 +12221,7 @@ fn sweep_holds_unconfirmed_prompt_while_resumed_codex_starts() {
         "send to starting Codex",
     );
     let message_id = MessageId::parse(&sent_id_from_stdout(&output.stdout)).unwrap();
-    assert_text_then_enter(&trace, &user_message("start once"));
+    assert_text_then_keys(&trace, &user_message("start once"), &["9"]);
     let sent = message_by_id(&env, &message_id);
     let window = Duration::from_secs(5);
     std::thread::sleep(
@@ -13528,10 +13550,13 @@ fn fresh_sends_exclude_hook_delivery_before_the_pane_write() {
             1,
             "mode {mode:?}: {lines:?}"
         );
-        assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+        let submit = match mode {
+            None => &["13"][..],
+            Some(_) => send_now_keys("claude"),
+        };
+        assert_eq!(keys_after_text(&lines, "once"), submit, "mode {mode:?}");
         assert_eq!(held.status, MessageStatus::Claimed);
         assert_eq!(held.attempts, 1);
-        assert_text_then_enter(&trace, &user_message("once"));
         assert_eq!(
             env.read_events()
                 .iter()
@@ -13814,7 +13839,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         "message deliver",
     );
 
-    assert_text_then_enter(&trace_log, &user_message("read plan"));
+    assert_text_then_keys(&trace_log, &user_message("read plan"), &["9"]);
     let messages = env.store().list_messages().expect("messages");
     let message = messages
         .iter()
@@ -14255,7 +14280,8 @@ fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
             .count(),
         1
     );
-    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 2);
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    assert_eq!(keys_after_text(&lines, "go"), send_now_keys("claude"));
     assert_compact_segments_then_enter(
         &lines,
         rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
@@ -14453,6 +14479,7 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
             let mut command = traced_rimz(&env, &trace);
             command
                 .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+                .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "50")
                 .args(["message"]);
             if let Some(mode) = mode {
                 command.arg(mode);
@@ -14525,7 +14552,11 @@ fn compact_first_rechecks_turn_and_fill_after_the_pane_lock() {
                 assert_eq!(messages[0].attempts, 0);
                 continue;
             }
-            assert_text_then_enter(&trace, &user_message("go"));
+            let submit = match mode {
+                None => &["13"][..],
+                Some(_) => send_now_keys("claude"),
+            };
+            assert_text_then_keys(&trace, &user_message("go"), submit);
             assert!(
                 !String::from_utf8_lossy(&output.stdout).contains("compacted"),
                 "{output:?}"
@@ -14714,7 +14745,6 @@ fn interrupt_skips_its_key_when_the_turn_ends_during_its_write_wait() {
     let before = DeliveryRendezvous::new(&env, "late-stop-before-write");
     let child = traced_rimz(&env, &trace)
         .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
         .args(["message", "--interrupt", "@claude", "--", "new direction"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -14729,11 +14759,15 @@ fn interrupt_skips_its_key_when_the_turn_ends_during_its_write_wait() {
     release.write_all(&[1]).unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert_text_then_enter(&trace, &user_message("new direction"));
     let lines = trace_lines(&trace);
     assert!(
         !lines.iter().any(|line| is_escape_key(line)),
-        "the key would cancel the turn the paste starts: {lines:?}"
+        "a resting receiver gets no interrupt key: {lines:?}"
+    );
+    assert_eq!(
+        keys_after_text(&lines, "new direction"),
+        send_now_keys("claude"),
+        "{lines:?}"
     );
 }
 
@@ -15414,8 +15448,13 @@ fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
         .enumerate()
         .filter_map(|(index, line)| is_enter_key(line).then_some(index))
         .collect();
-    assert_eq!(enters.len(), 2);
-    assert!(enters[0] < paste_at && paste_at < enters[1], "{lines:?}");
+    assert_eq!(enters.len(), 1, "{lines:?}");
+    assert!(enters[0] < paste_at, "{lines:?}");
+    assert_eq!(
+        keys_after_text(&lines, "hello from coder"),
+        send_now_keys("claude"),
+        "{lines:?}"
+    );
 }
 
 #[test]
@@ -15613,6 +15652,7 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
     for (kind, native) in [
         ("codex", Some("/compact")),
         ("antigravity", Some("/compact")),
+        ("pi", Some("/compact")),
         ("cursor", Some("/summarize")),
         ("qwen", Some("/compress")),
         ("amp", None),
@@ -15700,6 +15740,12 @@ fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
         assert_eq!(writes.len(), 1, "{lines:?}");
         assert!(writes[0].ends_with(&format!("\t--\t{native}")), "{lines:?}");
         assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.ends_with("\t27\t91\t49\t51\t59\t51\t117")),
+            "a command presses no queue key: {lines:?}"
+        );
     }
 }
 
@@ -17697,6 +17743,33 @@ fn assert_compact_segments_then_enter(lines: &[String], instruction: &str) {
     );
 }
 
+/// Asserts `text` was pasted and the pane writes right after it are `keys`, by their trace
+/// bytes.
+fn assert_text_then_keys(trace_log: &Path, text: &str, keys: &[&str]) {
+    let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
+    // Paste bytes are decimal-encoded in this trace. A literal CR here would
+    // therefore come from the byte-faithful raw `write-chars` path instead.
+    assert!(
+        !raw.contains('\r'),
+        "no carriage return should be folded into raw typed text; trace: {raw:?}"
+    );
+    let lines = trace_lines(trace_log);
+    let paste = lines
+        .iter()
+        .position(|line| is_paste(line, text))
+        .unwrap_or_else(|| panic!("expected a bracketed paste of `{text}`; trace: {lines:?}"));
+    let after = keys_after(&lines, paste);
+    assert_eq!(
+        after
+            .iter()
+            .map(String::as_str)
+            .take(keys.len())
+            .collect::<Vec<_>>(),
+        keys,
+        "trace: {lines:?}"
+    );
+}
+
 fn assert_text_then_enter(trace_log: &Path, text: &str) {
     let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
     // Paste bytes are decimal-encoded in this trace. A literal CR here would
@@ -18663,6 +18736,54 @@ fn steer_reaches_unbound_codex_pane() {
     assert_text_then_enter(&trace_log, &user_message("continue"));
 }
 
+/// The command keys replace only the queue key: a slash-led steer presses send-now.
+#[test]
+fn slash_led_paste_presses_command_keys_only_at_a_boundary_unless_a_header_leads() {
+    assert_slash_led_send_presses(&[], &user_message("/status"), &["13"]);
+    assert_slash_led_send_presses(
+        &[
+            ("RIMZ_AGENT_KIND", "claude"),
+            ("RIMZ_AGENT_NAME", "brisk-heron"),
+        ],
+        "Type: AGENT_MESSAGE\nFrom: @brisk-heron (claude)\nContent:\n/status",
+        &["9"],
+    );
+    for kind in ["claude", "antigravity"] {
+        let lines = steer_key_case(kind, false, &["--steer"], "/tmp/build.log is ready");
+        assert_eq!(
+            keys_after_text(&lines, "/tmp/build.log is ready"),
+            send_now_keys(kind),
+            "{kind}: {lines:?}"
+        );
+    }
+}
+
+/// Sends `/status` from `sender` to an idle Codex and asserts `pasted` was submitted with `keys`.
+fn assert_slash_led_send_presses(sender: &[(&str, &str)], pasted: &str, keys: &[&str]) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("codex");
+    seed_provisional_codex_launch(
+        &env,
+        "launch_slash_led",
+        "swift-otter",
+        Some("coder"),
+        "terminal_8",
+        None,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+
+    let trace_log = env.project_root.join("zellij-slash-led-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-slash-led-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .envs(sender.iter().copied())
+            .args(["message", "@coder", "--", "/status"]),
+        "slash-led message to codex",
+    );
+    assert_text_then_keys(&trace_log, pasted, keys);
+}
+
 #[test]
 fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
     let env = Env::new();
@@ -18685,7 +18806,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
             .args(["message", "@coder", "--", "read plan"]),
         "queue to provisional codex",
     );
-    assert_text_then_enter(&trace_log, &user_message("read plan"));
+    assert_text_then_keys(&trace_log, &user_message("read plan"), &["9"]);
     let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].status, MessageStatus::Sent);

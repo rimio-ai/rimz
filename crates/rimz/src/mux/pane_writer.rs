@@ -3,7 +3,7 @@
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::PaneId;
-use crate::pane::keys::NamedKey;
+use crate::pane::keys::{KeyStep, NamedKey};
 use crate::utils::time::unix_now_ms;
 
 use super::typing::{InputSource, TypingRecord};
@@ -51,6 +51,17 @@ impl PaneWriter {
 
     pub fn press(&self, key: NamedKey) -> Result<()> {
         self.write(|backend| backend.send_key(&self.pane, &self.session, key))
+    }
+
+    /// Press a declared key sequence, each key after its pause.
+    pub fn press_keys(&self, steps: &[KeyStep]) -> Result<()> {
+        for step in steps {
+            if !step.pause.is_zero() {
+                std::thread::sleep(step.pause);
+            }
+            self.press(step.key)?;
+        }
+        Ok(())
     }
 
     fn write(&self, send: impl FnOnce(&dyn MuxBackend) -> Result<()>) -> Result<()> {

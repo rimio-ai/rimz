@@ -285,19 +285,26 @@ pub(crate) fn is_enter_key(line: &str) -> bool {
 /// Waits for a detached `message deliver` to paste `text` and press its Enter: the
 /// record turns `Sent` between the two writes, so `Sent` alone does not cover the Enter.
 pub(crate) fn wait_for_text_then_enter(trace_log: &std::path::Path, text: &str) {
+    wait_for_text_then_key(trace_log, text, "13");
+}
+
+/// Waits for a detached `message deliver` to paste `text` and then write the key whose trace
+/// bytes are `key`, such as Codex's Tab (`9`).
+pub(crate) fn wait_for_text_then_key(trace_log: &std::path::Path, text: &str, key: &str) {
+    let key_write = format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t{key}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let lines = trace_lines(trace_log);
         if lines
             .iter()
             .position(|line| is_paste(line, text))
-            .is_some_and(|at| lines[at..].iter().any(|line| is_enter_key(line)))
+            .is_some_and(|at| lines[at..].iter().any(|line| line.ends_with(&key_write)))
         {
             return;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "timed out waiting for a paste of `{text}` and its Enter; trace: {lines:?}"
+            "timed out waiting for a paste of `{text}` and its key {key}; trace: {lines:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }

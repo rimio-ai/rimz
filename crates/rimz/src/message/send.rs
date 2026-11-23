@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 
 use crate::Store;
-use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
+use crate::agents::{AgentState, AgentStatus, MessageKeys};
 use crate::harness::auto_continue::CardStatus;
 use crate::launcher::agent_pane::AgentPane;
 use crate::message::{
@@ -20,9 +20,7 @@ use crate::message::{
 };
 use crate::mux::PaneWriter;
 use crate::mux::typing::{InputSource, TypingRecord, TypingView};
-use crate::pane::keys::NamedKey;
 use crate::sidebar::produce::hosting::HostingErr;
-use crate::store::follow::{EventFollower, FollowEvent};
 use crate::store::message::{
     AutoCompact, HarnessNotice, MessageBody, MessageRecord, MessageSender,
 };
@@ -39,13 +37,6 @@ pub enum SendErr {
     Store(#[from] crate::store::StoreErr),
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
-    #[error(
-        "{label} runs {kind}, which has no interrupt key; use --steer to write into the live turn, or park it"
-    )]
-    NoInterruptKey {
-        label: String,
-        kind: crate::ids::AgentKind,
-    },
     #[error("someone is using the receiver's pane; retry at {until}")]
     TypingHeld { until: Timestamp },
     #[error("not sent: {reason}")]
@@ -90,6 +81,13 @@ pub(super) enum Receipt {
     TypingHeld {
         until: Timestamp,
         compacted: bool,
+    },
+    /// An interrupt's receiver no longer holds the claim's pane, before its key or after its
+    /// stop wait (`pressed`): nothing more is written, and the claims go back to the queue.
+    InterruptWithheld {
+        compacted: bool,
+        cause: &'static str,
+        pressed: bool,
     },
     Deferred(Deferral),
     /// A cache keepalive whose cache went cold before its write: the ping would only pay to
@@ -222,30 +220,13 @@ pub(super) fn send_batch_to_live_pane(
     batch: &[MessageRecord],
     send: &mut LiveSend,
 ) -> Result<Receipt> {
-    // Dispatch and delivery claims always pass a non-empty batch.
-    let head = batch
-        .first()
-        .expect("send_batch_to_live_pane requires at least one message");
-    let key = match send.kind {
-        DeliveryKind::Interrupt => {
-            Some(interrupt_key(&head.kind, &format!("@{}", target.label()))?)
-        }
-        DeliveryKind::Boundary | DeliveryKind::Steer => None,
-    };
-    let steer_key = (matches!(send.kind, DeliveryKind::Steer) && head.enter)
-        .then(|| {
-            crate::agents::spec_by_kind(head.kind.as_str())?
-                .launch
-                .steer_key
-        })
-        .flatten();
     crate::harness::hibernate::wake_pane(store, &target.pane_id)?;
     let writer = PaneWriter::open(
         Some(store.runtime_paths()),
         &target.pane_id,
         &workspace.session_name,
     )?;
-    let (receipt, row) = write_live(
+    write_live(
         workspace,
         store,
         snapshot,
@@ -255,140 +236,106 @@ pub(super) fn send_batch_to_live_pane(
         batch,
         send,
         &writer,
-    )?;
-    if let (Some(steer_key), Receipt::Sent { .. }) = (steer_key, &receipt)
-        && row.as_ref().is_some_and(|agent| {
-            matches!(
-                agent.effective_status(Timestamp::now()),
-                AgentStatus::Running | AgentStatus::Waiting
-            )
-        })
-    {
-        // A resting receiver opened a turn on the Enter; only a running one queued the text.
-        sleep(STEER_KEY_DELAY);
-        writer.press(steer_key)?;
-    }
-    let (Some(key), &Receipt::Sent { compacted, .. }) = (key, &receipt) else {
-        return Ok(receipt);
+    )
+}
+
+/// The keys of the receiver's kind: the row the write decided on, else the record's.
+fn receiver_keys(head: &MessageRecord, receiver: Option<&AgentState>) -> MessageKeys {
+    crate::agents::message_keys(receiver.map_or(&head.kind, |row| &row.kind))
+}
+
+/// How an interrupt's key went before its text.
+enum Interrupted {
+    /// A resting receiver: no key, and its text opens a fresh turn as it is.
+    NoKey,
+    /// The key went and the stop wait ended, seeing the stop or not.
+    Pressed(InterruptConfirmation),
+    /// The receiver no longer holds the claim's pane, before the key or after the stop wait
+    /// (`pressed`): no text follows.
+    Withheld { cause: &'static str, pressed: bool },
+}
+
+/// Press the receiver's interrupt keys and wait for the stop, before any text is written. A
+/// resting receiver gets no key: its text opens a fresh turn as it is.
+fn interrupt_first(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    head: &MessageRecord,
+    decided: Option<&AgentState>,
+    writer: &PaneWriter,
+) -> Result<Interrupted> {
+    let Some(running) = decided.filter(|agent| {
+        matches!(
+            agent.effective_status(Timestamp::now()),
+            AgentStatus::Running | AgentStatus::Waiting
+        )
+    }) else {
+        return Ok(Interrupted::NoKey);
     };
-    // Decide on the row read after the write's waits: a resting agent gets a
-    // plain send, since the key would cancel the very turn this paste starts.
-    // Queued records can retain a provisional launch id; the row carries the live card's session.
-    let decided_turn_started_at = row.as_ref().and_then(|agent| agent.turn_started_at);
-    let Some(agent_id) = row
-        .filter(|agent| {
-            matches!(
-                agent.effective_status(Timestamp::now()),
-                AgentStatus::Running | AgentStatus::Waiting
-            )
-        })
-        .map(|agent| agent.agent_id)
-    else {
-        return Ok(receipt);
-    };
-    sleep(super::interrupt_delay_from_env());
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_INTERRUPT_KEY");
-    // The delay leaves the receiver time to move: the key goes only to the session the paste
-    // decided on, in the claim's pane.
-    // The follower opens first, so no store I/O sits between the withheld check and the key.
-    let follower = crate::agents::spec_by_kind(head.kind.as_str())
-        .is_some_and(|spec| spec.launch.confirm_interrupt)
-        .then(|| EventFollower::open(store.paths().clone(), false));
-    let returns_queued_text = crate::agents::spec_by_kind(head.kind.as_str())
-        .is_some_and(|spec| spec.launch.interrupt_returns_queued_text);
-    let withheld = interrupt_withheld(workspace, store, target, bound, &agent_id).or_else(|| {
-        // Such a kind queues text pasted behind a running turn and opens no turn for it
-        // until the running one ends (agy: no invocation-0 PreInvocation until it dequeues,
-        // probes P9 and P10). A turn start newer than the one the paste decided on is
-        // therefore the paste's own turn, opened from a rest the row missed or after the
-        // running turn ended during the delay, and the key would cancel it. A paste with Enter
-        // off submits nothing, so its cause names the turn and not the message.
-        let opened_own_turn = returns_queued_text
-            && row_under_lock(store, head)
-                .ok()
-                .flatten()
-                .is_some_and(|row| row.turn_started_at > decided_turn_started_at);
-        opened_own_turn.then_some(if head.enter {
-            "the message opened a new turn during the interrupt delay, and the key would cancel it"
-        } else {
-            "a new turn started during the interrupt delay, and the key would cancel it"
-        })
-    });
-    if let Some(cause) = withheld {
-        return Ok(Receipt::Sent {
-            compacted,
-            interrupt: InterruptConfirmation::NotSent { cause },
+    // Queued records can retain a provisional launch id; the row carries the live card's session.
+    if let Some(cause) = interrupt_withheld(workspace, store, target, bound, &running.agent_id) {
+        return Ok(Interrupted::Withheld {
+            cause,
+            pressed: false,
         });
     }
-    writer.press(key)?;
-    // An unsubmitted draft stays in the composer through the key (agy 1.5.15), and Enter
-    // would submit it.
-    if returns_queued_text && head.enter {
-        sleep(INTERRUPT_RESUBMIT_DELAY);
-        writer.press(NamedKey::Enter)?;
-    }
-    drop(writer);
+    writer.press_keys(receiver_keys(head, Some(running)).interrupt)?;
     let window = super::interrupt_confirmation_window_from_env();
-    let interrupt = match follower {
-        None => InterruptConfirmation::NotChecked,
-        Some(Ok(follower)) => confirm_interrupt(follower, &head.kind, &agent_id, window),
-        Some(Err(error)) => {
-            tracing::debug!(%error, "cannot open interrupt confirmation cursor");
-            InterruptConfirmation::NotConfirmed { window }
-        }
-    };
-    Ok(Receipt::Sent {
-        compacted,
-        interrupt,
-    })
+    let stopped = wait_for_stop(store, head, running, window)?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_AFTER_INTERRUPT_STOP");
+    if let Some(cause) = interrupt_withheld(workspace, store, target, bound, &running.agent_id) {
+        return Ok(Interrupted::Withheld {
+            cause,
+            pressed: true,
+        });
+    }
+    Ok(Interrupted::Pressed(if stopped {
+        InterruptConfirmation::Confirmed
+    } else {
+        InterruptConfirmation::NotConfirmed { window }
+    }))
 }
 
-/// How long after its interrupt key a kind whose key returns queued text to the composer
-/// waits before the Enter that submits it: agy submitted it once at 100 ms and at 500 ms,
-/// and nothing when both keys went together (probe link 5, P9).
-const INTERRUPT_RESUBMIT_DELAY: Duration = Duration::from_millis(500);
-
-/// How long after a steer's Enter its kind's steer key waits: agy queues the submitted text
-/// first, and took it into the running turn on Alt+M 0.5 s later on both backends
-/// (`zellij-alt-m.md`, `send-immediately.md` probes of the agy-steer design).
-const STEER_KEY_DELAY: Duration = Duration::from_millis(500);
-
-fn confirm_interrupt(
-    mut follower: EventFollower,
-    kind: &crate::ids::AgentKind,
-    agent_id: &crate::ids::AgentSessionId,
+/// Read the receiver's row until it shows the stop of the turn `before` held, or `window`
+/// elapses; returns whether the stop showed. Text typed before the stop takes hold can be
+/// lost: agy read text 15 ms after Escape as one Alt chord.
+fn wait_for_stop(
+    store: &Store,
+    head: &MessageRecord,
+    before: &AgentState,
     window: Duration,
-) -> InterruptConfirmation {
+) -> Result<bool> {
     let started = Instant::now();
     loop {
-        let batch = match follower.poll() {
-            Ok(batch) => batch,
-            Err(error) => {
-                tracing::debug!(%error, "cannot read interrupt confirmation");
-                break;
-            }
-        };
-        if batch.events.iter().any(|event| {
-            matches!(event,
-                FollowEvent::Lifecycle(event) if event.kind == *kind
-                    && event.agent_id == *agent_id
-                    && matches!(event.signal, LifecycleSignal::TurnInterrupted { .. })
-            )
-        }) {
-            return InterruptConfirmation::Confirmed;
+        let row = row_under_lock(store, head)?;
+        if row.as_ref().is_some_and(|row| stop_took_hold(before, row)) {
+            return Ok(true);
         }
         let remaining = window.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            break;
+        if remaining.is_zero() || row.is_none() {
+            return Ok(false);
         }
-        sleep(remaining.min(Duration::from_millis(25)));
+        sleep(remaining.min(STOP_POLL));
     }
-    InterruptConfirmation::NotConfirmed { window }
 }
 
-/// Write a batch, returning the receipt and the receiver row its last write
-/// decided on.
+const STOP_POLL: Duration = Duration::from_millis(25);
+
+/// Whether `after` no longer holds the turn `before` held: the turn closed, or another
+/// started. A `before` that held no open turn (agy parked on background work) shows only the
+/// second.
+fn stop_took_hold(before: &AgentState, after: &AgentState) -> bool {
+    (before.holds_open_turn() && !after.holds_open_turn())
+        || after.turn_started_at != before.turn_started_at
+}
+
+/// Write a batch: an interrupt's keys and stop wait first, then every write decision again on
+/// the row the wait left, then the text and its submit keys.
 #[expect(
     clippy::too_many_arguments,
     reason = "one live write under the caller's pane lock"
@@ -403,7 +350,7 @@ fn write_live(
     batch: &[MessageRecord],
     send: &mut LiveSend,
     writer: &PaneWriter,
-) -> Result<(Receipt, Option<AgentState>)> {
+) -> Result<Receipt> {
     let decide = |send: &mut LiveSend, batch: &[MessageRecord], compacted: bool| {
         wait_and_decide(
             workspace,
@@ -419,7 +366,49 @@ fn write_live(
     };
     let (fresh, batch) = match decide(send, batch, false)? {
         Decided::Write { row, batch } => (row, batch),
-        Decided::Stop(receipt) => return Ok((receipt, None)),
+        Decided::Stop(receipt) => return Ok(receipt),
+    };
+    let head = batch
+        .first()
+        .expect("a write decision keeps at least one message");
+    let interrupted = if send.kind == DeliveryKind::Interrupt {
+        interrupt_first(
+            workspace,
+            store,
+            target,
+            bound,
+            head,
+            fresh.as_ref(),
+            writer,
+        )?
+    } else {
+        Interrupted::NoKey
+    };
+    let (fresh, batch, interrupt) = match interrupted {
+        Interrupted::NoKey => (fresh, batch, InterruptConfirmation::NotChecked),
+        // The stop wait outlasts every decision made before the key, so they are made again
+        // on the receiver as the wait left it.
+        Interrupted::Pressed(confirmation) => match decide_now(
+            workspace,
+            store,
+            snapshot,
+            target,
+            bound,
+            card_status,
+            &batch,
+            false,
+            send,
+        )? {
+            Decided::Write { row, batch } => (row, batch, confirmation),
+            Decided::Stop(receipt) => return Ok(receipt),
+        },
+        Interrupted::Withheld { cause, pressed } => {
+            return Ok(Receipt::InterruptWithheld {
+                compacted: false,
+                cause,
+                pressed,
+            });
+        }
     };
     let head = batch
         .first()
@@ -427,7 +416,7 @@ fn write_live(
     let checked = |row: &Option<AgentState>| row.as_ref().or(bound).cloned();
     let sent = |compacted| Receipt::Sent {
         compacted,
-        interrupt: InterruptConfirmation::NotChecked,
+        interrupt,
     };
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
@@ -441,16 +430,22 @@ fn write_live(
             receiver.as_ref(),
             send,
         )?;
-        return Ok((sent(false), fresh));
+        return Ok(sent(false));
     }
     debug_assert!(
         batch
             .iter()
             .all(|message| message.body == MessageBody::Prompt)
     );
-    let compact = batch
-        .iter()
-        .find_map(|message| compact_message_for_target(store, target, fresh.as_ref(), message));
+    // An interrupt that pressed its key never compacts first: the key can restore natively
+    // queued text into the composer, where the command would join it as a prompt.
+    let compact = (interrupt == InterruptConfirmation::NotChecked)
+        .then(|| {
+            batch.iter().find_map(|message| {
+                compact_message_for_target(store, target, fresh.as_ref(), message)
+            })
+        })
+        .flatten();
     let Some((command, threshold, agent)) = compact else {
         let receiver = checked(&fresh);
         write_text(
@@ -462,7 +457,7 @@ fn write_live(
             receiver.as_ref(),
             send,
         )?;
-        return Ok((sent(false), fresh));
+        return Ok(sent(false));
     };
     // Claimed only once the decisions above passed, so the command record
     // exists only for a write that follows at once.
@@ -493,12 +488,12 @@ fn write_live(
         },
     });
     if send.kind == DeliveryKind::Boundary {
-        return Ok((Receipt::CompactionPending, fresh));
+        return Ok(Receipt::CompactionPending);
     }
     // The prompts wait their own turn and decide on the row as it stands after the command.
     let (fresh, batch) = match decide(send, &batch, true)? {
         Decided::Write { row, batch } => (row, batch),
-        Decided::Stop(receipt) => return Ok((receipt, None)),
+        Decided::Stop(receipt) => return Ok(receipt),
     };
     let receiver = checked(&fresh);
     write_text(
@@ -510,7 +505,7 @@ fn write_live(
         receiver.as_ref(),
         send,
     )?;
-    Ok((sent(true), fresh))
+    Ok(sent(true))
 }
 
 /// The receiver's live holder row as it stands now; a session a restart or molt replaced is
@@ -614,8 +609,8 @@ pub(super) fn lookup_miss(
     }
 }
 
-/// Why an interrupt key must not follow its paste: the lookup no longer answers the claim's
-/// pane, or holds a session there other than `agent_id`, the one the paste decided on.
+/// Why an interrupt must write nothing more: the lookup no longer answers the claim's pane, or
+/// holds a session there other than `agent_id`, the one the write decided on.
 fn interrupt_withheld(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -628,18 +623,9 @@ fn interrupt_withheld(
         Ok(Some(found)) if found.pane_id == target.pane_id => {
             Some("another session of the receiver holds its pane now")
         }
-        Ok(_) => Some("the receiver left its pane during the interrupt delay"),
-        Err(_) => Some("the receiver's pane could not be read after the interrupt delay"),
+        Ok(_) => Some("the receiver left its pane"),
+        Err(_) => Some("the receiver's pane could not be read"),
     }
-}
-
-pub(super) fn interrupt_key(kind: &crate::ids::AgentKind, label: &str) -> Result<NamedKey> {
-    crate::agents::spec_by_kind(kind.as_str())
-        .and_then(|spec| spec.launch.interrupt_key)
-        .ok_or_else(|| SendErr::NoInterruptKey {
-            label: label.to_owned(),
-            kind: kind.clone(),
-        })
 }
 
 pub struct Pacer {
@@ -689,11 +675,7 @@ enum Decided {
     Stop(Receipt),
 }
 
-/// Run a write's waits, then read the receiver's row and make every write
-/// decision on it: the receiver can open a turn, raise a prompt, or start
-/// compacting while the write waits. Every member whose premise that row (or
-/// its harness subject) shows broken is withdrawn here and never typed; after
-/// a withdrawal the row is read again and the survivors judged again.
+/// Run a write's waits, then make every write decision ([`decide_now`]).
 #[expect(
     clippy::too_many_arguments,
     reason = "one live write under the caller's pane lock"
@@ -717,14 +699,53 @@ fn wait_and_decide(
     send.pacer.tick();
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
-    // Every delivery binds its claim to the pane before entering the write path.
-    let pane = head
-        .pane_id
-        .as_ref()
-        .expect("a claimed send carries its pane");
+    let pane = claimed_pane(head);
     if let Some(until) = send.typing_hold_until(workspace, store.runtime_paths(), pane) {
         return Ok(Decided::Stop(Receipt::TypingHeld { until, compacted }));
     }
+    decide_now(
+        workspace,
+        store,
+        snapshot,
+        target,
+        bound,
+        card_status,
+        batch,
+        compacted,
+        send,
+    )
+}
+
+fn claimed_pane(head: &MessageRecord) -> &crate::ids::PaneId {
+    // Every delivery binds its claim to the pane before entering the write path.
+    head.pane_id
+        .as_ref()
+        .expect("a claimed send carries its pane")
+}
+
+/// Read the receiver's row and make every write decision on it: the receiver can open a turn,
+/// raise a prompt, or start compacting while the write waits. Every member whose premise that
+/// row (or its harness subject) shows broken is withdrawn here and never typed; after a
+/// withdrawal the row is read again and the survivors judged again.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one live write under the caller's pane lock"
+)]
+fn decide_now(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    card_status: &CardStatus,
+    batch: &[MessageRecord],
+    compacted: bool,
+    send: &LiveSend,
+) -> Result<Decided> {
+    let head = batch
+        .first()
+        .expect("decide_now requires at least one message");
+    let pane = claimed_pane(head);
     // The lookup lists the room's panes, so it comes before the claim check and the row read:
     // only store reads sit between those and the decisions made on them.
     let not_hosted = || {
@@ -882,6 +903,7 @@ fn write_text(
         .first()
         .expect("write_text requires at least one message");
     let mut typed = None;
+    let mut slash_led = false;
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
@@ -906,7 +928,9 @@ fn write_text(
                     .all(|message| message.body == MessageBody::Prompt)
             );
             let peers = crate::address::addressable_agents(snapshot);
-            writer.paste(&prompt_payload(batch, &peers))?;
+            let payload = prompt_payload(batch, &peers);
+            slash_led = crate::store::message::opens_slash_command(&payload);
+            writer.paste(&payload)?;
         }
     }
     // Record the send once the text lands and before the submit keystroke, so a
@@ -942,7 +966,13 @@ fn write_text(
         // Raw-typed commands carry no paste close marker, so wait for composer
         // paste-burst state to flush before submitting.
         send.pause_raw_typing(head.body);
-        writer.press(NamedKey::Enter)?;
+        let keys = receiver_keys(head, receiver);
+        writer.press_keys(match (head.body, send.kind) {
+            (MessageBody::Command, _) => keys.command,
+            (MessageBody::Prompt, DeliveryKind::Boundary) if slash_led => keys.command,
+            (MessageBody::Prompt, DeliveryKind::Boundary) => keys.queue,
+            (MessageBody::Prompt, DeliveryKind::Steer | DeliveryKind::Interrupt) => keys.send_now,
+        })?;
     }
     Ok(())
 }
@@ -1171,81 +1201,35 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_confirmation_keeps_superseded_events_and_matches_identity() {
-        use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
-        use crate::disk::paths::{RuntimePaths, StatePaths};
-        use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-        use crate::store::event::EventEnvelope;
-        use crate::store::follow::EventFollower;
-
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
-        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-        let store = Store::open(paths.clone(), runtime).unwrap();
-        let append = |kind: &str, id: &str, signal| {
-            let observation =
-                AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
-            store
-                .append_event(&EventEnvelope::agent_lifecycle(
-                    workspace.clone(),
-                    "room",
-                    kind,
-                    "test",
-                    &observation,
-                ))
-                .unwrap();
+    fn a_stop_is_the_turn_closing_or_another_starting() {
+        let at: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+        let mut before = AgentState::stub("claude", "sess", AgentStatus::Running);
+        before.turn_started_at = Some(at);
+        assert!(before.holds_open_turn());
+        let rested = AgentState {
+            status: AgentStatus::Idle,
+            ..before.clone()
         };
-        let interrupted = || LifecycleSignal::TurnInterrupted {
-            turn_id: Some("old".into()),
+        let restarted = AgentState {
+            turn_started_at: Some(at + Duration::from_secs(1)),
+            ..before.clone()
         };
-        append("codex", "target", LifecycleSignal::Registered);
-        append(
-            "codex",
-            "target",
-            LifecycleSignal::TurnStarted {
-                turn_id: Some("old".into()),
-            },
-        );
-        append("codex", "target", interrupted());
-        let follower = EventFollower::open(paths.clone(), false).unwrap();
-        append("claude", "target", interrupted());
-        append("codex", "other", interrupted());
-        let kind = AgentKind::new_unchecked("codex");
-        let id = AgentSessionId::from("target");
+        let parked = AgentState {
+            phase: crate::agents::TurnPhase::Parked,
+            ..before.clone()
+        };
+        assert!(!parked.holds_open_turn());
         assert_eq!(
-            confirm_interrupt(follower, &kind, &id, Duration::ZERO),
-            super::super::InterruptConfirmation::NotConfirmed {
-                window: Duration::ZERO
-            }
-        );
-        append(
-            "codex",
-            "target",
-            LifecycleSignal::TurnStarted {
-                turn_id: Some("old".into()),
-            },
-        );
-        let follower = EventFollower::open(paths, false).unwrap();
-        append("codex", "target", interrupted());
-        append(
-            "codex",
-            "target",
-            LifecycleSignal::TurnStarted {
-                turn_id: Some("new".into()),
-            },
-        );
-        let snapshot = store.snapshot_cached().unwrap();
-        let target = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.kind == kind && agent.agent_id == id)
-            .unwrap();
-        assert_eq!(target.started_turn_id.as_deref(), Some("new"));
-        assert_eq!(target.closed_turn_id, None);
-        assert_eq!(
-            confirm_interrupt(follower, &kind, &id, Duration::ZERO),
-            super::super::InterruptConfirmation::Confirmed
+            [
+                stop_took_hold(&before, &before),
+                stop_took_hold(&before, &rested),
+                stop_took_hold(&before, &restarted),
+                stop_took_hold(&parked, &rested),
+                stop_took_hold(&parked, &restarted),
+            ],
+            [false, true, true, false, true],
+            "still running, rested, a changed turn start, a parked turn resting, a parked turn \
+             restarting"
         );
     }
 
