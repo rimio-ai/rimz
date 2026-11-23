@@ -1188,6 +1188,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         provider_account: ProviderAccountState::Unbound,

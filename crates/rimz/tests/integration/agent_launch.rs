@@ -206,6 +206,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     }
 }
 
@@ -7785,6 +7786,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             follow_up_message: None,
             reminder_section: None,
             identity: ExecIdentity::default(),
+            rimz_capabilities: None,
         };
         resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
         resume.identity.params.record = Some(Box::new(rimz::agents::LaunchRecord {
@@ -7944,6 +7946,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             follow_up_message: None,
             reminder_section: None,
             identity: ExecIdentity::default(),
+            rimz_capabilities: None,
         };
         env.rimz()
             .args(exec_args(&env, &request))
@@ -8059,6 +8062,7 @@ esac"#,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     };
     request.identity.params.isolation = Some(rimz::config::Isolation::Host);
     let mut wrapper = env
@@ -8266,6 +8270,7 @@ esac"#,
         follow_up_message: failed_follow_up,
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     };
     resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
     let mut wrapper_command = env.rimz();

@@ -1074,3 +1074,92 @@ fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
     assert_eq!(allow(true, None, Some(&["Glob"])), None);
     assert_eq!(allow(true, None, Some(&[])), None);
 }
+
+/// A `capabilities:` grant serves exactly its capabilities, each with its mark, and `mcps` keeps
+/// only the user's own servers: absent it limits none, listed it keeps RimZ's server beside them.
+/// A grant of skills alone starts no server, and a kind without MCP servers takes a grant silently.
+#[test]
+fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
+    let room = Room::new();
+    let compile = |kind: &str, grant: &[&str], mcps: Option<&[&str]>| {
+        let mut request = launch(kind, mcps, &[]);
+        request.rimz_capabilities =
+            Some(grant.iter().map(|entry| entry.parse().unwrap()).collect());
+        room.compile(&switches(true, true), &request)
+    };
+    let granted_args = serde_json::json!([
+        "mcp",
+        "serve",
+        "--only",
+        "rimz-lsp",
+        "--only",
+        "rimz-wait",
+        "--always",
+        "rimz-lsp"
+    ]);
+    let grant = ["rimz-lsp:always", "rimz-wait", "rimz-message"];
+    let mut actual = Vec::new();
+    for mcps in [None, Some(&["github"][..]), Some(&[][..])] {
+        let plan = compile("claude", &grant, mcps);
+        let argv = &plan.process().provider_argv;
+        actual.push((
+            claude_entry(argv).map(|(entry, _)| entry["args"].clone()),
+            allowlist(&claude_settings(argv)),
+            mcps_warnings(&plan),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (Some(granted_args.clone()), None, Vec::new()),
+            (
+                Some(granted_args.clone()),
+                Some(vec!["rimz".to_owned(), "github".to_owned()]),
+                Vec::new()
+            ),
+            (
+                Some(granted_args),
+                Some(vec!["rimz".to_owned()]),
+                Vec::new()
+            ),
+        ]
+    );
+    let skills_only = compile("claude", &["rimz-message"], None);
+    assert_eq!(claude_entry(&skills_only.process().provider_argv), None);
+    assert_eq!(
+        allowlist(&claude_settings(&skills_only.process().provider_argv)),
+        None
+    );
+    let plan = compile("opencode", &grant, None);
+    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+}
+
+/// A prompt's `rimz(x)` reference reaches only what the grant names: a capability the merge base
+/// would serve warns as unreachable once the grant leaves it out.
+#[test]
+fn a_grant_leaves_a_prompt_reference_outside_it_unreachable() {
+    let room = Room::new();
+    let unreachable = |grant: Option<&[&str]>| {
+        let mut request = launch("claude", None, &[]);
+        request.rimz_capabilities =
+            grant.map(|grant| grant.iter().map(|entry| entry.parse().unwrap()).collect());
+        request.system_prompt_file = Some(crate::config::PromptSource::Text {
+            origin: room.project.path().join("granted.md"),
+            text: "Read with rimz(lsp); wait with rimz(wait).".to_owned(),
+        });
+        room.compile(&switches(true, true), &request)
+            .warnings
+            .iter()
+            .filter(|warning| matches!(warning, LaunchPlanWarning::UnreachableCapability(_)))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(unreachable(None), Vec::<String>::new());
+    assert_eq!(
+        unreachable(Some(&["rimz-lsp"])),
+        [
+            "the system prompt names rimz(wait), which this launch reaches neither as a tool of \
+          RimZ's MCP server nor as a callable skill; the agent starts without it"
+        ]
+    );
+}

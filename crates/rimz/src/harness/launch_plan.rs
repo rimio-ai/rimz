@@ -1205,6 +1205,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 | AgentProcessStage::LoginShellReentry { process, .. } => process,
             };
             let server = launch::mcp_server(&reminders, &env, &process.env);
+            let mcps = request.mcp_list();
             // Impossible: `agents::conformance::agent_file_matcher_comes_with_an_agent_file`
             // pins that every adapter whose matcher is AgentFile renders an agent file.
             let file = adapter
@@ -1217,7 +1218,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     env: &env,
                     mcp: crate::agents::capabilities::McpLaunch {
                         server,
-                        mcps: request.mcps.as_deref(),
+                        mcps: mcps.as_deref(),
+                        granted: request.rimz_capabilities.is_some(),
                         login_env: &env,
                     },
                 })
@@ -1280,6 +1282,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     manual: adapter.manual_skill(),
                     withheld: &withheld_skills,
                     callable: listed.as_deref(),
+                    grant: request.skill_grant(),
                 },
             })?;
             process.pin_env(plan.pins.clone());

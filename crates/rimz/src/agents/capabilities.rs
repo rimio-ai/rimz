@@ -52,6 +52,9 @@ pub struct McpLaunch<'a> {
     pub server: Option<McpServer>,
     /// `None` leaves the user's servers as the provider loads them.
     pub mcps: Option<&'a [crate::config::McpName]>,
+    /// The list's RimZ capabilities come from a `capabilities:` grant, so a warning about one
+    /// names that key rather than `mcps`.
+    pub granted: bool,
     /// The provider login environment, where the account's config is read.
     pub login_env: &'a BTreeMap<String, String>,
 }
@@ -70,6 +73,15 @@ impl McpLaunch<'_> {
             .collect()
     }
 
+    /// The profile key `entry` came from: `capabilities` for a granted capability, else `mcps`.
+    pub(super) fn key(&self, entry: &crate::config::McpName) -> &'static str {
+        if self.granted && entry.capability().is_some() {
+            "capabilities"
+        } else {
+            "mcps"
+        }
+    }
+
     /// One warning for each mark the launch cannot apply: a mark on one of the user's
     /// servers, for `user_server_reason`, and any other mark while RimZ's server is off.
     pub(super) fn unapplied_marks(&self, user_server_reason: &str) -> Vec<String> {
@@ -85,7 +97,10 @@ impl McpLaunch<'_> {
                 } else {
                     return None;
                 };
-                Some(format!("the mcps entry `{entry}` is not applied: {reason}"))
+                Some(format!(
+                    "the {} entry `{entry}` is not applied: {reason}",
+                    self.key(entry)
+                ))
             })
             .collect()
     }

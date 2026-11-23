@@ -1064,6 +1064,7 @@ fn tmux_agent_exec_command(
         follow_up_message: None,
         reminder_section: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
+        rimz_capabilities: None,
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
         .expect("exec argv");
@@ -1116,6 +1117,7 @@ fn tmux_resume_command(
         follow_up_message: None,
         reminder_section: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
+        rimz_capabilities: None,
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
         .expect("exec argv");
@@ -1172,6 +1174,7 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
             },
             ..rimz::harness::launch::ExecIdentity::default()
         },
+        rimz_capabilities: None,
     };
     let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
         .expect("exec argv");

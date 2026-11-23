@@ -150,6 +150,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             skills: None,
             mcps: None,
             no_skill_tool: false,
+            rimz_capabilities: None,
             allowed_tools: None,
             tools: None,
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,

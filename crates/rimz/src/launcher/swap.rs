@@ -753,6 +753,7 @@ pub fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         skills: posture.launch.skills.clone(),
         mcps: posture.launch.mcps.clone(),
         no_skill_tool: posture.launch.no_skill_tool,
+        rimz_capabilities: posture.launch.rimz_capabilities.clone(),
         allowed_tools: posture.launch.allowed_tools.clone(),
         tools: posture.launch.tools.clone(),
         isolation_default: posture.launch.isolation_default,

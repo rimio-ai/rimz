@@ -185,6 +185,7 @@ fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     }
 }
 

@@ -8651,6 +8651,7 @@ fn assert_parent_follow_up_case(
         follow_up_message: Some(message.message_id.clone()),
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     };
     request.identity.name = Some(child_name.clone());
     request.identity.name_explicit = true;

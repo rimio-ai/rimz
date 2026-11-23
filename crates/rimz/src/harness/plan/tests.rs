@@ -1872,6 +1872,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         skills: Some(vec!["merge".parse().unwrap()]),
         mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
         no_skill_tool: true,
+        rimz_capabilities: Some(vec!["rimz-lsp:deferred".parse().unwrap()]),
         allowed_tools: Some(vec!["Read".parse().unwrap()]),
         tools: Some(vec!["Read".to_owned()]),
         launch: LaunchParams {
@@ -1899,6 +1900,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         skills,
         mcps,
         no_skill_tool,
+        rimz_capabilities,
         allowed_tools,
         tools,
         launch,
@@ -1922,6 +1924,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             skills,
             mcps,
             no_skill_tool,
+            rimz_capabilities,
             allowed_tools,
             tools,
             mode: launch.mode,
@@ -1999,6 +2002,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams {
@@ -2099,6 +2103,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams {
@@ -4073,6 +4078,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             skills: None,
             mcps: None,
             no_skill_tool: false,
+            rimz_capabilities: None,
             allowed_tools: None,
             tools: None,
             launch: LaunchParams {
@@ -4178,6 +4184,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams {
@@ -4641,6 +4648,7 @@ fn launch_request_names_and_metadata() {
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams {
@@ -5322,6 +5330,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         skills: Some(vec!["merge".parse().unwrap()]),
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams::default(),
@@ -5442,6 +5451,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         skills: Some(Vec::new()),
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         launch: LaunchParams {

@@ -493,6 +493,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         skills: None,
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -1445,6 +1446,127 @@ fn child_host_skill_views_withhold_delegation_without_configuring_a_list() {
         }
     }
     assert_eq!(actual, expected);
+}
+
+/// A RimZ grant withholds each `rimz-*` skill on disk it leaves out, with no `skills` list, on
+/// a kind with a skill switch; a kind without one is unenforced, which the plan warns about. A
+/// host view that cannot be read refuses a granted launch rather than keep native discovery,
+/// at preflight too. The enforcer decides from the inventory it enumerates, so the reminder's
+/// set of `rimz-*` skills plays no part, and a provider home the launch env moves is read.
+#[test]
+fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
+    let project = tempfile::tempdir().unwrap();
+    let library = project.path().join("agents/skills");
+    for name in ["commit", "rimz-lsp", "rimz-wait"] {
+        std::fs::create_dir_all(library.join(name)).unwrap();
+        std::fs::write(library.join(name).join("SKILL.md"), "skill\n").unwrap();
+    }
+    let login_env = BTreeMap::from([
+        ("HOME".into(), project.path().display().to_string()),
+        (
+            "RIMZ_AGENTS_HOME".into(),
+            project.path().join("agents").display().to_string(),
+        ),
+    ]);
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id, project.path()).unwrap();
+    let reminders = LaunchReminders {
+        settings: Some((runtime.prompt_dir(), login_env.clone())),
+        ..Default::default()
+    };
+    let compile = |kind: &str, grant: bool| {
+        let mut invocation = request(
+            kind,
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        invocation.rimz_capabilities = grant.then(|| vec!["rimz-lsp".parse().unwrap()]);
+        compile_agent_process_with_extra_env(
+            Some(&runtime),
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &reminders,
+        )
+    };
+    let mut actual = Vec::new();
+    for kind in ["claude", "codex", "amp"] {
+        for grant in [false, true] {
+            let view = match compile(kind, grant).unwrap().host_skills {
+                Some(crate::agents::skills::HostSkillPlan::Applied { unlisted, .. }) => {
+                    serde_json::to_value(unlisted).unwrap()
+                }
+                Some(crate::agents::skills::HostSkillPlan::Unenforced) => {
+                    serde_json::json!("unenforced")
+                }
+                None => serde_json::Value::Null,
+            };
+            actual.push((format!("{kind} grant={grant}"), view));
+        }
+    }
+    let null = serde_json::Value::Null;
+    let wait = serde_json::json!(["rimz-wait"]);
+    assert_eq!(
+        actual,
+        [
+            ("claude grant=false".to_owned(), null.clone()),
+            ("claude grant=true".to_owned(), wait.clone()),
+            ("codex grant=false".to_owned(), null.clone()),
+            ("codex grant=true".to_owned(), wait),
+            ("amp grant=false".to_owned(), null),
+            ("amp grant=true".to_owned(), serde_json::json!("unenforced")),
+        ]
+    );
+    std::fs::create_dir_all(project.path().join(".claude")).unwrap();
+    std::fs::write(project.path().join(".claude/skills"), "not a directory\n").unwrap();
+    let moved = project.path().join("moved");
+    std::fs::create_dir_all(moved.join("skills/rimz-message")).unwrap();
+    std::fs::write(moved.join("skills/rimz-message/SKILL.md"), "skill\n").unwrap();
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.rimz_capabilities = Some(vec!["rimz-lsp".parse().unwrap()]);
+    let moved_env = BTreeMap::from([("CLAUDE_CONFIG_DIR".into(), moved.display().to_string())]);
+    let process = compile_agent_process_with_extra_env(
+        Some(&runtime),
+        project.path(),
+        &invocation,
+        project.path(),
+        &moved_env,
+        &reminders,
+    )
+    .unwrap();
+    let Some(crate::agents::skills::HostSkillPlan::Applied { unlisted, .. }) = process.host_skills
+    else {
+        panic!("a grant applies the host view");
+    };
+    let unlisted = serde_json::to_value(unlisted).unwrap();
+    assert!(unlisted.to_string().contains("rimz-message"), "{unlisted}");
+    std::fs::create_dir_all(project.path().join(".claude")).unwrap();
+    std::fs::write(project.path().join(".claude/skills"), "not a directory\n").unwrap();
+    assert!(compile("claude", false).unwrap().host_skills.is_none());
+    let error = compile("claude", true).unwrap_err().to_string();
+    assert!(error.starts_with("reading skills at "), "{error}");
+    let preflight = compile_agent_process_with_extra_env(
+        Some(&runtime),
+        project.path(),
+        &invocation,
+        project.path(),
+        &login_env,
+        &LaunchReminders::default(),
+    );
+    let Err(error) = preflight else {
+        panic!("preflight refuses a granted launch");
+    };
+    let error = error.to_string();
+    assert!(error.starts_with("reading skills at "), "{error}");
 }
 
 #[test]
@@ -2999,6 +3121,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         skills: Some(vec!["merge".parse().unwrap(), "rebase".parse().unwrap()]),
         mcps: None,
         no_skill_tool: false,
+        rimz_capabilities: None,
         allowed_tools: None,
         tools: None,
         provider_account: ProviderAccountState::Unbound,
@@ -3117,6 +3240,26 @@ fn exec_wire_defaults_missing_skill_tool_flag_and_round_trips_true() {
     assert_eq!(
         (payload.get("no_skill_tool"), decoded),
         (Some(&serde_json::json!(true)), request)
+    );
+}
+
+#[test]
+fn exec_wire_omits_an_absent_grant_and_round_trips_one() {
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let legacy = serde_json::to_value(&request).unwrap();
+    assert!(legacy.get("rimz_capabilities").is_none());
+    request.rimz_capabilities = Some(vec![
+        "rimz-lsp:deferred".parse().unwrap(),
+        "rimz-message".parse().unwrap(),
+    ]);
+    let payload = serde_json::to_value(&request).unwrap();
+    let decoded = decode_exec_request("claude", None, &payload.to_string()).unwrap();
+    assert_eq!(
+        (payload.get("rimz_capabilities"), decoded),
+        (
+            Some(&serde_json::json!(["rimz-lsp:deferred", "rimz-message"])),
+            request
+        )
     );
 }
 

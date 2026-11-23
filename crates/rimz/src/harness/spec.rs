@@ -121,6 +121,8 @@ pub struct AgentCell {
     pub skills: Option<Vec<crate::config::SkillName>>,
     pub mcps: Option<Vec<crate::config::McpName>>,
     pub no_skill_tool: bool,
+    /// The RimZ grant of a `capabilities:` list, from the tools value it rides on.
+    pub rimz_capabilities: Option<Vec<crate::config::RimzEntry>>,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     /// The definition's tools list as canonical base names, for a kind that writes it into a
     /// provider file rather than argv.
@@ -157,6 +159,7 @@ impl Cell {
             skills: None,
             mcps: None,
             no_skill_tool: false,
+            rimz_capabilities: None,
             allowed_tools: None,
             tools: None,
             isolation_default: None,
@@ -1896,6 +1899,11 @@ fn agent_cell_from(
             resolved.kind.as_str(),
             resolved.tools.as_ref(),
         ),
+        rimz_capabilities: resolved
+            .tools
+            .as_ref()
+            .and_then(crate::agents::ToolSet::rimz)
+            .map(<[_]>::to_vec),
         allowed_tools: resolved.allowed_tools.clone(),
         tools: resolved.tools.as_ref().map(|tools| tools.bases().to_vec()),
         launch: crate::agents::LaunchParams {

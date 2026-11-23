@@ -1393,8 +1393,12 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         }
         let mut marks = Vec::new();
         for entry in listed.iter().filter(|entry| entry.mode().is_some()) {
-            let not_applied =
-                |reason: String| format!("the mcps entry `{entry}` is not applied: {reason}");
+            let not_applied = |reason: String| {
+                format!(
+                    "the {} entry `{entry}` is not applied: {reason}",
+                    launch.key(entry)
+                )
+            };
             let name = entry.name();
             if let Some(capability) = entry.capability() {
                 warnings.push(not_applied(format!(

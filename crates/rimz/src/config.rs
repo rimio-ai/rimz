@@ -34,6 +34,7 @@ mod agents;
 mod animation;
 mod attention;
 mod auto_redeem;
+mod capabilities;
 mod color;
 mod daemon;
 pub mod definitions;
@@ -87,6 +88,7 @@ pub(crate) use animation::{
 pub use attention::AttentionConfig;
 use auto_redeem::parse_min_gain;
 pub use auto_redeem::{AutoRedeemConfig, RedeemLevel, RedeemPolicy, SpendOrder};
+pub use capabilities::RimzEntry;
 pub use color::{ColorDepth, ThemeColor, ThemeMode};
 pub(crate) use color::{PaletteRole, Semantic, nearest_xterm_index, parse_hex, xterm_rgb};
 pub(crate) use daemon::{DaemonConfig, DaemonPane};
