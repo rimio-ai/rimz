@@ -159,7 +159,7 @@ fn entry_line(now: Timestamp, by: &str, text: &str) -> Result<String, BoardErr> 
 }
 
 pub(super) fn stamp(now: Timestamp) -> String {
-    now.to_zoned(MachineConfig::load_lenient().time_zone())
+    now.to_zoned_datetime(MachineConfig::load_lenient().time_zone())
         .strftime(super::scratch::PROGRESS_STAMP_FORMAT)
         .to_string()
 }

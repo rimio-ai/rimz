@@ -21,7 +21,7 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
         (Some(_), Some(_)) => unreachable!("clap enforces --text/--file conflicts"),
     };
     let machine_config = crate::cli::machine_config();
-    let now = Timestamp::now().to_zoned(machine_config.time_zone());
+    let now = Timestamp::now().to_zoned_datetime(machine_config.time_zone());
     let not_before = if no_schedule {
         Some(None)
     } else {

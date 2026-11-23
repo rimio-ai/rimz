@@ -803,7 +803,7 @@ fn clock_self_wait_names_its_local_time_and_condition_self_wait_its_elapsed_time
         ..task()
     };
     let local = at
-        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .to_zoned_datetime(crate::config::MachineConfig::load_lenient().time_zone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string();
     assert_eq!(
@@ -860,7 +860,7 @@ fn self_wait_headlines_end_with_the_label_and_loop_deliveries_do_not() {
     };
     let at: Timestamp = "2026-01-01T14:20:00Z".parse().unwrap();
     let local = at
-        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .to_zoned_datetime(crate::config::MachineConfig::load_lenient().time_zone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string();
     for (entry, meta, evidence, headline) in [

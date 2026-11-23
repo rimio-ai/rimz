@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-fn noon() -> Zoned {
+fn noon() -> ZonedDateTime {
     "2026-11-12T12:30:05.250-06:00"
         .parse::<Timestamp>()
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
+        .to_zoned_datetime(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
 }
 
 fn request(kind: &str, title: &str, body: &[u8]) -> AddRequest {
@@ -503,11 +503,11 @@ fn titles(listing: &Listing) -> Vec<&str> {
         .collect()
 }
 
-fn at(stamp: &str) -> Zoned {
+fn at(stamp: &str) -> ZonedDateTime {
     stamp
         .parse::<Timestamp>()
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
+        .to_zoned_datetime(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
 }
 
 fn listed(root: &Path, filters: &[&str], now: Timestamp) -> Listing {

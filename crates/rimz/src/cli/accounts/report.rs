@@ -212,7 +212,7 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         filter,
         &ReportContext {
             day_cutoff_secs: now
-                .to_zoned(config.time_zone())
+                .to_zoned_datetime(config.time_zone())
                 .start_of_day()
                 .ok()
                 .map(|day| day.timestamp().as_second().max(0) as u64),
@@ -1624,7 +1624,9 @@ fn missing_reading(report: &AccountRow, now: Timestamp, time_zone: &TimeZone) ->
                 |stamp| {
                     format!(
                         "no reading since {}",
-                        stamp.to_zoned(time_zone.clone()).strftime("%Y-%m-%d")
+                        stamp
+                            .to_zoned_datetime(time_zone.clone())
+                            .strftime("%Y-%m-%d")
                     )
                 },
             ),
@@ -1757,7 +1759,7 @@ fn reset_credit_lines(
                 "{:<width$} · {}",
                 deadline_word(expiry, now),
                 expiry
-                    .to_zoned(time_zone.clone())
+                    .to_zoned_datetime(time_zone.clone())
                     .strftime("%Y-%m-%d %H:%M %:z")
             ),
             None => "expiry unknown".to_owned(),

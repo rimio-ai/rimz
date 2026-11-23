@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 
 use rimz::disk::atomic::write_bytes_atomically;
 use rimz::disk::paths::{RuntimePaths, config_home, env_path};
@@ -97,7 +97,7 @@ pub(super) enum TimerErr {
 
 type Result<T> = std::result::Result<T, TimerErr>;
 
-pub(super) fn tick(now: &Zoned) -> Result<()> {
+pub(super) fn tick(now: &ZonedDateTime) -> Result<()> {
     let host = detect_host(
         std::env::var_os("INVOCATION_ID").is_some(),
         which::which("systemd-run").is_ok(),

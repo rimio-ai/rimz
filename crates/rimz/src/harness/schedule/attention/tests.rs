@@ -82,7 +82,7 @@ fn read_room_reads_a_seeded_room_without_writing() {
     )
     .unwrap();
     let before = tree(dir.path());
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = BTreeMap::new();
     let read = |open| {
         read_room(
@@ -220,7 +220,7 @@ fn seeded_room(
 }
 
 fn read_seeded(room: &(PathBuf, StatePaths, RuntimePaths), name: &str, open: bool) -> TaskReading {
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     read_room(
         &room.0,
         &room.1,
@@ -247,7 +247,7 @@ fn read_room_lists_the_rooms_runs_once_for_all_its_tasks() {
     for name in ["second-booking", "third-booking"] {
         super::super::instances::insert(&room.1, name, &booking("pr[x]=merged")(&room.0)).unwrap();
     }
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let before = RUN_LISTINGS.get();
 
     let read = read_room(
@@ -516,7 +516,7 @@ fn a_run_in_progress_holds_back_only_the_failure_it_follows() {
             serde_json::json!({}),
         );
         seed(&room);
-        let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+        let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
         read_room(
             &room.0,
             &room.1,

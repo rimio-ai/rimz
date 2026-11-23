@@ -2105,14 +2105,16 @@ fn human_show_wait_and_journal_are_readable() {
     assert_eq!(text.matches("pending, recheck").count(), 1, "{text}");
     assert!(text.contains("trail  "), "{text}");
     let zone = jiff::tz::TimeZone::system();
-    let today = jiff::Timestamp::now().to_zoned(zone.clone()).date();
+    let today = jiff::Timestamp::now()
+        .to_zoned_datetime(zone.clone())
+        .date();
     let local_time = |at: &Value| {
         let at = at
             .as_str()
             .unwrap()
             .parse::<jiff::Timestamp>()
             .unwrap()
-            .to_zoned(zone.clone());
+            .to_zoned_datetime(zone.clone());
         let format = if at.date() == today {
             "%H:%M"
         } else {

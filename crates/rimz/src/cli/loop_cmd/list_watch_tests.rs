@@ -21,7 +21,7 @@ fn timed(name: &str, entry: TaskEntry, arming: Option<Arming>, last: Option<Time
         TaskSource::Config,
         last,
         arming.as_ref(),
-        &now().to_zoned(TimeZone::UTC),
+        &now().to_zoned_datetime(TimeZone::UTC),
     );
     let mut row = row(name);
     row.state = TaskState::observe(&timing, false, true);
@@ -168,7 +168,7 @@ fn mock(needs_you: bool) -> Room {
             TaskSource::Config,
             None,
             None,
-            &now().to_zoned(TimeZone::UTC),
+            &now().to_zoned_datetime(TimeZone::UTC),
         ));
         wake.head = "on command exit".into();
     }

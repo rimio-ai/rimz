@@ -330,7 +330,7 @@ fn json_show(env: &Env, target: &str) -> Value {
 fn historical_clock(at: &str) -> String {
     at.parse::<jiff::Timestamp>()
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }

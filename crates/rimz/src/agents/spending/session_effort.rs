@@ -98,7 +98,9 @@ impl SessionEffortRecord {
 
 #[must_use = "durability barrier; check the result"]
 pub fn record(paths: &RuntimePaths, record: &SessionEffortRecord) -> Result<(), AtomicErr> {
-    let date = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    let date = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     let path = paths.shared_session_effort(date);
     // Separate a torn prior tail without reading the segment on the hook path.
     let mut bytes = vec![b'\n'];
@@ -144,7 +146,7 @@ fn segments(
     else {
         return Ok(segments);
     };
-    let today = now.to_zoned(TimeZone::UTC).date();
+    let today = now.to_zoned_datetime(TimeZone::UTC).date();
     for path in super::history::segments(&paths.effort_dir())? {
         let Some(date) = super::history::segment_date(&path) else {
             continue;
@@ -152,7 +154,7 @@ fn segments(
         if date > today {
             continue;
         }
-        let Ok(start) = date.at(0, 0, 0, 0).to_zoned(TimeZone::UTC) else {
+        let Ok(start) = date.at(0, 0, 0, 0).to_zoned_datetime(TimeZone::UTC) else {
             continue;
         };
         let Ok(end) = u64::try_from(start.timestamp().as_second() + 86_400) else {
@@ -280,7 +282,7 @@ pub(super) fn maintain(hold: &super::history::Maintenance, now_secs: u64) -> Res
         }
         let mut totals = BTreeMap::<_, (Timestamp, EffortWindow)>::new();
         for record in records.iter() {
-            let date = record.at.to_zoned(TimeZone::UTC).date();
+            let date = record.at.to_zoned_datetime(TimeZone::UTC).date();
             for (kind, session, credit) in record.credits() {
                 let (at, total) = totals
                     .entry((kind.clone(), session.clone(), date))
@@ -325,7 +327,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths =
             RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-        let date = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+        let date = Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date();
         let path = paths.shared_session_effort(date);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{\"kind\":\"claude\",\"session\":\"old\",\"at\":\"2026-01-01T00:00:00Z\",\"event\":\"totals\",\"active_ms\":20,\"from_user\":1,\"from_teammates\":2,\"to_teammates\":3,\"future\":true}\nnot json\n{\"kind\":").unwrap();
@@ -362,7 +366,8 @@ mod tests {
         at: Timestamp,
         records: &[SessionEffortRecord],
     ) -> std::path::PathBuf {
-        let path = paths.shared_session_effort(at.to_zoned(jiff::tz::TimeZone::UTC).date());
+        let path =
+            paths.shared_session_effort(at.to_zoned_datetime(jiff::tz::TimeZone::UTC).date());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut bytes = Vec::new();
         for record in records {

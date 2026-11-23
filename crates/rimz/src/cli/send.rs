@@ -266,7 +266,7 @@ fn named_target_parts(outcome: &DispatchOutcome) -> (&str, Option<&str>) {
 }
 
 fn typing_hold_detail(until: jiff::Timestamp) -> String {
-    let local = until.to_zoned(crate::cli::machine_config().time_zone());
+    let local = until.to_zoned_datetime(crate::cli::machine_config().time_zone());
     format!(
         "someone is using the receiver's pane; retry at {}",
         local.strftime("%Y-%m-%d %H:%M:%S %Z")

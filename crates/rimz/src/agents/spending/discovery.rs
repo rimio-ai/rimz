@@ -1022,7 +1022,7 @@ fn codex_partition_is_old(relative: &Path, now_secs: u64) -> bool {
     let Ok(cutoff) = jiff::Timestamp::from_second(cutoff_secs) else {
         return false;
     };
-    partition < cutoff.to_zoned(jiff::tz::TimeZone::UTC).date()
+    partition < cutoff.to_zoned_datetime(jiff::tz::TimeZone::UTC).date()
 }
 
 fn count_directory_stat(stats: Option<&mut DiscoveryStats>) {

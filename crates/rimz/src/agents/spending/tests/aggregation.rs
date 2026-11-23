@@ -340,7 +340,7 @@ fn hourly_chart_cells_use_wall_clock_hours_and_only_recent_raw_rows() {
         let today = local_day_index(now_secs, spec.timezone.as_deref()).unwrap();
         let noon = Timestamp::from_second(now_secs as i64)
             .unwrap()
-            .to_zoned(jiff::tz::TimeZone::get("America/New_York").unwrap());
+            .to_zoned_datetime(jiff::tz::TimeZone::get("America/New_York").unwrap());
         let older = |days| {
             noon.checked_sub(jiff::Span::new().days(days))
                 .unwrap()
@@ -739,7 +739,7 @@ fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
             ..receiver
         },
     ]);
-    let segment = paths.shared_session_effort(at.to_zoned(jiff::tz::TimeZone::UTC).date());
+    let segment = paths.shared_session_effort(at.to_zoned_datetime(jiff::tz::TimeZone::UTC).date());
     std::fs::create_dir_all(segment.parent().unwrap()).unwrap();
     let mut bytes = Vec::new();
     for record in records {

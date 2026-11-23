@@ -260,7 +260,10 @@ pub(super) fn render_display_chat_to(
             continue;
         }
         let entry = &display.entry;
-        let entry_date = entry.chat.at.map(|at| at.to_zoned(tz.clone()).date());
+        let entry_date = entry
+            .chat
+            .at
+            .map(|at| at.to_zoned_datetime(tz.clone()).date());
         if display.lane.is_margin() && !wrote_live_divider && !display.archived {
             if let Some(at) = entry.chat.at {
                 write_live_divider(out, at, tz, today)?;
@@ -329,7 +332,8 @@ pub(super) fn render_display_chat_to(
                 .root_at()
                 .zip(entry.chat.at)
                 .is_some_and(|(root, at)| {
-                    root.to_zoned(tz.clone()).date() != at.to_zoned(tz.clone()).date()
+                    root.to_zoned_datetime(tz.clone()).date()
+                        != at.to_zoned_datetime(tz.clone()).date()
                 });
             write_entry_content(
                 &mut buffer,
@@ -439,7 +443,10 @@ fn write_stage_line(
     let mut line = render::paint(faint, "⇢ ");
     line.push_str(&render::paint(render::palette::accent(), &transition));
     if continuation && let Some(at) = entry.chat.at {
-        let time = at.to_zoned(tz.clone()).strftime("%H:%M").to_string();
+        let time = at
+            .to_zoned_datetime(tz.clone())
+            .strftime("%H:%M")
+            .to_string();
         line.push_str(&render::paint(faint, &format!("  {time}")));
     }
     let note = entry.chat.text.trim();
@@ -588,11 +595,13 @@ pub(super) fn write_entry_header(
         };
         header.push_str(&render::paint(
             render::palette::faint(),
-            &at.to_zoned(tz.clone()).strftime(format).to_string(),
+            &at.to_zoned_datetime(tz.clone())
+                .strftime(format)
+                .to_string(),
         ));
         if let Some(delivered) = delivery_stamp(&entry.chat) {
-            let delivered = delivered.to_zoned(tz.clone());
-            let format = if delivered.date() != at.to_zoned(tz.clone()).date() {
+            let delivered = delivered.to_zoned_datetime(tz.clone());
+            let format = if delivered.date() != at.to_zoned_datetime(tz.clone()).date() {
                 DATED_TIME_FORMAT
             } else {
                 TIME_FORMAT
@@ -679,7 +688,7 @@ pub(super) fn write_live_divider(
 }
 
 pub(super) fn format_marker_when(at: jiff::Timestamp, tz: &TimeZone, today: Date) -> String {
-    let zoned = at.to_zoned(tz.clone());
+    let zoned = at.to_zoned_datetime(tz.clone());
     let date = zoned.date();
     if date == today {
         format!("earlier today · {}", zoned.strftime("%H:%M"))

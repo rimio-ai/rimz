@@ -445,7 +445,7 @@ fn parse_zellij_timestamp(raw: &str) -> Option<Timestamp> {
     raw.replace(' ', "T")
         .parse::<jiff::civil::DateTime>()
         .ok()?
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .ok()
         .map(|zoned| zoned.timestamp())
 }

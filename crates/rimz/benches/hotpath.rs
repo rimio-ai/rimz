@@ -2143,7 +2143,7 @@ fn spending_recorded_year_fixture() -> SpendingFixture {
         let ts = (SPENDING_NOW_SECS / 86_400 - offset) * 86_400 + 43_200;
         let date = jiff::Timestamp::from_second(ts as i64)
             .expect("timestamp")
-            .to_zoned(jiff::tz::TimeZone::UTC)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
             .date();
         let rows = (0..250)
             .map(|index| {

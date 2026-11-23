@@ -422,7 +422,7 @@ impl WakeRow {
         )
     }
 
-    pub fn wait_state(&self, now: &jiff::Zoned) -> String {
+    pub fn wait_state(&self, now: &jiff::ZonedDateTime) -> String {
         match self.state {
             WakeState::Watching => {
                 let mut state = format!("watching {}", self.elapsed.as_deref().unwrap_or("0s"));
@@ -663,7 +663,7 @@ pub fn arm(
             format!("in {}", duration_label(delay)),
         )
     } else if let Some(at) = request.at.as_deref() {
-        let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+        let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
         let fire_at = schedule::resolve_once_at("wait", at, &now).map_err(at_refusal)?;
         one_shot_trigger(TaskEntry {
             fire_at: Some(fire_at),

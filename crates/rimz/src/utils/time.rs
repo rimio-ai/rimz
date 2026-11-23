@@ -15,7 +15,7 @@ pub fn unix_now_ms() -> u64 {
 /// Format a wall-clock timestamp in local time, including its UTC offset.
 pub fn format_local_timestamp(timestamp: jiff::Timestamp) -> String {
     timestamp
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .strftime("%Y-%m-%d %H:%M:%S %:z")
         .to_string()
 }
@@ -154,20 +154,20 @@ impl CalendarAt {
     /// The instant in `now`'s zone: a daily or weekly time's first strictly after `now`, a
     /// dated time as written, past or not. A time that repeats when clocks fall back means its
     /// earlier occurrence, or its later one when only the later is still ahead of `now`.
-    pub(crate) fn resolve(self, now: &jiff::Zoned) -> Option<jiff::Timestamp> {
+    pub(crate) fn resolve(self, now: &jiff::ZonedDateTime) -> Option<jiff::Timestamp> {
         let civil = |date: jiff::civil::Date, time: ClockTime| {
             date.at(time.hour() as i8, time.minute() as i8, 0, 0)
         };
         let at = |date: jiff::civil::Date, time: ClockTime| {
             civil(date, time)
-                .to_zoned(now.time_zone().clone())
+                .to_zoned_datetime(now.time_zone().clone())
                 .ok()
                 .map(|zoned| zoned.timestamp())
         };
         // In a fold `at` takes the earlier occurrence; elsewhere this equals `at`.
         let later_at = |date: jiff::civil::Date, time: ClockTime| {
             now.time_zone()
-                .to_ambiguous_zoned(civil(date, time))
+                .to_ambiguous_zoned_datetime(civil(date, time))
                 .later()
                 .ok()
                 .map(|zoned| zoned.timestamp())
@@ -442,7 +442,7 @@ mod tests {
             instant
                 .parse::<jiff::Timestamp>()
                 .unwrap()
-                .to_zoned(zone.clone())
+                .to_zoned_datetime(zone.clone())
         };
         let daily = CalendarAt::parse("01:30").unwrap();
         let resolve = |now: &str| daily.resolve(&at(now)).unwrap().to_string();

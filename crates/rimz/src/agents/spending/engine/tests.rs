@@ -121,7 +121,7 @@ fn effort_fixture() -> (tempfile::TempDir, RuntimePaths, u64) {
         at,
         event: session_effort::SessionEffortEvent::Active { active_ms: 1234 },
     };
-    let path = runtime.shared_session_effort(at.to_zoned(jiff::tz::TimeZone::UTC).date());
+    let path = runtime.shared_session_effort(at.to_zoned_datetime(jiff::tz::TimeZone::UTC).date());
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
     (dir, runtime, at.as_second() as u64)
@@ -188,7 +188,8 @@ fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
     };
     let (_dir, runtime, now_secs) = effort_fixture();
     let old = Timestamp::from_second(now_secs as i64 - 10 * 86_400).unwrap();
-    let old_path = runtime.shared_session_effort(old.to_zoned(jiff::tz::TimeZone::UTC).date());
+    let old_path =
+        runtime.shared_session_effort(old.to_zoned_datetime(jiff::tz::TimeZone::UTC).date());
     let record = SessionEffortRecord {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         session: "effort-only".into(),
@@ -252,12 +253,12 @@ fn closed_day_fixture() -> (tempfile::TempDir, RuntimePaths, SpendingWalker, u64
     let at = Timestamp::from_second(now_secs as i64 - 20 * 86_400).unwrap();
     let path = runtime
         .spending_history
-        .spend(at.to_zoned(jiff::tz::TimeZone::UTC).year());
+        .spend(at.to_zoned_datetime(jiff::tz::TimeZone::UTC).year());
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
         &path,
         serde_json::json!({
-            "kind": "claude", "account": home, "day": at.to_zoned(jiff::tz::TimeZone::UTC).date(),
+            "kind": "claude", "account": home, "day": at.to_zoned_datetime(jiff::tz::TimeZone::UTC).date(),
             "rows": [{"session": {"native": "effort-only"}, "ts": at.as_second(), "usd": 2.0}]
         })
         .to_string(),
@@ -400,7 +401,8 @@ fn empty_fleet_still_publishes_when_shared_maintenance_is_unavailable() {
             WorkspaceLock::try_acquire_mode(&paths.maintain_lock(), 0o664).unwrap()
         };
         let old = Timestamp::from_second(now_secs as i64 - 10 * 86_400).unwrap();
-        let old_path = runtime.shared_session_effort(old.to_zoned(jiff::tz::TimeZone::UTC).date());
+        let old_path =
+            runtime.shared_session_effort(old.to_zoned_datetime(jiff::tz::TimeZone::UTC).date());
         let record = SessionEffortRecord {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             session: "effort-only".into(),
@@ -1429,7 +1431,7 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         timezone: Some("UTC".to_owned()),
     };
     let day_cutoff_secs = Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .start_of_day()
         .expect("UTC day start")
         .timestamp()
@@ -2039,7 +2041,7 @@ impl RebuildFixture {
     fn day(&self) -> jiff::civil::Date {
         Timestamp::from_second(((self.now_secs / 86_400 - 20) * 86_400) as i64)
             .unwrap()
-            .to_zoned(jiff::tz::TimeZone::UTC)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
             .date()
     }
 

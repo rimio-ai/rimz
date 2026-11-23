@@ -30,7 +30,7 @@ impl TmpUnit {
         expired(self.modified)
             && match self.hold {
                 TmpHold::Unowned => true,
-                TmpHold::Ended(ended) => expired(ended.into()),
+                TmpHold::Ended(ended) => SystemTime::try_from(ended).is_ok_and(expired),
                 TmpHold::Live | TmpHold::Open => false,
             }
     }

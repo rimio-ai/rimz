@@ -816,8 +816,11 @@ impl When {
     ) -> Result<jiff::Timestamp, String> {
         let at = match self.0 {
             Form::Instant(at) => Some(at),
-            Form::Civil(civil) => civil.to_zoned(zone.clone()).ok().map(|at| at.timestamp()),
-            Form::Calendar(at) => at.resolve(&now.to_zoned(zone.clone())),
+            Form::Civil(civil) => civil
+                .to_zoned_datetime(zone.clone())
+                .ok()
+                .map(|at| at.timestamp()),
+            Form::Calendar(at) => at.resolve(&now.to_zoned_datetime(zone.clone())),
             Form::After(delay) => now.checked_add(delay).ok(),
         };
         at.ok_or_else(|| "the time lies outside the calendar".to_owned())

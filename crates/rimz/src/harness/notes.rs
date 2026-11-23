@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 use serde::Serialize;
 
 use crate::disk::{atomic, paths};
@@ -222,7 +222,7 @@ pub fn add(request: &AddRequest, dir: &Path) -> Result<Added, NotesErr> {
     };
     let facts = caller_facts(env, project);
     let root = std::path::absolute(paths::notes_dir()).unwrap_or_else(|_| paths::notes_dir());
-    let added = add_at(&root, request, &facts, &Zoned::now())?;
+    let added = add_at(&root, request, &facts, &ZonedDateTime::now())?;
     Ok(Added {
         unresolved_project,
         ..added
@@ -262,7 +262,7 @@ fn add_at(
     root: &Path,
     request: &AddRequest,
     facts: &[(&'static str, String)],
-    now: &Zoned,
+    now: &ZonedDateTime,
 ) -> Result<Added, NotesErr> {
     let kind = slug(&request.kind).ok_or_else(|| NotesErr::NoSlug {
         what: "kind",

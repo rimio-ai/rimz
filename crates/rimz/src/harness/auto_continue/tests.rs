@@ -786,7 +786,7 @@ fn daily_scope_snapshot(
     )
     .expect("scope state");
     let cutoff = now
-        .to_zoned(config.time_zone())
+        .to_zoned_datetime(config.time_zone())
         .start_of_day()
         .expect("day start")
         .timestamp()
@@ -981,7 +981,7 @@ fn monthly_scope_snapshot(
         .insert("claude".into(), "5/month".parse().unwrap());
     let mut provider = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     provider.day_cutoff_secs = now
-        .to_zoned(config.time_zone())
+        .to_zoned_datetime(config.time_zone())
         .start_of_day()
         .unwrap()
         .timestamp()
@@ -1073,7 +1073,7 @@ fn binding_month_cap_delays_fleet_day_resume_until_the_last_reset() {
     config.harness.budget = Some("5/day".parse().unwrap());
     snapshot.fleet_day_spend_epoch_secs = Some(
         parked_at
-            .to_zoned(config.time_zone())
+            .to_zoned_datetime(config.time_zone())
             .start_of_day()
             .unwrap()
             .timestamp()
@@ -1133,7 +1133,7 @@ fn raised_month_cap_does_not_swallow_a_fleet_day_reset() {
         config.harness.budget = Some("5/day".parse().unwrap());
         snapshot.fleet_day_spend_epoch_secs = Some(
             parked_at
-                .to_zoned(config.time_zone())
+                .to_zoned_datetime(config.time_zone())
                 .start_of_day()
                 .unwrap()
                 .timestamp()

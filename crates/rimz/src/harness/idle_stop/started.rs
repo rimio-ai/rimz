@@ -809,7 +809,7 @@ impl<'a> List<'a> {
             self.seen.insert(workflow_key(run.id.as_str()));
         }
         let zone = MachineConfig::load_lenient().time_zone();
-        let now = self.now.to_zoned(zone);
+        let now = self.now.to_zoned_datetime(zone);
         for (name, task) in catalog.visible() {
             let entry = task.entry();
             if entry.wait.is_some() || entry.resolved_root() != self.seat.root {

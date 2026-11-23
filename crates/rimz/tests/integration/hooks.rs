@@ -1074,7 +1074,9 @@ fn first_subagent_hook_records_the_reserved_parent_team_seat() {
     env.drain_hooks();
     assert_hook_succeeded_neutral(kind.as_str(), output);
 
-    let year = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).year();
+    let year = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .year();
     let history = rimz::disk::paths::SpendingHistoryPaths::under(&env.rimz_home().join("accounts"));
     let record: SessionRoleRecord =
         serde_json::from_reader(std::fs::File::open(history.roles(year)).unwrap()).unwrap();

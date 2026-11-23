@@ -92,7 +92,7 @@ pub(super) fn run_budget(
                 if previous_window != BudgetWindow::Day && next.window == BudgetWindow::Day {
                     let zone = rimz::config::MachineConfig::load_lenient().time_zone();
                     ledger.day_baseline = Some(DayBaseline {
-                        date: jiff::Timestamp::now().to_zoned(zone).date(),
+                        date: jiff::Timestamp::now().to_zoned_datetime(zone).date(),
                         cost_usd: total_cost_usd(agent).unwrap_or(0.0),
                     });
                 } else if next.window == BudgetWindow::Session {

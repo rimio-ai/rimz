@@ -1032,7 +1032,7 @@ mod repeats {
             deepening_record(0),
             deepening_record(2048),
         ]);
-        let as_of = Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC);
+        let as_of = Timestamp::UNIX_EPOCH.to_zoned_datetime(jiff::tz::TimeZone::UTC);
         for all in [false, true] {
             let json = crate::cli::stats::json::assists_value(&stats, 0, all, &as_of);
             let bytes = json["events"]
@@ -1065,7 +1065,7 @@ mod repeats {
             keepalive_record("b", false),
             keepalive_record("a", true),
         ]);
-        let as_of = Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC);
+        let as_of = Timestamp::UNIX_EPOCH.to_zoned_datetime(jiff::tz::TimeZone::UTC);
         let results = [false, true]
             .into_iter()
             .flat_map(|all| {

@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 
 use crate::RuntimePaths;
 use crate::ids::{MuxName, WorkspaceId};
@@ -17,7 +17,7 @@ use crate::store::message::MessageBody;
 pub(crate) fn wake_due_messages(
     runtime: &RuntimePaths,
     mux: MuxName,
-    now: &Zoned,
+    now: &ZonedDateTime,
     last_spawn: &mut Option<(Timestamp, Timestamp)>,
 ) {
     let path = runtime.message_wake_path();

@@ -133,7 +133,7 @@ impl RelayOutput {
             return Ok(());
         }
         let width = usize::from(terminal::size().map_or(48, |(width, _)| width));
-        let time = jiff::Timestamp::now().to_zoned(jiff::tz::TimeZone::system());
+        let time = jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::system());
         let time = time.strftime("%H:%M").to_string();
         let text = separator_label(&self.target, &time, self.reconnected, width);
         if !at_line_start {

@@ -781,7 +781,7 @@ fn codex_identity_enrichment_preserves_hook_owned_question() {
     env.record(&env.project_root);
     let session_id = "11111111-1111-4111-8111-111111111111";
     let now = jiff::Timestamp::now();
-    let date = now.to_zoned(jiff::tz::TimeZone::UTC).date();
+    let date = now.to_zoned_datetime(jiff::tz::TimeZone::UTC).date();
     let sessions = env.home_root.join(format!(
         ".codex/sessions/{:04}/{:02}/{:02}",
         date.year(),
@@ -866,7 +866,7 @@ fn codex_guardian_rollout_cannot_displace_the_root_on_its_pane() {
     let now = std::time::SystemTime::now();
     let date = jiff::Timestamp::try_from(now)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let sessions = env.home_root.join(format!(
         ".codex/sessions/{:04}/{:02}/{:02}",

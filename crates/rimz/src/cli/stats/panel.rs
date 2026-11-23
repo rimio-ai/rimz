@@ -423,7 +423,7 @@ fn has_usage(window: &SpendWindow) -> bool {
 }
 
 fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String> {
-    let date = |since: Option<jiff::Zoned>| {
+    let date = |since: Option<jiff::ZonedDateTime>| {
         let since = since?;
         let start = active.assist_since(stats.as_of().timestamp(), &stats.timezone)?;
         if start >= since.timestamp() {
@@ -431,7 +431,7 @@ fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String>
         }
         let today = Timestamp::from_second(today_day * DAY_SECS)
             .ok()?
-            .to_zoned(jiff::tz::TimeZone::UTC);
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC);
         let date = since.strftime(if since.year() == today.year() {
             "%b %d"
         } else {

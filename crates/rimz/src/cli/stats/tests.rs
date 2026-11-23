@@ -3399,10 +3399,10 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(envelope["events"].as_array().unwrap().len(), 1);
 }
 
-fn shanghai(second: i64) -> jiff::Zoned {
+fn shanghai(second: i64) -> jiff::ZonedDateTime {
     jiff::Timestamp::from_second(second)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::get("Asia/Shanghai").unwrap())
+        .to_zoned_datetime(jiff::tz::TimeZone::get("Asia/Shanghai").unwrap())
 }
 
 fn keys(value: &serde_json::Value) -> Vec<&str> {

@@ -1141,7 +1141,9 @@ fn gc_tmp_floor_evicts_machine_wide_oldest_first_and_keeps_live_units() {
     std::fs::create_dir_all(&orphan).unwrap();
     std::fs::File::open(&orphan)
         .unwrap()
-        .set_modified((now - jiff::SignedDuration::from_hours(3)).into())
+        .set_modified(
+            std::time::SystemTime::try_from(now - jiff::SignedDuration::from_hours(3)).unwrap(),
+        )
         .unwrap();
     let unnamed = paths.temp_unit_dir(None);
     std::fs::create_dir_all(&unnamed).unwrap();

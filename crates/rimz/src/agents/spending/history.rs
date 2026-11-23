@@ -185,7 +185,7 @@ pub(super) fn migrate(runtime: &RuntimePaths, now_secs: u64) -> Result<(), Atomi
     else {
         return Ok(());
     };
-    let year = now.to_zoned(TimeZone::UTC).year();
+    let year = now.to_zoned_datetime(TimeZone::UTC).year();
     for directory in [
         runtime.legacy_session_roles(),
         runtime.legacy_session_effort(),
@@ -205,7 +205,7 @@ pub(super) fn migrate(runtime: &RuntimePaths, now_secs: u64) -> Result<(), Atomi
                 };
                 let end = date
                     .at(0, 0, 0, 0)
-                    .to_zoned(TimeZone::UTC)
+                    .to_zoned_datetime(TimeZone::UTC)
                     .map(|start| start.timestamp().as_second() + 86_400)
                     .ok()
                     .and_then(|end| u64::try_from(end).ok());

@@ -500,7 +500,7 @@ fn the_published_cache_carries_the_loops_own_verdict() {
     };
     crate::harness::schedule::instances::seed(&state, "waiting", &waiting);
     crate::harness::schedule::instances::seed(&state, "invalid", &invalid);
-    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let stats = BTreeMap::new();
     let context = || ReadContext {
         open: true,

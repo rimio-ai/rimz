@@ -705,7 +705,7 @@ impl Dashboard<'_> {
                 jiff::tz::TimeZone::get(&self.stats.timezone).unwrap_or(jiff::tz::TimeZone::UTC);
             title.push_str(&format!(
                 " (records since {})",
-                since.to_zoned(zone).strftime("%b %d")
+                since.to_zoned_datetime(zone).strftime("%b %d")
             ));
         }
         let mut lines = Vec::new();

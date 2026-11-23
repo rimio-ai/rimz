@@ -389,7 +389,7 @@ pub(in crate::cli) fn copy_to_notes(
 }
 
 fn dated_clock(at: Timestamp) -> String {
-    at.to_zoned(jiff::tz::TimeZone::system())
+    at.to_zoned_datetime(jiff::tz::TimeZone::system())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }

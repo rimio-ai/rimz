@@ -179,7 +179,7 @@ fn team_rows(stats: &Stats, active: Window) -> Vec<TeamJson> {
     rows
 }
 
-fn stamp(at: &jiff::Zoned) -> String {
+fn stamp(at: &jiff::ZonedDateTime) -> String {
     at.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
 
@@ -212,7 +212,7 @@ pub(super) fn assists_value(
     stats: &AssistStats,
     limit: usize,
     all: bool,
-    as_of: &jiff::Zoned,
+    as_of: &jiff::ZonedDateTime,
 ) -> serde_json::Value {
     let (events, older) = stats.timeline(limit, all);
     serde_json::json!({

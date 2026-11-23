@@ -643,7 +643,7 @@ fn observe_task_timing(
     task: &LoadedTask,
     (stamps, records): (&BTreeMap<String, Timestamp>, &TaskRecords),
     arming: Option<&Arming>,
-    now_zoned: &jiff::Zoned,
+    now_zoned: &jiff::ZonedDateTime,
 ) -> schedule::TaskTiming {
     let last_fire = schedule::attention::stamp(stamps, records, key, name).copied();
     let timing =
@@ -655,7 +655,7 @@ fn task_next_fire_text(
     name: &str,
     task: &LoadedTask,
     arming: Option<&Arming>,
-    now: &jiff::Zoned,
+    now: &jiff::ZonedDateTime,
 ) -> Option<String> {
     let runtime = runtime_for_root(&task.entry().resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
@@ -717,7 +717,7 @@ fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSourc
 }
 
 fn pause_until_text(until: Timestamp, now: Timestamp) -> String {
-    let local = until.to_zoned(MachineConfig::load_lenient().time_zone());
+    let local = until.to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     format!(
         "{} ({})",
         ui::rel_until(until, now),

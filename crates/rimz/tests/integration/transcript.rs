@@ -1713,7 +1713,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
         "{stderr}"
     );
     let prior_date = recent_time(60)
-        .to_zoned(rimz::config::MachineConfig::default().time_zone())
+        .to_zoned_datetime(rimz::config::MachineConfig::default().time_zone())
         .strftime("%a, %b %-d %Y")
         .to_string();
     assert!(

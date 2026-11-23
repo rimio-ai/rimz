@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 
 use super::{
     Trigger,
@@ -207,7 +207,7 @@ pub enum LoopRunHost {
 pub fn fire_due_tasks(
     runtime: &RuntimePaths,
     project_root: Option<&Path>,
-    now: &Zoned,
+    now: &ZonedDateTime,
     host: LoopRunHost,
     ci_source: Option<&CiSource>,
 ) {
@@ -424,7 +424,7 @@ fn fire_tasks(
     runtime: &RuntimePaths,
     project_root: Option<&Path>,
     tasks: BTreeMap<String, LoadedTask>,
-    now: &Zoned,
+    now: &ZonedDateTime,
     host: LoopRunHost,
     ci_source: Option<&CiSource>,
 ) -> Vec<String> {
@@ -723,7 +723,7 @@ fn plan(
     tasks: &BTreeMap<String, LoadedTask>,
     state: &BTreeMap<String, Timestamp>,
     arming_entries: &BTreeMap<String, Arming>,
-    now: &Zoned,
+    now: &ZonedDateTime,
     when_states: &BTreeMap<String, WhenState>,
     verdicts: &BTreeMap<String, Verdict>,
     lost_runners: &BTreeSet<String>,

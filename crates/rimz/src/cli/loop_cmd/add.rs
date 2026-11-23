@@ -452,7 +452,7 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let tasks = scoped_tasks(args, globals)?;
     let now = Timestamp::now();
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let now_zoned = now.to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     let entries = arming::load()?;
     let mut out = ui::out();
     for (name, task) in tasks {
@@ -515,7 +515,7 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
 }
 
 fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
-    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     let mut timing = AddTiming {
         fire_at: None,
         deadline: None,
@@ -602,7 +602,7 @@ fn write_add_feedback(
     }
     let zone = MachineConfig::load_lenient().time_zone();
     if let Some(next) = first_next_fire(parsed) {
-        let local = next.to_zoned(zone);
+        let local = next.to_zoned_datetime(zone);
         writeln!(
             out,
             "next fire: {} ({})",
@@ -745,7 +745,7 @@ fn idle_note(args: &AddArgs, launch: &LoopLaunch) -> Option<&'static str> {
 fn first_next_fire(parsed: &schedule::ParsedTrigger) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
-    parsed.next_after(&now.to_zoned(zone))
+    parsed.next_after(&now.to_zoned_datetime(zone))
 }
 
 #[cfg(test)]

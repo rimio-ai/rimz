@@ -20,7 +20,7 @@ use crate::config::{LaunchKind, OverlapPolicy, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
 use crate::utils::time::{CalendarAt, DurationUnit, parse_duration_units};
-use jiff::{SignedDuration, Timestamp, Zoned};
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 
 pub mod arm;
 pub mod arming;
@@ -618,7 +618,7 @@ impl IntervalSpec {
 
 /// `at` to the minute in the machine's time zone, as listings and wakes print an instant.
 fn local_minute(at: Timestamp) -> String {
-    at.to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+    at.to_zoned_datetime(crate::config::MachineConfig::load_lenient().time_zone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }
@@ -644,7 +644,7 @@ impl Schedule {
 
     /// Whether this schedule is due now, given the last time its task was
     /// armed or fired. First-sight arming is owned by the elder firing module.
-    fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+    fn due(&self, last_fire: Timestamp, now: &ZonedDateTime) -> bool {
         match self {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
@@ -657,7 +657,7 @@ impl Schedule {
     /// First occurrence after `last_fire`, evaluated from `now` in the
     /// configured local zone. A returned timestamp may be at or before `now`,
     /// which means the elder should fire on its next tick.
-    fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+    fn next_after(&self, last_fire: Timestamp, now: &ZonedDateTime) -> Option<Timestamp> {
         match self {
             Schedule::Interval(spec) => last_fire
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
@@ -782,7 +782,7 @@ impl ParsedTrigger {
         }
     }
 
-    pub fn next_after(&self, now: &Zoned) -> Option<Timestamp> {
+    pub fn next_after(&self, now: &ZonedDateTime) -> Option<Timestamp> {
         let Trigger::Schedule(parsed) = &self.trigger else {
             return None;
         };
@@ -1025,7 +1025,7 @@ impl TaskTiming {
         source: catalog::TaskSource,
         last_fire: Option<Timestamp>,
         arming: Option<&arming::Arming>,
-        now: &Zoned,
+        now: &ZonedDateTime,
     ) -> Self {
         let parsed = parsed.clone();
         let arm_state = arming::ArmState::resolve(arming, source, now.timestamp());
@@ -1144,7 +1144,11 @@ pub fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timest
 /// Resolve a one-shot `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`) to the first
 /// matching instant strictly after `now`, in `now`'s zone. A dated time at or before `now` is
 /// refused as in the past.
-pub fn resolve_once_at(name: &str, raw: &str, now: &Zoned) -> Result<Timestamp, ScheduleErr> {
+pub fn resolve_once_at(
+    name: &str,
+    raw: &str,
+    now: &ZonedDateTime,
+) -> Result<Timestamp, ScheduleErr> {
     let bad = || ScheduleErr::BadOnceAt {
         name: name.to_owned(),
         value: raw.to_owned(),
@@ -1512,19 +1516,19 @@ impl CronSpec {
         day_matches && self.months & 1 << date.month() != 0
     }
 
-    fn matches(&self, now: &Zoned) -> bool {
+    fn matches(&self, now: &ZonedDateTime) -> bool {
         self.matches_day(now.date())
             && self.hours & 1 << now.hour() != 0
             && self.minutes & 1 << now.minute() != 0
     }
 
-    fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+    fn due(&self, last_fire: Timestamp, now: &ZonedDateTime) -> bool {
         self.matches(now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
     }
 
     /// The first selected minute after `now` (or `now` itself while it is due), found day by
     /// day and then minute by minute within the first day that holds one.
-    fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+    fn next_after(&self, last_fire: Timestamp, now: &ZonedDateTime) -> Option<Timestamp> {
         if self.due(last_fire, now) {
             return Some(now.timestamp());
         }
@@ -1534,11 +1538,20 @@ impl CronSpec {
         for _ in 0..CRON_SEARCH_DAYS {
             let next = date.tomorrow().ok()?;
             if self.matches_day(date) {
-                let start = date.to_zoned(zone.clone()).ok()?.timestamp().as_second();
-                let end = next.to_zoned(zone.clone()).ok()?.timestamp().as_second();
+                let start = date
+                    .to_zoned_datetime(zone.clone())
+                    .ok()?
+                    .timestamp()
+                    .as_second();
+                let end = next
+                    .to_zoned_datetime(zone.clone())
+                    .ok()?
+                    .timestamp()
+                    .as_second();
                 let found = (start.max(from)..end).step_by(60).find_map(|second| {
                     let at = Timestamp::from_second(second).ok()?;
-                    self.matches(&at.to_zoned(zone.clone())).then_some(at)
+                    self.matches(&at.to_zoned_datetime(zone.clone()))
+                        .then_some(at)
                 });
                 if found.is_some() {
                     return found;

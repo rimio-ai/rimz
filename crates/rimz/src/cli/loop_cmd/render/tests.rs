@@ -42,7 +42,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         TaskSource::Config,
         None,
         None,
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     );
     let mut failed = record(20, LoopRunResult::Errored);
     failed.error = Some("launch failed".into());
@@ -53,7 +53,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         entry,
         source: TaskSource::Config,
         timing,
-        now_zoned: now.to_zoned(jiff::tz::TimeZone::UTC),
+        now_zoned: now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
         records: vec![failed],
         quiet: None,
         heard: None,
@@ -705,7 +705,7 @@ fn worktree_view() -> ShowView {
     let mut view = show_view(true);
     view.now_zoned = Timestamp::from_second(3600)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let verdict = |pr: Option<&str>, ci: Option<&str>| rimz::harness::when::Verdict {
         truth: match (pr, ci) {
             (_, Some(ci)) if ci != "passed" => Some(false),
@@ -1479,7 +1479,7 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
     let mut view = show_view(true);
     view.now_zoned = Timestamp::from_second(4000)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     let mut cleared = scheduled(2100, LoopRunResult::Completed);
     cleared.checkout = Some("/repo/retried".into());
     let mut resolved = cleared.clone();
@@ -1525,7 +1525,7 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
     );
     view.now_zoned = Timestamp::from_second(3940)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC);
     assert!(!show_text(&view).contains("ready but blocked over 30m"));
 }
 
@@ -1674,7 +1674,7 @@ fn true_condition_without_hold_renders_due() {
         schedule::catalog::TaskSource::Config,
         Some(now),
         None,
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     );
     let timing = super::super::condition::observe(("machine::ready", "ready"), &entry, timing, now);
     let mut out = Vec::new();
@@ -1710,7 +1710,7 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
         schedule::catalog::TaskSource::Config,
         Some(now),
         None,
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     );
     let timing = super::super::condition::observe(("machine::forge", "forge"), &entry, timing, now);
     assert_eq!(
@@ -2318,7 +2318,9 @@ fn task_rules_use_action_specific_verbs() {
 
 #[test]
 fn spend_label_renders_today_last_and_cost_window() {
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<jiff::Zoned>().unwrap();
+    let now = "2026-06-02T12:00:00Z[UTC]"
+        .parse::<jiff::ZonedDateTime>()
+        .unwrap();
     let mut records = Vec::new();
     for (second, cost) in [(1, 0.28), (2, 0.42)] {
         let mut run = record(second, LoopRunResult::Completed);
@@ -2740,7 +2742,7 @@ fn interval_timing(
         blocked.map_or(TaskSource::Config, |state| TaskSource::Project { state }),
         last_fire,
         arming,
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     )
 }
 
@@ -2760,7 +2762,7 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
         TaskSource::Config,
         None,
         None,
-        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
     );
 
     let mut out = Vec::new();

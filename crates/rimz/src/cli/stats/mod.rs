@@ -393,10 +393,12 @@ impl Stats {
         rimz::agents::spending::local_day_index(now_secs, Some(&self.timezone)).unwrap_or(0)
     }
 
-    fn as_of(&self) -> jiff::Zoned {
+    fn as_of(&self) -> jiff::ZonedDateTime {
         Timestamp::from_millisecond(self.refreshed_at_ms as i64)
             .unwrap_or(Timestamp::UNIX_EPOCH)
-            .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
+            .to_zoned_datetime(
+                jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC),
+            )
     }
 
     fn no_owner(&self, active: Window) -> f64 {
@@ -409,19 +411,19 @@ impl Stats {
         (active.select(&self.total).usd - owned).max(0.0)
     }
 
-    fn recorded_since(&self) -> Option<jiff::Zoned> {
+    fn recorded_since(&self) -> Option<jiff::ZonedDateTime> {
         self.local_time(self.recorded_since_secs)
     }
 
-    fn effort_since(&self) -> Option<jiff::Zoned> {
+    fn effort_since(&self) -> Option<jiff::ZonedDateTime> {
         self.local_time(self.effort_since_secs)
     }
 
-    fn local_time(&self, secs: Option<u64>) -> Option<jiff::Zoned> {
+    fn local_time(&self, secs: Option<u64>) -> Option<jiff::ZonedDateTime> {
         Some(
             Timestamp::from_second(i64::try_from(secs?).ok()?)
                 .ok()?
-                .to_zoned(
+                .to_zoned_datetime(
                     jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC),
                 ),
         )

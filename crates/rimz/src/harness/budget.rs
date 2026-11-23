@@ -771,7 +771,7 @@ fn evaluate(
         // Agent grammar never yields a turn or month cap.
         BudgetWindow::Session | BudgetWindow::Turn | BudgetWindow::Month => total,
         BudgetWindow::Day => {
-            let date = now.to_zoned(zone.clone()).date();
+            let date = now.to_zoned_datetime(zone.clone()).date();
             match ledger.day_baseline.as_mut() {
                 Some(baseline) if baseline.date != date => {
                     baseline.date = date;
@@ -1598,7 +1598,7 @@ fn interrupt_due(last: Option<Timestamp>, now: Timestamp) -> bool {
 fn park_reset_at(window: BudgetWindow, parked_at: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
     match window {
         BudgetWindow::Day => parked_at
-            .to_zoned(zone.clone())
+            .to_zoned_datetime(zone.clone())
             .tomorrow()
             .ok()?
             .start_of_day()
@@ -1610,7 +1610,7 @@ fn park_reset_at(window: BudgetWindow, parked_at: Timestamp, zone: &TimeZone) ->
             )?;
             Timestamp::from_second(start as i64)
                 .ok()?
-                .to_zoned(TimeZone::UTC)
+                .to_zoned_datetime(TimeZone::UTC)
                 .checked_add(jiff::Span::new().months(1))
                 .ok()
                 .map(|zoned| zoned.timestamp())
@@ -1620,7 +1620,7 @@ fn park_reset_at(window: BudgetWindow, parked_at: Timestamp, zone: &TimeZone) ->
 }
 
 fn local_day_start(now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
-    now.to_zoned(zone.clone())
+    now.to_zoned_datetime(zone.clone())
         .start_of_day()
         .ok()
         .map(|zoned| zoned.timestamp())
@@ -1799,11 +1799,11 @@ fn ledger_day_reset(ledger: &BudgetLedger, now: Timestamp, zone: &TimeZone) -> O
         .day_baseline
         .as_ref()
         .map(|baseline| baseline.date)
-        .unwrap_or_else(|| now.to_zoned(zone.clone()).date());
+        .unwrap_or_else(|| now.to_zoned_datetime(zone.clone()).date());
     date.tomorrow()
         .ok()?
         .at(0, 0, 0, 0)
-        .to_zoned(zone.clone())
+        .to_zoned_datetime(zone.clone())
         .ok()
         .map(|zoned| zoned.timestamp())
 }

@@ -35,7 +35,7 @@ pub(super) fn room_source(root: &Path) -> RoomSource {
 
 /// A window reset as a reading line shows it, in `zone`.
 pub(super) fn reset_minute(at: Timestamp, zone: &TimeZone) -> String {
-    at.to_zoned(zone.clone())
+    at.to_zoned_datetime(zone.clone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }
@@ -206,7 +206,7 @@ pub(super) fn write_self(
         return Ok(());
     }
     writeln!(out, "{header}")?;
-    let zoned_now = now.to_zoned(rimz::config::MachineConfig::load_lenient().time_zone());
+    let zoned_now = now.to_zoned_datetime(rimz::config::MachineConfig::load_lenient().time_zone());
     write_waits(out, &waits, current_root, &zoned_now, 2)?;
     if !also.is_empty() {
         writeln!(out, "  also woken by {also}")?;
@@ -253,7 +253,7 @@ pub(super) fn write_room(
             .cmp(&b[0].priority())
             .then_with(|| a_header.cmp(b_header))
     });
-    let zoned_now = now.to_zoned(rimz::config::MachineConfig::load_lenient().time_zone());
+    let zoned_now = now.to_zoned_datetime(rimz::config::MachineConfig::load_lenient().time_zone());
     for (header, card) in cards {
         writeln!(out, "  {header}")?;
         write_waits(out, &card, current_root, &zoned_now, 4)?;
@@ -344,7 +344,7 @@ fn write_waits(
     out: &mut impl Write,
     rows: &[&WakeRow],
     current_root: &Path,
-    now: &jiff::Zoned,
+    now: &jiff::ZonedDateTime,
     indent: usize,
 ) -> Result<()> {
     use ui::status::{StateRole, role};

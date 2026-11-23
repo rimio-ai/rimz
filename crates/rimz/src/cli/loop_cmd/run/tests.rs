@@ -37,7 +37,7 @@ fn manual_condition_notice_reports_unmet_or_unknown_and_counts_conjunctions() {
             TaskSource::Config,
             Some(now),
             None,
-            &now.to_zoned(jiff::tz::TimeZone::UTC),
+            &now.to_zoned_datetime(jiff::tz::TimeZone::UTC),
         );
         let timing = if condition.is_some() {
             timing.with_condition(

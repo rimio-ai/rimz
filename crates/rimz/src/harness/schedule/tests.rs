@@ -330,7 +330,7 @@ fn fire_at_rows_are_ephemeral_absolute_one_shots() {
     assert!(ephemeral_lifetime(&entry));
     let local = at
         .timestamp()
-        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone());
+        .to_zoned_datetime(crate::config::MachineConfig::load_lenient().time_zone());
     assert_eq!(
         parsed.describe(),
         local.strftime("once at %Y-%m-%d %H:%M").to_string()
@@ -388,7 +388,7 @@ fn fire_at_is_due_and_next_exactly_at_its_instant() {
     assert_eq!(schedule.next_after(at.timestamp(), &at), None);
 
     let parsed = parse_trigger("reset", &entry);
-    let timing = |last_fire, now: &Zoned| {
+    let timing = |last_fire, now: &ZonedDateTime| {
         TaskTiming::evaluate(&parsed, catalog::TaskSource::Config, last_fire, None, now).state()
     };
     assert_eq!(
@@ -412,11 +412,18 @@ fn fire_at_is_due_and_next_exactly_at_its_instant() {
     );
 }
 
-fn after_zoned(now: &Zoned, seconds: i64) -> Zoned {
-    after(now, seconds).to_zoned(now.time_zone().clone())
+fn after_zoned(now: &ZonedDateTime, seconds: i64) -> ZonedDateTime {
+    after(now, seconds).to_zoned_datetime(now.time_zone().clone())
 }
 
-pub(super) fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
+pub(super) fn zdt(
+    year: i16,
+    month: i8,
+    day: i8,
+    hour: i8,
+    minute: i8,
+    second: i8,
+) -> ZonedDateTime {
     date(year, month, day)
         .at(hour, minute, second, 0)
         .in_tz("UTC")
@@ -428,12 +435,12 @@ pub(super) fn seconds_before(ts: Timestamp, seconds: i64) -> Timestamp {
 }
 
 /// A last-fire stamp `seconds` before `now`.
-fn before(now: &Zoned, seconds: i64) -> Timestamp {
+fn before(now: &ZonedDateTime, seconds: i64) -> Timestamp {
     seconds_before(now.timestamp(), seconds)
 }
 
 /// An occurrence `seconds` after `now`.
-fn after(now: &Zoned, seconds: i64) -> Timestamp {
+fn after(now: &ZonedDateTime, seconds: i64) -> Timestamp {
     now.timestamp()
         .checked_add(SignedDuration::from_secs(seconds))
         .expect("shifted timestamp")
@@ -1345,7 +1352,7 @@ fn schedule_due_at_occurrence_edges() {
     let quarter = zdt(2026, 6, 24, 8, 30, 12);
     let off_minute = zdt(2026, 6, 24, 8, 31, 0);
     // Was `schedule` due at `now`, given a fire `ago` seconds earlier?
-    let due = |schedule: &Schedule, now: &Zoned, ago| schedule.due(before(now, ago), now);
+    let due = |schedule: &Schedule, now: &ZonedDateTime, ago| schedule.due(before(now, ago), now);
 
     assert!(!due(&interval, &boundary, 899), "interval a second early");
     assert!(due(&interval, &boundary, 900), "interval at the boundary");
@@ -1394,7 +1401,8 @@ fn schedule_next_after_reports_the_following_occurrence() {
     let on_quarter = zdt(2026, 6, 24, 8, 30, 12);
     let jan_second = zdt(2026, 1, 2, 0, 0, 0);
     // The next occurrence at `now`, given a fire `ago` seconds earlier.
-    let next = |schedule: &Schedule, now: &Zoned, ago| schedule.next_after(before(now, ago), now);
+    let next =
+        |schedule: &Schedule, now: &ZonedDateTime, ago| schedule.next_after(before(now, ago), now);
 
     let interval_last = before(&ten_past, 60);
     assert_eq!(
@@ -1449,7 +1457,7 @@ impl Default for Timing {
 
 impl Timing {
     /// A task last fired `ago` seconds before the evaluation instant.
-    fn fired(ago: i64, now: &Zoned) -> Self {
+    fn fired(ago: i64, now: &ZonedDateTime) -> Self {
         Self {
             last_fire: Some(before(now, ago)),
             ..Self::default()
@@ -1479,7 +1487,7 @@ impl Timing {
         }
     }
 
-    fn state(self, entry: &TaskEntry, now: &Zoned) -> TaskTimingState {
+    fn state(self, entry: &TaskEntry, now: &ZonedDateTime) -> TaskTimingState {
         TaskTiming::evaluate(
             &parse_trigger("task", entry),
             self.source,
@@ -1624,7 +1632,7 @@ fn zoned_in(
     tz: &str,
     (year, month, day): (i16, i8, i8),
     (hour, minute, second): (i8, i8, i8),
-) -> Zoned {
+) -> ZonedDateTime {
     date(year, month, day)
         .at(hour, minute, second, 0)
         .in_tz(tz)
@@ -1712,7 +1720,7 @@ fn once_at_resolves_to_the_first_matching_instant_after_now() {
     // Spring forward: 02:30 on 2027-03-14 does not exist and resolves past the gap.
     let spring = resolve_once_at("m", "02:30", &zoned_in(new_york, (2027, 3, 13), (12, 0, 0)))
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::get(new_york).unwrap());
+        .to_zoned_datetime(jiff::tz::TimeZone::get(new_york).unwrap());
     assert_eq!(
         (spring.date(), spring.hour(), spring.minute()),
         (date(2027, 3, 14), 3, 30)
@@ -1756,7 +1764,7 @@ fn delayed_instant_rounds_up_to_the_next_whole_minute() {
 fn cron_accepts_names_stepped_ranges_and_macros() {
     let wed_0900 = zdt(2026, 6, 24, 9, 0, 0);
     let sat_0900 = zdt(2026, 6, 27, 9, 0, 0);
-    let due = |expr: &str, now: &Zoned| cron(expr).due(before(now, 60), now);
+    let due = |expr: &str, now: &ZonedDateTime| cron(expr).due(before(now, 60), now);
     assert!(due("0 9 * * mon-fri", &wed_0900), "a day-name range");
     assert!(!due("0 9 * * mon-fri", &sat_0900), "off the range");
     assert!(due("0 9 * * WED", &wed_0900), "names are case-insensitive");
@@ -1877,7 +1885,7 @@ fn cron_that_can_never_fire_is_refused_and_a_leap_day_is_found() {
         "both day fields fire on the weekday"
     );
     let leap = cron("0 0 29 2 *");
-    let next = |now: Zoned| leap.next_after(now.timestamp(), &now);
+    let next = |now: ZonedDateTime| leap.next_after(now.timestamp(), &now);
     assert_eq!(
         next(zdt(2026, 11, 8, 0, 0, 0)),
         Some(zdt(2028, 2, 29, 0, 0, 0).timestamp())
@@ -1890,12 +1898,15 @@ fn cron_that_can_never_fire_is_refused_and_a_leap_day_is_found() {
 }
 
 /// A minute walk with the matcher's semantics, as the search ran before it went day by day.
-fn brute_force_next(schedule: &Schedule, now: &Zoned) -> Option<Timestamp> {
+fn brute_force_next(schedule: &Schedule, now: &ZonedDateTime) -> Option<Timestamp> {
     let start = now.timestamp().as_second().div_euclid(60) + 1;
     (0..60 * 24 * 60).find_map(|offset| {
         let at = Timestamp::from_second((start + offset) * 60).ok()?;
         schedule
-            .due(now.timestamp(), &at.to_zoned(now.time_zone().clone()))
+            .due(
+                now.timestamp(),
+                &at.to_zoned_datetime(now.time_zone().clone()),
+            )
             .then_some(at)
     })
 }
@@ -1917,7 +1928,10 @@ fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
         assert_eq!(next, brute_force_next(&schedule, &now), "{expr} from {now}");
         let at = next.expect("an occurrence within 60 days");
         assert!(
-            schedule.due(now.timestamp(), &at.to_zoned(now.time_zone().clone())),
+            schedule.due(
+                now.timestamp(),
+                &at.to_zoned_datetime(now.time_zone().clone())
+            ),
             "{expr}"
         );
     }

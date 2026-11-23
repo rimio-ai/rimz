@@ -72,7 +72,7 @@ fn parse_progress_stamp(stamp: &str, zone: &TimeZone) -> Option<Timestamp> {
     DateTime::strptime(LEGACY_SECONDS_STAMP_FORMAT, stamp)
         .or_else(|_| DateTime::strptime(LEGACY_MINUTES_STAMP_FORMAT, stamp))
         .ok()?
-        .to_zoned(zone.clone())
+        .to_zoned_datetime(zone.clone())
         .ok()
         .map(|at| at.timestamp())
 }

@@ -163,7 +163,7 @@ static SEGMENTS: Mutex<BTreeMap<PathBuf, ParseCache<Segment>>> = Mutex::new(BTre
 
 #[must_use = "durability barrier; check the result"]
 pub fn record(paths: &RuntimePaths, record: &SessionRoleRecord) -> Result<(), AtomicErr> {
-    let year = record.at.to_zoned(jiff::tz::TimeZone::UTC).year();
+    let year = record.at.to_zoned_datetime(jiff::tz::TimeZone::UTC).year();
     let path = paths.shared_session_roles(year);
     let segments = read_segments(&paths.spending_history, year);
     let matches_session = |candidate: &SessionRoleRecord| {
@@ -203,7 +203,7 @@ pub(super) fn load(paths: &SpendingHistoryPaths, now_secs: u64) -> RoleIndex {
     else {
         return RoleIndex::default();
     };
-    let year = at.to_zoned(jiff::tz::TimeZone::UTC).year();
+    let year = at.to_zoned_datetime(jiff::tz::TimeZone::UTC).year();
     let segments = read_segments(paths, year);
     let mut records = BTreeMap::<_, &SessionRoleRecord>::new();
     for record in segments.iter().flat_map(|(_, segment)| &segment.records) {
@@ -298,7 +298,7 @@ pub(super) fn prune_segments(
     else {
         return Ok(());
     };
-    let year = at.to_zoned(jiff::tz::TimeZone::UTC).year();
+    let year = at.to_zoned_datetime(jiff::tz::TimeZone::UTC).year();
     let directory = hold.paths.roles_dir();
     let mut removed = false;
     for path in super::history::segments(&directory)? {
@@ -552,7 +552,8 @@ mod tests {
     }
 
     fn append_fixture(paths: &RuntimePaths, record: &SessionRoleRecord) {
-        let path = paths.shared_session_roles(record.at.to_zoned(jiff::tz::TimeZone::UTC).year());
+        let path =
+            paths.shared_session_roles(record.at.to_zoned_datetime(jiff::tz::TimeZone::UTC).year());
         let mut bytes = serde_json::to_vec(record).unwrap();
         bytes.push(b'\n');
         crate::disk::atomic::append_record_bytes(&path, &bytes).unwrap();

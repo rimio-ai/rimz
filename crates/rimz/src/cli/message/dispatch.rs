@@ -306,7 +306,7 @@ fn dispatch_mode(mode: SendKind, create: bool) -> Result<DispatchMode> {
             bail!("--when needs an existing recipient; remove --create");
         }
     }
-    let now = Timestamp::now().to_zoned(machine_config.time_zone());
+    let now = Timestamp::now().to_zoned_datetime(machine_config.time_zone());
     Ok(DispatchMode::Boundary {
         gate,
         not_before: schedule

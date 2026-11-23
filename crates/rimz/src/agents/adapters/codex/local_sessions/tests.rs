@@ -60,7 +60,9 @@ fn exact_locator_finds_old_and_archived_sessions_only_in_named_home() {
 }
 
 fn date_path(root: &Path, archived: bool, days_ago: usize) -> PathBuf {
-    let mut date = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    let mut date = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     for _ in 0..days_ago {
         date = date.yesterday().unwrap();
     }
@@ -91,7 +93,9 @@ fn write_rollout_with_extra(
     extra: &str,
 ) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
-    let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    let today = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     let path = dir.join(format!(
         "rollout-{:04}-{:02}-{:02}T00-00-00-{id}.jsonl",
         today.year(),
@@ -291,7 +295,9 @@ fn discovers_requested_workspaces_in_one_rollout_batch() {
 fn cached_discovery_reuses_headers_and_forces_the_backstop() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = PathBuf::from("/workspace/project");
-    let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    let today = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     let active = date_path(temp.path(), false, 0);
     let id = "11111111-1111-4111-8111-111111111111";
     let path = write_rollout(

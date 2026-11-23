@@ -325,7 +325,7 @@ fn gate_status(
     }
 }
 
-pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
+pub fn parse_schedule_at(raw: &str, now: &jiff::ZonedDateTime) -> Result<Timestamp, String> {
     if let Ok(duration) = parse_duration_units(raw, MESSAGE_DURATION_UNITS) {
         if duration.is_zero() {
             return Err("schedule duration must be greater than zero".to_owned());
@@ -343,7 +343,7 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
     let candidate = now
         .date()
         .at(time.hour() as i8, time.minute() as i8, 0, 0)
-        .to_zoned(now.time_zone().clone())
+        .to_zoned_datetime(now.time_zone().clone())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved today: {err}"))?;
     if candidate.timestamp() > now.timestamp() {
         return Ok(candidate.timestamp());
@@ -352,7 +352,7 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
         .tomorrow()
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))?
         .at(time.hour() as i8, time.minute() as i8, 0, 0)
-        .to_zoned(now.time_zone().clone())
+        .to_zoned_datetime(now.time_zone().clone())
         .map(|target| target.timestamp())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))
 }

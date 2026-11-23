@@ -126,7 +126,7 @@ impl Uploads {
             }
             Clipboard::Files(paths) => open_all(&paths),
             Clipboard::Image(png) => {
-                let name = jiff::Zoned::now()
+                let name = jiff::ZonedDateTime::now()
                     .strftime("clipboard-%Y%m%d-%H%M%S.png")
                     .to_string();
                 let opened = open(&png, name);

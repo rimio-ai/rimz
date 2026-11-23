@@ -135,7 +135,7 @@ fn refresh_loop(
                 result
             },
             || {
-                let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
+                let now = jiff::Timestamp::now().to_zoned_datetime(config.timezone.clone());
                 fire_timers(&runtime, config.mux, &now, &mut last_message_sweep);
                 if daemon_checked_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
                     daemon_checked_at = Instant::now();
@@ -160,7 +160,7 @@ fn refresh_loop(
 fn fire_timers(
     runtime: &RuntimePaths,
     mux: crate::ids::MuxName,
-    now: &jiff::Zoned,
+    now: &jiff::ZonedDateTime,
     last_message_sweep: &mut Option<(jiff::Timestamp, jiff::Timestamp)>,
 ) {
     let ci_source = crate::harness::when::CiSource::read(runtime);

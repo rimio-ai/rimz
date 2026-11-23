@@ -81,7 +81,7 @@ tar = { version = "0.4", default-features = false }
 # OpenCode stores usage and Cursor stores live chat roots in WAL SQLite
 # databases; adapters open both read-only. `bundled` keeps RimZ independent of
 # a system libsqlite3 at install time.
-rusqlite = { version = "0.42.0", features = ["bundled"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
 # Cursor's version-pinned chat root is protobuf. The decoder reads only the one
 # repeated pending-call field instead of owning a wire parser.
 prost = "0.14"
@@ -107,13 +107,13 @@ anyhow = "1"
 
 # Identifiers and time
 uuid = { version = "1", features = ["v7", "serde"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1.0", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env", "unstable-ext", "wrap_help"] }
 # Dynamic completion is still feature-gated as unstable, so pin its API until
 # clap stabilizes the environment-driven engine.
-clap_complete = { version = "=4.6.11", features = ["unstable-dynamic"] }
+clap_complete = { version = "=4.6.12", features = ["unstable-dynamic"] }
 # Layout launch flags are authored as shell-like strings in TOML but launched as
 # direct argv, so RimZ needs quote removal without invoking a shell. `shlex` is a
 # tiny POSIX-compatible splitter already present through the build graph and

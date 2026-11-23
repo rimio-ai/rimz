@@ -141,7 +141,9 @@ pub(super) fn discover_panes(
     let key = DiscoveryKey {
         home: home.clone(),
         workspaces: normalized_workspace_inputs(&workspaces),
-        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        today: Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date(),
     };
     let now = Instant::now();
     PANE_DISCOVERY.with(|cache| {
@@ -482,7 +484,7 @@ fn enumerate_window_rollouts(
     topology: &mut StampedPaths,
     headers: &mut StableValueCache<RolloutCandidate, Option<CodexRolloutHeader>>,
 ) -> Vec<RolloutCandidate> {
-    let first = since.to_zoned(jiff::tz::TimeZone::UTC).date();
+    let first = since.to_zoned_datetime(jiff::tz::TimeZone::UTC).date();
     let first = first.yesterday().unwrap_or(first);
     let last = today.tomorrow().unwrap_or(today);
     let mut date = first;
@@ -532,7 +534,9 @@ pub(super) fn discover(
     let Some(home) = super::CodexAdapter.config_home(login_env) else {
         return Vec::new();
     };
-    let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
+    let today = Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date();
     discover_cached(&home, workspaces, today, Instant::now())
 }
 
@@ -747,7 +751,9 @@ pub(super) fn discover_under(home: &Path, workspaces: &[&Path]) -> Vec<LocalSess
     let key = DiscoveryKey {
         home: home.to_path_buf(),
         workspaces: normalized_workspace_inputs(workspaces),
-        today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        today: Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .date(),
     };
     if key.workspaces.is_empty() {
         return Vec::new();
