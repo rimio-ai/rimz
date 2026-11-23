@@ -108,6 +108,9 @@ mod tests {
             "/home/u/.codex/packages/standalone/current/codex app-server"
         ));
         assert!(is_codex_daemon_cmdline("codex remote-control start"));
+        assert!(is_codex_daemon_cmdline(
+            "node /opt/@openai/codex/bin/codex.js app-server"
+        ));
     }
 
     #[test]

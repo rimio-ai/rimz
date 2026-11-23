@@ -180,21 +180,22 @@ enum DaemonHost {
 
 /// The daemon host a command line runs, read from its program and that program's
 /// first argument, through wrappers, JS launchers, and the `rimz daemon host …
-/// --` envelope. An agent whose prompt or worktree path merely mentions a host
-/// surface stays the agent.
+/// --` envelope. A launcher script reads as Codex as the agent rule reads it, by a
+/// path component naming the kind (`node …/codex/bin/codex.js`). An agent whose
+/// prompt or worktree path merely mentions a host surface stays the agent.
 fn command_daemon_host(command: &str) -> Option<DaemonHost> {
     let argv = crate::proc::command::effective_argv(command);
-    let [program, surface, rest @ ..] = argv.as_slice() else {
+    let [path, surface, rest @ ..] = argv.words.as_slice() else {
         return None;
     };
-    let program = crate::proc::command::basename(program);
+    let program = crate::proc::command::basename(path);
+    let runs_codex = program == "codex"
+        || program.starts_with("codex-")
+        || (argv.from_launcher
+            && crate::proc::command::agent_script_path_names_kind(path, "codex"));
     match (program, *surface) {
         ("claude", COMMAND_MARKER) => Some(DaemonHost::ClaudeRemoteControl),
-        (_, APP_SERVER_MARKER | COMMAND_MARKER)
-            if program == "codex" || program.starts_with("codex-") =>
-        {
-            Some(DaemonHost::Codex)
-        }
+        (_, APP_SERVER_MARKER | COMMAND_MARKER) if runs_codex => Some(DaemonHost::Codex),
         ("rimz", "codex") if rest.first() == Some(&APP_SERVER_MARKER) => Some(DaemonHost::Codex),
         _ => None,
     }
@@ -672,9 +673,18 @@ mod tests {
             "/home/u/.codex/packages/standalone/current/codex app-server",
             "node /usr/bin/codex remote-control start",
             "/bin/sh /tmp/shim/codex app-server",
+            "node /opt/@openai/codex/bin/codex.js app-server",
+            "/bin/rimz daemon host --workspace-id w -- \
+             node /opt/@openai/codex/bin/codex.js remote-control start",
         ] {
             assert!(command_is_host(command), "{command}");
         }
+        // Zellij reports a hand-started daemon's foreground argv in full.
+        assert!(pane_runs_daemon_host(&pane(
+            "terminal_1",
+            "tab_1",
+            Some("node /opt/@openai/codex/bin/codex.js app-server")
+        )));
         // An agent whose worktree path or prompt merely mentions a host surface
         // is the agent, not the host.
         for command in [
@@ -683,6 +693,8 @@ mod tests {
             "/bin/rimz agents exec claude --worktree-path /w/remote-control-fix",
             "codex 'why does the app-server crash'",
             "/bin/sh /tmp/shim/codex 'why does the app-server crash'",
+            "node /opt/@openai/codex/bin/codex.js 'why does the app-server crash'",
+            "/w/codex/bin/tool app-server",
             "claude 'is claude remote-control on'",
         ] {
             assert!(!command_is_host(command), "{command}");
