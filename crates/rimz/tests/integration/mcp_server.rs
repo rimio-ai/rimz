@@ -15,7 +15,7 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 11] = [
+const ALL_TOOLS: [&str; 12] = [
     "lsp",
     "wait",
     "subagent",
@@ -25,6 +25,7 @@ const ALL_TOOLS: [&str; 11] = [
     "self_stop",
     "self_compact",
     "self_tune",
+    "self_molt",
     "notes",
     "guide",
 ];
@@ -950,7 +951,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     let total = stdout.lines().last().unwrap();
     assert_eq!(
         total,
-        format!("total: ~{sum} tokens in 11 tools"),
+        format!("total: ~{sum} tokens in {} tools", ALL_TOOLS.len()),
         "{stdout}"
     );
 
@@ -1476,6 +1477,140 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     let (stopped, is_error) = server.answer(5, "stop", json!({"id": id}));
     assert!(!is_error, "{stopped}");
     assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
+}
+
+#[cfg(unix)]
+fn serve_for_molt(env: &Env, trace: &std::path::Path) -> McpServer {
+    use crate::common::{path_with_front, write_env_dump_shim, write_fake_login_shell};
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(env, &env.project_root);
+    crate::common::write_definition(env, "agents", "claude", "description: Base", "Base.");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+
+    crate::common::wait::register_calling_agent(env);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut observation = AgentLifecycleObservation::new(
+        Some("provider-session".into()),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("planner".to_owned());
+    observation.pane_id = Some("zellij:terminal_1".parse().unwrap());
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+
+    let shim = write_env_dump_shim(env, "claude");
+    let shell = write_fake_login_shell(env, "molt-shell", &[]);
+    let mut command = live_server(env, &[1]);
+    command
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LOG", trace)
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
+        .env("PATH", path_with_front(&shim))
+        .env("SHELL", shell);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    server
+}
+
+#[cfg(unix)]
+#[test]
+fn self_molt_binds_a_successor_and_keeps_the_server_answering() {
+    let env = Env::new();
+    let trace = env.home_root.join("molt-mux.log");
+    let mut server = serve_for_molt(&env, &trace);
+    let prompt = "Read the note at /x. go on";
+    let (molted, is_error) = server.answer(1, "self_molt", json!({"prompt": prompt}));
+    assert!(!is_error, "{molted}");
+    assert_eq!(molted["agent"], "@planner#main", "{molted}");
+    assert_eq!(molted["successor_kind"], "claude", "{molted}");
+    assert_eq!(molted["closes_after_secs"], 0, "{molted}");
+    assert_eq!(server.request(2, "ping", json!({}))["result"], json!({}));
+
+    let store = env.store();
+    let rows = store.audit_rows().unwrap();
+    let successor = rows
+        .iter()
+        .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+        .unwrap_or_else(|| panic!("no successor at epoch 1 under the caller's launch: {rows:?}"));
+    assert!(
+        successor
+            .first_prompt
+            .as_deref()
+            .is_some_and(|first| first.starts_with(prompt)),
+        "successor's first prompt: {:?}",
+        successor.first_prompt
+    );
+    let trace = std::fs::read_to_string(trace).unwrap();
+    assert!(trace.contains("\taction\tnew-pane\t"), "{trace}");
+    assert!(!trace.contains("\taction\tclose-pane\t"), "{trace}");
+    let bookings = rimz::store::idle_stop::read(store.paths());
+    let [booking] = bookings.as_slice() else {
+        panic!("expected one booking for the replaced session: {bookings:?}");
+    };
+    assert_eq!(booking.kind.as_str(), "claude");
+    assert_eq!(booking.agent_id.as_str(), "provider-session");
+    assert_eq!(booking.stop.after_secs, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn self_molt_refuses_an_invalid_when_idle_before_doing_any_work() {
+    let env = Env::new();
+    let trace = env.home_root.join("molt-mux.log");
+    let mut server = serve_for_molt(&env, &trace);
+    let events_before = env.read_events().len();
+    let (failure, is_error) =
+        server.answer(1, "self_molt", json!({"prompt": "x", "when_idle": "soon"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({"error": "invalid when_idle `soon`: unknown duration unit `soon`; use s/m/h/d"})
+    );
+    assert!(
+        !trace.exists(),
+        "invalid when_idle touched the multiplexer: {:?}",
+        std::fs::read_to_string(&trace)
+    );
+    let events = env.read_events();
+    assert_eq!(events.len(), events_before, "{events:?}");
+    let bookings = rimz::store::idle_stop::read(env.store().paths());
+    assert!(bookings.is_empty(), "{bookings:?}");
+}
+
+#[test]
+fn self_molt_refuses_a_caller_outside_an_agent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut server = serve(&env, &[]);
+    server.initialize();
+    let (failure, is_error) = server.answer(1, "self_molt", json!({"prompt": "x"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({"error": "molt runs only inside an agent: only the session holding the context can \
+                         write the note. Type /rimz-molt in the agent's pane, or send it with \
+                         `rimz message @<agent> '/rimz-molt'`"})
+    );
 }
 
 /// A tool that reads `/dev/stdin` reads nothing of the client's requests: the

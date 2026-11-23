@@ -94,6 +94,7 @@ impl Runner for Tools {
             Call::SelfStop(args) => control::stop(self, &args),
             Call::SelfCompact(args) => control::compact(self, &args),
             Call::SelfTune(args) => control::tune(self, &args),
+            Call::SelfMolt(args) => control::molt(self, &args),
             Call::Notes(args) => notes::add(self, args),
             Call::Guide(_) => Err(Failure::new("the server answers guide itself")),
         };
