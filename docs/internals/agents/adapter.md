@@ -27,7 +27,7 @@ The invariant matches module paths and type names, not kind strings, so it does 
 - `crates/rimz/src/cli/hooks.rs::run_feed_inner` waits for the drainer's reply only for `antigravity` and for a Claude or Codex `UserPromptSubmit` ([the feed](#the-feed)).
 - `crates/rimz/src/sidebar/refresh/mod.rs::codex_origin_overrides` and `crates/rimz/src/sidebar/refresh/sessions.rs::codex_turn_death_retry_due` serve Codex alone.
 - `crates/rimz/src/sidebar/enrich.rs::RemoteControlServerHealth::for_kind` reads server health for Claude and Codex only, and `crates/rimz/src/pane.rs::command_is_claude_host` recognizes a `claude remote-control` host command line.
-- `crates/rimz/src/config/accounts.rs::AccountsConfig::named` lists the kinds that take named accounts (Claude, Codex, Pi).
+- `crates/rimz/src/config/accounts.rs::AccountsConfig::named` lists the kinds that take named accounts (Claude, Codex, Pi, Antigravity).
 - `crates/rimz/src/harness/budget.rs` names Claude's and Codex's extra-usage surfaces in its subscription warning.
 
 A new adapter that needs one of those behaviours has to be added at that site. A new behaviour belongs on the spec or a trait, where every adapter answers it.
@@ -106,7 +106,7 @@ The table names each trait's central methods. The trait file is the full list.
 | `SpendingCapability` | `spending_sources`, `parse_spend`, `transcript_files`, `session_transcript`, `session_spend_transcripts` | no historical spend enters fleet aggregation |
 | `RuntimeControlCapability` | remote-control readiness, preparation, liveness, and reconciliation | remote control is disabled |
 
-`LaunchCapability::config_home` resolves a login's provider home from the env keys the adapter lists in `config_home_env_keys`. Any adapter can resolve a home this way, but only the kinds `AccountsConfig::named` lists (Claude, Codex, and Pi) can be configured as named accounts ([providers.md](./providers.md)).
+`LaunchCapability::config_home` resolves a login's provider home from the env keys the adapter lists in `config_home_env_keys`. Any adapter can resolve a home this way, but only the kinds `AccountsConfig::named` lists (Claude, Codex, Pi, and Antigravity) can be configured as named accounts ([providers.md](./providers.md)).
 
 `InstallationCapability::untracked_mode_fix(command_line) -> Option<String>` is an optional, pure per-pane check: no file reads, subprocesses, or other I/O. It receives `PaneRef::foreground_cmdline`, falling back to `PaneRef::command`, and returns a fix only when that invocation provably bypasses RimZ reporting. The default is `None`, and no built-in overrides it. Fix text is non-empty, leads with the action, command and arguments first, aims for about 40 cells, and says "then restart" when a running agent will not pick up the change. The sidebar retains the full fix and the renderer may shorten it.
 
