@@ -2,6 +2,7 @@
 //! background launch the command goes through.
 
 use super::Tools;
+use super::notices::{CollectedNotices, with_warnings};
 use super::room::Room;
 use super::start::{CollectedNotices, Start, TaskKind, with_warnings};
 use crate::harness::run::SupervisedRunRequest;
@@ -54,7 +55,7 @@ pub(super) fn launch(tools: &Tools, args: &SubagentArgs) -> Result<Answer, Failu
     };
     let mut notices = CollectedNotices::default();
     let outcome = crate::launcher::launch_background(&request, context, &mut notices);
-    let warnings = notices.0;
+    let warnings = notices.into_lines();
     let failure = match outcome {
         Ok(BackgroundLaunchOutcome::Launched(child)) => {
             return Ok(Answer::data(&Start {
