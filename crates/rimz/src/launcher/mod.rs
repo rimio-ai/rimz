@@ -16,7 +16,9 @@ use execute::{FreshLaunch, PreparedState, SettledLayout};
 pub use execute::{
     LeaderRun, OpenedRun, PreparedLaunch, RunCompletion, SupervisedContext, execute,
 };
-pub use supervised::prepare_supervised;
+pub use supervised::{
+    BackgroundLaunch, BackgroundLaunchOutcome, launch_background, prepare_supervised,
+};
 pub mod resolve;
 pub mod trust;
 pub mod worktree_entry;

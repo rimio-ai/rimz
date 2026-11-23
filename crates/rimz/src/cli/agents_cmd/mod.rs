@@ -1500,17 +1500,7 @@ pub(super) fn cohort_place_flag(cohort: &CohortLaunchArgs) -> Option<&'static st
     .find_map(|(set, flag)| set.then_some(flag))
 }
 
-pub(in crate::cli) struct BackgroundLaunch {
-    pub name: String,
-    pub run_id: rimz::RunId,
-    pub response_path: Option<PathBuf>,
-}
-
-pub(in crate::cli) enum BackgroundLaunchOutcome {
-    Launched(BackgroundLaunch),
-    BudgetExceeded { reason: String },
-    Aborted,
-}
+pub(in crate::cli) use rimz::launcher::{BackgroundLaunch, BackgroundLaunchOutcome};
 
 pub(in crate::cli) fn launch_supervised_background(
     launch: AgentLaunchArgs,
@@ -1591,12 +1581,22 @@ fn into_supervised_request(
         .launch
         .spec
         .context("supervised run requires an agent spec")?;
-    let mut request = rimz::harness::run::SupervisedRunRequest::new(
-        spec,
-        prompt,
-        permission_mode,
-        rimz::agents::ManagedLaunchState::PendingResolution,
-    );
+    let mut request = if args.launch.subagent {
+        rimz::harness::run::SupervisedRunRequest::subagent(spec, prompt)
+    } else {
+        let mut request = rimz::harness::run::SupervisedRunRequest::new(
+            spec,
+            prompt,
+            None,
+            rimz::agents::ManagedLaunchState::PendingResolution,
+        );
+        request.background = args.launch.cohort.bg;
+        request.self_cleanup_on_completion =
+            args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
+        request.report_to = report_to(args.launch.cohort.detach);
+        request
+    };
+    request.permission_mode = permission_mode;
     request.description = args.launch.cohort.description;
     request.worktree = args.launch.cohort.worktree;
     request.from_trunk = args.launch.from_trunk;
@@ -1607,10 +1607,6 @@ fn into_supervised_request(
     request.from_pr = args.launch.cohort.from_pr;
     request.channel = args.launch.cohort.channel;
     request.name = args.launch.name;
-    request.background = args.launch.cohort.bg;
-    request.self_cleanup_on_completion =
-        args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
-    request.subagent = args.launch.subagent;
     request.force_new_tab = args.launch.cohort.new_tab;
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
@@ -1628,7 +1624,6 @@ fn into_supervised_request(
     request.warn = args.launch.warn;
     request.grace = args.launch.grace;
     request.keep = args.launch.keep;
-    request.report_to = report_to(args.launch.cohort.detach);
     request.retries = args.launch.retries.unwrap_or(0);
     request.verify = args.launch.verify;
     request.max_attempts = args.launch.max_attempts;

@@ -2518,7 +2518,9 @@ path = "crates/rimz/src/harness"
 # workflow::join moves the workflow wait's look and poll from the CLI so the MCP join shares them (+9).
 # TaskCatalog::remove_keeping_runs is the schedule stop that leaves the task's runs going (+1).
 # idle_stop::started::RowKey keys each started row so the MCP task tools find its thing (+1).
-surface-budget = 1352
+# SupervisedRunRequest::subagent is the one subagent request the CLI and the MCP subagent tool
+# build (+1).
+surface-budget = 1353
 
 [[verdict]]
 kind = "item"
@@ -2993,7 +2995,9 @@ path = "crates/rimz/src/launcher"
 # and the Room notice carries the host's backend notices to its interaction (+3).
 # The agent and team waits move here as agent_join and team_join so the MCP join shares them (+22).
 # agent_join::WaitSet::once is the one-poll join the CLI's join deferring to the caller's report runs (+1).
-surface-budget = 158
+# launch_background with BackgroundLaunch and BackgroundLaunchOutcome is the one background
+# supervised launch the CLI and the MCP subagent tool share (+3).
+surface-budget = 161
 
 [[verdict]]
 kind = "item"
@@ -5889,7 +5893,8 @@ allowed-dependencies = [
 # hold_interrupted_turn and expire_interrupt stamp and settle an interrupted subagent turn's hold for the timeout helper; one fits the slack left before (+1).
 # release_rung restores a claimed stop rung the helper's interrupt could not deliver (+1).
 # release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow reconcile pass and cancel (+1).
-surface-budget = 66
+# subagent is the one subagent request the CLI and the MCP subagent tool build (+1).
+surface-budget = 67
 
 [[verdict]]
 kind = "item"

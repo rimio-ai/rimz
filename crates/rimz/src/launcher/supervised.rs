@@ -63,6 +63,63 @@ pub fn prepare_supervised(
     prepare(request, context, None, interaction)
 }
 
+/// A background supervised run whose pane opened: its agent's name, its run id, and the file
+/// its response lands in.
+#[derive(Debug)]
+pub struct BackgroundLaunch {
+    pub name: String,
+    pub run_id: crate::ids::RunId,
+    pub response_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub enum BackgroundLaunchOutcome {
+    Launched(BackgroundLaunch),
+    BudgetExceeded {
+        reason: String,
+    },
+    /// Handled before its pane opened, declined, or found already open.
+    Aborted,
+}
+
+/// Prepare `request` and open its pane as a background run, which settles on its own: the
+/// one sequence a background launch from the CLI or from an MCP tool goes through.
+pub fn launch_background(
+    request: &SupervisedRunRequest,
+    mut context: SupervisedContext,
+    interaction: &mut dyn Interaction,
+) -> Result<BackgroundLaunchOutcome> {
+    if !request.background {
+        bail!("a background launch needs a background request");
+    }
+    context.completion = RunCompletion::Detached;
+    let prepared = match prepare_supervised(request, context, interaction)? {
+        Preparation::Prepared(prepared) => *prepared,
+        Preparation::Handled(_) => return Ok(BackgroundLaunchOutcome::Aborted),
+    };
+    let opened = match execute(prepared, interaction)? {
+        LaunchOutcome::Opened(opened) => opened,
+        LaunchOutcome::BudgetExceeded { reason } => {
+            return Ok(BackgroundLaunchOutcome::BudgetExceeded { reason });
+        }
+        LaunchOutcome::Declined | LaunchOutcome::Existing => {
+            return Ok(BackgroundLaunchOutcome::Aborted);
+        }
+    };
+    let run = opened
+        .run
+        .context("supervised launch returned no leader run")?;
+    Ok(BackgroundLaunchOutcome::Launched(BackgroundLaunch {
+        name: run
+            .record
+            .agent_name
+            .clone()
+            .context("run has no agent name")?,
+        run_id: run.record.run_id,
+        response_path: run.response_path,
+    }))
+}
+
 fn prepare(
     request: &SupervisedRunRequest,
     context: SupervisedContext,
