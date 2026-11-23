@@ -2569,10 +2569,12 @@ fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller
                 .arg(&env.project_root);
             zellij(&mut drain);
             assert!(drain.output().unwrap().status.success());
+            // The helper closes the pane before it withdraws the booking, so wait for both.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-            while !std::fs::read_to_string(&log)
+            while !(std::fs::read_to_string(&log)
                 .unwrap_or_default()
                 .contains("close-pane")
+                && rimz::store::idle_stop::read(env.store().paths()).is_empty())
                 && std::time::Instant::now() < deadline
             {
                 std::thread::sleep(std::time::Duration::from_millis(100));
