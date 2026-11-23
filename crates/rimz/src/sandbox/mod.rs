@@ -106,6 +106,11 @@ pub enum SandboxErr {
     },
     #[error("provider {kind} declares no skill root; remove the profile skills list")]
     SkillsNeedRoot { kind: String },
+    #[error(
+        "provider {kind} has no skill view to withhold the RimZ skills the profile's \
+         `capabilities:` list leaves out; launch it at host isolation, or write its `tools:` instead"
+    )]
+    GrantNeedsView { kind: String },
     #[error("provider {kind} cannot mark skills user-only; remove the profile skills list")]
     ManualSkillsUnsupported { kind: String },
     #[error("invalid profile skills: {0}")]
@@ -119,6 +124,9 @@ pub struct SkillInputs<'a> {
     pub callable: Option<&'a [SkillName]>,
     /// Skills marked user-only whatever the list says.
     pub withheld: &'a [&'a str],
+    /// The profile's `capabilities:` grant: each `rimz-*` skill it leaves out is withheld, and a
+    /// view that cannot be prepared fails the launch as a list's would.
+    pub grant: Option<&'a [crate::config::RimzEntry]>,
 }
 
 pub struct SandboxInputs<'a> {
@@ -768,6 +776,7 @@ mod tests {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: None,
+                grant: None,
             },
         })
     }
@@ -796,6 +805,7 @@ mod tests {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: None,
+                grant: None,
             },
         })
         .unwrap();

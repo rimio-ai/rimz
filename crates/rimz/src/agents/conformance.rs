@@ -897,6 +897,7 @@ fn agent_file_matcher_comes_with_an_agent_file() {
         mcp: super::capabilities::McpLaunch {
             server: None,
             mcps: None,
+            granted: false,
             login_env: &env,
         },
     };
@@ -938,6 +939,7 @@ fn agent_file_kinds_write_a_limiting_mcps_list() {
                 mcp: super::capabilities::McpLaunch {
                     server: None,
                     mcps,
+                    granted: false,
                     login_env: &env,
                 },
             })

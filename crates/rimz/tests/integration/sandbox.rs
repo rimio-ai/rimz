@@ -1110,6 +1110,7 @@ fn ssh_config_plan(env: &Env, source: &Path) -> SandboxPlan {
             manual: ManualSkill::Frontmatter,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     })
     .unwrap()
@@ -1740,6 +1741,7 @@ fn sandbox_guarded_entries_follow_protected_identity_binds() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: Some(&[]),
+            grant: None,
         },
     };
     let plan = rimz::sandbox::plan(&inputs).unwrap();
@@ -1837,6 +1839,7 @@ fn vanishing_entries_plan(env: &Env) -> SandboxPlan {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     })
     .unwrap();
@@ -2037,6 +2040,7 @@ fn sandbox_guard_restores_replaced_entries_in_a_running_view() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     })
     .unwrap();
@@ -2300,6 +2304,7 @@ fn sandbox_guard_restores_a_replaced_entry_while_the_view_is_stopped() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     })
     .unwrap();
@@ -2670,6 +2675,7 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     };
     let plan = rimz::sandbox::plan(&inputs).unwrap();
@@ -2757,6 +2763,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
             manual: ManualSkill::Unsupported,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     };
     for contains_home in [false, true] {
@@ -2884,6 +2891,7 @@ fn scoped_protects_separate_git_directory() {
             manual: ManualSkill::Unsupported,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     })
     .unwrap();
@@ -2923,6 +2931,7 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
                 manual: ManualSkill::OpenAiPolicy,
                 withheld: &[],
                 callable: None,
+                grant: None,
             },
         )
         .unwrap();
@@ -2951,6 +2960,7 @@ fn sandbox_listed_library_marker_errors_keep_the_read_failure() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: Some(&listed),
+            grant: None,
         },
     );
     assert!(
@@ -2993,6 +3003,7 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
                     manual: ManualSkill::OpenAiPolicy,
                     withheld: &[],
                     callable,
+                    grant: None,
                 },
             );
             if callable.is_some() {
@@ -3078,6 +3089,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
             manual: ManualSkill::Frontmatter,
             withheld: &[],
             callable: Some(&["listed".parse().unwrap()]),
+            grant: None,
         },
     })
     .unwrap();
@@ -3163,6 +3175,7 @@ fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
             manual: ManualSkill::Frontmatter,
             withheld: &[],
             callable: Some(&[]),
+            grant: None,
         },
     )
     .unwrap();
@@ -3208,6 +3221,7 @@ fn sandbox_skills_state_failure_still_refuses() {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: Some(&[]),
+                grant: None,
             },
         )
         .is_err()
@@ -3313,6 +3327,7 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: None,
+                grant: None,
             },
         )
         .unwrap();
@@ -3378,6 +3393,7 @@ fn sandbox_matching_owned_pack_links_need_no_view_but_stale_links_do() {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: None,
+                grant: None,
             },
         )
         .unwrap();
@@ -3391,6 +3407,54 @@ fn sandbox_matching_owned_pack_links_need_no_view_but_stale_links_do() {
             "{argv:?}"
         );
     }
+}
+
+/// A grant with no `skills` list withholds each `rimz-*` skill the view enumerates and the grant
+/// leaves out, keeping the user's own and the granted ones, with no outside list of names.
+#[test]
+fn scoped_skill_view_withholds_the_rimz_skills_a_grant_leaves_out() {
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    let names = ["commit", "rimz-lsp", "rimz-wait"];
+    for name in names {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), format!("{name}\n")).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let grant: Vec<rimz::config::RimzEntry> = vec!["rimz-lsp".parse().unwrap()];
+    let vars = environment(&env);
+    let argv = skill_argv(
+        &env,
+        &vars,
+        SkillInputs {
+            kind: "claude",
+            home: Some(root.clone()),
+            manual: ManualSkill::Frontmatter,
+            withheld: &[],
+            callable: None,
+            grant: Some(&grant),
+        },
+    )
+    .unwrap();
+    let shown: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let target = root.join(name);
+            let source = argv
+                .windows(3)
+                .find(|args| args[0] == "--ro-bind" && Path::new(&args[2]) == target)
+                .map_or(target.clone(), |args| PathBuf::from(&args[1]));
+            std::fs::read_to_string(source.join("SKILL.md")).unwrap()
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "commit\n",
+            "rimz-lsp\n",
+            "---\ndisable-model-invocation: true\n---\nrimz-wait\n"
+        ]
+    );
 }
 
 #[test]
@@ -3482,6 +3546,7 @@ fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
                 home,
                 manual,
                 callable: None,
+                grant: None,
                 withheld: &["rimz-subagents"],
             },
         );
@@ -3598,6 +3663,7 @@ fn sandbox_empty_skill_list_makes_every_skill_manual() {
             manual: ManualSkill::Frontmatter,
             withheld: &[],
             callable: Some(&[]),
+            grant: None,
         },
     )
     .unwrap();
@@ -3651,6 +3717,7 @@ fn sandbox_manual_copies_are_content_addressed() {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: Some(&[]),
+                grant: None,
             },
         )
         .unwrap();
@@ -3746,6 +3813,7 @@ fn sandbox_codex_manual_writes_openai_policy() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: Some(&["callable".parse().unwrap()]),
+            grant: None,
         },
     )
     .unwrap();
@@ -3796,6 +3864,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
                     manual: ManualSkill::Unsupported,
                     withheld: &[],
                     callable: Some(list),
+                    grant: None,
                 },
             )
             .unwrap_err();
@@ -3814,10 +3883,45 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
             manual: ManualSkill::Unsupported,
             withheld: &[],
             callable: Some(&[]),
+            grant: None,
         },
     )
     .unwrap_err();
     assert!(matches!(err, SandboxErr::SkillsNeedRoot { .. }));
+    // A grant restricts only what it would withhold: a rootless view plans as with no grant, and
+    // a kind that cannot mark skills user-only refuses only over a `rimz-*` skill left out.
+    let rootless = SkillInputs {
+        kind: "plugin",
+        home: None,
+        manual: ManualSkill::Unsupported,
+        withheld: &[],
+        callable: None,
+        grant: Some(&[]),
+    };
+    assert!(skill_argv(&env, &environment(&env), rootless).is_ok());
+    let grant: Vec<rimz::config::RimzEntry> = vec!["rimz-wait".parse().unwrap()];
+    let granted = || SkillInputs {
+        kind: "plugin",
+        home: Some(root.clone()),
+        manual: ManualSkill::Unsupported,
+        withheld: &[],
+        callable: None,
+        grant: Some(&grant),
+    };
+    for name in ["rimz-wait", "native"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
+    }
+    assert!(skill_argv(&env, &environment(&env), granted()).is_ok());
+    std::fs::create_dir_all(root.join("rimz-lsp")).unwrap();
+    std::fs::write(root.join("rimz-lsp/SKILL.md"), "body\n").unwrap();
+    let err = skill_argv(&env, &environment(&env), granted()).unwrap_err();
+    assert!(matches!(err, SandboxErr::GrantNeedsView { .. }));
+    assert_eq!(
+        err.to_string(),
+        "provider plugin has no skill view to withhold the RimZ skills the profile's \
+         `capabilities:` list leaves out; launch it at host isolation, or write its `tools:` instead"
+    );
 }
 
 #[test]
@@ -3857,6 +3961,7 @@ fn sandbox_antigravity_skill_list_views_its_global_root() {
             manual: agy.manual_skill(),
             withheld: &[],
             callable: Some(&["listed".parse().unwrap()]),
+            grant: None,
         },
     )
     .unwrap();
@@ -3922,6 +4027,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: Some(&callable),
+            grant: None,
         },
     };
     let plan = rimz::sandbox::plan(&inputs).unwrap();
@@ -4015,6 +4121,7 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
                 manual: ManualSkill::Frontmatter,
                 withheld: &[],
                 callable: Some(&[]),
+                grant: None,
             },
         )
         .unwrap();
@@ -4096,6 +4203,7 @@ fn sandbox_skill_aliases_require_matching_invocation_policies() {
                 manual: ManualSkill::OpenAiPolicy,
                 withheld: &[],
                 callable: Some(&callable),
+                grant: None,
             },
         );
         if names.len() == 1 {
@@ -4154,6 +4262,7 @@ fn sandbox_non_skill_entries_are_never_materialized() {
                 manual: ManualSkill::OpenAiPolicy,
                 withheld: &[],
                 callable: Some(&callable),
+                grant: None,
             },
         )
         .unwrap();
@@ -4200,6 +4309,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     };
     let plan = rimz::sandbox::plan(&inputs).unwrap();
@@ -5434,6 +5544,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     )
     .unwrap();
@@ -5455,6 +5566,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             manual: ManualSkill::OpenAiPolicy,
             withheld: &[],
             callable: None,
+            grant: None,
         },
     )
     .unwrap();
@@ -5504,6 +5616,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
             manual: ManualSkill::Frontmatter,
             withheld: &[],
             callable: Some(&["visible".parse().unwrap()]),
+            grant: None,
         },
     })
     .unwrap();

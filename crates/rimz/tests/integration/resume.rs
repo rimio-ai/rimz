@@ -325,6 +325,7 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
                 },
                 ..ExecIdentity::default()
             },
+            rimz_capabilities: None,
         },
     )
     .expect("resume argv")

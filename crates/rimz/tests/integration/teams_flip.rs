@@ -1637,6 +1637,7 @@ impl Fixture {
             exit_on_run_completion: false,
             subagent: false,
             identity: ExecIdentity::default(),
+            rimz_capabilities: None,
         };
         request.identity.params = rimz::agents::LaunchParams {
             team: Some("forge".to_owned()),

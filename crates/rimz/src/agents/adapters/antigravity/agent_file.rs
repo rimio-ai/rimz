@@ -292,6 +292,7 @@ mod tests {
                         env_names: ["HOME".to_owned()].into(),
                     }),
                     mcps: mcps.as_deref(),
+                    granted: false,
                     login_env: &env,
                 },
             })

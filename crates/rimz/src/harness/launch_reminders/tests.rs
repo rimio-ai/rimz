@@ -1061,6 +1061,72 @@ fn capabilities_paragraph_on_a_skills_only_launch_follows_the_skills_list() {
     );
 }
 
+/// Under a RimZ grant the paragraph names only the granted capabilities: a served one as its
+/// tools, the rest as skills on disk, whatever `rimz-*` names a `skills` list carries. The
+/// launch plan's unreachable-reference warning reads this same list.
+#[test]
+fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
+    let mut actual = Vec::new();
+    for (kind, server) in [("claude", true), ("opencode", false)] {
+        for skills in [None, Some(vec!["rimz-wait", "commit"])] {
+            let mut request =
+                ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
+            request.skills =
+                skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+            request.rimz_capabilities = Some(vec![
+                "rimz-lsp:deferred".parse().unwrap(),
+                "rimz-message".parse().unwrap(),
+            ]);
+            let reminders = LaunchReminders {
+                mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
+                rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+                ..LaunchReminders::default()
+            };
+            let names: Vec<_> = reminders
+                .rimz_capabilities(&request)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect();
+            assert_eq!(names, ["rimz-lsp", "rimz-message"], "{kind}");
+            actual.push(capabilities_paragraph_of(&render(
+                &request,
+                &reminders,
+                Path::new("/checkout"),
+                None,
+            )));
+        }
+    }
+    let served = Some(format!(
+        "{CAPABILITIES_LEAD}\
+- rimz-lsp: the `lsp` tool of the `rimz` MCP server
+- rimz-message: Skill(rimz-message)"
+    ));
+    let skills = Some(format!(
+        "{CAPABILITIES_LEAD}\
+- rimz-lsp: Skill(rimz-lsp)
+- rimz-message: Skill(rimz-message)"
+    ));
+    assert_eq!(actual, [served.clone(), served, skills.clone(), skills]);
+}
+
+/// A granted capability the launch does not serve as tools is reachable by its skill only when
+/// that skill is on disk, as a skills list is checked on disk.
+#[test]
+fn a_granted_capability_with_neither_tools_nor_a_skill_on_disk_is_unreachable() {
+    let mut request =
+        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("pi"), Vec::new());
+    request.rimz_capabilities = Some(vec![
+        "rimz-lsp".parse().unwrap(),
+        "rimz-subagents".parse().unwrap(),
+    ]);
+    let reminders = LaunchReminders {
+        rimz_skills: rimz_skills(&["rimz-lsp"]),
+        ..LaunchReminders::default()
+    };
+    assert!(reminders.lsp_callable(&request));
+    assert!(!reminders.callable(&request, Capability::Subagents));
+}
+
 #[test]
 fn a_child_has_no_rimz_subagents_as_tool_or_skill() {
     for (kind, served) in [("claude", true), ("opencode", false)] {

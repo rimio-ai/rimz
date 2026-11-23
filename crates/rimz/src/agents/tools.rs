@@ -31,11 +31,15 @@ pub(crate) fn canonical_tool_name(name: &str) -> &str {
 /// type list reach a launch, and `restrictions` only records which bases carried one, for the
 /// notice that says it was dropped. A pack update's widening review compares those two lists
 /// alone, so a restriction that changes grants nothing it can see.
+///
+/// `rimz` is the RimZ grant of a `capabilities:` list, which rides on its tools value so that
+/// every rule that moves the tools moves the grant with them; a `tools:` list has none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSet {
     bases: Vec<String>,
     agent_types: Vec<String>,
     restrictions: Vec<String>,
+    rimz: Option<Vec<crate::config::RimzEntry>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +65,7 @@ impl ToolSet {
             bases: Vec::new(),
             agent_types: Vec::new(),
             restrictions: Vec::new(),
+            rimz: None,
         };
         for entry in entries {
             let entry_text = entry.trim();
@@ -116,6 +121,18 @@ impl ToolSet {
 
     pub fn bases(&self) -> &[String] {
         &self.bases
+    }
+
+    /// The RimZ capabilities a `capabilities:` list grants; `None` for a `tools:` list.
+    pub fn rimz(&self) -> Option<&[crate::config::RimzEntry]> {
+        self.rimz.as_deref()
+    }
+
+    /// These tools as the lowering of a `capabilities:` list that grants `grant`.
+    #[must_use]
+    pub fn with_rimz(mut self, grant: Vec<crate::config::RimzEntry>) -> Self {
+        self.rimz = Some(grant);
+        self
     }
 
     pub(crate) fn agent_types(&self) -> &[String] {

@@ -464,7 +464,8 @@ upward-dependencies = ["address"]
 # the rimz-* skills (+1).
 # ContextObservation::provider_at_rest tells the statusline feed the provider reports itself at rest (+1).
 # Background scripts, their report, and the shown threshold are folded by store and drawn by the renderer (+3).
-surface-budget = 1335
+# launch_callable is the one grant-aware skill rule both skill enforcers apply (+1).
+surface-budget = 1336
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1217,7 +1218,8 @@ upward-dependencies = [
 # served_marks gives the launch env and explain each served capability's load mark (+1).
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
 # rimz_references is the one rimz(x) scanner the launch warning and `rimz agents validate` share (+1).
-surface-budget = 305
+# RimzEntry carries a `capabilities:` grant's entries through ToolSet to the launch (+1).
+surface-budget = 306
 
 [[verdict]]
 kind = "item"
@@ -5814,7 +5816,9 @@ allowed-dependencies = [
 # ExecRequest::is_judge is the one judge rule for the launch plan and the served set (+1).
 # ExecRequest::cannot_delegate is the one rule that keeps rimz-subagents from a child and a
 # judge, read by the served set and the reminder's capability set (+1).
-surface-budget = 62
+# ExecRequest is the one reader of a `capabilities:` grant: skill_callable, served_marks,
+# mcp_list, and skill_grant serve the reminder, the plan, and both skill enforcers (+4).
+surface-budget = 66
 
 [[verdict]]
 kind = "item"

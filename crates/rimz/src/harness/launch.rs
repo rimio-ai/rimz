@@ -781,6 +781,10 @@ pub struct ExecRequest {
     /// Whether the applied tools list excludes `Skill`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_skill_tool: bool,
+    /// The RimZ capabilities a `capabilities:` list grants, each with its load mark; absent for
+    /// a profile that reaches them through `skills` and `mcps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rimz_capabilities: Option<Vec<crate::config::RimzEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     /// The definition's tools list as canonical base names.
@@ -816,17 +820,51 @@ impl ExecRequest {
     /// The skills callable with the launch's applied tools and profile policy,
     /// less the rimz skills `hidden` because the launch registers the MCP
     /// tools of the same name.
+    ///
+    /// On a request with a RimZ grant, a `skills` list names the user's own skills and the grant
+    /// names RimZ's, so the list's `rimz-*` names grant nothing and the granted names join it.
     pub fn callable_skills(&self, hidden: &[&str]) -> Option<Vec<crate::config::SkillName>> {
         if self.no_skill_tool {
             return Some(Vec::new());
         }
+        let grant = self.rimz_capabilities.as_deref();
         self.skills.as_ref().map(|skills| {
             skills
                 .iter()
-                .filter(|skill| !hidden.contains(&skill.as_str()))
+                .filter(|skill| grant.is_none() || !is_rimz_name(skill.as_str()))
                 .cloned()
+                .chain(
+                    grant
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entry| entry.name().parse().ok()),
+                )
+                .filter(|skill| !hidden.contains(&skill.as_str()))
                 .collect()
         })
+    }
+
+    /// Whether skill `name` is callable on this launch: under a RimZ grant a `rimz-*` skill is
+    /// callable only when the grant names it, and any other skill as the `skills` list says.
+    pub(super) fn skill_callable(&self, hidden: &[&str], name: &str) -> bool {
+        if self.rimz_capabilities.is_some() && is_rimz_name(name) {
+            return !self.no_skill_tool && self.granted(name);
+        }
+        crate::config::skill_is_callable(self.callable_skills(hidden).as_deref(), name)
+    }
+
+    /// Whether the request's RimZ grant names `name`.
+    fn granted(&self, name: &str) -> bool {
+        self.rimz_capabilities
+            .iter()
+            .flatten()
+            .any(|entry| entry.name() == name)
+    }
+
+    /// The request's RimZ grant, which each skill enforcer applies to the `rimz-*` skills it
+    /// enumerates: a restriction the profile set, which a launch applies or refuses, never skips.
+    pub(super) fn skill_grant(&self) -> Option<&[crate::config::RimzEntry]> {
+        self.rimz_capabilities.as_deref()
     }
 
     /// Whether this launch is a workflow judge, whose checkout is read-only.
@@ -844,13 +882,21 @@ impl ExecRequest {
         self.subagent || self.is_judge()
     }
 
-    /// The RimZ capabilities the launch's `mcps` selection serves, less `rimz-subagents` when
-    /// the launch gets no subagent surface (`LaunchReminders::no_subagents`).
+    /// The RimZ capabilities the launch's grant, or else its `mcps` selection, serves, less
+    /// `rimz-subagents` when the launch gets no subagent surface
+    /// (`LaunchReminders::no_subagents`).
     pub(super) fn mcp_capabilities(
         &self,
         no_subagents: bool,
     ) -> Vec<crate::mcp::catalog::Capability> {
-        let mut capabilities = crate::config::mcp_capabilities(self.mcps.as_deref());
+        let mut capabilities = match &self.rimz_capabilities {
+            Some(_) => self
+                .served_marks()
+                .into_iter()
+                .map(|(capability, _)| capability)
+                .collect(),
+            None => crate::config::mcp_capabilities(self.mcps.as_deref()),
+        };
         if no_subagents {
             capabilities
                 .retain(|capability| *capability != crate::mcp::catalog::Capability::Subagents);
@@ -858,16 +904,86 @@ impl ExecRequest {
         capabilities
     }
 
+    /// Each capability the grant, or else the `mcps` selection, serves, with its load mark.
+    pub(super) fn served_marks(
+        &self,
+    ) -> Vec<(
+        crate::mcp::catalog::Capability,
+        Option<crate::mcp::catalog::LoadMode>,
+    )> {
+        let Some(grant) = &self.rimz_capabilities else {
+            return crate::config::served_marks(self.mcps.as_deref());
+        };
+        crate::mcp::catalog::Capability::ALL
+            .into_iter()
+            .filter_map(|capability| {
+                let entry = grant
+                    .iter()
+                    .find(|entry| entry.capability() == Some(capability))?;
+                Some((capability, entry.mode()))
+            })
+            .collect()
+    }
+
+    /// The `mcps` list a provider's MCP code reads. With no grant it is the profile's own.
+    /// Under a grant it is the user's entries of `mcps` (`*` and their own servers), or `*`
+    /// when `mcps` is absent, then each granted capability with its mark.
+    pub(super) fn mcp_list(&self) -> Option<std::borrow::Cow<'_, [crate::config::McpName]>> {
+        let Some(grant) = &self.rimz_capabilities else {
+            return self.mcps.as_deref().map(std::borrow::Cow::Borrowed);
+        };
+        let own = self.mcps.as_ref().map_or_else(
+            || vec![crate::config::McpName::all()],
+            |entries| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.is_all() || entry.user_server().is_some())
+                    .cloned()
+                    .collect()
+            },
+        );
+        let granted = grant
+            .iter()
+            .filter(|entry| entry.capability().is_some())
+            .filter_map(|entry| entry.to_string().parse().ok());
+        Some(std::borrow::Cow::Owned(
+            own.into_iter().chain(granted).collect(),
+        ))
+    }
+
     /// The profile list handed to the provider, less the skills `withheld` from the model
-    /// (`LaunchReminders::withheld_skills`).
+    /// (`LaunchReminders::withheld_skills`). Under a RimZ grant the list holds only the user's
+    /// own names: each enforcer admits the granted `rimz-*` skills it finds through
+    /// `ExecRequest::skill_grant`.
     pub(super) fn launch_skills(&self, withheld: &[&str]) -> Option<Vec<crate::config::SkillName>> {
         self.skills.as_ref().map(|skills| {
             skills
                 .iter()
+                .filter(|skill| self.rimz_capabilities.is_none() || !is_rimz_name(skill.as_str()))
                 .filter(|skill| !withheld.contains(&skill.as_str()))
                 .cloned()
                 .collect()
         })
+    }
+
+    /// The skills a provider's allow rules name: `listed` and each granted `rimz-*` name that
+    /// is not `withheld`.
+    fn allowed_skills(
+        &self,
+        listed: &[crate::config::SkillName],
+        withheld: &[&str],
+    ) -> Vec<crate::config::SkillName> {
+        listed
+            .iter()
+            .cloned()
+            .chain(
+                self.rimz_capabilities
+                    .iter()
+                    .flatten()
+                    .filter(|entry| !withheld.contains(&entry.name()))
+                    .filter_map(|entry| entry.name().parse().ok()),
+            )
+            .collect()
     }
 
     pub fn fresh(
@@ -883,6 +999,7 @@ impl ExecRequest {
             skills: cell.skills.clone(),
             mcps: cell.mcps.clone(),
             no_skill_tool: cell.no_skill_tool,
+            rimz_capabilities: cell.rimz_capabilities.clone(),
             allowed_tools: cell.allowed_tools.clone(),
             tools: cell.tools.clone(),
             isolation_default: cell.isolation_default,
@@ -906,6 +1023,7 @@ impl ExecRequest {
             skills: None,
             mcps: None,
             no_skill_tool: false,
+            rimz_capabilities: None,
             allowed_tools: None,
             tools: None,
             isolation_default: None,
@@ -921,6 +1039,11 @@ impl ExecRequest {
             identity: ExecIdentity::default(),
         }
     }
+}
+
+/// A `rimz-*` name, which under a RimZ grant only the grant can make callable.
+fn is_rimz_name(name: &str) -> bool {
+    name.starts_with("rimz-")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1254,8 +1377,10 @@ fn compile_agent_process_with_extra_env(
     let skill_chain = crate::agents::skills::SkillChain::from_env(&skill_env);
     let withheld = reminders.withheld_skills(request);
     let listed = request.launch_skills(&withheld);
+    let grant = request.skill_grant();
     let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
         && (listed.is_some()
+            || grant.is_some()
             || (!withheld.is_empty()
                 && matches!(
                     adapter.spec().host_skills,
@@ -1264,7 +1389,7 @@ fn compile_agent_process_with_extra_env(
         let artifact_dir = runtime.prompt_dir();
         let mut args = action.extra_args().to_vec();
         match adapter.spec().host_skills.apply(
-            (listed.as_deref(), &withheld),
+            (listed.as_deref(), &withheld, grant),
             adapter.skills_home(&skill_env).as_deref(),
             skill_chain.as_ref(),
             (cwd, &artifact_dir),
@@ -1274,7 +1399,7 @@ fn compile_agent_process_with_extra_env(
                 *action.extra_args_mut() = args;
                 (Some(plan), artifact)
             }
-            Err(error) if listed.is_none() => {
+            Err(error) if listed.is_none() && grant.is_none() => {
                 tracing::debug!(
                     %error,
                     "keeping native skill discovery because the optional host view is unavailable"
@@ -1299,7 +1424,7 @@ fn compile_agent_process_with_extra_env(
     )?;
     if let (Some(listed), Some((artifact_dir, _))) = (&listed, &reminders.settings) {
         adapter.allow_listed_skill_args(
-            listed,
+            &request.allowed_skills(listed, &withheld),
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,
@@ -1497,7 +1622,8 @@ fn compile_agent_process_with_extra_env(
         mcp_warnings = adapter.mcp_server_args(
             &crate::agents::capabilities::McpLaunch {
                 server: mcp_server(reminders, &skill_env, &env),
-                mcps: request.mcps.as_deref(),
+                mcps: request.mcp_list().as_deref(),
+                granted: request.rimz_capabilities.is_some(),
                 login_env: &skill_env,
             },
             (cwd, artifact_dir),

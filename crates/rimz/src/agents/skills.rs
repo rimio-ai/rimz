@@ -503,10 +503,32 @@ fn read_skill(
     Ok(Some(SkillDir { name, source, path }))
 }
 
+/// Whether a launch's skill policy makes skill `name` callable: never when `withheld` names it;
+/// under a `capabilities:` `grant`, a `rimz-*` skill only when the grant names it; any other
+/// as `listed` says. Each enforcer applies it to the inventory it enumerates itself.
+pub(crate) fn launch_callable(
+    listed: Option<&[SkillName]>,
+    withheld: &[&str],
+    grant: Option<&[crate::config::RimzEntry]>,
+    name: &str,
+) -> bool {
+    if withheld.contains(&name) {
+        return false;
+    }
+    match grant {
+        Some(grant) if name.starts_with("rimz-") => grant.iter().any(|entry| entry.name() == name),
+        _ => crate::config::skill_is_callable(listed, name),
+    }
+}
+
 impl HostSkills {
     pub(crate) fn apply(
         self,
-        (listed, withheld): (Option<&[SkillName]>, &[&str]),
+        (listed, withheld, grant): (
+            Option<&[SkillName]>,
+            &[&str],
+            Option<&[crate::config::RimzEntry]>,
+        ),
         root: Option<&Path>,
         chain: Option<&SkillChain>,
         paths: (&Path, &Path),
@@ -545,9 +567,7 @@ impl HostSkills {
         let mut unlisted = Vec::new();
         for (name, skill) in inventory.skills {
             let provider_key = key(&skill)?;
-            let (keys, other_policy) = if crate::config::skill_is_callable(listed, &name)
-                && !withheld.contains(&name.as_str())
-            {
+            let (keys, other_policy) = if launch_callable(listed, withheld, grant, &name) {
                 (&mut callable, &unlisted)
             } else {
                 (&mut unlisted, &callable)

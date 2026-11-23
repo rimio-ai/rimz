@@ -8,7 +8,6 @@ use super::launch_context::{self, escape_reminder_text};
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{LaunchParams, model_display::display_model};
-use crate::config::skill_is_callable;
 use crate::mcp::catalog::Capability;
 
 pub use super::launch_context::TeamReminder;
@@ -138,7 +137,8 @@ impl LaunchReminders {
         if served.is_empty() {
             return None;
         }
-        let marks: Vec<_> = crate::config::served_marks(request.mcps.as_deref())
+        let marks: Vec<_> = request
+            .served_marks()
             .into_iter()
             .filter(|(capability, _)| served.contains(capability))
             .collect();
@@ -193,10 +193,13 @@ impl LaunchReminders {
         }
     }
 
-    /// The launch can use `capability`, through its MCP tools or its skill.
+    /// The launch can use `capability`, through its MCP tools or its skill. Under a RimZ grant
+    /// the skill counts only when it is on disk, as a `skills` list is checked on disk.
     fn callable(&self, request: &ExecRequest, capability: Capability) -> bool {
+        let name = capability.name();
         self.reach(request, capability) == Reach::Tools(capability)
-            || skill_is_callable(self.callable_skills(request).as_deref(), capability.name())
+            || (request.skill_callable(&self.hidden_skills(request), name)
+                && (request.skill_grant().is_none() || self.rimz_skills.contains(name)))
     }
 
     /// The launch can query the room's shared language servers.
@@ -213,13 +216,12 @@ impl LaunchReminders {
         let served = self.mcp_capabilities(request);
         let hidden = self.hidden_skills(request);
         let withheld = self.withheld_skills(request);
-        let callable = request.callable_skills(&hidden);
         let skills = self
             .rimz_skills
             .iter()
             .filter(|name| {
                 !withheld.contains(&name.as_str())
-                    && skill_is_callable(callable.as_deref(), name)
+                    && request.skill_callable(&hidden, name)
                     && !served.iter().any(|capability| capability.name() == *name)
             })
             .map(|name| (name.clone(), Reach::Skill));

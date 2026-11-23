@@ -460,7 +460,8 @@ fn own_rows(
 /// What shuts a profile out of RimZ capability `name`, judged offline by the
 /// machine config and the profile's `tools`, `skills`, and `mcps`: the reasons
 /// its MCP tools are out of reach, then the reasons its skill is. An empty side is
-/// a way in; the skill side does not look at the disk.
+/// a way in; the skill side does not look at the disk. A profile whose tools carry
+/// a `capabilities:` grant reaches only what the grant names, on either side.
 fn shut_out(
     machine: &rimz::config::MachineConfig,
     kind: &str,
@@ -471,6 +472,13 @@ fn shut_out(
     use rimz::mcp::catalog::Capability;
     if subagent && name == Capability::Subagents.name() {
         let reason = vec!["a subagent cannot launch subagents".to_owned()];
+        return (reason.clone(), reason);
+    }
+    let grant = profile.tools.as_ref().and_then(rimz::agents::ToolSet::rimz);
+    if let Some(grant) = grant
+        && !grant.iter().any(|entry| entry.name() == name)
+    {
+        let reason = vec![format!("its capabilities leave out {name}")];
         return (reason.clone(), reason);
     }
     let tool = match Capability::from_name(name) {
@@ -485,7 +493,9 @@ fn shut_out(
             vec![format!("{kind} takes no MCP servers")]
         }
         Some(capability)
-            if !rimz::config::mcp_capabilities(profile.mcps.as_deref()).contains(&capability) =>
+            if grant.is_none()
+                && !rimz::config::mcp_capabilities(profile.mcps.as_deref())
+                    .contains(&capability) =>
         {
             vec![format!("its mcps leave out {name}")]
         }
@@ -493,7 +503,7 @@ fn shut_out(
     };
     let skill = if rimz::agents::skills_lack_skill_tool(kind, profile.tools.as_ref()) {
         vec!["its tools leave out Skill".to_owned()]
-    } else if !rimz::config::skill_is_callable(profile.skills.as_deref(), name) {
+    } else if grant.is_none() && !rimz::config::skill_is_callable(profile.skills.as_deref(), name) {
         vec![format!("its skills leave out {name}")]
     } else {
         Vec::new()

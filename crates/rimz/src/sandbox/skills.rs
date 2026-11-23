@@ -28,7 +28,7 @@ pub(super) fn plan(
     inputs: &SkillInputs<'_>,
 ) -> Result<SkillView, SandboxErr> {
     match plan_view(env, skills_dir, inputs) {
-        Err(error) if inputs.callable.is_none() => {
+        Err(error) if inputs.callable.is_none() && inputs.grant.is_none() => {
             tracing::debug!(%error, "keeping native skill discovery because the optional view is unavailable");
             Ok(SkillView::default())
         }
@@ -98,6 +98,20 @@ fn plan_view(
         }
     }
     changed |= !owned.is_empty();
+    // A grant restricts only the `rimz-*` skills it would withhold, so a kind that cannot mark
+    // skills user-only refuses only when the inventory holds one.
+    if inputs.manual == ManualSkill::Unsupported
+        && inputs.grant.is_some()
+        && entries.iter().any(|(name, entry)| {
+            name.starts_with("rimz-")
+                && entry.source.join("SKILL.md").is_file()
+                && !crate::agents::skills::launch_callable(None, &[], inputs.grant, name)
+        })
+    {
+        return Err(SandboxErr::GrantNeedsView {
+            kind: inputs.kind.to_owned(),
+        });
+    }
     let mut shadows = BTreeMap::new();
     if let Some(callable) = inputs.callable {
         crate::config::validate_skill_list(callable)?;
@@ -116,14 +130,18 @@ fn plan_view(
             }
         }
     }
-    if inputs.callable.is_some() || !inputs.withheld.is_empty() {
+    if inputs.callable.is_some() || !inputs.withheld.is_empty() || inputs.grant.is_some() {
         let mut policies = BTreeMap::new();
         for (name, entry) in &entries {
             if !entry.source.is_dir() || !entry.source.join("SKILL.md").is_file() {
                 continue;
             }
-            let listed = crate::config::skill_is_callable(inputs.callable, name)
-                && !inputs.withheld.contains(&name.as_str());
+            let listed = crate::agents::skills::launch_callable(
+                inputs.callable,
+                inputs.withheld,
+                inputs.grant,
+                name,
+            );
             if let Some((other_name, other_listed)) = policies.get(&entry.source) {
                 if listed != *other_listed {
                     return Err(SandboxErr::ConflictingSkillAliases {

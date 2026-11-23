@@ -862,3 +862,33 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
         ]
     );
 }
+
+#[test]
+fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/granted.md"),
+        "---\ndescription: Test\nagent: claude\ntools: [Bash, Skill]\nmcps: []\nskills: []\n---\nBody.",
+    )
+    .unwrap();
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let (_, profile) = own_rows(&loaded)
+        .find(|(row, _)| row.name == "granted")
+        .unwrap();
+    let mut profile = profile.clone();
+    profile.tools = profile
+        .tools
+        .map(|tools| tools.with_rimz(vec!["rimz-wait".parse().unwrap()]));
+    let machine = rimz::config::MachineConfig::default();
+    let reasons = |name| shut_out(&machine, "claude", &profile, false, name);
+    assert_eq!(reasons("rimz-wait"), (Vec::new(), Vec::new()));
+    let left_out = vec!["its capabilities leave out rimz-message".to_owned()];
+    assert_eq!(reasons("rimz-message"), (left_out.clone(), left_out));
+}

@@ -66,6 +66,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
+        rimz_capabilities: None,
     }
 }
 

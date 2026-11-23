@@ -4724,6 +4724,7 @@ fn run_exiting_resume_wrapper(
             },
             ..ExecIdentity::default()
         },
+        rimz_capabilities: None,
     };
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let shim_dir = write_failing_agent_shim(env, "codex", 0);

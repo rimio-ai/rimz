@@ -29,6 +29,14 @@ impl McpName {
         self.mode
     }
 
+    /// The `*` entry.
+    pub(crate) fn all() -> Self {
+        Self {
+            name: ALL.to_owned(),
+            mode: None,
+        }
+    }
+
     /// `*`, which keeps every one of the user's servers and every capability.
     pub fn is_all(&self) -> bool {
         self.name == ALL

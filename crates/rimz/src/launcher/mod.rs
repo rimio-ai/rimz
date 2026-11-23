@@ -1458,6 +1458,9 @@ fn check_cell(
     request.skills.clone_from(&cell.skills);
     request.mcps.clone_from(&cell.mcps);
     request.no_skill_tool = cell.no_skill_tool;
+    request
+        .rimz_capabilities
+        .clone_from(&cell.rimz_capabilities);
     request.isolation_default = cell.isolation_default;
     request.action = match start {
         CellStart::Pick => crate::harness::launch::ExecAction::Pick {
