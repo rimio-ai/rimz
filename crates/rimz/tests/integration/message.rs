@@ -9302,6 +9302,7 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
 fn steer_enter_modes_respect_discrete_submit_key() {
     let env = Env::new();
     env.record(&env.project_root);
+    env.install_agent_hooks("claude");
     register_running_agent(
         &env,
         "sess-steer-enter",
@@ -9328,7 +9329,7 @@ fn steer_enter_modes_respect_discrete_submit_key() {
     );
 
     let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
-    run_success(
+    let quiet = run_success(
         traced_rimz(&env, "zellij-steer-quiet-trace.log").args([
             "message",
             "--steer",
@@ -9348,6 +9349,95 @@ fn steer_enter_modes_respect_discrete_submit_key() {
     assert!(
         !lines.iter().any(|line| is_enter_key(line)),
         "--no-enter must not press Enter; trace: {lines:?}"
+    );
+    assert_no_enter_settled(&env, &sent_id_from_stdout(&quiet.stdout));
+
+    // A plain --no-enter write to the resting receiver settles the same way, and a later
+    // boundary send goes straight to the pane rather than queueing behind either draft. The
+    // submitted steer is acknowledged first, so only a draft could hold the card's lane.
+    for hook in [
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-steer-enter",
+            "prompt": user_message("y"),
+        }),
+        json!({"hook_event_name": "Stop", "session_id": "sess-steer-enter"}),
+    ] {
+        run_hook(&env, hook, &[("ZELLIJ_PANE_ID", "3")]);
+    }
+    let plain = run_success(
+        traced_rimz(&env, "zellij-plain-quiet-trace.log").args([
+            "message",
+            "@claude",
+            "--no-enter",
+            "--",
+            "z",
+        ]),
+        "no-enter boundary send",
+    );
+    let lines = trace_lines(&env.project_root.join("zellij-plain-quiet-trace.log"));
+    assert!(
+        lines.iter().any(|line| is_paste(line, &user_message("z"))),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
+    assert_no_enter_settled(&env, &sent_id_from_stdout(&plain.stdout));
+
+    let sweep_log = env.project_root.join("zellij-no-enter-sweep-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-no-enter-sweep-trace.log")
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep past the delivery window",
+    );
+    let lines = trace_lines(&sweep_log);
+    assert!(
+        !lines.iter().any(|line| line.contains("\taction\twrite")),
+        "a settled --no-enter draft is never pasted again; trace: {lines:?}"
+    );
+
+    let next = run_success(
+        traced_rimz(&env, "zellij-after-quiet-trace.log").args(["message", "@claude", "--", "w"]),
+        "boundary send after the drafts",
+    );
+    sent_id_from_stdout(&next.stdout);
+}
+
+/// A `--no-enter` prompt is settled `delivered` at its write, with the reason on its event.
+fn assert_no_enter_settled(env: &Env, message_id: &str) {
+    let settled = env
+        .store()
+        .list_message_history()
+        .expect("message history")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .unwrap_or_else(|| panic!("{message_id} not settled"));
+    assert_eq!(settled.status, MessageStatus::Delivered);
+    let events = env.read_events();
+    let methods = events
+        .iter()
+        .filter(|event| event.params_value()["message_id"].as_str() == Some(message_id))
+        .map(|event| event.method.as_str())
+        .collect::<Vec<_>>();
+    for method in ["message.sent", "message.delivered"] {
+        assert_eq!(
+            methods.iter().filter(|seen| **seen == method).count(),
+            1,
+            "{method}: {methods:?}"
+        );
+    }
+    let delivered = events
+        .iter()
+        .find(|event| {
+            event.method == "message.delivered"
+                && event.params_value()["message_id"].as_str() == Some(message_id)
+        })
+        .expect("delivered event");
+    assert!(
+        delivered.params_value()["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("unsubmitted")),
+        "{delivered:?}"
     );
 }
 

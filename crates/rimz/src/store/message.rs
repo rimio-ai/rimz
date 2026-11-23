@@ -1339,6 +1339,13 @@ impl MessageRecord {
         }
     }
 
+    /// Whether the write alone completes this record's delivery: a `--no-enter` prompt asks
+    /// for text in the composer and no turn, so no acknowledgement follows it. A command is
+    /// excluded, since readers of a delivered command take it as run.
+    pub(in crate::store) fn settles_at_write(&self) -> bool {
+        self.body == MessageBody::Prompt && !self.enter
+    }
+
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt
             && self.enter
