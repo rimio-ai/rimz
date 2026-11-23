@@ -27,6 +27,56 @@ fn tick_discovers_a_manual_run_and_drives_its_recheck() {
     tick_until(&env, &id, "done");
 }
 
+/// A waiting check whose program is only on the room's saved PATH runs again when a tick from a
+/// process without that directory re-runs it.
+#[test]
+fn tick_reruns_a_waiting_check_on_the_rooms_saved_path() {
+    use crate::common::{path_with_front, write_path_shim};
+    let recheck = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(2);
+    let (env, _) = fixture(
+        &format!(
+            "{HEADER}[script.pr]\nrun = 'room-path-check'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
+        ),
+        "",
+    );
+    let bin = env.home_root.join("room-bin");
+    let ran = env.home_root.join("room-path-check.ran");
+    let ran = shlex::try_quote(ran.to_str().unwrap())
+        .unwrap()
+        .into_owned();
+    write_path_shim(
+        &bin,
+        "room-path-check",
+        &format!(
+            "if [ -e {ran} ]; then printf '{{\"outcome\":\"done\"}}'; else : > {ran}; printf '{{\"outcome\":\"pending\",\"recheck_at\":\"{recheck}\"}}'; fi"
+        ),
+    );
+    let room_path = path_with_front(&bin);
+    let record_path = env.state_path_for(&env.project_root).workspace_record;
+    let mut record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    record["terminal_path"] = json!(room_path.to_str().unwrap());
+    fs::write(&record_path, record.to_string()).unwrap();
+    let id = start_with(|| {
+        let mut command = env.rimz();
+        command.env("PATH", &room_path);
+        command
+    });
+    until(&env, &id, |v| v["record"]["wait"]["outcome"] == "pending");
+    let value = until(&env, &id, |value| {
+        if value["record"]["state"] != "active" {
+            return true;
+        }
+        success(command(&env, &["loop", "tick"]));
+        false
+    });
+    assert_eq!(
+        value["record"]["state"],
+        "done",
+        "{}{value:#}",
+        died_attempts(&value)
+    );
+}
+
 #[test]
 fn tick_routes_check_timeout_and_workflow_deadline_before_far_backoff() {
     for deadline in [false, true] {

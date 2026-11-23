@@ -177,26 +177,68 @@ fn shell_fail_waits_without_journaling_a_tail_and_a_log_error_dies() {
 
 #[test]
 fn a_shell_spawn_error_dies() {
+    use std::os::unix::fs::PermissionsExt;
+
     let pending = toml::Value::String(r#"printf '{"outcome":"pending"}'"#.into());
-    for (spec, waiting, spawn_error) in [
+    let test = format!(
+        "{HEADER}[test.pr]\nshell='exit 3'\non.pass='@done'\non.fail='@wait'\ntimeout='1h'\n"
+    );
+    let script =
+        format!("{HEADER}[script.pr]\nshell={pending}\non.pending='@wait'\ntimeout='1h'\n");
+    let test_file = format!(
+        "{HEADER}[test.pr]\nrun='checks/pr.sh'\non.pass='@done'\non.fail='@wait'\ntimeout='1h'\n"
+    );
+    let script_file =
+        format!("{HEADER}[script.pr]\nrun='checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n");
+    let unexecutable = "`{file}` is not executable";
+    let (mut actual, mut expected, mut reasons) = (Vec::new(), Vec::new(), Vec::new());
+    // A bare program's reason names the PATH searched: the advance's own, or the one the room
+    // saved, which a command found nowhere still dies on. A program given as a path names none.
+    for (spec, body, waiting, saved, spawn_error) in [
         (
-            format!(
-                "{HEADER}[test.pr]\nshell='exit 3'\non.pass='@done'\non.fail='@wait'\ntimeout='1h'\n"
-            ),
+            &test,
+            "exit 3",
             "fail",
-            "cannot find binary path",
+            None,
+            "cannot find `sh` on PATH \"\"",
         ),
         (
-            format!("{HEADER}[script.pr]\nshell={pending}\non.pending='@wait'\ntimeout='1h'\n"),
+            &script,
+            "",
             "pending",
-            "No such file or directory",
+            None,
+            "cannot find `sh` on PATH \"\"",
+        ),
+        (
+            &script,
+            "",
+            "pending",
+            Some("/rimz-test-missing-dir"),
+            "cannot find `sh` on PATH \"/rimz-test-missing-dir\"",
+        ),
+        (&test_file, "exit 3", "fail", None, unexecutable),
+        (
+            &script_file,
+            r#"printf '{"outcome":"pending"}'"#,
+            "pending",
+            None,
+            unexecutable,
         ),
     ] {
-        let (env, _) = fixture(&spec, "");
+        let (env, dir) = fixture(spec, &format!("#!/bin/sh\n{body}\n"));
+        let file = dir.join("checks/pr.sh");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
         let id = start(&env);
         until(&env, &id, |v| {
             v["record"]["wait"]["outcome"] == waiting && v["record"]["attempt"].is_null()
         });
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        if let Some(saved) = saved {
+            let path = env.state_path_for(&env.project_root).workspace_record;
+            let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            record["terminal_path"] = json!(saved);
+            fs::write(&path, record.to_string()).unwrap();
+        }
         let output = env
             .rimz()
             .args(["workflow", "advance", &id])
@@ -206,24 +248,23 @@ fn a_shell_spawn_error_dies() {
         success(output);
         let value = settled(&env, &id, "failed");
         let input = &value["record"]["input"];
-        assert_eq!(input["cause"], "died", "{waiting}: {input:#}");
-        assert!(
-            input["reason"].as_str().unwrap().contains(spawn_error),
-            "{waiting}: {input:#}"
-        );
-        // The log file existed before the spawn failed, so it is named; no process exited.
-        assert!(
+        // A test check's reason opens with the command and its directory.
+        let reason = input["reason"].as_str().unwrap_or_default();
+        actual.push((
+            input["cause"].as_str().map(str::to_owned),
+            reason.rsplit(": ").next().unwrap_or_default().to_owned(),
+            // The log file existed before the spawn failed, so it is named; no process exited.
             input["detail"]["log"]
                 .as_str()
-                .is_some_and(|log| Path::new(log).is_file()),
-            "{waiting}: {input:#}"
-        );
-        assert_eq!(
-            input["detail"].as_object().unwrap().len(),
-            1,
-            "{waiting}: {input:#}"
-        );
+                .is_some_and(|log| Path::new(log).is_file())
+                && input["detail"].as_object().is_some_and(|d| d.len() == 1),
+        ));
+        let file = file.canonicalize().unwrap();
+        let spawn_error = spawn_error.replace("{file}", &file.to_string_lossy());
+        expected.push((Some("died".to_owned()), spawn_error, true));
+        reasons.push(input.clone());
     }
+    assert_eq!(actual, expected, "{reasons:#?}");
 }
 
 #[test]

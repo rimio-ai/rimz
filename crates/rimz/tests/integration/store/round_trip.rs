@@ -116,6 +116,7 @@ fn root_lane_is_stamped_through_every_fold_reader() {
             pins: Default::default(),
             remote_control_off: Default::default(),
             agent_shell: None,
+            terminal_path: None,
             skipped: Vec::new(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },

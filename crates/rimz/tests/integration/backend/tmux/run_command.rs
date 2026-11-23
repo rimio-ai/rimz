@@ -36,6 +36,25 @@ fn workflow_layout_closes_all_cells_and_preserves_unrelated_panes() {
 }
 
 #[test]
+fn closed_card_runs_its_check_on_the_room_path() {
+    require_tmux!();
+    let env = Env::new();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    crate::backend::workflow::check_closed_card_runs_its_check_on_the_room_path(
+        &env,
+        "tmux",
+        &session,
+        || {
+            let mut command = env.rimz();
+            command.args(["--mux", "tmux"]);
+            command
+        },
+        || AttachedTmuxClient::attach(&server.socket, &session, 160, 50),
+    );
+}
+
+#[test]
 fn terminal_run_closes_only_its_command_pane() {
     check_command_pane(false);
 }

@@ -751,6 +751,7 @@ impl TestRoom {
                 pins: crate::ids::RoomLogins::new(),
                 remote_control_off: Default::default(),
                 agent_shell: None,
+                terminal_path: None,
                 skipped: Vec::new(),
                 updated_at: jiff::Timestamp::now(),
             },

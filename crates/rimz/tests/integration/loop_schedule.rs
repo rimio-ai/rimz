@@ -2938,7 +2938,7 @@ fn instance_task_in_a_recorded_project_reaches_machine_wide_readers() {
 
 #[cfg(unix)]
 #[test]
-fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
+fn loop_birth_saves_shell_lookups_only_for_manual_fires_and_keeps_the_terminal_path() {
     use crate::common::CommandTimeoutExt;
 
     let mut actual = Vec::new();
@@ -2963,11 +2963,14 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
         let hit = agent_bin.join("bash");
         std::os::unix::fs::symlink(&shell, &hit).unwrap();
         let path = env.state_path_for(&env.project_root).workspace_record;
+        // A fire's command step runs on the saved PATH, so it holds the shell the fire must find.
+        let terminal_path = path_with_front(&agent_bin).into_string().unwrap();
         if prior {
             env.record(&env.project_root);
             let mut record: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             record["agent_shell"] = json!({"name": "bash", "path": "/previous/bash"});
+            record["terminal_path"] = json!(terminal_path);
             std::fs::write(&path, record.to_string()).unwrap();
         }
         let effect = match kind {
@@ -3023,12 +3026,21 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             &std::fs::read(&path).unwrap_or_else(|error| panic!("{error}: {output:?}")),
         )
         .unwrap();
-        actual.push((kind, prior, verb, record.get("agent_shell").cloned()));
+        actual.push((
+            kind,
+            prior,
+            verb,
+            record.get("agent_shell").cloned(),
+            record.get("terminal_path").cloned(),
+        ));
+        // Neither a scheduled fire's detached start nor a supervised birth is a terminal's
+        // entry, so the saved PATH stays as it was.
         expected.push((
             kind,
             prior,
             verb,
             (verb != "run").then(|| json!({"name": "bash", "path": hit})),
+            prior.then(|| json!(terminal_path)),
         ));
     }
     assert_eq!(actual, expected);

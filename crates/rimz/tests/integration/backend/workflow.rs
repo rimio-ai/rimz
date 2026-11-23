@@ -3,7 +3,9 @@ use std::fs;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::common::{Env, path_with_front, write_fake_login_shell, write_path_shim};
+use crate::common::{
+    CommandTimeoutExt, Env, path_with_front, write_fake_login_shell, write_path_shim,
+};
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::mux::{MuxBackend, PaneListOptions, PaneReadConsistency};
 use rimz::store::workflow::{self, RunState};
@@ -385,6 +387,166 @@ pub(super) fn check_layout(
         }
         assert_eq!(load_run(&state, &id).0.state, RunState::Done);
     }
+}
+
+/// A script check whose program is only on the PATH the room started with runs when a process
+/// without that directory closes the agent card before it, whichever process hosts the advance
+/// the close wakes. `attach` holds a client on the room `command` starts.
+pub(super) fn check_closed_card_runs_its_check_on_the_room_path<G>(
+    env: &Env,
+    mux: &str,
+    session: &str,
+    command: impl Fn() -> Command,
+    attach: impl FnOnce() -> G,
+) {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    crate::common::git::init_repo(&env.project_root);
+    env.install_agent_hooks("claude");
+    let bin = env.home_root.join("room-bin");
+    let provider_ready = env.home_root.join("provider-ready");
+    write_path_shim(
+        &bin,
+        "claude",
+        &format!(
+            "[ \"$1\" = --version ] && {{ printf '2.1.296 (Claude Code)\\n'; exit; }}; printf '%s' \"$$\" > {}; exec sleep 300",
+            shlex::try_quote(provider_ready.to_str().unwrap()).unwrap()
+        ),
+    );
+    let ran = env.home_root.join("room-path-check.ran");
+    write_path_shim(
+        &bin,
+        "room-path-check",
+        &format!(
+            "printf '%s' \"$PATH\" > {}; printf '{{\"outcome\":\"left\"}}'",
+            shlex::try_quote(ran.to_str().unwrap()).unwrap()
+        ),
+    );
+    // The room is born before the fake login shell is configured: a pane shell that exits at
+    // once would end the session it opens.
+    command()
+        .env("PATH", path_with_front(&bin))
+        .args(["start", "--no-attach"])
+        .assert_success_within_timeout("start the room on the PATH with the check");
+    let _client = attach();
+    let shell = write_fake_login_shell(env, "room-path-shell", &[]);
+    fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&serde_json::json!({"mux": {"default": mux}, "agents": {"shell": shell}}))
+            .unwrap(),
+    )
+    .unwrap();
+    env.write_config(
+        &env.project_root,
+        &toml::to_string(&serde_json::json!({
+            "agents": [{"name":"claude", "isolation":"host", "env":{"PATH":path_with_front(&bin).to_string_lossy()}}]
+        }))
+        .unwrap(),
+    );
+    let room = || {
+        let mut command = command();
+        command
+            .env("PATH", path_with_front(&bin))
+            .env("SHELL", &shell);
+        command
+    };
+    room()
+        .args(["trust", "grant", "--agents", "claude"])
+        .assert_success_within_timeout("trust the stub provider");
+    let dir = env.rimz_home().join("workflows/room-path");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("prompt.md"), "go").unwrap();
+    fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\nscope='worktree'\nstart='triage'\n[agent.triage]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nthen='ruled'\non={died='ruled'}\nmax-visits=1\n[script.ruled]\nrun='room-path-check'\non={left='@done', timeout='@done'}\ntimeout='5m'\n",
+    )
+    .unwrap();
+    let output = room()
+        .args(["workflow", "run", "room-path"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "workflow run: {output:?}");
+    let id: rimz::ids::WorkflowRunId = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let state = env.state_path_for(&env.project_root);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (pane, run_id) = loop {
+        let record = workflow::load(&state.workflow(&id)).unwrap();
+        if let Some(attempt) = record
+            .attempt
+            .as_ref()
+            .and_then(|attempt| attempt.run.as_ref())
+        {
+            let run = rimz::harness::run::load(&state, &attempt.run_id).unwrap();
+            let started = fs::read_to_string(&provider_ready)
+                .ok()
+                .and_then(|pid| pid.parse::<u32>().ok());
+            if let Some(pane) = run
+                .pane_id
+                .filter(|_| started.is_some() && started == run.provider_pid)
+            {
+                break (pane, attempt.run_id.clone());
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the agent must start in a pane: {record:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // The test process's PATH lacks the room's bin directory, as a tmux server's can.
+    // A close before the sidebar host has read the card finds no card to close.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let close = loop {
+        let close = command()
+            .args([
+                "sidebar",
+                "close",
+                "--pane",
+                &pane.to_string(),
+                "--session-name",
+                session,
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(close.status.success(), "sidebar close: {close:?}");
+        if !String::from_utf8_lossy(&close.stderr).contains("no card owns pane") {
+            break close;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the card never reached the sidebar host: {close:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (record, home) = loop {
+        let (record, home) = load_run(&state, &id);
+        if record.state != RunState::Active {
+            break (record, home);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the close must settle the run: {record:#?}\n{:#?}\n{close:?}",
+            rimz::harness::run::load(&state, &run_id)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(
+        (record.state, fs::read_to_string(&ran).ok()),
+        (
+            RunState::Done,
+            Some(path_with_front(&bin).into_string().unwrap())
+        ),
+        "{:#?}",
+        workflow::journal(&home).unwrap()
+    );
 }
 
 /// A run's record and the home it was read from. An ended run's home moves by one rename to the

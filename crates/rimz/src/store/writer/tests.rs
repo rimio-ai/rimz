@@ -1183,7 +1183,7 @@ fn skipped_settings_are_replaced_preserved_and_reset_with_the_room() {
 }
 
 #[test]
-fn agent_shell_survives_rerecords_and_recovery_but_not_reset() {
+fn agent_shell_and_terminal_path_survive_rerecords_and_recovery_but_not_reset() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -1195,38 +1195,50 @@ fn agent_shell_survives_rerecords_and_recovery_but_not_reset() {
         name: "bash".into(),
         path: "/usr/bin/bash".into(),
     };
+    let terminal_path = "/home/u/.local/bin:/usr/bin".to_owned();
     let mut recorded = record::WorkspaceRecord::from_resolved(&workspace);
     recorded.agent_shell = Some(shell.clone());
+    recorded.terminal_path = Some(terminal_path.clone());
     record::write(&paths, &recorded).unwrap();
+    let read = || {
+        let record = record::read(&paths.workspace_record).unwrap();
+        (record.agent_shell, record.terminal_path)
+    };
 
     let mut actual = Vec::new();
     store.record_workspace(&workspace).unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
     store.set_skipped_settings(&workspace, Vec::new()).unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
     store
         .pin_room_logins(&workspace, &crate::ids::RoomLogins::new())
         .unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
     let bin = dir.path().join("builds/build/rimz");
     crate::disk::atomic::write_executable_bytes_atomically(&bin, b"build").unwrap();
     store
         .record_room_bin(&workspace, bin, "build".to_owned())
         .unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
+    store
+        .set_room_birth_settings(&workspace, BTreeSet::new(), Some(shell.clone()))
+        .unwrap();
+    actual.push(read());
     store.reset_records_keeping_logins().unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
     store.reset_records(false).unwrap();
-    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    actual.push(read());
+    let kept = (Some(shell), Some(terminal_path));
     assert_eq!(
         actual,
         [
-            Some(shell.clone()),
-            Some(shell.clone()),
-            Some(shell.clone()),
-            Some(shell.clone()),
-            Some(shell),
-            None
+            kept.clone(),
+            kept.clone(),
+            kept.clone(),
+            kept.clone(),
+            kept.clone(),
+            kept,
+            (None, None)
         ]
     );
 }
