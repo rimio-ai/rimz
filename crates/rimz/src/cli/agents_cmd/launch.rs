@@ -31,6 +31,7 @@ pub(super) fn launch_layout(
         fresh: args.launch.cohort.fresh,
         cwd: args.launch.cwd.as_deref(),
         under_fire: fire.is_some(),
+        caller_repo: false,
     })?;
 
     let mut launch = args.launch;
@@ -141,6 +142,7 @@ pub(super) fn launch_layout(
             .unwrap_or_default(),
         loop_fire: fire.map(|fire| fire.fire),
         subagent_profile: launch.subagent_profile,
+        one_seat: false,
     };
     let outcome =
         rimz::launcher::launch_layout(&room, layout, allow_in_place, &mut CliInteraction)?;

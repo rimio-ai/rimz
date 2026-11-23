@@ -6680,6 +6680,8 @@ fn explain_prints_the_plan_without_side_effects() {
           "rimz-lsp",
           "rimz-wait",
           "rimz-subagents",
+          "rimz-agents",
+          "rimz-teams",
           "rimz-workflow",
           "rimz-loop",
           "rimz-message",

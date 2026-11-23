@@ -15,10 +15,12 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 15] = [
+const ALL_TOOLS: [&str; 17] = [
     "lsp",
     "wait",
     "subagent",
+    "agent",
+    "team",
     "workflow",
     "schedule",
     "message",
@@ -646,6 +648,584 @@ fn a_subagent_call_launches_a_child_of_the_caller_from_outside_the_room() {
     );
 }
 
+/// A live room with a git checkout, a `worker` profile, and a `solo` team, whose servers run
+/// from a directory outside it as the agent `parent-launch` or the subagent `child-launch`.
+#[cfg(unix)]
+struct LayoutRoom {
+    env: Env,
+    store: rimz::Store,
+    session: String,
+    agent_bin: std::path::PathBuf,
+    shell: std::path::PathBuf,
+    presence: std::path::PathBuf,
+    trace: std::path::PathBuf,
+    outside: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl LayoutRoom {
+    fn new() -> Self {
+        use crate::common::git::git;
+        use crate::common::room::{MATERIALIZED_ROOM_PANES, seed_live_zellij_room};
+        use rimz::agents::LaunchParams;
+        use rimz::ids::{AgentKind, AgentSessionId};
+
+        let env = Env::new();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "rimz@example.test"],
+            &["config", "user.name", "RimZ Test"],
+            &["commit", "-q", "--allow-empty", "-m", "init"],
+        ] {
+            git(&env.project_root, args);
+        }
+        env.install_agent_hooks("claude");
+        crate::common::trust_claude_project(&env, &env.project_root);
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: claude\ntools: []",
+            "",
+        );
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "solo",
+            "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+            "Complete the work.",
+        );
+        let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
+        let shell = crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let store = env.store();
+        store.record_workspace(&workspace).expect("record room");
+        for (launch, name, pane, launch_params) in [
+            (
+                "parent-launch",
+                "parent",
+                "terminal_2",
+                LaunchParams::default(),
+            ),
+            (
+                "child-launch",
+                "child",
+                "terminal_1",
+                LaunchParams {
+                    parent_agent_id: Some(AgentSessionId::from("elsewhere-launch")),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    ..LaunchParams::default()
+                },
+            ),
+        ] {
+            seed_agent(
+                &store,
+                &workspace,
+                launch,
+                name,
+                pane,
+                launch_params,
+                &env.project_root,
+            );
+        }
+        seed_live_zellij_room(
+            store.runtime_paths(),
+            &workspace.session_name,
+            serde_json::from_str(MATERIALIZED_ROOM_PANES).unwrap(),
+        );
+        let presence = env.home_root.join("presence.wasm");
+        std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+        let trace = env.home_root.join("launch-trace.log");
+        Self {
+            session: workspace.session_name,
+            store,
+            agent_bin,
+            shell,
+            presence,
+            trace,
+            outside: tempfile::tempdir().expect("a directory outside the room"),
+            env,
+        }
+    }
+
+    fn serve(&self, launch: &str) -> McpServer {
+        use crate::common::room::MATERIALIZED_ROOM_PANES;
+
+        let mut command = self.env.rimz();
+        command
+            .current_dir(self.outside.path())
+            .args(["mcp", "serve", "--launch-env"])
+            .env("RIMZ_MCP_SERVE", "rimz-agents,rimz-teams")
+            .env("RIMZ_MCP_CWD", &self.env.project_root)
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, launch)
+            .env("SHELL", &self.shell)
+            .env("PATH", crate::common::path_with_front(&self.agent_bin))
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace)
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+            .env("RIMZ_PRESENCE_PLUGIN", &self.presence)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", self.session),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+        let mut server = McpServer::spawn(command);
+        server.initialize();
+        server
+    }
+
+    fn agents(&self) -> Vec<rimz::agents::AgentState> {
+        self.store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("launch history")
+            .agents
+    }
+
+    /// Registers launched `seat` as live in zellij pane `pane`, its provider process the
+    /// returned sleep, as its provider's session start would.
+    fn register(&self, seat: &rimz::agents::AgentState, pane: &str) -> std::process::Child {
+        use crate::common::ScrubSessionEnvExt;
+
+        let process = Command::new("sleep")
+            .scrub_session_env()
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let session = format!("{}-session", seat.name.as_deref().expect("a seat name"));
+        let mut observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(session.as_str().into()),
+            rimz::agents::LifecycleSignal::Registered,
+        );
+        observation.agent_name.clone_from(&seat.name);
+        observation.launch_id = Some(seat.agent_id.clone());
+        observation.worktree_path.clone_from(&seat.worktree_path);
+        observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            pane,
+        ));
+        observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            &session,
+            process.id(),
+        ));
+        observation.launch = rimz::agents::LaunchParams {
+            team: seat.team.clone(),
+            role: seat.role.clone(),
+            lane: seat.lane.clone(),
+            ..launched_by("parent-launch")
+        };
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        self.store
+            .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id,
+                workspace.session_name,
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("the seat goes live");
+        process
+    }
+}
+
+/// An `agent` call opens a persistent peer started by the caller in a new tab, from a server
+/// whose process directory is outside the room, and the answered id works in `tasks`, `join`,
+/// and `stop`. Every refusal answers before anything launches.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_opens_a_peer_of_the_caller_from_outside_the_room() {
+    let room = LayoutRoom::new();
+    let rows = room.agents().len();
+    let call = json!({"profile": "worker", "prompt": "audit the parser", "description": "audit"});
+
+    let (answer, is_error) = room.serve("child-launch").answer(1, "agent", call.clone());
+    assert!(is_error, "{answer}");
+    assert_eq!(
+        answer,
+        json!({"error": "launch refused: subagents cannot launch agents or subagents. Do the work \
+            yourself and report the result to your caller; do not retry this command."})
+    );
+    let (answer, is_error) = room
+        .serve("unknown-launch")
+        .answer(1, "agent", call.clone());
+    assert!(is_error, "{answer}");
+    assert_eq!(
+        answer["error"],
+        json!(
+            "launch refused: RimZ could not resolve the calling agent's durable launch identity, \
+             so it cannot safely verify the configured chain limit. Launching another agent from \
+             here is not permitted; do not retry this command."
+        ),
+    );
+    let mut server = room.serve("parent-launch");
+    for (id, profile, error) in [
+        (2, "solo", "`solo` is a team; launch it with `team`"),
+        (
+            3,
+            "worker,worker",
+            "`worker,worker` is a layout of several seats; `agent` launches one",
+        ),
+    ] {
+        let (answer, is_error) =
+            server.answer(id, "agent", json!({"profile": profile, "prompt": "p"}));
+        assert!(is_error, "{answer}");
+        assert_eq!(answer["error"], json!(error), "{answer}");
+    }
+    assert_eq!(room.agents().len(), rows, "a refusal launches nothing");
+
+    let (answer, is_error) = server.answer(4, "agent", call);
+    assert!(!is_error, "{answer}");
+    let agents = room.agents();
+    let peer = agents
+        .iter()
+        .find(|agent| agent.profile.as_deref() == Some("worker"))
+        .expect("the peer's launch row");
+    let name = peer.name.clone().expect("a handle");
+    let id = format!("agent:{name}");
+    assert_eq!(answer["id"], json!(id), "{answer}");
+    assert_eq!(answer["status"], json!("running"), "{answer}");
+    assert!(
+        answer["report"].as_str().unwrap().contains("AGENT_REPORT"),
+        "{answer}"
+    );
+    assert_eq!(
+        peer.launcher().map(|(_, id)| id.to_string()),
+        Some("parent-launch".to_owned()),
+    );
+    assert_eq!(
+        std::fs::canonicalize(peer.worktree_path.as_deref().unwrap()).unwrap(),
+        std::fs::canonicalize(&room.env.project_root).unwrap()
+    );
+    let trace = std::fs::read_to_string(&room.trace).unwrap();
+    assert!(trace.contains("new-tab"), "{trace}");
+
+    let (listed, is_error) = server.answer(5, "tasks", json!({"kind": "agent"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [id.as_str()], "{listed}");
+    let (joined, is_error) = server.answer(6, "join", json!({"id": id, "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined["status"], json!("running"), "{joined}");
+    let (stopped, is_error) = server.answer(7, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped["id"], json!(id), "{stopped}");
+}
+
+/// A `team` call opens the team's cohort in the named worktree, through a real launch: the
+/// answered id is the seats' team instance, and `tasks`, `join`, and `stop` act on it. A second
+/// call onto the live cohort says its brief went to the leader, so it is not sent again.
+#[cfg(unix)]
+#[test]
+fn a_team_call_opens_its_cohort_in_the_named_worktree() {
+    let room = LayoutRoom::new();
+    let rows = room.agents().len();
+    let mut server = room.serve("parent-launch");
+    for (id, team, error) in [
+        (
+            1,
+            "worker",
+            "unknown team `worker`; configured teams: peer, solo",
+        ),
+        (
+            2,
+            "solo.lead",
+            "`solo.lead` names one role; launch it with `agent`",
+        ),
+    ] {
+        let (answer, is_error) = server.answer(
+            id,
+            "team",
+            json!({"team": team, "prompt": "p", "worktree": "demo"}),
+        );
+        assert!(is_error, "{answer}");
+        assert_eq!(answer["error"], json!(error), "{answer}");
+    }
+    assert_eq!(room.agents().len(), rows, "a refusal launches nothing");
+
+    let call = json!({"team": "solo", "prompt": "build it", "worktree": "demo"});
+    let (answer, is_error) = server.answer(3, "team", call.clone());
+    assert!(!is_error, "{answer}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.team.as_deref() == Some("solo"))
+        .expect("the seat's launch row");
+    let id = format!("team:{}", seat.team_instance().expect("a team instance"));
+    assert_eq!(id, "team:solo#demo");
+    assert_eq!(answer["id"], json!(id), "{answer}");
+    assert!(
+        answer["report"].as_str().unwrap().contains("TEAM_REPORT"),
+        "{answer}"
+    );
+    assert!(room.env.home_root.join("project-worktrees/demo").exists());
+
+    let (listed, is_error) = server.answer(4, "tasks", json!({"kind": "team"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [id.as_str()], "{listed}");
+    let (joined, is_error) = server.answer(5, "join", json!({"id": id, "timeout": "1s"}));
+    assert!(!is_error, "{joined}");
+    assert_eq!(joined["status"], json!("running"), "{joined}");
+
+    let mut process = room.register(seat, "terminal_3");
+    let (again, is_error) = server.answer(6, "team", call);
+    process.kill().unwrap();
+    process.wait().unwrap();
+    assert!(is_error, "{again}");
+    assert_eq!(
+        again["error"],
+        json!(
+            "the cohort already live in this worktree took your brief: it went to its leader, and nothing new started"
+        ),
+        "{again}"
+    );
+    assert_eq!(
+        again["hint"],
+        json!("do not send the brief again; its leader answers in its own turn"),
+    );
+    let queued = room.store.list_messages().expect("the message queue");
+    assert!(
+        queued.iter().any(|message| message.text == "build it"),
+        "{queued:?}"
+    );
+
+    let (stopped, is_error) = server.answer(7, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped["id"], json!(id), "{stopped}");
+}
+
+/// A worktree whose cohort has closed refuses a plain launch, and the hint names what the called
+/// tool offers: `agent` has `fresh`, which then launches, and `team` does not.
+#[cfg(unix)]
+#[test]
+fn a_closed_worktree_refusal_hints_in_the_called_tools_terms() {
+    let room = LayoutRoom::new();
+    let mut server = room.serve("parent-launch");
+    let call = json!({"profile": "worker", "prompt": "p", "worktree": "closed-agent"});
+    let (opened, is_error) = server.answer(1, "agent", call.clone());
+    assert!(!is_error, "{opened}");
+    let (refused, is_error) = server.answer(2, "agent", call.clone());
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["hint"],
+        json!("set `fresh` to start a new session in this worktree"),
+        "{refused}"
+    );
+    let mut fresh = call;
+    fresh["fresh"] = json!(true);
+    let (relaunched, is_error) = server.answer(3, "agent", fresh);
+    assert!(!is_error, "{relaunched}");
+
+    let call = json!({"team": "solo", "prompt": "p", "worktree": "closed-team"});
+    let (opened, is_error) = server.answer(4, "team", call.clone());
+    assert!(!is_error, "{opened}");
+    let (refused, is_error) = server.answer(5, "team", call);
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["hint"],
+        json!("name another `worktree`"),
+        "{refused}"
+    );
+}
+
+/// A caller whose recorded checkout is in another repository gets the tools' cross-repository
+/// refusal from `agent` and `team`, worded for a tool caller, and no worktree appears in the
+/// room's repository.
+#[cfg(unix)]
+#[test]
+fn a_caller_in_another_repository_gets_the_cross_repository_refusal() {
+    use crate::common::git::git;
+
+    let room = LayoutRoom::new();
+    let other = room.env.home_root.join("other-repo");
+    std::fs::create_dir_all(&other).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.test"],
+        &["config", "user.name", "RimZ Test"],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        git(&other, args);
+    }
+    let other = std::fs::canonicalize(&other).unwrap();
+    crate::common::trust_claude_project(&room.env, &other);
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    seed_agent(
+        &room.store,
+        &workspace,
+        "stranger-launch",
+        "stranger",
+        "terminal_2",
+        rimz::agents::LaunchParams::default(),
+        &other,
+    );
+    let mut server = room.serve("stranger-launch");
+    let room_root = std::fs::canonicalize(&room.env.project_root).unwrap();
+    let refusal = format!(
+        "this agent's checkout is in another repository than room root {}; `worktree` works \
+         only from the room's checkout",
+        room_root.display()
+    );
+    for (id, tool, call) in [
+        (
+            1,
+            "agent",
+            json!({"profile": "worker", "prompt": "p", "worktree": "elsewhere-agent"}),
+        ),
+        (
+            2,
+            "team",
+            json!({"team": "solo", "prompt": "p", "worktree": "elsewhere-team"}),
+        ),
+    ] {
+        let name = call["worktree"].as_str().unwrap().to_owned();
+        let (answer, is_error) = server.answer(id, tool, call);
+        assert!(is_error, "{answer}");
+        assert_eq!(answer["error"], json!(refusal), "{answer}");
+        assert!(
+            !room
+                .env
+                .home_root
+                .join("project-worktrees")
+                .join(&name)
+                .exists(),
+            "{tool} made a worktree in the room's repository"
+        );
+    }
+}
+
+/// A seat of a team launched through `agent`, by a literal `<team>.<role>` or by a bare role the
+/// caller's lane qualifies, answers its `agent:` id with the way to its answer: no AGENT_REPORT
+/// comes, `join` on the id answers, and `tasks` lists the seat under its team.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_that_seats_a_team_says_how_its_answer_comes() {
+    let room = LayoutRoom::new();
+    crate::common::write_definition(
+        &room.env,
+        "teams",
+        "duo",
+        "layout: lead,helper\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: \
+         worker, owns: [Build]}\n  - {role: helper, agent: worker}",
+        "Complete the work.",
+    );
+    let seat_answer = |answer: &Value, role: &str| {
+        let agents = room.agents();
+        let seat = agents
+            .iter()
+            .find(|agent| {
+                agent.team.as_deref() == Some("duo") && agent.role.as_deref() == Some(role)
+            })
+            .unwrap_or_else(|| panic!("the {role} seat's launch row: {answer}"))
+            .clone();
+        let team = format!("team:{}", seat.team_instance().expect("a team instance"));
+        assert_eq!(
+            answer["id"],
+            json!(format!("agent:{}", seat.name.as_deref().unwrap())),
+            "{answer}"
+        );
+        assert_eq!(
+            answer["report"],
+            json!(format!(
+                "no AGENT_REPORT comes, since this agent is a seat of team `duo`: `join` on the \
+                 id is the way to its answer, and `tasks` lists it under `{team}`"
+            )),
+            "{answer}"
+        );
+        (seat, team)
+    };
+
+    let mut server = room.serve("parent-launch");
+    let (answer, is_error) = server.answer(
+        1,
+        "agent",
+        json!({"profile": "duo.lead", "prompt": "lead it", "worktree": "duo-lane"}),
+    );
+    assert!(!is_error, "{answer}");
+    let (lead, team) = seat_answer(&answer, "lead");
+    assert_eq!(team, "team:duo#duo-lane");
+    let (listed, is_error) = server.answer(2, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [team.as_str()], "{listed}");
+
+    let mut live = room.register(&lead, "terminal_3");
+    let mut seat = room.serve(lead.agent_id.as_str());
+    let (answer, is_error) =
+        seat.answer(1, "agent", json!({"profile": "helper", "prompt": "help"}));
+    assert!(!is_error, "{answer}");
+    let (_, helper_team) = seat_answer(&answer, "helper");
+    assert_eq!(helper_team, team);
+    let (listed, is_error) = seat.answer(2, "tasks", json!({}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(task_ids(&listed), [team.as_str()], "{listed}");
+    live.kill().unwrap();
+    live.wait().unwrap();
+}
+
+/// A bad `name` is refused before anything opens: no worktree appears.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_with_a_bad_name_is_refused_before_a_worktree_exists() {
+    let room = LayoutRoom::new();
+    let (answer, is_error) = room.serve("parent-launch").answer(
+        1,
+        "agent",
+        json!({"profile": "worker", "prompt": "p", "name": "bad name", "worktree": "named"}),
+    );
+    assert!(is_error, "{answer}");
+    assert_eq!(
+        answer["error"],
+        json!("invalid agent name `bad name`; use ASCII letters, numbers, and `-`"),
+        "{answer}"
+    );
+    assert!(!room.env.home_root.join("project-worktrees/named").exists());
+}
+
+/// Records agent `name` of launch `launch` as bound to `pane` in its checkout `worktree`.
+#[cfg(unix)]
+fn seed_agent(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    launch: &str,
+    name: &str,
+    pane: &str,
+    launch_params: rimz::agents::LaunchParams,
+    worktree: &std::path::Path,
+) {
+    use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from(format!("{name}-session")),
+                launch_id: Some(AgentSessionId::from(launch)),
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch: launch_params,
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
+                runtime_owner: None,
+                worktree_path: Some(worktree.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed an agent");
+}
+
 /// The id of each row a `tasks` answer lists.
 fn task_ids(listed: &Value) -> Vec<&str> {
     listed["tasks"]
@@ -839,7 +1419,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -965,7 +1545,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{stderr}"
     );
@@ -1785,7 +2365,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Plan"), "{out}");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -1829,6 +2409,8 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "rimz-lsp",
         "rimz-wait",
         "rimz-subagents",
+        "rimz-agents",
+        "rimz-teams",
         "rimz-workflow",
         "rimz-control",
         "rimz-notes",
@@ -1869,7 +2451,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -1897,11 +2479,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
 
-    // A profile that allows no subagents is served no subagent tool and offered no skill.
+    // A profile that allows no subagents is served no subagent tool and offered no skill, and
+    // keeps the agent and team tools, which start no child of it.
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
         ),
         "{out}"
     );
@@ -2000,7 +2583,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -2015,7 +2598,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );

@@ -4,8 +4,9 @@
 use std::path::Path;
 
 use super::Tools;
+use super::notices::{CollectedNotices, with_warnings};
 use super::room::Room;
-use super::start::{CollectedNotices, Start, TaskKind, with_warnings};
+use super::start::{Start, TaskKind};
 use crate::harness::workflow::{self, StartArgs};
 use crate::launcher::context::resolve_caller;
 use crate::launcher::workflow_start::{self, StartOrigin, WorkflowStart};
@@ -75,7 +76,7 @@ pub(super) fn start(tools: &Tools, args: &WorkflowArgs) -> Result<Answer, Failur
         },
         &mut notices,
     );
-    warnings.append(&mut notices.0);
+    warnings.extend(notices.into_lines());
     let failure = match started {
         Ok(Some((record, _))) => {
             let report = if args.detach { DETACHED_REPORT } else { REPORT };

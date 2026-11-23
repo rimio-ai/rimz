@@ -24,6 +24,8 @@ pub enum Capability {
     Lsp,
     Wait,
     Subagents,
+    Agents,
+    Teams,
     Workflow,
     Loop,
     Message,
@@ -32,10 +34,12 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Capability; 8] = [
+    pub const ALL: [Capability; 10] = [
         Self::Lsp,
         Self::Wait,
         Self::Subagents,
+        Self::Agents,
+        Self::Teams,
         Self::Workflow,
         Self::Loop,
         Self::Message,
@@ -48,8 +52,14 @@ impl Capability {
     pub fn starts_things(self) -> bool {
         matches!(
             self,
-            Self::Wait | Self::Subagents | Self::Workflow | Self::Loop
+            Self::Wait | Self::Subagents | Self::Agents | Self::Teams | Self::Workflow | Self::Loop
         )
+    }
+
+    /// Whether the group's tools launch agents themselves, which a launch that cannot delegate
+    /// is denied, tools and skill alike.
+    pub fn launches_agents(self) -> bool {
+        matches!(self, Self::Subagents | Self::Agents | Self::Teams)
     }
 
     /// The capability's name, which is also the name of the skill it matches.
@@ -58,6 +68,8 @@ impl Capability {
             Self::Lsp => "rimz-lsp",
             Self::Wait => "rimz-wait",
             Self::Subagents => "rimz-subagents",
+            Self::Agents => "rimz-agents",
+            Self::Teams => "rimz-teams",
             Self::Workflow => "rimz-workflow",
             Self::Loop => "rimz-loop",
             Self::Message => "rimz-message",
@@ -114,6 +126,8 @@ pub enum Call {
     Lsp(LspArgs),
     Wait(WaitArgs),
     Subagent(SubagentArgs),
+    Agent(AgentArgs),
+    Team(TeamArgs),
     Workflow(WorkflowArgs),
     Schedule(Box<ScheduleArgs>),
     Message(MessageArgs),
@@ -237,7 +251,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 15] = [
+pub static TOOLS: [Tool; 17] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -273,6 +287,30 @@ pub static TOOLS: [Tool; 15] = [
         schema: schema::<SubagentArgs>,
         output: Some(start_schema),
         parse: |arguments| parse::<SubagentArgs>(arguments).map(Call::Subagent),
+    },
+    Tool {
+        name: "agent",
+        capability: Some(Capability::Agents),
+        purpose: Purpose::Delegate,
+        read_only: false,
+        command: "agents",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<AgentArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<AgentArgs>(arguments).map(Call::Agent),
+    },
+    Tool {
+        name: "team",
+        capability: Some(Capability::Teams),
+        purpose: Purpose::Delegate,
+        read_only: false,
+        command: "teams launch",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<TeamArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<TeamArgs>(arguments).map(Call::Team),
     },
     Tool {
         name: "workflow",
@@ -825,6 +863,93 @@ impl ToolArgs for SubagentArgs {
             .find(|(_, value)| value.trim().is_empty())
             .map(|(field, _)| format!("`{field}` is blank"))
     }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentArgs {
+    /// The agent profile to launch, or a bare model; one seat, never a team.
+    pub profile: String,
+    /// The brief: the agent's first turn.
+    pub prompt: String,
+    /// A label for `tasks` and the sidebar, a few words.
+    pub description: Option<String>,
+    /// A distinct handle, when the channel already holds this profile's.
+    pub name: Option<String>,
+    /// Re-base the profile onto this model alias for this launch.
+    pub agent: Option<String>,
+    /// Work in this worktree. A new one branches from `agents.worktree.base` when set, else from
+    /// the `HEAD` of your repository's main checkout; a `team.role` branches as its team does.
+    pub worktree: Option<String>,
+    /// Start a new session in an existing `worktree`.
+    #[serde(default)]
+    pub fresh: bool,
+    /// Work in a worktree of this open pull request, by number or URL.
+    pub from_pr: Option<String>,
+    /// Work in this existing directory.
+    pub cwd: Option<PathBuf>,
+}
+
+impl ToolArgs for AgentArgs {
+    fn refusal(&self) -> Option<String> {
+        if let Some(blank) = blank_field(&[("profile", &self.profile), ("prompt", &self.prompt)]) {
+            return Some(blank);
+        }
+        let places = [
+            self.worktree.is_some(),
+            self.from_pr.is_some(),
+            self.cwd.is_some(),
+        ];
+        if places.into_iter().filter(|given| *given).count() > 1 {
+            return Some("give at most one of `worktree`, `from_pr`, and `cwd`".to_owned());
+        }
+        if self.fresh && self.worktree.is_none() {
+            return Some("`fresh` needs `worktree`".to_owned());
+        }
+        blank_place(self.worktree.as_deref(), self.from_pr.as_deref())
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TeamArgs {
+    /// The configured team to launch.
+    pub team: String,
+    /// The brief, which goes to the team's leader.
+    pub prompt: String,
+    /// The team's worktree. A new one branches from `agents.worktree.base` when set, else from
+    /// origin's default branch, fetched at launch.
+    pub worktree: Option<String>,
+    /// Work in a worktree of this open pull request, by number or URL.
+    pub from_pr: Option<String>,
+    /// A label each seat carries in the sidebar, a few words; `tasks` shows the team's goal.
+    pub description: Option<String>,
+}
+
+impl ToolArgs for TeamArgs {
+    fn refusal(&self) -> Option<String> {
+        if let Some(blank) = blank_field(&[("team", &self.team), ("prompt", &self.prompt)]) {
+            return Some(blank);
+        }
+        if self.worktree.is_some() == self.from_pr.is_some() {
+            return Some("give exactly one of `worktree` and `from_pr`".to_owned());
+        }
+        blank_place(self.worktree.as_deref(), self.from_pr.as_deref())
+    }
+}
+
+fn blank_field(fields: &[(&str, &String)]) -> Option<String> {
+    fields
+        .iter()
+        .find(|(_, value)| value.trim().is_empty())
+        .map(|(field, _)| format!("`{field}` is blank"))
+}
+
+fn blank_place(worktree: Option<&str>, from_pr: Option<&str>) -> Option<String> {
+    [("worktree", worktree), ("from_pr", from_pr)]
+        .into_iter()
+        .find(|(_, value)| value.is_some_and(|value| value.trim().is_empty()))
+        .map(|(field, _)| format!("`{field}` is blank"))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

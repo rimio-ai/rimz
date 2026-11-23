@@ -1005,6 +1005,8 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
 - rimz-lsp: the `lsp` tool of the `{server}` MCP server
 - rimz-wait: the `wait` tool of the `{server}` MCP server
 - rimz-subagents: the `subagent` tool of the `{server}` MCP server
+- rimz-agents: the `agent` tool of the `{server}` MCP server
+- rimz-teams: the `team` tool of the `{server}` MCP server
 - rimz-workflow: the `workflow` tool of the `{server}` MCP server
 - rimz-loop: the `schedule` tool of the `{server}` MCP server
 - rimz-message: the `message` tool of the `{server}` MCP server
@@ -1142,14 +1144,19 @@ fn a_granted_capability_with_neither_tools_nor_a_skill_on_disk_is_unreachable() 
 }
 
 #[test]
-fn a_child_has_no_rimz_subagents_as_tool_or_skill() {
+fn a_child_has_no_launching_capability_as_tool_or_skill() {
     for (kind, served) in [("claude", true), ("opencode", false)] {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
         request.subagent = true;
         let reminders = LaunchReminders {
             mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
-            rimz_skills: rimz_skills(&["rimz-message", "rimz-subagents"]),
+            rimz_skills: rimz_skills(&[
+                "rimz-agents",
+                "rimz-message",
+                "rimz-subagents",
+                "rimz-teams",
+            ]),
             ..LaunchReminders::default()
         };
         let paragraph =
@@ -1161,13 +1168,15 @@ fn a_child_has_no_rimz_subagents_as_tool_or_skill() {
             "- rimz-message: Skill(rimz-message)"
         };
         assert!(paragraph.contains(message), "{paragraph}");
-        assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
+        for launching in ["rimz-subagents:", "rimz-agents:", "rimz-teams:"] {
+            assert!(!paragraph.contains(launching), "{paragraph}");
+        }
         assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
     }
 }
 
 #[test]
-fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
+fn a_judge_has_no_launching_capability_as_tool_or_skill() {
     for (kind, served) in [("claude", true), ("opencode", false)] {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
@@ -1178,7 +1187,13 @@ fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
         });
         let reminders = LaunchReminders {
             mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
-            rimz_skills: rimz_skills(&["rimz-loop", "rimz-message", "rimz-subagents"]),
+            rimz_skills: rimz_skills(&[
+                "rimz-agents",
+                "rimz-loop",
+                "rimz-message",
+                "rimz-subagents",
+                "rimz-teams",
+            ]),
             ..LaunchReminders::default()
         };
         let capabilities = reminders.rimz_capabilities(&request);
@@ -1186,12 +1201,14 @@ fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
             capabilities.contains(&("rimz-loop".to_owned(), Reach::Skill)),
             "a judge not served `schedule` keeps the rimz-loop skill: {capabilities:?}"
         );
-        assert!(
-            capabilities
-                .iter()
-                .all(|(name, _)| name != Capability::Subagents.name()),
-            "{capabilities:?}"
-        );
+        for launching in [Capability::Subagents, Capability::Agents, Capability::Teams] {
+            assert!(
+                capabilities
+                    .iter()
+                    .all(|(name, _)| name != launching.name()),
+                "{capabilities:?}"
+            );
+        }
         let paragraph =
             capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
                 .unwrap();
@@ -1201,7 +1218,9 @@ fn a_judge_has_no_rimz_subagents_as_tool_or_skill() {
             "- rimz-message: Skill(rimz-message)"
         };
         assert!(paragraph.contains(message), "{paragraph}");
-        assert!(!paragraph.contains("rimz-subagents:"), "{paragraph}");
+        for launching in ["rimz-subagents:", "rimz-agents:", "rimz-teams:"] {
+            assert!(!paragraph.contains(launching), "{paragraph}");
+        }
         assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
     }
 }

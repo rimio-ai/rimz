@@ -357,7 +357,8 @@ pub(in crate::cli) fn run_supervised(
             rimz::launcher::LaunchOutcome::BudgetExceeded { reason } => {
                 return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
             }
-            rimz::launcher::LaunchOutcome::Declined | rimz::launcher::LaunchOutcome::Existing => {
+            rimz::launcher::LaunchOutcome::Declined
+            | rimz::launcher::LaunchOutcome::Existing { .. } => {
                 return Ok(None);
             }
         };

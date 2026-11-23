@@ -12,6 +12,7 @@
 
 mod control;
 mod join;
+mod layout;
 mod lsp;
 mod message;
 mod notes;
@@ -92,6 +93,8 @@ impl Runner for Tools {
             Call::Lsp(args) => lsp::run(self, &args),
             Call::Wait(args) => wait::arm(self, &args),
             Call::Subagent(args) => subagent::launch(self, &args),
+            Call::Agent(args) => layout::launch_agent(self, &args),
+            Call::Team(args) => layout::launch_team(self, &args),
             Call::Workflow(args) => workflow::start(self, &args),
             Call::Schedule(args) => schedule::book(self, &args),
             Call::Message(args) => message::send(self, &args),

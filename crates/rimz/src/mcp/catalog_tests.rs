@@ -89,6 +89,14 @@ fn capability_names_round_trip_and_become_only_arguments() {
     assert_eq!(names(&[Capability::Message]), ["message"]);
     assert!(!Capability::Message.starts_things());
     assert_eq!(
+        names(&[Capability::Agents]),
+        ["agent", "tasks", "join", "stop", "guide"]
+    );
+    assert_eq!(
+        names(&[Capability::Teams]),
+        ["team", "tasks", "join", "stop", "guide"]
+    );
+    assert_eq!(
         names(&[Capability::Workflow]),
         ["workflow", "tasks", "join", "stop", "guide"]
     );
@@ -279,6 +287,46 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
+        ("agent", json!({"profile": " ", "prompt": "p"})),
+        ("agent", json!({"profile": "coder", "prompt": "\n"})),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "fresh": true}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "worktree": "a", "cwd": "/b"}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "worktree": "a", "from_pr": "1"}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "from_pr": "1", "cwd": "/b"}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "worktree": " "}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "model": "opus"}),
+        ),
+        ("team", json!({"team": " ", "prompt": "p", "worktree": "a"})),
+        (
+            "team",
+            json!({"team": "forge", "prompt": " ", "worktree": "a"}),
+        ),
+        ("team", json!({"team": "forge", "prompt": "p"})),
+        (
+            "team",
+            json!({"team": "forge", "prompt": "p", "worktree": "a", "from_pr": "1"}),
+        ),
+        (
+            "team",
+            json!({"team": "forge", "prompt": "p", "from_pr": " "}),
+        ),
         ("workflow", json!({"prompt": "p"})),
         ("workflow", json!({"name": ""})),
         ("workflow", json!({"name": "./ship"})),

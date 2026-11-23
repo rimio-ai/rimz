@@ -1002,7 +1002,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    let capabilities = request.mcp_capabilities(reminders.no_subagents(&request));
+    let capabilities = request.mcp_capabilities(&reminders.denied_capabilities(&request));
     // A kind whose prompt rides an agent file takes a passed server only inside the file,
     // which only a fresh launch with a composed prompt writes; a kind that serves from the
     // launch env takes it on every launch.

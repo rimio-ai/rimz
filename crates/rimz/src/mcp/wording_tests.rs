@@ -341,6 +341,8 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
     let served = vec![
         "rimz-wait/conditions".to_owned(),
         "rimz-subagents/delegating".to_owned(),
+        "rimz-agents/launching".to_owned(),
+        "rimz-teams/launching".to_owned(),
         "rimz-workflow/steering".to_owned(),
         "rimz-workflow/debugging".to_owned(),
         "rimz-loop/targets".to_owned(),
@@ -371,5 +373,7 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
     assert!(has_guides(Capability::Wait));
     assert!(has_guides(Capability::Loop));
     assert!(has_guides(Capability::Subagents));
+    assert!(has_guides(Capability::Agents));
+    assert!(has_guides(Capability::Teams));
     assert!(!has_guides(Capability::Lsp));
 }

@@ -541,9 +541,10 @@ pub struct Profile {
     )]
     pub skills: Option<Vec<super::SkillName>>,
     /// The RimZ MCP capabilities and the user's own MCP servers a launch keeps;
-    /// unset serves every capability and leaves the user's servers alone. A subagent child, a
-    /// workflow judge, and a launch whose profile sets `subagents = []` are never served
-    /// `rimz-subagents`, whatever this holds.
+    /// unset serves every capability and leaves the user's servers alone. A subagent child and
+    /// a workflow judge are never served `rimz-subagents`, `rimz-agents`, or `rimz-teams`, and
+    /// a launch whose profile sets `subagents = []` is never served `rimz-subagents`, whatever
+    /// this holds.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
