@@ -431,11 +431,11 @@ fn launch_receipt_names_each_agent_by_its_list_handle() {
     assert_eq!(handles, ["coder"]);
     let output = receipt_for(&identities, &handles);
     assert!(
-        output.contains("launched @coder (round-binder) in #auth (/repo)"),
+        output.contains("launched @coder (@round-binder) in #auth (/repo)"),
         "{output}"
     );
     assert!(
-        output.contains("  @coder (round-binder)   claude"),
+        output.contains("  @coder (@round-binder)   claude"),
         "{output}"
     );
     assert!(output.contains("  prompt    → @coder  \"Fix the login.\""));

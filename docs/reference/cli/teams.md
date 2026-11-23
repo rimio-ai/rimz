@@ -244,9 +244,9 @@ launched forge in worktree #feat-rate-limits
   board     .rimz/team/blackboard.md
   prompt    → @planner  "add rate limiting"
 
-  @planner (stable-haven)   claude  fable        <- leader
-  @coder (round-binder)     codex   gpt-6-astra
-  @reviewer (quiet-otter)   claude  opus
+  @planner (@stable-haven)   claude  fable        <- leader
+  @coder (@round-binder)     codex   gpt-6-astra
+  @reviewer (@quiet-otter)   claude  opus
   signals   ci.failed → @coder
 ```
 

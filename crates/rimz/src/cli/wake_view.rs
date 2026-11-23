@@ -312,14 +312,9 @@ fn card_header(
             })
             .collect::<Vec<_>>();
         if agent.is_launched_child()
-            && let Some(name) = &agent.name
+            && let Some(label) = labels.last_mut()
         {
-            let petname = format!("@{name}");
-            if let Some(label) = labels.last_mut()
-                && label.as_str() != petname.as_str()
-            {
-                label.push_str(&format!(" ({petname})"));
-            }
+            *label = rimz::address::handle_with_name(label, agent.name.as_deref());
         }
         labels.join(" › ")
     } else {
