@@ -293,20 +293,30 @@ fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_i
 #[test]
 fn a_profile_that_allows_no_subagents_gets_no_subagents_paragraph() {
     let mut actual = Vec::new();
-    for (skills, server) in [
+    let grant = || {
+        Some(vec![
+            "rimz-message".parse().unwrap(),
+            "rimz-subagents".parse().unwrap(),
+        ])
+    };
+    for (skills, server, rimz_capabilities) in [
         (
             Some(vec![
                 "rimz-message".parse().unwrap(),
                 "rimz-subagents".parse().unwrap(),
             ]),
             false,
+            None,
         ),
-        (None, false),
-        (None, true),
+        (None, false, None),
+        (None, true, None),
+        (None, false, grant()),
+        (None, true, grant()),
     ] {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         request.skills = skills;
+        request.rimz_capabilities = rimz_capabilities;
         let reminders = LaunchReminders {
             mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
             subagent_catalog: Some(SubagentCatalog::NoneAllowed),
@@ -321,9 +331,15 @@ fn a_profile_that_allows_no_subagents_gets_no_subagents_paragraph() {
             reminders
                 .mcp_capabilities(&request)
                 .contains(&Capability::Subagents),
+            crate::agents::skills::launch_callable(
+                request.skills.as_deref(),
+                &reminders.withheld_skills(&request),
+                request.rimz_capabilities.as_deref(),
+                "rimz-subagents",
+            ),
         ));
     }
-    assert_eq!(actual, [(false, true, false); 3]);
+    assert_eq!(actual, [(false, true, false, false); 5]);
 }
 
 fn team_reminder(team: Team) -> TeamReminder {

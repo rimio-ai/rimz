@@ -6358,6 +6358,10 @@ fn explain_shows_the_grant_of_the_launch() {
             "agent: crew\ncapabilities: [+bash, +rimz-lsp]\nallowed-tools: [\"+Bash(git *)\"]",
         ),
         ("web", "agent: pi-crew\ncapabilities: [+web]"),
+        (
+            "unreached",
+            "agent: pi-crew\ncapabilities: [+rimz-lsp]\nskills: []",
+        ),
         ("native", "agent: pi"),
     ] {
         crate::common::write_definition(
@@ -6428,6 +6432,22 @@ fn explain_shows_the_grant_of_the_launch() {
                     "subagents: unrestricted".to_owned(),
                     "allowed-tools: none".to_owned(),
                     "callable: native discovery, less the RimZ skills outside the grant".to_owned(),
+                ],
+            ),
+            (
+                "unreached",
+                serde_json::json!({
+                    "tools": ["Read", "Grep", "Glob", "LS", "Skill"],
+                    "rimz_capabilities": [],
+                    "subagents": null,
+                    "allowed_tools": null,
+                }),
+                vec![
+                    "tools: Read, Grep, Glob, LS, Skill".to_owned(),
+                    "rimz: no RimZ capability".to_owned(),
+                    "subagents: unrestricted".to_owned(),
+                    "allowed-tools: none".to_owned(),
+                    "callable: none (all manual)".to_owned(),
                 ],
             ),
             (

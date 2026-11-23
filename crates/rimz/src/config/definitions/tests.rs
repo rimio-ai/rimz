@@ -5969,6 +5969,64 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill
     assert_eq!(grant("probe.judge"), ["rimz-message"]);
 }
 
+/// Every `Skill(rimz-x)` the built-in team text names is in a capabilities seat's grant, the
+/// reflect text's only on a reflecting team, so a name added to the text fails here until
+/// `SeatEdits::edit` grants it.
+#[test]
+fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
+    let named = |text: &str| {
+        text.split("Skill(")
+            .skip(1)
+            .filter_map(|rest| rest.split_once(')'))
+            .map(|(name, _)| name.to_owned())
+            .filter(|name| name.starts_with("rimz-"))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let consensus = named(crate::harness::team_prompt::BUILT_IN_CONSENSUS);
+    let reflect = named(crate::harness::team_prompt::SHIPPED_REFLECT);
+    assert!(!consensus.is_empty() && !reflect.is_empty());
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/seat.md",
+        "agent: claude\ncapabilities: [bash]",
+        "",
+    );
+    let seats = |judged: &str| {
+        format!(
+            "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: seat\n    role: judge\n    owns: [{judged}]"
+        )
+    };
+    let mut actual = Vec::new();
+    for (stages, judged) in [
+        (TEAM_STAGES.to_owned(), "Review"),
+        (
+            format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+            "Review, Reflect",
+        ),
+    ] {
+        team_definition(root.path(), &stages, &seats(judged), "Pipeline.");
+        let loaded = clean(root.path());
+        for seat in ["probe.lead", "probe.judge"] {
+            let granted: std::collections::BTreeSet<_> = loaded.agent_profiles.0[seat]
+                .tools
+                .as_ref()
+                .unwrap()
+                .rimz()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.name().to_owned())
+                .collect();
+            actual.push(granted);
+        }
+    }
+    let reflecting: std::collections::BTreeSet<_> = consensus.union(&reflect).cloned().collect();
+    assert_eq!(
+        actual,
+        [consensus.clone(), consensus, reflecting.clone(), reflecting]
+    );
+}
+
 /// The `rimz-message` a seat gains loads with no such skill on disk, where it reaches nothing,
 /// while the same name written by the user is checked as any `rimz-` entry is.
 #[test]
