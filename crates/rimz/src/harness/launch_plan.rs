@@ -73,6 +73,9 @@ pub struct LaunchPlan {
     /// Every skill withheld from the model: the hidden ones, and `rimz-subagents` on a
     /// launch that gets no subagent surface.
     pub withheld_skills: Vec<&'static str>,
+    /// Each RimZ capability the launch has, by name, with how the launch reminder says it
+    /// reaches it.
+    pub rimz_reach: Vec<(String, String)>,
     pub warnings: Vec<LaunchPlanWarning>,
     temp_owner: Option<String>,
     runtime: RuntimePaths,
@@ -1302,6 +1305,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             &process.argv,
         );
     }
+    let rimz_reach = reminders.capability_lines(&request);
     Ok(LaunchPlan {
         system_prompt_digest,
         request,
@@ -1319,6 +1323,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         mcp_switched_off: reminders.mcp_switched_off.clone(),
         withheld_skills,
         hidden_skills,
+        rimz_reach,
         warnings,
         temp_owner,
         runtime: inputs.runtime.clone(),

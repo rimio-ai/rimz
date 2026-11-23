@@ -464,8 +464,9 @@ upward-dependencies = ["address"]
 # the rimz-* skills (+1).
 # ContextObservation::provider_at_rest tells the statusline feed the provider reports itself at rest (+1).
 # Background scripts, their report, and the shown threshold are folded by store and drawn by the renderer (+3).
-# launch_callable is the one grant-aware skill rule both skill enforcers apply (+1).
-surface-budget = 1336
+# applied_tools gives explain the tools a kind's argv applies; launch_callable is the one
+# grant-aware skill rule both skill enforcers apply (+2).
+surface-budget = 1337
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2542,7 +2543,8 @@ path = "crates/rimz/src/harness"
 # plan::check_subagent_profile_spec is the one --subagent-profile refusal for launch, explain, and loop add (+1).
 # +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
 # hook_drain::provider_rest_settle asks a drainer and reads the row for the statusline feed (+1).
-surface-budget = 1356
+# ExecRequest::cannot_delegate tells explain that a child or judge launch has no subagents (+1).
+surface-budget = 1357
 
 [[verdict]]
 kind = "item"
