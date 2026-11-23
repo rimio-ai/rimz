@@ -3244,6 +3244,17 @@ impl rimz::agents::capabilities::SpendingCapability for PiAdoptionTestAdapter {}
 impl rimz::agents::capabilities::RuntimeControlCapability for PiAdoptionTestAdapter {}
 
 #[test]
+fn the_apply_pool_cap_is_twice_the_cores_plus_one_up_to_64() {
+    use super::pool_cap;
+
+    assert_eq!(pool_cap(1), 3);
+    assert_eq!(pool_cap(4), 9);
+    assert_eq!(pool_cap(31), 63);
+    assert_eq!(pool_cap(32), 64);
+    assert_eq!(pool_cap(512), 64);
+}
+
+#[test]
 fn a_stream_reply_line_answers_only_its_own_frame() {
     use super::{Exchange, reply_line};
     use rimz::agents::HookReply;

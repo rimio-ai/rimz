@@ -4321,8 +4321,9 @@ fn a_run_child_is_not_reused_once_its_cwd_is_recreated() {
     let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
     let second = rimz::proc::children(drainer.id());
     assert!(
-        second.len() == 1 && second != child,
-        "a recreated cwd is another directory: {child:?} then {second:?}"
+        second.len() == 2 && second.contains(&child[0]),
+        "a recreated cwd is another directory, so its frame starts a new child beside the idle \
+         one: {child:?} then {second:?}"
     );
     release.write_all(&[1]).unwrap();
     release_until_exit(&env, &mut drainer, &listener);
@@ -4331,23 +4332,78 @@ fn a_run_child_is_not_reused_once_its_cwd_is_recreated() {
     }
 }
 
+/// A Stop frame whose environment differs from `stop_frame`'s by `key` alone.
+fn keyed_stop_frame(env: &Env, key: &str) -> HookIngress {
+    let mut frame = stop_frame(env);
+    frame
+        .env
+        .insert("RIMZ_TEST_APPLY_POOL_KEY".into(), key.into());
+    frame
+}
+
 #[test]
-fn an_idle_run_child_exits_and_frees_the_election_after_drainer_death() {
+fn idle_pooled_children_exit_and_free_the_election_after_drainer_death() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
-    append_stop(&env);
-    append_stop(&env);
+    for key in ["a", "b", "a"] {
+        append_frame(&env, keyed_stop_frame(&env, key));
+    }
     let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
-    let release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
-    let child = rimz::proc::children(drainer.id());
-    assert_eq!(child.len(), 1, "the run's child waits for its next frame");
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    release.write_all(&[1]).unwrap();
+    let release = apply_barrier(&store, Some(&mut drainer), &listener, "second frame");
+    let children = rimz::proc::children(drainer.id());
+    assert_eq!(children.len(), 2, "each key's child waits in the pool");
     drainer.kill().unwrap();
     drainer.wait().unwrap();
     drop(release);
-    wait_for_readiness(&store, None, "the idle child kept the election", || {
+    wait_for_readiness(&store, None, "an idle child kept the election", || {
         WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
             .unwrap()
-            .filter(|_| !rimz::proc::process_is_live(child[0], None))
+            .filter(|_| {
+                children
+                    .iter()
+                    .all(|&child| !rimz::proc::process_is_live(child, None))
+            })
     });
+}
+
+#[test]
+fn a_recovery_leaves_no_pooled_child_alive() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut failing = keyed_stop_frame(&env, "b");
+    failing
+        .env
+        .insert("RIMZ_TEST_HOOK_APPLY_STREAM_FAIL".into(), "1".into());
+    let frames = [
+        append_frame(&env, keyed_stop_frame(&env, "a")).0,
+        append_frame(&env, failing).0,
+        append_frame(&env, keyed_stop_frame(&env, "a")).0,
+    ];
+    let (mut drainer, listener) = barrier_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &[]);
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "first frame");
+    let first = rimz::proc::children(drainer.id());
+    assert_eq!(first.len(), 1, "a's child waits for its next frame");
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "recovered frame");
+    assert_eq!(
+        rimz::proc::children(drainer.id()),
+        Vec::<u32>::new(),
+        "the recovery closed the pool"
+    );
+    release.write_all(&[1]).unwrap();
+    let mut release = apply_barrier(&store, Some(&mut drainer), &listener, "third frame");
+    let third = rimz::proc::children(drainer.id());
+    assert!(
+        third.len() == 1 && third != first,
+        "a's next frame starts a new child: {first:?} then {third:?}"
+    );
+    release.write_all(&[1]).unwrap();
+    release_until_exit(&env, &mut drainer, &listener);
+    for frame in &frames {
+        assert_eq!(lifecycle_count(&env, &frame.event_id), 1);
+    }
 }

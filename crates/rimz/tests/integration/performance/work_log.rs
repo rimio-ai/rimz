@@ -169,7 +169,11 @@ fn an_apply_child_never_applies_another_environments_frame() {
     let log = env.home_root.join("run-work.jsonl");
     let sessions = [0, 0, 1, 0];
     let (frames, rows) = drain_queued(&env, &sessions, &log, &[]);
-    assert_eq!(rows.len(), 3, "A A | B | A: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        2,
+        "A's idle child takes its last frame after B's commit: {rows:?}"
+    );
     let events = env.read_events();
     for (frame, index) in frames.iter().zip(sessions) {
         let lifecycle = events
@@ -183,6 +187,32 @@ fn an_apply_child_never_applies_another_environments_frame() {
             "each frame applies under its own environment: {lifecycle}"
         );
     }
+}
+
+#[test]
+fn a_full_pool_closes_the_apply_child_unused_longest() {
+    let env = fixture();
+    let log = env.home_root.join("run-work.jsonl");
+    let (_, rows) = drain_queued(
+        &env,
+        &[0, 1, 0, 2, 0],
+        &log,
+        &[("RIMZ_TEST_HOOK_APPLY_POOL_CAP", "2")],
+    );
+    assert_eq!(rows.len(), 3, "C evicts B, not A: {rows:?}");
+}
+
+#[test]
+fn a_pool_of_one_starts_a_child_on_every_environment_change() {
+    let env = fixture();
+    let log = env.home_root.join("run-work.jsonl");
+    let (_, rows) = drain_queued(
+        &env,
+        &[0, 1, 0],
+        &log,
+        &[("RIMZ_TEST_HOOK_APPLY_POOL_CAP", "1")],
+    );
+    assert_eq!(rows.len(), 3, "A | B | A: {rows:?}");
 }
 
 #[test]
