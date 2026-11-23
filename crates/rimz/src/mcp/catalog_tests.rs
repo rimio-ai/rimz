@@ -323,15 +323,9 @@ fn the_text_fits_what_providers_keep() {
     assert_eq!(wording.breaches(), Vec::<String>::new());
     let instructions = wording.instructions(&Capability::ALL);
     let first = instructions.lines().next().unwrap_or_default();
-    for group in [
-        "`lsp`",
-        "`wait`",
-        "`subagent`",
-        "`tasks`, `join`, and `stop`",
-        "`notes`",
-        "`self_tune` to",
-    ] {
-        assert!(first.contains(group), "{group} missing from {first:?}");
+    for purpose in TOOLS.iter().map(|tool| tool.purpose) {
+        let phrase = purpose.phrase();
+        assert!(first.contains(phrase), "{phrase} missing from {first:?}");
     }
     for tool in TOOLS
         .iter()
@@ -363,14 +357,7 @@ fn the_full_listing_is_the_served_text() {
     let instructions = wording.instructions(&groups);
     assert!(text.contains(&instructions), "{text}");
     let first = instructions.lines().next().unwrap();
-    assert!(
-        first.contains("`lsp`") && first.contains("`self_stop`"),
-        "{first}"
-    );
-    assert!(
-        !first.contains("`wait`") && !first.contains("`notes`"),
-        "{first}"
-    );
+    assert_eq!(first, "RimZ tools to read code and manage yourself.");
     assert!(!text.contains("only some of these tools"), "{text}");
     assert!(!text.contains(" · text "), "{text}");
     let served = tools_list(&tools, &[], &wording);

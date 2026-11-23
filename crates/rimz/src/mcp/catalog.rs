@@ -376,16 +376,16 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    /// What the tools of this purpose do, after their names in the first line.
+    /// What the tools of this purpose let an agent do, as the first line lists it.
     pub fn phrase(self) -> &'static str {
         match self {
-            Self::Code => "to read code",
-            Self::Start => "to wait outside your turn",
-            Self::Delegate => "to delegate",
-            Self::Started => "for what you started",
-            Self::Yourself => "to manage yourself",
-            Self::Notes => "to save a note",
-            Self::Guides => "for guides",
+            Self::Code => "read code",
+            Self::Start => "wait outside your turn",
+            Self::Delegate => "delegate",
+            Self::Started => "track what you started",
+            Self::Yourself => "manage yourself",
+            Self::Notes => "keep notes",
+            Self::Guides => "load usage guides",
         }
     }
 }

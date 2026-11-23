@@ -60,7 +60,7 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
 
     assert_eq!(
         wording.instructions(&[Capability::Lsp]),
-        "RimZ tools: `lsp` to read code.\nUse `lsp`, replaced.\nShared, replaced.\nSecond line."
+        "RimZ tools to read code.\nUse `lsp`, replaced.\nShared, replaced.\nSecond line."
     );
     let paths: Vec<_> = wording.instruction_paths(&[Capability::Lsp]).collect();
     assert_eq!(
@@ -85,7 +85,7 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     assert_eq!(
         wording.instructions(&[Capability::Notes, Capability::Lsp]),
         format!(
-            "RimZ tools: `lsp` to read code; `notes` to save a note.\n{}\n{}\n{shared}",
+            "RimZ tools to read code and keep notes.\n{}\n{}\n{shared}",
             sentence(Capability::Lsp),
             sentence(Capability::Notes)
         )
@@ -93,16 +93,16 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     assert_eq!(
         wording.instructions(&[Capability::Wait]),
         format!(
-            "RimZ tools: `wait` to wait outside your turn; `tasks`, `join`, and `stop` for \
-             what you started; `guide` for guides.\n{}\n{shared}",
+            "RimZ tools to wait outside your turn, track what you started, and load usage \
+             guides.\n{}\n{shared}",
             sentence(Capability::Wait)
         )
     );
     assert_eq!(
         wording.instructions(&[Capability::Subagents]),
         format!(
-            "RimZ tools: `subagent` to delegate; `tasks`, `join`, and `stop` for what you \
-             started; `guide` for guides.\n{}\n{shared}",
+            "RimZ tools to delegate, track what you started, and load usage guides.\n{}\n\
+             {shared}",
             sentence(Capability::Subagents)
         )
     );

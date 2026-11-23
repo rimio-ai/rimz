@@ -477,35 +477,26 @@ fn guide_names(groups: &[Capability]) -> Vec<String> {
         .collect()
 }
 
-/// The instructions' first line for a launch serving `groups`: each served
-/// tool's name, grouped by what the tools are for.
+/// The instructions' first line for a launch serving `groups`: a short intro saying what the
+/// served tools are for, which the group sentences after it name.
 fn first_line(groups: &[Capability]) -> String {
-    let tools: Vec<&Tool> = if groups.is_empty() {
+    let mut purposes: Vec<Purpose> = if groups.is_empty() {
         Vec::new()
     } else {
-        super::catalog::tools_for(groups).collect()
+        super::catalog::tools_for(groups)
+            .map(|tool| tool.purpose)
+            .collect()
     };
-    let mut purposes: Vec<Purpose> = tools.iter().map(|tool| tool.purpose).collect();
     purposes.sort();
     purposes.dedup();
-    let parts: Vec<String> = purposes
-        .into_iter()
-        .map(|purpose| {
-            let names: Vec<String> = tools
-                .iter()
-                .filter(|tool| tool.purpose == purpose)
-                .map(|tool| format!("`{}`", tool.name))
-                .collect();
-            let names = match names.as_slice() {
-                [one] => one.clone(),
-                [first, second] => format!("{first} and {second}"),
-                [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
-                [] => String::new(),
-            };
-            format!("{names} {}", purpose.phrase())
-        })
-        .collect();
-    format!("RimZ tools: {}.", parts.join("; "))
+    let phrases: Vec<&str> = purposes.into_iter().map(Purpose::phrase).collect();
+    let phrases = match phrases.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    };
+    format!("RimZ tools to {phrases}.")
 }
 
 /// The path of `group`'s one-line instructions.
