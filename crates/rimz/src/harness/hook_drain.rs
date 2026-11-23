@@ -880,11 +880,17 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
     )? {
         return Ok(());
     }
-    let mut active = Instant::now();
     #[cfg(feature = "testkit")]
     let mut ticks = std::env::var_os("RIMZ_TEST_HOOK_DRAIN_TICKS")
         .map(UnixStream::connect)
         .transpose()?;
+    // The tick counter queues its clients before this release, so a short idle window cannot
+    // close the listener on them.
+    #[cfg(feature = "testkit")]
+    if let Some(ticks) = ticks.as_mut() {
+        ticks.read_exact(&mut [0])?;
+    }
+    let mut active = Instant::now();
     loop {
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_POLL_CLIENTS");
