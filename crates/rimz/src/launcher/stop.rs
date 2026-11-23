@@ -504,6 +504,9 @@ struct Ending {
     /// holder unless the asked session still holds it, and after a re-key the row that
     /// adopted its provisional key.
     session: AgentState,
+    /// The bare handle a failed root's line starts with; a child's starts with `label`.
+    handle: String,
+    /// The handle as a receipt names it, with a differing name beside it.
     label: String,
     /// The handle of the agent whose stop reached this one as a launched child.
     parent: Option<String>,
@@ -568,7 +571,8 @@ impl Stopper<'_> {
         if self.tracker.contains(&key) {
             return;
         }
-        let label = crate::address::agent_handle(&agent, self.peers, true);
+        let handle = crate::address::agent_handle(&agent, self.peers, true);
+        let label = crate::address::handle_with_name(&handle, agent.name.as_deref());
         let children = crate::address::launched_children(self.read.agents(), &agent)
             .into_iter()
             .filter(|child| child.ended_at.is_none())
@@ -577,7 +581,7 @@ impl Stopper<'_> {
         for child in children {
             self.end_tree(child, Some(label.clone()), endings);
         }
-        let ending = self.end(&agent, key.clone(), label, parent);
+        let ending = self.end(&agent, key.clone(), handle, label, parent);
         self.tracker.insert(key);
         self.tracker.insert(ending.key());
         endings.push(ending);
@@ -587,12 +591,14 @@ impl Stopper<'_> {
         &mut self,
         agent: &AgentState,
         key: AgentKey,
+        handle: String,
         label: String,
         parent: Option<String>,
     ) -> Ending {
         let mut ending = Ending {
             asked: key,
             session: agent.clone(),
+            handle,
             label,
             parent,
             closed: false,
@@ -1115,6 +1121,12 @@ impl Stopper<'_> {
         let mut stop = TreeStop::default();
         for ending in endings {
             let key = ending.key();
+            // A failed root is paired once, by `TreeStop::into_result`; a child only here.
+            let failed = if ending.parent.is_some() {
+                &ending.label
+            } else {
+                &ending.handle
+            };
             // `judge` decides every ending before a receipt is built, so an undecided one
             // is impossible; it still never reads as stopped.
             let outcome = ending
@@ -1128,7 +1140,7 @@ impl Stopper<'_> {
                     stop.root_stopped = true;
                     stop.root = Some(ending.session.clone());
                 }
-                (_, Err(reason)) => stop.failures.push(format!("{}: {reason}", ending.label)),
+                (_, Err(reason)) => stop.failures.push(format!("{failed}: {reason}")),
             }
             if ending.left_run {
                 continue;
@@ -1146,7 +1158,7 @@ impl Stopper<'_> {
             let rows = match self.room.store.audit_rows() {
                 Ok(rows) => rows,
                 Err(err) => {
-                    stop.failures.push(format!("{}: {err:#}", ending.label));
+                    stop.failures.push(format!("{failed}: {err:#}"));
                     continue;
                 }
             };
@@ -1175,7 +1187,7 @@ impl Stopper<'_> {
                     kind,
                     session,
                 ) {
-                    stop.failures.push(format!("{}: {err}", ending.label));
+                    stop.failures.push(format!("{failed}: {err}"));
                 }
             }
         }

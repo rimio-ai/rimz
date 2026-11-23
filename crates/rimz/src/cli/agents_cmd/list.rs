@@ -406,7 +406,7 @@ fn render_list_summary(
         .filter_map(|(entry, _)| {
             let attention = entry.needs_you.as_ref()?;
             Some(render::NeedsYouRow {
-                handle: entry.handle.clone(),
+                handle: rimz::address::handle_with_name(&entry.handle, entry.name.as_deref()),
                 kind: Some(entry.kind.to_string()),
                 status: Some(attention.status),
                 since: attention.since,

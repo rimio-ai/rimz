@@ -129,7 +129,9 @@ pub enum Observed<'a> {
     /// A pending target's wait reason, read this poll, beside the one read before it.
     Reason {
         address: &'a str,
-        previous: Option<TurnWaitReason>,
+        /// The agent's name, for prose that pairs it with `address`.
+        name: Option<&'a str>,
+        previous: Box<Option<TurnWaitReason>>,
         reason: Option<TurnWaitReason>,
     },
     /// A poll that left targets pending; these indices settled during it.
@@ -144,11 +146,13 @@ fn observe_reason(
     slot: &mut Option<TurnWaitReason>,
     reason: Option<TurnWaitReason>,
     address: &str,
+    name: Option<&str>,
 ) -> Result<()> {
-    let previous = slot.take();
+    let previous = Box::new(slot.take());
     *slot = reason.clone();
     observe(Observed::Reason {
         address,
+        name,
         previous,
         reason,
     })
@@ -186,7 +190,13 @@ fn poll_target(
                     Some((view, agent)) => {
                         let address =
                             crate::address::paste_address(agent, &view.snapshot, current_channel);
-                        observe_reason(observe, reason, view.reason(agent), &address)?;
+                        observe_reason(
+                            observe,
+                            reason,
+                            view.reason(agent),
+                            &address,
+                            agent.name.as_deref(),
+                        )?;
                     }
                     None => *reason = None,
                 }
@@ -215,7 +225,13 @@ fn poll_target(
                 }));
             };
             let address = crate::address::paste_address(agent, &view.snapshot, current_channel);
-            observe_reason(observe, reason, view.reason(agent), &address)?;
+            observe_reason(
+                observe,
+                reason,
+                view.reason(agent),
+                &address,
+                agent.name.as_deref(),
+            )?;
             *name = agent_name(agent).to_owned();
             let completion = view.completion(agent);
             let latest = match agent.turn_started_at {

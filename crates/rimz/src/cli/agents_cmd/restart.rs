@@ -470,7 +470,7 @@ pub(in crate::cli) fn restart_resolved(
     if continues {
         note.push_str("; continue queued");
     }
-    let handle = rimz::address::agent_handle(agent, peers, true);
+    let handle = rimz::address::named_handle(agent, peers, true);
     Ok(match fresh_reason {
         Some(reason) => format!("restarted {handle} fresh — {reason}{note}"),
         None => format!(

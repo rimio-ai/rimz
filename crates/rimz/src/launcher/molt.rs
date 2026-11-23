@@ -145,6 +145,11 @@ pub struct Molted {
 }
 
 impl Molted {
+    /// The replaced agent's name, paired with [`handle`](Self::handle) where prose names it.
+    pub fn name(&self) -> Option<&str> {
+        self.source.name.as_deref()
+    }
+
     /// After delivering the receipt, release the replaced session and book its close: once its
     /// turn has ended and it has rested `rest`, [`close_rested`] closes its pane. Returns the
     /// cleanup notices even if their optional presentation fails; the replacement has bound,

@@ -143,7 +143,11 @@ pub(super) fn run_tune(args: TuneArgs, globals: &GlobalFlags) -> Result<()> {
         let condition = (report.setting == TuneSetting::KeepWarm)
             .then_some(tuned.keep_warm_condition.as_deref())
             .flatten();
-        render_setting(&handle, report, condition)?;
+        render_setting(
+            &rimz::address::handle_with_name(&handle, agent.name.as_deref()),
+            report,
+            condition,
+        )?;
     }
     if args.setting.is_none() {
         return budget::run_budget(&ctx, agent, &peers, &args, None);

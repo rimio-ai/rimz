@@ -216,22 +216,28 @@ impl Marking<'_> {
                 && agent.kind.as_str() == row.name
                 && !agent.agent_id.is_provisional()
         });
-        let live = agent.filter(|agent| agent.ended_at.is_none());
-        let label = selected.map_or_else(
-            || match live {
-                Some(agent) => {
-                    rimz::address::paste_address(agent, &snapshot, &ctx.address_context())
-                }
-                None => row.display_name().to_owned(),
-            },
-            |selected| selected.address.clone(),
-        );
         if let (Some(selected), Some(agent)) = (selected, agent)
             && let Err(err) = selected.check(Some(agent))
         {
-            writeln!(out, "error {label}: {err}")?;
+            writeln!(out, "error {}: {err}", selected.address)?;
             return Ok(false);
         }
+        let live = agent.filter(|agent| agent.ended_at.is_none());
+        let label = selected.map_or_else(
+            || match live {
+                Some(agent) => rimz::address::handle_with_name(
+                    &rimz::address::paste_address(agent, &snapshot, &ctx.address_context()),
+                    agent.name.as_deref(),
+                ),
+                None => row.display_name().to_owned(),
+            },
+            |selected| {
+                rimz::address::handle_with_name(
+                    &selected.address,
+                    agent.and_then(|agent| agent.name.as_deref()),
+                )
+            },
+        );
         let Some(agent) = live else {
             writeln!(
                 out,

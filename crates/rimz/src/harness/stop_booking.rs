@@ -51,7 +51,7 @@ pub fn book_stop(
     caller: impl FnOnce() -> Result<Option<CallerIdentity>>,
 ) -> Result<StopBooking> {
     let peers = crate::address::addressable_agents(snapshot);
-    let label = crate::address::agent_handle(agent, &peers, true);
+    let label = crate::address::named_handle(agent, &peers, true);
     let pending = idle_stop::read(paths)
         .into_iter()
         .find(|request| request.kind == agent.kind && request.agent_id == agent.agent_id);

@@ -4,7 +4,7 @@
 use std::io::Write;
 
 use anyhow::Result;
-use rimz::address::{addressable_agents, agent_handle};
+use rimz::address::{addressable_agents, named_handle};
 use rimz::message::compact::{ReceiptOutcome, compact_agent as compact};
 
 use crate::cli::{GlobalFlags, ctx::Ctx, render, send};
@@ -24,7 +24,7 @@ pub(super) fn compact_agent(
         None,
         &ctx.address_context(),
     )?;
-    let handle = agent_handle(agent, &addressable_agents(&snapshot), false);
+    let handle = named_handle(agent, &addressable_agents(&snapshot), false);
     let caller = send::resolve_caller(&ctx.store)?;
     let receipt = compact(
         &ctx.workspace,

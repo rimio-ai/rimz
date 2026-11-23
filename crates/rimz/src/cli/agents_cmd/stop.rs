@@ -179,12 +179,16 @@ pub(super) fn stop_agent(
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(live_agent) = live_agent {
         let peers = rimz::address::addressable_agents(&snapshot);
-        let label = rimz::address::paste_address(live_agent, &snapshot, current_channel);
+        let name = live_agent.name.as_deref();
+        let label = rimz::address::handle_with_name(
+            &rimz::address::paste_address(live_agent, &snapshot, current_channel),
+            name,
+        );
         let stop = stop_resolved(&ctx, globals, &snapshot, &[live_agent])?.remove(0);
         let mut out = render::out();
         report_children(&stop, &mut out)?;
         if stop.error().is_some() {
-            return stop.into_result(&rimz::address::agent_handle(live_agent, &peers, true));
+            return stop.into_result(&rimz::address::named_handle(live_agent, &peers, true));
         }
         let mut receipt = format!("stopped {label} ({})", live_agent.kind);
         if offers_resume(workspace, live_agent) {
@@ -287,7 +291,8 @@ fn stop_selected(
         };
         let stop = stop_resolved(ctx, globals, &snapshot, &[agent])?.remove(0);
         closed.extend(stop.reached().iter().cloned());
-        if report_stop(&stop, &mut out, &target.address)? {
+        let label = rimz::address::handle_with_name(&target.address, agent.name.as_deref());
+        if report_stop(&stop, &mut out, &label)? {
             failed += 1;
         }
     }
@@ -317,7 +322,7 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
         }
     };
     let peers = rimz::address::addressable_agents(&snapshot);
-    let label = rimz::address::agent_handle(agent, &peers, true);
+    let label = rimz::address::named_handle(agent, &peers, true);
     let after = match when_idle {
         WhenIdle::After(after) => Some(after),
         WhenIdle::Off | WhenIdle::Reference(_) => None,
