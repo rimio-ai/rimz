@@ -1028,13 +1028,15 @@ fn a_runs_step_timeout_and_cancel_leave_its_children_running() {
     deploy(&env, "child");
     let gate = deploy_fan(
         &env,
-        "start = [{ workflow = 'child' }, { workflow = 'child' }]\nthen = 'after'\ntimeout = '1s'",
+        "start = [{ workflow = 'child' }, { workflow = 'child' }]\nthen = 'after'\ntimeout = '1h'",
     );
     commit_project(&env);
     let parent = started(run(&env, "fan", &[], &[]));
     until(&env, &parent, |value| value["record"]["wait"].is_object());
     let ids = children(&open_gate(&env, &parent, &gate));
-    std::thread::sleep(Duration::from_millis(1100));
+    rewrite(&env, &parent, |record| {
+        record["attempt"]["started_at"] = json!("1970-01-01T00:00:00Z");
+    });
     success(command(&env, &["workflow", "advance", &parent]));
     let value = settled(&env, &parent, "failed");
     assert!(
