@@ -284,6 +284,7 @@ fn only_agent_booked_one_off_launch_commands_are_bookings() {
         &readings,
         &TeamsConfig::default(),
         &records(&runtime),
+        &BookingsCache::default(),
         &root,
     );
 
@@ -374,7 +375,14 @@ fn facts_name_the_team_branch_fire_and_end() {
         },
     )]));
 
-    let facts = collect(&tasks, &readings, &teams, &records, &root);
+    let facts = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
 
     let facts = &facts[0];
     assert_eq!(facts.starts, BookingStarts::Team("forge".to_owned()));
@@ -514,6 +522,7 @@ fn the_published_cache_carries_the_loops_own_verdict() {
             &readings,
             &TeamsConfig::default(),
             &records(&runtime),
+            &BookingsCache::default(),
             &root,
         ),
     };
@@ -690,6 +699,7 @@ fn a_consumed_one_shot_keeps_its_fired_entry_for_its_lifetime() {
         &readings,
         &TeamsConfig::default(),
         &records(&runtime),
+        &BookingsCache::default(),
         &root,
     );
     assert_eq!(before.len(), 1, "waiting on its time while the row stands");
@@ -870,6 +880,7 @@ fn a_fire_reads_its_branch_from_the_tree_its_rows_run_in() {
         &BTreeMap::from([("spike".to_owned(), reading())]),
         &TeamsConfig::default(),
         &records(&runtime),
+        &BookingsCache::default(),
         &root,
     );
     assert_eq!(
@@ -885,12 +896,26 @@ fn a_fire_reads_its_branch_from_the_tree_its_rows_run_in() {
         rows: &rows,
         ..records(&runtime)
     };
-    let fresh = collect(&tasks, &readings, &TeamsConfig::default(), &records, &root);
+    let fresh = collect(
+        &tasks,
+        &readings,
+        &TeamsConfig::default(),
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     assert_eq!(fresh[0].branch.as_deref(), Some("spike-20261113-100000"));
     assert!(fresh[0].worktree);
 
     std::fs::remove_dir_all(&tree).unwrap();
-    let mut gone = collect(&tasks, &readings, &TeamsConfig::default(), &records, &root);
+    let mut gone = collect(
+        &tasks,
+        &readings,
+        &TeamsConfig::default(),
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     assert_eq!(
         gone[0].branch, None,
         "the removed tree's marker is unreadable"
@@ -936,11 +961,18 @@ fn a_lane_teams_done_is_read_in_that_worktree() {
     let (tasks, readings) = fired("lang", entry, &fire);
     let records = records(&runtime);
     let team_done = || {
-        collect(&tasks, &readings, &teams, &records, &root)[0]
-            .fire
-            .as_ref()
-            .unwrap()
-            .team_done
+        collect(
+            &tasks,
+            &readings,
+            &teams,
+            &records,
+            &BookingsCache::default(),
+            &root,
+        )[0]
+        .fire
+        .as_ref()
+        .unwrap()
+        .team_done
     };
 
     assert_eq!(team_done(), None, "no board read yet");
@@ -957,11 +989,25 @@ fn a_lane_teams_done_is_read_in_that_worktree() {
     board(&tree, "Build");
     assert_eq!(team_done(), Some(false));
     board(&tree, "Done");
-    let done = collect(&tasks, &readings, &teams, &records, &root);
+    let done = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     assert_eq!(done[0].fire.as_ref().unwrap().team_done, Some(true));
 
     std::fs::remove_dir_all(&tree).unwrap();
-    let mut closed = collect(&tasks, &readings, &teams, &records, &root);
+    let mut closed = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     let prior = BookingsCache {
         version: BOOKINGS_CACHE_VERSION,
         bookings: done,
@@ -1001,7 +1047,14 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
     board(&tree, "Done");
     let prior = BookingsCache {
         version: BOOKINGS_CACHE_VERSION,
-        bookings: collect(&tasks, &readings, &teams, &records, &root),
+        bookings: collect(
+            &tasks,
+            &readings,
+            &teams,
+            &records,
+            &BookingsCache::default(),
+            &root,
+        ),
     };
     assert_eq!(
         prior.bookings[0].fire.as_ref().unwrap().team_done,
@@ -1010,7 +1063,14 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
     assert!(branch_demand(&prior).is_empty());
 
     board(&tree, "Review");
-    let mut reopened = collect(&tasks, &readings, &teams, &records, &root);
+    let mut reopened = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     carry(&prior, &mut reopened);
     assert_eq!(reopened[0].fire.as_ref().unwrap().team_done, Some(false));
     let reopened = BookingsCache {
@@ -1023,7 +1083,14 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
     );
 
     std::fs::remove_file(tree.join(".rimz/team/blackboard.md")).unwrap();
-    let mut unreadable = collect(&tasks, &readings, &teams, &records, &root);
+    let mut unreadable = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records,
+        &BookingsCache::default(),
+        &root,
+    );
     carry(&prior, &mut unreadable);
     assert_eq!(
         unreadable[0].fire.as_ref().unwrap().team_done,
@@ -1064,14 +1131,28 @@ fn a_fire_records_the_launches_of_its_rows_and_keeps_them() {
     };
     let prior = BookingsCache {
         version: BOOKINGS_CACHE_VERSION,
-        bookings: collect(&tasks, &readings, &teams, &seen, &root),
+        bookings: collect(
+            &tasks,
+            &readings,
+            &teams,
+            &seen,
+            &BookingsCache::default(),
+            &root,
+        ),
     };
     assert_eq!(
         prior.bookings[0].fire.as_ref().unwrap().launches,
         ["lead-launch", "member-launch"]
     );
 
-    let mut later = collect(&tasks, &readings, &teams, &records(&runtime), &root);
+    let mut later = collect(
+        &tasks,
+        &readings,
+        &teams,
+        &records(&runtime),
+        &BookingsCache::default(),
+        &root,
+    );
     carry(&prior, &mut later);
     assert_eq!(
         later[0].fire.as_ref().unwrap().launches,
@@ -1103,11 +1184,18 @@ fn a_fire_ends_with_the_rows_carrying_its_id() {
             rows,
             ..records(&runtime)
         };
-        collect(&tasks, &readings, &TeamsConfig::default(), &records, &root)[0]
-            .fire
-            .as_ref()
-            .unwrap()
-            .ended_at
+        collect(
+            &tasks,
+            &readings,
+            &TeamsConfig::default(),
+            &records,
+            &BookingsCache::default(),
+            &root,
+        )[0]
+        .fire
+        .as_ref()
+        .unwrap()
+        .ended_at
     };
 
     assert_eq!(
@@ -1536,6 +1624,7 @@ fn facts_read_the_label_or_launch_description_and_a_teams_typed_lane() {
         &readings,
         &TeamsConfig::default(),
         &records(&runtime),
+        &BookingsCache::default(),
         &root,
     );
     let read: BTreeMap<&str, (Option<&str>, Option<&str>)> = facts
@@ -1581,6 +1670,7 @@ fn a_fired_agent_names_its_rows_named_lane_and_keeps_its_text_past_consumption()
         &BTreeMap::from([("typed".to_owned(), reading())]),
         &TeamsConfig::default(),
         &records(&runtime),
+        &BookingsCache::default(),
         &root,
     );
     assert_eq!(unfired[0].description.as_deref(), Some("type the language"));
@@ -2067,5 +2157,118 @@ fn a_fired_one_off_that_is_no_booking_reads_no_rows() {
             .map(|facts| (facts.task.as_str(), facts.fire.is_some()))
             .collect::<Vec<_>>(),
         [("waiting", false)]
+    );
+}
+
+/// A fire whose rows were pruned keeps the end its last publication held, by either way in
+/// (a catalog booking's and a consumed one-shot's), until something carrying its id is alive
+/// again; a treeless consumed entry whose kept end is past the window is dropped as before.
+#[test]
+fn a_fire_keeps_its_published_end_once_its_rows_are_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, runtime) = room(dir.path());
+    let now: Timestamp = "2026-11-13T12:00:00Z".parse().unwrap();
+    let past = now - jiff::SignedDuration::from_secs(15 * 86_400);
+    let path = crate::worktree::worktree_path(&root, worktrees(), "kept").unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    let published = |task: &str, fire: &FireMark, worktree: bool| BookingFacts {
+        task: task.to_owned(),
+        starts: BookingStarts::Team("forge".to_owned()),
+        leader: None,
+        booked_by: vec![link("booker")],
+        branch: worktree.then(|| task.to_owned()),
+        worktree,
+        needs_fix: None,
+        blocking: None,
+        unmet: Vec::new(),
+        timing: None,
+        lane: None,
+        description: None,
+        fire: Some(FireFacts {
+            at: past,
+            fire: fire.fire.clone(),
+            ended_at: Some(past),
+            pr: BookingPr::Open { number: Some(3) },
+            team_done: None,
+            launches: vec!["gone".to_owned()],
+        }),
+    };
+    let kept = mark(past, Some(LaunchKind::Team), "forge#kept");
+    let revived = mark(past, Some(LaunchKind::Team), "forge#kept");
+    let treeless = mark(past, Some(LaunchKind::Agent), "coder");
+    let catalog = mark(past, Some(LaunchKind::Agent), "coder");
+    let prior = BookingsCache {
+        version: BOOKINGS_CACHE_VERSION,
+        bookings: vec![
+            published("kept", &kept, true),
+            published("revived", &revived, true),
+            published("treeless", &treeless, false),
+            published("lang", &catalog, false),
+        ],
+    };
+    let end = |facts: &BookingFacts| facts.fire.as_ref().unwrap().ended_at;
+
+    let living = [stamped("revived", &revived.fire)];
+    let records = RoomRecords {
+        rows: &living,
+        ..records(&runtime)
+    };
+    let ledger = ledger(vec![
+        ("kept", kept),
+        ("revived", revived.clone()),
+        ("treeless", treeless.clone()),
+    ]);
+    let (kept, gone) = consumed(
+        &ledger,
+        &TeamsConfig::default(),
+        &records,
+        &prior,
+        &root,
+        now,
+        3_600,
+    );
+    let ends: Vec<_> = kept
+        .iter()
+        .map(|facts| (facts.task.as_str(), end(facts)))
+        .collect();
+    assert_eq!(
+        ends,
+        [("kept", Some(past)), ("revived", None)],
+        "a pruned worktree entry keeps its end; one alive again publishes none"
+    );
+    assert_eq!(
+        gone,
+        [treeless.fire],
+        "a treeless kept end past the window drops"
+    );
+
+    let entry = launching(&["rimz", "agents", "coder", "go"], &root);
+    let (tasks, readings) = fired("lang", entry.clone(), &catalog);
+    let pruned = collect(
+        &tasks,
+        &readings,
+        &TeamsConfig::default(),
+        &records,
+        &prior,
+        &root,
+    );
+    assert_eq!(
+        end(&pruned[0]),
+        Some(past),
+        "a catalog fire keeps its end too"
+    );
+    let (tasks, readings) = fired("lang", entry, &revived);
+    let alive = collect(
+        &tasks,
+        &readings,
+        &TeamsConfig::default(),
+        &records,
+        &prior,
+        &root,
+    );
+    assert_eq!(
+        end(&alive[0]),
+        None,
+        "a catalog fire alive again publishes none"
     );
 }

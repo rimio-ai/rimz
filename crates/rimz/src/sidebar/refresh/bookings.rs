@@ -92,7 +92,9 @@ pub(in crate::sidebar) struct FireFacts {
     pub at: Timestamp,
     /// The fire's id, which every row and run its launch made carries as `loop_fire`.
     pub fire: FireId,
-    /// The latest end stamp the room's records hold for the launch.
+    /// The latest end stamp the room's records hold for the launch; once they hold none and
+    /// nothing the fire launched is alive (its rows pruned), the end the previous publication
+    /// of the same fire held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<Timestamp>,
     pub pr: BookingPr,
@@ -269,7 +271,7 @@ impl Lane<'_> {
         };
         let mut facts = Vec::new();
         if booked {
-            facts = collect(catalog.visible(), &readings, &teams, &records, root);
+            facts = collect(catalog.visible(), &readings, &teams, &records, prior, root);
             carry(prior, &mut facts);
             reread_prs(&records.source, root, &mut facts);
         }
@@ -428,6 +430,7 @@ pub(super) fn collect(
     readings: &BTreeMap<String, TaskReading>,
     teams: &TeamsConfig,
     records: &RoomRecords,
+    prior: &BookingsCache,
     root: &Path,
 ) -> Vec<BookingFacts> {
     tasks
@@ -441,7 +444,7 @@ pub(super) fn collect(
             let fired = reading
                 .launch
                 .as_ref()
-                .map(|mark| Fired::read(mark, &booked, team, records, root));
+                .map(|mark| Fired::read(mark, &booked, team, records, prior, root));
             Some(BookingFacts {
                 task: name.clone(),
                 starts: booked.starts(team.is_some()),
@@ -513,6 +516,7 @@ impl Fired {
         booked: &Booked,
         team: Option<&Team>,
         records: &RoomRecords,
+        prior: &BookingsCache,
         root: &Path,
     ) -> Self {
         let rows: Vec<&AgentState> = records
@@ -539,7 +543,8 @@ impl Fired {
         let facts = FireFacts {
             at: mark.at,
             fire: mark.fire.clone(),
-            ended_at: ended_at(mark, records, &rows),
+            ended_at: ended_at(mark, records, &rows)
+                .or_else(|| (!alive).then(|| published_end(prior, &mark.fire)).flatten()),
             pr: branch.as_deref().map_or(BookingPr::Unread, |branch| {
                 branch_pr(&records.source, branch, root)
             }),
@@ -593,7 +598,7 @@ pub(super) fn consumed(
         .filter_map(|(task, mark)| {
             let booked = booked_fire(mark)?;
             let team = teams.0.get(&booked.target);
-            let fired = Fired::read(mark, &booked, team, records, root);
+            let fired = Fired::read(mark, &booked, team, records, prior, root);
             let facts = BookingFacts {
                 task: task.to_owned(),
                 starts: booked.starts(team.is_some()),
@@ -669,6 +674,16 @@ fn fire_alive(mark: &FireMark, records: &RoomRecords, rows: &[&AgentState]) -> b
             .iter()
             .any(|run| run.loop_fire.as_ref() == Some(&mark.fire) && !run.status.is_terminal())
         || mark.launching()
+}
+
+/// The end the previous publication of the fire `fire` held.
+fn published_end(prior: &BookingsCache, fire: &FireId) -> Option<Timestamp> {
+    prior
+        .bookings
+        .iter()
+        .filter_map(|before| before.fire.as_ref())
+        .find(|before| before.fire == *fire)?
+        .ended_at
 }
 
 /// Whether a launched team's board in its launch checkout reads `Done`; `None` while the

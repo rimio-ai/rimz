@@ -179,10 +179,12 @@ impl Entry<'_> {
     }
 }
 
-/// A fire is starting while nothing it launched is alive or carries its id, and the records
-/// hold no end of its launch.
+/// A fire is starting while nothing it launched is alive or carries its id, no pass recorded a
+/// launch of its rows, and the records hold no end of its launch. A fire whose rows registered
+/// and of which nothing is left alive is ended, with no time until the lane publishes one.
 fn starting(snapshot: &SidebarSnapshot, fire: &FireFacts, alive: bool) -> bool {
     !alive
+        && fire.launches.is_empty()
         && fire.ended_at.is_none()
         && !snapshot
             .agents
