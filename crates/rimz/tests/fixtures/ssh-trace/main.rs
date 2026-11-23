@@ -264,7 +264,12 @@ fn record_attach_identity_if_requested() {
     use std::os::fd::AsFd as _;
 
     if let Some(path) = env::var_os("RIMZ_TEST_SSH_PID_FILE") {
-        std::fs::write(path, std::process::id().to_string()).expect("write ssh trace pid");
+        // Published by rename: a test polls for the file and reads it once, and a file
+        // written in place can be seen created and still empty.
+        let mut staged = path.clone();
+        staged.push(".partial");
+        std::fs::write(&staged, std::process::id().to_string()).expect("write ssh trace pid");
+        std::fs::rename(&staged, &path).expect("publish ssh trace pid");
     }
     let Some(path) = env::var_os("RIMZ_TEST_SSH_TTY_NAME_LOG") else {
         return;
