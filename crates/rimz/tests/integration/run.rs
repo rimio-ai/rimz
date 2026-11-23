@@ -5857,7 +5857,6 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
                     "sess-messages".into(),
                     Some("lucid-atlas".to_owned()),
                     text.to_owned(),
-                    true,
                     DeliveryGate::Done,
                 )
                 .with_sender(sender)

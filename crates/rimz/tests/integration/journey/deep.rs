@@ -1338,45 +1338,6 @@ fn tmux_steer_delivers_text_and_enter_to_real_agent_pane() {
 }
 
 #[test]
-fn tmux_steer_without_enter_suppresses_submit_in_real_agent_pane() {
-    if which::which("tmux").is_err() {
-        crate::common::skip("tmux not on PATH");
-        return;
-    }
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    let (socket, session, _pane, _server) = real_agent_room(&env, "sess-steer-no-enter");
-
-    let out = run_steer(
-        &env,
-        &socket,
-        &["@codex", "--no-enter", "--", "hold the line"],
-    );
-    assert!(
-        out.status.success(),
-        "steer --no-enter failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let screen = capture_all_until(
-        &socket,
-        &session,
-        |s| s.contains("hold the line"),
-        CAPTURE_BUDGET,
-    );
-    assert!(
-        screen.contains("hold the line"),
-        "steer --no-enter should still type the prompt:\n{screen}"
-    );
-    assert!(
-        !screen.contains("SUBMITTED:hold the line"),
-        "steer --no-enter should not send the submitting Enter:\n{screen}"
-    );
-}
-
-#[test]
 fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     if which::which("tmux").is_err() {
         crate::common::skip("tmux not on PATH");

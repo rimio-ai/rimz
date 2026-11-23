@@ -557,23 +557,3 @@ fn announced_stamp_commits_once_and_only_on_queued_records() {
     assert_eq!(q.live(), live);
     assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
 }
-
-#[test]
-fn a_no_enter_send_never_notifies_its_agent_sender() {
-    let q = Queue::new();
-    register_sender(&q, false);
-    let settled = q.sent_with(1, |record| {
-        record.sender = sender();
-        record.enter = false;
-    });
-    assert_eq!(settled.status, MessageStatus::Delivered);
-    let report = q
-        .reconcile_stale_messages(
-            "session",
-            Timestamp::now() + settled.body.delivery_window() + Duration::from_secs(1),
-            0,
-        )
-        .unwrap();
-    assert_eq!(report.timed_out, 0);
-    assert!(q.live().is_empty());
-}

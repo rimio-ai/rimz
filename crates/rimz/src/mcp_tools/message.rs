@@ -70,7 +70,6 @@ pub(super) fn send(tools: &Tools, args: &MessageArgs) -> Result<Answer, Failure>
         automated: false,
         allow_fanout: args.all,
         mux: None,
-        enter: true,
         force: false,
         auto_compact: None,
         mode: match args.mode {

@@ -172,7 +172,6 @@ fn command_segments<'a>(text: &'a str, command: &str) -> (&'a str, Option<&'a st
 /// shares. Text and address vary per recipient and arrive at [`Self::record`].
 struct MessageDraft {
     body: MessageBody,
-    enter: bool,
     gate: DeliveryGate,
     sender: MessageSender,
     automated: bool,
@@ -253,7 +252,6 @@ impl MessageDraft {
             recipient.agent_id,
             recipient.agent_name,
             text.to_owned(),
-            self.enter,
             self.gate,
         )
         .with_launch_id(recipient.launch_id)

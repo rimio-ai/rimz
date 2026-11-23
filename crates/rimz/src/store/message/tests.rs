@@ -211,7 +211,7 @@ fn wrap_up_wakes_only_when_its_unclaimed_or_claimed_lease_expires() {
 }
 
 #[test]
-fn untagged_message_keeps_legacy_bytes() {
+fn untagged_message_keeps_legacy_bytes_and_the_constant_enter_key() {
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
     let legacy = format!(
         concat!(
@@ -225,6 +225,24 @@ fn untagged_message_keeps_legacy_bytes() {
     );
     let record: MessageRecord = serde_json::from_str(&legacy).unwrap();
     assert_eq!(serde_json::to_string(&record).unwrap(), legacy);
+    let unsubmitted: MessageRecord =
+        serde_json::from_str(&legacy.replace("\"enter\":true", "\"enter\":false")).unwrap();
+    assert_eq!(serde_json::to_string(&unsubmitted).unwrap(), legacy);
+
+    // A binary that still requires the key decodes a fresh record.
+    #[derive(serde::Deserialize)]
+    struct BeforeEnterRetired {
+        text: String,
+        enter: bool,
+        gate: DeliveryGate,
+    }
+    let fresh = delivery_message(2, &agent("receiver", None), DeliveryGate::Any, None);
+    let old: BeforeEnterRetired =
+        serde_json::from_str(&serde_json::to_string(&fresh).unwrap()).unwrap();
+    assert_eq!(
+        (old.text, old.enter, old.gate),
+        (fresh.text, true, DeliveryGate::Any)
+    );
     let event = crate::store::event::MessageEventPayload::from_record(&record, None);
     assert!(
         serde_json::to_value(event)
@@ -1191,7 +1209,6 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)))
     .with_after(vec![after_condition(&upstream, Some(now))])
     .with_auto_compact(Some(AutoCompact::Percent(70)));
-    record.enter = false;
     record.status = MessageStatus::Delivered;
     record.enqueued_at = now - jiff::SignedDuration::from_secs(120);
     record.updated_at = now;
@@ -1301,7 +1318,6 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         Some(now),
     )])
     .with_auto_compact(Some(AutoCompact::Tokens(120_000)));
-    original.enter = false;
     original.status = MessageStatus::Errored;
     original.enqueued_at = now - jiff::SignedDuration::from_secs(120);
     original.updated_at = now;
@@ -1329,7 +1345,6 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.sender, original.sender);
     assert_eq!(requeued.body, original.body);
     assert_eq!(requeued.text, original.text);
-    assert_eq!(requeued.enter, original.enter);
     assert_eq!(requeued.gate, original.gate);
     assert_eq!(requeued.force, original.force);
     assert_eq!(requeued.not_before, original.not_before);

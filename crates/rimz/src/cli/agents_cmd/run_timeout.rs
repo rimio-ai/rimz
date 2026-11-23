@@ -175,7 +175,6 @@ fn deadline_stop_request(
         automated: true,
         allow_fanout: false,
         mux,
-        enter: true,
         force: false,
         auto_compact: None,
         mode,

@@ -419,7 +419,6 @@ fn cold_team_stop_with_pending_message_avoids_machine_config_loads() {
         "work-0".into(),
         None,
         "continue the task".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     let workspace = env.resolve_workspace(&env.project_root);

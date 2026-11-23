@@ -2623,7 +2623,6 @@ fn arm_owed_to_planner(env: &Env) {
         "provider-session".into(),
         Some("planner".into()),
         "rebase first".into(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     )
     .with_launch_id(Some("launch-session".into()));
@@ -3178,7 +3177,6 @@ fn a_swap_wrapper_error_settles_the_agent_only_after_its_bind() {
             "launch_holder".into(),
             Some("pruner".into()),
             "rebase first".into(),
-            true,
             rimz::store::message::DeliveryGate::Done,
         )
         .with_launch_id(Some(reservation.launch_id().clone()));

@@ -48,7 +48,6 @@ fn a_briefing_counts_owed_child_answers_and_only_conversation_messages() {
             parent.agent_id.clone(),
             None,
             text.to_owned(),
-            true,
             crate::store::message::DeliveryGate::Done,
         )
     };

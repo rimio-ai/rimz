@@ -112,7 +112,6 @@ fn edit_message_updates_queued_record_and_appends_event() {
                 gate: Some(DeliveryGate::Any),
                 not_before: Some(None),
                 force: Some(true),
-                enter: Some(false),
                 auto_compact: Some(Some(AutoCompact::Percent(70))),
             },
             "session",
@@ -127,7 +126,6 @@ fn edit_message_updates_queued_record_and_appends_event() {
     assert_eq!(edited.not_before, None);
     assert_eq!(edited.retry_after, None);
     assert!(edited.force);
-    assert!(!edited.enter);
     assert_eq!(edited.auto_compact, Some(AutoCompact::Percent(70)));
 
     let live = q.live();
@@ -135,7 +133,7 @@ fn edit_message_updates_queued_record_and_appends_event() {
     assert_eq!(live[0], *edited);
     assert_eq!(
         q.reason("message.edited"),
-        "text, gate, schedule, force, enter, smart_compact"
+        "text, gate, schedule, force, smart_compact"
     );
 }
 

@@ -49,7 +49,6 @@ pub(super) struct MessageListRow {
     pub(super) body: MessageBody,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) text: Option<String>,
-    pub(super) enter: bool,
     pub(super) gate: DeliveryGate,
     pub(super) force: bool,
     pub(super) reply_wanted: bool,
@@ -146,7 +145,6 @@ impl MessageListRow {
             sender: message.sender,
             body: message.body,
             text: Some(message.text),
-            enter: message.enter,
             gate: message.gate,
             force: message.force,
             reply_wanted: message.reply_wanted,
@@ -195,7 +193,6 @@ impl MessageListRow {
             sender: payload.sender.unwrap_or_default(),
             body: payload.body,
             text: None,
-            enter: payload.enter,
             gate: payload.gate,
             force: payload.forced,
             reply_wanted: false,

@@ -3349,7 +3349,6 @@ fn resume_skips_a_stage_delivered_after_its_attempt_began() {
         session.clone(),
         Some("coder".to_owned()),
         "stage".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_sender(MessageSender::Harness {
@@ -3397,7 +3396,6 @@ fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
         session.clone(),
         Some("coder".to_owned()),
         "say hi".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_sender(MessageSender::Human);
