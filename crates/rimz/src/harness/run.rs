@@ -267,6 +267,23 @@ impl SupervisedRunRequest {
             throttle_turn: None,
         }
     }
+
+    /// A subagent launch: a background child of its caller that cleans up after itself and
+    /// reports to it, with every other field as `new` leaves it.
+    pub fn subagent(spec: String, prompt: String) -> Self {
+        Self {
+            background: true,
+            self_cleanup_on_completion: true,
+            subagent: true,
+            report_to: ReportTo::Launcher,
+            ..Self::new(
+                spec,
+                prompt,
+                None,
+                crate::agents::ManagedLaunchState::PendingResolution,
+            )
+        }
+    }
 }
 
 /// Command-neutral result of attempting one supervised turn.

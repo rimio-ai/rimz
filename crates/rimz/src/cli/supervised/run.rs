@@ -311,22 +311,37 @@ pub(in crate::cli) fn run_supervised(
             termination: request.loop_fire.as_ref().map(|_| termination_slot.clone()),
         }
     };
-    let preparation = rimz::launcher::prepare_supervised(
-        &request,
-        rimz::launcher::SupervisedContext {
-            root: globals.root.clone(),
-            worktree_fresh_command: presentation.worktree_fresh_command.clone(),
-            machine: crate::cli::machine_config(),
-            mux: globals.mux,
-            recovery: if std::io::stdin().is_terminal() {
-                rimz::room::AttendedRecovery::Reset
-            } else {
-                rimz::room::AttendedRecovery::RequireExplicitReset
-            },
-            completion,
+    let context = rimz::launcher::SupervisedContext {
+        root: globals.root.clone(),
+        worktree_fresh_command: presentation.worktree_fresh_command.clone(),
+        machine: crate::cli::machine_config(),
+        mux: globals.mux,
+        recovery: if std::io::stdin().is_terminal() {
+            rimz::room::AttendedRecovery::Reset
+        } else {
+            rimz::room::AttendedRecovery::RequireExplicitReset
         },
-        &mut interaction,
-    )?;
+        completion,
+    };
+    if request.background {
+        use rimz::launcher::BackgroundLaunchOutcome;
+        return Ok(
+            match rimz::launcher::launch_background(&request, context, &mut interaction)? {
+                BackgroundLaunchOutcome::Launched(launch) => {
+                    Some(SupervisedRunOutcome::Background {
+                        agent_name: launch.name,
+                        run_id: launch.run_id,
+                        response_path: launch.response_path,
+                    })
+                }
+                BackgroundLaunchOutcome::BudgetExceeded { reason } => {
+                    Some(SupervisedRunOutcome::BudgetExceeded { reason })
+                }
+                BackgroundLaunchOutcome::Aborted => None,
+            },
+        );
+    }
+    let preparation = rimz::launcher::prepare_supervised(&request, context, &mut interaction)?;
     let mut next = match preparation {
         rimz::launcher::Preparation::Prepared(prepared) => *prepared,
         rimz::launcher::Preparation::Handled(_) => return Ok(None),
@@ -349,17 +364,6 @@ pub(in crate::cli) fn run_supervised(
         let mut run = opened
             .run
             .context("supervised launch returned no leader run")?;
-        if request.background {
-            return Ok(Some(SupervisedRunOutcome::Background {
-                agent_name: run
-                    .record
-                    .agent_name
-                    .clone()
-                    .context("run has no agent name")?,
-                run_id: run.record.run_id,
-                response_path: run.response_path,
-            }));
-        }
         let prepared = AttemptContext {
             workspace: run.workspace.clone(),
             store: run.store.clone(),
