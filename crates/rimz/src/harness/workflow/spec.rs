@@ -27,10 +27,12 @@ pub struct Issue {
     pub message: String,
 }
 
+/// An issue at `path`, its message on one line: the path and the values a message quotes come
+/// from the `workflow.toml`, so a quoted key could otherwise add a line.
 pub(super) fn issue(path: &str, message: impl Display) -> Issue {
     Issue {
         path: path.into(),
-        message: format!("{path}: {message}"),
+        message: crate::packs::one_line(&format!("{path}: {message}")),
     }
 }
 

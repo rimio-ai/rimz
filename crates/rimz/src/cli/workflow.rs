@@ -1311,9 +1311,9 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         for row in &report.rows {
             table.row([
                 render::cell(one_line(&row.workflow)),
-                render::cell(&row.node),
+                render::cell(one_line(&row.node)),
                 render::cell(&row.kind),
-                render::cell(match row.runner.as_str() {
+                render::cell(one_line(match row.runner.as_str() {
                     "condition" => "condition",
                     "sleep" => "sleep",
                     "run" => row.run.as_deref().unwrap_or("—"),
@@ -1321,7 +1321,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     "message" => "message",
                     "workflow" => "workflow",
                     _ => row.agent.as_deref().unwrap_or("—"),
-                }),
+                })),
                 render::cell(if row.agent.is_none() {
                     "—"
                 } else if row.do_background {
@@ -1329,8 +1329,8 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                 } else {
                     "no"
                 }),
-                render::cell(
-                    row.edges
+                render::cell(one_line(
+                    &row.edges
                         .iter()
                         .map(|edge| {
                             let mark = edge
@@ -1340,16 +1340,16 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                         })
                         .collect::<Vec<_>>()
                         .join(", "),
-                ),
+                )),
             ]);
         }
         let mut out = render::out();
         table.render(&mut out)?;
         for error in &report.errors {
-            writeln!(out, "{}", each_line(&error.message))?;
+            writeln!(out, "{}", error.message)?;
         }
         for warning in &report.warnings {
-            writeln!(out, "warning: {}", each_line(&warning.message))?;
+            writeln!(out, "warning: {}", warning.message)?;
         }
     }
     drop(scratch);
@@ -1357,17 +1357,6 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         bail!("{} workflow error(s)", report.errors.len());
     }
     Ok(())
-}
-
-/// Escapes each line of a diagnostic on its own, so a parser excerpt keeps its line breaks
-/// while a control character inside a line still shows. The workflow name a message carries
-/// is escaped where the message interpolates it, so it cannot break a line here.
-fn each_line(message: &str) -> String {
-    message
-        .split('\n')
-        .map(one_line)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
