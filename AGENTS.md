@@ -22,6 +22,7 @@ Every bullet here is an invariant, and a change to one is a product decision. [D
 - **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header ([transcript.md](./docs/internals/harness/transcript.md#writing-entries)).
 - **Sidebar is read-only on the store.** Store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
+- **Official launches are recognized.** A provider's official program reads as its agent, whether the user starts it by hand in a room pane or RimZ starts it through its `rimz agents exec` wrapper, with a test per provider that proves it ([instances.md](./docs/internals/agents/instances.md#recognizing-a-hosted-cli)).
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, provider folder-trust grants, pack install summaries and update holds, and privacy settings are product behaviour.
 
 ## Engineering principles

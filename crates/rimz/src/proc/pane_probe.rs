@@ -517,6 +517,51 @@ mod tests {
         }
     }
 
+    /// The root `AGENTS.md` invariant: a provider's official launch is always
+    /// recognized. Each declared program name, run by hand with terminal stdio,
+    /// reads as its agent (an ambiguous name only once the caller owns the kind),
+    /// and so does RimZ's wrapper around it.
+    #[test]
+    fn every_official_launch_reads_as_its_agent() {
+        let start = timestamp("2026-11-23T06:00:00Z");
+        for definition in crate::agents::all_definitions() {
+            let spec = definition.spec();
+            for &program in spec.bin_names {
+                let ambiguous = spec.ambiguous_bin_identity(program).is_some();
+                let classified = if ambiguous {
+                    crate::agents::registry::command_may_be_agent_kind(program, spec.kind)
+                } else {
+                    crate::agents::registry::command_agent_kind(program) == Some(spec.kind)
+                };
+                assert!(classified, "{program} launches {}", spec.kind);
+                let fixture = chain([(10, "zsh"), (20, program)])
+                    .live(20, start, None)
+                    .stdio(20, StdioTerminal::Terminal);
+                let in_pane = fixture.in_pane_agent(spec.kind, 10);
+                assert_eq!(in_pane.map(|agent| agent.pid), Some(20), "{program}");
+                if !ambiguous {
+                    let hosted = fixture.hosted_agent(10);
+                    assert_eq!(
+                        hosted.map(|agent| (agent.kind.as_str().to_owned(), agent.pid)),
+                        Some((spec.kind.to_owned(), 20)),
+                        "{program}"
+                    );
+                }
+                let wrapper: &'static str = String::leak(format!(
+                    "/usr/bin/rimz agents exec {} --request-file /runtime/exec.json",
+                    spec.kind
+                ));
+                let fixture = chain([(10, wrapper), (20, program)]).live(10, start, None);
+                let hosted = fixture.hosted_agent(10);
+                assert_eq!(
+                    hosted.map(|agent| (agent.kind.as_str().to_owned(), agent.pid)),
+                    Some((spec.kind.to_owned(), 10)),
+                    "{wrapper}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn hosted_agent_process_requires_complete_live_proof() {
         let start = timestamp("2026-07-01T10:00:00Z");
