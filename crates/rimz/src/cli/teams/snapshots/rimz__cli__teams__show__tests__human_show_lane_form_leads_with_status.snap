@@ -7,8 +7,8 @@ forge#feat-x · working
   pipeline: Explore → Plan → Implement → Done
   pr:       none
 
-  MEMBER    STATUS   AGE  ACTIVITY         CTX   COST
-  @planner  running   2m  reading show.rs  42%  $0.25
+  MEMBER    NAME  STATUS   AGE  ACTIVITY         CTX   COST
+  @planner  -     running   2m  reading show.rs  42%  $0.25
 
   signals: ci.failed → @planner · fired 1m ago ×2 · team-forge-feat-x-planner-ci-failed
 

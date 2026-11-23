@@ -2780,7 +2780,7 @@ fn booker_label(store: Option<&rimz::Store>, link: &rimz::agents::LaunchedBy) ->
                 .filter(|agent| agent.ended_at.is_none())
                 .collect::<Vec<_>>();
             rimz::address::launch_row(&rows.agents, &link.kind, &link.agent_id)
-                .map(|agent| rimz::address::agent_handle(agent, &peers, true))
+                .map(|agent| rimz::address::named_handle(agent, &peers, true))
         })
         .unwrap_or_else(|| link.agent_id.to_string())
 }

@@ -5,8 +5,8 @@ expression: "format!(\"{body}\\n{closing}\")"
 
 AGENTS
   1 live: 1 running
-   HANDLE  ACCOUNT        BRANCH  STATUS   REASON                                              SEEN
-!  @otter  codex@default  main    running  372k lowered to 244k: gpt-6-sol runs a 272k window  0s ago
+   HANDLE  NAME  ACCOUNT        BRANCH  STATUS   REASON                                              SEEN
+!  @otter  -     codex@default  main    running  372k lowered to 244k: gpt-6-sol runs a 272k window  0s ago
 
 
 ! 1 warning in AGENTS

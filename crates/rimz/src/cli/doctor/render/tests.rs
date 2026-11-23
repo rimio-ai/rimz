@@ -934,6 +934,7 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
                     phase: rimz::agents::TurnPhase::default(),
                     last_seen: Timestamp::now(),
                     handle: "@fox".into(),
+                    name: None,
                     account: "codex@team".parse().unwrap(),
                     turn_error: Some("reason".into()),
                     attributed_to_account: attributed,
@@ -965,6 +966,94 @@ fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
 }
 
 #[test]
+fn agent_findings_pair_a_differing_name_and_keep_the_restart_command_bare() {
+    use super::super::model::AgentRow;
+    let report = DoctorReport {
+        agents: Some(AgentRollup::Observed {
+            counts: AgentCounts::default(),
+            rows: vec![AgentRow {
+                kind: "codex".into(),
+                agent_id: "session".into(),
+                branch: Some("main".into()),
+                status: AgentStatus::Failed,
+                phase: rimz::agents::TurnPhase::default(),
+                last_seen: Timestamp::now(),
+                handle: "@fox".into(),
+                name: Some("round-binder".into()),
+                account: "codex@team".parse().unwrap(),
+                turn_error: Some("reason".into()),
+                attributed_to_account: false,
+                compaction_lowered: None,
+                mod_missing: false,
+                mod_signals_missing: Vec::new(),
+                mod_blocked: None,
+                restartable: true,
+                historical: false,
+            }],
+        }),
+        ..report_fixture()
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_agents(w, &report, &mut tally));
+    assert_eq!(
+        crate::cli::render::cell_under(&body, "NAME", "@fox"),
+        "@round-binder"
+    );
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing.contains("@fox (@round-binder) on codex@team is failed: reason"),
+        "{closing}"
+    );
+    assert!(closing.contains("rimz agents restart @fox"), "{closing}");
+    assert!(!closing.contains("restart @fox ("), "{closing}");
+}
+
+#[test]
+fn agent_table_names_a_differing_name_in_its_own_column() {
+    use super::super::model::AgentRow;
+    let row = |handle: &str, name: &str| AgentRow {
+        kind: "codex".into(),
+        agent_id: name.into(),
+        branch: Some("main".into()),
+        status: AgentStatus::Running,
+        phase: rimz::agents::TurnPhase::default(),
+        last_seen: Timestamp::now(),
+        handle: handle.into(),
+        name: Some(name.into()),
+        account: "codex@team".parse().unwrap(),
+        turn_error: None,
+        attributed_to_account: false,
+        compaction_lowered: None,
+        mod_missing: false,
+        mod_signals_missing: Vec::new(),
+        mod_blocked: None,
+        restartable: true,
+        historical: false,
+    };
+    let report = DoctorReport {
+        agents: Some(AgentRollup::Observed {
+            counts: AgentCounts::default(),
+            rows: vec![row("@fox", "round-binder"), row("@sol", "sol")],
+        }),
+        ..report_fixture()
+    };
+    let body = strip(|w| render_agents(w, &report, &mut Tally::default()));
+    assert_eq!(
+        crate::cli::render::cell_under(&body, "HANDLE", "@fox"),
+        "@fox"
+    );
+    assert_eq!(
+        crate::cli::render::cell_under(&body, "NAME", "@fox"),
+        "@round-binder"
+    );
+    assert_eq!(crate::cli::render::cell_under(&body, "NAME", "@sol"), "-");
+    assert_eq!(
+        crate::cli::render::cell_under(&body, "ACCOUNT", "@sol"),
+        "codex@team"
+    );
+}
+
+#[test]
 fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
     use super::super::model::{AgentRow, CompactionLowered};
     for count in [1, 2] {
@@ -979,6 +1068,7 @@ fn compaction_lowered_counts_one_or_several_agents_with_closing_fixes() {
                 phase: Default::default(),
                 last_seen: Timestamp::now(),
                 handle: handle.into(),
+                name: None,
                 account: "codex@default".parse().unwrap(),
                 turn_error: None,
                 attributed_to_account: false,
@@ -1050,6 +1140,7 @@ fn mod_missing_warns_per_session_with_its_restart_in_the_closing_fix() {
                 phase: Default::default(),
                 last_seen: Timestamp::now(),
                 handle: handle.into(),
+                name: None,
                 account: "claude@default".parse().unwrap(),
                 turn_error: None,
                 attributed_to_account: false,
@@ -1114,6 +1205,7 @@ fn mod_signals_missing_warn_once_per_signal_with_the_reload_fix() {
         phase: Default::default(),
         last_seen: Timestamp::now(),
         handle: "@otter".into(),
+        name: None,
         account: "claude@default".parse().unwrap(),
         turn_error: None,
         attributed_to_account: false,
@@ -1180,6 +1272,7 @@ fn mod_missing_fix_installs_into_the_rows_own_login() {
         phase: Default::default(),
         last_seen: Timestamp::now(),
         handle: "@otter".into(),
+        name: None,
         account: account.parse().unwrap(),
         turn_error: None,
         attributed_to_account: false,
@@ -3610,6 +3703,7 @@ fn audit_adds_agent_context_without_changing_findings() {
         phase: rimz::agents::TurnPhase::default(),
         last_seen: Timestamp::now(),
         handle: handle.into(),
+        name: None,
         account: "codex@team".parse().unwrap(),
         turn_error: None,
         attributed_to_account: false,

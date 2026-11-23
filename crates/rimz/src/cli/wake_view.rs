@@ -198,7 +198,7 @@ pub(super) fn write_self(
         .join(" · ");
     let header = format!(
         "{} · {}",
-        rimz::address::agent_handle(agent, &rimz::address::addressable_agents(snapshot), true),
+        rimz::address::named_handle(agent, &rimz::address::addressable_agents(snapshot), true),
         wait_count(waits.len())
     );
     if waits.is_empty() && !also.is_empty() {
@@ -305,18 +305,15 @@ fn card_header(
             }
             chain.insert(0, parent);
         }
-        let mut labels = chain
+        chain
             .iter()
             .map(|ancestor| {
-                rimz::address::agent_handle(ancestor, peers, !ancestor.is_launched_child())
+                let handle =
+                    rimz::address::agent_handle(ancestor, peers, !ancestor.is_launched_child());
+                rimz::address::handle_with_name(&handle, ancestor.name.as_deref())
             })
-            .collect::<Vec<_>>();
-        if agent.is_launched_child()
-            && let Some(label) = labels.last_mut()
-        {
-            *label = rimz::address::handle_with_name(label, agent.name.as_deref());
-        }
-        labels.join(" › ")
+            .collect::<Vec<_>>()
+            .join(" › ")
     } else {
         row.target.clone()
     };
@@ -603,6 +600,39 @@ mod tests {
                 Some("  @claude#lane › @reviewer (@modern-notch)"),
                 Some("@claude#lane")
             )
+        );
+    }
+
+    #[test]
+    fn headers_pair_each_differing_name() {
+        let mut snapshot = pane_shadowed_snapshot();
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].name = Some("round-binder".into());
+        let mut out = Vec::new();
+        write_self(
+            &mut out,
+            &snapshot.agents[0],
+            &snapshot,
+            &[],
+            Path::new("/repo"),
+            snapshot.generated_at,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "@claude#lane (@round-binder) · no waits\n"
+        );
+        let mut child = rimz::testkit::agent_state("codex", "child", snapshot.generated_at);
+        rimz::testkit::set_lane(&mut child, "lane");
+        child.profile = Some("reviewer".into());
+        child.name = Some("modern-notch".into());
+        child.parent_agent_id = Some("owner".into());
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child.launch_depth = Some(1);
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(child);
+        let rendered = room_text(&snapshot, self_wait_row(&snapshot, "codex", "child"));
+        assert_eq!(
+            rendered.lines().next(),
+            Some("  @claude#lane (@round-binder) › @reviewer (@modern-notch)")
         );
     }
 

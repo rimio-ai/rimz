@@ -602,6 +602,7 @@ fn project_agent_rollup(
                 phase,
                 last_seen: agent.last_seen,
                 handle,
+                name: agent.name.clone(),
                 account,
                 turn_error: agent.displayed_turn_error_label(snapshot.now),
                 attributed_to_account,

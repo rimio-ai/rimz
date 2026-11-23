@@ -186,6 +186,9 @@ pub(super) struct LiveMember {
     pub role: Option<String>,
     pub signals: Vec<LiveSignal>,
     pub handle: String,
+    /// The agent's name, paired with `handle` where a line names the member in prose.
+    #[serde(skip)]
+    pub name: Option<String>,
     pub kind: String,
     pub status: AgentStatus,
     #[serde(skip)]
@@ -741,6 +744,7 @@ fn live_instances(
                         })
                         .collect(),
                     handle: rimz::address::agent_handle(agent, &peers, false),
+                    name: agent.name.clone(),
                     kind: agent.kind.to_string(),
                     status,
                     phase,

@@ -981,6 +981,9 @@ pub(super) struct AgentRow {
     pub(super) restartable: bool,
     #[serde(skip)]
     pub(super) historical: bool,
+    /// The agent's name, paired with `handle` where a line names the agent in prose.
+    #[serde(skip)]
+    pub(super) name: Option<String>,
 }
 
 /// `{"key", "file", "disables_hooks"}`, the policy as `rimz doctor --json`

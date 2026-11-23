@@ -706,9 +706,11 @@ fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
         .unwrap()
         .1;
     assert_eq!(body, loop_body);
-    assert_eq!(
-        body.lines().next().unwrap().trim(),
-        receipt["target"].as_str().unwrap()
+    let header = body.lines().next().unwrap().trim();
+    let name = header.strip_prefix(receipt["target"].as_str().unwrap());
+    assert!(
+        name.is_some_and(|name| name.starts_with(" (@") && name.ends_with(')')),
+        "the header is the receipt's target with the agent's minted name beside it: {header}"
     );
 }
 
