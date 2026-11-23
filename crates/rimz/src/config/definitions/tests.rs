@@ -5319,3 +5319,174 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
         )]
     );
 }
+
+#[test]
+fn plus_lists_add_to_the_chain_and_the_kind_base_in_place_and_in_order() {
+    let root = fixture();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\ntools: [Bash, Skill]\nallowed-tools: [Read]\nskills: [work]\n\
+         mcps: [github:deferred, rimz-lsp]\nsubagents: [general]\n---\nBase.",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\ntools: [Bash]\n---\nBase.",
+    );
+    for (path, fields) in [
+        (
+            "agents/parent.md",
+            "agent: claude\ntools: [Bash, read, Skill]",
+        ),
+        (
+            "agents/child.md",
+            "agent: parent\ntools: [+Write, '+Read', '+Bash(git *)']",
+        ),
+        ("agents/mid.md", "agent: claude"),
+        (
+            "agents/heir.md",
+            "agent: mid\nallowed-tools: [+Write]\nskills: [+review, +work]\n\
+             mcps: [+github, +rimz-lsp:deferred, +linear]",
+        ),
+        (
+            "agents/edit.md",
+            "agent: claude\ntools: [+Edit]\nmcps: [+rimz-lsp:always]",
+        ),
+        (
+            "agents/stacked.md",
+            "agent: edit\ntools: [+Write, +Edit]\nmcps: [+rimz-lsp]",
+        ),
+        (
+            "agents/ranked.md",
+            "agent: claude\ntier: principal\ntools: [+Write]",
+        ),
+    ] {
+        definition(root.path(), path, fields, "");
+    }
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: mid\n    role: lead\n    owns: [Plan, Implement]\n    tools: [+AskUserQuestion]\n  - agent: child\n    role: judge\n    owns: [Review]\n    tools: [+Edit]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let agents = &loaded.agent_profiles.0;
+    let tools = |profile: &Profile| profile.tools.as_ref().unwrap().bases().to_vec();
+    assert_eq!(tools(&agents["child"]), ["Bash", "Read", "Skill", "Write"]);
+    assert_eq!(tools(&agents["edit"]), ["Bash", "Skill", "Edit"]);
+    assert_eq!(
+        tools(&agents["stacked"]),
+        ["Bash", "Skill", "Edit", "Write"]
+    );
+    assert_eq!(
+        agents["heir"]
+            .allowed_tools
+            .iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["Read", "Write"]
+    );
+    assert_eq!(
+        agents["heir"]
+            .skills
+            .iter()
+            .flatten()
+            .map(SkillName::as_str)
+            .collect::<Vec<_>>(),
+        ["work", "review"]
+    );
+    let mcps = |name: &str| {
+        agents[name]
+            .mcps
+            .iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(mcps("heir"), ["github", "rimz-lsp:deferred", "linear"]);
+    assert_eq!(mcps("edit"), ["github:deferred", "rimz-lsp:always"]);
+    assert_eq!(mcps("stacked"), ["github:deferred", "rimz-lsp"]);
+    let render = |kind: &str| {
+        tools(
+            &agents["ranked"]
+                .definition_renders
+                .as_ref()
+                .unwrap()
+                .renders[kind],
+        )
+    };
+    assert_eq!(render("claude"), ["Bash", "Skill", "Write"]);
+    assert_eq!(render("codex"), ["Bash", "Write"]);
+    assert_eq!(
+        tools(&agents["probe.lead"]),
+        ["Bash", "Skill", "AskUserQuestion"]
+    );
+    assert_eq!(
+        tools(&agents["probe.judge"]),
+        ["Bash", "Read", "Skill", "Write", "Edit"]
+    );
+}
+
+#[test]
+fn plus_lists_refuse_a_mix_a_bare_plus_and_nothing_below_a_required_list() {
+    for (fields, needle) in [
+        (
+            "agent: claude\ntools: [Bash, +Read]",
+            "sets `tools:` mixing `+` entries with plain ones",
+        ),
+        (
+            "agent: claude\nskills: ['+']",
+            "sets `skills:` with a bare `+`",
+        ),
+        (
+            "agent: claude\ntools: [+Bash]",
+            "sets `tools:` with `+` entries, but neither its chain nor the claude kind base \
+             lists `tools`; write the full list",
+        ),
+        (
+            "agent: claude\ntools: [Bash]\nallowed-tools: [+Read]",
+            "sets `allowed-tools:` with `+` entries, but neither its chain nor the claude \
+             kind base lists `allowed-tools`",
+        ),
+    ] {
+        let root = fixture();
+        definition(root.path(), "agents/probe.md", fields, "");
+        error(root.path(), needle);
+    }
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: [+work]\nmcps: [+github]\n\
+         subagents: [+general]",
+        "",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: probe\n    role: lead\n    owns: [Plan, Implement]\n    mcps: [github, +linear]\n  - agent: probe\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    let probe = &loaded.agent_profiles.0["probe"];
+    assert_eq!(
+        (&probe.skills, &probe.mcps, &probe.subagents),
+        (&None, &None, &None)
+    );
+    assert!(
+        loaded.errors.iter().any(|error| error
+            .message
+            .contains("role 'lead' sets `mcps:` mixing `+` entries")),
+        "{:#?}",
+        loaded.errors
+    );
+}

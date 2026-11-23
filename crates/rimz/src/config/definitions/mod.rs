@@ -621,6 +621,8 @@ fn load_resolved(
                 if let Some(definition) = kind_base {
                     let kind = definition.spec().kind;
                     let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
+                    fm.check_plus()
+                        .map_err(|message| DefinitionErr::new(path, message))?;
                     if fm.tier.is_some() {
                         return Err(DefinitionErr::new(
                             path,
@@ -747,6 +749,8 @@ fn load_resolved(
                     names.insert(key.clone(), path.clone());
                 }
                 let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
+                fm.check_plus()
+                    .map_err(|message| DefinitionErr::new(path, message))?;
                 frontmatter::description(path, fm.description.as_deref())?;
                 let definition = Definition {
                     path: path.clone(),
