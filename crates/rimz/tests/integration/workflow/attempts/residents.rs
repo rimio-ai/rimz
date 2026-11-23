@@ -203,8 +203,7 @@ fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
 fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     let room = Room::new("admission.occupancy='takeover'");
     room.list_pane(71, "claude");
-    let mut owner = dummy_agent_process();
-    let pid = owner.id();
+    let pid = room.owner("resident");
     let workspace = room.env.resolve_workspace(&room.env.project_root);
     let lifecycle = |signal| {
         let mut observation = AgentLifecycleObservation::new(Some("resident".into()), signal);
@@ -248,8 +247,7 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     }
     // The occupant's session ends while the failed close waits for its owner to exit.
     lifecycle(LifecycleSignal::Ended);
-    owner.kill().unwrap();
-    owner.wait().unwrap();
+    room.kill_owner("resident");
     let receipt = success(start.wait_with_output().unwrap());
     let id = receipt.lines().next().unwrap().to_owned();
     let run = room.attempt(&id);
