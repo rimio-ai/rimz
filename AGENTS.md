@@ -46,7 +46,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - **One agent is one launch id.** A match that decides whether two rows are the same agent compares launch ids, never `(kind, session id)`.
 - **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
 - **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, clap help text, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
-- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed, and for each literal a changed predicate or parser matches (a marker string, a subcommand), and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
+- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
 
 ## Testing
 
