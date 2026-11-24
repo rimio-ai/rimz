@@ -436,8 +436,16 @@ fn prepare(
             bail!("session {session} is no longer available; restart fresh instead");
         }
     }
+    let companion_unattended = run_layout.as_ref().map(|(args, _)| match args.starter {
+        Starter::Workflow => Some(trust::Unattended::Workflow),
+        Starter::Team => Some(trust::Unattended::Team),
+        Starter::Agent => Some(trust::Unattended::Agent),
+        Starter::Human => agent_launched.then_some(trust::Unattended::Agent),
+    });
+    let mut checked_folder_trust = HashSet::new();
+    let mut noticed_hook_trust = HashSet::new();
     let mut companion_logins = Vec::new();
-    if let Some((args, _)) = &run_layout {
+    if let Some(unattended) = companion_unattended {
         let mut prospective = cwd
             .as_deref()
             .map(|cwd| workspace.at_launch_dir(cwd))
@@ -446,42 +454,15 @@ fn prepare(
         if worktree_launch {
             prospective.cwd_project_root = Some(workspace.launch_repo_root().to_path_buf());
         }
-        let mut checked_folder_trust = HashSet::new();
-        let mut noticed_hook_trust = HashSet::new();
-        for (index, cell) in layout.agent_cells().enumerate() {
-            if index == leader_index {
-                continue;
-            }
-            let (login, _) = check_cell(
-                &prospective,
-                store.runtime_paths(),
-                cell,
-                crate::config::Isolation::resolve(
-                    cell.launch.isolation,
-                    cell.isolation_default,
-                    machine_config.agents.isolation,
-                ),
-                CellStart::Launch(None),
-                &mut checked_folder_trust,
-                &mut noticed_hook_trust,
-                || {
-                    crate::config::definitions::hook_trust_fix(
-                        &cell.kind,
-                        cell.launch.profile.as_deref(),
-                        None,
-                    )
-                },
-                match args.starter {
-                    Starter::Workflow => Some(trust::Unattended::Workflow),
-                    Starter::Team => Some(trust::Unattended::Team),
-                    Starter::Agent => Some(trust::Unattended::Agent),
-                    Starter::Human => agent_launched.then_some(trust::Unattended::Agent),
-                },
-                None,
-                interaction,
-            )?;
-            companion_logins.push(login);
-        }
+        companion_logins = check_companions(
+            &prospective,
+            store.runtime_paths(),
+            (&layout, leader_index),
+            &machine_config,
+            (&mut checked_folder_trust, &mut noticed_hook_trust),
+            unattended,
+            interaction,
+        )?;
     }
     if worktree_launch && !checkout::confirm_cross_repo_worktree(&workspace, interaction)? {
         return Ok(Preparation::Handled(LaunchOutcome::Declined));
@@ -524,6 +505,21 @@ fn prepare(
         return Ok(Preparation::Handled(LaunchOutcome::Declined));
     };
     checkout::stamp_created_tree(&launch, request.loop_fire.as_ref());
+    // A pull-request worktree exists only now, and a provider can trust it apart from the
+    // checkout the companions' preflight read: agy takes its trust only from an entry naming it.
+    if request.from_pr.is_some()
+        && let Some(unattended) = companion_unattended
+    {
+        check_companions(
+            &workspace.at_launch_dir(&launch.cwd)?,
+            store.runtime_paths(),
+            (&layout, leader_index),
+            &machine_config,
+            (&mut checked_folder_trust, &mut noticed_hook_trust),
+            unattended,
+            interaction,
+        )?;
+    }
     if cwd.is_some() {
         launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
     }
@@ -820,6 +816,53 @@ fn prepare(
         })),
         leader_run: Some(leader),
     })))
+}
+
+/// Preflight each companion cell of a run-bearing layout at `workspace`, the leader aside,
+/// answering their logins in cell order.
+fn check_companions(
+    workspace: &crate::ResolvedWorkspace,
+    runtime: &crate::RuntimePaths,
+    (layout, leader_index): (&LayoutSpec, usize),
+    machine_config: &crate::config::MachineConfig,
+    (checked_folder_trust, noticed_hook_trust): (
+        &mut HashSet<(crate::ids::LoginKey, PathBuf)>,
+        &mut HashSet<crate::ids::LoginKey>,
+    ),
+    unattended: Option<trust::Unattended>,
+    interaction: &mut dyn Interaction,
+) -> Result<Vec<crate::ids::LoginName>> {
+    let mut logins = Vec::new();
+    for (index, cell) in layout.agent_cells().enumerate() {
+        if index == leader_index {
+            continue;
+        }
+        let (login, _) = check_cell(
+            workspace,
+            runtime,
+            cell,
+            crate::config::Isolation::resolve(
+                cell.launch.isolation,
+                cell.isolation_default,
+                machine_config.agents.isolation,
+            ),
+            CellStart::Launch(None),
+            checked_folder_trust,
+            noticed_hook_trust,
+            || {
+                crate::config::definitions::hook_trust_fix(
+                    &cell.kind,
+                    cell.launch.profile.as_deref(),
+                    None,
+                )
+            },
+            unattended,
+            None,
+            interaction,
+        )?;
+        logins.push(login);
+    }
+    Ok(logins)
 }
 
 fn preflight_agent(

@@ -430,6 +430,7 @@ struct PreparedLayout {
     prompt_agent_index: Option<usize>,
     checked_folder_trust: HashSet<(LoginKey, PathBuf)>,
     noticed_hook_trust: HashSet<LoginKey>,
+    unattended: Option<trust::Unattended>,
     preflighted_logins: Vec<LoginName>,
     empty_dir: Option<crate::agents::empty_dir::Prepared>,
     placement: Placement,
@@ -747,6 +748,14 @@ pub fn prepare_layout(
             allow_in_place,
         )
     };
+    let unattended = match args.starter {
+        Starter::Workflow => Some(trust::Unattended::Workflow),
+        Starter::Agent => Some(trust::Unattended::Agent),
+        Starter::Team => Some(trust::Unattended::Team),
+        Starter::Human => None,
+    }
+    .or_else(|| caller.as_ref().map(|_| trust::Unattended::Agent))
+    .or_else(|| team_name.as_ref().map(|_| trust::Unattended::Team));
     let empty_dir_eligible = single_cell && !worktree_launch && args.launch.cwd.is_none();
     if resume_scope.is_none() {
         if !single_cell
@@ -784,14 +793,7 @@ pub fn prepare_layout(
                         None,
                     )
                 },
-                match args.starter {
-                    Starter::Workflow => Some(trust::Unattended::Workflow),
-                    Starter::Agent => Some(trust::Unattended::Agent),
-                    Starter::Team => Some(trust::Unattended::Team),
-                    Starter::Human => None,
-                }
-                .or_else(|| caller.as_ref().map(|_| trust::Unattended::Agent))
-                .or_else(|| team_name.as_ref().map(|_| trust::Unattended::Team)),
+                unattended,
                 empty_dir_eligible.then_some((&projection.agents, args.launch.name.as_deref())),
                 interaction,
             )?;
@@ -820,6 +822,7 @@ pub fn prepare_layout(
             prompt_agent_index,
             checked_folder_trust,
             noticed_hook_trust,
+            unattended,
             preflighted_logins,
             empty_dir,
             placement,
@@ -884,8 +887,9 @@ fn settle_layout(
         focus,
         receipt_leader_index,
         prompt_agent_index,
-        checked_folder_trust,
-        noticed_hook_trust,
+        mut checked_folder_trust,
+        mut noticed_hook_trust,
+        unattended,
         preflighted_logins,
         empty_dir,
         placement,
@@ -1217,6 +1221,36 @@ fn settle_layout(
         return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
     };
     checkout::stamp_created_tree(&launch, args.launch.loop_fire.as_ref());
+    // A pull-request worktree exists only now, and a provider can trust it apart from the
+    // checkout the cell preflight read: agy takes its trust only from an entry naming it.
+    if args.launch.cohort.from_pr.is_some() {
+        let pr_workspace = workspace.at_launch_dir(&launch.cwd)?;
+        for cell in layout.agent_cells() {
+            check_cell(
+                &pr_workspace,
+                store.runtime_paths(),
+                cell,
+                crate::config::Isolation::resolve(
+                    cell.launch.isolation,
+                    cell.isolation_default,
+                    machine_config.agents.isolation,
+                ),
+                CellStart::Launch(None),
+                &mut checked_folder_trust,
+                &mut noticed_hook_trust,
+                || {
+                    crate::config::definitions::hook_trust_fix(
+                        &cell.kind,
+                        cell.launch.profile.as_deref(),
+                        None,
+                    )
+                },
+                unattended,
+                None,
+                interaction,
+            )?;
+        }
+    }
     let checkout = empty_dir.as_ref().map(|_| launch.cwd.display().to_string());
     if let Some(prepared) = &empty_dir {
         launch.cwd.clone_from(&prepared.cwd);
