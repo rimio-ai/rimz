@@ -139,13 +139,13 @@ In `#auth`, with the room using `claude@rimio`:
 $ rimz agents claude --name coder --model fable --new-tab
 launched @coder in #auth (/repo)
 
-  @coder   claude@rimio  fable
+  @coder   claude@rimio  Fable
 
 Reach: rimz message @coder#auth '<text>'
 Wait:  rimz agents wait @coder#auth
 ```
 
-When tier routing moves a member past an earlier entry, its receipt model adds the tier and every pass, for example `astra (senior; opus: not buildable; fable: logged out)`. A fresh launch also prints one stderr warning per moved member, naming its profile or role, tier, chosen model, and every pass, including the full build error. An unmoved launch prints neither addition. Replaying a session prints no new routing warning.
+When tier routing moves a member past an earlier entry, its receipt model adds the tier and every pass, for example `Astra (senior; opus: not buildable; fable: logged out)`. A fresh launch also prints one stderr warning per moved member, naming its profile or role, tier, chosen model, and every pass, including the full build error. An unmoved launch prints neither addition. Replaying a session prints no new routing warning.
 
 A freshly launched agent whose CLI exits with an error before its session opens is relaunched in the same pane. RimZ prints `rimz: codex exited with code 1 before its session opened; relaunching in 3s (1 of 3, Ctrl-C cancels)`, waits, and starts the same command again, up to three times by default ([startup relaunches](../../guide/configuration.md#startup-relaunches)). When the last relaunch dies the same way, RimZ says it is not relaunching again and reports the failure as it would have the first. Configuration refusals (exit 78), including OpenCode model checks, are not startup crashes and are never automatically relaunched; fix the reason above first. Resumed sessions, [`fork`](#fork), and [provider session pickers](#resume-a-provider-session) are never automatically relaunched.
 
@@ -735,7 +735,7 @@ Cards group by place and channel, using the sidebar's rule. `⑂` marks a checko
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
-| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. Fast mode adds a bold amber bolt after the label (`ϟ`, or the configured `card.fast` glyph). The `show` header uses the same suffix. |
+| `MODEL` | The shared model display name and effort, as `model@effort`, hiding the agent's implied home series in human tables and `show` headers while keeping the series in JSON `label`; a recorded context-window qualifier appears as `[1M]`. Fast mode adds a bold amber bolt after the label (`ϟ`, or the configured `card.fast` glyph). The `show` header uses the same suffix. |
 | `CTX` | Context-window fill. |
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
 | `AGE` | Time since the agent's last cache request while it rests, keepalive pings included, or since the later of its own activity and that request while it works or asks; child activity is excluded, matching the sidebar. A rowless child shows time since its real activity. |
@@ -963,14 +963,14 @@ The panel names the applied `branch <name>` and any `since` boundary above the g
 - `activity` leads with asks, then tool calls.
 - `messages` reads `{n} from you · {n} from teammates · {n} to teammates`, excluding RimZ automation. Sent messages are credited by handle, so a message sent by an excluded session still credits the handle a counted session holds.
 
-A `Models` section follows the members: one row per model id the transcripts named (`unknown` where none), each `{cost} · {token split} · {N} tok/s`, with throughput omitted when timing is unavailable. It splits the same all-in spend by model, subagents included, so a member's heading model (its latest session's) can differ from the rows. Throughput counts only this report's agents, dividing summed timed output by summed response durations per model, not averaging member rates. Rows sort by cost, highest first (unpriced last), then by tokens, then by model id. A `Total` line ends the panel, except that a lone team group omits it because its caption already carries the totals.
+A `Models` section follows the members: one row per model id the transcripts named, showing its full display name with series (`unknown` where none; ids that format alike appear as separate rows), each `{cost} · {token split} · {N} tok/s`, with throughput omitted when timing is unavailable. It splits the same all-in spend by model, subagents included, so a member's heading model (its latest session's) can differ from the rows. Throughput counts only this report's agents, dividing summed timed output by summed response durations per model, not averaging member rates. Rows sort by cost, highest first (unpriced last), then by tokens, then by model id. A `Total` line ends the panel, except that a lone team group omits it because its caption already carries the totals.
 
 ```console
 $ rimz agents attribution
 since 2026-09-06 21:26
 forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 
-  @planner · Claude · claude-fable-5-1@high
+  @planner · Claude · Fable 5.1@high
       effort:    17m active · $9.66
       subagents: 3 runs · $3.51
                  explorer  2 × · $2.40
@@ -981,7 +981,7 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 [...]
 ```
 
-`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, with ` ⚡ fast` appended outside the code span when any counted own-session turn ran fast, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} · {N} tok/s `` (with `unknown` outside the code span and throughput omitted without timing). A `subagents` bullet carries the run count and cost share, with nested kind bullets as `{kind}: {count} × · {duration} active · {cost}`, omitting unavailable parts and appending ` ⚡ fast` when any counted child turn in that kind ran fast. Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
+`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, with ` ⚡ fast` appended outside the code span when any counted own-session turn ran fast, and model bullets under `**Models**` as `` - `{model}` — {cost} · {token split} · {N} tok/s `` using the full display name with series (with `unknown` outside the code span and throughput omitted without timing). A `subagents` bullet carries the run count and cost share, with nested kind bullets as `{kind}: {count} × · {duration} active · {cost}`, omitting unavailable parts and appending ` ⚡ fast` when any counted child turn in that kind ran fast. Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model names sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
 
 The `--json` document has the keys `schema` (`10`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time, cost, or throughput figure is `null`, never a placeholder zero or wall-clock time. Lists arrive in rendered order.
 
