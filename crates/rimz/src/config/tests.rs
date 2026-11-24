@@ -2731,6 +2731,8 @@ fn web_auth_users_round_trip() {
     assert_eq!(round_tripped.auth_users, ["alice", "bob"]);
 }
 
+/// Also seeds `agents/<kind>.md` under `root` when `agent` is a kind and that file is absent. In a
+/// home, that base overrides a pack's base for the kind.
 fn write_definition(root: &Path, path: &str, fields: &str, body: &str) -> PathBuf {
     let frontmatter: serde_json::Value = serde_saphyr::from_str(fields).unwrap();
     if let Some(kind) = frontmatter["agent"]
@@ -3091,6 +3093,15 @@ fn a_tiered_definition_failure_names_the_root_that_blocks_its_first_model() {
         )
     );
 
+    write("agents/codex.md", "", "Base.");
+    write(
+        "agents/worker.md",
+        "agent: codex\ntier: senior\ntools: []\nsubagents: [broken]",
+        "",
+    );
+    assert_eq!(roots(definition_failures(home)("worker")), broken_line);
+
+    write("agents/worker.md", "agent: codex\ntier: senior", "");
     std::fs::remove_file(&base).unwrap();
     let sources = [tempdir().unwrap(), tempdir().unwrap()];
     for (pack, source) in ["one", "two"].into_iter().zip(&sources) {
