@@ -804,8 +804,18 @@ fn global_account_switch_refuses_failed_preflight_without_writing() {
 
 #[test]
 fn selecting_a_mounted_account_without_bubblewrap_refuses_without_writing() {
-    const REASON: &str =
-        "antigravity accounts run in a mount view, which needs Linux and bubblewrap";
+    let reason = format!(
+        "antigravity accounts run in a mount view, which needs Linux and bubblewrap\n  {}",
+        if cfg!(target_os = "linux") {
+            "bwrap is not on PATH; install bubblewrap"
+        } else {
+            "this host is not Linux"
+        }
+    );
+    let refuses = |error: String| {
+        assert!(error.contains(&reason), "{error}");
+        assert!(!error.contains("isolation"), "{error}");
+    };
     let env = Env::new();
     let home = env.home_root.join("agy-work");
     let no_bwrap = env.home_root.join("no-bwrap-bin");
@@ -838,10 +848,9 @@ fn selecting_a_mounted_account_without_bubblewrap_refuses_without_writing() {
             .unwrap()
     };
 
-    let global = failed(&run(&["use", "--global", "antigravity", "work"]));
-    assert!(global.contains(REASON), "{global}");
-    let room = failed(&run(&["use", "antigravity", "work"]));
-    assert!(room.contains(REASON), "{room}");
+    refuses(failed(&run(&["add", "antigravity", "other"])));
+    refuses(failed(&run(&["use", "--global", "antigravity", "work"])));
+    refuses(failed(&run(&["use", "antigravity", "work"])));
     assert_eq!(std::fs::read(&config).unwrap(), config_before);
     assert_eq!(std::fs::read(&record).unwrap(), record_before);
 

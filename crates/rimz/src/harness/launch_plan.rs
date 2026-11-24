@@ -1318,7 +1318,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         let bwrap = sandbox::preflight(Isolation::Scoped)
             .map_err(|error| LaunchPlanErr::AccountMount {
                 login: login.key().to_string(),
-                reason: error.to_string(),
+                reason: error.required_mount_reason(),
             })?
             .expect("a scoped preflight answers with bwrap or an error");
         let view = sandbox::MountPlan {
