@@ -1,6 +1,7 @@
 //! What a `rimz subagents` caller may launch.
 
 use crate::agents::AgentState;
+use crate::config::effective::{ProfileScope, resolve_seat_setting};
 use crate::config::{CommandsConfig, ProfilesConfig};
 use crate::harness::spec::LayoutErr;
 
@@ -35,12 +36,22 @@ pub enum SubagentCatalog {
 /// allowed; a home with neither profiles nor commands otherwise lists nothing.
 pub fn catalog(
     caller_profile: Option<&str>,
+    caller_agent: Option<&str>,
+    caller_kind: Option<&str>,
+    scope: ProfileScope,
     profiles: &ProfilesConfig,
     subagent_profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> SubagentCatalog {
-    let allowed = allowed_specs(caller_profile, profiles);
-    if allowed.is_some_and(|allowed| allowed.is_empty()) {
+    let allowed = allowed_specs(
+        caller_profile,
+        caller_agent,
+        caller_kind,
+        scope,
+        profiles,
+        subagent_profiles,
+    );
+    if allowed.as_ref().is_some_and(Vec::is_empty) {
         return SubagentCatalog::NoneAllowed;
     }
 
@@ -70,7 +81,9 @@ pub fn catalog(
         }
         let base = subagent_profiles.0.get(runtime.kind());
         if base.is_none()
-            && !allowed.is_some_and(|allowed| allowed.iter().any(|name| name == runtime.name()))
+            && !allowed
+                .as_ref()
+                .is_some_and(|allowed| allowed.iter().any(|name| name == runtime.name()))
         {
             continue;
         }
@@ -138,39 +151,83 @@ fn reminder_profile(profile: &SubagentProfile) -> String {
     )
 }
 
-fn allowed_specs<'a>(
+/// The effective `subagents:` allowlist for a caller, resolved in launch chain order under
+/// its recorded `--agent` and kind.
+pub fn allowed_specs(
     caller_profile: Option<&str>,
-    profiles: &'a ProfilesConfig,
-) -> Option<&'a [String]> {
-    caller_profile
-        .and_then(|name| profiles.0.get(name))
-        .and_then(|profile| profile.subagents.as_deref())
+    caller_agent: Option<&str>,
+    caller_kind: Option<&str>,
+    scope: ProfileScope,
+    profiles: &ProfilesConfig,
+    subagent_profiles: &ProfilesConfig,
+) -> Option<Vec<String>> {
+    resolve_seat_setting(
+        caller_profile,
+        caller_agent,
+        caller_kind,
+        scope,
+        profiles,
+        subagent_profiles,
+        true,
+        |profile| {
+            // A Markdown definition listing the native Agent tool refuses any `subagents:`
+            // list from lower layers (override or final kind base).
+            if profile.definition.is_some()
+                && profile
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.has("Agent"))
+            {
+                Some(profile.subagents.clone())
+            } else {
+                profile.subagents.clone().map(Some)
+            }
+        },
+    )
+    .flatten()
 }
 
 pub fn check_allowed(
     caller: &AgentState,
     profiles: &ProfilesConfig,
+    subagent_profiles: &ProfilesConfig,
     profile: &str,
-    agent_override: Option<&str>,
 ) -> crate::harness::spec::Result<()> {
-    let Some(allowed) = allowed_specs(caller.profile.as_deref(), profiles) else {
+    let scope = ProfileScope::for_launch(caller.profile_scope, caller.is_launched_child());
+    let Some(allowed) = allowed_specs(
+        caller.profile.as_deref(),
+        caller
+            .record
+            .as_ref()
+            .and_then(|record| record.agent.as_deref()),
+        Some(caller.kind.as_str()),
+        scope,
+        profiles,
+        subagent_profiles,
+    ) else {
         return Ok(());
     };
-    for requested in [Some(profile), agent_override].into_iter().flatten() {
-        let requested = requested.trim();
-        if allowed
-            .iter()
-            .any(|candidate| profiles.key(candidate) == profiles.key(requested))
-        {
-            continue;
-        }
-        return Err(LayoutErr::SubagentProfileNotAllowed {
-            caller_profile: caller.profile.clone().unwrap_or_default(),
-            profile: requested.to_owned(),
-            allowed: format!("[{}]", allowed.join(", ")),
-        });
+    let requested = profile.trim();
+    if allowed
+        .iter()
+        .any(|candidate| profiles.key(candidate) == profiles.key(requested))
+    {
+        return Ok(());
     }
-    Ok(())
+    Err(LayoutErr::SubagentProfileNotAllowed {
+        caller_profile: caller
+            .profile
+            .clone()
+            .or_else(|| {
+                caller
+                    .record
+                    .as_ref()
+                    .and_then(|record| record.agent.clone())
+            })
+            .unwrap_or_else(|| caller.kind.to_string()),
+        profile: requested.to_owned(),
+        allowed: format!("[{}]", allowed.join(", ")),
+    })
 }
 
 #[cfg(test)]
@@ -227,26 +284,133 @@ mod tests {
     #[test]
     fn allowlist_checks_spec_and_agent_override() {
         let (caller, profiles) = caller(Some(vec!["explorer", "designer"]));
-        assert!(check_allowed(&caller, &profiles, " explorer ", None).is_ok());
-        assert!(check_allowed(&caller, &profiles, "explorer", Some("designer")).is_ok());
+        let empty = ProfilesConfig::default();
+        assert!(check_allowed(&caller, &profiles, &empty, " explorer ").is_ok());
 
-        let error = check_allowed(&caller, &profiles, "codex", None).unwrap_err();
+        let error = check_allowed(&caller, &profiles, &empty, "codex").unwrap_err();
         assert!(error.to_string().contains("profile `planner`"));
         assert!(error.to_string().contains("[explorer, designer]"));
-        assert!(check_allowed(&caller, &profiles, "explorer", Some("codex")).is_err());
+    }
+
+    #[test]
+    fn caller_recorded_agent_override_governs_allowlist_and_catalog() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        std::fs::create_dir(root.path().join("subagents")).unwrap();
+        for (rel, content) in [
+            (
+                "agents/antigravity.md",
+                "---\ndescription: Antigravity base\nsubagents: [other]\ntools: [Read]\n---\nAntigravity.",
+            ),
+            (
+                "agents/codex.md",
+                "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.",
+            ),
+            (
+                "agents/astra.md",
+                "---\ndescription: Astra\nagent: codex\nsubagents: [advisor]\n---\nAstra.",
+            ),
+            (
+                "agents/mute.md",
+                "---\ndescription: Mute\nagent: codex\nsubagents: []\n---\nMute.",
+            ),
+            (
+                "agents/reviewer.md",
+                "---\ndescription: Reviewer\nagent: antigravity\n---\nReviewer.",
+            ),
+            (
+                "subagents/advisor.md",
+                "---\ndescription: Advisor\nagent: antigravity\n---\nAdvisor.",
+            ),
+            (
+                "subagents/other.md",
+                "---\ndescription: Other\nagent: codex\n---\nOther.",
+            ),
+        ] {
+            std::fs::write(root.path().join(rel), content).unwrap();
+        }
+        let machine = crate::config::MachineConfig::default();
+        let definitions = crate::config::definitions::load(
+            root.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &machine.agents.commands,
+            &root.path().join("config.toml"),
+            &machine.tiers,
+            None,
+        );
+        assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+        let profiles = definitions.agent_profiles;
+        let subagents = definitions.subagent_profiles;
+
+        let make_caller = |profile: Option<&str>, recorded_agent: Option<&str>| {
+            let mut agent = AgentState::stub("codex", "parent", AgentStatus::Running);
+            agent.profile = profile.map(str::to_owned);
+            if let Some(base) = recorded_agent {
+                agent.record = Some(Box::new(crate::agents::LaunchRecord {
+                    agent: Some(base.to_owned()),
+                    ..Default::default()
+                }));
+            }
+            agent
+        };
+        let reviewer_astra = make_caller(Some("reviewer"), Some("astra"));
+        let bare_astra = make_caller(None, Some("astra"));
+        let bare_mute = make_caller(None, Some("mute"));
+        let reviewer_missing = make_caller(Some("reviewer"), Some("deleted"));
+        let actual = vec![
+            (
+                "reviewer under astra allows advisor",
+                check_allowed(&reviewer_astra, &profiles, &subagents, "advisor").is_ok(),
+            ),
+            (
+                "reviewer under astra refuses other",
+                check_allowed(&reviewer_astra, &profiles, &subagents, "other").is_err(),
+            ),
+            (
+                "bare codex under astra allows advisor",
+                check_allowed(&bare_astra, &profiles, &subagents, "advisor").is_ok(),
+            ),
+            (
+                "bare codex under astra refuses other",
+                check_allowed(&bare_astra, &profiles, &subagents, "other").is_err(),
+            ),
+            (
+                "bare codex under mute refuses advisor",
+                check_allowed(&bare_mute, &profiles, &subagents, "advisor").is_err(),
+            ),
+            (
+                "unresolved X on reviewer under codex leaves list unrestricted",
+                check_allowed(&reviewer_missing, &profiles, &subagents, "other").is_ok(),
+            ),
+        ];
+        assert_eq!(
+            actual,
+            vec![
+                ("reviewer under astra allows advisor", true),
+                ("reviewer under astra refuses other", true),
+                ("bare codex under astra allows advisor", true),
+                ("bare codex under astra refuses other", true),
+                ("bare codex under mute refuses advisor", true),
+                (
+                    "unresolved X on reviewer under codex leaves list unrestricted",
+                    true
+                ),
+            ]
+        );
     }
 
     #[test]
     fn missing_policy_allows_all_and_empty_policy_allows_none() {
         let (unrestricted, profiles) = caller(None);
-        assert!(check_allowed(&unrestricted, &profiles, "codex", None).is_ok());
+        let empty = ProfilesConfig::default();
+        assert!(check_allowed(&unrestricted, &profiles, &empty, "codex").is_ok());
 
         let mut bare = unrestricted;
         bare.profile = None;
-        assert!(check_allowed(&bare, &profiles, "codex", None).is_ok());
+        assert!(check_allowed(&bare, &profiles, &empty, "codex").is_ok());
 
         let (caller, profiles) = caller(Some(Vec::new()));
-        assert!(check_allowed(&caller, &profiles, "explorer", None).is_err());
+        assert!(check_allowed(&caller, &profiles, &empty, "explorer").is_err());
     }
 
     #[test]
@@ -255,6 +419,9 @@ mod tests {
         let children: ProfilesConfig = toml::from_str("[opencode]\nagent = 'opencode'").unwrap();
         let listed = catalog(
             Some("planner"),
+            None,
+            None,
+            ProfileScope::Agents,
             &profiles,
             &children,
             &CommandsConfig::default(),
@@ -263,10 +430,10 @@ mod tests {
                 if specs.len() == 1 && specs[0].name == "opencode-mini"
                     && specs[0].agent.as_deref() == Some("opencode")));
         agent.profile = Some("planner".into());
-        assert!(check_allowed(&agent, &profiles, "opencode-mini", None).is_ok());
-        assert!(check_allowed(&agent, &profiles, "opencode", None).is_err());
+        assert!(check_allowed(&agent, &profiles, &children, "opencode-mini").is_ok());
+        assert!(check_allowed(&agent, &profiles, &children, "opencode").is_err());
         let (agent, profiles) = caller(Some(vec!["opencode"]));
-        assert!(check_allowed(&agent, &profiles, "opencode-mini", None).is_err());
+        assert!(check_allowed(&agent, &profiles, &children, "opencode-mini").is_err());
     }
 
     #[test]
@@ -279,6 +446,9 @@ mod tests {
                 let (agent, profiles) = caller(Some(vec![allowed]));
                 let listed = catalog(
                     Some("planner"),
+                    None,
+                    None,
+                    ProfileScope::Agents,
                     &profiles,
                     &children,
                     &CommandsConfig::default(),
@@ -289,7 +459,7 @@ mod tests {
                     "{allowed}: {listed:?}"
                 );
                 assert!(
-                    check_allowed(&agent, &profiles, requested, None).is_ok(),
+                    check_allowed(&agent, &profiles, &children, requested).is_ok(),
                     "{allowed}"
                 );
             }
@@ -299,6 +469,9 @@ mod tests {
         let commands = CommandsConfig(BTreeMap::from([("agy".to_owned(), "echo hi".to_owned())]));
         let listed = catalog(
             Some("planner"),
+            None,
+            None,
+            ProfileScope::Agents,
             &profiles,
             &ProfilesConfig::default(),
             &commands,
@@ -310,7 +483,7 @@ mod tests {
                     && specs[0].source == SubagentProfileSource::Command),
             "command agy: {listed:?}"
         );
-        assert!(check_allowed(&agent, &profiles, "agy", None).is_ok());
+        assert!(check_allowed(&agent, &profiles, &ProfilesConfig::default(), "agy").is_ok());
     }
 
     #[test]
@@ -359,9 +532,15 @@ mod tests {
             "cargo clippy".to_owned(),
         )]));
 
-        let SubagentCatalog::Available(specs) =
-            catalog(None, &profiles, &subagent_profiles, &commands)
-        else {
+        let SubagentCatalog::Available(specs) = catalog(
+            None,
+            None,
+            None,
+            ProfileScope::Agents,
+            &profiles,
+            &subagent_profiles,
+            &commands,
+        ) else {
             panic!("unrestricted catalog is available");
         };
         assert_eq!(
@@ -384,6 +563,9 @@ mod tests {
         )]));
         let SubagentCatalog::Available(specs) = catalog(
             Some("planner"),
+            None,
+            None,
+            ProfileScope::Agents,
             &profiles,
             &ProfilesConfig::default(),
             &commands,
@@ -403,6 +585,9 @@ mod tests {
             assert_eq!(
                 catalog(
                     Some("planner"),
+                    None,
+                    None,
+                    ProfileScope::Agents,
                     &profiles,
                     &ProfilesConfig::default(),
                     &commands
@@ -418,6 +603,9 @@ mod tests {
         assert_eq!(
             catalog(
                 Some("planner"),
+                None,
+                None,
+                ProfileScope::Agents,
                 &profiles,
                 &ProfilesConfig::default(),
                 &CommandsConfig::default(),
@@ -436,6 +624,9 @@ mod tests {
         assert_eq!(
             catalog(
                 Some("planner"),
+                None,
+                None,
+                ProfileScope::Agents,
                 &profiles,
                 &ProfilesConfig::default(),
                 &commands,
@@ -490,6 +681,48 @@ mod tests {
         assert_eq!(
             reminder(&SubagentCatalog::NoneAllowed, "skill(rimz-subagents)"),
             "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools."
+        );
+    }
+
+    #[test]
+    fn unchanged_profile_reads_subagents_directly_without_toml_or_kind_base_walk() {
+        let mut profiles: ProfilesConfig = toml::from_str(
+            r#"
+            [parent]
+            agent = "claude"
+            subagents = ["advisor"]
+            [child]
+            agent = "parent"
+            [claude]
+            agent = "claude"
+            subagents = ["other"]
+            "#,
+        )
+        .unwrap();
+        profiles.0.get_mut("claude").unwrap().kind_base = true;
+        let empty = ProfilesConfig::default();
+
+        assert_eq!(
+            allowed_specs(
+                Some("child"),
+                None,
+                Some("claude"),
+                ProfileScope::Agents,
+                &profiles,
+                &empty,
+            ),
+            None
+        );
+        assert_eq!(
+            allowed_specs(
+                Some("parent"),
+                None,
+                Some("claude"),
+                ProfileScope::Agents,
+                &profiles,
+                &empty,
+            ),
+            Some(vec!["advisor".to_owned()])
         );
     }
 }

@@ -11,7 +11,7 @@ use serde::Serialize;
 use rimz::agents::capabilities::SystemTextChannel;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
 use rimz::config::effective::ProfileScope;
-use rimz::config::{Isolation, ProfilesConfig, SkillName};
+use rimz::config::{Isolation, SkillName};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
@@ -66,7 +66,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
-    let (request, cwd, action_note, system_prompt_digest, profiles, tuning) = if args
+    let (request, cwd, action_note, system_prompt_digest, scope, tuning) = if args
         .target
         .starts_with('@')
     {
@@ -85,8 +85,12 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &channel.address_context(),
         )?;
         let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
-        let profiles = effective.profiles_for_launch(scope, agent.profile.as_deref());
-        let fallback = (scope == ProfileScope::Subagents).then_some(&effective.profiles);
+        let (resolved_scope, profiles) = scope.resolve_launch(
+            agent.profile.as_deref(),
+            &effective.profiles,
+            &effective.subagent_profiles,
+        );
+        let fallback = (resolved_scope == ProfileScope::Subagents).then_some(&effective.profiles);
         let posture =
             rimz::launcher::swap::member_posture(&agent, profiles, fallback, &effective.teams);
         if let Some(reason) = &posture.degraded {
@@ -113,7 +117,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             cwd,
             note.map(str::to_owned),
             agent.system_prompt_digest.clone(),
-            profiles,
+            scope,
             posture.launch.tuning.clone(),
         )
     } else {
@@ -142,7 +146,10 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             Some((&runtime, &state)),
         )?;
         warnings.extend(finalized.warnings.iter().map(ToString::to_string));
-        effective.profiles = finalized.profiles;
+        match scope {
+            ProfileScope::Agents => effective.profiles = finalized.profiles,
+            ProfileScope::Subagents => effective.subagent_profiles = finalized.profiles,
+        }
         let resolved = finalized.resolved;
         let count = resolved.layout.agent_cells().count();
         let cell_count: usize = resolved
@@ -247,7 +254,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             workspace.worktree_root.clone(),
             None,
             None,
-            &effective.profiles,
+            scope,
             tuning,
         )
     };
@@ -292,7 +299,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let report = ExplainReport::new(
         &args,
         &plan,
-        profiles,
+        scope,
+        &effective,
         &tuning,
         bwrap.as_deref(),
         warnings,
@@ -815,10 +823,15 @@ struct SandboxReport<'a> {
 }
 
 impl<'a> ExplainReport<'a> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "report assembly keeps the compiled plan, effective tables, and rendered metadata explicit"
+    )]
     fn new(
         args: &'a ExplainArgs,
         plan: &'a LaunchPlan,
-        profiles: &ProfilesConfig,
+        scope: ProfileScope,
+        effective: &rimz::config::effective::LaunchAgents,
         tuning: &rimz::harness::spec::TuningSources,
         bwrap: Option<&'a Path>,
         mut warnings: Vec<String>,
@@ -827,6 +840,20 @@ impl<'a> ExplainReport<'a> {
         let process = plan.process();
         let request = &plan.request;
         let params = &request.identity.params;
+        let (resolved_scope, profiles) = scope.resolve_launch(
+            params.profile.as_deref(),
+            &effective.profiles,
+            &effective.subagent_profiles,
+        );
+        let fallback = (resolved_scope == ProfileScope::Subagents).then_some(&effective.profiles);
+        let recorded_agent = rimz::harness::plan::normalized_preset_value(
+            params
+                .record
+                .as_ref()
+                .and_then(|record| record.agent.as_deref()),
+        );
+        let model_override =
+            rimz::harness::plan::normalized_preset_value(args.overrides.model.as_deref()).is_some();
         let routed_profile = params
             .profile
             .as_ref()
@@ -843,16 +870,6 @@ impl<'a> ExplainReport<'a> {
             });
         let adapter = rimz::agents::find_definition(request.kind.as_str())
             .expect("compiled agent has an adapter");
-        let resolved = params.profile.as_deref().and_then(|name| {
-            rimz::harness::spec::resolve_profile_under(
-                name,
-                rimz::harness::plan::normalized_preset_value(args.overrides.agent.as_deref())
-                    .as_deref(),
-                profiles,
-                None,
-            )
-            .ok()
-        });
         // A source names the layer that supplied the planned value; a value the plan
         // dropped or leaves unset has none.
         let source = |source: &Option<rimz::harness::spec::TuningSource>, planned: bool| {
@@ -864,10 +881,14 @@ impl<'a> ExplainReport<'a> {
             .and_then(|record| record.auto_compact);
         let profile = params.profile.as_deref().map(|name| ProfileReport {
             name,
-            chain: resolved
-                .clone()
-                .map(rimz::harness::spec::ResolvedProfile::into_chain)
-                .unwrap_or_default(),
+            chain: rimz::harness::spec::explain_profile_chain(
+                name,
+                recorded_agent.as_deref(),
+                request.kind.as_str(),
+                model_override,
+                profiles,
+                fallback,
+            ),
             role: params.role.as_deref(),
             team: params.team.as_deref(),
         });
@@ -1053,11 +1074,14 @@ impl<'a> ExplainReport<'a> {
                 subagents: if request.cannot_delegate() {
                     Some(Vec::new())
                 } else {
-                    params
-                        .profile
-                        .as_ref()
-                        .and_then(|name| profiles.0.get(name))
-                        .and_then(|profile| profile.subagents.clone())
+                    rimz::harness::subagent_policy::allowed_specs(
+                        params.profile.as_deref(),
+                        recorded_agent.as_deref(),
+                        Some(request.kind.as_str()),
+                        scope,
+                        &effective.profiles,
+                        &effective.subagent_profiles,
+                    )
                 },
                 cannot_delegate: request.cannot_delegate(),
                 allowed_tools: request.allowed_tools.as_deref(),

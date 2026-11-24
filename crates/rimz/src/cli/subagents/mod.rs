@@ -987,6 +987,21 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     effective.overlay_profile_sources(&mut sources);
     let catalog = rimz::harness::subagent_policy::catalog(
         caller.as_ref().and_then(|caller| caller.profile.as_deref()),
+        caller.as_ref().and_then(|caller| {
+            caller
+                .record
+                .as_ref()
+                .and_then(|record| record.agent.as_deref())
+        }),
+        caller.as_ref().map(|caller| caller.kind.as_str()),
+        caller
+            .as_ref()
+            .map_or(rimz::config::effective::ProfileScope::Agents, |caller| {
+                rimz::config::effective::ProfileScope::for_launch(
+                    caller.profile_scope,
+                    caller.is_launched_child(),
+                )
+            }),
         &effective.profiles,
         &effective.subagent_profiles,
         &config.agents.commands,

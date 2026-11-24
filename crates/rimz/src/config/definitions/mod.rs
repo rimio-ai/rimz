@@ -15,6 +15,8 @@ mod team;
 mod traits;
 
 pub use agent::DefinitionSource;
+pub(crate) use agent::keeps_inherited_model;
+pub(super) use agent::{TierCandidates, build_tier_candidates};
 pub use traits::ConsensusPieces;
 
 #[cfg(test)]
@@ -33,19 +35,23 @@ use super::{
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::AgentFrontmatter;
 
-/// An override base passed to [`Profile::build_under`]: either a stored profile row (Markdown
-/// definition, team seat, kind base, or TOML row) or a resolved provider runtime.
+/// An override base passed to [`Profile::build_under`]: a Markdown definition row, or a resolved
+/// provider runtime (bare kind, kind base, or project TOML chain) with an optional written model.
 #[derive(Clone, Copy)]
 pub enum BuildBase<'a> {
     Profile(&'a Profile),
-    Runtime(crate::agents::Runtime),
+    Runtime(crate::agents::Runtime, Option<&'a str>),
 }
 
 impl std::fmt::Debug for BuildBase<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Profile(profile) => f.debug_tuple("Profile").field(profile).finish(),
-            Self::Runtime(runtime) => f.debug_tuple("Runtime").field(&runtime.name()).finish(),
+            Self::Runtime(runtime, model) => f
+                .debug_tuple("Runtime")
+                .field(&runtime.name())
+                .field(model)
+                .finish(),
         }
     }
 }
@@ -268,7 +274,7 @@ pub enum DefinitionCause {
 /// Nothing in the tree ships one, so naming the file is not enough: the
 /// message has to say what a kind base is, where to write it, and that an
 /// empty body is refused in turn.
-fn missing_kind_base(home: &Path, kind: &str) -> String {
+pub(super) fn missing_kind_base(home: &Path, kind: &str) -> String {
     let shipped = std::iter::once(kind)
         .chain(
             crate::agents::find_definition(kind)

@@ -1242,9 +1242,10 @@ upward-dependencies = [
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
 # RimzEntry carries a `capabilities:` grant's entries through ToolSet to the launch (+1).
 # prompt_references, PromptReference, and PromptReferenceKind share positional rimz(x), skill(x), and subagent(x) scanning between launch rewrite and `rimz agents validate` (+3).
-# BuildBase, DefinitionSource, and Profile::build_under rebuild Markdown definitions on demand (+2).
-# LaunchAgents::routed_overrides and LaunchAgents::block_failed_override share routed override state with the launch planner (+2).
-surface-budget = 312
+# BuildBase, DefinitionSource, Profile::build_under, and keeps_inherited_model rebuild Markdown definitions on demand (+3).
+# LaunchAgents::block_failed_override shares failed-override checks with the launch planner (+1).
+# resolve_seat_setting resolves after-launch profile settings in launch chain order (+1).
+surface-budget = 313
 
 [[verdict]]
 kind = "item"
@@ -2573,8 +2574,9 @@ path = "crates/rimz/src/harness"
 # `read_when` with `WhenPlace`, `WindowAccount`, and `ArmedWhen` is the one reading of a `when`
 # for a loop task, a wait, and the schedule tool; `refuse_unreadable_forge` went private (+3).
 # `TaskCatalog::skipped_machine_row` lets the schedule tool refuse a name whose booker is unknown (+1).
-# One-chain `--agent` override helpers (`AgentOverride`, `resolve_agent_override`, `check_agent_model_family`, `keeps_inherited_model`, `virtual_agent_parts`) unify launch routing and spec resolution (+5).
-surface-budget = 1372
+# One-chain `--agent` override helpers (`AgentOverride`, `resolve_agent_override`, `check_agent_model_family`, `inline_layout_profile_targets`, `pick_in_launch_chain`) unify launch routing, spec resolution, and seat settings (+4).
+# `subagent_policy::allowed_specs` and `spec::explain_profile_chain` share one-chain explain and allowlist resolution with CLI explain (+2).
+surface-budget = 1373
 
 [[verdict]]
 kind = "item"

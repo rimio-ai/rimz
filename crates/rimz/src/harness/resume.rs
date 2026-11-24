@@ -557,12 +557,22 @@ fn resolve_posture_with_role(
                 })
             })
             .or_else(|| {
-                if profile.definition.is_none() || profile.agent == request.kind.as_str() {
+                if profile.agent == request.kind.as_str() {
                     return None;
                 }
-                let mut built = profile
-                    .build_under(None, Some(request.kind.as_str()), None)?
-                    .ok()?;
+                let mut built = if profile.definition.is_some() {
+                    profile
+                        .build_under(None, Some(request.kind.as_str()), None)?
+                        .ok()?
+                } else if profile.kind_base {
+                    crate::harness::spec::routed_kind_base(
+                        request.kind.as_str(),
+                        &profiles,
+                        fallback,
+                    )?
+                } else {
+                    return None;
+                };
                 if let Some(stamp) = request.stamped_tier {
                     built.model = Some(stamp.model.clone());
                     built.tier_stamp = Some(Box::new(stamp.clone()));
@@ -3314,19 +3324,32 @@ fn restore_resume_cell(
             )
             .map_err(error)?;
         }
-        let overridden = crate::harness::spec::profile_cell_with_base_override(
-            profile.unwrap_or(kind.as_str()),
-            profiles,
-            base.as_ref(),
-            role,
-        )
-        .map_err(|err| error(err.to_string()))?;
-        if overridden.kind != kind {
+        if let Some(base_override) = &base
+            && base_override.resolved.kind != kind
+        {
             return Err(error(format!(
                 "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
-                overridden.kind
+                base_override.resolved.kind
             )));
         }
+        let resolve = |target_kind| {
+            crate::harness::spec::profile_cell_for_replay(
+                profile.unwrap_or(kind.as_str()),
+                profiles,
+                fallback,
+                base.as_ref(),
+                role,
+                crate::harness::spec::ReplayOptions {
+                    target_kind,
+                    ..Default::default()
+                },
+            )
+        };
+        // A tier with no model of the session's kind walks to another one, or to none.
+        let overridden = match resolve(None) {
+            Ok(cell) if cell.kind == kind => cell,
+            _ => resolve(Some(kind.as_str())).map_err(|err| error(err.to_string()))?,
+        };
         ResumeLaunchPosture {
             mode: base
                 .as_ref()
@@ -3363,8 +3386,8 @@ fn restore_resume_cell(
         ResumeLaunchPosture::from(&*cell)
     };
     if let Some((tier, tiers)) = overrides.tier {
-        let definition = profile
-            .and_then(|name| profiles.0.get(name))
+        let profile_row = profile.and_then(|name| profiles.0.get(name));
+        let definition = profile_row
             .and_then(|profile| profile.definition_renders.as_ref())
             .ok_or_else(|| error("--tier on resume requires a Markdown agent definition".into()))?;
         let mut skipped = Vec::new();
@@ -3417,27 +3440,39 @@ fn restore_resume_cell(
                     }
                 ))
             })?;
-        // As a fresh `--tier` launch: the definition's effort, then the kind base's, then the
-        // built-in default for the tier's model.
-        let base = profiles
-            .0
-            .get(kind.as_str())
-            .filter(|base| base.kind_base)
-            .and_then(|base| base.effort.clone());
-        (posture.effort, posture.tuning.effort) = if let Some(effort) = &definition.effort {
-            (
-                Some(effort.clone()),
-                profile.map(|name| TuningSource::Profile(name.to_owned())),
-            )
-        } else if let Some(effort) = base {
-            (Some(effort), Some(TuningSource::KindBase(kind.clone())))
-        } else {
-            let effort = crate::agents::definition_defaults(kind.as_str(), Some(&model)).effort;
-            (
-                effort.map(str::to_owned),
-                effort.map(|_| TuningSource::BuiltIn),
-            )
-        };
+        // As a fresh `--tier` launch: an explicit effort from the override chain or definition,
+        // then the kind base's, then the built-in default for the tier's model.
+        let keep_override_effort = overrides.agent.is_some()
+            && posture.effort.is_some()
+            && !matches!(
+                posture.tuning.effort,
+                Some(TuningSource::KindBase(_) | TuningSource::BuiltIn | TuningSource::Recorded)
+            );
+        if !keep_override_effort {
+            let base = profiles
+                .0
+                .get(kind.as_str())
+                .filter(|base| base.kind_base)
+                .and_then(|base| base.effort.clone());
+            (posture.effort, posture.tuning.effort) = if let Some(effort) = &definition.effort {
+                let writer = profile_row
+                    .and_then(|row| row.definition.as_ref())
+                    .and_then(|def| def.writers().effort.as_deref())
+                    .or(profile);
+                (
+                    Some(effort.clone()),
+                    writer.map(|name| TuningSource::Profile(name.to_owned())),
+                )
+            } else if let Some(effort) = base {
+                (Some(effort), Some(TuningSource::KindBase(kind.clone())))
+            } else {
+                let effort = crate::agents::definition_defaults(kind.as_str(), Some(&model)).effort;
+                (
+                    effort.map(str::to_owned),
+                    effort.map(|_| TuningSource::BuiltIn),
+                )
+            };
+        }
         posture.model = Some(model.clone());
         posture.tier = Some(Box::new(crate::agents::TierStamp {
             tier,

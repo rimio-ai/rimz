@@ -358,6 +358,7 @@ pub fn check_supervised_subagent_allowed(
     request: &SupervisedRunRequest,
     caller: Option<&crate::agents::AgentState>,
     profiles: &crate::config::ProfilesConfig,
+    subagent_profiles: &crate::config::ProfilesConfig,
 ) -> Result<()> {
     if !request.subagent {
         return Ok(());
@@ -368,8 +369,8 @@ pub fn check_supervised_subagent_allowed(
     crate::harness::subagent_policy::check_allowed(
         caller,
         profiles,
+        subagent_profiles,
         &request.spec,
-        request.agent.as_deref(),
     )?;
     Ok(())
 }

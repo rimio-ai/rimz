@@ -193,6 +193,12 @@ impl<'a> LaunchCompactPolicy<'a> {
             team: cell.launch.team.as_deref().or(self.team),
             role: cell.launch.role.as_deref(),
             profile: cell.launch.profile.as_deref(),
+            agent: cell
+                .launch
+                .record
+                .as_ref()
+                .and_then(|record| record.agent.as_deref()),
+            kind: Some(cell.kind.as_str()),
             scope: cell.launch.profile_scope.unwrap_or(self.scope),
         };
         let Some(line) = seat.resolve(
@@ -966,14 +972,12 @@ pub fn resolve_launch(
         (scope == crate::config::effective::ProfileScope::Subagents).then_some(&launch.profiles);
     let layout = match crate::harness::spec::resolve_spec_in_scope(
         spec,
-        scope,
         profiles,
         &launch.profiles,
         fallback,
         commands,
         &launch.teams,
         agent_override,
-        Some(launch.routed_overrides()),
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))

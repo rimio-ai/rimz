@@ -2092,7 +2092,7 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
     ]);
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    // A role's own fast, off and unset included, survives a re-base onto another kind.
+    // A role's own fast, off and unset included, survives `--agent` onto another kind.
     for (target, model, mode, effort, fast, final_mode, final_effort) in [
         ("codex", None, None, None, None, None, Some("xhigh")),
         ("opencode", None, None, None, None, None, None),
@@ -4546,14 +4546,14 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
         effort: Some("low".into()),
         fast: Some(crate::agents::Toggle::Off),
         args: Some("--claude-only".into()),
-        ..role("coder", "parent")
+        ..role("coder", "toml_l")
     };
     let toml_team = team(vec![toml_binding.clone()]);
     let prepared = prepare_team("toml_t", &toml_team, &profiles, base_astra.as_ref())
         .expect("fresh toml team");
     let fresh_toml = &prepared.roles[0].resolved;
     let replay_toml = profile_cell_with_base_override(
-        "parent",
+        "toml_l",
         &profiles,
         base_astra.as_ref(),
         Some(&toml_binding),

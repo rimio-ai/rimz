@@ -5198,3 +5198,348 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
         "{foreign}"
     );
 }
+
+#[test]
+fn recorded_agent_override_governs_model_reminder_subagent_catalog_and_withholding() {
+    use crate::agents::LaunchRecord;
+    use crate::harness::subagent_policy::SubagentCatalog;
+    use crate::mcp::catalog::Capability;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/antigravity.md",
+            "---\ndescription: Antigravity base\nmodel-reminder: false\nsubagents: [advisor]\nkeep-warm: 1h\nidle-compact: 50k\ntools: [Read]\n---\nAntigravity.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\nmodel-reminder: true\ntools: [Read]\n---\nCodex.",
+        ),
+        (
+            "agents/astra.md",
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\nmodel-reminder: false\nsubagents: [advisor]\nkeep-warm: 3h\nidle-compact: 90k\n---\nAstra.",
+        ),
+        (
+            "agents/mute.md",
+            "---\ndescription: Mute\nagent: codex\nsubagents: []\n---\nMute.",
+        ),
+        (
+            "agents/reviewer.md",
+            "---\ndescription: Reviewer\nagent: antigravity\n---\nReviewer.",
+        ),
+        (
+            "subagents/advisor.md",
+            "---\ndescription: Advisor\nagent: antigravity\n---\nAdvisor.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    let mut machine = crate::config::MachineConfig::default();
+    machine.harness.cache_keepalive = true;
+    machine.harness.keep_warm = crate::config::KeepWarm::Off;
+    machine.harness.idle_compact = crate::config::IdleCompact::Off;
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.subagents.profiles = definitions.subagent_profiles;
+    let effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
+            .unwrap();
+
+    let make = |kind: &str,
+                profile: Option<&str>,
+                agent_override: Option<&str>,
+                subagent: bool,
+                scope: Option<ProfileScope>| {
+        let mut req = request(
+            kind,
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        req.subagent = subagent;
+        req.identity.params.profile = profile.map(str::to_owned);
+        req.identity.params.profile_scope = scope;
+        if let Some(base) = agent_override {
+            req.identity.params.record = Some(Box::new(LaunchRecord {
+                agent: Some(base.to_owned()),
+                ..Default::default()
+            }));
+        }
+        req
+    };
+    let catalog_summary = |catalog: Option<&SubagentCatalog>| match catalog {
+        None => "none".to_owned(),
+        Some(SubagentCatalog::NoneAllowed) => "none_allowed".to_owned(),
+        Some(SubagentCatalog::Disabled) => "disabled".to_owned(),
+        Some(SubagentCatalog::Available(specs)) => specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+    };
+    let check = |req: &ExecRequest| {
+        let (rem, _) = reminders(req, Some(&effective), &machine.agents.commands);
+        let denies_subagents = rem
+            .denied_capabilities(req)
+            .contains(&Capability::Subagents);
+        (
+            rem.model,
+            catalog_summary(rem.subagent_catalog.as_ref()),
+            denies_subagents,
+            long_cache_requested(req, &machine, Some(&effective)),
+            idle_compact_covered(req, &machine, Some(&effective)),
+        )
+    };
+    let cases = [
+        (
+            "child advisor under astra",
+            make(
+                "codex",
+                Some("advisor"),
+                Some("astra"),
+                true,
+                Some(ProfileScope::Subagents),
+            ),
+        ),
+        (
+            "child advisor under bare codex",
+            make(
+                "codex",
+                Some("advisor"),
+                Some("codex"),
+                true,
+                Some(ProfileScope::Subagents),
+            ),
+        ),
+        (
+            "direct reviewer under astra",
+            make("codex", Some("reviewer"), Some("astra"), false, None),
+        ),
+        (
+            "direct reviewer under mute withholds rimz-subagents",
+            make("codex", Some("reviewer"), Some("mute"), false, None),
+        ),
+        (
+            "bare codex under astra",
+            make("codex", None, Some("astra"), false, None),
+        ),
+        (
+            "bare codex under mute withholds rimz-subagents",
+            make("codex", None, Some("mute"), false, None),
+        ),
+        (
+            "unresolved X on reviewer falls back to recorded kind codex",
+            make("codex", Some("reviewer"), Some("deleted"), false, None),
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(label, req)| (*label, check(req)))
+        .collect();
+    let expected = vec![
+        (
+            "child advisor under astra",
+            (false, "none".into(), true, false, false),
+        ),
+        (
+            "child advisor under bare codex",
+            (true, "none".into(), true, false, false),
+        ),
+        (
+            "direct reviewer under astra",
+            (false, "advisor".into(), false, true, true),
+        ),
+        (
+            "direct reviewer under mute withholds rimz-subagents",
+            (true, "none_allowed".into(), true, false, false),
+        ),
+        (
+            "bare codex under astra",
+            (false, "advisor".into(), false, true, true),
+        ),
+        (
+            "bare codex under mute withholds rimz-subagents",
+            (true, "none_allowed".into(), true, false, false),
+        ),
+        (
+            "unresolved X on reviewer falls back to recorded kind codex",
+            (
+                true,
+                "advisor,antigravity,codex".into(),
+                false,
+                false,
+                false,
+            ),
+        ),
+    ];
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn unchanged_profile_reads_model_reminder_directly_and_changed_kind_uses_recorded_base() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".rimz")).unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\nmodel-reminder: true\n---\nClaude.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\nmodel-reminder: false\n---\nCodex.",
+        ),
+        (
+            "agents/reviewer.md",
+            "---\ndescription: Reviewer\nagent: claude\ntools: [Read]\n---\nReviewer.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    std::fs::write(
+        project.join(".rimz/config.toml"),
+        "[profiles.parent]\nagent = 'claude'\nmodel-reminder = false\n\
+         [profiles.child]\nagent = 'parent'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(&project, root.path()).unwrap();
+
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let effective = crate::config::effective::load_with_roots(&machine, &project, root.path())
+        .expect("effective config");
+    let state = crate::StatePaths::for_project_root(&project).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+
+    let check_model_reminder = |kind: &str, profile: &str| {
+        let mut req = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        req.identity.params.profile = Some(profile.to_owned());
+        req.identity.params.model = Some("opus".to_owned());
+        let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &req,
+            cwd: &project,
+            project_root: &project,
+            rimz_bin: Path::new("rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: crate::config::Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+        })
+        .unwrap();
+        plan.process()
+            .reminder
+            .contains(&format!("You are @{profile}, running on"))
+    };
+
+    // Unchanged TOML child on claude with no override reads its own row directly (unset -> true),
+    // without walking to `parent` (`model-reminder = false`).
+    assert!(check_model_reminder("claude", "child"));
+    assert!(!check_model_reminder("claude", "parent"));
+    // Unchanged Markdown reviewer on claude gets claude base's true; when moved to codex with no
+    // override (e.g. via `--model`), it reads under codex's base (false), not claude's.
+    assert!(check_model_reminder("claude", "reviewer"));
+    assert!(!check_model_reminder("codex", "reviewer"));
+}
+
+#[test]
+fn agent_tool_definition_ignores_lower_subagents_lists_across_all_readers() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\nsubagents: []\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/helper.md"),
+        "---\ndescription: Helper\nagent: claude\ntools: [Read]\n---\nHelp.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/native.md"),
+        "---\ndescription: Native agent\nagent: claude\ntools: [Read, Agent]\n---\nNative.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
+
+    for (label, agent_override) in [
+        ("native --agent codex", Some("codex")),
+        ("native --model astra (no --agent)", None),
+    ] {
+        assert_eq!(
+            crate::harness::subagent_policy::allowed_specs(
+                Some("native"),
+                agent_override,
+                Some("codex"),
+                ProfileScope::Agents,
+                &machine.agents.profiles,
+                &machine.subagents.profiles,
+            ),
+            None,
+            "{label}: allowed_specs must not inherit codex.md's subagents: []"
+        );
+        let cat = crate::harness::subagent_policy::catalog(
+            Some("native"),
+            agent_override,
+            Some("codex"),
+            ProfileScope::Agents,
+            &machine.agents.profiles,
+            &machine.subagents.profiles,
+            &machine.agents.commands,
+        );
+        assert!(
+            matches!(cat, crate::harness::subagent_policy::SubagentCatalog::Available(ref items) if items.iter().any(|p| p.name == "helper")),
+            "{label}: catalog must stay Available with helper, got {cat:?}"
+        );
+        let mut req = request(
+            "codex",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        req.identity.params.profile = Some("native".into());
+        req.identity.params.record = Some(Box::new(crate::agents::LaunchRecord {
+            agent: agent_override.map(str::to_owned),
+            ..Default::default()
+        }));
+        let (rem, _) = reminders(&req, Some(&effective), &machine.agents.commands);
+        assert!(
+            !rem.denied_capabilities(&req)
+                .contains(&crate::mcp::catalog::Capability::Subagents),
+            "{label}: rimz-subagents capability must not be withheld"
+        );
+    }
+}

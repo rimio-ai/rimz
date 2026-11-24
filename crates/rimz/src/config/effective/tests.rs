@@ -36,9 +36,12 @@ fn keep_warm_declared_horizon_resolves_seats_without_live_admission() {
             team,
             role,
             profile,
+            agent: None,
+            kind: None,
+            scope: ProfileScope::Agents,
             launched_child,
         }
-        .declared_horizon(&teams, &profiles, &harness)
+        .declared_horizon(&teams, &profiles, &ProfilesConfig::default(), &harness)
         .map(|(max, clause)| (max.as_secs(), clause))
     })
     .into();
@@ -62,9 +65,12 @@ fn keep_warm_declared_horizon_resolves_seats_without_live_admission() {
             team: Some("staged"),
             role: None,
             profile: None,
+            agent: None,
+            kind: None,
+            scope: ProfileScope::Agents,
             launched_child: false,
         }
-        .declared_horizon(&teams, &profiles, &harness),
+        .declared_horizon(&teams, &profiles, &ProfilesConfig::default(), &harness),
         None
     );
 }
@@ -103,6 +109,8 @@ fn smart_compact_resolves_role_profile_scope_and_explicit_off() {
             team: Some("forge"),
             role,
             profile: Some(profile),
+            agent: None,
+            kind: None,
             scope,
         };
         (
@@ -2643,4 +2651,49 @@ fn tier_routes_read_an_alias_launch_word_as_its_kind() {
         );
         assert_eq!((routed, profiles), route(kind), "{alias}");
     }
+}
+
+#[test]
+fn kind_base_model_route_onto_missing_non_tier_base_refuses() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
+    )
+    .unwrap();
+    let machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let err = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("claude"),
+            None,
+            Some("neon"),
+            None,
+            |_, _| None,
+        )
+        .expect_err("claude kind base routed to missing antigravity base must refuse");
+    let text = err.to_string();
+    assert!(
+        text.contains("claude: model 'neon' (antigravity) cannot run this definition:")
+            && text.contains("whose kind base is missing"),
+        "{text}"
+    );
+
+    // A bare kind with no base row of its own stays accepted as before.
+    let mut bare_launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    bare_launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("codex"),
+            None,
+            Some("neon"),
+            None,
+            |_, _| None,
+        )
+        .expect("bare kind without base row stays accepted");
 }
