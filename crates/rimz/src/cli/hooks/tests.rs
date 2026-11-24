@@ -1831,6 +1831,35 @@ fn stop_antigravity_turn(store: &rimz::Store, agent_id: &str, fully_idle: bool) 
     feed_antigravity(store, adapter, "Stop", stop);
 }
 
+fn park_antigravity_with_shell(store: &rimz::Store, agent_id: &str, shell_id: &str, command: &str) {
+    let workspace = hooks_test_workspace(Some("main"));
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+    );
+    observation.background_shells = Some(rimz::agents::BackgroundShellReport::Snapshot {
+        shells: vec![rimz::agents::BackgroundShell {
+            id: shell_id.to_owned(),
+            command: Some(command.to_owned()),
+            description: None,
+            started_at: jiff::Timestamp::now(),
+        }],
+    });
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event_name: "Stop",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+}
+
 struct CopilotCorrelationAdapter;
 
 impl rimz::agents::capabilities::CoreCapability for CopilotCorrelationAdapter {
@@ -2815,6 +2844,154 @@ fn an_antigravity_parked_turn_reads_success_whichever_of_stop_and_idle_lands_fir
             "stop first: {stop_first}"
         );
     }
+}
+
+#[test]
+fn an_antigravity_rest_report_empties_background_shells_on_a_parked_row_without_interrupting() {
+    let (_dir, store) = hooks_test_store();
+    let mut run = rimz::store::run::RunRecord::new(
+        store.paths().workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("antigravity"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    run.agent_id = Some("parked-shell".into());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+
+    start_antigravity_turn(&store, "parked-shell");
+    queue_antigravity_continue(&store, "parked-shell");
+    park_antigravity_with_shell(&store, "parked-shell", "task-1", "sleep 60");
+    let before = antigravity_row(&store, "parked-shell");
+    assert_eq!(
+        (before.status, before.phase, before.background_shells.len()),
+        (
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Parked,
+            1
+        )
+    );
+    assert!(antigravity_continue_owed(&store, "parked-shell"));
+
+    let env =
+        std::collections::BTreeMap::from([("RIMZ_RUN_ID".to_owned(), run.run_id.to_string())]);
+    let frames = feed_antigravity_statusline_in(
+        &store,
+        "parked-shell",
+        serde_json::json!({"agent_state": "idle"}),
+        &env,
+    );
+    assert_eq!(frames.len(), 1);
+    let after = antigravity_row(&store, "parked-shell");
+    assert!(
+        after.background_shells.is_empty(),
+        "rest report empties listed background shells"
+    );
+    assert_eq!(
+        (after.status, after.phase),
+        (
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Parked
+        )
+    );
+    assert!(
+        antigravity_continue_owed(&store, "parked-shell"),
+        "owed compaction continue stays owed"
+    );
+    let open_run = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(
+        (open_run.status, open_run.interrupted_at),
+        (rimz::store::run::RunStatus::Running, None),
+        "supervised run stays open without an interrupt hold"
+    );
+    assert!(
+        !antigravity_signals(&store, "parked-shell")
+            .iter()
+            .any(|signal| matches!(signal, LifecycleSignal::TurnInterrupted { .. })),
+        "parked rest records no TurnInterrupted"
+    );
+
+    // Once the list is empty, a repeat rest report records nothing.
+    let recorded = antigravity_signals(&store, "parked-shell").len();
+    assert_eq!(
+        feed_antigravity_statusline_in(
+            &store,
+            "parked-shell",
+            serde_json::json!({"agent_state": "idle"}),
+            &env,
+        )
+        .len(),
+        1
+    );
+    assert_eq!(antigravity_signals(&store, "parked-shell").len(), recorded);
+    assert_eq!(
+        antigravity_row(&store, "parked-shell").last_activity,
+        after.last_activity
+    );
+}
+
+#[test]
+fn a_stale_antigravity_rest_report_leaves_background_shells_intact() {
+    let (_dir, store) = hooks_test_store();
+    start_antigravity_turn(&store, "stale-shell");
+    let (payload, observation) =
+        observe_antigravity_statusline("stale-shell", serde_json::json!({"agent_state": "idle"}));
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    park_antigravity_with_shell(&store, "stale-shell", "task-1", "sleep 60");
+    let before = antigravity_row(&store, "stale-shell");
+    let signals = antigravity_signals(&store, "stale-shell");
+
+    let from = ingress_len(&store);
+    persist_antigravity_statusline(
+        &store,
+        &payload,
+        observation,
+        &std::collections::BTreeMap::new(),
+    );
+    assert_eq!(apply_antigravity_frames_from(&store, from).len(), 1);
+    let after = antigravity_row(&store, "stale-shell");
+    assert_eq!(after.background_shells, before.background_shells);
+    assert_eq!(antigravity_signals(&store, "stale-shell"), signals);
+    assert_eq!(
+        (after.status, after.phase, after.last_activity),
+        (before.status, before.phase, before.last_activity)
+    );
+}
+
+#[test]
+fn an_antigravity_rest_report_interrupts_an_open_turn_and_empties_its_background_shells() {
+    let (_dir, store) = hooks_test_store();
+    start_antigravity_turn(&store, "open-with-shell");
+    park_antigravity_with_shell(&store, "open-with-shell", "task-1", "sleep 60");
+    start_antigravity_turn(&store, "open-with-shell");
+    let before = antigravity_row(&store, "open-with-shell");
+    assert_eq!(
+        (before.status, before.phase, before.background_shells.len()),
+        (
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Reasoning,
+            1
+        )
+    );
+
+    let frames = feed_antigravity_statusline(
+        &store,
+        "open-with-shell",
+        serde_json::json!({"agent_state": "idle"}),
+    );
+    assert_eq!(frames.len(), 1);
+    let after = antigravity_row(&store, "open-with-shell");
+    assert_eq!(after.status, rimz::agents::AgentStatus::Idle);
+    assert!(
+        after.background_shells.is_empty(),
+        "interrupting rest also empties listed background shells"
+    );
+    assert_eq!(
+        antigravity_signals(&store, "open-with-shell").last(),
+        Some(&LifecycleSignal::TurnInterrupted { turn_id: None })
+    );
 }
 
 #[test]

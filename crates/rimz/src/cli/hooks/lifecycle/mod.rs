@@ -144,7 +144,7 @@ pub(super) fn handle_lifecycle_frame(
             Ok((released, recorded, derived))
         })?
     };
-    // A rest report that records no interrupt is no activity: it refreshes and reacts to nothing.
+    // A rest report that records nothing is no activity: it refreshes and reacts to nothing.
     if decoded.reports_provider_rest() && recorded.is_none() {
         return Ok(decoded.reply().clone());
     }

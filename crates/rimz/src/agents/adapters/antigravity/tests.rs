@@ -3027,16 +3027,711 @@ fn a_running_background_task_parks_the_turn_until_its_completion_wakes_the_plann
         (AgentStatus::Success, TurnPhase::Idle),
         "a task that ends any other way ends too"
     );
-    let mut ending = parked;
+    let mut ending = parked.clone();
     ending.extend([
         user_record(6, AT_12, "next"),
         planner_record(7, AT_12, None),
     ]);
     assert_eq!(
         phase(ending),
-        (AgentStatus::Success, TurnPhase::Idle),
-        "a task with no completion row parks only the turn it started in"
+        (AgentStatus::Running, TurnPhase::Parked),
+        "a background task outlives a later user prompt and keeps its no-tool end parked"
     );
+    let restart_notice = "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-07-13T23:23:12Z \
+        sender=system priority=MESSAGE_PRIORITY_LOW content=[Notice] All your subagents and \
+        background tasks have been stopped due to server restart. If you want a subagent to \
+        continue working, it needs to be revived by sending a message.\n</SYSTEM_MESSAGE>";
+    let mut quoted_restart = parked.clone();
+    quoted_restart.extend([
+        record(6, "MODEL", "GENERIC", "DONE", AT_12, restart_notice).to_string(),
+        planner_record(7, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(quoted_restart),
+        (AgentStatus::Running, TurnPhase::Parked),
+        "quoted restart text in tool output does not clear running tasks"
+    );
+    let still_running_quoting_finish = format!(
+        "<SYSTEM_MESSAGE>\n[Message] timestamp={AT_12} sender={task} \
+         priority=MESSAGE_PRIORITY_HIGH content=Background command is still running after 300s: \
+         echo 'content=Task id \"{task}\" finished with result:'\n</SYSTEM_MESSAGE>"
+    );
+    let still_running_quoting_restart = format!(
+        "<SYSTEM_MESSAGE>\n[Message] timestamp={AT_12} sender={task} \
+         priority=MESSAGE_PRIORITY_HIGH content=Background command is still running after 300s: \
+         echo 'content=[Notice] All your subagents and background tasks have been stopped due to \
+         server restart'\n</SYSTEM_MESSAGE>"
+    );
+    let mut still_running_quoted = parked.clone();
+    still_running_quoted.extend([
+        record(
+            6,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            AT_12,
+            &still_running_quoting_finish,
+        )
+        .to_string(),
+        record(
+            7,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            AT_12,
+            &still_running_quoting_restart,
+        )
+        .to_string(),
+        planner_record(8, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(still_running_quoted),
+        (AgentStatus::Running, TurnPhase::Parked),
+        "a still-running SYSTEM_MESSAGE quoting finish or restart text ends no task"
+    );
+    let mut after_restart = parked;
+    after_restart.extend([
+        record(6, "SYSTEM", "SYSTEM_MESSAGE", "DONE", AT_12, restart_notice).to_string(),
+        planner_record(7, AT_12, None),
+    ]);
+    assert_eq!(
+        phase(after_restart),
+        (AgentStatus::Success, TurnPhase::Idle),
+        "the server-restart notice clears running background tasks"
+    );
+}
+
+#[test]
+fn background_shell_reports_follow_parked_stop_finish_kill_and_idle_repair() {
+    use crate::agents::{BackgroundShell, BackgroundShellReport};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let login_env = BTreeMap::from([(session::HOME_ENV.to_owned(), home.display().to_string())]);
+    let conv = "0c100c27-850f-4226-b07a-72701c1f9d19";
+    let task2 = format!("{conv}/task-2");
+    let task4 = format!("{conv}/task-4");
+    let t2_at = "2026-11-24T15:06:23Z";
+    let t4_at = "2026-11-24T15:06:30Z";
+    let start_row = |step: u64, at: &str, id: &str, cmd: &str| {
+        record(
+            step,
+            "MODEL",
+            "GENERIC",
+            "RUNNING",
+            at,
+            &format!(
+                "Created At: {at}\nTool is running as a background task with task id: {id}\n\
+                 Task Description: {cmd}\n\
+                 Task logs are available at: file://{}/brain/{conv}/.system_generated/tasks/task-{step}.log",
+                home.display()
+            ),
+        )
+        .to_string()
+    };
+    let finish_row = |step: u64, at: &str, id: &str, outcome: &str| {
+        record(
+            step,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            at,
+            &format!(
+                "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n\
+                 <SYSTEM_MESSAGE>\n[Message] timestamp={at} sender={id} \
+                 priority=MESSAGE_PRIORITY_HIGH content=Task id \"{id}\" {outcome}:\n\
+                 Command exited with code 0.\n</SYSTEM_MESSAGE>"
+            ),
+        )
+        .to_string()
+    };
+    let decode = |event: &str, payload: &Value| {
+        AntigravityAdapter
+            .decode_hook_in(event, payload, &login_env)
+            .unwrap()
+            .lifecycle()
+            .cloned()
+            .unwrap()
+            .background_shells
+    };
+    let write_rows = |rows: &[String]| {
+        write_transcript_named(home, conv, "transcript_full.jsonl", &rows.join("\n"))
+    };
+    let stop_payload = |path: &Path, fully_idle: bool| {
+        json!({
+            "conversationId": conv,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": path.display().to_string(),
+            "fullyIdle": fully_idle,
+            "terminationReason": "NO_TOOL_CALL",
+            "error": "",
+        })
+    };
+
+    // Sequence from live probe 0c100c27: two background commands start, turn parks.
+    let mut rows = vec![
+        user_record(0, "2026-11-24T15:06:12Z", "start two background tasks"),
+        planner_record(
+            1,
+            "2026-11-24T15:06:12Z",
+            Some(
+                json!([{"name":"run_command","args":{"CommandLine":"sleep 240 && echo AAA","WaitMsBeforeAsync":500}}]),
+            ),
+        ),
+        start_row(2, t2_at, &task2, "sleep 240 && echo AAA"),
+        planner_record(
+            3,
+            "2026-11-24T15:06:26Z",
+            Some(
+                json!([{"name":"run_command","args":{"CommandLine":"sleep 900 && echo BBB","WaitMsBeforeAsync":500}}]),
+            ),
+        ),
+        start_row(4, t4_at, &task4, "sleep 900 && echo BBB"),
+        planner_record(5, "2026-11-24T15:06:32Z", None),
+    ];
+    let path = write_rows(&rows);
+    let expected_two = vec![
+        BackgroundShell {
+            id: task2.clone(),
+            command: Some("sleep 240 && echo AAA".to_owned()),
+            description: None,
+            started_at: t2_at.parse().unwrap(),
+        },
+        BackgroundShell {
+            id: task4.clone(),
+            command: Some("sleep 900 && echo BBB".to_owned()),
+            description: None,
+            started_at: t4_at.parse().unwrap(),
+        },
+    ];
+    assert_eq!(
+        decode("Stop", &stop_payload(&path, false)),
+        Some(BackgroundShellReport::Snapshot {
+            shells: expected_two.clone(),
+        }),
+        "parked Stop snapshots both running commands with id, command, and row created_at"
+    );
+
+    // Later turn ("Reply only OK") ends parked while earlier turn's commands still run.
+    rows.extend([
+        user_record(6, "2026-11-24T15:08:43Z", "Reply only OK"),
+        planner_record(7, "2026-11-24T15:08:43Z", None),
+    ]);
+    write_rows(&rows);
+    assert_eq!(
+        decode("Stop", &stop_payload(&path, false)),
+        Some(BackgroundShellReport::Snapshot {
+            shells: expected_two,
+        }),
+        "a later turn's parked Stop keeps commands started in an earlier turn"
+    );
+
+    // Kill task-4 through manage_task PostToolUse:observed.
+    let kill_payload = json!({
+        "conversationId": conv,
+        "workspacePaths": ["/workspace/project"],
+        "transcriptPath": path.display().to_string(),
+        "stepIdx": 10,
+        "error": "",
+        "toolCall": {
+            "name": "manage_task",
+            "args": { "Action": "kill", "TaskId": task4 }
+        }
+    });
+    assert_eq!(
+        decode("PostToolUse:observed", &kill_payload),
+        Some(BackgroundShellReport::Finished {
+            ids: vec![task4.clone()],
+        }),
+        "manage_task kill reports Finished for its TaskId"
+    );
+
+    // After the cancel row lands, a parked Stop lists only task-2.
+    rows.push(finish_row(
+        11,
+        "2026-11-24T15:09:13Z",
+        &task4,
+        "was canceled with result",
+    ));
+    write_rows(&rows);
+    assert_eq!(
+        decode("Stop", &stop_payload(&path, false)),
+        Some(BackgroundShellReport::Snapshot {
+            shells: vec![BackgroundShell {
+                id: task2.clone(),
+                command: Some("sleep 240 && echo AAA".to_owned()),
+                description: None,
+                started_at: t2_at.parse().unwrap(),
+            }],
+        })
+    );
+
+    // Quoted start/finish/restart text in DONE tool output and still-running SYSTEM_MESSAGE
+    // (including a command quoting finish or restart text) are ignored; task-2 stays listed.
+    let quoted = format!(
+        "Tool is running as a background task with task id: {conv}/task-99\n\
+         Task Description: echo fake\n\
+         Task id \"{task2}\" finished with result:\n\
+         [Notice] All your subagents and background tasks have been stopped due to server restart."
+    );
+    let still_running = format!(
+        "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T15:09:30Z sender={task2} \
+         priority=MESSAGE_PRIORITY_HIGH content=Background command is still running after 300s: \
+         echo 'Task id \"{task2}\" finished with result:' && echo '[Notice] All your subagents and \
+         background tasks have been stopped due to server restart'\n</SYSTEM_MESSAGE>"
+    );
+    rows.extend([
+        record(
+            12,
+            "MODEL",
+            "GENERIC",
+            "DONE",
+            "2026-11-24T15:09:20Z",
+            &quoted,
+        )
+        .to_string(),
+        record(
+            13,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            "2026-11-24T15:09:30Z",
+            &still_running,
+        )
+        .to_string(),
+    ]);
+    write_rows(&rows);
+    assert_eq!(
+        decode("Stop", &stop_payload(&path, false)),
+        Some(BackgroundShellReport::Snapshot {
+            shells: vec![BackgroundShell {
+                id: task2.clone(),
+                command: Some("sleep 240 && echo AAA".to_owned()),
+                description: None,
+                started_at: t2_at.parse().unwrap(),
+            }],
+        }),
+        "quoted start/finish/restart text in DONE output and still-running notices are not task rows"
+    );
+
+    // Start row more than 64 KiB above the transcript's end is still listed (whole-file read).
+    let mut padded = rows.clone();
+    let filler = "x".repeat(8_000);
+    for idx in 0..10 {
+        padded.push(
+            record(
+                20 + idx,
+                "MODEL",
+                "GENERIC",
+                "DONE",
+                "2026-11-24T15:09:40Z",
+                &filler,
+            )
+            .to_string(),
+        );
+    }
+    let padded_path = write_rows(&padded);
+    assert!(
+        std::fs::metadata(&padded_path).unwrap().len() > 65_536,
+        "fixture must exceed the 64 KiB tail"
+    );
+    assert_eq!(
+        decode("Stop", &stop_payload(&padded_path, false)),
+        Some(BackgroundShellReport::Snapshot {
+            shells: vec![BackgroundShell {
+                id: task2.clone(),
+                command: Some("sleep 240 && echo AAA".to_owned()),
+                description: None,
+                started_at: t2_at.parse().unwrap(),
+            }],
+        }),
+        "start rows beyond 64 KiB stay listed via whole-file read"
+    );
+
+    // Finish through run_command PostToolUse:mutating (clean and errored).
+    let finish_hook = json!({
+        "conversationId": conv,
+        "workspacePaths": ["/workspace/project"],
+        "transcriptPath": path.display().to_string(),
+        "stepIdx": 2,
+        "error": "",
+        "toolCall": {
+            "name": "run_command",
+            "id": "call_1",
+            "args": { "CommandLine": "sleep 240 && echo AAA", "WaitMsBeforeAsync": 500 }
+        }
+    });
+    assert_eq!(
+        decode("PostToolUse:mutating", &finish_hook),
+        Some(BackgroundShellReport::Finished {
+            ids: vec![task2.clone()],
+        }),
+        "run_command PostToolUse reports Finished for <conv>/task-<stepIdx>"
+    );
+    assert_eq!(
+        decode(
+            "PostToolUse:mutating",
+            &with(&finish_hook, [("error", json!("exit 1"))]),
+        ),
+        Some(BackgroundShellReport::Finished {
+            ids: vec![task2.clone()],
+        }),
+        "an errored run_command still finished"
+    );
+
+    // Missed finish repaired by fullyIdle: true Stop, from the payload alone (even while transcript
+    // still lists task-2 or points at a missing file).
+    assert_eq!(
+        decode("Stop", &stop_payload(&padded_path, true)),
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() }),
+        "fullyIdle: true repairs a missed finish from the payload alone"
+    );
+    assert_eq!(
+        decode("Stop", &stop_payload(Path::new("/tmp/missing.jsonl"), true)),
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() }),
+        "fullyIdle: true does not depend on reading the transcript"
+    );
+
+    // Stop parked on a native subagent alone lists nothing.
+    let subagent_only = vec![
+        user_record(0, AT_09, "spawn a child"),
+        planner_record(
+            1,
+            AT_10,
+            Some(
+                json!([{"name":"invoke_subagent","args":{"Subagents":[{"Prompt":"work","Role":"helper","TypeName":"general"}]}}]),
+            ),
+        ),
+        planner_record(2, AT_11, None),
+    ];
+    let sub_path = write_rows(&subagent_only);
+    assert_eq!(
+        decode("Stop", &stop_payload(&sub_path, false)),
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() }),
+        "a Stop parked on a native subagent alone lists no background shell"
+    );
+
+    // Real server-restart notice clears running tasks on parked Stop too.
+    rows.push(
+        record(
+            14,
+            "SYSTEM",
+            "SYSTEM_MESSAGE",
+            "DONE",
+            "2026-11-24T15:10:00Z",
+            "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T15:10:00Z sender=system \
+             content=[Notice] All your subagents and background tasks have been stopped due to server restart.\n</SYSTEM_MESSAGE>",
+        )
+        .to_string(),
+    );
+    write_rows(&rows);
+    assert_eq!(
+        decode("Stop", &stop_payload(&path, false)),
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() }),
+        "a server-restart notice clears earlier start rows from the Stop snapshot"
+    );
+}
+
+#[test]
+fn background_shell_reports_handle_edges_guards_and_queued_post_tool_use() {
+    use crate::agents::{BackgroundShell, BackgroundShellReport};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("account");
+    let view_home = dir.path().join("view_home");
+    let login_env = BTreeMap::from([
+        ("HOME".to_owned(), view_home.display().to_string()),
+        (session::HOME_ENV.to_owned(), home.display().to_string()),
+    ]);
+    let decode = |event: &str, payload: &Value| {
+        AntigravityAdapter
+            .decode_hook_in(event, payload, &login_env)
+            .expect("hook decode must not fail")
+            .lifecycle()
+            .cloned()
+    };
+
+    // Missing transcript, path outside path guard, and symlink all report nothing on parked Stop.
+    let outside = dir.path().join("outside/transcript_full.jsonl");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    let start_line = record(
+        2,
+        "MODEL",
+        "GENERIC",
+        "RUNNING",
+        AT_10,
+        &format!(
+            "Created At: {AT_10}\nTool is running as a background task with task id: {SESSION_ID}/task-2\n\
+             Task Description: sleep 60\n"
+        ),
+    )
+    .to_string();
+    std::fs::write(&outside, &start_line).unwrap();
+
+    let symlink_path = home
+        .join("brain")
+        .join(CHILD_ALPHA)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(symlink_path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &symlink_path).unwrap();
+
+    let missing_path = home
+        .join("brain")
+        .join(SESSION_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+
+    for (label, session_id, transcript) in [
+        ("missing", SESSION_ID, missing_path.as_path()),
+        ("outside guard", SESSION_ID, outside.as_path()),
+        ("symlink", CHILD_ALPHA, symlink_path.as_path()),
+    ] {
+        let obs = decode(
+            "Stop",
+            &json!({
+                "conversationId": session_id,
+                "workspacePaths": ["/workspace/project"],
+                "transcriptPath": transcript.display().to_string(),
+                "fullyIdle": false,
+                "terminationReason": "NO_TOOL_CALL",
+            }),
+        )
+        .unwrap();
+        assert_eq!(obs.background_shells, None, "{label} reports nothing");
+    }
+
+    // Named-account mount remap + missing Task Description + unparseable created_at fallback +
+    // failed Stop with fullyIdle: false still snapshots running commands.
+    let no_desc_bad_time = record(
+        3,
+        "MODEL",
+        "GENERIC",
+        "RUNNING",
+        "not-a-timestamp",
+        &format!(
+            "Tool is running as a background task with task id: {SESSION_ID}/task-3\n\
+             Task logs are available at: file:///tmp/task-3.log"
+        ),
+    )
+    .to_string();
+    write_transcript_named(
+        &home,
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &[start_line.clone(), no_desc_bad_time].join("\n"),
+    );
+    let mounted_transcript = view_home
+        .join(".gemini/antigravity-cli/brain")
+        .join(SESSION_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    let before = Timestamp::now();
+    let failed_stop = decode(
+        "Stop",
+        &json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": mounted_transcript.display().to_string(),
+            "fullyIdle": false,
+            "terminationReason": "ERROR",
+            "error": "boom",
+        }),
+    )
+    .unwrap();
+    let after = Timestamp::now();
+    assert_eq!(
+        failed_stop.signal,
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        }
+    );
+    let Some(BackgroundShellReport::Snapshot { shells }) = failed_stop.background_shells else {
+        panic!("failed Stop with fullyIdle: false must still snapshot running commands");
+    };
+    assert_eq!(shells.len(), 2);
+    assert_eq!(
+        shells[0],
+        BackgroundShell {
+            id: format!("{SESSION_ID}/task-2"),
+            command: Some("sleep 60".to_owned()),
+            description: None,
+            started_at: AT_10.parse().unwrap(),
+        }
+    );
+    assert_eq!(shells[1].id, format!("{SESSION_ID}/task-3"));
+    assert_eq!(shells[1].command, None);
+    assert_eq!(shells[1].description, None);
+    assert!(
+        shells[1].started_at >= before && shells[1].started_at <= after,
+        "unparseable created_at falls back to hook time: {:?}",
+        shells[1].started_at
+    );
+
+    // A >64 KiB transcript containing invalid UTF-8 bytes in an unrelated row still snapshots
+    // running commands via a single lossy whole-file read.
+    let mut lossy_bytes = format!("{start_line}\n").into_bytes();
+    let filler = "x".repeat(8_000);
+    for idx in 0..10 {
+        lossy_bytes.extend_from_slice(
+            record(20 + idx, "MODEL", "GENERIC", "DONE", AT_11, &filler)
+                .to_string()
+                .as_bytes(),
+        );
+        lossy_bytes.push(b'\n');
+    }
+    lossy_bytes.extend_from_slice(b"{\"step_index\":31,\"content\":\"\xff\xfe\"}\n");
+    let lossy_path = home
+        .join("brain")
+        .join(SESSION_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::write(&lossy_path, &lossy_bytes).unwrap();
+    assert!(
+        std::fs::metadata(&lossy_path).unwrap().len() > 65_536,
+        "lossy fixture must exceed 64 KiB"
+    );
+    assert_eq!(
+        decode(
+            "Stop",
+            &json!({
+                "conversationId": SESSION_ID,
+                "workspacePaths": ["/workspace/project"],
+                "transcriptPath": mounted_transcript.display().to_string(),
+                "fullyIdle": false,
+                "terminationReason": "NO_TOOL_CALL",
+            }),
+        )
+        .unwrap()
+        .background_shells,
+        Some(BackgroundShellReport::Snapshot {
+            shells: vec![BackgroundShell {
+                id: format!("{SESSION_ID}/task-2"),
+                command: Some("sleep 60".to_owned()),
+                description: None,
+                started_at: AT_10.parse().unwrap(),
+            }],
+        }),
+        "lossy whole-file read tolerates invalid UTF-8 bytes in a >64 KiB transcript"
+    );
+
+    // Failed Stop with fullyIdle: true still emits empty Snapshot.
+    let failed_idle = decode(
+        "Stop",
+        &json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": mounted_transcript.display().to_string(),
+            "fullyIdle": true,
+            "terminationReason": "ERROR",
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        failed_idle.background_shells,
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() })
+    );
+
+    // Bare `/compact` Stop reports nothing regardless of fullyIdle.
+    for fully_idle in [Some(true), Some(false), None] {
+        let mut payload = json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": mounted_transcript.display().to_string(),
+            "terminationReason": "TERMINAL_CUSTOM_HOOK",
+            "lastUserInput": "/compact",
+        });
+        if let Some(idle) = fully_idle {
+            payload["fullyIdle"] = json!(idle);
+        }
+        let compact = decode("Stop", &payload).unwrap();
+        assert!(matches!(
+            compact.signal,
+            LifecycleSignal::CompactionEnded { .. }
+        ));
+        assert_eq!(
+            compact.background_shells, None,
+            "bare /compact Stop reports no shells (fullyIdle={fully_idle:?})"
+        );
+    }
+
+    // PostToolUse negative cases: missing stepIdx, non-kill manage_task, missing/blank/failed
+    // TaskId, and unrelated tools all report nothing.
+    for (label, event, payload) in [
+        (
+            "run_command without stepIdx",
+            "PostToolUse:mutating",
+            json!({"conversationId": SESSION_ID, "toolCall": {"name": "run_command"}}),
+        ),
+        (
+            "manage_task list",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "toolCall": {"name": "manage_task", "args": {"Action": "list"}}}),
+        ),
+        (
+            "manage_task kill without TaskId",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "toolCall": {"name": "manage_task", "args": {"Action": "kill"}}}),
+        ),
+        (
+            "manage_task kill blank TaskId",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "toolCall": {"name": "manage_task", "args": {"Action": "kill", "TaskId": "   "}}}),
+        ),
+        (
+            "manage_task kill non-string TaskId",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "toolCall": {"name": "manage_task", "args": {"Action": "kill", "TaskId": 42}}}),
+        ),
+        (
+            "manage_task kill failed",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "error": "not found", "toolCall": {"name": "manage_task", "args": {"Action": "kill", "TaskId": "conv/task-2"}}}),
+        ),
+        (
+            "read_file with stepIdx",
+            "PostToolUse:observed",
+            json!({"conversationId": SESSION_ID, "stepIdx": 2, "toolCall": {"name": "read_file"}}),
+        ),
+    ] {
+        let obs = decode(event, &payload).unwrap();
+        assert_eq!(obs.background_shells, None, "{label}");
+    }
+
+    // Queued PostToolUse keeps stepIdx and manage_task args intact across queue round-trip.
+    for (event, payload, expected_id) in [
+        (
+            "PostToolUse:mutating",
+            json!({
+                "conversationId": SESSION_ID,
+                "stepIdx": 7,
+                "error": "",
+                "toolCall": {"name": "run_command", "args": {"CommandLine": "sleep 30"}}
+            }),
+            format!("{SESSION_ID}/task-7"),
+        ),
+        (
+            "PostToolUse:observed",
+            json!({
+                "conversationId": SESSION_ID,
+                "stepIdx": 10,
+                "error": "",
+                "toolCall": {"name": "manage_task", "args": {"Action": "kill", "TaskId": format!("{SESSION_ID}/task-9")}}
+            }),
+            format!("{SESSION_ID}/task-9"),
+        ),
+    ] {
+        let queued = AntigravityAdapter
+            .queued_hook_payload(event, &payload)
+            .unwrap_or_else(|| payload.clone());
+        let round_tripped: Value =
+            serde_json::from_str(&serde_json::to_string(&queued).unwrap()).unwrap();
+        assert_eq!(
+            decode(event, &round_tripped).unwrap().background_shells,
+            Some(BackgroundShellReport::Finished {
+                ids: vec![expected_id],
+            }),
+            "queued {event} preserves shell report"
+        );
+    }
 }
 
 #[test]

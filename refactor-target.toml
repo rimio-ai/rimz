@@ -480,7 +480,9 @@ upward-dependencies = [
 # key sequences, read by kind (+4).
 # bridge_saved_settings_args carries into the launch's one settings document what the login's
 # saved settings hold and a session document would replace or miss (+1).
-surface-budget = 1349
+# AgentState::rest_clears_background_shells lets record_provider_rest decide in log order whether a
+# provider rest report empties listed background shells (+1).
+surface-budget = 1350
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

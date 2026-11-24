@@ -2630,6 +2630,13 @@ impl AgentState {
             && reported_at > self.last_activity
     }
 
+    /// Whether a provider's report at `reported_at` that it rests clears this hook-folded row's
+    /// listed background shells: the row still lists at least one shell and has no activity as new
+    /// as the report.
+    pub fn rest_clears_background_shells(&self, reported_at: Timestamp) -> bool {
+        !self.background_shells.is_empty() && reported_at > self.last_activity
+    }
+
     /// Whether this live card is still owed the continue queued behind its compaction command:
     /// the fold's mark owes it and no interrupt the provider settled after its queue withdrew it.
     /// A settle is compared with the queue instant, not `last_activity`, since the compaction's

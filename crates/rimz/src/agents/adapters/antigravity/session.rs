@@ -20,8 +20,8 @@ use crate::agents::local_session_cache::{
     IncrementalCatalog, StableValueCache, StampedPaths, normalized_workspace_inputs,
 };
 use crate::agents::{
-    AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    SpawnedSubagent, TranscriptMessage, TranscriptRole, read_transcript_tail,
+    AgentStatus, BackgroundShell, LocalSessionObservation, LocalSessionProjection,
+    LocalSessionState, SpawnedSubagent, TranscriptMessage, TranscriptRole, read_transcript_tail,
     read_transcript_tail_with_status, sanitize_user_prompt,
 };
 use crate::ids::{AgentKind, AgentSessionId};
@@ -1007,6 +1007,71 @@ pub(super) fn valid_transcript_under(home: &Path, path: &Path, session_id: &str)
         })
 }
 
+/// Background commands the validated transcript shows still running at the time of a parked
+/// `Stop`. Reads the whole file once lossily, since a long-running command's start row can
+/// sit ahead of the 64 KiB tail after tool output grows the file.
+pub(super) fn running_background_shells_under(
+    home: &Path,
+    path: &Path,
+    session_id: &str,
+    fallback_started_at: Timestamp,
+) -> Option<Vec<BackgroundShell>> {
+    valid_transcript_under(home, path, session_id).then_some(())?;
+    let bytes = fs::read(path).ok()?;
+    let lines = String::from_utf8_lossy(&bytes);
+    let mut tasks = RunningTasks::default();
+    for record in parse_records(&lines) {
+        tasks.observe(&record);
+    }
+    Some(tasks.into_shells(fallback_started_at))
+}
+
+struct RunningTask {
+    id: String,
+    command: Option<String>,
+    started_at: Option<Timestamp>,
+}
+
+#[derive(Default)]
+struct RunningTasks {
+    tasks: Vec<RunningTask>,
+}
+
+impl RunningTasks {
+    fn observe(&mut self, record: &TranscriptRecord) -> bool {
+        if let Some(task) = background_task_started(record) {
+            self.tasks.retain(|running| running.id != task.id);
+            self.tasks.push(task);
+            return true;
+        }
+        if let Some(task_id) = background_task_finished(record) {
+            self.tasks.retain(|running| running.id != task_id);
+            return true;
+        }
+        if background_tasks_stopped_by_restart(record) {
+            self.tasks.clear();
+            return true;
+        }
+        false
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    fn into_shells(self, fallback_started_at: Timestamp) -> Vec<BackgroundShell> {
+        self.tasks
+            .into_iter()
+            .map(|task| BackgroundShell {
+                id: task.id,
+                command: task.command,
+                description: None,
+                started_at: task.started_at.unwrap_or(fallback_started_at),
+            })
+            .collect()
+    }
+}
+
 fn fold(lines: &str) -> FoldedSession {
     let mut folded = FoldedSession {
         first_event_at: None,
@@ -1017,14 +1082,9 @@ fn fold(lines: &str) -> FoldedSession {
         native_prompt_detail: None,
         waiting_since: None,
     };
-    let mut background_tasks = Vec::new();
+    let mut background_tasks = RunningTasks::default();
     for record in parse_records(lines) {
-        if let Some(task) = background_task_started(&record) {
-            background_tasks.push(task.to_owned());
-            continue;
-        }
-        if let Some(task) = background_task_finished(&record) {
-            background_tasks.retain(|running: &String| running != task);
+        if background_tasks.observe(&record) {
             continue;
         }
         let Some(role) = visible_role(&record) else {
@@ -1051,7 +1111,6 @@ fn fold(lines: &str) -> FoldedSession {
         match role {
             TranscriptRole::Steering => continue,
             TranscriptRole::User => {
-                background_tasks.clear();
                 folded.native_prompt_detail = None;
                 folded.waiting_since = None;
                 folded.status = AgentStatus::Running;
@@ -1086,9 +1145,9 @@ fn fold(lines: &str) -> FoldedSession {
     folded
 }
 
-/// The task id of a `MODEL` / `GENERIC` row that moved a tool to the background (agy 1.5.14).
+/// A `MODEL` / `GENERIC` row that moved a tool to the background (agy 1.5.14).
 /// The row keeps its `RUNNING` status after the task ends.
-fn background_task_started(record: &TranscriptRecord) -> Option<&str> {
+fn background_task_started(record: &TranscriptRecord) -> Option<RunningTask> {
     if (record.source.as_str(), record.record_type.as_str()) != ("MODEL", "GENERIC")
         || record.status != "RUNNING"
     {
@@ -1098,17 +1157,54 @@ fn background_task_started(record: &TranscriptRecord) -> Option<&str> {
         .content
         .as_deref()?
         .split_once("running as a background task with task id: ")?;
-    rest.split_whitespace().next()
+    let id = rest.split_whitespace().next()?.to_owned();
+    let command = rest
+        .split_once("\nTask Description:")
+        .map(|(_, after_desc)| {
+            after_desc
+                .split_once("\nTask logs are available at:")
+                .map_or(after_desc, |(desc, _)| desc)
+        })
+        .and_then(|desc| normalized(Some(desc)));
+    let started_at = record.created_at.parse::<Timestamp>().ok();
+    Some(RunningTask {
+        id,
+        command,
+        started_at,
+    })
+}
+
+/// The body after `content=` on the `[Message]` header line of a `SYSTEM` / `SYSTEM_MESSAGE`
+/// row (agy 1.5.14). Anchoring to the header prevents a periodic still-running notice whose
+/// command text quotes a finish or restart phrase from matching.
+fn system_message_body(record: &TranscriptRecord) -> Option<&str> {
+    if (record.source.as_str(), record.record_type.as_str()) != ("SYSTEM", "SYSTEM_MESSAGE") {
+        return None;
+    }
+    let (_, after_open) = record
+        .content
+        .as_deref()?
+        .split_once("<SYSTEM_MESSAGE>\n")?;
+    let message = after_open.strip_prefix("[Message] ")?;
+    let first_line_end = message.find('\n').unwrap_or(message.len());
+    let content_pos = message[..first_line_end].find(" content=")?;
+    Some(&message[content_pos + " content=".len()..])
 }
 
 /// The task id a `SYSTEM` / `SYSTEM_MESSAGE` row reports ended, whatever word follows it
 /// (agy 1.5.14).
 fn background_task_finished(record: &TranscriptRecord) -> Option<&str> {
-    if (record.source.as_str(), record.record_type.as_str()) != ("SYSTEM", "SYSTEM_MESSAGE") {
-        return None;
-    }
-    let (_, rest) = record.content.as_deref()?.split_once("Task id \"")?;
+    let rest = system_message_body(record)?.strip_prefix("Task id \"")?;
     rest.split_once('"').map(|(task, _)| task)
+}
+
+const SERVER_RESTART_STOPPED_TASKS: &str =
+    "[Notice] All your subagents and background tasks have been stopped due to server restart";
+
+/// Whether a `SYSTEM` / `SYSTEM_MESSAGE` row reports that a server restart stopped every running
+/// background task (agy 1.5.15).
+fn background_tasks_stopped_by_restart(record: &TranscriptRecord) -> bool {
+    system_message_body(record).is_some_and(|body| body.starts_with(SERVER_RESTART_STOPPED_TASKS))
 }
 
 fn is_turn_start(record: &TranscriptRecord) -> bool {

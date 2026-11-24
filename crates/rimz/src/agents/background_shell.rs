@@ -17,7 +17,8 @@ pub struct BackgroundShell {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// When RimZ first saw the shell, not when the provider spawned it.
+    /// When the provider's own record says the shell started, where the adapter reads one,
+    /// and otherwise when RimZ first saw it.
     pub started_at: Timestamp,
 }
 

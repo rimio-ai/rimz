@@ -1673,6 +1673,70 @@ fn effective_status_settles_background_park_to_success() {
 }
 
 #[test]
+fn parked_launched_child_with_listed_shell_projects_running_parked_while_operational_stays_success()
+{
+    let now = Timestamp::from_second(2_800).unwrap();
+    let started_at = Timestamp::from_second(1_000).unwrap();
+    let mut child = test_agent(AgentStatus::Running, 1_000);
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.phase = TurnPhase::Parked;
+    child
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "conv/task-2".to_owned(),
+            command: Some("sleep 240 && echo AAA".to_owned()),
+            description: None,
+            started_at,
+        });
+
+    assert_eq!(
+        child.rowless_status(&ParkDemotion::default(), now),
+        (AgentStatus::Running, TurnPhase::Parked)
+    );
+    assert_eq!(child.background_shells.len(), 1);
+    assert_eq!(child.background_shells[0].id, "conv/task-2");
+
+    let mut status = child.status;
+    let mut phase = child.phase;
+    let mut label = None;
+    let mut overlay_raised_at = None;
+    let mut ask_detail = None;
+    let mut extra_questions = 0;
+    project_display(
+        Some(&child),
+        &mut status,
+        &mut phase,
+        &mut label,
+        &mut overlay_raised_at,
+        &mut ask_detail,
+        &mut extra_questions,
+        None,
+        child.last_activity,
+        None,
+        false,
+        None,
+        &ParkDemotion::default(),
+        now,
+        1_800,
+        5,
+    );
+    assert_eq!((status, phase), (AgentStatus::Running, TurnPhase::Parked));
+
+    assert_eq!(child.effective_status(now), AgentStatus::Success);
+    assert_eq!(child.silent_child_for(now, 1_800), None);
+    assert_eq!(
+        crate::agents::lifecycle::LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        }
+        .terminal_disposition(),
+        None
+    );
+}
+
+#[test]
 fn settle_marker_tied_with_last_activity_admits_no_outcome() {
     for outcome in [
         TurnSettleOutcome::Complete,
@@ -2887,6 +2951,69 @@ fn a_provider_rest_interrupts_only_a_turn_the_hooks_hold_open() {
             ("idle", false),
             ("success", false),
             ("failed", false),
+        ]
+    );
+}
+
+#[test]
+fn a_provider_rest_clears_background_shells_only_when_newer_and_non_empty() {
+    let reported_at = Timestamp::from_second(1_050).unwrap();
+    let with_shell = |mut row: AgentState| {
+        row.background_shells.push(BackgroundShell {
+            id: "task-1".into(),
+            command: Some("sleep 60".into()),
+            description: None,
+            started_at: Timestamp::from_second(990).unwrap(),
+        });
+        row
+    };
+    let mut parked_with_shell = with_shell(test_agent(AgentStatus::Running, 1_000));
+    parked_with_shell.phase = TurnPhase::Parked;
+    let mut parked_empty = test_agent(AgentStatus::Running, 1_000);
+    parked_empty.phase = TurnPhase::Parked;
+    let mut parked_equal = with_shell(test_agent(AgentStatus::Running, 1_050));
+    parked_equal.phase = TurnPhase::Parked;
+    let mut parked_newer = with_shell(test_agent(AgentStatus::Running, 1_060));
+    parked_newer.phase = TurnPhase::Parked;
+    let cases = [
+        ("parked with shell", parked_with_shell),
+        (
+            "running with shell",
+            with_shell(test_agent(AgentStatus::Running, 1_000)),
+        ),
+        (
+            "waiting with shell",
+            with_shell(test_agent(AgentStatus::Waiting, 1_000)),
+        ),
+        (
+            "failed with shell",
+            with_shell(test_agent(AgentStatus::Failed, 1_000)),
+        ),
+        (
+            "success with shell",
+            with_shell(test_agent(AgentStatus::Success, 1_000)),
+        ),
+        (
+            "idle with shell",
+            with_shell(test_agent(AgentStatus::Idle, 1_000)),
+        ),
+        ("parked without shells", parked_empty),
+        ("activity equal to rest", parked_equal),
+        ("activity newer than rest", parked_newer),
+    ];
+    let clears = cases.map(|(label, row)| (label, row.rest_clears_background_shells(reported_at)));
+    assert_eq!(
+        clears,
+        [
+            ("parked with shell", true),
+            ("running with shell", true),
+            ("waiting with shell", true),
+            ("failed with shell", true),
+            ("success with shell", true),
+            ("idle with shell", true),
+            ("parked without shells", false),
+            ("activity equal to rest", false),
+            ("activity newer than rest", false),
         ]
     );
 }

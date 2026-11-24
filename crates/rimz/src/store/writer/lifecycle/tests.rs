@@ -473,6 +473,99 @@ fn pre_tool_use_with_a_script_report_reaches_the_fold_and_a_plain_one_stays_drop
 }
 
 #[test]
+fn observed_tool_with_a_shell_report_reaches_the_fold() {
+    let (_dir, store) = test_store();
+    let append = |kind: &str, observation: &AgentLifecycleObservation, event_name: &str| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked(kind),
+                event_name,
+                observation,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle event")
+    };
+    let at = jiff::Timestamp::from_second(1_000).unwrap();
+    append(
+        "antigravity",
+        &observation(LifecycleSignal::TurnStarted { turn_id: None }),
+        "PreInvocation",
+    );
+    let mut parked = observation(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: true,
+        turn_id: None,
+    });
+    parked.background_shells = Some(crate::agents::BackgroundShellReport::Snapshot {
+        shells: vec![
+            crate::agents::BackgroundShell {
+                id: "sess-1/task-2".to_owned(),
+                command: Some("sleep 240".to_owned()),
+                description: None,
+                started_at: at,
+            },
+            crate::agents::BackgroundShell {
+                id: "sess-1/task-4".to_owned(),
+                command: Some("sleep 900".to_owned()),
+                description: None,
+                started_at: at,
+            },
+        ],
+    });
+    assert!(
+        append("antigravity", &parked, "Stop")
+            .primary_event_id
+            .is_some()
+    );
+
+    // Unnamed observed ToolUsed carrying a shell report must not be dropped before the fold.
+    let mut unnamed_finish = observation(LifecycleSignal::ToolUsed {
+        effect: ToolEffect::Observed,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    });
+    unnamed_finish.background_shells = Some(crate::agents::BackgroundShellReport::Finished {
+        ids: vec!["sess-1/task-2".to_owned()],
+    });
+    assert!(
+        append("antigravity", &unnamed_finish, "PostToolUse:observed")
+            .primary_event_id
+            .is_some(),
+        "unnamed observed tool with a background_shells report must append"
+    );
+
+    // Named manage_task PostToolUse:observed carrying a kill report reaches the fold too.
+    let mut kill = observation(LifecycleSignal::ToolUsed {
+        effect: ToolEffect::Observed,
+        name: Some("manage_task".to_owned()),
+        native_key: None,
+        turn_id: None,
+    });
+    kill.background_shells = Some(crate::agents::BackgroundShellReport::Finished {
+        ids: vec!["sess-1/task-4".to_owned()],
+    });
+    assert!(
+        append("antigravity", &kill, "PostToolUse:observed")
+            .primary_event_id
+            .is_some()
+    );
+
+    let agents = snapshot::catch_up_rollup(store.paths())
+        .expect("rollup")
+        .1
+        .to_vec();
+    let agent =
+        find_agent(&agents, "antigravity", &AgentSessionId::from("sess-1")).expect("folded agent");
+    assert!(
+        agent.background_shells.is_empty(),
+        "both shell Finished reports must fold into the agent row: {:?}",
+        agent.background_shells
+    );
+}
+
+#[test]
 fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
     let (_dir, store) = test_store();
     let started = observation(LifecycleSignal::TurnStarted { turn_id: None });

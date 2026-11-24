@@ -104,6 +104,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 - Tool activity comes from the `PostToolUse` hook on file-edit tools only.
 - A bare `/compact` compacts and is confirmed by its own hooks. It takes no instruction, and `rimz agents history` leaves the command out.
 - Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
+- Background commands appear in `background_shells` and the card's waits list from the first `Stop` after Antigravity backgrounds them until they finish or are killed.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
 - Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review, and RimZ does not change it.
 
@@ -486,7 +487,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ |
 | Pi | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✓ | ◐ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ◐ | ◐ | ✗ |
+| Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ◐ | ◐ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
