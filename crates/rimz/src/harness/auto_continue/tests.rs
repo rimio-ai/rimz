@@ -3239,7 +3239,7 @@ mod refusal_fold {
         let now = marker_at + second;
         fold.pass(now);
         assert_eq!(
-            fold.record("fable 5.2"),
+            fold.record("claude 5.2 fable"),
             None,
             "a read older than the marker"
         );
@@ -3272,7 +3272,7 @@ mod refusal_fold {
         // The pass records the refusal.
         fold.pass(now);
         let refusal = fold
-            .record("fable 5.2")
+            .record("claude 5.2 fable")
             .expect("the confirmed refusal is recorded");
         assert_eq!(refusal.label.as_deref(), Some(SENTENCE));
         let (status, hold) = fold.card("sess", now);
@@ -3288,7 +3288,7 @@ mod refusal_fold {
         let now = Timestamp::now() + 4 * second;
         fold.pass(now);
         assert!(
-            !fold.record("fable 5.2").unwrap().stands(),
+            !fold.record("claude 5.2 fable").unwrap().stands(),
             "the sibling's success clears it"
         );
         let (status, hold) = fold.card("sess", now);
@@ -3361,7 +3361,7 @@ mod refusal_fold {
             read_windows(&fold.runtime, marker_at + second);
             fold.pass(marker_at + 2 * second);
             assert!(
-                fold.record("fable 5.2")
+                fold.record("claude 5.2 fable")
                     .is_some_and(|refusal| refusal.stands())
             );
         };
@@ -3378,7 +3378,7 @@ mod refusal_fold {
         fold.append("sibling", parked, None, model);
         fold.pass(Timestamp::now() + 3 * second);
         assert!(
-            !fold.record("fable 5.2").unwrap().stands(),
+            !fold.record("claude 5.2 fable").unwrap().stands(),
             "a clean Stop parked on background work clears it"
         );
 
@@ -3398,13 +3398,13 @@ mod refusal_fold {
         fold.append("sibling", started("s2"), Some("do Y"), model);
         fold.pass(Timestamp::now() + 3 * second);
         assert!(
-            fold.record("fable 5.2").unwrap().stands(),
+            fold.record("claude 5.2 fable").unwrap().stands(),
             "a prompt into the parked row is no success"
         );
         fold.append("sibling", parked("s2"), None, model);
         fold.pass(Timestamp::now() + 4 * second);
         assert!(
-            !fold.record("fable 5.2").unwrap().stands(),
+            !fold.record("claude 5.2 fable").unwrap().stands(),
             "the prompt's clean Stop clears it"
         );
 
@@ -3420,7 +3420,7 @@ mod refusal_fold {
         fold.append("sibling", closed, None, model);
         fold.pass(Timestamp::now() + 3 * second);
         assert!(
-            fold.record("fable 5.2").unwrap().stands(),
+            fold.record("claude 5.2 fable").unwrap().stands(),
             "a compaction at rest is no success"
         );
     }

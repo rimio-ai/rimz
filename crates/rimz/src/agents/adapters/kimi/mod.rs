@@ -121,7 +121,10 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
         picker: Some(&["kimi", "--session"]),
-        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
+        definitions: crate::agents::definition::DefinitionSpec {
+            home_series: Some("Kimi"),
+            ..crate::agents::definition::DefinitionSpec::EMPTY
+        },
         program: Some("kimi"),
         fixed_args: &[],
         prompt: super::PromptStyle::None,

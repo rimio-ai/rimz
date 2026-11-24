@@ -352,6 +352,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         variants: &[],
         runs_other_providers_models: true,
+        home_series: None,
         effort: Some("xhigh"),
         models: &[],
         prefixes: &[],
