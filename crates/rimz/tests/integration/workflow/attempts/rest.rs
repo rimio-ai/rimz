@@ -464,21 +464,24 @@ fn restart_abandons_an_inflight_rest_check_answer_before_relaunching() {
     // The trace shim closes the pane but cannot terminate its owner.
     owner.kill().unwrap();
     owner.wait().unwrap();
-    let restart = room
-        .command(&["workflow", "restart", &id])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let restart = std::cell::RefCell::new(
+        room.command(&["workflow", "restart", &id])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     // Release once restart has committed the abandonment, not once it exits: its pane close
     // can outlast the hold under load, and the released answer still reloads after the commit.
+    // A restart that exits first ends the wait, so `success` prints its error.
     until(&room.env, &id, |value| {
-        events(value, "turn_end")
-            .iter()
-            .any(|event| event["action"] == "interrupted")
+        restart.borrow_mut().try_wait().unwrap().is_some()
+            || events(value, "turn_end")
+                .iter()
+                .any(|event| event["action"] == "interrupted")
     });
     waiting.write_all(&[1]).unwrap();
-    let receipt = success(restart.wait_with_output().unwrap());
+    let receipt = success(restart.into_inner().wait_with_output().unwrap());
     assert!(receipt.contains("visits restarted at 1"), "{receipt}");
     #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
