@@ -72,7 +72,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/local_session_cache` | holds; landed pass-24b; pass-33h | `62bcf1c8c` | 30 | `IncrementalCatalog::refresh` answers whether it enumerated; `ValueRefresh` floored at `pub(super)` (caveat 13). |
 | `agents/jsonc` | holds; landed pass-24b | `6f49ccef0` | 30 | the only JSONC entry point. |
 | `agents/version` | holds; landed pass-24b | `6f49ccef0` | 30 | escapes nothing. |
-| `agents/model_display` | holds; landed pass-24b | `6f49ccef0` | 30 | one crate-reach selector. |
+| `agents/model_display` | holds; landed pass-24b | `6f49ccef0` | 30 | `ParsedModel`, `RenderedModel`, `home_series`, `home_series_owner`, and `display_model_for_kind` share one model parse and series-aware render. |
 | `agents/background_shell` | holds; landed pass-24b | `6f49ccef0` | 30 | report fold at crate reach. |
 | `agents/transcript` | holds | `6f49ccef0` | 30 | root-re-exported types imported by adapters; `TranscriptPosition::new` pinned by `0022abeca`. |
 | `agents/turns` | holds | `6f49ccef0` | 30 | the binary's history command reads `TurnOutcome`. |

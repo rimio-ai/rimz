@@ -198,7 +198,7 @@ With none of these present and an OTLP-only configuration, there is no source.
 
 The OTel source supplies a model and a latest-call composition only, with no window size. Without a window size the card draws no fill gauge or window token. A composition with nonzero input or cache tokens counts as session history, and output alone does not (`AgentTokenUsage::used_tokens`). OTel carries no dollar figure: `github.copilot.cost` is a billing multiplier ([traces](../../externals/agent-adapter/copilot-reference.md#traces)).
 
-The card's model label prefers the display name only when it contains a digit, then the context model ID, then the launch model (`agents/model_display.rs::model_label_source`).
+The card's model label prefers the context or launch model ID unless it parses with no version and the display name holds an ASCII digit, falling back to the display name when no ID is present (`agents/model_display.rs::model_label_source`).
 
 ## Account and balance
 

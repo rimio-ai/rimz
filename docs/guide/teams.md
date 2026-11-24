@@ -56,9 +56,9 @@ launched forge in worktree #feat-rate-limits
   board     .rimz/team/blackboard.md
   prompt    → @planner  "add rate limiting to the ingest API"
 
-  @planner    claude  fable        <- leader
-  @coder      codex   gpt-6-astra
-  @reviewer   claude  opus
+  @planner    claude  Fable    <- leader
+  @coder      codex   Astra 6
+  @reviewer   claude  Opus
   signals   ci.failed → @coder
 ```
 

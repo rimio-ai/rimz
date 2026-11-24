@@ -143,7 +143,7 @@ The user folder is `droid_settings_path`, so `RIMZ_DROID_SETTINGS` moves it too.
 | 3 | a unique entry of that name |
 | 4 | an entry whose raw `model` equals the selector body |
 
-A resolved entry supplies the canonical model id, the display name, and a positive `maxContextLimit`. An unresolved selector still gets a display label from `model_display::display_factory_custom_selector`, but no pricing identity, capacity, or dollars.
+A resolved entry supplies the canonical model id, the display name, and a positive `maxContextLimit`. An unresolved selector still gets an unformatted slug from `model_display::strip_factory_custom_selector` for renderers to format, but no pricing identity, capacity, or dollars.
 
 ### Refresh source
 
