@@ -751,6 +751,9 @@ pub(super) struct DefinitionSpec {
     /// in `agent:`: routing by model leaves them to the kind that owns the prefix. Each carries
     /// the highest effort its models take here, where `max` launches.
     pub foreign_prefixes: &'static [(&'static str, &'static str)],
+    /// The model series this adapter's own identity implies (omitted when
+    /// rendered beside an agent of this kind).
+    pub home_series: Option<&'static str>,
     pub tools: DefinitionTools,
 }
 
@@ -762,6 +765,7 @@ impl DefinitionSpec {
         runs_other_providers_models: false,
         prefixes: &[],
         foreign_prefixes: &[],
+        home_series: None,
         tools: DefinitionTools::Unsupported,
     };
 }

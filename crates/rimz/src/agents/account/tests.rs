@@ -726,12 +726,16 @@ fn model_capacity_matches_only_the_model_family() {
         ProviderCapacity::from_windows(vec![window(now, Some(20), 3_600, Some(300)), scoped]);
     for (model, matches) in [
         (Some("claude-fable-5-1"), true),
+        (Some("claude-fable-5-1[1m]"), true),
         (Some("claude-fable-5-1-20260801"), true),
         (Some("claude-opus-4-8"), false),
         (Some("Fable 5.1@high"), true),
+        (Some("fable"), true),
+        (Some("fable[1m]"), true),
         (Some("fAbLe"), true),
         (Some("Fablework"), false),
         (Some("Opus 4.6"), false),
+        (Some("opus[1m]"), false),
         (None, false),
     ] {
         assert_eq!(
@@ -1125,4 +1129,255 @@ fn capacity_drops_windows_read_before_the_identity_floor() {
         cached_usage_read_at(&runtime, &login_key("claude")),
         Some(floor + SignedDuration::from_mins(1))
     );
+}
+
+#[test]
+fn legacy_series_prefixed_refusal_record_still_vetoes_new_key() {
+    let (_dir, runtime) = runtime();
+    let codex = login_key("codex");
+    std::fs::write(
+        runtime.shared_model_refusals_path(),
+        r#"{"logins":{"codex@default":{"gpt 6.2 sol":{"refused_at":"2033-05-18T03:00:00Z","label":"Sol 6.2 unavailable"}}}}"#,
+    )
+    .unwrap();
+    let capacity = ProviderCapacity::read(&runtime, &codex).expect("legacy refusal reads");
+    assert_eq!(
+        crate::agents::model_refusal::model_key("gpt-6.2-sol"),
+        "gpt 6.2 sol"
+    );
+    assert!(
+        capacity.model_refused(Some("gpt-6.2-sol")),
+        "legacy `gpt 6.2 sol` record must veto `gpt-6.2-sol`"
+    );
+    assert!(
+        capacity.model_refused(Some("sol 6.2")),
+        "legacy `gpt 6.2 sol` record must veto `sol 6.2`"
+    );
+    assert!(
+        !capacity.model_refused(Some("gpt-6.3-sol")),
+        "sibling version must not be vetoed by legacy `gpt 6.2 sol`"
+    );
+
+    let mut refusals =
+        crate::agents::model_refusal::ModelRefusals::read(&runtime.shared_model_refusals_path());
+    let cleared = refusals.raise_succeeded(
+        &codex,
+        &crate::agents::model_refusal::model_key("gpt-6.2-sol"),
+        Timestamp::from_second(2_000_000_000).unwrap(),
+    );
+    assert!(
+        cleared,
+        "clean turn on `sol 6.2` clears legacy `gpt 6.2 sol`"
+    );
+    assert!(
+        !refusals.logins[&codex]["gpt 6.2 sol"].stands(),
+        "legacy record no longer stands after clean turn"
+    );
+}
+
+#[test]
+fn refusal_records_round_trip_veto_stand_and_clear_across_model_shapes() {
+    use crate::agents::model_refusal::{ModelRefusals, model_key};
+    use crate::agents::{AgentContext, AgentState, AgentStatus, AgentTurnError, TurnErrorClass};
+
+    let t1 = Timestamp::from_second(2_000_000_100).unwrap();
+    let t2 = Timestamp::from_second(2_000_000_200).unwrap();
+    let t3 = Timestamp::from_second(2_000_000_300).unwrap();
+    let now = Timestamp::from_second(2_000_000_350).unwrap();
+    let login = login_key("claude");
+
+    let limit_agent = |model: &str, at: Timestamp| {
+        let mut agent = AgentState::seed(
+            AgentKind::new_unchecked("claude"),
+            "root".into(),
+            AgentStatus::Success,
+            at - SignedDuration::from_secs(50),
+        );
+        agent.model = Some(model.to_owned());
+        agent.ping_opened_at = Some(at - SignedDuration::from_secs(10));
+        agent.context = Some(AgentContext {
+            model_id: Some(model.to_owned()),
+            turn_error: Some(AgentTurnError {
+                model: Some(model.to_owned()),
+                ended_turn: false,
+                class: TurnErrorClass::PausedRateLimit,
+                at,
+                label: Some("model refused".to_owned()),
+            }),
+            ..AgentContext::new("claude", at)
+        });
+        agent
+    };
+
+    let clean_agent = |model: &str, started: Timestamp| {
+        let mut agent = AgentState::seed(
+            AgentKind::new_unchecked("claude"),
+            "clean".into(),
+            AgentStatus::Success,
+            started + SignedDuration::from_secs(10),
+        );
+        agent.model = Some(model.to_owned());
+        agent.turn_started_at = Some(started);
+        agent.turn_ended_at = Some(started + SignedDuration::from_secs(10));
+        agent
+    };
+
+    let ids = [
+        "gpt-5.1-codex-max",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-preview",
+        "Gemini 3.8 Flash Lite",
+        "grok-4.5-build-free",
+        "gpt-oss-120b",
+        "kimi-for-coding",
+        "gemini-pro-orchestrator-neon",
+        "claude-opus-4-8",
+        "gpt-6.2-sol",
+        "gpt-5.5",
+        "grok-4.5",
+        "deepseek-v4-pro",
+        "kimi-k2.5",
+        "MiniMax-M3.1-Flash-Preview",
+        "o4-mini",
+        "claude-3-5-haiku-20241022",
+        "Orchestrator (Neon)",
+        "Fable 5.2",
+        "fable",
+        "gemini-2.0-flash-001",
+        "gemini-2.5-pro-preview-05-06",
+        "claude-3-5-sonnet-v2",
+    ];
+    for id in ids {
+        let mut refusals = ModelRefusals::default();
+        assert!(
+            refusals.raise_refused(&login, &model_key(id), t1, Some("refused")),
+            "{id}: initial refusal raises"
+        );
+        let capacity = ProviderCapacity {
+            refusals: refusals.login(&login),
+            ..Default::default()
+        };
+        assert!(
+            capacity.refusal(Some(id)).is_some_and(|r| r.stands()),
+            "{id}: recorded key must veto its own model"
+        );
+
+        // Second marker with no usage windows confirms only if `observe` sees `stands`.
+        assert!(
+            refusals.observe(&[limit_agent(id, t2)], &BTreeMap::new(), now),
+            "{id}: standing record must raise on a newer marker without fresh capacity"
+        );
+        assert_eq!(
+            refusals.login(&login).len(),
+            1,
+            "{id}: raising keeps one record"
+        );
+        let raised = ProviderCapacity {
+            refusals: refusals.login(&login),
+            ..Default::default()
+        };
+        assert_eq!(
+            raised.refusal(Some(id)).map(|r| r.refused_at),
+            Some(t2),
+            "{id}: refusal stamp rose"
+        );
+
+        // Clean turn after t2 clears the record.
+        assert!(
+            refusals.observe(&[clean_agent(id, t3)], &BTreeMap::new(), now),
+            "{id}: clean turn clears standing record"
+        );
+        let cleared = ProviderCapacity {
+            refusals: refusals.login(&login),
+            ..Default::default()
+        };
+        assert!(
+            !cleared.model_refused(Some(id)),
+            "{id}: record no longer stands after clean turn"
+        );
+    }
+
+    // Legacy `gpt 5.1 codex max` is vetoed, stands, and clears on `gpt-5.1-codex-max`.
+    let mut legacy = ModelRefusals::default();
+    legacy.raise_refused(&login, "gpt 5.1 codex max", t1, Some("legacy"));
+    let cap = ProviderCapacity {
+        refusals: legacy.login(&login),
+        ..Default::default()
+    };
+    assert!(cap.model_refused(Some("gpt-5.1-codex-max")));
+    assert!(legacy.observe(
+        &[limit_agent("gpt-5.1-codex-max", t2)],
+        &BTreeMap::new(),
+        now
+    ));
+    assert_eq!(legacy.login(&login).len(), 1);
+    assert!(legacy.observe(
+        &[clean_agent("gpt-5.1-codex-max", t3)],
+        &BTreeMap::new(),
+        now
+    ));
+    assert!(
+        !legacy
+            .login(&login)
+            .values()
+            .any(crate::agents::ModelRefusal::stands)
+    );
+
+    // A clean turn on `gemini-3-flash-preview` must leave `gemini-3-pro-preview` standing.
+    let mut sibling = ModelRefusals::default();
+    sibling.raise_refused(
+        &login,
+        &model_key("gemini-3-pro-preview"),
+        t1,
+        Some("pro refused"),
+    );
+    assert!(
+        !sibling.observe(
+            &[clean_agent("gemini-3-flash-preview", t3)],
+            &BTreeMap::new(),
+            now
+        ),
+        "flash preview clean turn must not clear pro preview refusal"
+    );
+    let cap = ProviderCapacity {
+        refusals: sibling.login(&login),
+        ..Default::default()
+    };
+    assert!(cap.model_refused(Some("gemini-3-pro-preview")));
+    assert!(!cap.model_refused(Some("gemini-3-flash-preview")));
+
+    // Version-less `kimi-for-coding` beside legacy `kimi for coding`, and legacy `gemini flash 3`.
+    for (legacy_key, model_id) in [
+        ("kimi for coding", "kimi-for-coding"),
+        ("gemini flash 3", "gemini-3-flash"),
+    ] {
+        let mut r = ModelRefusals::default();
+        r.raise_refused(&login, legacy_key, t1, Some("legacy"));
+        let cap = ProviderCapacity {
+            refusals: r.login(&login),
+            ..Default::default()
+        };
+        assert!(
+            cap.model_refused(Some(model_id)),
+            "{legacy_key} vetoes {model_id}"
+        );
+        assert!(r.observe(&[clean_agent(model_id, t3)], &BTreeMap::new(), now));
+        assert!(
+            !r.login(&login)
+                .values()
+                .any(crate::agents::ModelRefusal::stands),
+            "{model_id} clears {legacy_key}"
+        );
+    }
+
+    // Two spellings of one match key (`claude opus 4.8` and `opus 4.8`) stay one record.
+    let mut dedup = ModelRefusals::default();
+    assert!(dedup.raise_refused(&login, "opus 4.8", t1, Some("first")));
+    assert!(dedup.raise_refused(&login, "claude opus 4.8", t2, Some("second")));
+    assert_eq!(
+        dedup.login(&login).len(),
+        1,
+        "two spellings of one match key must update one record, never create two"
+    );
+    assert_eq!(dedup.login(&login).values().next().unwrap().refused_at, t2);
 }

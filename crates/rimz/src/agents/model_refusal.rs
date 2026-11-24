@@ -86,12 +86,18 @@ impl ModelRefusals {
                 continue;
             };
             let login = agent.login_key();
+            let parsed_key = parsed_model_key(model);
             let key = model_key(model);
-            let stands = self
-                .logins
-                .get(&login)
-                .and_then(|models| models.get(&key))
-                .is_some_and(ModelRefusal::stands);
+            let stands = self.logins.get(&login).is_some_and(|models| {
+                models.iter().any(|(recorded, refusal)| {
+                    refusal.stands()
+                        && parsed_key.as_ref().is_some_and(|key| {
+                            super::model_display::ParsedModel::parse(recorded)
+                                .match_key()
+                                .is_some_and(|recorded| recorded == *key)
+                        })
+                })
+            });
             let confirmed = stands
                 || capacities
                     .get(&login)
@@ -113,7 +119,9 @@ impl ModelRefusals {
 
     /// Raise `login`'s refusal of `model_key` to `at` with the provider's
     /// `label`. Returns whether anything changed: an `at` no later than the
-    /// stored one writes nothing.
+    /// stored one writes nothing. Matches an existing record sharing the same
+    /// parsed matching key so two spellings (`claude 4.8 opus`, `opus 4.8`)
+    /// stay one record.
     pub(crate) fn raise_refused(
         &mut self,
         login: &LoginKey,
@@ -122,7 +130,22 @@ impl ModelRefusals {
         label: Option<&str>,
     ) -> bool {
         let models = self.logins.entry(login.clone()).or_default();
-        if let Some(refusal) = models.get_mut(model_key) {
+        let parsed = parsed_model_key(model_key);
+        let existing_key = if models.contains_key(model_key) {
+            Some(model_key.to_owned())
+        } else {
+            parsed.as_ref().and_then(|key| {
+                models.keys().find_map(|recorded| {
+                    super::model_display::ParsedModel::parse(recorded)
+                        .match_key()
+                        .filter(|recorded_key| recorded_key == key)
+                        .map(|_| recorded.clone())
+                })
+            })
+        };
+        if let Some(existing_key) = existing_key
+            && let Some(refusal) = models.get_mut(&existing_key)
+        {
             if refusal.refused_at >= at {
                 return false;
             }
@@ -154,11 +177,16 @@ impl ModelRefusals {
         let Some(models) = self.logins.get_mut(login) else {
             return false;
         };
+        let parsed = parsed_model_key(model_key);
         let mut raised = false;
-        for (_, refusal) in models
-            .iter_mut()
-            .filter(|(recorded, _)| *recorded == model_key || is_version_of(model_key, recorded))
-        {
+        for (_, refusal) in models.iter_mut().filter(|(recorded, _)| {
+            *recorded == model_key
+                || parsed.as_ref().is_some_and(|key| {
+                    super::model_display::ParsedModel::parse(recorded)
+                        .match_key()
+                        .is_some_and(|recorded| key.clears_refusal(&recorded))
+                })
+        }) {
             if started <= refusal.refused_at || refusal.succeeded_at.is_some_and(|at| at >= started)
             {
                 continue;
@@ -186,21 +214,19 @@ fn clean_request_opened_at(agent: &AgentState) -> Option<Timestamp> {
     (clean && agent.turn_ended_at? >= opened).then_some(opened)
 }
 
-/// Whether `key` names a version of `family`, a version-less key such as `fable`: the
-/// family's name, a space, then a version number (`fable 5.2`).
-pub(crate) fn is_version_of(key: &str, family: &str) -> bool {
-    key.strip_prefix(family)
-        .and_then(|rest| rest.strip_prefix(' '))
-        .is_some_and(|version| version.starts_with(|c: char| c.is_ascii_digit()))
+/// The parsed `(name, version)` matching key for a model or launch alias.
+pub(super) fn parsed_model_key(model: &str) -> Option<super::model_display::ModelMatchKey> {
+    super::model_display::ParsedModel::parse(super::account::launch_model_id(model.trim()))
+        .match_key()
 }
 
 /// The key a refusal is recorded under: a launch alias resolved to its model
-/// id, then the model's display name, lowercased. A slug, a display name and
-/// a name with a context-window suffix share one key; sibling versions do not.
+/// id, then the lowercased `series version family` (or family/verbatim name
+/// when unseriesed) from [`super::model_display::ParsedModel::refusal_key`],
+/// which re-parses to the same matching key.
 pub fn model_key(model: &str) -> String {
-    super::model_display::model_label_parts(super::account::launch_model_id(model.trim()))
-        .0
-        .to_lowercase()
+    super::model_display::ParsedModel::parse(super::account::launch_model_id(model.trim()))
+        .refusal_key()
 }
 
 impl AgentState {

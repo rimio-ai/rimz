@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
-use super::model_refusal::{CONFIRM_WINDOW, model_key};
+use super::model_refusal::{CONFIRM_WINDOW, parsed_model_key};
 use super::{AgentState, AgentStatus, AgentTurnError, ProviderCapacity, TurnErrorClass};
 use crate::ids::{AgentKind, AgentSessionId, LoginKey};
 
@@ -174,10 +174,10 @@ impl ParkDemotion {
     ) -> Option<ModelHold> {
         if let Some(label) = self.refused(agent, status, now) {
             let current = agent.current_model()?;
-            let model = super::model_display::model_label_parts(super::account::launch_model_id(
-                current.trim(),
-            ))
-            .0;
+            let model = super::model_display::display_model_for_kind(
+                super::account::launch_model_id(current.trim()),
+                Some(agent.kind.as_str()),
+            );
             let login = agent.login_key();
             let label = label.map(str::to_owned);
             let stands = self
@@ -244,7 +244,7 @@ fn marker_on(marker: &AgentTurnError, model: &str) -> bool {
     marker
         .model
         .as_deref()
-        .is_none_or(|stamp| model_key(stamp) == model_key(model))
+        .is_none_or(|stamp| parsed_model_key(stamp) == parsed_model_key(model))
 }
 
 #[derive(Default)]

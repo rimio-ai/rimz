@@ -107,7 +107,10 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         picker: Some(&["qwen", "--resume"]),
-        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
+        definitions: crate::agents::definition::DefinitionSpec {
+            home_series: Some("Qwen"),
+            ..crate::agents::definition::DefinitionSpec::EMPTY
+        },
         program: Some("qwen"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("-i"),

@@ -485,7 +485,9 @@ upward-dependencies = [
 # skills::available_skills exposes full on-disk skill names so `agents validate` checks `skill(x)` (+1).
 # skills::{SkillMarkerErr, is_user_only, is_model_callable_on_disk} share the one user-only marker read
 # and launch-time optional-skill check across definition loading and launch settlement (+3).
-surface-budget = 1354
+# ParsedModel, RenderedModel, home_series, home_series_owner, and display_model_for_kind share one
+# model parse and series-aware render across agents, sidebar, and CLI (+9 net).
+surface-budget = 1363
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

@@ -205,6 +205,10 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
             ..PresetMatchers::EMPTY
         },
         message_keys: crate::agents::MessageKeys::NOT_YET_IMPLEMENTED,
+        definitions: DefinitionSpec {
+            home_series: Some("MiniMax"),
+            ..DefinitionSpec::EMPTY
+        },
         ..LaunchSpec::EMPTY
     },
 };

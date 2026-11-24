@@ -821,15 +821,13 @@ impl ProviderCapacity {
     /// versioned name its own entry and its family's version-less one. Among those the standing
     /// record wins, then the newest refusal; the exact entry gets no precedence.
     pub(crate) fn refusal(&self, model: Option<&str>) -> Option<&ModelRefusal> {
-        use super::model_refusal::is_version_of;
-        let key = super::model_refusal::model_key(model?);
-        let versionless = |name: &str| !name.bytes().any(|byte| byte.is_ascii_digit());
+        let key = super::model_refusal::parsed_model_key(model?)?;
         self.refusals
             .iter()
             .filter(|(recorded, _)| {
-                **recorded == key
-                    || (versionless(&key) && is_version_of(recorded, &key))
-                    || (versionless(recorded) && is_version_of(&key, recorded))
+                super::model_display::ParsedModel::parse(recorded)
+                    .match_key()
+                    .is_some_and(|recorded| recorded.covers(&key))
             })
             .map(|(_, refusal)| refusal)
             .max_by_key(|refusal| (refusal.stands(), refusal.refused_at))
@@ -1033,23 +1031,24 @@ impl ProviderCapacity {
     }
 
     fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
-        let model = model.map(|model| {
-            crate::agents::model_display::display_model(launch_model_id(model)).to_ascii_lowercase()
+        let model = model.and_then(|model| {
+            crate::agents::model_display::ParsedModel::parse(launch_model_id(model)).match_key()
         });
         self.windows.iter().filter(move |window| {
-            let Some(family) = window
+            let Some(scope) = window
                 .scope
                 .as_ref()
                 .and_then(|scope| scope.id.strip_prefix("model:"))
+                .and_then(|scope| {
+                    crate::agents::model_display::ParsedModel::parse(scope).match_key()
+                })
             else {
                 return false;
             };
-            !family.is_empty()
-                && window.duration_mins.is_some_and(|mins| mins > 0)
+            window.duration_mins.is_some_and(|mins| mins > 0)
                 && model
-                    .as_deref()
-                    .and_then(|model| model.strip_prefix(family))
-                    .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with([' ', '-', '@']))
+                    .as_ref()
+                    .is_some_and(|model| model.matches_scope(&scope))
         })
     }
 

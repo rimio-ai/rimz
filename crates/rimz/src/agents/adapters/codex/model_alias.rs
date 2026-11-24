@@ -71,13 +71,29 @@ impl ModelCatalogSource for AppServerSource {
     }
 }
 
-fn family(id: &str) -> Option<(Vec<&str>, &str)> {
-    let (version, family) = id.strip_prefix("gpt-")?.split_once('-')?;
-    let components: Vec<_> = version.split('.').collect();
-    components
+fn family(id: &str) -> Option<(Vec<String>, String)> {
+    if id.contains("--") {
+        return None;
+    }
+    let parsed = crate::agents::model_display::ParsedModel::parse(id);
+    if parsed.has_date_suffix() || parsed.series() != Some("GPT") || parsed.family().is_empty() {
+        return None;
+    }
+    let version = parsed.version()?;
+    let components: Vec<String> = version.split('.').map(str::to_owned).collect();
+    if !components
         .iter()
         .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))
-        .then_some((components, family))
+    {
+        return None;
+    }
+    let family = parsed
+        .family()
+        .iter()
+        .map(|word| word.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-");
+    Some((components, family))
 }
 
 fn upgrade_end<'a>(

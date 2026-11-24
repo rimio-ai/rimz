@@ -92,7 +92,7 @@ fn pass(runtime: &RuntimePaths, agents: &[AgentState], now: i64) {
 fn record(runtime: &RuntimePaths) -> Option<ModelRefusal> {
     ModelRefusals::read(&runtime.shared_model_refusals_path())
         .login(&login())
-        .get("fable 5.2")
+        .get("claude 5.2 fable")
         .cloned()
 }
 
