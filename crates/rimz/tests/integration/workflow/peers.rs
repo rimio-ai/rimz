@@ -677,11 +677,14 @@ fn a_lost_collection_reports_on_the_next_pass_once() {
     env.record(&env.project_root);
     seed_agent(&env, "planner");
     let marker = deploy(&env, "owed");
-    let (owed, _) = pending(&env, "owed", &AGENT);
+    // Start with a no-op detached advance so only this test's own advances can collect `owed`.
+    let owed = started(run(
+        &env,
+        "owed",
+        &[],
+        &[AGENT[0], AGENT[1], ("RIMZ_BIN", "/bin/true")],
+    ));
     fs::write(&marker, "").unwrap();
-    rewrite(&env, &owed, |record| {
-        record["recheck_at"] = json!("2000-01-01T00:00:00Z");
-    });
     let socket = env.runtime_root.join("report.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -999,6 +1002,7 @@ fn a_runs_step_fails_naming_a_canceled_child_only_once_every_child_ended() {
         "canceled"
     );
 
+    until(&env, &ids[1], |value| value["record"]["wait"].is_object());
     fs::write(&child_marker, "").unwrap();
     rewrite(&env, &ids[1], |record| {
         record["recheck_at"] = json!("2000-01-01T00:00:00Z");
@@ -1071,6 +1075,7 @@ fn a_runs_step_cancel_leaves_a_started_run_whose_record_cannot_be_read_out_of_it
     let parent = started(run(&env, "fan", &[], &[]));
     until(&env, &parent, |value| value["record"]["wait"].is_object());
     let ids = children(&open_gate(&env, &parent, &gate));
+    until(&env, &ids[0], |value| value["record"]["wait"].is_object());
     // A directory at the record's path fails its read for every uid, root included.
     let record = run_home(&env, &ids[0]).record;
     fs::remove_file(&record).unwrap();
@@ -1222,6 +1227,8 @@ fn a_runs_step_refuses_before_any_child_on_a_dirty_checkout_depth_and_unstartabl
 
 /// Opens the fan's gate and spawns the advance into its 'spread' step, which holds at
 /// `socket` once each child's worktree exists, before the child's run is published.
+/// Sets `RIMZ_BIN=/bin/true` so each published child's detached advance is a no-op: no
+/// background child advance can collect a canceled child or spawn a stray parent advance.
 fn advance_held(env: &Env, id: &str, marker: &Path, socket: &Path) -> Child {
     fs::write(marker, "").unwrap();
     rewrite(env, id, |record| {
@@ -1230,6 +1237,7 @@ fn advance_held(env: &Env, id: &str, marker: &Path, socket: &Path) -> Child {
     env.rimz()
         .args(["workflow", "advance", id])
         .env("RIMZ_TEST_WORKFLOW_RUNS_GATE", socket)
+        .env("RIMZ_BIN", "/bin/true")
         .spawn()
         .unwrap()
 }
@@ -1263,8 +1271,9 @@ fn owned_worktrees(env: &Env) -> usize {
 }
 
 /// Starts the fan given its 'spread' step and holds its advance at the second child's
-/// worktree, the first child already started: returns the advance, the gate listener, the
-/// held connection and the reserved ids.
+/// worktree, the first child already started with a no-op detached advance (`RIMZ_BIN=/bin/true`
+/// on `advance_held`), so only the test's own commands can collect it or start a parent advance.
+/// Returns the advance, the gate listener, the held connection and the reserved ids.
 fn held_at_second_child(
     env: &Env,
     spread: &str,
