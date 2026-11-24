@@ -110,6 +110,25 @@ fn limit_refusal(
     ))
 }
 
+fn child_posture(
+    child: &AgentState,
+    launch: &crate::config::effective::LaunchAgents,
+) -> crate::harness::resume::ResumePosture {
+    let scope = ProfileScope::for_launch(child.profile_scope, child.is_launched_child());
+    let fallback = (scope == ProfileScope::Subagents).then_some(&launch.profiles);
+    crate::harness::resume::resolve_posture(
+        PostureRequest {
+            record: child.record.as_deref(),
+            profile: child.profile.as_deref(),
+            kind: &child.kind,
+            stamped_mode: child.mode,
+            stamped_tier: child.tier.as_deref(),
+        },
+        launch.profiles_for_launch(scope, child.profile.as_deref()),
+        fallback,
+    )
+}
+
 fn resume_resolved(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -131,19 +150,7 @@ fn resume_resolved(
     let machine = crate::config::MachineConfig::load_lenient();
     let launch = crate::config::effective::load(&machine, &workspace.project_root)?;
     launch.block_set_failure()?;
-    let posture = crate::harness::resume::resolve_posture(
-        PostureRequest {
-            record: child.record.as_deref(),
-            profile: child.profile.as_deref(),
-            kind: &child.kind,
-            stamped_mode: child.mode,
-            stamped_tier: child.tier.as_deref(),
-        },
-        launch.profiles_for_launch(
-            ProfileScope::for_launch(child.profile_scope, child.is_launched_child()),
-            child.profile.as_deref(),
-        ),
-    );
+    let posture = child_posture(child, &launch);
     if let Some(reason) = &posture.degraded {
         bail!("{reason}");
     }

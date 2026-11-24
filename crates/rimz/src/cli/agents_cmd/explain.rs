@@ -86,7 +86,9 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
         let profiles = effective.profiles_for_launch(scope, agent.profile.as_deref());
-        let posture = rimz::launcher::swap::member_posture(&agent, profiles, &effective.teams);
+        let fallback = (scope == ProfileScope::Subagents).then_some(&effective.profiles);
+        let posture =
+            rimz::launcher::swap::member_posture(&agent, profiles, fallback, &effective.teams);
         if let Some(reason) = &posture.degraded {
             warnings.push(format!("{reason}; showing bare {} posture", agent.kind));
         }

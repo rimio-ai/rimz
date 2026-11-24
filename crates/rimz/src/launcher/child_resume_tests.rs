@@ -50,6 +50,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
             stamped_tier: None,
         },
         &Default::default(),
+        None,
     );
     posture.launch.args = vec!["--model".to_owned(), "opus".to_owned()];
     posture.launch.system_prompt_file = Some("/prompts/coder.md".into());
@@ -138,4 +139,74 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
             }
         );
     }
+}
+
+#[test]
+fn child_resume_resolves_recorded_agent_override_from_agents_table() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house prompt.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house prompt.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/advisor.md"),
+        "---\ndescription: Advisor\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]\n---\nAdvise carefully.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let mut child = AgentState::stub("codex", "child", crate::agents::AgentStatus::Success);
+    child.profile = Some("advisor".into());
+    child.parent_agent_id = Some("parent".into());
+    child.parent_agent_kind = Some(crate::ids::AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+    child.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: Some("high".into()),
+        agent: Some("astra".into()),
+        ..Default::default()
+    }));
+
+    let posture = child_posture(&child, &launch);
+
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert_eq!(posture.launch.model.as_deref(), Some("astra"));
+    assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+    let prompt_files: Vec<String> = posture
+        .launch
+        .system_prompt_file
+        .iter()
+        .chain(&posture.launch.append_system_prompt_files)
+        .map(|src| src.origin().display().to_string())
+        .collect();
+    assert!(
+        prompt_files.iter().any(|p| p.ends_with("agents/codex.md")),
+        "{prompt_files:?}"
+    );
+    assert!(
+        prompt_files
+            .iter()
+            .any(|p| p.ends_with("subagents/advisor.md")),
+        "{prompt_files:?}"
+    );
+    assert!(
+        !prompt_files.iter().any(|p| p.ends_with("agents/claude.md")),
+        "{prompt_files:?}"
+    );
 }

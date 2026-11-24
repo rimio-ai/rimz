@@ -1152,9 +1152,10 @@ fn plan_recovery(
         {
             return true;
         }
-        let (_, profiles) =
+        let (scope, own_profiles) =
             ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child())
                 .resolve_launch(agent.profile.as_deref(), profiles, subagent_profiles);
+        let fallback = (scope == ProfileScope::Subagents).then_some(profiles);
         let posture = crate::harness::resume::resolve_posture(
             crate::harness::resume::PostureRequest {
                 record: agent.record.as_deref(),
@@ -1163,7 +1164,8 @@ fn plan_recovery(
                 stamped_mode: agent.mode,
                 stamped_tier: agent.tier.as_deref(),
             },
-            profiles,
+            own_profiles,
+            fallback,
         );
         let isolation = crate::config::Isolation::resolve(
             crate::harness::plan::effective_resume_isolation(

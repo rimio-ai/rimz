@@ -919,7 +919,7 @@ fn settle_layout(
             &args,
             &machine_config,
             &teams,
-            &effective.profiles,
+            &effective,
             layout,
             team_name,
             single_cell,
@@ -1149,7 +1149,7 @@ fn settle_layout(
                     &args,
                     &machine_config,
                     &teams,
-                    &effective.profiles,
+                    &effective,
                     layout,
                     team_name,
                     single_cell,
@@ -1682,7 +1682,7 @@ fn launch_resume_layout(
     args: &LayoutRequest,
     machine_config: &crate::config::MachineConfig,
     teams: &crate::config::TeamsConfig,
-    profiles: &crate::config::ProfilesConfig,
+    effective: &crate::config::effective::LaunchAgents,
     mut layout: LayoutSpec,
     team_name: Option<String>,
     single_cell: bool,
@@ -1785,7 +1785,8 @@ fn launch_resume_layout(
     for warning in crate::harness::resume::restore_routed_cells(
         &mut layout,
         &plan.seeds,
-        profiles,
+        &effective.profiles,
+        Some(&effective.subagent_profiles),
         &overrides,
     )? {
         if let Some(index) = reported_warnings

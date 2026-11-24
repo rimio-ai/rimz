@@ -1916,11 +1916,40 @@ fn apply_role_under(
     resolved.apply_role(&effective);
 }
 
+/// Replay constraints carried from `harness::resume` when rebuilding a recorded launch under
+/// its stored kind, model, or tier stamp.
+#[derive(Default)]
+pub(super) struct ReplayOptions<'a> {
+    pub target_kind: Option<&'a str>,
+    /// `Some(model_opt)` when replaying a `LaunchRecord` without a tier stamp: forces the
+    /// recorded model (including `None`) and prevents kind bases from filling a model.
+    pub recorded_model: Option<Option<&'a str>>,
+    pub stamped_tier: Option<&'a crate::agents::TierStamp>,
+}
+
 fn resolve_profile_with_override(
     name: &str,
     profiles: &ProfilesConfig,
     base_override: Option<&AgentOverride<'_>>,
     role: Option<&RoleBinding>,
+) -> Result<ResolvedProfile> {
+    resolve_profile_with_override_and_replay(
+        name,
+        profiles,
+        None,
+        base_override,
+        role,
+        ReplayOptions::default(),
+    )
+}
+
+fn resolve_profile_with_override_and_replay(
+    name: &str,
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+    base_override: Option<&AgentOverride<'_>>,
+    role: Option<&RoleBinding>,
+    replay: ReplayOptions<'_>,
 ) -> Result<ResolvedProfile> {
     let Some(x) = base_override else {
         let mut resolved = resolve_profile(name, profiles)?;
@@ -1932,12 +1961,22 @@ fn resolve_profile_with_override(
 
     let key = profiles.key(name);
     let root = profiles.0.get(key);
+    let bare_runtime = root
+        .is_none()
+        .then(|| crate::agents::find_runtime(key))
+        .flatten();
+    if root.is_none() && bare_runtime.is_none() {
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: name.to_owned(),
+            base: key.to_owned(),
+        });
+    }
 
     // Bare runtime or kind-base row: contributes no layer of its own.
-    if root.is_none() || root.is_some_and(|profile| profile.kind_base) {
+    if bare_runtime.is_some() || root.is_some_and(|profile| profile.kind_base) {
         let original_kind = root
             .map(|profile| profile.agent.as_str())
-            .or_else(|| crate::agents::find_runtime(key).map(crate::agents::Runtime::kind))
+            .or_else(|| bare_runtime.map(crate::agents::Runtime::kind))
             .unwrap_or(key);
         let mut resolved = if x.routed.contains(key) && profiles.0.contains_key(key) {
             let mut resolved = resolve_profile(key, profiles)?;
@@ -1965,19 +2004,35 @@ fn resolve_profile_with_override(
 
     // Markdown definition or Markdown team seat: build L under X through the loader.
     if let Some(l_def) = &l_profile.definition {
-        let already_routed = x.routed.contains(key);
+        let already_routed = x.routed.contains(key) && replay.target_kind.is_none();
         let l_natural_kind = l_def.natural_kind();
         let (built, dropped_model) = if already_routed {
             (Cow::Borrowed(l_profile), None)
         } else {
-            let built = l_profile
-                .build_under(Some(x.build_base()), None, x.toml_model_for_build())
+            let build_model = if replay.target_kind.is_some() {
+                None
+            } else {
+                x.toml_model_for_build()
+            };
+            let mut built = l_profile
+                .build_under(Some(x.build_base()), replay.target_kind, build_model)
                 .expect("Markdown definition always builds")
                 .map_err(|err| LayoutErr::InvalidProfile {
                     profile: name.to_owned(),
-                    reason: format!("cannot run on {}: {}", x.resolved.kind, err.message),
+                    reason: format!(
+                        "cannot run on {}: {}",
+                        replay.target_kind.unwrap_or(x.resolved.kind.as_str()),
+                        err.message
+                    ),
                 })?;
-            let dropped = (!x.writes_engine
+            if let Some(stamp) = replay.stamped_tier {
+                built.model = Some(stamp.model.clone());
+                built.tier_stamp = Some(Box::new(stamp.clone()));
+            } else if let Some(recorded_model) = replay.recorded_model {
+                built.model = recorded_model.map(str::to_owned);
+            }
+            let dropped = (replay.target_kind.is_none()
+                && !x.writes_engine
                 && role.is_none_or(|binding| binding.model.is_none())
                 && l_def.written_tier().is_none())
             .then(|| l_def.written_model())
@@ -2033,8 +2088,14 @@ fn resolve_profile_with_override(
         for (layer_name, _) in &x.toml_layers {
             layers.push(layer_name.clone());
         }
-        if let Some(base) = kind_base_for(&built.agent, profiles, x.table) {
-            resolved.fill_missing(base, &built.agent);
+        if let Some(base) = kind_base_for(&built.agent, profiles, fallback.or(x.table)) {
+            fill_toml_layer(
+                &mut resolved,
+                base,
+                &built.agent,
+                replay.recorded_model.is_some(),
+                false,
+            );
             layers.push(built.agent.clone());
         }
         dedup_first(&mut layers);
@@ -2131,7 +2192,8 @@ fn resolve_profile_with_override(
         });
     let mut skip_l_model = x.writes_engine;
     let mut dropped_model = None;
-    if !x.writes_engine
+    if replay.target_kind.is_none()
+        && !x.writes_engine
         && role.is_none_or(|binding| binding.model.is_none())
         && let Some(model) = l_written_model
         && !keeps_inherited_model(l_kind, final_kind, model)
@@ -2483,6 +2545,25 @@ pub(super) fn profile_cell_with_base_override(
     role: Option<&RoleBinding>,
 ) -> Result<AgentCell> {
     let resolved = resolve_profile_with_override(name, profiles, base_override, role)?;
+    cell_from_profile(name, &resolved)
+}
+
+pub(super) fn profile_cell_for_replay(
+    name: &str,
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+    base_override: Option<&AgentOverride<'_>>,
+    role: Option<&RoleBinding>,
+    replay: ReplayOptions<'_>,
+) -> Result<AgentCell> {
+    let resolved = resolve_profile_with_override_and_replay(
+        name,
+        profiles,
+        fallback,
+        base_override,
+        role,
+        replay,
+    )?;
     cell_from_profile(name, &resolved)
 }
 
