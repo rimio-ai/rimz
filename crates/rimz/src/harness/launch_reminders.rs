@@ -58,8 +58,9 @@ pub(super) struct LaunchReminders {
     pub sandbox: bool,
     pub lsp_configured: bool,
     pub lsp_servers: Vec<String>,
-    /// The `rimz-*` skills on disk for the launch's kind and login; empty in
-    /// preflight compiles.
+    /// The `rimz-*` skills on disk for the launch's kind and effective environment (login plus
+    /// trusted project `[[agents]]` env, with named-login overrides winning); empty in preflight
+    /// compiles.
     pub rimz_skills: BTreeSet<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub system_prompt_file: Option<PathBuf>,
