@@ -1056,3 +1056,125 @@ fn launch_worktree_admission_refuses_main_before_any_work() {
     crate::harness::lanes::admit_launch_worktree_name(&workspace, &config, &[], Some("docs"))
         .expect("another name");
 }
+
+#[test]
+fn check_cell_copies_seat_consensus_skill_marker_to_host_preflight() {
+    if std::env::var_os("RIMZ_TEST_CHECK_CELL_SEAT_SKILL").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home.path().join(".claude");
+        let rimz_dir = home.path().join(".rimz");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "launcher::tests::check_cell_copies_seat_consensus_skill_marker_to_host_preflight",
+                "--nocapture",
+            ])
+            .env("HOME", home.path())
+            .env("CLAUDE_CONFIG_DIR", &claude_dir)
+            .env("RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_AGENTS_HOME", &rimz_dir)
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_TEST_CHECK_CELL_SEAT_SKILL", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    struct AcceptAll;
+    impl Interaction for AcceptAll {
+        fn cross_repo(&mut self, _: &crate::ResolvedWorkspace) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        fn pr_branch(
+            &mut self,
+            _: &crate::worktree::WorktreeErr,
+        ) -> anyhow::Result<Option<crate::worktree::PrBranchChoice>> {
+            Ok(None)
+        }
+        fn unmanaged_checkout(&mut self, _: &str, _: &std::path::Path) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        fn closed_cohort(&mut self, _: ClosedCohort<'_>) -> anyhow::Result<CohortChoice> {
+            Ok(CohortChoice::Fresh)
+        }
+        fn notice(&mut self, _: Notice<'_>) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    let claude_dir = PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+    let work_skill = claude_dir.join("skills/work");
+    std::fs::create_dir_all(&work_skill).unwrap();
+    std::fs::write(
+        work_skill.join("SKILL.md"),
+        "---\nname: work\ndescription: Work.\n---\nWork.\n",
+    )
+    .unwrap();
+    let adapter = crate::agents::find_definition("claude").unwrap();
+    adapter
+        .install_hooks(
+            &crate::agents::ambient_env(),
+            crate::agents::HookInstallOptions::default(),
+        )
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let workspace = crate::workspace::WorkspaceResolver::resolve(&repo, None).unwrap();
+    let state = crate::StatePaths::for_project_root(&repo).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+
+    let mut cell = agent_cell("claude");
+    cell.skills = Some(vec![
+        "work".parse().unwrap(),
+        "rimz-message".parse().unwrap(),
+    ]);
+    cell.seat_consensus_skill = true;
+
+    let mut checked_folder_trust = HashSet::new();
+    let mut noticed_hook_trust = HashSet::new();
+    let mut interaction = AcceptAll;
+    check_cell(
+        &workspace,
+        &runtime,
+        &cell,
+        crate::config::Isolation::Host,
+        CellStart::Launch(None),
+        &mut checked_folder_trust,
+        &mut noticed_hook_trust,
+        || "rimz hooks trust claude".to_owned(),
+        None,
+        None,
+        &mut interaction,
+    )
+    .unwrap_or_else(|err| {
+        panic!("check_cell must carry seat_consensus_skill into preflight: {err}")
+    });
+
+    cell.seat_consensus_skill = false;
+    let err = check_cell(
+        &workspace,
+        &runtime,
+        &cell,
+        crate::config::Isolation::Host,
+        CellStart::Launch(None),
+        &mut checked_folder_trust,
+        &mut noticed_hook_trust,
+        || "rimz hooks trust claude".to_owned(),
+        None,
+        None,
+        &mut interaction,
+    )
+    .expect_err("author-written missing rimz-message must refuse in check_cell");
+    assert!(
+        err.to_string().contains("unknown skill 'rimz-message'"),
+        "unexpected error: {err:#}"
+    );
+}
