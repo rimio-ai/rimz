@@ -710,9 +710,9 @@ fn fresh_install_writes_the_plugin_and_settings_and_no_global_hooks() {
             "command": "rimz", "args": ["mcp", "serve", "--launch-env"]
         }}})
     );
-    assert_eq!(
-        read_json(&home.paths.settings)["permissions"],
-        json!({"allow": ["mcp(rimz_tools/*)"]})
+    assert!(
+        read_json(&home.paths.settings).get("permissions").is_none(),
+        "fresh install adds nothing to permissions"
     );
     assert!(!home.paths.state.exists());
     assert!(!home.config.exists());
@@ -753,13 +753,12 @@ fn a_legacy_install_agy_stripped_migrates_into_the_plugin() {
             "statusLine": rimz_statusline(json!({"stack_with_default": true}))
         }),
     );
-    let settings_before = std::fs::read(&home.paths.settings).unwrap();
     let managed = home.integration();
     assert!(!managed.installed(&env()));
     assert!(managed.managed_artifacts_present(&env()));
     assert_eq!(
         managed.outdated_files(&env(), Default::default()),
-        std::slice::from_ref(&home.paths.hooks)
+        vec![home.paths.hooks.clone(), home.paths.settings.clone()]
     );
     let preview = managed.preview(&env(), Default::default()).unwrap();
     let global = preview
@@ -768,6 +767,12 @@ fn a_legacy_install_agy_stripped_migrates_into_the_plugin() {
         .find(|file| file.path == home.paths.hooks)
         .expect("the stripped global hooks file is previewed");
     assert!(!global.candidate.contains("rimz hooks feed"));
+    let settings_preview = preview
+        .files
+        .iter()
+        .find(|file| file.path == home.paths.settings)
+        .expect("the stripped settings file is previewed");
+    assert!(!settings_preview.candidate.contains("mcp(rimz_tools/*)"));
     assert_eq!(
         preview.status_line_change,
         Some(StatusLineChange::Unchanged)
@@ -775,8 +780,11 @@ fn a_legacy_install_agy_stripped_migrates_into_the_plugin() {
     managed.install(&env(), Default::default()).unwrap();
     assert_eq!(read_json(&home.paths.hooks), json!({"mine": mine}));
     assert_eq!(
-        std::fs::read(&home.paths.settings).unwrap(),
-        settings_before
+        read_json(&home.paths.settings),
+        json!({
+            "colorScheme": "tokyo night",
+            "statusLine": rimz_statusline(json!({"stack_with_default": true}))
+        })
     );
     assert!(!home.paths.state.exists());
     assert!(managed.installed(&env()));
@@ -1372,7 +1380,7 @@ fn a_plugin_upgraded_from_one_without_its_mcp_config_is_missing_until_reinstalle
 }
 
 #[test]
-fn the_saved_allow_rule_follows_the_switch_and_keeps_the_users_rules() {
+fn install_and_uninstall_strip_the_leftover_mcp_rule_and_keep_user_rules() {
     const RULE: &str = "mcp(rimz_tools/*)";
     let on = crate::agents::HookInstallOptions {
         allow_routine_rimz: true,
@@ -1380,85 +1388,117 @@ fn the_saved_allow_rule_follows_the_switch_and_keeps_the_users_rules() {
     let off = crate::agents::HookInstallOptions {
         allow_routine_rimz: false,
     };
-    let home = AgyHome::new();
-    let managed = home.integration();
-    let permissions = || read_json(&home.paths.settings)["permissions"].clone();
-    write_json(
-        &home.paths.settings,
-        &json!({"theme": "dark", "permissions": {"allow": ["command(ls)"], "deny": ["command(rm)"]}}),
-    );
-    let preview = managed.preview(&env(), on).unwrap();
-    let settings = preview
-        .files
-        .iter()
-        .find(|file| file.path == home.paths.settings)
-        .unwrap();
-    assert!(
-        settings.candidate.contains(RULE),
-        "the dry-run diff shows the rule"
-    );
-    managed.install(&env(), on).unwrap();
-    assert_eq!(
-        permissions(),
-        json!({"allow": ["command(ls)", RULE], "deny": ["command(rm)"]})
-    );
-    assert_eq!(read_json(&home.paths.settings)["theme"], "dark");
-    let once = home.snapshot();
-    managed.install(&env(), on).unwrap();
-    assert_eq!(home.snapshot(), once, "a reinstall writes no duplicate");
 
-    let preview = managed.preview(&env(), off).unwrap();
-    let settings = preview
-        .files
-        .iter()
-        .find(|file| file.path == home.paths.settings)
-        .unwrap();
-    assert!(!settings.candidate.contains(RULE));
-    managed.install(&env(), off).unwrap();
-    assert_eq!(
-        permissions(),
-        json!({"allow": ["command(ls)"], "deny": ["command(rm)"]})
-    );
-    assert!(
-        managed.installed(&env()),
-        "a missing rule leaves the hooks installed"
-    );
-    assert!(managed.outdated_files(&env(), on).is_empty());
-
-    managed.install(&env(), on).unwrap();
-    managed.uninstall(&env()).unwrap();
-    assert_eq!(
-        permissions(),
-        json!({"allow": ["command(ls)"], "deny": ["command(rm)"]})
-    );
-
-    for before in [
-        json!({"theme": "dark"}),
-        json!({"theme": "dark", "permissions": {"allow": [RULE]}}),
-    ] {
+    for options in [on, off] {
         let home = AgyHome::new();
         let managed = home.integration();
-        write_json(&home.paths.settings, &before);
-        managed.install(&env(), on).unwrap();
-        let mut installed = read_json(&home.paths.settings);
-        installed.as_object_mut().unwrap().remove("statusLine");
-        assert_eq!(
-            installed["permissions"],
-            json!({"allow": [RULE]}),
-            "{before}"
+        let permissions = || read_json(&home.paths.settings)["permissions"].clone();
+        managed.install(&env(), options).unwrap();
+        assert!(
+            read_json(&home.paths.settings).get("permissions").is_none(),
+            "fresh install adds no permissions ({options:?})"
         );
-        managed.install(&env(), off).unwrap();
-        let mut removed = read_json(&home.paths.settings);
-        removed.as_object_mut().unwrap().remove("statusLine");
-        assert_eq!(removed, json!({"theme": "dark"}), "{before}");
-        managed.install(&env(), on).unwrap();
-        managed.uninstall(&env()).unwrap();
+        assert!(managed.outdated_files(&env(), options).is_empty());
+
+        write_json(
+            &home.paths.settings,
+            &json!({
+                "theme": "dark",
+                "statusLine": rimz_statusline(json!({"stack_with_default": true})),
+                "permissions": {"allow": ["command(ls)", RULE], "deny": ["command(rm)"]}
+            }),
+        );
+        assert!(
+            managed.installed(&env()),
+            "a leftover saved rule leaves hooks installed ({options:?})"
+        );
         assert_eq!(
-            read_json(&home.paths.settings),
+            managed.outdated_files(&env(), options),
+            vec![home.paths.settings.clone()],
+            "a leftover saved rule makes settings outdated ({options:?})"
+        );
+        let preview = managed.preview(&env(), options).unwrap();
+        let settings = preview
+            .files
+            .iter()
+            .find(|file| file.path == home.paths.settings)
+            .unwrap();
+        assert!(
+            settings.original.as_deref().unwrap().contains(RULE)
+                && !settings.candidate.contains(RULE)
+                && settings.candidate.contains("command(ls)"),
+            "preview shows removal while keeping user rules ({options:?}): {}",
+            settings.candidate
+        );
+        managed.install(&env(), options).unwrap();
+        assert_eq!(
+            permissions(),
+            json!({"allow": ["command(ls)"], "deny": ["command(rm)"]}),
+            "{options:?}"
+        );
+        assert_eq!(read_json(&home.paths.settings)["theme"], "dark");
+        assert!(managed.outdated_files(&env(), options).is_empty());
+        let once = home.snapshot();
+        managed.install(&env(), options).unwrap();
+        assert_eq!(home.snapshot(), once, "reinstall is idempotent");
+
+        for before in [
             json!({"theme": "dark"}),
-            "{before}"
-        );
+            json!({"theme": "dark", "permissions": {"allow": [RULE]}}),
+        ] {
+            let home = AgyHome::new();
+            let managed = home.integration();
+            write_json(&home.paths.settings, &before);
+            managed.install(&env(), options).unwrap();
+            let mut installed = read_json(&home.paths.settings);
+            installed.as_object_mut().unwrap().remove("statusLine");
+            assert_eq!(installed, json!({"theme": "dark"}), "{options:?} {before}");
+            assert!(managed.outdated_files(&env(), options).is_empty());
+        }
+
+        for wrong_shape in [
+            json!({"theme": "dark", "permissions": false}),
+            json!({"theme": "dark", "permissions": {"allow": "not-an-array"}}),
+        ] {
+            let home = AgyHome::new();
+            let managed = home.integration();
+            managed.install(&env(), options).unwrap();
+            let mut settings = wrong_shape.clone();
+            settings["statusLine"] = rimz_statusline(json!({"stack_with_default": true}));
+            write_json(&home.paths.settings, &settings);
+            assert!(
+                managed.outdated_files(&env(), options).is_empty(),
+                "wrong-shaped permissions is not flagged outdated: {wrong_shape}"
+            );
+            managed.install(&env(), options).unwrap();
+            assert_eq!(
+                read_json(&home.paths.settings)["permissions"],
+                wrong_shape["permissions"],
+                "wrong-shaped permissions is left as it is: {wrong_shape}"
+            );
+        }
     }
+
+    let home = AgyHome::new();
+    let managed = home.integration();
+    write_json(
+        &home.paths.settings,
+        &json!({"theme": "dark", "permissions": {"allow": ["command(ls)", RULE], "deny": ["command(rm)"]}}),
+    );
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(
+        read_json(&home.paths.settings),
+        json!({"theme": "dark", "permissions": {"allow": ["command(ls)"], "deny": ["command(rm)"]}})
+    );
+
+    let home = AgyHome::new();
+    let managed = home.integration();
+    write_json(
+        &home.paths.settings,
+        &json!({"theme": "dark", "permissions": {"allow": [RULE]}}),
+    );
+    managed.uninstall(&env()).unwrap();
+    assert_eq!(read_json(&home.paths.settings), json!({"theme": "dark"}));
 }
 
 #[test]
@@ -4987,6 +5027,139 @@ fn allowed_tools_merge_into_the_one_settings_document() {
     let mut args = vec!["--mode".to_owned(), "plan".to_owned()];
     permissions::render(&untranslated, paths, &mut args, &mut None).unwrap();
     assert_eq!(args, ["--mode", "plan"]);
+}
+
+#[test]
+fn routine_rimz_settings_union_idempotence_and_refusal() {
+    let root = tempfile::tempdir().unwrap();
+    let provider = root.path().join("provider");
+    let chain = crate::agents::skills::SkillChain::from_home(root.path());
+    std::fs::create_dir_all(provider.join("rimz-a")).unwrap();
+    std::fs::write(provider.join("rimz-a/SKILL.md"), "---\nname: rimz-a\n---\n").unwrap();
+    let dirs = [root.path().join("tmp"), root.path().join("shared")];
+    let expected_routine: Vec<Value> = crate::agents::ROUTINE_RIMZ_PREFIXES
+        .iter()
+        .map(|prefix| json!(format!("command({prefix})")))
+        .collect();
+    assert!(expected_routine.contains(&json!("command(rimz agents)")));
+    assert!(expected_routine.contains(&json!("command(rimz pane list)")));
+
+    for profile in [
+        None,
+        Some(json!({
+            "permissions": {
+                "allow": ["command(custom)", "command(rimz agents)"],
+                "deny": ["command(rm)"]
+            },
+            "enableTerminalSandbox": true
+        })),
+    ] {
+        let mut args = profile
+            .as_ref()
+            .map(|value| vec!["--settings".to_owned(), value.to_string()])
+            .unwrap_or_default();
+        let mut artifact = None;
+        AntigravityAdapter
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&chain)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        assert_eq!(args.len(), 2);
+        assert!(artifact.is_none());
+        let value: Value = serde_json::from_str(&args[1]).unwrap();
+        let mut expected = Vec::new();
+        if profile.is_some() {
+            expected.push(json!("command(custom)"));
+            expected.push(json!("command(rimz agents)"));
+            assert_eq!(value["permissions"]["deny"], json!(["command(rm)"]));
+            assert_eq!(value["enableTerminalSandbox"], json!(true));
+        }
+        for rule in &expected_routine {
+            if !expected.contains(rule) {
+                expected.push(rule.clone());
+            }
+        }
+        assert_eq!(value["permissions"]["allow"], json!(expected));
+        assert!(value["permissions"].get("additionalDirectories").is_none());
+        assert!(value.get("sandbox").is_none());
+        assert!(value.get("autoMode").is_none());
+        let before = args.clone();
+        AntigravityAdapter
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&chain)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        assert_eq!(args, before, "reapplying routine rules is idempotent");
+    }
+
+    for (contents, key) in [
+        ("{broken", "JSON"),
+        ("[]", "object"),
+        (r#"{"permissions":false}"#, "permissions"),
+        (r#"{"permissions":{"allow":null}}"#, "permissions.allow"),
+    ] {
+        std::fs::write(root.path().join("profile.json"), contents).unwrap();
+        let mut args = vec!["--settings".to_owned(), "profile.json".to_owned()];
+        let error = AntigravityAdapter
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (None, None),
+                &dirs,
+                &mut args,
+                &mut None,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("profile.json"), "{error}");
+        assert!(error.contains(key), "{error}");
+        // The room write rules merge into the same key with the switch off, so the error
+        // must not offer the switch as a cure.
+        assert!(!error.contains("allow-routine-rimz"), "{error}");
+    }
+
+    let empty_env = BTreeMap::new();
+    let server = |grant: bool| crate::agents::capabilities::McpServer {
+        command: PathBuf::from("/bin/rimz"),
+        args: vec!["mcp".to_owned(), "serve".to_owned()],
+        grant,
+        env_names: std::collections::BTreeSet::new(),
+    };
+    for (grant_server, expected_mcp) in [(Some(true), true), (Some(false), false), (None, false)] {
+        let mut args = Vec::new();
+        let mut artifact = None;
+        let warnings = AntigravityAdapter
+            .mcp_server_args(
+                &crate::agents::capabilities::McpLaunch {
+                    server: grant_server.map(server),
+                    mcps: None,
+                    granted: false,
+                    login_env: &empty_env,
+                },
+                (root.path(), root.path()),
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        assert!(warnings.is_empty());
+        if expected_mcp {
+            assert_eq!(args.len(), 2, "{args:?}");
+            let doc: Value = serde_json::from_str(&args[1]).unwrap();
+            assert_eq!(
+                doc,
+                json!({"permissions": {"allow": ["mcp(rimz_tools/*)"]}})
+            );
+        } else {
+            assert!(args.is_empty(), "{args:?}");
+        }
+    }
 }
 
 #[test]

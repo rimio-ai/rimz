@@ -97,7 +97,8 @@ pub struct AgentsConfig {
     /// where the adapter can carry them, rather than a listing at launch.
     #[serde(rename = "runtime-env")]
     pub runtime_env: bool,
-    /// Allow routine RimZ coordination through Claude launch settings and Codex installed rules.
+    /// Allow routine RimZ coordination through Claude and Antigravity launch settings and Codex
+    /// installed rules.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
     /// Hand RimZ's own MCP server to Claude, Codex, and Antigravity launches.

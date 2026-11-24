@@ -396,35 +396,31 @@ fn write_intro_context(
         )?;
     }
     let saved_mcp_rule = |text: Option<&str>| {
-        text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        text.map(|text| text.strip_prefix('\u{feff}').unwrap_or(text))
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
             .and_then(|settings| settings.pointer("/permissions/allow").cloned())
             .and_then(|allow| allow.as_array().cloned())
             .is_some_and(|allow| allow.iter().any(|rule| rule == ANTIGRAVITY_MCP_RULE))
     };
-    if let Some(file) = previews
+    if previews
         .iter()
         .filter(|preview| preview.agent == "antigravity")
         .flat_map(|preview| &preview.files)
-        .find(|file| {
+        .any(|file| {
             file.path.ends_with("antigravity-cli/settings.json")
-                && saved_mcp_rule(file.original.as_deref()) != saved_mcp_rule(Some(&file.candidate))
+                && saved_mcp_rule(file.original.as_deref())
+                && !saved_mcp_rule(Some(&file.candidate))
         })
     {
         writeln!(
             out,
-            "{}",
-            if saved_mcp_rule(Some(&file.candidate)) {
-                "Antigravity also gets a saved permission rule: RimZ's MCP tools run without a prompt in every agy session of the account, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`."
-            } else {
-                "Removing Antigravity's saved `mcp(rimz_tools/*)` rule ends prompt-free RimZ MCP tools in every agy session of the account, including outside RimZ (`[agents] allow-routine-rimz = false`)."
-            }
+            "Removing Antigravity's saved `mcp(rimz_tools/*)` rule ends prompt-free RimZ MCP tools for an `agy` started by hand inside a RimZ agent's shell; RimZ launches carry the rule themselves while `[agents] allow-routine-rimz` is on."
         )?;
     }
     Ok(())
 }
 
-/// The rule Antigravity's install saves in the account's `permissions.allow` while
-/// `allow-routine-rimz` is on.
+/// The saved `permissions.allow` rule earlier installs wrote and current installs strip.
 const ANTIGRAVITY_MCP_RULE: &str = "mcp(rimz_tools/*)";
 
 fn write_agent_table(out: &mut dyn Write, previews: &[HookInstallPreview]) -> std::io::Result<()> {

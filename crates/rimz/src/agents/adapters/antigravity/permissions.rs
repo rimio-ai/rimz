@@ -1,10 +1,11 @@
-//! RimZ `allowed-tools` and room/notes write rules in agy's permission grammar, merged into the
-//! launch's one `--settings` document as `permissions.allow`. agy's matching was observed on agy
-//! 1.5.14 and 1.5.16: `command(P)` matches P word by word with any trailing arguments, a file
-//! target covers a directory's descendants on its resolved path and expands no glob or `~`, and a
-//! rule string agy cannot read is accepted and matches nothing, so an `allowed-tools` rule with
-//! no translation is left out, never passed on. The same document carries every launch's
-//! `queuedMessages` pin and an ask launch's `agentMode` pin (`pin_modes`).
+//! RimZ `allowed-tools`, routine RimZ command and MCP server rules, and room/notes write rules in
+//! agy's permission grammar, merged into the launch's one `--settings` document as
+//! `permissions.allow`. agy's matching was observed on agy 1.5.14 and 1.5.16: `command(P)`
+//! matches P word by word with any trailing arguments, a file target covers a directory's
+//! descendants on its resolved path and expands no glob or `~`, and a rule string agy cannot read
+//! is accepted and matches nothing, so an `allowed-tools` rule with no translation is left out,
+//! never passed on. The same document carries every launch's `queuedMessages` pin and an ask
+//! launch's `agentMode` pin (`pin_modes`).
 
 use std::path::Path;
 
@@ -198,6 +199,44 @@ pub(super) fn allow_write_dirs<'a>(
         artifact.as_ref(),
         false,
         |object| union_settings_array(object, "permissions", "allow", rules),
+    )?;
+    Ok(())
+}
+
+/// Union `command(<prefix>)` allow rules for the shared routine RimZ prefixes into the launch's
+/// one settings document.
+pub(super) fn allow_routine_rimz(
+    (cwd, artifact_dir): (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    let allow = crate::agents::ROUTINE_RIMZ_PREFIXES
+        .iter()
+        .map(|prefix| format!("command({prefix})"));
+    *artifact = merge_settings(
+        cwd,
+        artifact_dir,
+        extra_args,
+        artifact.as_ref(),
+        false,
+        |object| union_settings_array(object, "permissions", "allow", allow),
+    )?;
+    Ok(())
+}
+
+/// Union the allow rule for RimZ's plugin MCP server into the launch's one settings document.
+pub(super) fn allow_mcp_server(
+    (cwd, artifact_dir): (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    *artifact = merge_settings(
+        cwd,
+        artifact_dir,
+        extra_args,
+        artifact.as_ref(),
+        false,
+        |object| union_settings_array(object, "permissions", "allow", [super::mcp_allow_rule()]),
     )?;
     Ok(())
 }

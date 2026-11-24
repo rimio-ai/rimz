@@ -458,7 +458,18 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     };
     let no_mcp_argv = |plan: &LaunchPlan| {
         let argv = &plan.process().provider_argv;
-        assert!(!argv.iter().any(|arg| arg.contains("mcp")), "{argv:?}");
+        assert!(
+            !argv
+                .iter()
+                .enumerate()
+                .any(|(i, arg)| arg.contains("mcp") && !(i > 0 && argv[i - 1] == "--settings")),
+            "{argv:?}"
+        );
+        for value in flag_values(argv, "--settings") {
+            let doc: serde_json::Value = serde_json::from_str(value).unwrap();
+            assert!(doc.get("mcpServers").is_none(), "{doc}");
+            assert!(doc.get("allowedMcpServers").is_none(), "{doc}");
+        }
     };
     let cwd = room.project.path().display().to_string();
     let serves = |plan: &LaunchPlan, value: &str| {
@@ -1089,31 +1100,38 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     );
 }
 
-/// agy reads its own server's tools under the adapter's name, and an `allowed-tools` launch
-/// that serves them allows them while the routine switch is on. A launch with no list, or a
-/// list agy cannot read a rule of, adds only the room's write rules (and any saved allow rules),
-/// not a duplicate served rule from `allowed-tools`.
+/// Every Antigravity launch carries the routine `command(<prefix>)` rules while the routine switch
+/// is on and adds `mcp(rimz_tools/*)` exactly when the launch also serves RimZ's MCP server,
+/// whether or not the profile has an `allowed-tools` list, and carries neither when the switch is
+/// off.
 #[test]
 fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
     let room = Room::new();
+    let routine_rules: Vec<String> = crate::agents::routine_rimz_prefixes()
+        .iter()
+        .map(|prefix| format!("command({prefix})"))
+        .collect();
     let room_rules = [
         antigravity_write_rule(&room.state.root),
         antigravity_write_rule(&room.runtime.root),
         antigravity_write_rule(&room.runtime.shared_root),
     ];
-    let with_room = |prefix: &[&str]| {
-        let rules: Vec<String> = prefix
-            .iter()
-            .map(|rule| (*rule).to_owned())
-            .chain(room_rules.iter().cloned())
-            .collect();
+    let expected = |prefix: &[&str], routine: bool, mcp_served: bool| {
+        let mut rules: Vec<String> = prefix.iter().map(|rule| (*rule).to_owned()).collect();
+        if routine {
+            rules.extend(routine_rules.iter().cloned());
+        }
+        rules.extend(room_rules.iter().cloned());
+        if routine && mcp_served && !rules.iter().any(|rule| rule == "mcp(rimz_tools/*)") {
+            rules.push("mcp(rimz_tools/*)".to_owned());
+        }
         Some(serde_json::json!(rules))
     };
-    let allow = |routine: bool, mcps: Option<&[&str]>, rules: Option<&[&str]>| {
+    let allow = |routine: bool, tools: bool, mcps: Option<&[&str]>, rules: Option<&[&str]>| {
         let mut request = launch("antigravity", mcps, &[]);
         request.allowed_tools =
             rules.map(|rules| rules.iter().map(|rule| rule.parse().unwrap()).collect());
-        let plan = room.compile(&switches(routine, true), &request);
+        let plan = room.compile(&switches(routine, tools), &request);
         flag_values(&plan.process().provider_argv, "--settings")
             .last()
             .map(|value| serde_json::from_str::<serde_json::Value>(value).unwrap())
@@ -1121,22 +1139,41 @@ fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
     };
     let read = Some(&["Read"][..]);
     assert_eq!(
-        allow(true, None, read),
-        with_room(&["read_file(*)", "mcp(rimz_tools/*)"])
+        allow(true, true, None, read),
+        expected(&["read_file(*)"], true, true)
     );
     assert_eq!(
         allow(
             true,
+            true,
             Some(&["rimz-lsp", "github"]),
             Some(&["Read", "mcp__github"])
         ),
-        with_room(&["read_file(*)", "mcp(github/*)", "mcp(rimz_tools/*)"])
+        expected(&["read_file(*)", "mcp(github/*)"], true, true)
     );
-    assert_eq!(allow(false, None, read), with_room(&["read_file(*)"]));
-    assert_eq!(allow(true, Some(&[]), read), with_room(&["read_file(*)"]));
-    assert_eq!(allow(true, None, None), with_room(&[]));
-    assert_eq!(allow(true, None, Some(&["Glob"])), with_room(&[]));
-    assert_eq!(allow(true, None, Some(&[])), with_room(&[]));
+    assert_eq!(
+        allow(true, true, None, Some(&["mcp__rimz"])),
+        expected(&["mcp(rimz_tools/*)"], true, true)
+    );
+    assert_eq!(
+        allow(false, true, None, read),
+        expected(&["read_file(*)"], false, false)
+    );
+    assert_eq!(allow(false, true, None, None), expected(&[], false, false));
+    assert_eq!(
+        allow(true, true, Some(&[]), read),
+        expected(&["read_file(*)"], true, false)
+    );
+    assert_eq!(allow(true, false, None, None), expected(&[], true, false));
+    assert_eq!(allow(true, true, None, None), expected(&[], true, true));
+    assert_eq!(
+        allow(true, true, None, Some(&["Glob"])),
+        expected(&[], true, true)
+    );
+    assert_eq!(
+        allow(true, true, None, Some(&[])),
+        expected(&[], true, true)
+    );
 }
 
 /// A `capabilities:` grant serves exactly its capabilities, each with its mark, and `mcps` keeps
