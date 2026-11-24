@@ -541,7 +541,9 @@ pub struct Profile {
     )]
     pub skills: Option<Vec<super::SkillName>>,
     /// Whether `rimz-message` in `skills` was added by a Markdown team seat rather than written
-    /// by the author, so launch settles it against the launch's kind, login, and skill inventory.
+    /// by the author, so launch settles it against the launch's kind, effective environment (login
+    /// plus trusted project `[[agents]]` env, with named-login overrides winning), and skill
+    /// inventory.
     #[serde(skip)]
     pub seat_consensus_skill: bool,
     /// The RimZ MCP capabilities and the user's own MCP servers a launch keeps;
