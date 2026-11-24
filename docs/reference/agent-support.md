@@ -98,6 +98,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 - `agy` is an alias of `antigravity`: `agent: agy` and the kind base `agents/agy.md` work as their `antigravity` spellings do.
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
 - `--add-dir` opens each directory as an agy workspace: agy loads its `AGENTS.md`, `.agents/rules`, and `.agents/skills` and runs its `.agents/hooks.json`, without a trust prompt for it. The launch warns.
+- A [folder-trust grant](./cli/hooks-trust.md#agent-folder-trust) on the main repository covers its subdirectories and worktrees, pull-request worktrees aside: a launch there passes the folder to agy as trust for that session, so agy does not ask again.
 - Context, tokens, plan, and the Gemini 5h and weekly quota windows are live from the wrapped statusline. The card's dollar figure is the session's total at list price, priced from its transcript as the file grows, so it shows from the first priced response and moves mid-turn. It counts toward room spend and per-agent and room [budget caps](./cli/budget.md), never account caps.
 - History replays every past session and prices its tokens at list price in `rimz stats`. A model the price book has no exact entry for shows tokens without dollars.
 - Tool activity comes from the `PostToolUse` hook on file-edit tools only.
