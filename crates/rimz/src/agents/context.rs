@@ -62,7 +62,8 @@ pub struct ContextObservation {
     /// The provider reports itself at rest with no background work, so a turn
     /// the hooks still hold open ended without a hook: the statusline feed
     /// appends a rest report (`PROVIDER_REST_EVENT`) that the hook drainer turns
-    /// into an interrupt on such a turn.
+    /// into an interrupt on such a turn. A report newer than the row's last
+    /// activity also empties its listed background shells.
     pub provider_at_rest: bool,
 }
 
