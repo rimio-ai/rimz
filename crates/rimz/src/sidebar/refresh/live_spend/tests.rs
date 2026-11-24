@@ -669,3 +669,214 @@ fn an_old_agy_session_leaves_no_live_baseline() {
         workspace.live_baselines
     );
 }
+
+#[test]
+fn agy_split_walk_baselines_match_cold_walk() {
+    use std::io::Write as _;
+
+    let published = Timestamp::from_second(1_750_000_000).unwrap();
+    let wt = Path::new("/repo/wt");
+    let id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    let adapter = find_definition("antigravity").unwrap();
+    let prices = crate::agents::pricing::PriceBook::from_litellm_json(
+        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":1e-6}}"#,
+    );
+    let model_row = |step: u32, at: &str, input: u64, output: u64| {
+        serde_json::json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": at,
+            "model": "agy-priced",
+            "input_tokens": input,
+            "output_tokens": output,
+            "tool_calls": [{"name": "run_command", "args": {}}]
+        })
+        .to_string()
+    };
+    let generic_row = |step: u32, at: &str| {
+        serde_json::json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "DONE",
+            "created_at": at,
+            "content": "ok"
+        })
+        .to_string()
+    };
+    // Row 1 precedes both the UTC day cutoff (2025-06-15T00:00Z) and the trailing 24h cutoff
+    // (2025-06-14T10:26:40Z); row 3 precedes the day cutoff only; row 5 is today.
+    let row1 = model_row(1, "2025-06-14T08:00:00Z", 1_000_000, 200);
+    let follower1 = generic_row(2, "2025-06-14T08:00:05Z");
+    let row3 = model_row(3, "2025-06-14T23:00:00Z", 2_000_000, 200);
+    let follower3 = generic_row(4, "2025-06-14T23:00:05Z");
+    let row5 = model_row(5, "2025-06-15T09:00:00Z", 500_000, 100);
+    let scope = SpendScope::from_roots(Some(wt), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Trailing24h,
+        timezone: Some("UTC".into()),
+    };
+
+    let split_dir = tempfile::tempdir().unwrap();
+    let split_logs = split_dir
+        .path()
+        .join(format!("brain/{id}/.system_generated/logs"));
+    std::fs::create_dir_all(&split_logs).unwrap();
+    let split_path = split_logs.join("transcript_full.jsonl");
+    let split_files = [SpendingFile {
+        adapter,
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+            adapter.spec().kind,
+        )),
+        path: split_path.clone(),
+    }];
+    let split_cache = split_dir.path().join("spending.json");
+    let split_history = crate::disk::paths::SpendingHistoryPaths::under(split_dir.path());
+    let mut split_walker = SpendingWalker::new();
+
+    std::fs::write(&split_path, format!("{row1}\n")).unwrap();
+    let walk = |walker: &mut SpendingWalker,
+                cache: &Path,
+                history: &crate::disk::paths::SpendingHistoryPaths,
+                files: &[SpendingFile]| {
+        walker.walk_local(
+            cache,
+            &WalkRequest {
+                history,
+                files,
+                prices: &prices,
+                now_secs: published.as_second() as u64,
+                origin_overrides: &Default::default(),
+                user_inputs: &[],
+                scope: Some(&scope),
+                spec: &spec,
+            },
+            &mut SilentWalk,
+        )
+    };
+    walk(
+        &mut split_walker,
+        &split_cache,
+        &split_history,
+        &split_files,
+    );
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&split_path)
+            .unwrap();
+        writeln!(file, "{follower1}").unwrap();
+        writeln!(file, "{row3}").unwrap();
+    }
+    walk(
+        &mut split_walker,
+        &split_cache,
+        &split_history,
+        &split_files,
+    );
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&split_path)
+            .unwrap();
+        writeln!(file, "{follower3}").unwrap();
+        writeln!(file, "{row5}").unwrap();
+    }
+    let split_result = walk(
+        &mut split_walker,
+        &split_cache,
+        &split_history,
+        &split_files,
+    );
+
+    let cold_dir = tempfile::tempdir().unwrap();
+    let cold_logs = cold_dir
+        .path()
+        .join(format!("brain/{id}/.system_generated/logs"));
+    std::fs::create_dir_all(&cold_logs).unwrap();
+    let cold_path = cold_logs.join("transcript_full.jsonl");
+    std::fs::write(
+        &cold_path,
+        format!("{row1}\n{follower1}\n{row3}\n{follower3}\n{row5}\n"),
+    )
+    .unwrap();
+    let cold_files = [SpendingFile {
+        adapter,
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+            adapter.spec().kind,
+        )),
+        path: cold_path,
+    }];
+    let cold_cache = cold_dir.path().join("spending.json");
+    let cold_history = crate::disk::paths::SpendingHistoryPaths::under(cold_dir.path());
+    let mut cold_walker = SpendingWalker::new();
+    let cold_result = walk(&mut cold_walker, &cold_cache, &cold_history, &cold_files);
+
+    assert_eq!(
+        split_result.workspace.live_baselines, cold_result.workspace.live_baselines,
+        "split walk live_baselines must match cold walk"
+    );
+    assert_eq!(
+        split_result.workspace.headline_live_baselines,
+        cold_result.workspace.headline_live_baselines,
+        "split walk headline_live_baselines must match cold walk"
+    );
+    let key = format!("antigravity:{id}");
+    assert!((cold_result.workspace.live_baselines[&key] - 3.0004).abs() < 1e-9);
+    assert!((cold_result.workspace.headline_live_baselines[&key] - 1.0002).abs() < 1e-9);
+}
+
+#[test]
+fn originless_keyless_rows_each_count_once_in_baselines() {
+    let published = Timestamp::from_second(1_750_000_000).unwrap();
+    let wt = Path::new("/repo/wt");
+    let adapter = find_definition("pi").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    // No `session` header means no origin; two keyless assistant rows before the UTC day cutoff
+    // (2025-06-15T00:00Z), even with identical payloads, must each count once.
+    let line = serde_json::json!({
+        "type": "message",
+        "timestamp": "2025-06-14T23:00:00.000Z",
+        "message": {
+            "role": "assistant",
+            "model": "gpt-5",
+            "usage": {"input": 100, "output": 50, "cost": {"total": 1.0}}
+        }
+    })
+    .to_string();
+    std::fs::write(&path, format!("{line}\n{line}\n")).unwrap();
+    let files = [SpendingFile {
+        adapter,
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+            adapter.spec().kind,
+        )),
+        path,
+    }];
+    let scope = SpendScope::from_roots(Some(wt), &[]);
+    let result = SpendingWalker::new().walk_local(
+        &dir.path().join("spending.json"),
+        &WalkRequest {
+            history: &crate::disk::paths::SpendingHistoryPaths::under(dir.path()),
+            files: &files,
+            prices: &crate::agents::pricing::PriceBook::default(),
+            now_secs: published.as_second() as u64,
+            origin_overrides: &Default::default(),
+            user_inputs: &[],
+            scope: Some(&scope),
+            spec: &HeadlineSpec {
+                mode: SpendWindowMode::Today,
+                timezone: Some("UTC".into()),
+            },
+        },
+        &mut SilentWalk,
+    );
+    let total: f64 = result.workspace.live_baselines.values().sum();
+    assert!(
+        (total - 2.0).abs() < 1e-9,
+        "keyless originless rows must each count once: {:?}",
+        result.workspace.live_baselines
+    );
+}

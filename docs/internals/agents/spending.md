@@ -135,6 +135,7 @@ The cursor carries provider resume state where a parser needs it:
 
 | Provider | Resume state |
 | --- | --- |
+| Antigravity | the byte start of a trailing model row awaiting its follower for response timing |
 | Claude | the object-shaped pricing fingerprint and response timing |
 | Codex | the cumulative-totals fold, response timing, service tier, and learned file origin (which survives cold re-parses) |
 | Copilot | per-model shutdown baselines and the session-start directory |
@@ -162,10 +163,10 @@ Three version constants gate schema changes:
 | `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
-The current values are `SPENDING_CACHE_VERSION` 30, `PROVIDER_SPENDING_VERSION` 26, and `WORKSPACE_SPENDING_VERSION` 10. The doc comment above each constant lists what every earlier bump changed, and is the place to record the next one. Three facts follow from the current shapes:
+The current values are `SPENDING_CACHE_VERSION` 31, `PROVIDER_SPENDING_VERSION` 26, and `WORKSPACE_SPENDING_VERSION` 10. The doc comment above each constant lists what every earlier bump changed, and is the place to record the next one. Three facts follow from the current shapes:
 
 - The provider publication carries owner credit for subagents and `roles.ownerless_subagents` ([What the publication carries](#what-the-publication-carries)). It also carries the walk hour and the hourly, daily, and weekly chart cells. `chart.hours` and `chart.hour` have serde defaults, so an older file stays readable with a zero hour until it is recomputed.
-- The workspace sidecar counts sessions and keys live baselines by the adapter's native session, so Claude counts per UUID with native subagents folded under their parent. A file with no origin (an Antigravity transcript) is in no scope, so a session of one whose youngest row is within the 8-day raw retain window gets a baseline per cutoff (`crates/rimz/src/agents/spending/aggregate.rs::originless_session_spend`): its spend from before the day cutoff in `live_baselines`, and its spend from before the headline cutoff in `headline_live_baselines` where the two differ. A live card on it adds only the day's spend to the room's day figure, and only the headline window's spend to the headline.
+- The workspace sidecar counts sessions and keys live baselines by the adapter's native session, so Claude counts per UUID with native subagents folded under their parent. A file with no origin (an Antigravity transcript) is in no scope, so a session of one whose youngest row is within the 8-day raw retain window gets a baseline per cutoff (`crates/rimz/src/agents/spending/aggregate.rs::originless_session_spend`), deduplicated per session through `SidechainDedup`: its spend from before the day cutoff in `live_baselines`, and its spend from before the headline cutoff in `headline_live_baselines` where the two differ. A live card on it adds only the day's spend to the room's day figure, and only the headline window's spend to the headline.
 - The Codex parser counts no spend for helper-thread rollouts (Guardian, `/review`, and memory consolidation, `crates/rimz/src/agents/adapters/codex/rollout.rs::CodexSessionMetaPayload::is_spending_helper`). Cursor version 30 made finalized rollouts re-parse once, so rows cached before that rule are gone.
 
 A cursor bump discards the cursor's rows for absent files, but never the separately recorded closed days.
@@ -176,16 +177,19 @@ Writers refuse a schema downgrade after a cheap leading-version probe. A long-li
 
 `CachedEntry.timing` uses the optional cache key `g`, holding `ResponseTiming` as `{"m": milliseconds, "o": output_tokens}`. Compaction copies timing and sums both counters, and keeps timing when any constituent row was timed. `SpendWindow` sums them into `timed_ms` and `timed_output`, and published JSON omits zero counters. Stats reads the published per-model windows. Attribution folds transcript `CachedEntry.timing` through `SlotEffort`, keeping raw counters across member and report model merges. `SpendWindow::tokens_per_sec` and `SlotEffort::tokens_per_sec` share the rounded ratio of sums, never an average of response or member rates.
 
-Both timed adapters attach timing only through `response_timing` in `agents/spending/cache.rs`. Its constants define the metric: output must reach `MIN_TIMED_OUTPUT_TOKENS` (100), elapsed time must exceed `MIN_RESPONSE_MS` (200), and `MAX_RESPONSE_MS` (300,000) is inclusive. A threshold change requires a cursor-cache version bump.
+The timed adapters attach timing only through `response_timing` in `agents/spending/cache.rs`. Its constants define the metric: output must reach `MIN_TIMED_OUTPUT_TOKENS` (100), elapsed time must exceed `MIN_RESPONSE_MS` (200), and `MAX_RESPONSE_MS` (300,000) is inclusive. A threshold change requires a cursor-cache version bump.
 
 | Adapter | Start | End | Cursor carries |
 | --- | --- | --- | --- |
 | Claude | the latest timestamp across top-level, non-sidechain user lines, fixed at a message's first assistant line | each assistant line's own millisecond timestamp | the pricing fingerprint, the latest user timestamp, and the current message id with its fixed start, so a suffix parse can finish a streaming message |
 | Codex | `task_started` and non-model response items advance the latest input timestamp until the first model item | `token_usage_record`, which filters output and elapsed time and resets the input and model state | in-flight and pending timing |
+| Antigravity | a `MODEL` / `PLANNER_RESPONSE` row's whole-second `created_at` | the immediately following `MODEL` / `GENERIC` row's whole-second `created_at` (any status) | the byte start of a trailing model row, so the next resumed parse reads from there and re-emits it timed only when a `GENERIC` follower produces timing |
 
 Claude user timestamps need not be monotonic, and interleaved tool-result user lines cannot move an in-flight message's start. After token and speed-metadata ties, `should_replace_duplicate` prefers the larger timed duration in both chunk and cross-file dedup. Advisor iteration rows are untimed.
 
 Codex model items are reasoning, assistant messages, and function, custom-tool, local-shell, or web-search calls. The next `token_count` takes the pending timing only when its output count matches. Usage, cost, cumulative totals, and dedup keys come from `token_count` alone. Replayed heads neither produce timing nor keep timing state. A history without response records stays untimed: the count timestamp is no fallback, because it can include tool runtime.
+
+Antigravity passes `output_tokens` and the whole-second gap times 1,000 through `response_timing`, so zero-second gaps fail the 200 ms floor and each gap carries under a second of truncation error; tool calls waiting on user approval or `ask_question` were not captured. `SYSTEM` / `CHECKPOINT` rows stay priced without timing and never end a model response. Any other follower or no follower (plain-text turn endings included) leaves the response untimed. A trailing model row emits untimed at once without moving `SpendCursor.offset` back, storing its byte start in `AntigravitySpendState.pending_start`; on the next parse, `should_replace_duplicate` keeps a timed re-emit on the token tie (in fleet walks, closed days, and `originless_session_spend` baselines alike) while `LocalSpendFold::absorb` skips the equal-token duplicate. A truncated or rewritten file whose remembered start is past the end or does not span to `offset` as a model row ignores the carried start without panicking or attaching wrong timing.
 
 Other adapters supply no timing. The user-facing definition and comparison limits are in the [insight guide](../../guide/insight.md#how-the-numbers-are-calculated).
 

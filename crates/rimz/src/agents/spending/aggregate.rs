@@ -821,15 +821,18 @@ struct OriginlessBaseline {
 }
 
 /// Each recent originless session's spend from before `day_cutoff_secs` and
-/// before `headline_cutoff_secs`. A session whose youngest row is past the
-/// raw retain window is left out, as the scoped baselines leave theirs.
+/// before `headline_cutoff_secs`. Deduplicates per session through
+/// `SidechainDedup` so a resumed parser's re-emitted copy (such as
+/// Antigravity's timed follow-up) counts once, while keyless rows stay counted
+/// once each. A session whose youngest row is past the raw retain window is
+/// left out, as the scoped baselines leave theirs.
 fn originless_session_spend<'a>(
     files: impl Iterator<Item = (&'a SpendingFile, &'a FileCacheEntry)>,
     day_cutoff_secs: u64,
     headline_cutoff_secs: u64,
     now_secs: u64,
 ) -> impl Iterator<Item = (String, OriginlessBaseline)> {
-    let mut sessions = FastHashMap::<String, OriginlessBaseline>::default();
+    let mut sessions = FastHashMap::<SessionKey<'a>, SidechainDedup<&'a CachedEntry>>::default();
     for (file, cached_file) in files {
         let file_key = file_session_key(file.adapter, &file.path);
         for entry in cached_file
@@ -838,7 +841,12 @@ fn originless_session_spend<'a>(
             .filter(|entry| within_widest_window(entry.ts_secs, now_secs))
         {
             let session = session_key(file.adapter.spec().kind, file_key, entry);
-            let baseline = sessions.entry(session.materialize()).or_default();
+            sessions.entry(session).or_default().insert(entry);
+        }
+    }
+    sessions.into_iter().filter_map(move |(session, deduped)| {
+        let mut baseline = OriginlessBaseline::default();
+        for entry in deduped.into_counted() {
             baseline.youngest_secs = baseline.youngest_secs.max(entry.ts_secs);
             if entry.ts_secs < day_cutoff_secs {
                 baseline.day += entry.cost_usd;
@@ -847,10 +855,9 @@ fn originless_session_spend<'a>(
                 baseline.headline += entry.cost_usd;
             }
         }
-    }
-    sessions
-        .into_iter()
-        .filter(move |(_, baseline)| within_raw_retain_window(baseline.youngest_secs, now_secs))
+        within_raw_retain_window(baseline.youngest_secs, now_secs)
+            .then(|| (session.materialize(), baseline))
+    })
 }
 
 fn add_scoped_sessions<'a>(
