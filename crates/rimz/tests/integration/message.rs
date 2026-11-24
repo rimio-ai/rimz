@@ -872,6 +872,49 @@ fn steer_presses_send_now_and_a_boundary_send_presses_queue() {
     }
 }
 
+/// A forced steer onto an open prompt presses send-now without its leading Enter, which the
+/// prompt could take as its answer; keys that are Enter alone stay.
+#[test]
+fn forced_steer_onto_an_open_prompt_presses_only_the_chord() {
+    for (kind, keys) in [
+        ("claude", &["24", "19"][..]),
+        ("antigravity", &["27\t109"]),
+        ("codex", &["13"]),
+        ("pi", &["13"]),
+        ("opencode", &["13"]),
+    ] {
+        let (env, panes) = interrupt_fixture(kind);
+        append_lifecycle(
+            &env,
+            kind,
+            "PermissionRequest",
+            "sess-interrupt",
+            LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            |_| {},
+        );
+        let trace = env.project_root.join("forced-steer.log");
+        run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", panes)
+                .args(["message", "--steer", "--force"])
+                .args([&format!("@{kind}"), "--", "new direction"]),
+            "forced steer",
+        );
+        let lines = trace_lines(&trace);
+        assert_eq!(
+            keys_after_text(&lines, "new direction"),
+            keys,
+            "{kind}: {lines:?}"
+        );
+    }
+}
+
 #[test]
 fn interrupt_queued_record_presses_escape_then_types() {
     interrupt_order_case("codex", Some("sess-interrupt"), false);
@@ -9114,11 +9157,7 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
         "sent to {} ({message_id})",
         named(&env, "sess-steer-queued", "@claude")
     )));
-    assert_text_then_keys(
-        &trace_log,
-        &user_message("push now"),
-        send_now_keys("claude"),
-    );
+    assert_text_then_keys(&trace_log, &user_message("push now"), &["24", "19"]);
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Sent
