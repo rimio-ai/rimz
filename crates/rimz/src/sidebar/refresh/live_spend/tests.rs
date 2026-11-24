@@ -707,7 +707,7 @@ fn agy_split_walk_baselines_match_cold_walk() {
         .to_string()
     };
     // Row 1 precedes both the UTC day cutoff (2025-06-15T00:00Z) and the trailing 24h cutoff
-    // (2025-06-14T10:26:40Z); row 3 precedes the day cutoff only; row 5 is today.
+    // (2025-06-14T15:06:40Z); row 3 precedes the day cutoff only; row 5 is today.
     let row1 = model_row(1, "2025-06-14T08:00:00Z", 1_000_000, 200);
     let follower1 = generic_row(2, "2025-06-14T08:00:05Z");
     let row3 = model_row(3, "2025-06-14T23:00:00Z", 2_000_000, 200);
