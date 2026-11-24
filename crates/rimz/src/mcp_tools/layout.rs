@@ -186,7 +186,12 @@ fn open(
     launch: Launch,
 ) -> Result<(Box<OpenedLayout>, Vec<String>), Failure> {
     let mut notices = CollectedNotices::default();
-    let team = launch.teams_scene.then(|| launch.spec.clone());
+    let tool = if launch.teams_scene {
+        TaskKind::Team
+    } else {
+        TaskKind::Agent
+    };
+    let from_pr = launch.from_pr.is_some();
     let outcome = enter_and_launch(room, machine, launch, &mut notices);
     let closed = notices.closed_cohort().map(str::to_owned);
     let warnings = notices.into_lines();
@@ -206,22 +211,37 @@ fn open(
             prompt_delivered: false,
         }) => Failure::new("a cohort is already live in this worktree; nothing launched")
             .with_hint("call `tasks` to see what you have running"),
-        Err(err) => with_closed_cohort_hint(Failure::from(err), closed.as_deref(), team.as_deref()),
+        Err(err) => with_closed_cohort_hint(Failure::from(err), closed.as_deref(), tool, from_pr),
     };
     Err(with_warnings(failure, warnings))
 }
 
 /// The way past a refused closed cohort, in the called tool's terms: the library's text names
 /// the command's `--fresh`, which `team` has no argument for, and its resume command when one
-/// exists.
-fn with_closed_cohort_hint(failure: Failure, closed: Option<&str>, team: Option<&str>) -> Failure {
-    if closed.is_none() {
+/// exists. `agent` refuses `fresh` beside `from_pr`, so after a `from_pr` call the hint names
+/// the closed worktree, a marker name that `worktree` takes as it is.
+fn with_closed_cohort_hint(
+    failure: Failure,
+    closed: Option<&str>,
+    tool: TaskKind,
+    from_pr: bool,
+) -> Failure {
+    let Some(name) = closed else {
         return failure;
-    }
-    match team {
-        Some(_) => failure.with_hint("name another `worktree`"),
-        None => failure.with_hint("set `fresh` to start a new session in this worktree"),
-    }
+    };
+    let hint = match (tool, from_pr) {
+        (TaskKind::Team, false) => "name another `worktree`".to_owned(),
+        (TaskKind::Team, true) => "`team` cannot start a new session in this worktree; name a \
+                                   `worktree` in place of `from_pr` to launch outside the pull \
+                                   request"
+            .to_owned(),
+        (_, false) => "set `fresh` to start a new session in this worktree".to_owned(),
+        (_, true) => format!(
+            "to start a new session in this worktree, call again with `worktree` {name:?} and \
+             `fresh` in place of `from_pr`"
+        ),
+    };
+    failure.with_hint(hint)
 }
 
 fn enter_and_launch(
@@ -300,18 +320,36 @@ mod tests {
 
     #[test]
     fn only_a_refused_closed_cohort_gets_a_hint_in_the_called_tools_terms() {
-        let hint = |error: &str, closed, team| {
-            with_closed_cohort_hint(Failure::new(error), closed, team).hint
+        let hint = |error: &str, closed, tool, from_pr| {
+            with_closed_cohort_hint(Failure::new(error), closed, tool, from_pr).hint
         };
+        let closed = "worktree `pr-1` is closed";
         let fresh = Some("set `fresh` to start a new session in this worktree".to_owned());
-        assert_eq!(hint("worktree `demo` is closed", Some("demo"), None), fresh);
+        assert_eq!(hint(closed, Some("pr-1"), TaskKind::Agent, false), fresh);
         assert_eq!(
-            hint("worktree `demo` is closed", Some("demo"), Some("solo")),
+            hint(closed, Some("pr-1"), TaskKind::Agent, true),
+            Some(
+                "to start a new session in this worktree, call again with `worktree` \"pr-1\" \
+                 and `fresh` in place of `from_pr`"
+                    .to_owned()
+            ),
+        );
+        assert_eq!(
+            hint(closed, Some("pr-1"), TaskKind::Team, false),
             Some("name another `worktree`".to_owned()),
         );
+        assert_eq!(
+            hint(closed, Some("pr-1"), TaskKind::Team, true),
+            Some(
+                "`team` cannot start a new session in this worktree; name a `worktree` in \
+                 place of `from_pr` to launch outside the pull request"
+                    .to_owned()
+            ),
+        );
         let names_the_flag = "cannot relaunch 'demo' fresh; or resume without --fresh";
-        assert_eq!(hint(names_the_flag, None, None), None);
-        assert_eq!(hint(names_the_flag, None, Some("solo")), None);
+        for (tool, from_pr) in [(TaskKind::Agent, true), (TaskKind::Team, false)] {
+            assert_eq!(hint(names_the_flag, None, tool, from_pr), None);
+        }
     }
 
     #[test]
