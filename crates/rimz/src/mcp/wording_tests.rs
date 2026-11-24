@@ -82,6 +82,8 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     let wording = Wording::built_in();
     let sentence = |group: Capability| wording.file(&group_sentence(group)).text().to_owned();
     let shared = wording.file(SHARED).text().to_owned();
+    let started = "Use `tasks`, `join`, and `stop` to list, await, or cancel what you started.";
+    let guide = "Use `guide` to load a usage guide a tool description names.";
     assert_eq!(
         wording.instructions(&[Capability::Notes, Capability::Lsp]),
         format!(
@@ -91,10 +93,17 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
         )
     );
     assert_eq!(
+        wording.instructions(&[Capability::Control]),
+        format!(
+            "RimZ tools to manage yourself and load usage guides.\n{}\n{guide}\n{shared}",
+            sentence(Capability::Control)
+        )
+    );
+    assert_eq!(
         wording.instructions(&[Capability::Wait]),
         format!(
             "RimZ tools to wait outside your turn, track what you started, and load usage \
-             guides.\n{}\n{shared}",
+             guides.\n{}\n{started}\n{guide}\n{shared}",
             sentence(Capability::Wait)
         )
     );
@@ -102,13 +111,32 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
         wording.instructions(&[Capability::Subagents]),
         format!(
             "RimZ tools to delegate, track what you started, and load usage guides.\n{}\n\
-             {shared}",
+             {started}\n{guide}\n{shared}",
             sentence(Capability::Subagents)
         )
     );
     let all = wording.instructions(&Capability::ALL);
     assert!(!all.contains("only some of these tools"), "{all}");
+    assert!(all.contains(started), "{all}");
+    assert!(all.contains(guide), "{all}");
     assert_eq!(wording.instruction_paths(&Capability::ALL).count(), 0);
+    // `instructions_breach` counts both shared-tool sentences against `TEXT_LIMIT`.
+    let fixed_len = all.chars().count() - shared.chars().count();
+    for (extra, overflows) in [(0, false), (1, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        put(
+            dir.path(),
+            SHARED,
+            "x".repeat(TEXT_LIMIT - fixed_len + extra),
+        );
+        let loaded = Wording::read(dir.path());
+        assert_eq!(
+            !messages(&loaded).is_empty(),
+            overflows,
+            "extra={extra} warnings={:?}",
+            messages(&loaded)
+        );
+    }
 }
 
 /// Each reason a replacement cannot serve: the built-in text is served in its
