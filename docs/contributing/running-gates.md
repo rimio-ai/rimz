@@ -190,7 +190,7 @@ A branch that bumps `SNAPSHOT_VERSION` or `ROLLUP_CACHE_VERSION` re-checks each 
 
 Run a gate or test as `setsid --wait <command>` when it starts outside the terminal's foreground process group while it still holds that terminal. A command that a `rimz wait --run` watcher or a trailing `&` starts from an agent pane is such a run.
 
-Every test that reaches the interactive shell probe of a launch (`bash_interactive_shell_argv` in `crates/rimz/src/harness/launch.rs`) starts a `bash -i` that opens the controlling terminal. From a background group, bash stops itself and the test with `SIGTTIN`. A gate run that way timed out 30 launch and sandbox tests (`did not finish within 30s; killed`, or a nextest timeout near 370 s) that pass in seconds under `setsid --wait`.
+Every test that reaches the interactive shell of a launch (`bash_interactive_shell_argv` in `crates/rimz/src/harness/launch.rs`) starts a `bash -i` that opens the controlling terminal. From a background group, bash stops itself and the test with `SIGTTIN`. A gate run that way timed out 30 launch and sandbox tests (`did not finish within 30s; killed`, or a nextest timeout near 370 s) that pass in seconds under `setsid --wait`.
 
 ## Codex agent shells
 
