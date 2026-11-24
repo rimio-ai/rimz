@@ -437,6 +437,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         transcript_path: None,
         origin: None,
         compacted_from: None,
+        retired_context_tokens: None,
         usage: rimz::agents::AgentUsageSummary::default(),
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
         pane_stamp: None,

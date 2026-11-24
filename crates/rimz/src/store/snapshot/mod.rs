@@ -52,7 +52,7 @@ pub(crate) use panes::{
 #[cfg(test)]
 pub(crate) use process::pane_agent_kind;
 pub(crate) use process::{pane_worktree_path, process_is_active};
-pub(super) use project::{observation_stale_at, observation_stale_on};
+pub(super) use project::{compaction_retires_usage, observation_stale_at, observation_stale_on};
 pub use row::{
     AgentCard, BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling,
     BookingStage, BookingStarts, BookingState, BookingWait, CacheClock, CardDescription,

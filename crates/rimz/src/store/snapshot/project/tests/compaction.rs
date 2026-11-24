@@ -1007,3 +1007,104 @@ fn manual_compaction_on_parked_row_keeps_parked_and_preserves_turn_clocks() {
         );
     }
 }
+
+#[test]
+fn stamped_retired_context_tokens_retires_sidecar_reading_and_hook_usage_still_wins() {
+    use crate::agents::context::{AgentContext, AgentTokenUsage};
+
+    let sidecar = |kind: &str, used: u64| {
+        let mut ctx = AgentContext::new(kind, jiff::Timestamp::now());
+        ctx.tokens = Some(AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            used_percentage: Some(((used * 100) / 1_000_000) as u8),
+            remaining_percentage: Some(100 - ((used * 100) / 1_000_000) as u8),
+            current_context_tokens: Some(used),
+            current_usage: None,
+            session_usage: None,
+        });
+        ctx
+    };
+    let stamped_event = |source: &str, event_name: &str, sig: serde_json::Value, retired: u64| {
+        raw_lifecycle(
+            source,
+            serde_json::json!({
+                "event_name": event_name,
+                "agent_id": "sess-1",
+                "signal": sig,
+                "retired_context_tokens": retired,
+            }),
+        )
+    };
+
+    // Kind-agnostic: both antigravity and claude retire whatever the event carries when prior hook
+    // usage gave none.
+    for source in ["antigravity", "claude"] {
+        // Explicit bracketed close.
+        let mut agent = reduce_agent_states(&[
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            lifecycle(source, "PreInvocation", signal("compacting")),
+            stamped_event(source, "Stop", compaction_ended(Some(false)), 26_700),
+        ])
+        .remove(0);
+        assert_eq!(agent.retired_context_tokens, Some(26_700), "{source}");
+        agent.attach_context(Some(sidecar(source, 26_700)));
+        assert_eq!(agent.context_used_tokens(), None, "{source}");
+        assert_eq!(agent.occupied_context_tokens(), None, "{source}");
+        assert_eq!(agent.context_fill_pct(), None, "{source}");
+        assert_eq!(agent.resolved_context_window(), Some(1_000_000), "{source}");
+        agent.attach_context(Some(sidecar(source, 14_038)));
+        assert_eq!(agent.context_used_tokens(), Some(14_038), "{source}");
+
+        // Unbracketed explicit close.
+        let unbracketed = reduce_agent_states(&[
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            stamped_event(source, "Stop", compaction_ended(Some(false)), 26_700),
+        ])
+        .remove(0);
+        assert_eq!(unbracketed.retired_context_tokens, Some(26_700), "{source}");
+
+        // Derived close (bracket closed by TurnStarted).
+        let derived = reduce_agent_states(&[
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            lifecycle(source, "PreInvocation", signal("compacting")),
+            stamped_event(source, "PreInvocation", signal("turn_started"), 26_700),
+        ])
+        .remove(0);
+        assert_eq!(derived.retired_context_tokens, Some(26_700), "{source}");
+
+        // Second compaction after a new reading replaces the retired figure.
+        let second = reduce_agent_states(&[
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            lifecycle(source, "PreInvocation", signal("compacting")),
+            stamped_event(source, "Stop", compaction_ended(Some(false)), 26_700),
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            lifecycle(source, "PreInvocation", signal("compacting")),
+            stamped_event(source, "Stop", compaction_ended(Some(false)), 41_000),
+        ])
+        .remove(0);
+        assert_eq!(second.retired_context_tokens, Some(41_000), "{source}");
+
+        // Failed compaction retires nothing even if stamped.
+        let failed = reduce_agent_states(&[
+            lifecycle(source, "PreInvocation", signal("turn_started")),
+            lifecycle(source, "PreInvocation", signal("compacting")),
+            stamped_event(source, "Stop", compaction_failed(Some(false)), 26_700),
+        ])
+        .remove(0);
+        assert_eq!(failed.retired_context_tokens, None, "{source}");
+    }
+
+    // Hook-carried usage still wins over a stamped value.
+    let hook_wins = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        stamped_event(
+            "claude",
+            "PostCompact",
+            compaction_ended(Some(false)),
+            26_700,
+        ),
+    ])
+    .remove(0);
+    assert_eq!(hook_wins.retired_context_tokens, Some(85_000));
+}

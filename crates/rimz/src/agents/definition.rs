@@ -1815,6 +1815,11 @@ pub struct Capabilities {
     /// Local transcript/rollout tail is a live context source refreshable
     /// outside hooks. Drives producer ticks and renderer transcript watches.
     pub transcript_tail_context: bool,
+    /// The provider's context sidecar keeps its pre-compaction occupancy
+    /// reading across a compaction until a later turn updates it, so the store
+    /// stamps that reading onto a usage-retiring close event for the fold to
+    /// retire.
+    pub context_lags_compaction: bool,
     /// Registers its session lazily and/or routes hooks through a daemon, so
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.

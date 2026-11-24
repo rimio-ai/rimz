@@ -488,3 +488,105 @@ fn a_spent_window_withholds_the_reminder_until_the_reset_and_paces_nothing() {
         );
     }
 }
+
+#[test]
+fn reminder_stays_suppressed_on_withheld_lagging_sidecar_through_first_prompt_then_rearms() {
+    use crate::agents::context::{AgentContext, AgentTokenUsage};
+    use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use crate::ids::AgentSessionId;
+    use crate::store::writer::AgentLifecycleIntent;
+    use crate::store::{Store, agent_context};
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths =
+        crate::disk::paths::StatePaths::under(workspace_id.clone(), &dir.path().join("state"))
+            .unwrap();
+    let runtime = RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let kind = AgentKind::new_unchecked("antigravity");
+    let session = AgentSessionId::from("sess-agy");
+
+    let write_sidecar = |used: u64| {
+        let mut ctx = AgentContext::new("antigravity", Timestamp::now());
+        ctx.tokens = Some(AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            used_percentage: Some(((used * 100) / 1_000_000) as u8),
+            remaining_percentage: Some(100 - ((used * 100) / 1_000_000) as u8),
+            current_context_tokens: Some(used),
+            current_usage: None,
+            session_usage: None,
+        });
+        agent_context::write(
+            store.runtime_paths(),
+            "antigravity",
+            session.as_str(),
+            &ctx,
+            None,
+        )
+        .unwrap();
+    };
+    let append = |event: &str, signal: LifecycleSignal| {
+        let obs = AgentLifecycleObservation::new(Some(session.clone()), signal);
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: kind.clone(),
+                event_name: event,
+                observation: &obs,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    };
+
+    write_sidecar(150_000);
+    append(
+        "PreInvocation",
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    append("PreInvocation", LifecycleSignal::Compacting);
+    append(
+        "Stop",
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
+    );
+    // First prompt clears `compacted_awaiting_prompt`, leaving only the retired-reading guard.
+    append(
+        "PreInvocation",
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+
+    let read_agent = || {
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == session)
+            .cloned()
+            .expect("agent row")
+    };
+
+    let withheld = read_agent();
+    assert!(withheld.compacted_awaiting_prompt.is_none());
+    assert!(
+        !due(&withheld),
+        "stale pre-compaction sidecar reading must not re-fire reminder after first prompt"
+    );
+
+    write_sidecar(14_038);
+    let post = read_agent();
+    assert!(
+        !due(&post),
+        "low post-compaction reading stays below threshold"
+    );
+
+    write_sidecar(120_000);
+    let crossed = read_agent();
+    assert!(
+        due(&crossed),
+        "genuine crossing above threshold re-arms reminder"
+    );
+}

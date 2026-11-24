@@ -1084,6 +1084,7 @@ fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) ->
         transcript_path: None,
         origin: None,
         compacted_from: None,
+        retired_context_tokens: None,
         usage: crate::agents::AgentUsageSummary::default(),
         pane_id: None,
         pane_stamp: None,

@@ -54,6 +54,7 @@ fn registered(
         transcript_path: None,
         origin: None,
         compacted_from: None,
+        retired_context_tokens: None,
         usage: rimz::agents::AgentUsageSummary::default(),
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane_raw)),
         pane_stamp: None,

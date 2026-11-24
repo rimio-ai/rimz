@@ -564,6 +564,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         transcript_path: None,
         origin: None,
         compacted_from: None,
+        retired_context_tokens: None,
         usage: rimz::agents::AgentUsageSummary::default(),
         pane_id: None,
         pane_stamp: None,
