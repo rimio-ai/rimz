@@ -6,7 +6,7 @@ forge
   source: /tmp/.agents/teams/forge/team.toml
   layout: planner,coder+reviewer
 
-  @planner   claude  fable  <- leader
+  @planner   claude  Fable  <- leader
   signals   ci.failed → @planner
   @planner keep-warm: max 6h; while team.stage!=Done
   (prompt stack: rimz teams show forge --json)

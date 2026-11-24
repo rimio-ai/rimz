@@ -12,14 +12,14 @@ pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
 }
 
 /// The most specific observed or carried model name; never synthesized.
-pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
+pub(super) fn display_model(row: &SidebarRow) -> Option<RenderedModel> {
     model_label_source(
         ctx(row).and_then(|context| context.model_display_name.as_deref()),
         ctx(row).and_then(|context| context.model_id.as_deref()),
         row.as_agent().and_then(|agent| agent.model.as_deref()),
     )
     .filter(|model| !model.is_empty())
-    .map(|raw| model_label_parts(raw).0)
+    .map(|raw| ParsedModel::parse(raw).render(home_series(&row.name)))
 }
 
 /// Reasoning configuration: the session's observed live effort is preferred;
@@ -794,7 +794,7 @@ mod tests {
                 }],
                 None,
             );
-            display_model(snapshot.rows().next().unwrap())
+            display_model(snapshot.rows().next().unwrap()).map(|model| model.full())
         };
         assert_eq!(project(&state).as_deref(), Some("Opus 5"));
         state.context.as_mut().unwrap().model_id = None;

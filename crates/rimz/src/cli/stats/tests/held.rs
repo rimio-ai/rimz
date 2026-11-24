@@ -945,7 +945,7 @@ fn dashboard_empty_keeps_the_wordmark_and_centres_at_both_widths() {
 fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     let (mut stats, assists) = fixture();
     let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
-    assert!(output.contains("GPT 6 Astra"), "{output}");
+    assert!(output.contains("GPT · Astra 6"), "{output}");
     let models = output
         .split("Models")
         .nth(1)

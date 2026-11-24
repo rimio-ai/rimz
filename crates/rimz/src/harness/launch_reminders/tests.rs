@@ -766,9 +766,13 @@ fn environment_follows_identity_and_precedes_policy() {
             assert_eq!(text.matches("<system_reminder>").count(), 1);
             assert_eq!(text.matches("</system_reminder>").count(), 1);
             let identity = text
-                .find(if subagent { "GPT 6 Astra" } else { "### Team" })
+                .find(if subagent {
+                    "GPT · Astra 6"
+                } else {
+                    "### Team"
+                })
                 .expect("identity");
-            assert_eq!(text.contains("GPT 6 Astra"), subagent);
+            assert_eq!(text.contains("GPT · Astra 6"), subagent);
             let env = text.find("- shell: sh").expect("environment paragraph");
             let tmp = text.find("- tmp: /tmp").expect("tmp bullet");
             let policy = text
@@ -798,14 +802,14 @@ fn model_line_names_handle_and_model_without_effort() {
     for (params, expected) in [
         (
             params.clone(),
-            Some("You are @planner, running on Fable 5.1."),
+            Some("You are @planner, running on Claude · Fable 5.1."),
         ),
         (
             LaunchParams {
                 role: None,
                 ..params.clone()
             },
-            Some("You are @writer, running on Fable 5.1."),
+            Some("You are @writer, running on Claude · Fable 5.1."),
         ),
         (
             LaunchParams {
@@ -813,7 +817,7 @@ fn model_line_names_handle_and_model_without_effort() {
                 profile: None,
                 ..params.clone()
             },
-            Some("You are running on Fable 5.1."),
+            Some("You are running on Claude · Fable 5.1."),
         ),
         (
             LaunchParams {

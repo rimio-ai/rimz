@@ -2842,7 +2842,7 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
     let rendered = strip_ansi(&held_frame(&stats, &AssistStats::default(), active, today));
     for expected in [
         "Today $12",
-        "Current Mod",
+        "Current · Mod",
         "Codex",
         "today $12 so far · ~$12 by midnight · █ yesterday $18",
         "3 active days since",
@@ -3008,14 +3008,17 @@ fn stall_notice_names_child_parent_and_silence_in_stats() {
 fn model_display_names() {
     use rimz::agents::model_display::display_model;
 
-    assert_eq!(display_model("claude-opus-4-8"), "Opus 4.8");
-    assert_eq!(display_model("claude-haiku-4-5"), "Haiku 4.5");
-    assert_eq!(display_model("claude-fable-5"), "Fable 5");
-    assert_eq!(display_model("claude-opus-4-7-20260101"), "Opus 4.7");
+    assert_eq!(display_model("claude-opus-4-8"), "Claude · Opus 4.8");
+    assert_eq!(display_model("claude-haiku-4-5"), "Claude · Haiku 4.5");
+    assert_eq!(display_model("claude-fable-5"), "Claude · Fable 5");
+    assert_eq!(
+        display_model("claude-opus-4-7-20260101"),
+        "Claude · Opus 4.7"
+    );
     assert_eq!(display_model("gpt-5"), "GPT 5");
-    assert_eq!(display_model("gpt-5-codex"), "GPT 5 Codex");
-    assert_eq!(display_model("gpt-5.1-codex-max"), "GPT 5.1 Codex Max");
-    assert_eq!(display_model("mystery-model"), "Mystery Model");
+    assert_eq!(display_model("gpt-5-codex"), "GPT · Codex 5");
+    assert_eq!(display_model("gpt-5.1-codex-max"), "GPT · Codex Max 5.1");
+    assert_eq!(display_model("mystery-model"), "Mystery · Model");
 }
 
 #[test]
@@ -3727,4 +3730,86 @@ fn today_index_uses_the_publications_zone() {
         stats.today_day(now.as_second() as u64),
         now.as_second() / DAY_SECS + 1
     );
+}
+
+#[test]
+fn stats_from_provider_folds_models_sharing_a_displayed_name() {
+    let today = 20_000;
+    let agy = ModelTally {
+        tally: every_window(tally(1_000, 10.0, 2)),
+        kind: "antigravity".into(),
+    };
+    let pi = ModelTally {
+        tally: every_window(tally(400, 3.0, 1)),
+        kind: "pi".into(),
+    };
+    let mut cache = rimz::agents::spending::ProviderSpendingCache {
+        refreshed_at_ms: 123,
+        timezone: "UTC".into(),
+        days: BTreeMap::from([(today, day(1_400, 13.0))]),
+        chart: rimz::agents::spending::ChartSpend {
+            today,
+            hour: 12,
+            hours: BTreeMap::from([(
+                today * 24 + 10,
+                BTreeMap::from([("Gemini 4 Neon".into(), 4.0), ("gemini-4-neon".into(), 1.5)]),
+            )]),
+            days: BTreeMap::from([(
+                today,
+                BTreeMap::from([
+                    ("Gemini 4 Neon".into(), 10.0),
+                    ("gemini-4-neon".into(), 3.0),
+                ]),
+            )]),
+            weeks: BTreeMap::from([(
+                today,
+                BTreeMap::from([
+                    ("Gemini 4 Neon".into(), 10.0),
+                    ("gemini-4-neon".into(), 3.0),
+                ]),
+            )]),
+        },
+        models: BTreeMap::from([("Gemini 4 Neon".into(), agy), ("gemini-4-neon".into(), pi)]),
+        ..Default::default()
+    };
+    cache.spending.total = every_window(tally(1_400, 13.0, 3));
+
+    let stats = Stats::from_provider(cache);
+
+    assert_eq!(stats.by_model.len(), 1);
+    let folded = stats
+        .by_model
+        .get("Gemini 4 Neon")
+        .expect("highest-spend member supplies the folded raw id");
+    assert_eq!(folded.kind, "antigravity");
+    assert!((folded.tally.day.usd - 13.0).abs() < 1e-9);
+    assert_eq!(folded.tally.day.tokens, 1_400);
+    assert_eq!(folded.tally.day.sessions, 3);
+    assert_eq!(stats.chart.hours[&(today * 24 + 10)].len(), 1);
+    assert!((stats.chart.hours[&(today * 24 + 10)]["Gemini 4 Neon"] - 5.5).abs() < 1e-9);
+    assert_eq!(stats.chart.days[&today].len(), 1);
+    assert!((stats.chart.days[&today]["Gemini 4 Neon"] - 13.0).abs() < 1e-9);
+    assert_eq!(stats.chart.weeks[&today].len(), 1);
+    assert!((stats.chart.weeks[&today]["Gemini 4 Neon"] - 13.0).abs() < 1e-9);
+
+    let json = json::stats_json_value(&stats, &AssistStats::default(), today, false, Window::Today);
+    let models = json["models"].as_array().expect("models array");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["model"], "Gemini 4 Neon");
+    assert_eq!(models[0]["name"], "Gemini · Neon 4");
+    assert!((models[0]["usd"].as_f64().unwrap() - 13.0).abs() < 1e-9);
+
+    let mut panel_out = Vec::new();
+    render_spend(
+        &mut panel_out,
+        &stats,
+        today,
+        false,
+        None,
+        Window::Today,
+        "\n",
+    )
+    .unwrap();
+    let panel_text = String::from_utf8(panel_out).unwrap();
+    assert_eq!(panel_text.matches("Gemini · Neon 4").count(), 1);
 }

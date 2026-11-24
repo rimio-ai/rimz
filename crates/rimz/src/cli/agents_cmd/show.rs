@@ -465,7 +465,7 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
     if let Some(profile) = &agent.profile {
         facts.push(profile.clone());
     }
-    if let Some(model) = &agent.model.label {
+    if let Some(model) = &agent.model.human_label {
         let mut model = model.clone();
         if agent.model.fast {
             let config = crate::cli::machine_config();

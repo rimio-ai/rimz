@@ -20,7 +20,7 @@ forge
   source: /tmp/.agents/teams/forge/team.toml
   layout: planner,coder+reviewer
 
-  @planner   claude  fable  <- leader
-  @coder     claude  fable
+  @planner   claude  Fable  <- leader
+  @coder     claude  Fable
   signals   ci.failed → @planner, ci.failed → @coder
   (prompt stack: rimz teams show forge --json)

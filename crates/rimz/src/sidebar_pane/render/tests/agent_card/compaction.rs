@@ -64,7 +64,7 @@ fn opencode_capacity_yields_at_the_exact_label_boundary() {
         let mut snapshot = opencode_compaction_snapshot();
         snapshot.theme.glyphs.set = Some(set.into());
         let theme = Theme::fixed_for_theme(false, &snapshot.theme);
-        for width in [53, 54, 55, 58] {
+        for width in [54, 55, 56, 58] {
             let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
             let identity = lines
                 .iter()
@@ -74,7 +74,7 @@ fn opencode_capacity_yields_at_the_exact_label_boundary() {
             assert!(text.contains("835k"), "{set}, {width}: {text}");
             assert_eq!(
                 text.contains("835k/1M"),
-                width >= 54,
+                width >= 55,
                 "{set}, {width}: {text}"
             );
             assert!(text.trim_end().ends_with("$1.20"), "{text}");

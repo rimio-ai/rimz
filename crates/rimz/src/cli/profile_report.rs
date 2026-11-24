@@ -342,20 +342,21 @@ fn profile_cards(
     Ok(())
 }
 
+pub(crate) fn tier_note(tier: rimz::config::tiers::ModelTier, fallback: Option<bool>) -> String {
+    if fallback == Some(true) {
+        format!("{tier}, fallback")
+    } else {
+        tier.to_string()
+    }
+}
+
 pub(crate) fn model_label(
     model: &str,
     tier: Option<rimz::config::tiers::ModelTier>,
     fallback: Option<bool>,
 ) -> String {
     match tier {
-        Some(tier) => format!(
-            "{model} ({tier}{})",
-            if fallback == Some(true) {
-                ", fallback"
-            } else {
-                ""
-            }
-        ),
+        Some(tier) => format!("{model} ({})", tier_note(tier, fallback)),
         None => model.to_owned(),
     }
 }

@@ -141,6 +141,8 @@ pub(super) struct ModelReport {
     pub effort: Option<String>,
     pub fast: bool,
     pub label: Option<String>,
+    #[serde(skip)]
+    pub human_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<rimz::agents::TierStamp>>,
 }
@@ -718,21 +720,35 @@ pub(super) fn model_report(agent: &AgentState) -> ModelReport {
     let effort = context
         .and_then(|context| context.effort.clone())
         .or_else(|| agent.effort.clone());
-    let display = rimz::agents::model_display::model_label_source(
+    let parsed = rimz::agents::model_display::model_label_source(
         context.and_then(|context| context.model_display_name.as_deref()),
         context.and_then(|context| context.model_id.as_deref()),
         agent.model.as_deref(),
-    );
-    let display = display.map(|raw| {
-        let (name, window) = rimz::agents::model_display::model_label_parts(raw);
-        window.map_or_else(|| name.clone(), |window| format!("{name}[{window}]"))
+    )
+    .map(rimz::agents::model_display::ParsedModel::parse);
+    let format_with_window = |parsed: &rimz::agents::model_display::ParsedModel, home| {
+        let name = parsed.render(home).full();
+        parsed
+            .window()
+            .map_or(name.clone(), |window| format!("{name}[{window}]"))
+    };
+    let json_display = parsed
+        .as_ref()
+        .map(|parsed| format_with_window(parsed, None));
+    let human_display = parsed.as_ref().map(|parsed| {
+        format_with_window(
+            parsed,
+            rimz::agents::model_display::home_series(agent.kind.as_str()),
+        )
     });
-    let label = model_label(display.as_deref(), effort.as_deref());
+    let label = model_label(json_display.as_deref(), effort.as_deref());
+    let human_label = model_label(human_display.as_deref(), effort.as_deref());
     ModelReport {
         id,
         effort,
         fast: agent.fast_mode(),
         label,
+        human_label,
         tier: agent.tier.clone(),
     }
 }

@@ -262,7 +262,7 @@ upward-dependencies = [
 # The legacy HeadlessVerdict and shared Codex billing remain; the headless request, result, form operations and adapter forms are gone, their slack kept.
 # Entitlement shares typed per-login subscription access with projection and CLI (+1).
 # The fast-mode switch declaration is shared by adapters and definition load.
-# model_label_parts and window_short share model and window spelling across renderers (+2).
+# ParsedModel, RenderedModel, and window_short share model and window spelling across renderers (+2).
 # model_label_source shares version-aware model source selection between CLI and sidebar (+1).
 # SpendUpdate distinguishes authoritative replacement from a counted-spend rewrite merge (+1).
 # LaunchBlocker and LaunchCapability::launch_blocker share provider launch preconditions (+2).
@@ -485,9 +485,9 @@ upward-dependencies = [
 # skills::available_skills exposes full on-disk skill names so `agents validate` checks `skill(x)` (+1).
 # skills::{SkillMarkerErr, is_user_only, is_model_callable_on_disk} share the one user-only marker read
 # and launch-time optional-skill check across definition loading and launch settlement (+3).
-# ParsedModel, RenderedModel, home_series, home_series_owner, and display_model_for_kind share one
-# model parse and series-aware render across agents, sidebar, and CLI (+9 net).
-surface-budget = 1363
+# ParsedModel, RenderedModel, home_series, home_series_owner, and display_model_for_kind replace
+# model_label_parts and display_factory_custom_selector (+7 net).
+surface-budget = 1361
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

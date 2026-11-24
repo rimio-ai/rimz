@@ -34,7 +34,7 @@ fn launch_receipt_names_accounts_and_aligns_provider_columns() {
     .unwrap();
     assert_eq!(
         String::from_utf8(output.into_inner()).unwrap(),
-        "launched 2 agents in #auth (/repo)\n\n  @named     claude@rimio  fable\n  @default   claude        fable\n\n"
+        "launched 2 agents in #auth (/repo)\n\n  @named     claude@rimio  Fable\n  @default   claude        Fable\n\n"
     );
 }
 
@@ -67,7 +67,7 @@ fn launch_receipt_carries_moved_stamp_to_the_roster() {
     .unwrap();
     let text = String::from_utf8(output.into_inner()).unwrap();
     assert!(
-        text.contains("astra (senior; opus: not buildable)"),
+        text.contains("Astra (senior; opus: not buildable)"),
         "{text}"
     );
 }

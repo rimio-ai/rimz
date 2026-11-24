@@ -49,7 +49,7 @@ fn fast_card_bolt_follows_the_model_across_tier_edges() {
                     "{width}: {text}"
                 );
                 if fast && capabilities {
-                    assert!(text.contains("GPT 6.1 Sol ϟ"), "{text}");
+                    assert!(text.contains("Sol 6.1 ϟ"), "{text}");
                     assert!(!text.contains("Sol · ϟ"), "{text}");
                     if let Some(reasoning) = text.find("xhigh") {
                         assert!(text.find('ϟ').unwrap() < reasoning, "{text}");
@@ -268,7 +268,7 @@ fn fast_bolt_keeps_its_room_before_the_tier_move_mark() {
     for width in [33, 34, 35, 36, 37] {
         let text = identity_text(&snapshot, &theme, width + 2);
         assert!(text.contains("abcdefghijklmnop · "), "{width}: {text}");
-        let model = if width >= 34 { "astra ϟ" } else { "ast… ϟ" };
+        let model = if width >= 34 { "Astra ϟ" } else { "Ast… ϟ" };
         assert!(text.contains(model), "{width}: {text}");
         assert_eq!(text.contains("ϟ ↪"), width >= 36, "{width}: {text}");
         assert_eq!(text.contains('↪'), width >= 36, "{width}: {text}");
