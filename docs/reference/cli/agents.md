@@ -582,7 +582,7 @@ The default report shows:
 - the action, working directory, and effective settings, with `fast` and `code-mode` as `on`, `off`, or `unset`, an `auto-compact` row when the launch passes a native window, and `(kind base <kind>)` after each of effort, fast, code mode, and auto-compact that the kind base supplied;
 - the provider argv and the wrapped argv;
 - the launch's environment overrides and unset keys (not the whole ambient environment);
-- the grant: the applied tools list (or the provider default when the launch applies none), each RimZ capability the launch has with how it reaches it, worded as the launch reminder's capability lines, the profile's `subagents` allowlist or `unrestricted`, and the `allowed-tools` rules;
+- the grant: the applied tools list (or the provider default when the launch applies none), each RimZ capability the launch has with how it reaches it (`mcp(<tool>)` or `skill(<name>)`), the profile's `subagents` allowlist or `unrestricted`, and the `allowed-tools` rules;
 - prompt sources, the composed prompt text, and how the RimZ reminder is delivered;
 - scoped-view mounts, pins, copies (skills and system SSH config), and skill omissions;
 - the skill policy: scoped view, host provider switch with unlisted keys, or an unenforced-list warning.
