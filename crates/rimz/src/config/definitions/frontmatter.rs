@@ -309,11 +309,12 @@ impl AgentFrontmatter {
         Ok(())
     }
 
-    /// A kind base's fields less those `namespace` refuses: a subagent takes no
-    /// `idle-compact` or `subagents`, and a direct profile no `timeout`.
+    /// A kind base's or direct parent's fields less those `namespace` drops: a subagent takes no
+    /// `idle-compact`, `keep-warm`, or `subagents`, and a direct profile no `timeout`.
     pub(super) fn for_namespace(mut self, namespace: &str) -> Self {
         if namespace == "subagents" {
             self.idle_compact = None;
+            self.keep_warm = None;
             self.subagents = None;
         } else {
             self.timeout = None;

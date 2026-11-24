@@ -5180,6 +5180,7 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
     let mut child = direct.clone();
     child["timeout"] = serde_json::json!(1800);
     child["idle-compact"] = serde_json::Value::Null;
+    child["keep-warm"] = serde_json::Value::Null;
     child["subagents"] = serde_json::Value::Null;
     let mut own = direct.clone();
     own["model"] = serde_json::json!("sonnet");
@@ -7220,4 +7221,340 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
             *reads.borrow()
         );
     });
+}
+
+#[test]
+fn subagent_files_follow_agents_parents_and_drop_direct_only_fields() {
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    write(
+        home.path(),
+        "agents/claude.md",
+        "---\ndescription: Claude base\nkeep-warm: 2h\n---\nClaude house.",
+    );
+    write(
+        home.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\n---\nCodex house.",
+    );
+    definition(
+        pack.path(),
+        "agents/senior.md",
+        "agent: claude\nmodel: opus\neffort: high\nfast: on\nsmart-compact: 50%\n\
+         idle-compact: 150k\nkeep-warm: 2h\nsubagents: [general]\ntools: [Bash, Read]",
+        "Pack senior craft.",
+    );
+    definition(
+        home.path(),
+        "agents/senior.md",
+        "agent: claude\nmodel: sonnet\neffort: medium\nfast: on\nsmart-compact: 60%\n\
+         idle-compact: 200k\nkeep-warm: 3h\nsubagents: [general]\ntools: [Read, Grep]",
+        "Home senior craft.",
+    );
+    definition(
+        home.path(),
+        "subagents/shared.md",
+        "agent: claude\nmodel: sonnet\neffort: low\ntools: [Read]",
+        "Subagent shared craft.",
+    );
+    definition(
+        pack.path(),
+        "agents/shared.md",
+        "agent: claude\nmodel: opus\neffort: high\ntools: [Bash]",
+        "Pack agent shared craft.",
+    );
+    definition(
+        home.path(),
+        "subagents/child_bare.md",
+        "agent: senior\ntimeout: 30m",
+        "Bare child craft.",
+    );
+    definition(
+        home.path(),
+        "subagents/child_pack.md",
+        "agent: crew:senior",
+        "Pack child craft.",
+    );
+    definition(
+        home.path(),
+        "subagents/child_retarget.md",
+        "agent: senior\nmodel: astra",
+        "Retarget craft.",
+    );
+    definition(
+        home.path(),
+        "subagents/child_own_first.md",
+        "agent: shared",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_pack_shared.md",
+        "agent: crew:shared",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_grand.md",
+        "agent: child_bare",
+        "Grandchild craft.",
+    );
+
+    let loaded = clean(home.path());
+    assert!(
+        !loaded.subagent_profiles.0.contains_key("senior"),
+        "direct parent must never appear in subagents table"
+    );
+    assert!(
+        !loaded
+            .subagent_profiles
+            .0
+            .keys()
+            .any(|name| name.contains(':')),
+        "qualified parent must never appear in subagents table"
+    );
+
+    let bare = &loaded.subagent_profiles.0["child_bare"];
+    assert_eq!(bare.agent, "claude");
+    assert_eq!(bare.model.as_deref(), Some("sonnet"));
+    assert_eq!(bare.effort.as_deref(), Some("medium"));
+    assert_eq!(bare.fast, Some(crate::agents::Toggle::On));
+    assert_eq!(
+        bare.smart_compact,
+        Some(crate::config::FlipCompact::Threshold(
+            crate::store::message::AutoCompact::Percent(60)
+        ))
+    );
+    assert_eq!(bare.idle_compact, None);
+    assert_eq!(bare.keep_warm, None);
+    assert_eq!(bare.subagents, None);
+    assert_eq!(
+        bare.tools.as_ref().map(crate::agents::ToolSet::bases),
+        Some(["Read".to_owned(), "Grep".to_owned()].as_slice())
+    );
+    assert_eq!(bare.timeout, Some(std::time::Duration::from_secs(1800)));
+    let bare_crafts: Vec<_> = bare
+        .append_system_prompt_files
+        .iter()
+        .map(|src| match src {
+            crate::config::PromptSource::Text { text, .. } => text.as_str(),
+            crate::config::PromptSource::File(_) => "<file>",
+        })
+        .collect();
+    assert_eq!(bare_crafts, vec!["Home senior craft.", "Bare child craft."]);
+
+    let pack_child = &loaded.subagent_profiles.0["child_pack"];
+    assert_eq!(pack_child.model.as_deref(), Some("opus"));
+    assert_eq!(pack_child.effort.as_deref(), Some("high"));
+    assert_eq!(pack_child.idle_compact, None);
+    assert_eq!(pack_child.keep_warm, None);
+    assert_eq!(pack_child.subagents, None);
+    let pack_crafts: Vec<_> = pack_child
+        .append_system_prompt_files
+        .iter()
+        .map(|src| match src {
+            crate::config::PromptSource::Text { text, .. } => text.as_str(),
+            crate::config::PromptSource::File(_) => "<file>",
+        })
+        .collect();
+    assert_eq!(pack_crafts, vec!["Pack senior craft.", "Pack child craft."]);
+
+    let retarget = &loaded.subagent_profiles.0["child_retarget"];
+    assert_eq!(retarget.agent, "codex");
+    assert_eq!(retarget.model.as_deref(), Some("astra"));
+    assert_eq!(retarget.effort.as_deref(), Some("medium"));
+    assert_eq!(retarget.idle_compact, None);
+    assert_eq!(retarget.keep_warm, None);
+    assert_eq!(retarget.subagents, None);
+
+    // Own tree wins on bare name; qualified name still reaches pack's agents/.
+    assert_eq!(
+        loaded.subagent_profiles.0["child_own_first"]
+            .effort
+            .as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        loaded.subagent_profiles.0["child_pack_shared"]
+            .effort
+            .as_deref(),
+        Some("high")
+    );
+
+    let grand = &loaded.subagent_profiles.0["child_grand"];
+    assert_eq!(grand.effort.as_deref(), Some("medium"));
+    assert_eq!(grand.idle_compact, None);
+    assert_eq!(grand.keep_warm, None);
+    assert_eq!(grand.subagents, None);
+    assert_eq!(grand.append_system_prompt_files.len(), 3);
+}
+
+#[test]
+fn subagent_following_failed_agent_parent_reports_once_and_ignores_parent_subagents_list() {
+    let home = fixture();
+    let pack = linked_pack(home.path(), "crew");
+    write(
+        home.path(),
+        "agents/claude.md",
+        "---\ndescription: Claude base\n---\nClaude house.",
+    );
+    // Parent fails only on its own `subagents:` list (unknown child, and Agent-tool conflict).
+    definition(
+        home.path(),
+        "agents/bad_subagents.md",
+        "agent: claude\nmodel: opus\neffort: high\ntools: [Bash]\nsubagents: [nonexistent]",
+        "Bad subagents parent.",
+    );
+    definition(
+        home.path(),
+        "agents/agent_conflict.md",
+        "agent: claude\ntools: [Agent, Bash]\nsubagents: [general]",
+        "Agent conflict parent.",
+    );
+    // Parent and child referencing each other via `subagents:` and `agent:`.
+    definition(
+        home.path(),
+        "agents/delegator.md",
+        "agent: claude\ntools: [Bash]\nsubagents: [child_of_delegator]",
+        "Delegator parent.",
+    );
+    definition(
+        home.path(),
+        "subagents/child_of_bad_subagents.md",
+        "agent: bad_subagents",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_of_conflict.md",
+        "agent: agent_conflict",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_of_delegator.md",
+        "agent: delegator",
+        "",
+    );
+    // Parents failing for non-`subagents:` reasons.
+    definition(
+        home.path(),
+        "agents/broken_bare.md",
+        "agent: claude\ntools: [Bash]\nbudget: not-a-number",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_of_broken_bare.md",
+        "agent: broken_bare",
+        "",
+    );
+    // Overridden pack agent parent that fails on a non-`subagents:` reason.
+    definition(
+        pack.path(),
+        "agents/pack_broken.md",
+        "agent: claude\ntools: [Bash]\nbudget: not-a-number",
+        "",
+    );
+    definition(
+        home.path(),
+        "agents/pack_broken.md",
+        "agent: claude\ntools: [Bash]",
+        "",
+    );
+    definition(
+        home.path(),
+        "subagents/child_of_pack_broken.md",
+        "agent: crew:pack_broken",
+        "",
+    );
+    // Agents file still cannot follow a subagent.
+    definition(
+        home.path(),
+        "agents/cannot_follow_child.md",
+        "agent: child_of_delegator",
+        "",
+    );
+
+    let loaded = load_checked(home.path());
+    assert!(
+        loaded
+            .subagent_profiles
+            .0
+            .contains_key("child_of_bad_subagents"),
+        "child must load when parent fails only on subagents: {:?}",
+        loaded.errors
+    );
+    assert!(
+        loaded.subagent_profiles.0.contains_key("child_of_conflict"),
+        "child must load when parent fails only on Agent+subagents: {:?}",
+        loaded.errors
+    );
+    assert!(
+        loaded
+            .subagent_profiles
+            .0
+            .contains_key("child_of_delegator")
+            && loaded.agent_profiles.0.contains_key("delegator"),
+        "parent listing its own inheriting child must both load: {:?}",
+        loaded.errors
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("bad_subagents"));
+    assert!(!loaded.agent_profiles.0.contains_key("agent_conflict"));
+
+    assert!(
+        !loaded
+            .subagent_profiles
+            .0
+            .contains_key("child_of_broken_bare")
+    );
+    assert!(
+        !loaded
+            .subagent_profiles
+            .0
+            .contains_key("child_of_pack_broken")
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("cannot_follow_child"));
+
+    let count_for = |suffix: &str| {
+        loaded
+            .errors
+            .iter()
+            .filter(|err| err.path.ends_with(suffix))
+            .collect::<Vec<_>>()
+    };
+    let bare_parent_errs = count_for("agents/broken_bare.md");
+    assert_eq!(
+        bare_parent_errs.len(),
+        1,
+        "failed agents parent must be reported once: {:?}",
+        loaded.errors
+    );
+    let bare_child_errs = count_for("subagents/child_of_broken_bare.md");
+    assert_eq!(bare_child_errs.len(), 1, "{:?}", loaded.errors);
+    assert!(
+        bare_child_errs[0]
+            .message
+            .contains("follows `broken_bare`, which failed to load"),
+        "{}",
+        bare_child_errs[0].message
+    );
+    let pack_child_errs = count_for("subagents/child_of_pack_broken.md");
+    assert_eq!(pack_child_errs.len(), 1, "{:?}", loaded.errors);
+    assert!(
+        pack_child_errs[0]
+            .message
+            .contains("follows `crew:pack_broken`, which failed to load"),
+        "{}",
+        pack_child_errs[0].message
+    );
+    let agent_follows_sub = count_for("agents/cannot_follow_child.md");
+    assert_eq!(agent_follows_sub.len(), 1, "{:?}", loaded.errors);
+    assert!(
+        agent_follows_sub[0]
+            .message
+            .contains("rimz resolves `agent:` within agents"),
+        "{}",
+        agent_follows_sub[0].message
+    );
 }
