@@ -2197,6 +2197,7 @@ fn parked_child_marker_covers_turn_error_focus_no_description_and_drop_widths() 
         (25, long),
         (23, Some("ab")),
         (24, Some("ab")),
+        (23, Some("a")),
     ]
     .into_iter()
     .map(|(width, description)| {
@@ -2221,6 +2222,7 @@ fn parked_child_marker_covers_turn_error_focus_no_description_and_drop_widths() 
             (25, "✓ coder · a …  ⋯ bg"),
             (23, "✓ coder  ⋯ bg"),
             (24, "✓ coder · ab  ⋯ bg"),
+            (23, "✓ coder · a  ⋯ bg"),
         ]
         .map(|(width, line)| (width, line.to_owned()))
     );
