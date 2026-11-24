@@ -248,7 +248,7 @@ A message can remain `sent` while RimZ catches up with the agent's hooks. If a h
 
 A prompt sent while an agent is starting after a resume also stays `sent`, keeping its queue position rather than being typed again. RimZ waits until the agent reports its first activity since the resume, or ten confirmation windows pass after the resume (five minutes by default), then lets the most recently armed confirmation deadline finish before retrying. An ordinary startup hold adds no warning in `rimz doctor`. A write from before the resume still retries normally, because it went to the previous process.
 
-`message steer` delivers past the schedule, the conditions, the queue order, and the gate, but still waits for the typing hold, even with `--force`. An open prompt still stops it unless you add `--force`. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
+`message steer` delivers past the schedule, the conditions, the queue order, and the gate, but still waits for the typing hold, even with `--force`. An open prompt still stops it unless you add `--force`, which on Claude Code and Antigravity then presses only the send-now chord, without the Enter the prompt could take as its answer. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
 
 ## Agents message each other
 
