@@ -632,7 +632,7 @@ fn transcript_tail_and_statusline_supply_context() {
     })).unwrap().context;
     assert_eq!(
         context.model_display_name.as_deref(),
-        Some("DeepSeek V4 Pro")
+        Some("deepseek-v4-pro")
     );
     let malformed_context = adapter
         .observe_context(

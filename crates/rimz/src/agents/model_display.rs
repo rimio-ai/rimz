@@ -391,14 +391,6 @@ pub(super) fn strip_factory_custom_selector(id: &str) -> Option<&str> {
     Some(display_slug)
 }
 
-/// Structurally render Factory's legacy custom selector
-/// `custom:<display-name-slug>-<zero-based-index>`.
-pub(crate) fn display_factory_custom_selector(id: &str) -> Option<String> {
-    let slug = strip_factory_custom_selector(id)?;
-    let display = display_model(slug);
-    (!display.is_empty()).then_some(display)
-}
-
 /// Context windows truncate to whole units, with lowercase `k` and uppercase `M`.
 pub(crate) fn window_short(window: u64) -> String {
     if window >= 1_000_000 {
