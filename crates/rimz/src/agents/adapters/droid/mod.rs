@@ -537,7 +537,11 @@ impl crate::agents::capabilities::ContextCapability for DroidAdapter {
         let model_display_name = resolved
             .as_ref()
             .map(|model| model.display_name.clone())
-            .or_else(|| raw_model.and_then(super::model_display::display_factory_custom_selector));
+            .or_else(|| {
+                raw_model
+                    .and_then(super::model_display::strip_factory_custom_selector)
+                    .map(str::to_owned)
+            });
         let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
         let context_window_size = resolved
             .as_ref()

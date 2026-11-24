@@ -363,7 +363,9 @@ fn qwen_lifecycle(
                 .as_ref()
                 .and_then(|meta| meta.persisted_cli_flags.model.as_deref())
                 .and_then(non_empty_trimmed)
-        });
+        })
+        .map(|model| statusline::strip_provider_decoration(&model).to_owned())
+        .filter(|model| !model.is_empty());
     observation.prompt = (event_name == "UserPromptSubmit")
         .then(|| parse_user_prompt_submit(payload))
         .and_then(|value| {

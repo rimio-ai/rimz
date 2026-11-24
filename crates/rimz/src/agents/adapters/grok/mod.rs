@@ -678,10 +678,7 @@ fn refresh_resolved_context(
                 .as_ref()
                 .and_then(transcript::Summary::title)
                 .map_or(FieldPatch::Keep, FieldPatch::Set),
-            model_display_name: model_id
-                .as_deref()
-                .map(super::model_display::display_model)
-                .map_or(FieldPatch::Keep, FieldPatch::Set),
+            model_display_name: FieldPatch::Keep,
             model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
             effort: summary
                 .and_then(|value| value.reasoning_effort)

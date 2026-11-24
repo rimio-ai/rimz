@@ -9,7 +9,6 @@ use super::payloads::normalized_generated_output;
 use crate::agents::context::{
     AgentContext, AgentCost, AgentSessionUsage, AgentTokenUsage, CostCoverage, clamp_pct,
 };
-use crate::agents::model_display::display_model;
 use crate::agents::pricing::PriceBook;
 use crate::agents::transcript_fs::deserialize_optional_u64_lossy;
 
@@ -127,7 +126,7 @@ impl ModelTokens {
     }
 }
 
-fn strip_provider_decoration(model: &str) -> &str {
+pub(super) fn strip_provider_decoration(model: &str) -> &str {
     let model = model.trim();
     model
         .strip_prefix('[')
@@ -139,10 +138,7 @@ fn strip_provider_decoration(model: &str) -> &str {
 fn model_display_name(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let model = strip_provider_decoration(&value);
-        if model.is_empty() {
-            return None;
-        }
-        Some(display_model(model))
+        (!model.is_empty()).then(|| model.to_owned())
     })
 }
 
