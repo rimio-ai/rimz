@@ -145,8 +145,11 @@ pub(crate) use scheme::{
 pub use scheme::{SchemeSwatch, scheme_swatches};
 pub(crate) use sentry::SentryConfig;
 pub use sidebar::SidebarConfig;
+pub use skills::{
+    PromptReference, PromptReferenceKind, SkillName, prompt_references, rimz_references,
+    skill_is_callable,
+};
 pub(crate) use skills::{SkillListErr, deserialize_optional_skill_list, validate_skill_list};
-pub use skills::{SkillName, rimz_references, skill_is_callable};
 pub(crate) use theme::InlinePalette;
 #[cfg(test)]
 pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};

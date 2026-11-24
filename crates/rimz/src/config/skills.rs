@@ -83,31 +83,89 @@ pub fn validate_skill_list(skills: &[SkillName]) -> Result<(), SkillListErr> {
     Ok(())
 }
 
-/// The RimZ capabilities `text` names in the `rimz(x)` notation, each as `rimz-x`: a
-/// lowercase name (`[a-z][a-z0-9-]*`) between `rimz(` and `)`, where `rimz` follows no
-/// identifier character, so `spawn_detached_rimz(x)` names nothing. Any other casing or shape
-/// is plain text, and a code span counts like any other text.
-pub fn rimz_references(text: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for (at, opening) in text.match_indices("rimz(") {
-        if text[..at]
+/// Which prompt shorthand form a [`PromptReference`] matched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptReferenceKind {
+    Rimz,
+    Skill,
+    Subagent,
+}
+
+/// One shorthand reference (`rimz(x)`, `skill(x)`, or `subagent(x)`) located in
+/// a prompt text, with the name inside the parentheses and its full byte range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptReference<'a> {
+    pub kind: PromptReferenceKind,
+    pub name: &'a str,
+    pub range: std::ops::Range<usize>,
+}
+
+const PROMPT_REFERENCE_KEYWORDS: [(&str, PromptReferenceKind); 3] = [
+    ("rimz", PromptReferenceKind::Rimz),
+    ("skill", PromptReferenceKind::Skill),
+    ("subagent", PromptReferenceKind::Subagent),
+];
+
+/// Scan `text` in byte order for `rimz(x)`, `skill(x)`, and `subagent(x)`
+/// references. Each keyword is case-sensitive and must follow no identifier
+/// character; code spans count like other text.
+pub fn prompt_references(text: &str) -> Vec<PromptReference<'_>> {
+    let mut found = Vec::new();
+    for (open, _) in text.match_indices('(') {
+        let Some((keyword, kind)) = PROMPT_REFERENCE_KEYWORDS
+            .into_iter()
+            .find(|(keyword, _)| text[..open].ends_with(keyword))
+        else {
+            continue;
+        };
+        let start = open - keyword.len();
+        if text[..start]
             .chars()
             .next_back()
             .is_some_and(|before| before.is_alphanumeric() || before == '_')
         {
             continue;
         }
-        let Some((name, _)) = text[at + opening.len()..].split_once(')') else {
+        let Some((name, _)) = text[open + 1..].split_once(')') else {
             continue;
         };
-        let mut chars = name.chars();
-        if chars.next().is_some_and(|first| first.is_ascii_lowercase())
-            && chars.all(|rest| rest.is_ascii_lowercase() || rest.is_ascii_digit() || rest == '-')
-        {
-            names.insert(format!("rimz-{name}"));
+        let valid = match kind {
+            PromptReferenceKind::Rimz => {
+                let mut chars = name.chars();
+                chars.next().is_some_and(|first| first.is_ascii_lowercase())
+                    && chars.all(|rest| {
+                        rest.is_ascii_lowercase() || rest.is_ascii_digit() || rest == '-'
+                    })
+            }
+            PromptReferenceKind::Skill => !name.contains('(') && name.parse::<SkillName>().is_ok(),
+            PromptReferenceKind::Subagent => {
+                !name.is_empty()
+                    && !name
+                        .chars()
+                        .any(|ch| ch.is_whitespace() || matches!(ch, ',' | '+' | '/' | '(' | ')'))
+            }
+        };
+        if valid {
+            found.push(PromptReference {
+                kind,
+                name,
+                range: start..open + 1 + name.len() + 1,
+            });
         }
     }
-    names
+    found
+}
+
+/// The RimZ capabilities `text` names in the `rimz(x)` notation, each as `rimz-x`: a
+/// lowercase name (`[a-z][a-z0-9-]*`) between `rimz(` and `)`, where `rimz` follows no
+/// identifier character, so `spawn_detached_rimz(x)` names nothing. Any other casing or shape
+/// is plain text, and a code span counts like any other text.
+pub fn rimz_references(text: &str) -> BTreeSet<String> {
+    prompt_references(text)
+        .into_iter()
+        .filter(|reference| reference.kind == PromptReferenceKind::Rimz)
+        .map(|reference| format!("rimz-{}", reference.name))
+        .collect()
 }
 
 pub(crate) fn deserialize_optional_skill_list<'de, D>(
@@ -196,6 +254,66 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["rimz-wait"]
         );
+    }
+
+    #[test]
+    fn prompt_references_scan_all_three_forms_with_ranges_and_grammars() {
+        let text = "Use rimz(lsp), `skill(rimz-lsp)`, skill(_shared), skill(rimz.skills), \
+                    skill(s), subagent(explorer), subagent(opencode-mini), subagent(forge.lint), \
+                    subagent(My_Profile), and subagent(s).\n\
+                    Plain: Skill(rimz-lsp), Agent(explorer), Subagent(explorer), Rimz(lsp), \
+                    my_skill(commit), my_subagent(explorer), spawn_detached_rimz(wait), \
+                    skill(), skill(.), skill(..), skill(+commit), skill(a/b), skill(a\\b), \
+                    skill(a:b), skill(a b), skill(a(b)), subagent(), subagent(a b), \
+                    subagent(a,b), subagent(a+b), subagent(a/b), subagent(a(b)), \
+                    skill(open, subagent(open.";
+        let found = prompt_references(text);
+        let summary: Vec<_> = found
+            .iter()
+            .map(|r| (r.kind, r.name, &text[r.range.clone()]))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (PromptReferenceKind::Rimz, "lsp", "rimz(lsp)"),
+                (PromptReferenceKind::Skill, "rimz-lsp", "skill(rimz-lsp)"),
+                (PromptReferenceKind::Skill, "_shared", "skill(_shared)"),
+                (
+                    PromptReferenceKind::Skill,
+                    "rimz.skills",
+                    "skill(rimz.skills)"
+                ),
+                (PromptReferenceKind::Skill, "s", "skill(s)"),
+                (
+                    PromptReferenceKind::Subagent,
+                    "explorer",
+                    "subagent(explorer)"
+                ),
+                (
+                    PromptReferenceKind::Subagent,
+                    "opencode-mini",
+                    "subagent(opencode-mini)"
+                ),
+                (
+                    PromptReferenceKind::Subagent,
+                    "forge.lint",
+                    "subagent(forge.lint)"
+                ),
+                (
+                    PromptReferenceKind::Subagent,
+                    "My_Profile",
+                    "subagent(My_Profile)"
+                ),
+                (PromptReferenceKind::Subagent, "s", "subagent(s)"),
+            ]
+        );
+        // Nested parentheses reject the outer form and still scan a valid inner form.
+        let nested = "skill(rimz(wait))";
+        let inner: Vec<_> = prompt_references(nested)
+            .into_iter()
+            .map(|r| (r.kind, r.name, &nested[r.range]))
+            .collect();
+        assert_eq!(inner, [(PromptReferenceKind::Rimz, "wait", "rimz(wait)")]);
     }
 
     #[test]
