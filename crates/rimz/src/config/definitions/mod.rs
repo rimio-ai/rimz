@@ -3,7 +3,7 @@
 //! `DefinitionCause::PackProblem` to retain reporting without failing the definition set.
 //!
 //! A Markdown profile merges in `frontmatter.rs` (`AgentFrontmatter::inherit` and
-//! `inherit_base`), then resolves and lowers in `agent.rs` (`Resolver::finish`).
+//! `inherit_base`), then resolves and lowers in `agent.rs` (`finish_profile`).
 
 mod agent;
 mod catalog;
@@ -14,15 +14,17 @@ pub mod review;
 mod team;
 mod traits;
 
+pub use agent::DefinitionSource;
 pub use traits::ConsensusPieces;
 
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use super::{
     AgentSpecSources, CommandsConfig, DefinitionOrigin, Profile, ProfileSource, ProfilesConfig,
@@ -30,6 +32,23 @@ use super::{
 };
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::AgentFrontmatter;
+
+/// An override base passed to [`Profile::build_under`]: either a stored profile row (Markdown
+/// definition, team seat, kind base, or TOML row) or a resolved provider runtime.
+#[derive(Clone, Copy)]
+pub enum BuildBase<'a> {
+    Profile(&'a Profile),
+    Runtime(crate::agents::Runtime),
+}
+
+impl std::fmt::Debug for BuildBase<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Profile(profile) => f.debug_tuple("Profile").field(profile).finish(),
+            Self::Runtime(runtime) => f.debug_tuple("Runtime").field(&runtime.name()).finish(),
+        }
+    }
+}
 
 /// A user-shell launch that can reach a provider's hook-trust prompt.
 pub fn hook_trust_fix(
@@ -85,8 +104,47 @@ pub enum SkillCheck<'a> {
     },
 }
 
-type SkillInventory = Rc<crate::agents::skills::SkillInventory>;
-type TextRead = Result<Rc<str>, Rc<std::io::Error>>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OwnedSkillCheck {
+    Skip,
+    Check {
+        env: BTreeMap<String, String>,
+        machine_isolation: super::Isolation,
+    },
+}
+
+impl From<SkillCheck<'_>> for OwnedSkillCheck {
+    fn from(check: SkillCheck<'_>) -> Self {
+        match check {
+            SkillCheck::Skip => Self::Skip,
+            SkillCheck::Check {
+                env,
+                machine_isolation,
+            } => Self::Check {
+                env: env.clone(),
+                machine_isolation,
+            },
+        }
+    }
+}
+
+impl OwnedSkillCheck {
+    fn as_ref(&self) -> SkillCheck<'_> {
+        match self {
+            Self::Skip => SkillCheck::Skip,
+            Self::Check {
+                env,
+                machine_isolation,
+            } => SkillCheck::Check {
+                env,
+                machine_isolation: *machine_isolation,
+            },
+        }
+    }
+}
+
+type SkillInventory = Arc<crate::agents::skills::SkillInventory>;
+type TextRead = Result<Arc<str>, Arc<std::io::Error>>;
 
 #[cfg(test)]
 thread_local! {
@@ -98,41 +156,58 @@ fn count_text_read(path: &Path) {
     TEXT_READS.with(|reads| *reads.borrow_mut().entry(path.to_path_buf()).or_default() += 1);
 }
 
-struct SkillCatalog<'a> {
-    check: SkillCheck<'a>,
+#[derive(Debug)]
+struct SkillCatalog {
+    check: OwnedSkillCheck,
     chain: crate::agents::skills::SkillChain,
-    inventories: RefCell<BTreeMap<String, Result<SkillInventory, String>>>,
-    texts: RefCell<BTreeMap<PathBuf, TextRead>>,
+    inventories: Mutex<BTreeMap<String, Result<SkillInventory, String>>>,
+    texts: Mutex<BTreeMap<PathBuf, TextRead>>,
 }
 
-impl<'a> SkillCatalog<'a> {
-    fn new(check: SkillCheck<'a>, home: &Path, packs: &ResolvedPacks) -> Self {
+impl PartialEq for SkillCatalog {
+    fn eq(&self, other: &Self) -> bool {
+        self.check == other.check && self.chain.roots() == other.chain.roots()
+    }
+}
+
+impl Eq for SkillCatalog {}
+
+impl SkillCatalog {
+    fn new(check: SkillCheck<'_>, home: &Path, packs: &ResolvedPacks) -> Self {
         Self {
-            check,
+            check: check.into(),
             chain: crate::agents::skills::SkillChain::from_resolved(home, packs),
-            inventories: RefCell::default(),
-            texts: RefCell::default(),
+            inventories: Mutex::default(),
+            texts: Mutex::default(),
         }
     }
 
     fn read_text(&self, path: &Path) -> TextRead {
-        self.texts
-            .borrow_mut()
+        let mut texts = self
+            .texts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        texts
             .entry(path.to_path_buf())
             .or_insert_with(|| {
                 #[cfg(test)]
                 count_text_read(path);
-                std::fs::read_to_string(path).map(Rc::from).map_err(Rc::new)
+                std::fs::read_to_string(path)
+                    .map(Arc::from)
+                    .map_err(Arc::new)
             })
             .clone()
     }
 
     fn enumerate(&self, kind: &str) -> Result<Option<SkillInventory>, String> {
-        let SkillCheck::Check { env, .. } = self.check else {
+        let OwnedSkillCheck::Check { env, .. } = &self.check else {
             return Ok(None);
         };
-        self.inventories
-            .borrow_mut()
+        let mut inventories = self
+            .inventories
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inventories
             .entry(kind.to_owned())
             .or_insert_with(|| {
                 crate::agents::skills::enumerate(
@@ -142,7 +217,7 @@ impl<'a> SkillCatalog<'a> {
                     Some(&self.chain),
                     |_| true,
                 )
-                .map(Rc::new)
+                .map(Arc::new)
                 .map_err(|error| error.to_string())
             })
             .clone()
@@ -368,18 +443,76 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Immutable state from one definitions load, retained by stored Markdown rows so on-demand
+/// builds reuse kind bases, tiers, and the skill catalog without rereading disk.
+#[derive(Debug, PartialEq, Eq)]
+struct SharedLoadState {
+    home: PathBuf,
+    bases: BTreeMap<String, AgentFrontmatter>,
+    failed_bases: BTreeMap<String, DefinitionErr>,
+    skills: Arc<SkillCatalog>,
+    tiers: super::tiers::TierConfig,
+    native_auto_compact: Option<u64>,
+}
+
+/// The subagent-namespace names and diagnostics needed to validate a direct definition's
+/// `subagents:` list after the load returns.
+#[derive(Debug, PartialEq, Eq)]
+struct SubagentCheck {
+    defined: BTreeSet<String>,
+    failed: BTreeSet<String>,
+    problems: BTreeMap<String, DefinitionErr>,
+    packs: BTreeSet<String>,
+    allowed: BTreeSet<String>,
+}
+
+impl SubagentCheck {
+    fn from_namespace(subagents: &Namespace, allowed: &BTreeSet<String>) -> Self {
+        Self {
+            defined: subagents.definitions.keys().cloned().collect(),
+            failed: subagents.failed.clone(),
+            problems: subagents.problems.clone(),
+            packs: subagents.packs.clone(),
+            allowed: allowed.clone(),
+        }
+    }
+
+    fn check_lookup(&self, name: &str, source: &Path) -> Result<(), DefinitionErr> {
+        if let Some(error) = self.problems.get(name) {
+            return Err(DefinitionErr::new(source, &error.message).with_cause(error.cause.clone()));
+        }
+        if self.defined.contains(name) {
+            return Ok(());
+        }
+        if let Some((pack, item)) = name.split_once(':') {
+            let message = if self.packs.contains(pack) {
+                format!(
+                    "pack '{pack}' does not ship '{item}' in this namespace; run `rimz packs show {pack}`"
+                )
+            } else {
+                format!(
+                    "unknown pack '{pack}'; installed packs: {}; run `rimz packs list`",
+                    self.packs.iter().cloned().collect::<Vec<_>>().join(", ")
+                )
+            };
+            return Err(DefinitionErr::new(source, message));
+        }
+        Ok(())
+    }
+}
+
+/// Per-namespace load context shared across all retained definitions of one load.
+#[derive(Debug, PartialEq, Eq)]
+struct LoadContext {
+    shared: Arc<SharedLoadState>,
+    subagents: Option<Arc<SubagentCheck>>,
+}
+
 /// The inputs every resolver and seat loader in one [`load`] shares.
 #[derive(Clone, Copy)]
 struct LoadScope<'a> {
-    home: &'a Path,
-    /// Each loaded kind base's frontmatter by file stem, as its row is named, which fills what a
-    /// definition on the kind of that name leaves unset.
-    bases: &'a BTreeMap<String, AgentFrontmatter>,
-    failed_bases: &'a BTreeMap<String, DefinitionErr>,
+    context: &'a Arc<LoadContext>,
     traits: &'a BTreeMap<String, ClaimResolution>,
-    skills: &'a SkillCatalog<'a>,
-    tiers: &'a super::tiers::TierConfig,
-    native_auto_compact: Option<u64>,
 }
 
 /// A kind base that loaded, held back until its `subagents:` names check.
@@ -481,7 +614,7 @@ fn load_resolved(
     native_auto_compact: Option<u64>,
     packs: &ResolvedPacks,
 ) -> LoadedDefinitions {
-    let catalog = SkillCatalog::new(skills, agents_home, packs);
+    let catalog = Arc::new(SkillCatalog::new(skills, agents_home, packs));
     let mut loaded = LoadedDefinitions::default();
     loaded.warnings.clone_from(&packs.warnings);
     loaded.errors.extend(packs.problems.iter().map(|problem| {
@@ -701,18 +834,23 @@ fn load_resolved(
                         ..Namespace::default()
                     };
                     let own_base = BTreeMap::from([(name.clone(), fm.clone())]);
+                    let base_ctx = Arc::new(LoadContext {
+                        shared: Arc::new(SharedLoadState {
+                            home: agents_home.to_owned(),
+                            bases: own_base,
+                            failed_bases: BTreeMap::new(),
+                            skills: Arc::clone(&catalog),
+                            tiers: tiers.clone(),
+                            native_auto_compact,
+                        }),
+                        subagents: None,
+                    });
                     let scope = LoadScope {
-                        home: agents_home,
-                        bases: &own_base,
-                        failed_bases: &BTreeMap::new(),
+                        context: &base_ctx,
                         traits: &sources.claims["traits"],
-                        skills: &catalog,
-                        tiers,
-                        native_auto_compact,
                     };
-                    let row = |namespace: &str| {
-                        agent::Resolver::new(scope, namespace, [&tree, &tree], &BTreeSet::new())
-                            .kind_base(name)
+                    let row = |namespace: &'static str| {
+                        agent::Resolver::new(scope, namespace, [&tree, &tree]).kind_base(name)
                     };
                     let rows = (row("agents")?, row("subagents")?);
                     bases.insert(name.clone(), fm);
@@ -792,20 +930,25 @@ fn load_resolved(
     // A subagent's first error here predates any refusal its own failure causes.
     let mut first_errors: Vec<DefinitionErr> = Vec::new();
     while pending.iter().any(|base| base.rows.0.subagents.is_some()) {
+        let probe_ctx = Arc::new(LoadContext {
+            shared: Arc::new(SharedLoadState {
+                home: agents_home.to_owned(),
+                bases: bases.clone(),
+                failed_bases: failed_bases.clone(),
+                skills: Arc::clone(&catalog),
+                tiers: tiers.clone(),
+                native_auto_compact,
+            }),
+            subagents: None,
+        });
         let scope = LoadScope {
-            home: agents_home,
-            bases: &bases,
-            failed_bases: &failed_bases,
+            context: &probe_ctx,
             traits: &sources.claims["traits"],
-            skills: &catalog,
-            tiers,
-            native_auto_compact,
         };
         let (loadable, errors) = agent::loadable(agent::Resolver::new(
             scope,
             "subagents",
             [&subagents, &agents],
-            &BTreeSet::new(),
         ));
         for error in errors {
             if first_errors.iter().all(|first| first.path != error.path) {
@@ -817,12 +960,13 @@ fn load_resolved(
             .chain(pending.iter().map(|base| base.keys[0].clone()))
             .chain(commands.0.keys().cloned())
             .collect();
+        let subagent_check = SubagentCheck::from_namespace(&subagents, &children);
         let mut refused = Vec::new();
         for (index, base) in pending.iter_mut().enumerate() {
             let Some(listed) = &base.rows.0.subagents else {
                 continue;
             };
-            match agent::subagent_names(&base.item.path, listed, &subagents, &children) {
+            match agent::subagent_names(&base.item.path, listed, &subagent_check) {
                 Ok(names) => base.rows.0.subagents = Some(names),
                 Err(error) => refused.push((index, error)),
             }
@@ -893,19 +1037,26 @@ fn load_resolved(
             subagents.failed.insert(name.clone());
         }
     }
-    let scope = LoadScope {
-        home: agents_home,
-        bases: &bases,
-        failed_bases: &failed_bases,
-        traits: &sources.claims["traits"],
-        skills: &catalog,
-        tiers,
+    let shared = Arc::new(SharedLoadState {
+        home: agents_home.to_owned(),
+        bases,
+        failed_bases,
+        skills: Arc::clone(&catalog),
+        tiers: tiers.clone(),
         native_auto_compact,
+    });
+    let subagents_ctx = Arc::new(LoadContext {
+        shared: Arc::clone(&shared),
+        subagents: None,
+    });
+    let subagents_scope = LoadScope {
+        context: &subagents_ctx,
+        traits: &sources.claims["traits"],
     };
     let resolved_from = loaded.errors.len();
     // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(
-        agent::Resolver::new(scope, "subagents", [&subagents, &agents], &BTreeSet::new()),
+        agent::Resolver::new(subagents_scope, "subagents", [&subagents, &agents]),
         &mut loaded,
     );
     for error in &mut loaded.errors[resolved_from..] {
@@ -920,8 +1071,18 @@ fn load_resolved(
         .chain(commands.0.keys())
         .cloned()
         .collect();
+    let agents_ctx = Arc::new(LoadContext {
+        shared,
+        subagents: Some(Arc::new(SubagentCheck::from_namespace(
+            &subagents, &children,
+        ))),
+    });
+    let agents_scope = LoadScope {
+        context: &agents_ctx,
+        traits: &sources.claims["traits"],
+    };
     agent::resolve_namespace(
-        agent::Resolver::new(scope, "agents", [&agents, &subagents], &children),
+        agent::Resolver::new(agents_scope, "agents", [&agents, &subagents]),
         &mut loaded,
     );
     // The resolver knows paths, not pack items; team::load appends its own fixes.
@@ -935,9 +1096,8 @@ fn load_resolved(
         }
     }
     team::load(
-        scope,
+        agents_scope,
         [&agents, &subagents],
-        &children,
         &sources,
         commands,
         &mut loaded,

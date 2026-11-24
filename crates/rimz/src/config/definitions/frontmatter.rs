@@ -10,7 +10,7 @@ use crate::config::{IdleCompact, IdleCompactParseError};
 
 use super::DefinitionErr;
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct AgentFrontmatter {
     #[serde(rename = "name")]
@@ -285,7 +285,7 @@ impl AgentFrontmatter {
     /// Settles each `+` list nothing below added to, once the whole chain and the kind base are
     /// in: `skills` and `mcps` stay absent, which already means everything, and `tools`,
     /// `capabilities`, and `allowed-tools` have no list to add to. A pending `subagents` list
-    /// stays for `Resolver::finish`, which refuses it where a plain list is refused before it
+    /// stays for `finish_profile`, which refuses it where a plain list is refused before it
     /// reads it as absent.
     pub(super) fn settle_plus(&mut self, kind: &str) -> Result<(), String> {
         for (key, list) in self.lists() {
