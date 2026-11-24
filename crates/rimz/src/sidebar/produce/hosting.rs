@@ -6,15 +6,16 @@
 //! published snapshot, or a pane stored on a record: when the mux cannot answer, the read is
 //! a [`HostingErr`] naming the failure.
 //!
-//! A read answers three questions. [`HostingRead::agent_hosting`] takes an agent, a kind and
+//! A read answers four questions. [`HostingRead::agent_hosting`] takes an agent, a kind and
 //! its launch key, and answers the session holding it, the row `address::launch_row` picks,
 //! with that row's pane. [`HostingRead::session_hosting`] takes one exact session, so a
 //! session a swap replaced still answers its own pane while it is listed.
 //! [`HostingRead::agent_hosting_of_session`] takes the session a caller holds (a sidebar
 //! card's key) and answers the agent that caller acts on: that session while no swap replaced
-//! it, else its launch's holder. From the same listing, [`HostingRead::closing_empties_tab`]
-//! says whether closing a pane leaves its tab without a working pane, and
-//! [`HostingRead::tab_anchor`] picks a listed pane to close a tab by.
+//! it, else its launch's holder. [`HostingRead::pane_owner`] takes a pane a close names and
+//! answers the agent that close stops, or none for a raw pane. From the same listing,
+//! [`HostingRead::closing_empties_tab`] says whether closing a pane leaves its tab without a
+//! working pane, and [`HostingRead::tab_anchor`] picks a listed pane to close a tab by.
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
@@ -65,6 +66,14 @@ pub struct HostingRead {
     snapshot: SidebarSnapshot,
     /// The listing this read folded, which tab each pane is in.
     panes: Vec<PaneRef>,
+}
+
+/// A pane [`HostingRead::pane_owner`] was asked about that its listing does not hold.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("pane {pane} is not in session {session}")]
+pub struct PaneUnlisted {
+    pane: PaneId,
+    session: String,
 }
 
 /// The lookup could not get the multiplexer's own answer; the backend pick's notices
@@ -138,6 +147,28 @@ impl HostingRead {
             },
             None => Hosting::Nowhere,
         }
+    }
+
+    /// The agent a close of `pane` acts on, by this read alone: the holder of the session
+    /// the pane binder ties to `pane` (a launched child's own session included), or `None`
+    /// for a listed pane no session holds, which closes as a raw pane. A pane this read does
+    /// not list is refused.
+    pub fn pane_owner(&self, pane: &PaneId) -> Result<Option<&AgentState>, PaneUnlisted> {
+        if self.listed(pane).is_none() {
+            return Err(PaneUnlisted {
+                pane: pane.clone(),
+                session: self.session_name.clone(),
+            });
+        }
+        Ok(self
+            .snapshot
+            .agent_panes
+            .iter()
+            .filter(|bound| &bound.pane_id == pane)
+            .find_map(|bound| {
+                self.agent_hosting_of_session(&bound.kind, bound.agent_id.as_ref()?)
+                    .holder
+            }))
     }
 
     /// The agent row as this read found it in the store.

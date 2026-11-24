@@ -626,3 +626,87 @@ fn a_tab_closes_only_beside_another_with_every_working_pane_a_target_and_no_call
     let read = fixture.read(Vec::new(), sole);
     assert!(!read.closing_empties_tab(&id("terminal_7"), None));
 }
+
+fn owner_id(read: &HostingRead, pane: &str) -> Result<Option<String>, PaneUnlisted> {
+    read.pane_owner(&PaneId::from_parts(MuxName::Zellij, pane))
+        .map(|owner| owner.map(|agent| agent.agent_id.to_string()))
+}
+
+#[test]
+fn a_pane_owner_is_the_bound_session_a_raw_pane_or_a_refusal() {
+    let fixture = Fixture::new();
+    let bound = fixture.agent("claude", "bound", Some("terminal_1"));
+    let read = fixture.read(
+        vec![bound],
+        vec![
+            test_support::pane("terminal_1", Some("claude"), Some("/repo/main")),
+            test_support::pane("terminal_2", Some("zsh"), Some("/repo/main")),
+        ],
+    );
+    assert_eq!(owner_id(&read, "terminal_1"), Ok(Some("bound".to_owned())));
+    assert_eq!(owner_id(&read, "terminal_2"), Ok(None));
+    let refusal = owner_id(&read, "terminal_9").unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "pane zellij:terminal_9 is not in session room"
+    );
+}
+
+#[test]
+fn a_launched_childs_pane_is_owned_by_the_child() {
+    let fixture = Fixture::new();
+    let parent = fixture.agent("claude", "root", Some("terminal_1"));
+    let mut child = fixture.agent("claude", "kid", Some("terminal_2"));
+    child.parent_agent_id = Some("root".into());
+    child.launch_depth = Some(1);
+    let read = fixture.read(vec![parent, child], listed(&["terminal_1", "terminal_2"]));
+    assert_eq!(owner_id(&read, "terminal_2"), Ok(Some("kid".to_owned())));
+    assert_eq!(owner_id(&read, "terminal_1"), Ok(Some("root".to_owned())));
+}
+
+#[test]
+fn a_pane_owner_follows_a_swap_to_the_launch_holder() {
+    let fixture = Fixture::new();
+    let old = launch_session(&fixture, "claude", "sess-old", 0, Some("terminal_1"));
+    let new = launch_session(&fixture, "claude", "sess-new", 1, Some("terminal_2"));
+    let read = fixture.read(vec![old, new], listed(&["terminal_1", "terminal_2"]));
+    assert_eq!(
+        owner_id(&read, "terminal_1"),
+        Ok(Some("sess-new".to_owned()))
+    );
+}
+
+/// The proven race: a reopen binds its agent to a new pane while a sidebar view still folds
+/// that pane without the binding, as a sessionless card keyed by the pane id. The close's
+/// own read resolves the bound agent, so it stops and records it rather than closing raw.
+#[test]
+fn a_pane_the_store_binds_resolves_its_agent_whatever_a_stale_view_drew() {
+    let fixture = Fixture::new();
+    let pane = listed(&["terminal_1"]);
+    let stale = fixture.read(Vec::new(), pane.clone());
+    assert!(
+        stale
+            .snapshot
+            .agent_panes
+            .iter()
+            .any(|bound| bound.pane_id.to_string() == "zellij:terminal_1"
+                && bound.agent_id.is_none()),
+        "{:?}",
+        stale.snapshot.agent_panes
+    );
+    let (kind, pane_key) = key("claude", "zellij:terminal_1");
+    assert!(
+        stale
+            .agent_hosting_of_session(&kind, &pane_key)
+            .holder
+            .is_none(),
+        "a card keyed by its pane id names no session"
+    );
+    assert_eq!(owner_id(&stale, "terminal_1"), Ok(None));
+    let reopened = fixture.agent("claude", "reopened", Some("terminal_1"));
+    let read = fixture.read(vec![reopened], pane);
+    assert_eq!(
+        owner_id(&read, "terminal_1"),
+        Ok(Some("reopened".to_owned()))
+    );
+}

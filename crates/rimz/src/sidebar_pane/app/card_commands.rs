@@ -1,7 +1,7 @@
 //! Card reductions over the acting view's retained roster and highlight.
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::sidebar_pane::commands::{CardDirection, CardReply, CardRequest, CardTarget};
+use crate::ids::PaneId;
+use crate::sidebar_pane::commands::{CardDirection, CardReply, CardRequest};
 use crate::sidebar_pane::render::ViewState;
 use crate::sidebar_pane::view::{BodyFilter, card_slots};
 use crate::store::snapshot::SidebarSnapshot;
@@ -38,7 +38,7 @@ impl CardInput {
         if now >= self.expires {
             return Err("request expired; try again");
         }
-        let (view, destination) = views.command_target_for(&self.request)?;
+        let (view, destination) = views.command_target()?;
         if view != self.view || destination != pane {
             return Err("view changed while the request was queued; try again");
         }
@@ -51,15 +51,13 @@ pub(super) fn reduce(
     view: &mut ViewState,
     snapshot: &SidebarSnapshot,
 ) -> (InputOutcome, CardReply) {
-    let mut outcome = InputOutcome::default();
-    // A pane-named close is routed to any ready view, not the presser's, so
-    // it leaves that view's help and search draft as they are.
-    if !matches!(request, CardRequest::CloseTarget { pane: Some(_) }) {
-        outcome.redraw = std::mem::take(&mut view.toggles.help_visible);
-        if view.toggles.search_draft.take().is_some() {
-            anchor_selection(view, snapshot);
-            outcome.redraw = true;
-        }
+    let mut outcome = InputOutcome {
+        redraw: std::mem::take(&mut view.toggles.help_visible),
+        ..InputOutcome::default()
+    };
+    if view.toggles.search_draft.take().is_some() {
+        anchor_selection(view, snapshot);
+        outcome.redraw = true;
     }
     let target = match request {
         CardRequest::Walk {
@@ -162,43 +160,16 @@ pub(super) fn reduce(
             }
             return (outcome, CardReply::Done);
         }
-        CardRequest::CloseTarget { pane: named } => {
-            let wanted = named.as_ref().or(view.selected_pane.as_ref());
-            let Some((row, pane)) = snapshot.rows().find_map(|row| {
+        CardRequest::CloseTarget {} => {
+            // The CLI decides who owns the pane from its own hosting read: this view's
+            // roster can lag the store by a fold.
+            let Some(pane) = snapshot.rows().find_map(|row| {
                 let pane = &row.pane.as_ref()?.pane_id;
-                (Some(pane) == wanted).then_some((row, pane))
+                (Some(pane) == view.selected_pane.as_ref()).then_some(pane)
             }) else {
-                // A launched child's pane has no card of its own: it nests under its parent.
-                if let Some((child, pane)) = named.as_ref().and_then(|named| {
-                    let mut children = snapshot.rows().flat_map(|row| row.sub_agents());
-                    Some((
-                        children.find(|child| child.pane.as_ref() == Some(named))?,
-                        named,
-                    ))
-                }) {
-                    let target = CardTarget::Agent {
-                        kind: child.kind.clone(),
-                        agent_id: AgentSessionId::from(child.id.clone()),
-                        pane: pane.clone(),
-                    };
-                    return (outcome, CardReply::CloseTarget { target });
-                }
-                let reason = match named {
-                    Some(pane) => format!("no card owns pane {pane}"),
-                    None => "no highlighted card".to_owned(),
-                };
-                return (outcome, request.refused(reason));
+                return (outcome, request.refused("no highlighted card"));
             };
-            let target = if row.as_agent().is_some() {
-                CardTarget::Agent {
-                    kind: AgentKind::new_unchecked(row.name.clone()),
-                    agent_id: AgentSessionId::from(row.id.clone()),
-                    pane: pane.clone(),
-                }
-            } else {
-                CardTarget::Pane(pane.clone())
-            };
-            return (outcome, CardReply::CloseTarget { target });
+            return (outcome, CardReply::CloseTarget { pane: pane.clone() });
         }
     };
     if let Some(pane) = target {

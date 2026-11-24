@@ -71,7 +71,8 @@ pub(super) fn spawn_rimz(
 
 /// Run `command` on a worker and report its first stderr line, or a non-zero
 /// exit with none, through `wake`. Stderr counts whatever the exit: `rimz
-/// sidebar close` prints a host refusal there and still exits 0.
+/// sidebar close` prints a refusal there, from the host or from its own read
+/// of the room, and still exits 0.
 fn run_reporting(mut command: Command, wake: Option<SyncSender<Wakeup>>) {
     command
         .stdin(Stdio::null())
@@ -193,12 +194,15 @@ mod tests {
             Ok(Wakeup::Notice("no client attached".into()))
         );
         let mut refused = Command::new("sh");
-        refused.args(["-c", "echo 'sidebar close: no card owns pane tmux:%9' >&2"]);
+        refused.args([
+            "-c",
+            "echo 'sidebar close: pane tmux:%9 is not in session room; nothing was closed' >&2",
+        ]);
         run_reporting(refused, Some(wake.clone()));
         assert_eq!(
             notices.recv_timeout(Duration::from_secs(10)),
             Ok(Wakeup::Notice(
-                "sidebar close: no card owns pane tmux:%9".into()
+                "sidebar close: pane tmux:%9 is not in session room; nothing was closed".into()
             )),
             "a refusal printed before a clean exit still reaches the pane"
         );

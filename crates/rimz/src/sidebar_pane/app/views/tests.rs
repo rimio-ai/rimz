@@ -802,22 +802,6 @@ fn a_departed_clients_context_is_frozen_beside_surviving_coviewers() {
 }
 
 #[test]
-fn a_pane_scoped_close_acts_while_clients_view_different_tabs() {
-    let clock = clock();
-    let mut views = Views::default();
-    views.reconcile_frame(&frame(&[(1, 11), (2, 21)]), clock.now(), HOLD);
-    let bare = CardRequest::CloseTarget { pane: None };
-    assert!(views.command_target_for(&bare).is_err());
-    let scoped = CardRequest::CloseTarget {
-        pane: Some(pane(21)),
-    };
-    let (_, target) = views
-        .command_target_for(&scoped)
-        .expect("a pane-scoped close needs no view agreement");
-    assert!([pane(10), pane(20)].contains(target), "{target}");
-}
-
-#[test]
 fn the_palette_client_is_the_sole_viewer_of_the_pressing_sidebar() {
     let clock = clock();
     let mut views = Views::default();
