@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
 use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
+use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
 
 use super::frontmatter::AgentFrontmatter;
 use super::{
@@ -141,7 +142,8 @@ impl<'a> Resolver<'a> {
 pub(super) struct SeatEdits {
     /// Only the leader keeps the question tool.
     pub leader: bool,
-    /// A team running the shipped reflect consensus adds `rimz-reflect` to a skills list.
+    /// A team running the shipped reflect consensus adds `rimz-reflect` to a non-empty skills
+    /// list.
     pub reflects: bool,
 }
 
@@ -149,9 +151,7 @@ pub(super) struct SeatEdits {
 const CONSENSUS_SKILL: &str = "rimz-message";
 
 impl SeatEdits {
-    /// Returns whether it added [`CONSENSUS_SKILL`] to the grant: that entry loads whether or not
-    /// the skill is on disk, since the seat never wrote it.
-    fn edit(self, fm: &mut AgentFrontmatter) -> bool {
+    fn edit(self, fm: &mut AgentFrontmatter) {
         if !self.leader
             && let Some(tools) = &mut fm.tools
         {
@@ -164,24 +164,17 @@ impl SeatEdits {
             if !self.leader {
                 capabilities.retain(|entry| entry.trim() != "ask");
             }
-            // `rimz-` names stay out of a `capabilities:` seat's skills, so the grant takes the
-            // skills the team's consensus names wherever the seat's Skill tool is implied: every
+            // A capability stays out of a `capabilities:` seat's skills, so the grant takes the
+            // one the team's consensus names wherever the seat's Skill tool is implied: every
             // Markdown team runs the built-in consensus, which names `rimz-message`.
-            if !skill_implied(capabilities, fm.skills.as_deref()) {
-                return false;
+            if skill_implied(capabilities, fm.skills.as_deref())
+                && !capabilities.iter().any(|entry| {
+                    let name = frontmatter::marked_name(entry);
+                    name == CONSENSUS_SKILL || name == SERVER_NAME
+                })
+            {
+                capabilities.push(CONSENSUS_SKILL.to_owned());
             }
-            let mut added_consensus = false;
-            let reflect = self.reflects.then_some("rimz-reflect");
-            for name in std::iter::once(CONSENSUS_SKILL).chain(reflect) {
-                if !capabilities
-                    .iter()
-                    .any(|entry| frontmatter::marked_name(entry) == name)
-                {
-                    capabilities.push(name.to_owned());
-                    added_consensus |= name == CONSENSUS_SKILL;
-                }
-            }
-            return added_consensus;
         }
         if self.reflects
             && let Some(skills) = &mut fm.skills
@@ -190,7 +183,6 @@ impl SeatEdits {
         {
             skills.push("rimz-reflect".to_owned());
         }
-        false
     }
 }
 
@@ -591,7 +583,9 @@ impl Resolver<'_> {
         }
         fm.settle_plus(kind)
             .map_err(|message| DefinitionErr::new(path, message))?;
-        let seat_added = self.seat.is_some_and(|seat| seat.edit(&mut fm));
+        if let Some(seat) = self.seat {
+            seat.edit(&mut fm);
+        }
         profile.allowed_tools = fm
             .allowed_tools
             .as_ref()
@@ -645,7 +639,9 @@ impl Resolver<'_> {
                         .map(|entry| entry.trim())
                         .filter(|entry| {
                             let name = frontmatter::marked_name(entry);
-                            name.starts_with("rimz-") || (key == "mcps" && name == "rimz")
+                            Capability::from_name(name).is_some()
+                                || (key == "mcps"
+                                    && (name == SERVER_NAME || name.starts_with("rimz-")))
                         })
                         .map(|entry| format!("`{entry}`"))
                         .collect();
@@ -654,8 +650,8 @@ impl Resolver<'_> {
                             path,
                             format!(
                                 "sets `capabilities:`, and its `{key}:` lists {}; beside \
-                                 `capabilities:` that list holds only your own, so list RimZ's \
-                                 in `capabilities:` instead",
+                                 `capabilities:` RimZ's MCP capabilities go only in \
+                                 `capabilities:`, so list them there instead",
                                 rimz.join(", ")
                             ),
                         ));
@@ -750,10 +746,6 @@ impl Resolver<'_> {
                 self.scope.skills,
             )?,
         };
-        if let Some(grant) = tools.as_ref().and_then(ToolSet::rimz) {
-            let exempt = seat_added.then_some(CONSENSUS_SKILL);
-            granted_skills_on_disk(path, kind, grant, exempt, skill_check, self.scope.skills)?;
-        }
         profile.mcps = fm
             .mcps
             .as_deref()
@@ -947,40 +939,40 @@ const WORDS: [(&str, &[&str]); 5] = [
 /// entry grants a RimZ capability.
 fn skill_implied(capabilities: &[String], skills: Option<&[String]>) -> bool {
     skills.is_none_or(|skills| !skills.is_empty())
-        || capabilities
-            .iter()
-            .any(|entry| entry.trim().starts_with("rimz-"))
+        || capabilities.iter().any(|entry| {
+            let name = frontmatter::marked_name(entry);
+            name == SERVER_NAME || name.starts_with("rimz-")
+        })
 }
 
 /// Lowers a resolved `capabilities:` list to the tools value it stands for: each word's tool
-/// bases in written order, then `Skill` where [`skill_implied`], carrying each `rimz-`
-/// entry with its mark as the RimZ grant.
+/// bases in written order, then `Skill` where [`skill_implied`], carrying each listed
+/// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted,
+/// then itself with its mark, which marks each capability that has none of its own
+/// (`ExecRequest::served_marks`) and reaches a provider's MCP code as it does from `mcps`.
 fn lower_capabilities(
     path: &Path,
     written: &[String],
     skills: Option<&[String]>,
 ) -> Result<ToolSet, DefinitionErr> {
     let mut bases: Vec<String> = Vec::new();
-    let mut grant: Vec<crate::config::RimzEntry> = Vec::new();
-    let marks: Vec<&str> = crate::mcp::catalog::Capability::ALL
+    let mut listed: Vec<(&str, Option<LoadMode>)> = Vec::new();
+    let names: Vec<&str> = Capability::ALL
         .iter()
         .map(|capability| capability.name())
         .collect();
-    let mark_refused = |entry: &str| {
-        DefinitionErr::new(
-            path,
-            format!(
-                "lists `{entry}` in `capabilities:`, but a load mark applies only to a \
-                 capability with MCP tools ({}); drop the mark",
-                marks.join(", ")
-            ),
-        )
-    };
     for entry in written.iter().map(|entry| entry.trim()) {
         let name = frontmatter::marked_name(entry);
         if let Some((_, tools)) = WORDS.iter().find(|(word, _)| *word == name) {
             if name != entry {
-                return Err(mark_refused(entry));
+                return Err(DefinitionErr::new(
+                    path,
+                    format!(
+                        "lists `{entry}` in `capabilities:`, but a load mark applies only to \
+                         `rimz` and a capability with MCP tools ({}); drop the mark",
+                        names.join(", ")
+                    ),
+                ));
             }
             for tool in *tools {
                 if !bases.iter().any(|base| base == tool) {
@@ -989,32 +981,65 @@ fn lower_capabilities(
             }
             continue;
         }
-        let parsed: crate::config::RimzEntry = entry.parse().map_err(|_| {
-            DefinitionErr::new(
-                path,
+        let parsed = (name == SERVER_NAME)
+            .then_some(name)
+            .or_else(|| Capability::from_name(name).map(Capability::name));
+        let mode = match entry.rsplit_once(':') {
+            Some((_, mark)) => LoadMode::from_name(mark.trim()),
+            None => None,
+        };
+        let marked_well = mode.is_some() || name == entry;
+        let Some(name) = parsed.filter(|_| marked_well) else {
+            let skill = name.parse::<crate::config::RimzEntry>().is_ok();
+            let reason = if skill && marked_well {
+                format!(
+                    "lists `{entry}` in `capabilities:`, which holds only RimZ's capabilities \
+                     with MCP tools ({}), or `rimz` for all of them; `{name}` is a skill, so \
+                     list it in `skills:` instead",
+                    names.join(", ")
+                )
+            } else {
                 format!(
                     "lists `{entry}` in `capabilities:`, which is neither one of the words \
-                     bash, read, write, ask, and web nor a RimZ capability `rimz-<name>`; a \
-                     provider's own tool names go in `tools:`"
-                ),
-            )
-        })?;
-        if parsed.mode().is_some() && parsed.capability().is_none() {
-            return Err(mark_refused(entry));
-        }
-        match grant.iter().find(|held| held.name() == parsed.name()) {
-            Some(held) if *held == parsed => {}
+                     bash, read, write, ask, and web, nor `rimz` or a RimZ capability ({}), \
+                     each with an optional `:always` or `:deferred`; a provider's own tool \
+                     names go in `tools:`",
+                    names.join(", ")
+                )
+            };
+            return Err(DefinitionErr::new(path, reason));
+        };
+        match listed.iter().find(|(held, _)| *held == name) {
+            Some((_, held)) if *held == mode => {}
             Some(_) => {
                 return Err(DefinitionErr::new(
                     path,
-                    format!(
-                        "lists `{}` in `capabilities:` with two different marks; keep one",
-                        parsed.name()
-                    ),
+                    format!("lists `{name}` in `capabilities:` with two different marks; keep one"),
                 ));
             }
-            None => grant.push(parsed),
+            None => listed.push((name, mode)),
         }
+    }
+    let wildcard = listed
+        .iter()
+        .find(|(name, _)| *name == SERVER_NAME)
+        .map(|(_, mode)| *mode);
+    let mut grant: Vec<crate::config::RimzEntry> = listed
+        .iter()
+        .filter_map(|(name, own)| {
+            Some(crate::config::RimzEntry::new(
+                Capability::from_name(name)?,
+                *own,
+            ))
+        })
+        .collect();
+    if let Some(mark) = wildcard {
+        let rest = Capability::ALL
+            .into_iter()
+            .filter(|capability| !listed.iter().any(|(name, _)| *name == capability.name()))
+            .map(|capability| crate::config::RimzEntry::new(capability, None));
+        grant.extend(rest);
+        grant.push(crate::config::RimzEntry::server(mark));
     }
     if skill_implied(written, skills) {
         bases.push("Skill".to_owned());
@@ -1022,59 +1047,6 @@ fn lower_capabilities(
     Ok(ToolSet::parse(&bases)
         .map_err(|error| DefinitionErr::new(path, error.to_string()))?
         .with_rimz(grant))
-}
-
-/// Under [`SkillCheck::Check`], refuses each `rimz-` entry of a grant that names neither a
-/// capability of RimZ's MCP server nor a skill on disk for `kind`, except `exempt`.
-fn granted_skills_on_disk(
-    path: &Path,
-    kind: &str,
-    grant: &[crate::config::RimzEntry],
-    exempt: Option<&str>,
-    check: SkillCheck<'_>,
-    catalog: &SkillCatalog<'_>,
-) -> Result<(), DefinitionErr> {
-    let SkillCheck::Check { env, .. } = check else {
-        return Ok(());
-    };
-    let checked = |entry: &&crate::config::RimzEntry| {
-        entry.capability().is_none() && Some(entry.name()) != exempt
-    };
-    if !grant.iter().any(|entry| checked(&entry)) {
-        return Ok(());
-    }
-    let Some(discovered) = catalog
-        .enumerate(kind)
-        .map_err(|error| DefinitionErr::new(path, error))?
-    else {
-        return Ok(());
-    };
-    let Some(entry) = grant
-        .iter()
-        .filter(checked)
-        .find(|entry| !discovered.skills.contains_key(entry.name()))
-    else {
-        return Ok(());
-    };
-    let searched: Vec<String> = agents::find_definition(kind)
-        .and_then(|definition| definition.skills_home(env))
-        .into_iter()
-        .chain(catalog.chain.roots())
-        .map(|root| {
-            root.join(entry.name())
-                .join("SKILL.md")
-                .display()
-                .to_string()
-        })
-        .collect();
-    Err(DefinitionErr::new(
-        path,
-        format!(
-            "lists `{entry}` in `capabilities:`, which is neither a capability of RimZ's MCP \
-             server nor a skill on disk for {kind}; missing at {}",
-            searched.join(" and ")
-        ),
-    ))
 }
 
 /// Under [`SkillCheck::Check`], each listed skill resolves as the scoped view finds it:

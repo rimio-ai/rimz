@@ -1530,8 +1530,9 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
 }
 
 /// A profile whose tools carry a `capabilities:` grant, a TOML profile over a Markdown kind
-/// base that writes one included, reaches RimZ only through the grant: its `skills` and
-/// `mcps` hold the user's own names, so a `rimz` or `rimz-` entry there is refused.
+/// base that writes one included, reaches RimZ's MCP capabilities only through the grant, so a
+/// capability's name in its `skills`, or `rimz` or a capability in its `mcps`, is refused.
+/// `skills` keeps every other skill, a `rimz-*` skill alone included.
 fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -> Result<()> {
     if resolved
         .tools
@@ -1541,12 +1542,13 @@ fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -
     {
         return Ok(());
     }
-    // `skills` reserves only `rimz-` names; `mcps` reserves `rimz` too, RimZ's own server.
+    // `mcps` reserves `rimz` too, RimZ's own server.
+    let capability = |name: &&str| crate::mcp::catalog::Capability::from_name(name).is_some();
     let skills = resolved.skills.iter().flatten().map(|skill| skill.as_str());
     let mcps = resolved.mcps.iter().flatten().map(|entry| entry.name());
     let rimz: Vec<String> = skills
-        .filter(|name| name.starts_with("rimz-"))
-        .chain(mcps.filter(|name| *name == "rimz" || name.starts_with("rimz-")))
+        .filter(capability)
+        .chain(mcps.filter(|name| *name == "rimz" || capability(name)))
         .map(|name| format!("`{name}`"))
         .collect();
     if rimz.is_empty() {
@@ -1556,8 +1558,8 @@ fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -
         profile: profile.to_owned(),
         reason: format!(
             "its kind base sets `capabilities:`, and its `skills` or `mcps` list {}; beside \
-             `capabilities:` those lists hold only your own, so list RimZ's in the kind base's \
-             `capabilities:` instead",
+             `capabilities:` RimZ's MCP capabilities go only in the kind base's \
+             `capabilities:`, so list them there instead",
             rimz.join(", ")
         ),
     })

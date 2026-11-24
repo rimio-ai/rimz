@@ -504,8 +504,9 @@ fn read_skill(
 }
 
 /// Whether a launch's skill policy makes skill `name` callable: never when `withheld` names it;
-/// under a `capabilities:` `grant`, a `rimz-*` skill only when the grant names it; any other
-/// as `listed` says. Each enforcer applies it to the inventory it enumerates itself.
+/// under a `capabilities:` `grant`, the skill of a capability of RimZ's MCP server only when the
+/// grant names it; any other, a `rimz-*` skill alone included, as `listed` says. Each enforcer
+/// applies it to the inventory it enumerates itself.
 pub(crate) fn launch_callable(
     listed: Option<&[SkillName]>,
     withheld: &[&str],
@@ -516,7 +517,9 @@ pub(crate) fn launch_callable(
         return false;
     }
     match grant {
-        Some(grant) if name.starts_with("rimz-") => grant.iter().any(|entry| entry.name() == name),
+        Some(grant) if crate::mcp::catalog::Capability::from_name(name).is_some() => {
+            grant.iter().any(|entry| entry.name() == name)
+        }
         _ => crate::config::skill_is_callable(listed, name),
     }
 }

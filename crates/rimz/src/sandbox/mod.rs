@@ -124,8 +124,8 @@ pub struct SkillInputs<'a> {
     pub callable: Option<&'a [SkillName]>,
     /// Skills marked user-only whatever the list says.
     pub withheld: &'a [&'a str],
-    /// The profile's `capabilities:` grant: each `rimz-*` skill it leaves out is withheld, and a
-    /// view that cannot be prepared fails the launch as a list's would.
+    /// The profile's `capabilities:` grant: the skill of each capability it leaves out is
+    /// withheld, and a view that cannot be prepared fails the launch as a list's would.
     pub grant: Option<&'a [crate::config::RimzEntry]>,
 }
 

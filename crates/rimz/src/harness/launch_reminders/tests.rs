@@ -1077,22 +1077,26 @@ fn capabilities_paragraph_on_a_skills_only_launch_follows_the_skills_list() {
     );
 }
 
-/// Under a RimZ grant the paragraph names only the granted capabilities: a served one as its
-/// tools, the rest as skills on disk, whatever `rimz-*` names a `skills` list carries. The
-/// launch plan's unreachable-reference warning reads this same list.
+/// Under a RimZ grant the paragraph names only the granted capabilities, a served one as its
+/// tools and the rest as skills on disk, whatever capability names a `skills` list carries, and
+/// then each `rimz-*` skill alone that the `skills` list admits: `skills: []` withholds it and
+/// still leaves a granted capability its skill. The launch plan's unreachable-reference warning
+/// reads this same list.
 #[test]
 fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
     let mut actual = Vec::new();
     for (kind, server) in [("claude", true), ("opencode", false)] {
-        for skills in [None, Some(vec!["rimz-wait", "commit"])] {
+        for skills in [
+            None,
+            Some(vec!["rimz-wait", "rimz-reflect", "commit"]),
+            Some(Vec::new()),
+        ] {
+            let quiet = skills.as_ref().is_some_and(Vec::is_empty);
             let mut request =
                 ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
             request.skills =
                 skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
-            request.rimz_capabilities = Some(vec![
-                "rimz-lsp:deferred".parse().unwrap(),
-                "rimz-reflect".parse().unwrap(),
-            ]);
+            request.rimz_capabilities = Some(vec!["rimz-lsp:deferred".parse().unwrap()]);
             let reminders = LaunchReminders {
                 mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
                 rimz_skills: rimz_skills(&["rimz-lsp", "rimz-reflect", "rimz-wait"]),
@@ -1103,7 +1107,12 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
                 .into_iter()
                 .map(|(name, _)| name)
                 .collect();
-            assert_eq!(names, ["rimz-lsp", "rimz-reflect"], "{kind}");
+            let expected: &[&str] = if quiet {
+                &["rimz-lsp"]
+            } else {
+                &["rimz-lsp", "rimz-reflect"]
+            };
+            assert_eq!(names, expected, "{kind}");
             actual.push(capabilities_paragraph_of(&render(
                 &request,
                 &reminders,
@@ -1117,12 +1126,30 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
 - rimz-lsp: the `lsp` tool of the `rimz` MCP server
 - rimz-reflect: Skill(rimz-reflect)"
     ));
+    let served_quiet = Some(format!(
+        "{CAPABILITIES_LEAD}\
+- rimz-lsp: the `lsp` tool of the `rimz` MCP server"
+    ));
     let skills = Some(format!(
         "{CAPABILITIES_LEAD}\
 - rimz-lsp: Skill(rimz-lsp)
 - rimz-reflect: Skill(rimz-reflect)"
     ));
-    assert_eq!(actual, [served.clone(), served, skills.clone(), skills]);
+    let skills_quiet = Some(format!(
+        "{CAPABILITIES_LEAD}\
+- rimz-lsp: Skill(rimz-lsp)"
+    ));
+    assert_eq!(
+        actual,
+        [
+            served.clone(),
+            served,
+            served_quiet,
+            skills.clone(),
+            skills,
+            skills_quiet
+        ]
+    );
 }
 
 /// A granted capability the launch does not serve as tools is reachable by its skill only when

@@ -4292,6 +4292,16 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
             },
         ),
         (
+            "reflects",
+            Profile {
+                skills: Some(vec![
+                    "work".parse().unwrap(),
+                    "rimz-reflect".parse().unwrap(),
+                ]),
+                ..profile("claude")
+            },
+        ),
+        (
             "switched",
             Profile {
                 tools: Some(granted("rimz-wait")),
@@ -4312,8 +4322,10 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
         grant(resolve_profile_rebased("switched", Some("claude"), &profiles).unwrap()),
         Some(vec!["rimz-wait".to_owned()])
     );
-    // A skill named exactly `rimz` is the user's own; in `mcps`, `rimz` is RimZ's server.
+    // A skill named exactly `rimz` is the user's own, as is a `rimz-*` skill alone; in `mcps`,
+    // `rimz` is RimZ's server.
     assert_eq!(grant(resolve_profile("own", &profiles).unwrap()), lsp);
+    assert_eq!(grant(resolve_profile("reflects", &profiles).unwrap()), lsp);
     let error = resolve_profile("served", &profiles)
         .unwrap_err()
         .to_string();
@@ -4329,7 +4341,7 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
     assert!(
         error.contains(
             "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz-wait`; \
-             beside `capabilities:` those lists hold only your own"
+             beside `capabilities:` RimZ's MCP capabilities go only in the kind base's"
         ),
         "{error}"
     );

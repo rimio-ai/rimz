@@ -1135,7 +1135,8 @@ fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
 
 /// A `capabilities:` grant serves exactly its capabilities, each with its mark, and `mcps` keeps
 /// only the user's own servers: absent it limits none, listed it keeps RimZ's server beside them.
-/// A grant of skills alone starts no server, and a kind without MCP servers takes a grant silently.
+/// A grant of no capability starts no server, and a kind without MCP servers takes a grant
+/// silently.
 #[test]
 fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
     let room = Room::new();
@@ -1155,7 +1156,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
         "--always",
         "rimz-lsp"
     ]);
-    let grant = ["rimz-lsp:always", "rimz-wait", "rimz-reflect"];
+    let grant = ["rimz-lsp:always", "rimz-wait"];
     let mut actual = Vec::new();
     for mcps in [None, Some(&["github"][..]), Some(&[][..])] {
         let plan = compile("claude", &grant, mcps);
@@ -1182,14 +1183,89 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
             ),
         ]
     );
-    let skills_only = compile("claude", &["rimz-reflect"], None);
-    assert_eq!(claude_entry(&skills_only.process().provider_argv), None);
+    let none_granted = compile("claude", &[], None);
+    assert_eq!(claude_entry(&none_granted.process().provider_argv), None);
     assert_eq!(
-        allowlist(&claude_settings(&skills_only.process().provider_argv)),
+        allowlist(&claude_settings(&none_granted.process().provider_argv)),
         None
     );
     let plan = compile("opencode", &grant, None);
     assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+}
+
+/// A grant of every capability through `rimz` hands the provider `rimz`'s mark as an
+/// `mcps: [rimz:<mark>]` list does: Codex's server-level `omit_tools_from` with no warning, and
+/// Claude's server `alwaysLoad`. With the server off, the warning names `capabilities`.
+#[test]
+fn a_rimz_grant_marks_the_server_as_an_mcps_rimz_entry_does() {
+    let room = Room::new();
+    let mut actual = Vec::new();
+    for mark in ["always", "deferred"] {
+        let wildcard = format!("rimz:{mark}");
+        let mut granted = launch("codex", None, &[]);
+        granted.rimz_capabilities = Some(
+            crate::mcp::catalog::Capability::ALL
+                .iter()
+                .map(|capability| capability.name())
+                .chain([wildcard.as_str()])
+                .map(|entry| entry.parse().unwrap())
+                .collect(),
+        );
+        let listed = launch("codex", Some(&[wildcard.as_str()]), &[]);
+        for kind in ["codex", "claude"] {
+            let [granted, listed] = [&granted, &listed].map(|request| {
+                let mut request = request.clone();
+                request.kind = crate::ids::AgentKind::new_unchecked(kind);
+                let plan = room.compile(&switches(true, true), &request);
+                let argv = &plan.process().provider_argv;
+                (
+                    codex_omit(argv, "rimz"),
+                    claude_entry(argv).map(|(entry, _)| entry["alwaysLoad"].clone()),
+                    mcps_warnings(&plan),
+                )
+            });
+            assert_eq!(granted, listed, "{kind} {mark}");
+            actual.push(granted);
+        }
+    }
+    let omit = |mode: &str| {
+        Some(toml::Value::Array(
+            (mode == "always")
+                .then(|| toml::Value::String("deferred".to_owned()))
+                .into_iter()
+                .collect(),
+        ))
+    };
+    assert_eq!(
+        actual,
+        [
+            (omit("always"), None, Vec::new()),
+            (None, Some(serde_json::json!(true)), Vec::new()),
+            (omit("deferred"), None, Vec::new()),
+            (None, Some(serde_json::json!(false)), Vec::new()),
+        ]
+    );
+    let mut granted = launch("claude", None, &[]);
+    granted.rimz_capabilities = Some(
+        crate::mcp::catalog::Capability::ALL
+            .iter()
+            .map(|capability| capability.name())
+            .chain(["rimz:deferred"])
+            .map(|entry| entry.parse().unwrap())
+            .collect(),
+    );
+    assert_eq!(
+        room.compile(&switches(true, false), &granted)
+            .warnings
+            .iter()
+            .map(ToString::to_string)
+            .filter(|warning| warning.contains("not applied"))
+            .collect::<Vec<_>>(),
+        [
+            "the capabilities entry `rimz:deferred` is not applied: RimZ's MCP server is off for \
+             this launch"
+        ]
+    );
 }
 
 /// A prompt's `rimz(x)` reference reaches only what the grant names: a capability the merge base

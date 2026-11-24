@@ -895,4 +895,16 @@ fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
     assert_eq!(reasons("rimz-wait"), (Vec::new(), Vec::new()));
     let left_out = vec!["its capabilities leave out rimz-message".to_owned()];
     assert_eq!(reasons("rimz-message"), (left_out.clone(), left_out));
+    // A `rimz-*` skill alone is the skills list's to admit, whatever the grant names.
+    let no_tools = vec!["rimz-reflect has no MCP tools".to_owned()];
+    assert_eq!(
+        reasons("rimz-reflect"),
+        (
+            no_tools.clone(),
+            vec!["its skills leave out rimz-reflect".to_owned()]
+        )
+    );
+    profile.skills = None;
+    let reasons = |name| shut_out(&machine, "claude", &profile, false, name);
+    assert_eq!(reasons("rimz-reflect"), (no_tools, Vec::new()));
 }
