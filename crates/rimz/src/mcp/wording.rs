@@ -323,13 +323,20 @@ impl Wording {
 
     /// The server's instructions for a launch serving `groups`: a first
     /// line naming the served tools by purpose, then the sentence of each
-    /// group, in group order, a line each, then the shared text.
+    /// group, in group order, a line each, then a line for `tasks`/`join`/`stop`
+    /// when served and one for `guide` when served, then the shared text.
     pub fn instructions(&self, groups: &[Capability]) -> String {
-        let sentences: Vec<&str> = Capability::ALL
+        let mut sentences: Vec<&str> = Capability::ALL
             .into_iter()
             .filter(|group| groups.contains(group))
             .map(|group| self.file(&group_sentence(group)).text())
             .collect();
+        if groups.iter().any(|group| group.starts_things()) {
+            sentences.push(STARTED_SENTENCE);
+        }
+        if groups.iter().any(|group| has_guides(*group)) {
+            sentences.push(GUIDE_SENTENCE);
+        }
         format!(
             "{}\n{}\n{}",
             first_line(groups),
@@ -607,6 +614,10 @@ fn first_line(groups: &[Capability]) -> String {
 fn group_sentence(group: Capability) -> String {
     format!("{}/instructions.md", group.name())
 }
+
+const STARTED_SENTENCE: &str =
+    "Use `tasks`, `join`, and `stop` to list, await, or cancel what you started.";
+const GUIDE_SENTENCE: &str = "Use `guide` to load a usage guide a tool description names.";
 
 #[cfg(test)]
 #[path = "wording_tests.rs"]
