@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
+use unicode_width::UnicodeWidthStr;
+
 use super::{paint, palette};
 
 pub(crate) struct RosterRow {
@@ -10,6 +12,7 @@ pub(crate) struct RosterRow {
     pub kind: String,
     pub login: Option<rimz::ids::LoginName>,
     pub model: Option<String>,
+    pub tier_note: Option<String>,
     pub tier: Option<rimz::agents::TierStamp>,
     pub leader: bool,
 }
@@ -71,20 +74,19 @@ impl Roster {
             })
             .max()
             .unwrap_or(0);
-        let model_width = self
-            .rows
+        let formatted_models: Vec<String> = self.rows.iter().map(formatted_model).collect();
+        let model_width = formatted_models
             .iter()
-            .map(|row| row.model.as_deref().unwrap_or("-").len())
+            .map(|model| UnicodeWidthStr::width(model.as_str()))
             .max()
             .unwrap_or(0);
-        for row in &self.rows {
+        for (row, mut model) in self.rows.iter().zip(formatted_models) {
             let handle = format!("@{:<handle_width$}", row.handle);
             let kind = row
                 .login
                 .as_ref()
                 .map_or_else(|| row.kind.clone(), |name| format!("{}@{name}", row.kind));
             let kind = format!("{kind:<kind_width$}");
-            let mut model = row.model.as_deref().unwrap_or("-").to_owned();
             if let Some(tier) = row.tier.as_ref().filter(|tier| tier.moved()) {
                 let passes = tier
                     .passes()
@@ -94,7 +96,8 @@ impl Roster {
                 model.push_str(&format!(" ({}; {passes})", tier.tier));
             }
             let model = if row.leader {
-                format!("{model:<model_width$}  <- leader")
+                let pad = model_width.saturating_sub(UnicodeWidthStr::width(model.as_str()));
+                format!("{model}{}  <- leader", " ".repeat(pad))
             } else {
                 model
             };
@@ -139,6 +142,17 @@ impl Roster {
     }
 }
 
+fn formatted_model(row: &RosterRow) -> String {
+    let mut model = row.model.as_deref().map_or_else(
+        || "-".to_owned(),
+        |model| rimz::agents::model_display::display_model_for_kind(model, Some(row.kind.as_str())),
+    );
+    if let Some(note) = row.tier_note.as_deref() {
+        model.push_str(&format!(" ({note})"));
+    }
+    model
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +166,7 @@ mod tests {
                 kind: "claude".to_owned(),
                 login: None,
                 model: Some("fable".to_owned()),
+                tier_note: None,
                 tier: None,
                 leader: true,
             },
@@ -160,6 +175,7 @@ mod tests {
                 kind: "codex".to_owned(),
                 login: None,
                 model: Some("gpt-6-astra".to_owned()),
+                tier_note: None,
                 tier: None,
                 leader: false,
             },
@@ -168,6 +184,7 @@ mod tests {
                 kind: "claude".to_owned(),
                 login: None,
                 model: None,
+                tier_note: None,
                 tier: None,
                 leader: false,
             },
@@ -178,7 +195,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output.into_inner()).unwrap(),
-            "  @planner    claude  fable        <- leader\n  @coder      codex   gpt-6-astra\n  @reviewer   claude  -\n"
+            "  @planner    claude  Fable    <- leader\n  @coder      codex   Astra 6\n  @reviewer   claude  -\n"
         );
     }
 
@@ -201,6 +218,7 @@ mod tests {
                 kind: "codex".into(),
                 login: None,
                 model: Some("astra".into()),
+                tier_note: None,
                 tier: Some(stamp.clone()),
                 leader: true,
             }])
@@ -210,9 +228,9 @@ mod tests {
             assert_eq!(
                 text,
                 if moved {
-                    "@coder   codex  astra (senior; opus: not buildable; fable: logged out)  <- leader\n"
+                    "@coder   codex  Astra (senior; opus: not buildable; fable: logged out)  <- leader\n"
                 } else {
-                    "@coder   codex  astra  <- leader\n"
+                    "@coder   codex  Astra  <- leader\n"
                 }
             );
         }

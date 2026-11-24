@@ -167,7 +167,7 @@ fn panel_groups_team_and_stray_members() {
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
     forge team · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
-      @planner (plan|ner) · Claude · fable`2@high
+      @planner (plan|ner) · Claude · Fable`2@high
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90 ϟ fast
@@ -178,7 +178,7 @@ fn panel_groups_team_and_stray_members() {
 
     Other agents · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
-      @codex · Codex · gpt-5.5@high ϟ fast
+      @codex · Codex · GPT 5.5@high ϟ fast
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
@@ -188,8 +188,8 @@ fn panel_groups_team_and_stray_members() {
           tokens:    300 input, 100 output
 
     Models
-      claude-opus-4-8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
-      gpt-5.5:         $1.60 · 300 input, 100 output
+      Claude · Opus 4.8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
+      GPT 5.5:           $1.60 · 300 input, 100 output
 
     Total · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)
     ");
@@ -241,7 +241,7 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
     let mut output = anstream::StripStream::new(Vec::new());
     render_panel(&mut output, &report).expect("render panel");
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
-      @codex · Codex · gpt-5.5@high
+      @codex · Codex · GPT 5.5@high
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
@@ -251,7 +251,7 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
           tokens:    300 input, 100 output
 
     Models
-      gpt-5.5: $1.60 · 300 input, 100 output
+      GPT 5.5: $1.60 · 300 input, 100 output
 
     Total · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
     ");
@@ -269,7 +269,7 @@ fn panel_omits_total_that_repeats_the_only_caption() {
     let output = String::from_utf8(output.into_inner()).expect("utf8");
 
     assert!(output.starts_with("forge team ·"));
-    assert!(output.contains("\nModels\n  claude-opus-4-8:"));
+    assert!(output.contains("\nModels\n  Claude · Opus 4.8:"));
     assert!(!output.contains("Total ·"));
 }
 
@@ -290,7 +290,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **`forge` team**
 
-    - **`plan|ner`** — Claude ``fable`2@high``
+    - **`plan|ner`** — Claude ``Fable`2@high``
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90 ⚡ fast
@@ -301,7 +301,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Other agents**
 
-    - **`@codex`** — Codex `gpt-5.5@high` ⚡ fast
+    - **`@codex`** — Codex `GPT 5.5@high` ⚡ fast
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90
@@ -312,8 +312,8 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Models**
 
-    - `claude-opus-4-8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
-    - `gpt-5.5` — $1.60 · 300 input, 100 output
+    - `Claude · Opus 4.8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
+    - `GPT 5.5` — $1.60 · 300 input, 100 output
 
     </details>
     "#);
@@ -370,17 +370,17 @@ fn markdown_model_code_span_keeps_punctuation_verbatim() {
     let mut spanned = member("@coder", Some("coder"), "Qwen", "qwen2_5-coder");
     assert_eq!(
         markdown_code(&model_label(&spanned)),
-        "`qwen2_5-coder@high`"
+        "`Qwen2_5 · Coder@high`"
     );
 
     spanned.model = Some("llama3*8b".to_owned());
-    assert_eq!(markdown_code(&model_label(&spanned)), "`llama3*8b@high`");
+    assert_eq!(markdown_code(&model_label(&spanned)), "`Llama3*8b@high`");
 
     spanned.model = Some("a[1]".to_owned());
     assert_eq!(markdown_code(&model_label(&spanned)), "`a[1]@high`");
 
     spanned.model = Some("fable`2".to_owned());
-    assert_eq!(markdown_code(&model_label(&spanned)), "``fable`2@high``");
+    assert_eq!(markdown_code(&model_label(&spanned)), "``Fable`2@high``");
     for (label, expected) in [
         ("`x`", "`` `x` ``"),
         ("`x", "`` `x ``"),

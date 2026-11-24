@@ -17,11 +17,11 @@ expression: rendered
 ▌  ▤ 227k · ◌ 195k ◍ 22k ↘ 9k ↗ 28k                  ▐
 ▌  ⧉ subagents (3)                              $2.22▐
 ▌    ✓ explorer · map sidebar serve supervisor  $0.46▐
-▌      ◇ 109k · GPT 6.1 Sol · xhigh                9m▐
+▌      ◇ 109k · GPT · Sol 6.1 · xhigh              9m▐
 ▌    ✓ explorer · map cli entry and gates       $1.02▐
-▌      ◇ 206k · GPT 6.1 Sol · xhigh               16m▐
+▌      ◇ 206k · GPT · Sol 6.1 · xhigh             16m▐
 ▌    ✓ explorer · map perf and live harness     $0.74▐
-▌      ◇ 163k · GPT 6.1 Sol · xhigh               13m▐
+▌      ◇ 163k · GPT · Sol 6.1 · xhigh             13m▐
 
 
 

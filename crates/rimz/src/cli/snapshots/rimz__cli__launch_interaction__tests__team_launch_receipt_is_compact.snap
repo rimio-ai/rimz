@@ -7,5 +7,5 @@ launched forge in worktree #feat-x
   board     .rimz/team/blackboard.md
   prompt    → @planner  "Read the handoff at /tmp/handoff-feat-x.md."
 
-  @planner   claude  fable        <- leader
-  @coder     codex   gpt-6-astra
+  @planner   claude  Fable    <- leader
+  @coder     codex   Astra 6

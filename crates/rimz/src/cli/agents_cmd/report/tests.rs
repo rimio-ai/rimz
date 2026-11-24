@@ -16,7 +16,7 @@ fn model_fast_is_typed_and_keeps_the_label_glyph_free() {
         });
         let report = serde_json::to_value(model_report(&state)).unwrap();
         assert_eq!(report["fast"], fast);
-        assert_eq!(report["label"], "GPT 6.1 Sol@xhigh");
+        assert_eq!(report["label"], "GPT · Sol 6.1@xhigh");
     }
 }
 
@@ -275,13 +275,28 @@ fn card_projection_model_label_is_stable_across_a_turn() {
     state.model = Some("claude-opus-5".into());
     state.effort = Some("medium".into());
     let before = model_report(&state);
-    assert_eq!(before.label.as_deref(), Some("Opus 5@medium"));
+    assert_eq!(before.label.as_deref(), Some("Claude · Opus 5@medium"));
+    assert_eq!(
+        before.human_label.as_deref(),
+        Some("Claude · Opus 5@medium")
+    );
+    let mut claude_state = state.clone();
+    claude_state.kind = AgentKind::new_unchecked("claude");
+    assert_eq!(
+        model_report(&claude_state).label.as_deref(),
+        Some("Claude · Opus 5@medium")
+    );
+    assert_eq!(
+        model_report(&claude_state).human_label.as_deref(),
+        Some("Opus 5@medium")
+    );
     let mut context = rimz::agents::AgentContext::new("codex", Timestamp::UNIX_EPOCH);
     context.model_id = state.model.clone();
     context.model_display_name = Some("Opus".into());
     state.context = Some(context);
     let after = model_report(&state);
     assert_eq!(after.label, before.label);
+    assert_eq!(after.human_label, before.human_label);
     assert_eq!(after.id, before.id);
     state.context.as_mut().unwrap().model_id = None;
     assert_eq!(model_report(&state).label, before.label);
@@ -292,12 +307,12 @@ fn card_projection_model_label_is_stable_across_a_turn() {
 #[test]
 fn card_projection_model_keeps_versioned_provider_display_names() {
     for (provider, id, display, expected) in [
-        ("cursor", "auto", "GPT-5.6 Sol", "GPT 5.6 Sol@high"),
+        ("cursor", "auto", "GPT-5.6 Sol", "GPT · Sol 5.6@high"),
         (
             "qwen",
             "[DeepSeek] deepseek-v4-pro",
-            "DeepSeek V4 Pro",
-            "DeepSeek V4 Pro@high",
+            "deepseek-v4-pro",
+            "DeepSeek · Pro V4@high",
         ),
     ] {
         let mut state = rimz::testkit::agent_state(provider, "model", Timestamp::UNIX_EPOCH);

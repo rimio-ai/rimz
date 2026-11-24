@@ -372,6 +372,7 @@ impl Stats {
         let Spending {
             total, by_provider, ..
         } = spending;
+        let (by_model, chart) = fold_models_for_display(models, chart);
         Stats {
             timezone,
             refreshed_at_ms,
@@ -383,7 +384,7 @@ impl Stats {
             effort_since_secs: roles.effort_since_secs,
             by_day: days,
             chart,
-            by_model: models,
+            by_model,
             by_provider,
             total,
         }
@@ -428,6 +429,121 @@ impl Stats {
                 ),
         )
     }
+}
+
+fn model_display_key(id: &str) -> String {
+    if id.is_empty() {
+        String::new()
+    } else {
+        rimz::agents::model_display::display_model(id)
+    }
+}
+
+fn compare_tally_spend(
+    a_id: &str,
+    a: &SpendTally,
+    b_id: &str,
+    b: &SpendTally,
+) -> std::cmp::Ordering {
+    a.year
+        .usd
+        .total_cmp(&b.year.usd)
+        .then_with(|| a.month.usd.total_cmp(&b.month.usd))
+        .then_with(|| a.week.usd.total_cmp(&b.week.usd))
+        .then_with(|| a.day.usd.total_cmp(&b.day.usd))
+        .then_with(|| a.headline.usd.total_cmp(&b.headline.usd))
+        .then_with(|| a.year.tokens.cmp(&b.year.tokens))
+        .then_with(|| a.month.tokens.cmp(&b.month.tokens))
+        .then_with(|| a.week.tokens.cmp(&b.week.tokens))
+        .then_with(|| a.day.tokens.cmp(&b.day.tokens))
+        .then_with(|| a.headline.tokens.cmp(&b.headline.tokens))
+        .then_with(|| b_id.cmp(a_id))
+}
+
+fn merge_spend_tally(dst: &mut SpendTally, src: &SpendTally) {
+    dst.headline.merge(&src.headline);
+    dst.day.merge(&src.day);
+    dst.week.merge(&src.week);
+    dst.month.merge(&src.month);
+    dst.year.merge(&src.year);
+}
+
+fn fold_chart_buckets(
+    buckets: BTreeMap<i64, BTreeMap<String, f64>>,
+    canonical_by_display: &mut BTreeMap<String, String>,
+) -> BTreeMap<i64, BTreeMap<String, f64>> {
+    buckets
+        .into_iter()
+        .map(|(bucket, cells)| {
+            let mut folded = BTreeMap::new();
+            for (raw_id, usd) in cells {
+                let display = model_display_key(&raw_id);
+                let canonical = canonical_by_display
+                    .entry(display)
+                    .or_insert_with(|| raw_id.clone());
+                *folded.entry(canonical.clone()).or_insert(0.0) += usd;
+            }
+            (bucket, folded)
+        })
+        .collect()
+}
+
+/// Fold per-model tallies and chart series that render to the same displayed
+/// name into one row keyed by its highest-spend member's raw id, keeping the
+/// published spend cache raw on disk.
+fn fold_models_for_display(
+    models: BTreeMap<String, ModelTally>,
+    mut chart: rimz::agents::spending::ChartSpend,
+) -> (
+    BTreeMap<String, ModelTally>,
+    rimz::agents::spending::ChartSpend,
+) {
+    let mut grouped: BTreeMap<String, Vec<(String, ModelTally)>> = BTreeMap::new();
+    for (id, tally) in models {
+        grouped
+            .entry(model_display_key(&id))
+            .or_default()
+            .push((id, tally));
+    }
+
+    let mut folded_models = BTreeMap::new();
+    let mut canonical_by_display = BTreeMap::new();
+    for (display, members) in grouped {
+        let Some((canonical_id, _)) = members
+            .iter()
+            .max_by(|(a_id, a), (b_id, b)| compare_tally_spend(a_id, &a.tally, b_id, &b.tally))
+        else {
+            continue;
+        };
+        let canonical_id = canonical_id.clone();
+
+        let mut merged = SpendTally::default();
+        let mut by_kind: BTreeMap<String, SpendTally> = BTreeMap::new();
+        for (_, member) in &members {
+            merge_spend_tally(&mut merged, &member.tally);
+            let kind_tally = by_kind.entry(member.kind.clone()).or_default();
+            merge_spend_tally(kind_tally, &member.tally);
+        }
+        let top_kind = by_kind
+            .into_iter()
+            .max_by(|(a_kind, a), (b_kind, b)| compare_tally_spend(a_kind, a, b_kind, b))
+            .map(|(kind, _)| kind)
+            .unwrap_or_default();
+
+        canonical_by_display.insert(display, canonical_id.clone());
+        folded_models.insert(
+            canonical_id,
+            ModelTally {
+                tally: merged,
+                kind: top_kind,
+            },
+        );
+    }
+
+    chart.hours = fold_chart_buckets(chart.hours, &mut canonical_by_display);
+    chart.days = fold_chart_buckets(chart.days, &mut canonical_by_display);
+    chart.weeks = fold_chart_buckets(chart.weeks, &mut canonical_by_display);
+    (folded_models, chart)
 }
 
 fn load_stats(human: bool) -> Result<Stats> {

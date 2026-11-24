@@ -483,7 +483,7 @@ fn agent_row(
     now: jiff::Timestamp,
     glyph: &impl Fn(GlyphRole) -> String,
 ) -> Vec<render::Cell> {
-    let model = agent.model.label.as_deref().unwrap_or("-");
+    let model = agent.model.human_label.as_deref().unwrap_or("-");
     let model = if model == "-" {
         render::cell(model).dash()
     } else if agent.model.fast {

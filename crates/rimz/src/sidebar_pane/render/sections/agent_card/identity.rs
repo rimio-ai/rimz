@@ -144,71 +144,139 @@ pub(super) fn agent_identity_line(
     if row_ctx.tier != Tier::L0
         && let Some(model) = display_model(row)
     {
-        left.push(Span::styled(value_seam(theme), theme.muted()));
-        let bolt = theme.glyph(GlyphRole::CardFast);
-        let model_budget = width.saturating_sub(
-            spans_width(&left)
-                + spans_width(&right)
-                + usize::from(!right.is_empty())
-                + 1
-                + text_width(bolt),
+        let base_width = spans_width(&left);
+        let (cluster, fits) = identity_capability_spans(
+            row_ctx,
+            row,
+            status,
+            &model,
+            model.series.is_some(),
+            base_width,
+            &right,
+            width,
         );
-        if row.as_agent().is_some_and(|agent| agent.fast) && model_budget > 0 {
-            left.push(Span::styled(ellipsize(&model, model_budget), theme.muted()));
-            left.push(Span::styled(
-                format!(" {bolt}"),
-                fast_mode_style(row_ctx, row, status),
-            ));
+        if model.series.is_some() && !fits {
+            let (without_series, _) = identity_capability_spans(
+                row_ctx, row, status, &model, false, base_width, &right, width,
+            );
+            left.extend(without_series);
         } else {
-            left.push(Span::styled(model, theme.muted()));
-        }
-        if row.as_agent().is_some_and(|card| card.tier_moved) {
-            left.push(Span::styled(
-                format!(" {}", theme.glyph(GlyphRole::CardTierMove)),
-                theme.muted(),
-            ));
-        }
-        if row_ctx.tier == Tier::L2
-            && let Some(reasoning) = display_reasoning(row)
-        {
-            left.push(Span::styled(value_seam(theme), theme.muted()));
-            left.push(Span::styled(reasoning.to_owned(), theme.muted()));
-        }
-        let meter = row.context_meter(row_ctx.bands.scale);
-        if status != AgentStatus::Idle
-            && let Some(window) = meter.window
-        {
-            if let Some(point) = meter.compact_at {
-                let point = window_short(point);
-                let window = format!("/{}", window_short(meter.capacity.unwrap_or(window)));
-                let available = width.saturating_sub(
-                    spans_width(&left)
-                        + spans_width(&right)
-                        + usize::from(!right.is_empty())
-                        + text_width(&value_seam(theme)),
-                );
-                if text_width(&point) <= available {
-                    left.push(Span::styled(value_seam(theme), theme.muted()));
-                    let full = text_width(&point) + text_width(&window) <= available;
-                    left.push(Span::styled(
-                        point,
-                        theme.styled(Component::CompactionPoint, Modifier::DIM),
-                    ));
-                    if full {
-                        left.push(Span::styled(window, theme.muted()));
-                    }
-                }
-            } else {
-                let capacity = meter.capacity.unwrap_or(window);
-                left.push(Span::styled(value_seam(theme), theme.muted()));
-                left.push(Span::styled(
-                    window_short(capacity),
-                    window_style(theme, capacity),
-                ));
-            }
+            left.extend(cluster);
         }
     }
     pin_right(left, right, width)
+}
+
+/// Dimmed brand colour of the adapter declaring `series` as its home series,
+/// or plain dim when no built-in adapter declares it.
+pub(super) fn series_style(theme: &Theme, series: &str) -> Style {
+    match home_series_owner(series) {
+        Some(owner) => theme.style(theme.provider_brand_tone(owner), Modifier::DIM),
+        None => theme.muted(),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "measuring with and without the series prefix shares the exact layout inputs"
+)]
+fn identity_capability_spans(
+    row_ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    status: AgentStatus,
+    model: &RenderedModel,
+    include_series: bool,
+    base_width: usize,
+    right: &[Span<'static>],
+    width: usize,
+) -> (Vec<Span<'static>>, bool) {
+    let theme = row_ctx.theme;
+    let right_reserved = spans_width(right) + usize::from(!right.is_empty());
+    let mut cluster: Vec<Span<'static>> = Vec::new();
+    let mut fits_intact = true;
+
+    cluster.push(Span::styled(value_seam(theme), theme.muted()));
+    if include_series && let Some(series) = model.series.as_deref() {
+        cluster.push(Span::styled(
+            format!("{series}{}", value_seam(theme)),
+            series_style(theme, series),
+        ));
+    }
+    let bolt = theme.glyph(GlyphRole::CardFast);
+    let model_budget = width
+        .saturating_sub(base_width + spans_width(&cluster) + right_reserved + 1 + text_width(bolt));
+    if row.as_agent().is_some_and(|agent| agent.fast) && model_budget > 0 {
+        if text_width(&model.name) > model_budget {
+            fits_intact = false;
+        }
+        cluster.push(Span::styled(
+            ellipsize(&model.name, model_budget),
+            theme.muted(),
+        ));
+        cluster.push(Span::styled(
+            format!(" {bolt}"),
+            fast_mode_style(row_ctx, row, status),
+        ));
+    } else {
+        if row.as_agent().is_some_and(|agent| agent.fast) {
+            fits_intact = false;
+        }
+        cluster.push(Span::styled(model.name.clone(), theme.muted()));
+    }
+    if row.as_agent().is_some_and(|card| card.tier_moved) {
+        cluster.push(Span::styled(
+            format!(" {}", theme.glyph(GlyphRole::CardTierMove)),
+            theme.muted(),
+        ));
+    }
+    if row_ctx.tier == Tier::L2
+        && let Some(reasoning) = display_reasoning(row)
+    {
+        cluster.push(Span::styled(value_seam(theme), theme.muted()));
+        cluster.push(Span::styled(reasoning.to_owned(), theme.muted()));
+    }
+    let meter = row.context_meter(row_ctx.bands.scale);
+    if status != AgentStatus::Idle
+        && let Some(window) = meter.window
+    {
+        if let Some(point) = meter.compact_at {
+            let point = window_short(point);
+            let window = format!("/{}", window_short(meter.capacity.unwrap_or(window)));
+            let available = width.saturating_sub(
+                base_width
+                    + spans_width(&cluster)
+                    + right_reserved
+                    + text_width(&value_seam(theme)),
+            );
+            if text_width(&point) <= available {
+                cluster.push(Span::styled(value_seam(theme), theme.muted()));
+                let full = text_width(&point) + text_width(&window) <= available;
+                if !full {
+                    fits_intact = false;
+                }
+                cluster.push(Span::styled(
+                    point,
+                    theme.styled(Component::CompactionPoint, Modifier::DIM),
+                ));
+                if full {
+                    cluster.push(Span::styled(window, theme.muted()));
+                }
+            } else {
+                fits_intact = false;
+            }
+        } else {
+            let capacity = meter.capacity.unwrap_or(window);
+            cluster.push(Span::styled(value_seam(theme), theme.muted()));
+            cluster.push(Span::styled(
+                window_short(capacity),
+                window_style(theme, capacity),
+            ));
+        }
+    }
+    if base_width + spans_width(&cluster) + right_reserved > width {
+        fits_intact = false;
+    }
+    (cluster, fits_intact)
 }
 
 /// One animation phase in this many flashes a running fast card's bolt.

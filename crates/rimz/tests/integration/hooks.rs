@@ -4402,7 +4402,7 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(context.context.agent_version.as_deref(), Some("0.19.10"));
     assert_eq!(
         context.context.model_display_name.as_deref(),
-        Some("DeepSeek V4 Pro")
+        Some("deepseek-v4-pro")
     );
     assert_eq!(context.context.vim_mode.as_deref(), Some("NORMAL"));
     let tokens = context.context.tokens.as_ref().unwrap();
@@ -4449,7 +4449,7 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(agent["cache_read_input_tokens"], 50);
     assert_eq!(agent["fresh_input_tokens"], 400);
     assert_eq!(agent["output_tokens"], 105);
-    assert_eq!(agent["context"]["model_display_name"], "DeepSeek V4 Pro");
+    assert_eq!(agent["context"]["model_display_name"], "deepseek-v4-pro");
     assert_eq!(agent["context"]["tokens"]["context_window_size"], 1_000_000);
     assert_eq!(agent["context"]["tokens"]["used_percentage"], 4);
     assert_eq!(agent["context"]["tokens"]["current_context_tokens"], 38_727);

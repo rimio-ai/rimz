@@ -366,15 +366,6 @@ pub fn model_label_source<'a>(
     }
 }
 
-/// A model's display name and optional compact context-window qualifier.
-pub fn model_label_parts(raw: &str) -> (String, Option<String>) {
-    let parsed = ParsedModel::parse(raw);
-    (
-        parsed.render(None).full(),
-        parsed.window().map(str::to_owned),
-    )
-}
-
 /// Strip Factory's legacy custom selector wrapper
 /// `custom:<display-name-slug>-<zero-based-index>`, returning the inner slug
 /// unformatted. The terminal decimal is protocol bookkeeping, not part of the

@@ -574,7 +574,7 @@ fn refuse_spent(
             "restart refused: the provider refuses {} on {} account `{}`, so the continue for \
              {}'s interrupted turn would stop again; pass `--account <other>` to run it on \
              another account, or `--no-continue` to reopen it at rest",
-            rimz::agents::model_display::model_label_parts(model).0,
+            rimz::agents::model_display::display_model_for_kind(model, Some(key.kind.as_str())),
             key.kind,
             key.name,
             handle(agent),

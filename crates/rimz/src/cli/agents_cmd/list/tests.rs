@@ -194,8 +194,8 @@ fn fast_model_cell_uses_the_resolved_glyph_without_marking_missing_models() {
                 table.render(&mut out).unwrap();
                 let text = String::from_utf8(out.into_inner()).unwrap();
                 let expected = match (model, fast) {
-                    (Some(_), true) => format!("GPT 6.1 Sol {bolt}"),
-                    (Some(_), false) => "GPT 6.1 Sol".to_owned(),
+                    (Some(_), true) => format!("Sol 6.1 {bolt}"),
+                    (Some(_), false) => "Sol 6.1".to_owned(),
                     (None, _) => "-".to_owned(),
                 };
                 assert_eq!(text.lines().last().unwrap().trim(), expected);
@@ -328,31 +328,31 @@ fn model_label_prefers_live_context_then_durable_launch_fields() {
     agent.context = Some(context);
     assert_eq!(
         model_report(&agent).label.as_deref(),
-        Some("Context Id@high")
+        Some("Context · Id@high")
     );
 
     agent.context.as_mut().unwrap().model_display_name = None;
     assert_eq!(
         model_report(&agent).label.as_deref(),
-        Some("Context Id@high")
+        Some("Context · Id@high")
     );
 
     agent.context.as_mut().unwrap().model_id = None;
     assert_eq!(
         model_report(&agent).label.as_deref(),
-        Some("Launch Model@high")
+        Some("Launch · Model@high")
     );
 
     agent.context.as_mut().unwrap().effort = None;
     assert_eq!(
         model_report(&agent).label.as_deref(),
-        Some("Launch Model@launch-effort")
+        Some("Launch · Model@launch-effort")
     );
 
     agent.context = None;
     assert_eq!(
         model_report(&agent).label.as_deref(),
-        Some("Launch Model@launch-effort")
+        Some("Launch · Model@launch-effort")
     );
 }
 

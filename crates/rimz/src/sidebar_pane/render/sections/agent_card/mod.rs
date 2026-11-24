@@ -5,7 +5,9 @@
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
-use crate::agents::model_display::{model_label_parts, window_short};
+use crate::agents::model_display::{
+    ParsedModel, RenderedModel, home_series, home_series_owner, window_short,
+};
 use crate::agents::{AgentContext, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
@@ -607,8 +609,8 @@ fn sub_agent_entry_lines(
         .unwrap_or(0);
     let model_col = grid
         .iter()
-        .filter_map(|sub| sub.model.as_deref())
-        .map(|model| text_width(&model_label_parts(model).0))
+        .filter_map(|sub| sub_agent_model_spans(theme, sub))
+        .map(|spans| spans_width(&spans))
         .max()
         .unwrap_or(0);
     for sub in rows {
@@ -849,6 +851,22 @@ fn append_sub_agent_tokens(
     }
 }
 
+/// One shared subagent model render for both column measurement and drawing.
+fn sub_agent_model_spans(theme: &Theme, sub: &SidebarSubAgent) -> Option<Vec<Span<'static>>> {
+    let model = sub.model.as_deref()?;
+    let rendered = ParsedModel::parse(model).render(home_series(sub.kind.as_str()));
+    let mut spans = Vec::with_capacity(2);
+    if let Some(series) = rendered.series {
+        let style = identity::series_style(theme, &series);
+        spans.push(Span::styled(
+            format!("{series}{}", value_seam(theme)),
+            style,
+        ));
+    }
+    spans.push(Span::styled(rendered.name, theme.muted()));
+    Some(spans)
+}
+
 fn append_sub_agent_model(
     theme: &Theme,
     left: &mut Vec<Span<'static>>,
@@ -866,8 +884,8 @@ fn append_sub_agent_model(
     } else {
         0
     };
-    match sub.model.as_deref() {
-        Some(model) => {
+    match sub_agent_model_spans(theme, sub) {
+        Some(spans) => {
             if *prev_rendered {
                 left.push(Span::styled(value_seam(theme), theme.muted()));
             } else {
@@ -875,9 +893,8 @@ fn append_sub_agent_model(
             }
             // Pad by painted width, not chars: a provider's model name may
             // hold wide characters, and `{:<N}` pads by char count.
-            let label = model_label_parts(model).0;
-            let pad = model_col.saturating_sub(text_width(&label));
-            left.push(Span::styled(label, theme.muted()));
+            let pad = model_col.saturating_sub(spans_width(&spans));
+            left.extend(spans);
             let bolt_width = if sub.effort.is_none() {
                 append_sub_agent_bolt(theme, left, sub, left_width)
             } else {

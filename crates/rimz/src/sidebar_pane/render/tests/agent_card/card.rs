@@ -94,7 +94,7 @@ fn tier_move_marker_follows_the_model_at_exact_width_boundaries() {
         for width in [31, 32, 33, 45, 46, 47] {
             let rendered = snapshot_to_screen(&snapshot, width, 15);
             assert_eq!(
-                rendered.contains("astra ↪"),
+                rendered.contains("Astra ↪"),
                 width >= 32,
                 "{set}, {width}:\n{rendered}"
             );
@@ -222,7 +222,7 @@ fn render_cursor_normalized_model_metadata_once() {
     let rendered = snapshot_to_screen(&snapshot_with(vec![cursor]), 54, 15);
 
     assert!(
-        rendered.contains("GPT 5.6 Sol · medium · 200k"),
+        rendered.contains("GPT · Sol 5.6 · medium · 200k"),
         "the identity line separates Cursor's normalized capabilities:\n{rendered}"
     );
     assert!(
@@ -913,4 +913,206 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
         read_name.style.bg, None,
         "a read result rests on no wash — the cue clears on the look"
     );
+}
+
+#[test]
+fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
+    let mut pi = agent(
+        "pi-1",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run gemini"),
+    );
+    pi.model = Some("gemini-4-neon".to_owned());
+    pi.effort = Some("high".to_owned());
+    pi.usage.context_window = Some(200_000);
+    let mut pi_ctx = AgentContext::new("pi", fixed_now());
+    pi_ctx.cost = Some(AgentCost {
+        total_cost_usd: Some(1.20),
+        ..Default::default()
+    });
+    pi.context = Some(pi_ctx);
+    let mut pi_deepseek = agent(
+        "pi-2",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run deepseek"),
+    );
+    pi_deepseek.model = Some("deepseek-v4-pro".to_owned());
+    let mut snapshot = snapshot_with(vec![pi, pi_deepseek]);
+    snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .handle = Some("pi-researcher".into());
+
+    let theme = super::super::truecolor_sidebar_theme();
+    let wide = snapshot_to_screen(&snapshot, 58, 20);
+    assert!(
+        wide.contains("pi-researcher · Gemini · Neon 4 · high · 200k"),
+        "wide Pi card shows Gemini series prefix:\n{wide}"
+    );
+    assert!(
+        wide.contains("pi · DeepSeek · Pro V4"),
+        "wide Pi card shows DeepSeek series prefix:\n{wide}"
+    );
+
+    // Check span styling on the wide card: `Gemini · ` wears Antigravity's
+    // brand colour dimmed; `DeepSeek · ` has no declaring adapter so it wears
+    // plain dim (`theme.muted()`).
+    let lines = group_lines_at_width(&snapshot, &theme, 99, 58);
+    let gemini_prefix = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "Gemini · ")
+        .expect("wide card renders `Gemini · ` prefix span");
+    assert_eq!(
+        gemini_prefix.style.fg,
+        Some(theme.provider_brand_tone("antigravity")),
+        "Gemini prefix uses Antigravity brand colour"
+    );
+    assert!(
+        gemini_prefix
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "Gemini prefix is dimmed"
+    );
+    let deepseek_prefix = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "DeepSeek · ")
+        .expect("wide card renders `DeepSeek · ` prefix span");
+    assert_eq!(
+        deepseek_prefix.style,
+        theme.muted(),
+        "undeclared series uses plain dim"
+    );
+
+    // Exact drop-width boundary (last width keeping `Gemini · `, first dropping
+    // it, and one column either side): `◐ pi-researcher` (15) +
+    // ` · Gemini · Neon 4 · high · 200k` (32) + ` $1.20` (6) = 53 content cells
+    // (pane width 55).
+    for width in [53, 54, 55, 56] {
+        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("pi-researcher"))
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            text.contains("Gemini · Neon 4"),
+            width >= 55,
+            "plain overflow width {width}: {text}"
+        );
+        assert!(
+            text.contains("Neon 4 · high · 200k") && text.trim_end().ends_with("$1.20"),
+            "family, version, reasoning, window, and cost stay intact at width {width}: {text}"
+        );
+    }
+
+    // Fast card: `Gemini · ` drops before `Flash Lite 3.8` would be ellipsized
+    // beside the bolt (`◐ pi-researcher` 15 + ` · Gemini · Flash Lite 3.8 ϟ` 28
+    // + ` $1.20` 6 = 49 content cells, pane width 51).
+    let mut fast_pi = agent(
+        "pi-fast",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run fast gemini"),
+    );
+    fast_pi.model = Some("gemini-3.8-flash-lite".to_owned());
+    let mut fast_ctx = AgentContext::new("pi", fixed_now());
+    fast_ctx.cost = Some(AgentCost {
+        total_cost_usd: Some(1.20),
+        ..Default::default()
+    });
+    fast_pi.context = Some(fast_ctx);
+    let mut fast_snapshot = snapshot_with(vec![fast_pi]);
+    {
+        let card = fast_snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap();
+        card.handle = Some("pi-researcher".into());
+        card.fast = true;
+    }
+    let bolt = theme.glyph(GlyphRole::CardFast);
+    for width in [49, 50, 51, 52] {
+        let lines = group_lines_at_width(&fast_snapshot, &theme, usize::MAX, width);
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("pi-researcher"))
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            text.contains("Gemini · Flash Lite 3.8"),
+            width >= 51,
+            "fast card width {width}: {text}"
+        );
+        assert!(
+            text.contains(&format!("Flash Lite 3.8 {bolt}"))
+                && !text.contains('…')
+                && text.trim_end().ends_with("$1.20"),
+            "fast card keeps full model name and bolt at width {width}: {text}"
+        );
+    }
+
+    // Compaction point + capacity: `Gemini · ` drops before `835k/1M` would
+    // lose `/1M` (`⣾ opencode-lead` 15 + ` · Gemini · Neon 4 · 835k/1M` 28 +
+    // ` $1.20` 6 = 49 content cells, pane width 51).
+    let mut compact_opencode = agent(
+        "opencode-compact",
+        "opencode",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run compact gemini"),
+    );
+    compact_opencode.model = Some("gemini-4-neon".to_owned());
+    compact_opencode.usage.context_window = Some(983_010);
+    let mut compact_ctx = AgentContext::new("opencode", fixed_now());
+    compact_ctx.cost = Some(AgentCost {
+        total_cost_usd: Some(1.20),
+        ..Default::default()
+    });
+    compact_opencode.context = Some(compact_ctx);
+    let mut compact_snapshot = snapshot_with(vec![compact_opencode]);
+    {
+        let card = compact_snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap();
+        card.handle = Some("opencode-lead".into());
+        card.usage.context_window = Some(983_010);
+        card.usage.context_capacity = Some(1_048_576);
+    }
+    for width in [49, 50, 51, 52] {
+        let lines = group_lines_at_width(&compact_snapshot, &theme, usize::MAX, width);
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("opencode-lead"))
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            text.contains("Gemini · Neon 4"),
+            width >= 51,
+            "compaction card width {width}: {text}"
+        );
+        assert!(
+            text.contains("Neon 4 · 835k/1M") && text.trim_end().ends_with("$1.20"),
+            "compaction point and capacity stay intact at width {width}: {text}"
+        );
+    }
 }
