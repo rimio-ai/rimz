@@ -183,6 +183,9 @@ fn assert_detached_writer_handoff(reuse_client: bool) {
     let client_id = remaining.clients[0].client_id.clone();
     let before = PaneSnapshot::expect(room.path(), room.name());
     let deadline = Instant::now() + Duration::from_secs(20);
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    first.send(b"\x07");
     first.press_alt('n');
     let native = poll_until(
         deadline.saturating_duration_since(Instant::now()),
@@ -1415,6 +1418,9 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     wait_for_pane_count(xdg, &name, 2);
 
     let mut client = AttachedClient::attach(&room, 160, 45);
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     let birth_sidebar = raw_sidebar_pane(xdg, &name);
     let birth_work = expect_list_panes(xdg, &name)
         .panes
@@ -1516,8 +1522,12 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let generation = stranded_generation(&settled, &target_sidebar);
     wait_for_accepted_focus_repair(&logs, &target_work, generation, switched_at);
 
+    // Zellij hands typed keys to the pane only in the base mode, locked here, so Ctrl g
+    // returns the client there for the input and back to normal for the stock keys after.
+    client.send(b"\x07");
     client.assert_input_reaches(&target_work, "repaired target work pane");
 
+    client.send(b"\x07");
     client.press_alt_once_until(
         'h',
         &target_sidebar,
@@ -1552,8 +1562,10 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let settled = wait_for_switch_settled(&poke_log, pokes_before, 1);
     let generation = stranded_generation(&settled, &target_sidebar);
     wait_for_accepted_focus_repair(&logs, &target_work, generation, switched_at);
+    client.send(b"\x07");
     client.assert_input_reaches(&target_work, "repaired target after plugin reload");
 
+    client.send(b"\x07");
     client.press_alt_once_until(
         'h',
         &target_sidebar,

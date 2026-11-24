@@ -56,15 +56,6 @@ struct KeysRoom {
 /// plugin's `rimz` children through a shim that logs each argv and stderr.
 fn keys_room(name: &str) -> KeysRoom {
     let room = LiveZellijSession::new(name);
-    let zellij_config = room.path().join(".config/zellij/config.kdl");
-    std::fs::write(
-        &zellij_config,
-        format!(
-            "{}\ndefault_mode \"locked\"\n",
-            std::fs::read_to_string(&zellij_config).unwrap()
-        ),
-    )
-    .unwrap();
     let wasm = presence_wasm_artifact();
     seed_presence_permissions(room.path(), &wasm);
     std::fs::write(room.path().join(".zshrc"), "").unwrap();
@@ -116,11 +107,8 @@ fn keys_room(name: &str) -> KeysRoom {
         unreachable!("one work pane was awaited");
     };
     client.press_alt_until('h', &pane(sidebar.id), "sidebar");
-    // `open_sidebar` births the session before the config's `default_mode`
-    // could apply, and this client attaches without RimZ's `--default-mode
-    // locked`, so it starts in normal: Ctrl g takes it to locked, the rimz
-    // keymap's home.
-    client.send(b"\x07");
+    // `open_sidebar` births the room locked, the rimz keymap's home, so even this
+    // plain attach starts there.
     poll_until(
         SPAWN_TIMEOUT,
         || Ok(client.screen()),

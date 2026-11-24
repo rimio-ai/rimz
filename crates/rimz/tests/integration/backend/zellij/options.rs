@@ -59,6 +59,9 @@ fn check_frames(baseline: bool, frames: Option<bool>, reapply: bool) {
         .pane_id
         .clone();
     let mut client = AttachedClient::attach(&room, 120, 40);
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     // A client attaching to a detached birth can land on the sidebar; where it
     // lands is not this test's subject, so steer it to the work pane.
     client.press_alt_until('l', &work, "birth work pane");

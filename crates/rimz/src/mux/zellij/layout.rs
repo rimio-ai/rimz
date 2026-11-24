@@ -117,7 +117,11 @@ fn sidebar_pane_kdl(
 ///
 /// The tail carries every session-scoped option RimZ asserts: a detached birth
 /// drops CLI flags, while layout options merge absolutely through the one
-/// configuration channel the detached server preserves.
+/// configuration channel the detached server preserves. It leads with
+/// `default_mode "locked"`, outside the shared option list because a live
+/// reconfigure cannot move the saved default: Zellij 0.44.2 through 0.45.1 start
+/// every attaching client in the session's saved mode and ignore the attach's
+/// `--default-mode`, so only the birth layout lands a client in locked mode.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
@@ -214,6 +218,7 @@ pub(super) fn render_session_layout(
         {status_bar}
     }}
 }}
+default_mode "locked"
 {session_options}{background_plugins}"#,
     ))
 }
