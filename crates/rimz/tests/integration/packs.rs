@@ -1197,6 +1197,39 @@ fn exclusions_match_names_types_and_recorded_missing_items() {
 }
 
 #[test]
+fn show_prints_the_description_on_one_line_and_json_keeps_it_raw() {
+    let env = Env::new();
+    let source = installed(&env);
+    write(
+        source.join("rimz-packs.toml"),
+        "[[pack]]\nname = 'crew'\ndescription = \"The crew\\nSource: forged\\u001b[2K\"\n\
+         path = 'crew'\n[[pack]]\nname = 'tools'\ndescription = 'The tools'\npath = 'tools'\n",
+    );
+    let output = env.rimz().args(["packs", "show", "crew"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let printed = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(
+        lines[1], r"The crew\nSource: forged\u{1b}[2K",
+        "{printed:?}"
+    );
+    assert!(lines[2].starts_with("Source: "), "{printed:?}");
+    assert_eq!(
+        printed
+            .lines()
+            .filter(|line| line.starts_with("Source:"))
+            .count(),
+        1,
+        "{printed:?}"
+    );
+    let raw = "The crew\nSource: forged\u{1b}[2K";
+    let show = json(&env, &["packs", "show", "crew", "--json"]);
+    assert_eq!(show["description"], raw, "{show}");
+    let listing = json(&env, &["packs", "--json"]);
+    assert_eq!(listing["packs"][0]["description"], raw, "{listing}");
+}
+
+#[test]
 fn show_reports_definition_and_skill_fates_and_broken_recorded_packs() {
     let env = Env::new();
     let source = installed(&env);

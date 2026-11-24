@@ -1285,7 +1285,7 @@ fn show(pack: &PackView) -> Result<()> {
         render::paint(palette::header(), pack.name.as_str())
     )?;
     if let Some(description) = &pack.description {
-        writeln!(out, "{description}")?;
+        writeln!(out, "{}", one_line(description))?;
     }
     writeln!(
         out,
