@@ -156,6 +156,7 @@ Replacing `/tmp` and `/var/tmp` would hide any RimZ state, socket, or project th
 | RimZ home, runtime home, Zellij socket base, tmux socket directory | `mux::domain::ProcessDomain::required_paths`. |
 | Working directory, project root, worktree, each `--add-dir` | The launch. |
 | Provider config home | Mount step 1, when it exists. |
+| A shared mounted-login account's own directory | The directory each `ProviderHome::file_binds` source lies in, so a `rimz` launch inside the view finds the account. |
 | Provider's own home | A launch on a named account: `ProviderLogin::default_home`, which link-shared accounts link into and shared Antigravity accounts run on directly. |
 
 Each candidate is normalized lexically, and a relative or non-UTF-8 one refuses with `SandboxErr::InvalidPath`. A candidate equal to `/tmp` or `/var/tmp` refuses the launch with `SandboxErr::TmpCollision`, whose message names the path. A candidate below either that exists is rebound, and a candidate nested under one already rebound is skipped. Candidates elsewhere need no mount, since the root bind already shows them.
