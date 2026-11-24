@@ -709,9 +709,11 @@ fn require_mount_view(
     {
         return Ok(());
     }
-    rimz::sandbox::preflight(rimz::config::Isolation::Scoped).with_context(|| {
-        format!("{kind} accounts run in a mount view, which needs Linux and bubblewrap")
-    })?;
+    rimz::sandbox::preflight(rimz::config::Isolation::Scoped)
+        .map_err(|error| anyhow::anyhow!(error.required_mount_reason()))
+        .with_context(|| {
+            format!("{kind} accounts run in a mount view, which needs Linux and bubblewrap")
+        })?;
     Ok(())
 }
 

@@ -328,6 +328,21 @@ pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
     Err(SandboxErr::UnsupportedOs)
 }
 
+impl SandboxErr {
+    /// The preflight failure worded for a mount view that host isolation cannot
+    /// drop, as a named account's: its fix never offers host isolation.
+    pub fn required_mount_reason(&self) -> String {
+        match self {
+            Self::UnsupportedOs => "this host is not Linux".into(),
+            Self::MissingBwrap => "bwrap is not on PATH; install bubblewrap".into(),
+            Self::ProbeFailed { status, stderr } => format!(
+                "bubblewrap probe failed ({status}): {stderr}; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy"
+            ),
+            other => other.to_string(),
+        }
+    }
+}
+
 impl From<SandboxErr> for crate::blocker::Blocker {
     fn from(error: SandboxErr) -> Self {
         use crate::blocker::Surface;
@@ -943,6 +958,21 @@ mod tests {
             "scoped isolation requires Linux; set agents.isolation = \"host\"",
             "scoped isolation needs bwrap on PATH; install bubblewrap or set agents.isolation = \"host\"",
             "bubblewrap probe failed (exit status: 1): namespace denied; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy, or set agents.isolation = \"host\"",
+        ]
+        "###);
+    }
+
+    #[test]
+    fn required_mount_reasons_leave_out_host_isolation() {
+        insta::assert_debug_snapshot!([
+            SandboxErr::UnsupportedOs.required_mount_reason(),
+            SandboxErr::MissingBwrap.required_mount_reason(),
+            SandboxErr::ProbeFailed { status: "exit status: 1".into(), stderr: "namespace denied".into() }.required_mount_reason(),
+        ], @r###"
+        [
+            "this host is not Linux",
+            "bwrap is not on PATH; install bubblewrap",
+            "bubblewrap probe failed (exit status: 1): namespace denied; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy",
         ]
         "###);
     }
