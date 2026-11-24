@@ -894,7 +894,8 @@ pub trait LaunchCapability: CoreCapability {
         false
     }
 
-    /// Grant a launch access to the room's state, runtime, and shared runtime roots.
+    /// Grant an agent write access to its own room's roots (state, runtime, and shared runtime)
+    /// through argv, plus any provider-native sandbox flags.
     fn configure_room_permissions(
         &self,
         _extra_args: &mut Vec<String>,
@@ -905,7 +906,9 @@ pub trait LaunchCapability: CoreCapability {
     ) {
     }
 
-    /// Merge provider command-sandbox settings into the launch's one settings document.
+    /// Grant an agent write access to its own room's roots (state, runtime, and shared runtime)
+    /// through its one settings document, covering both the provider's command sandbox and its
+    /// native file rules.
     fn configure_sandbox_settings(
         &self,
         _paths: (&Path, &Path),

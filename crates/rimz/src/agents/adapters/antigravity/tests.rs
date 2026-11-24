@@ -4908,6 +4908,22 @@ mod folder_trust {
                 r#"{"trustedWorkspaces":"x"}"#,
                 "expected trustedWorkspaces to be an array",
             ),
+            (
+                r#"{"permissions":"x"}"#,
+                "expected permissions to be an object",
+            ),
+            (
+                r#"{"permissions":[]}"#,
+                "expected permissions to be an object",
+            ),
+            (
+                r#"{"permissions":{"allow":"x"}}"#,
+                "expected permissions.allow to be an array",
+            ),
+            (
+                r#"{"permissions":{"allow":{}}}"#,
+                "expected permissions.allow to be an array",
+            ),
         ] {
             f.write_settings(text);
             let gap = f.gap(&repo, Some(&repo));
@@ -4919,7 +4935,7 @@ mod folder_trust {
             );
         }
         f.write_settings(&format!(
-            "\u{feff}{{\n  // agy's own\n  \"trustedWorkspaces\": [{:?}]\n}}",
+            "\u{feff}{{\n  // agy's own\n  \"trustedWorkspaces\": [{:?}],\n  \"permissions\": {{\"allow\": [\"mcp(rimz_tools/*)\", 42]}}\n}}",
             repo.display().to_string()
         ));
         assert_eq!(f.decide(&repo, Some(&repo)), FolderTrust::Decided);
@@ -5060,4 +5076,212 @@ mod folder_trust {
         assert_eq!(f.gap(&wt, Some(&repo)).key, wt);
         assert!(f.bridge(&wt, &[]).is_empty());
     }
+
+    /// Saved `permissions.allow` rules bridge into the launch's one settings document
+    /// unconditionally, dropping non-string entries, keeping any profile rules first without
+    /// duplicates, reading a named account's own file, and skipping silently on a missing or
+    /// malformed file without modifying the saved settings on disk.
+    #[test]
+    fn saved_allow_rules_bridge_into_the_one_settings_document() {
+        let mut f = Fixture::new();
+        let (repo, wt, pr) = (f.repo(), f.path("worktrees/wt"), f.path("worktrees/pr"));
+
+        assert!(
+            f.bridge(&repo, &[]).is_empty(),
+            "a missing saved file adds nothing and fails nothing"
+        );
+
+        let saved_text = json!({
+            "trustedWorkspaces": [repo],
+            "permissions": {
+                "allow": ["mcp(rimz_tools/*)", 123, null, "command(cargo test)"]
+            }
+        })
+        .to_string();
+        f.write_settings(&saved_text);
+
+        // Exact-trusted repo and untrusted PR worktree both carry saved allow rules without
+        // bridging trust.
+        assert_eq!(
+            settings_arg(&f.bridge(&repo, &[])),
+            json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
+        );
+        assert_eq!(
+            settings_arg(&f.bridge(&pr, &[])),
+            json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
+        );
+
+        // Inherited worktree carries both trustedWorkspaces and permissions.allow in one document.
+        assert_eq!(
+            settings_arg(&f.bridge(&wt, &[])),
+            json!({
+                "trustedWorkspaces": [repo, wt],
+                "permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}
+            })
+        );
+
+        // Existing profile settings keep their own allow rules first, deduplicate, and keep deny.
+        let profile = r#"{"queuedMessages":"queue","permissions":{"allow":["command(cargo test)","read_file(docs)"],"deny":["command(rm)"]}}"#;
+        assert_eq!(
+            settings_arg(&f.bridge(&repo, &["--settings", profile])),
+            json!({
+                "queuedMessages": "queue",
+                "permissions": {
+                    "allow": ["command(cargo test)", "read_file(docs)", "mcp(rimz_tools/*)"],
+                    "deny": ["command(rm)"]
+                }
+            })
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.settings()).unwrap(),
+            saved_text,
+            "bridge must never modify the saved settings file"
+        );
+
+        // A wrong-shaped saved file skips the bridge without failing compile.
+        for bad in [
+            "[",
+            r#"{"permissions":"x"}"#,
+            r#"{"permissions":[]}"#,
+            r#"{"permissions":{"allow":"x"}}"#,
+            r#"{"permissions":{"allow":{}}}"#,
+        ] {
+            f.write_settings(bad);
+            assert!(
+                f.bridge(&wt, &[]).is_empty(),
+                "malformed saved file must skip bridge without error: {bad}"
+            );
+        }
+
+        // A named account reads saved allow rules from its own account directory.
+        let account = f.path("accounts/work");
+        std::fs::create_dir_all(&account).unwrap();
+        std::fs::write(
+            account.join("settings.json"),
+            json!({"permissions": {"allow": ["command(just)"]}}).to_string(),
+        )
+        .unwrap();
+        f.env.insert(
+            "RIMZ_ANTIGRAVITY_HOME".into(),
+            account.display().to_string(),
+        );
+        assert_eq!(
+            settings_arg(&f.bridge(&repo, &[])),
+            json!({"permissions": {"allow": ["command(just)"]}})
+        );
+    }
+}
+
+/// Room-root and notes-folder write rules resolve symlinks, fall back to the path as written when
+/// a root does not exist, apply identically at every isolation level, and union cleanly into the
+/// launch's one settings document (inline or private file artifact).
+#[cfg(unix)]
+#[test]
+fn room_roots_and_notes_write_rules_resolve_symlinks_and_keep_missing_paths() {
+    use crate::config::Isolation;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let real_state = root.join("real-state");
+    let link_state = root.join("link-state");
+    let real_runtime = root.join("real-runtime");
+    let missing_shared = root.join("missing-shared");
+    let real_notes = root.join("real-notes");
+    let link_notes = root.join("link-notes");
+    let missing_notes = root.join("missing-notes");
+    std::fs::create_dir_all(&real_state).unwrap();
+    std::fs::create_dir_all(&real_runtime).unwrap();
+    std::fs::create_dir_all(&real_notes).unwrap();
+    std::os::unix::fs::symlink(&real_state, &link_state).unwrap();
+    std::os::unix::fs::symlink(&real_notes, &link_notes).unwrap();
+
+    let roots = [link_state, real_runtime.clone(), missing_shared.clone()];
+    let expected_root_rules = vec![
+        format!("write_file({})", real_state.display()),
+        format!("write_file({})", real_runtime.display()),
+        format!("write_file({})", missing_shared.display()),
+    ];
+
+    let mut actual_by_isolation = Vec::new();
+    for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+        let mut args = vec![
+            "--settings".to_owned(),
+            json!({
+                "queuedMessages": "queue",
+                "permissions": {
+                    "allow": ["command(git status)", format!("write_file({})", real_state.display())],
+                    "deny": ["command(rm)"]
+                }
+            })
+            .to_string(),
+        ];
+        let mut artifact = None;
+        AntigravityAdapter
+            .allow_team_notes_args(&link_notes, (&root, &root), &mut args, &mut artifact)
+            .unwrap();
+        AntigravityAdapter
+            .allow_team_notes_args(&missing_notes, (&root, &root), &mut args, &mut artifact)
+            .unwrap();
+        AntigravityAdapter
+            .configure_sandbox_settings((&root, &root), &roots, isolation, &mut args, &mut artifact)
+            .unwrap();
+        assert!(artifact.is_none());
+        let settings_flags: Vec<_> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str::<Value>(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(settings_flags.len(), 1, "{isolation:?}: {args:?}");
+        assert!(!args.iter().any(|arg| arg == "--add-dir"), "{args:?}");
+        actual_by_isolation.push((isolation, settings_flags.into_iter().next().unwrap()));
+    }
+
+    let expected_allow = vec![
+        "command(git status)".to_owned(),
+        format!("write_file({})", real_state.display()),
+        format!("write_file({})", real_notes.display()),
+        format!("write_file({})", missing_notes.display()),
+        expected_root_rules[1].clone(),
+        expected_root_rules[2].clone(),
+    ];
+    let expected_doc = json!({
+        "queuedMessages": "queue",
+        "permissions": {
+            "allow": expected_allow,
+            "deny": ["command(rm)"]
+        }
+    });
+    let expected_by_isolation: Vec<_> = [Isolation::Host, Isolation::Scoped, Isolation::Sandbox]
+        .into_iter()
+        .map(|isolation| (isolation, expected_doc.clone()))
+        .collect();
+    assert_eq!(actual_by_isolation, expected_by_isolation);
+
+    // A file-backed --settings source merges room rules into a private artifact.
+    std::fs::write(
+        root.join("profile.json"),
+        r#"{"permissions":{"deny":["command(rm)"]}}"#,
+    )
+    .unwrap();
+    let mut args = vec!["--settings".to_owned(), "profile.json".to_owned()];
+    let mut artifact = None;
+    AntigravityAdapter
+        .configure_sandbox_settings(
+            (&root, &root),
+            &roots,
+            Isolation::Host,
+            &mut args,
+            &mut artifact,
+        )
+        .unwrap();
+    let (_, value, source) = artifact.expect("file source stays a private artifact");
+    assert_eq!(source, root.join("profile.json"));
+    assert_eq!(
+        value,
+        json!({
+            "permissions": {
+                "deny": ["command(rm)"],
+                "allow": expected_root_rules
+            }
+        })
+    );
 }

@@ -1401,9 +1401,9 @@ fn compile_agent_process_with_extra_env(
         && let crate::agents::skills::ToolRules::Settings { render, translate } =
             adapter.spec().tool_rules
     {
-        // A list the provider reads replaces the account's saved allows, the install's rule for
-        // the tools of a provider-started server among them, so it carries that rule while
-        // routine is on. A list it reads none of emits nothing and leaves the saved allows.
+        // A list the provider reads stands in for saved allows the launch could not copy or that
+        // lack the install's rule for the tools of a provider-started server, so it carries that
+        // rule itself while routine is on.
         let served_rule = (reminders.routine_rimz.is_some()
             && reminders.mcp_launch_env(request).is_some()
             && rules.iter().any(|rule| translate(rule).is_some()))

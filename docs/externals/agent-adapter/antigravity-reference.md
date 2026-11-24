@@ -726,6 +726,13 @@ Prefix matching on `command(...)` is disabled whenever a command contains shell 
 - A permission rule matches an inline agent-file MCP server by its raw name: `mcp(<name>/*)` removed the prompt for a server the agent file named `<name>`, with no plugin or agent prefix.
 - `read_url` was not exercised: the probing model reported no fetch tool and made no call.
 
+1.5.16 capture (2026-11-24, TUI under `--settings` with `"allowNonWorkspaceAccess": false`, editing an existing file outside any Git repo and outside `/tmp`, reached through an in-workspace symlink):
+
+- A `write_file(<real folder>)` rule in `--settings` silences the "outside workspace" prompt for a native edit reached through an in-workspace symlink, in both `--mode auto` and default mode (`"agentMode": ""`), and a rule on an ancestor directory covers descendants. In default mode the rule also removes the mode's own ask-before-write for that folder (the allow rule outranks the preset).
+- agy matches `write_file` targets on the real (resolved) path only: a rule naming only the symlink path still prompts, with the prompt naming the real path.
+- `"allowNonWorkspaceAccess": false` in `--settings` overrides a saved `"allowNonWorkspaceAccess": true` in `settings.json`, while omitting the key from `--settings` leaves the saved `true` in effect.
+- Under `--mode auto`, editing an existing file under `/tmp` succeeded with no prompt and no allow rule (confirming the temp-tree exemption).
+
 Denying `read_file` on a path also denies `write_file` there. The system temp directory is readable and writable by default. `always-proceed` also auto-approves MCP calls and page reads. A pattern approved for the conversation holds across the main conversation and all its subagents (1.4.6). Project configuration under `~/.gemini/config/projects/` takes precedence over global CLI settings.
 
 The terminal sandbox ([sandbox](https://antigravity.google/docs/sandbox?tab=cli)) uses Linux namespaces, macOS `sandbox-exec`, and Windows 11 24H2+ (August 2026 update+) AppContainer process security environments. By default it blocks sensitive paths including `~/.ssh`, `.env`, macOS `~/Library/Application Support` (1.3.3), `~/.docker`, `~/.kube`, `~/_netrc` (1.4.6), `~/.config` (`XDG_CONFIG_HOME`), Windows `AppData\Roaming`, and `~/.git-credentials` (1.5.10), while keeping common developer tool settings readable. Explicit rules can grant access.

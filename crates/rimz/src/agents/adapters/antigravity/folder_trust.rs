@@ -1,17 +1,19 @@
-//! agy's workspace trust under the room's selected login, and the launch bridge that extends
-//! it. agy skips its trust prompt only for a folder its `settings.json` `trustedWorkspaces`
-//! names exactly: an entry for a parent, or for the primary checkout of a linked worktree, still
-//! prompts (agy 1.5.16). RimZ also judges a folder below a trusted entry, and a linked worktree
-//! whose primary checkout is trusted, as trusted, and passes such a launch directory to agy as
-//! session-only trust in the launch's one `--settings` document, never in the saved file. A
-//! pull-request worktree takes trust only from an entry naming it exactly.
+//! agy's workspace trust under the room's selected login, and the launch bridge that carries
+//! saved login settings into the launch's one `--settings` document. agy skips its trust prompt
+//! only for a folder its `settings.json` `trustedWorkspaces` names exactly: an entry for a
+//! parent, or for the primary checkout of a linked worktree, still prompts (agy 1.5.16). RimZ
+//! also judges a folder below a trusted entry, and a linked worktree whose primary checkout is
+//! trusted, as trusted, and passes such a launch directory to agy as session-only trust in the
+//! launch's one `--settings` document, never in the saved file. A pull-request worktree takes
+//! trust only from an entry naming it exactly. The same read also unions the login's saved
+//! `permissions.allow` rules into that document so any session allow list RimZ emits keeps them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::agents::launch_settings::merge_settings;
+use crate::agents::launch_settings::{merge_settings, union_settings_array};
 use crate::agents::skills::{LaunchSettingsArtifact, LaunchSettingsErr};
 use crate::agents::{FolderTrust, FolderTrustGap, FolderTrustPreview};
 use crate::worktree::LinkedWorktree;
@@ -23,6 +25,7 @@ struct Saved {
     original: Option<String>,
     root: Map<String, Value>,
     entries: Vec<String>,
+    allow: Vec<String>,
 }
 
 #[derive(PartialEq)]
@@ -62,8 +65,11 @@ pub(super) fn folder_trust(
     FolderTrust::Undecided(FolderTrustGap { path, key, grant })
 }
 
-/// Union the saved list and `cwd` into the launch's settings document when `cwd` is trusted
-/// only by inheritance. A settings file agy cannot read leaves argv alone, so agy asks itself.
+/// Carry saved login settings into the launch's one settings document: union the saved
+/// `trustedWorkspaces` and `cwd` when `cwd` is trusted only by inheritance, and union the saved
+/// `permissions.allow` rules unconditionally so a session allow list keeps them. A settings file
+/// agy cannot read leaves argv alone, so agy asks itself and folder-trust preflight reports the
+/// repair.
 pub(super) fn bridge(
     login_env: &BTreeMap<String, String>,
     (cwd, artifact_dir): (&Path, &Path),
@@ -74,10 +80,12 @@ pub(super) fn bridge(
         return Ok(());
     };
     let linked = crate::worktree::linked_worktree(cwd);
-    if cover(cwd, linked.as_ref(), &saved.entries) != Cover::Inherited {
+    let bridge_trust = cover(cwd, linked.as_ref(), &saved.entries) == Cover::Inherited;
+    if !bridge_trust && saved.allow.is_empty() {
         return Ok(());
     }
-    let launch_dirs = [cwd.to_path_buf(), canonical(cwd)].map(|dir| dir.display().to_string());
+    let launch_dirs = bridge_trust
+        .then(|| [cwd.to_path_buf(), canonical(cwd)].map(|dir| dir.display().to_string()));
     *artifact = merge_settings(
         cwd,
         artifact_dir,
@@ -85,16 +93,21 @@ pub(super) fn bridge(
         artifact.as_ref(),
         false,
         |object| {
-            let list = object
-                .entry(TRUSTED)
-                .or_insert_with(|| Value::Array(Vec::new()))
-                .as_array_mut()
-                .ok_or_else(|| format!("{TRUSTED} must be an array"))?;
-            for entry in saved.entries.into_iter().chain(launch_dirs) {
-                let entry = Value::String(entry);
-                if !list.contains(&entry) {
-                    list.push(entry);
+            if let Some(launch_dirs) = launch_dirs {
+                let list = object
+                    .entry(TRUSTED)
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .ok_or_else(|| format!("{TRUSTED} must be an array"))?;
+                for entry in saved.entries.into_iter().chain(launch_dirs) {
+                    let entry = Value::String(entry);
+                    if !list.contains(&entry) {
+                        list.push(entry);
+                    }
                 }
+            }
+            if !saved.allow.is_empty() {
+                union_settings_array(object, "permissions", "allow", saved.allow)?;
             }
             Ok(())
         },
@@ -123,10 +136,24 @@ fn read(login_env: &BTreeMap<String, String>) -> Result<(PathBuf, Saved), (PathB
                     .collect(),
                 Some(_) => return Err(format!("expected {TRUSTED} to be an array")),
             };
+            let allow = match root.get("permissions") {
+                None => Vec::new(),
+                Some(Value::Object(permissions)) => match permissions.get("allow") {
+                    None => Vec::new(),
+                    Some(Value::Array(entries)) => entries
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                    Some(_) => return Err("expected permissions.allow to be an array".to_owned()),
+                },
+                Some(_) => return Err("expected permissions to be an object".to_owned()),
+            };
             Ok(Saved {
                 original,
                 root,
                 entries,
+                allow,
             })
         });
     match saved {

@@ -749,6 +749,16 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         folder_trust::bridge(login_env, paths, extra_args, artifact)
     }
 
+    fn allow_team_notes_args(
+        &self,
+        run: &Path,
+        paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        permissions::allow_write_dirs([run], paths, extra_args, artifact)
+    }
+
     /// `--sandbox` confines agy's terminal commands to the workspace and added dirs, with no
     /// network (agy 1.5.14).
     fn has_native_sandbox(&self) -> bool {
@@ -773,6 +783,22 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         {
             extra_args.push(SANDBOX_FLAG.to_owned());
         }
+    }
+
+    fn configure_sandbox_settings(
+        &self,
+        paths: (&Path, &Path),
+        roots: &[PathBuf; 3],
+        _isolation: crate::config::Isolation,
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        permissions::allow_write_dirs(
+            roots.iter().map(PathBuf::as_path),
+            paths,
+            extra_args,
+            artifact,
+        )
     }
 
     /// The list rides the agent file (`agent_file`) and the server the rimz plugin's

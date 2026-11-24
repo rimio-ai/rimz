@@ -2019,6 +2019,10 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                         .map(|pair| pair[1].clone())
                         .collect();
                     assert_eq!(settings.len(), 1, "{case}: {argv:?}");
+                    let write_rule = |path: &Path| {
+                        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                        format!("write_file({})", resolved.display())
+                    };
                     // An ask launch pins agy's Default over the passthrough's own mode; yolo
                     // writes no mode, so the passthrough's stays.
                     assert_eq!(
@@ -2027,7 +2031,13 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                             "agentMode": if yolo { "auto" } else { "" },
                             "permissions": {
                                 "deny": ["command(rm)"],
-                                "allow": ["command(git status)", "mcp(rimz_tools/*)"]
+                                "allow": [
+                                    "command(git status)",
+                                    "mcp(rimz_tools/*)",
+                                    write_rule(&state.root),
+                                    write_rule(&runtime.root),
+                                    write_rule(&runtime.shared_root),
+                                ]
                             },
                             "queuedMessages": "queue"
                         }),
@@ -2107,19 +2117,39 @@ fn antigravity_pins_queue_mode_and_ask_mode_in_the_one_settings_document() {
                     .map(|pair| serde_json::from_str(&pair[1]).unwrap())
                     .collect();
                 let queue = serde_json::json!("queue");
+                let write_rule = |path: &Path| {
+                    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                    format!("write_file({})", resolved.display())
+                };
+                let permissions = serde_json::json!({
+                    "allow": [
+                        write_rule(&state.root),
+                        write_rule(&runtime.root),
+                        write_rule(&runtime.shared_root),
+                    ]
+                });
                 let expected = match (mode, user_settings) {
                     (PermissionMode::Ask, false) => {
-                        serde_json::json!({"agentMode": "", "queuedMessages": queue})
+                        serde_json::json!({
+                            "agentMode": "",
+                            "permissions": permissions,
+                            "queuedMessages": queue
+                        })
                     }
                     (PermissionMode::Ask, true) => serde_json::json!({
                         "agentMode": "",
                         "model": {"name": "flash"},
+                        "permissions": permissions,
                         "queuedMessages": queue
                     }),
-                    (_, false) => serde_json::json!({"queuedMessages": queue}),
+                    (_, false) => serde_json::json!({
+                        "permissions": permissions,
+                        "queuedMessages": queue
+                    }),
                     (_, true) => serde_json::json!({
                         "agentMode": "auto",
                         "model": {"name": "flash"},
+                        "permissions": permissions,
                         "queuedMessages": queue
                     }),
                 };
@@ -2187,15 +2217,228 @@ fn antigravity_bridges_a_trusted_primarys_worktree_into_the_one_settings_documen
             .filter(|pair| pair[0] == "--settings")
             .map(|pair| serde_json::from_str(&pair[1]).unwrap())
             .collect();
+        let write_rule = |path: &Path| {
+            let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            format!("write_file({})", resolved.display())
+        };
         assert_eq!(
             settings,
             [serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        write_rule(&state.root),
+                        write_rule(&runtime.root),
+                        write_rule(&runtime.shared_root),
+                    ]
+                },
                 "queuedMessages": "queue",
                 "trustedWorkspaces": [primary, worktree],
             })],
             "{action}: {argv:?}"
         );
     }
+}
+
+/// Every RimZ-started Antigravity launch carries in its one `--settings` document `write_file`
+/// rules for the three resolved room roots, any active notes run and the note store (when it
+/// exists), and the login's saved `permissions.allow` rules, deduplicated beside any profile
+/// `permissions.allow` and `allowed-tools` rules, without emitting `--add-dir` or
+/// `allowNonWorkspaceAccess` or editing the saved file.
+#[cfg(unix)]
+#[test]
+fn antigravity_grants_room_roots_note_store_and_saved_allows_on_every_launch() {
+    use crate::agents::PermissionMode;
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let rimz_home = root.join("rimz-home");
+    let runtime_home = root.join("runtime-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&rimz_home).unwrap();
+    std::fs::create_dir_all(&runtime_home).unwrap();
+    let id = crate::WorkspaceId::from_project_root(&root);
+    let state = StatePaths::under(id.clone(), &rimz_home).unwrap();
+    let runtime = RuntimePaths::under(id, &runtime_home).unwrap();
+    let team_run = state.root.join("team-notes/20261124/run-1");
+    std::fs::create_dir_all(&team_run).unwrap();
+    std::fs::create_dir_all(root.join(".rimz")).unwrap();
+    let team_link = root.join(".rimz/team");
+    std::os::unix::fs::symlink(&team_run, &team_link).unwrap();
+    let settings_file = home.join(".gemini/antigravity-cli/settings.json");
+    std::fs::create_dir_all(settings_file.parent().unwrap()).unwrap();
+    let saved_json = serde_json::json!({
+        "permissions": {
+            "allow": ["mcp(rimz_tools/*)", "command(cargo test)"]
+        }
+    })
+    .to_string();
+    std::fs::write(&settings_file, &saved_json).unwrap();
+
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let adapter = crate::agents::find_definition("antigravity").unwrap();
+    let write_rule = |path: &Path| {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        format!("write_file({})", resolved.display())
+    };
+    let profile_settings = r#"{"permissions":{"allow":["command(cargo test)","read_file(docs)"],"deny":["command(rm)"]}}"#;
+
+    for store_exists in [false, true] {
+        let store = state.notes_store();
+        if store_exists {
+            std::fs::create_dir_all(&store).unwrap();
+        }
+        for action in ["launch", "resume"] {
+            for subagent in [false, true] {
+                for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+                    for mode in [
+                        PermissionMode::Ask,
+                        PermissionMode::Auto,
+                        PermissionMode::Plan,
+                        PermissionMode::Yolo,
+                    ] {
+                        for with_allowed_tools in [false, true] {
+                            let mut args = adapter.spec().launch.permission_args(mode);
+                            args.extend(["--settings".to_owned(), profile_settings.to_owned()]);
+                            let mut req = request("antigravity", action_with_args(action, args));
+                            req.subagent = subagent;
+                            if with_allowed_tools {
+                                req.allowed_tools = Some(
+                                    ["Bash(git status:*)", "Read(//docs)"]
+                                        .iter()
+                                        .map(|rule| rule.parse().unwrap())
+                                        .collect(),
+                                );
+                            }
+                            let plan = compile(LaunchPlanInputs {
+                                recorded_system_prompt_digest: None,
+                                request: &req,
+                                cwd: &root,
+                                project_root: &root,
+                                rimz_bin: Path::new("/bin/rimz"),
+                                runtime: &runtime,
+                                state: &state,
+                                effective: None,
+                                machine: &machine,
+                                commands: &machine.agents.commands,
+                                accounts: &machine.accounts,
+                                isolation,
+                                bwrap: isolation.is_scoped().then_some(Path::new("/bin/bwrap")),
+                                agents: Ok(&[]),
+                                ambient_env: &ambient,
+                                agent_shell: None,
+                                hibernate: false,
+                            })
+                            .unwrap();
+                            let case = format!(
+                                "store={store_exists} {action} child={subagent} {isolation:?} \
+                                 {mode:?} allowed_tools={with_allowed_tools}"
+                            );
+                            let argv = &plan.process().provider_argv;
+                            let docs: Vec<serde_json::Value> = argv
+                                .windows(2)
+                                .filter(|pair| pair[0] == "--settings")
+                                .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+                                .collect();
+                            assert_eq!(docs.len(), 1, "{case}: {argv:?}");
+                            let doc = &docs[0];
+                            assert!(
+                                doc.get("allowNonWorkspaceAccess").is_none(),
+                                "{case}: {doc}"
+                            );
+                            assert!(
+                                !argv.iter().any(|arg| arg == "--add-dir"),
+                                "{case}: {argv:?}"
+                            );
+                            assert_eq!(
+                                doc["permissions"]["deny"],
+                                serde_json::json!(["command(rm)"]),
+                                "{case}: {doc}"
+                            );
+                            let allow: Vec<&str> = doc["permissions"]["allow"]
+                                .as_array()
+                                .unwrap_or_else(|| {
+                                    panic!("{case}: missing permissions.allow in {doc}")
+                                })
+                                .iter()
+                                .map(|entry| entry.as_str().unwrap())
+                                .collect();
+                            let mut expected = vec![
+                                "command(cargo test)".to_owned(),
+                                "read_file(docs)".to_owned(),
+                            ];
+                            if with_allowed_tools {
+                                expected.push("command(git status)".to_owned());
+                                expected.push("read_file(/docs)".to_owned());
+                            }
+                            expected.push("mcp(rimz_tools/*)".to_owned());
+                            expected.push(write_rule(&team_run));
+                            if store_exists {
+                                expected.push(write_rule(&store));
+                            }
+                            expected.push(write_rule(&state.root));
+                            expected.push(write_rule(&runtime.root));
+                            expected.push(write_rule(&runtime.shared_root));
+                            let expected_refs: Vec<&str> =
+                                expected.iter().map(String::as_str).collect();
+                            assert_eq!(allow, expected_refs, "{case}: {doc}");
+                            assert!(
+                                !allow.iter().any(|rule| rule.contains(".rimz/team")),
+                                "{case}: link spelling must not appear: {allow:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(&settings_file).unwrap(),
+        saved_json,
+        "saved settings.json must never be written by launch compile"
+    );
+
+    // An unreadable or wrong-shaped saved file skips saved rules, still succeeds, and still emits
+    // the room and note-store rules in one settings document.
+    std::fs::write(&settings_file, r#"{"permissions":{"allow":"broken"}}"#).unwrap();
+    let req = request("antigravity", action_with_args("launch", Vec::new()));
+    let plan = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
+        request: &req,
+        cwd: &root,
+        project_root: &root,
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        machine: &machine,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        isolation: Isolation::Host,
+        bwrap: None,
+        agents: Ok(&[]),
+        ambient_env: &ambient,
+        agent_shell: None,
+        hibernate: false,
+    })
+    .unwrap();
+    let argv = &plan.process().provider_argv;
+    let docs: Vec<serde_json::Value> = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--settings")
+        .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+        .collect();
+    assert_eq!(docs.len(), 1, "{argv:?}");
+    assert_eq!(
+        docs[0]["permissions"]["allow"],
+        serde_json::json!([
+            write_rule(&team_run),
+            write_rule(&state.notes_store()),
+            write_rule(&state.root),
+            write_rule(&runtime.root),
+            write_rule(&runtime.shared_root),
+        ])
+    );
 }
 
 #[test]
@@ -4921,6 +5164,13 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
     );
     let plan = compile_with_ambient(project.path(), &bare, &ambient).unwrap();
     assert_eq!(plan.agent_file, None);
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let write_rule = |path: &Path| {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        format!("write_file({})", resolved.display())
+    };
     assert_eq!(
         plan.process().provider_argv,
         [
@@ -4928,7 +5178,17 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
             "--agent",
             "mine",
             "--settings",
-            r#"{"queuedMessages":"queue"}"#
+            &serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        write_rule(&state.root),
+                        write_rule(&runtime.root),
+                        write_rule(&runtime.shared_root),
+                    ]
+                },
+                "queuedMessages": "queue"
+            })
+            .to_string(),
         ]
     );
 
