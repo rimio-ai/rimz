@@ -731,8 +731,9 @@ pub struct ExecRequest {
     )]
     pub skills: Option<Vec<crate::config::SkillName>>,
     /// Whether `rimz-message` in `skills` was added by a Markdown team seat rather than written
-    /// by the author. Settled at launch against the launch's kind, login, and skill inventory;
-    /// omitted by older binaries, which read as author-written.
+    /// by the author. Settled at launch against the launch's kind, effective environment (login
+    /// plus trusted project `[[agents]]` env), and skill inventory; omitted by older binaries,
+    /// which read as author-written.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub seat_consensus_skill: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -919,10 +920,38 @@ impl ExecRequest {
         ))
     }
 
-    /// Settle a seat-added `rimz-message` skill entry against this launch's kind, login, and
-    /// skill inventory: keep it when installed and model-callable there, else drop it silently.
-    /// Author-written entries (`!self.seat_consensus_skill`) are left untouched.
+    /// Settle a seat-added `rimz-message` skill entry against this launch's kind, effective
+    /// environment (login plus trusted project `[[agents]]` env, with named-login overrides
+    /// winning), and skill inventory: keep it when installed and model-callable there, else drop
+    /// it silently. Author-written entries (`!self.seat_consensus_skill`) are left untouched.
+    ///
+    /// Returns the effective skill-discovery environment so `compile` populates
+    /// `reminders.rimz_skills` from the same map. Untrusted or unreadable project config stays
+    /// unapplied here so `compile_agent_process_with_extra_env` emits its trust refusal in its
+    /// original order.
     pub(super) fn settle_seat_skills(
+        &mut self,
+        project_root: &Path,
+        adapter: &crate::agents::AgentDefinition,
+        login: &crate::agents::ProviderLogin,
+        ambient_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        let mut skill_env = login_env.clone();
+        if let Ok(crate::trust::AgentEnv::Apply(trusted_env)) =
+            crate::trust::agent_env(project_root, self.kind.as_str())
+        {
+            skill_env.extend(trusted_env);
+            for (key, value) in adapter.launch_env() {
+                skill_env.insert(key.to_owned(), value.to_owned());
+            }
+            skill_env.extend(login.overrides(ambient_env));
+        }
+        self.settle_seat_skills_in_env(adapter, &skill_env);
+        skill_env
+    }
+
+    fn settle_seat_skills_in_env(
         &mut self,
         adapter: &crate::agents::AgentDefinition,
         env: &BTreeMap<String, String>,
@@ -1275,7 +1304,7 @@ fn compile_agent_process_with_extra_env(
     let mut settled;
     let request = if request.seat_consensus_skill {
         settled = request.clone();
-        settled.settle_seat_skills(adapter, &login_env);
+        settled.settle_seat_skills_in_env(adapter, &login_env);
         &settled
     } else {
         request

@@ -869,11 +869,17 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.accounts,
     )?;
     let login_env = login.env(inputs.ambient_env);
-    request.settle_seat_skills(adapter, &login_env);
+    let skill_env = request.settle_seat_skills(
+        inputs.project_root,
+        adapter,
+        &login,
+        inputs.ambient_env,
+        &login_env,
+    );
     reminders.settings = Some((inputs.runtime.prompt_dir(), login_env.clone()));
     reminders.rimz_skills = crate::agents::skills::rimz_skills(
-        adapter.skills_home(&login_env).as_deref(),
-        crate::agents::skills::SkillChain::from_env(&login_env).as_ref(),
+        adapter.skills_home(&skill_env).as_deref(),
+        crate::agents::skills::SkillChain::from_env(&skill_env).as_ref(),
     );
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.

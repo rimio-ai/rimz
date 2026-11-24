@@ -1966,3 +1966,324 @@ fn seat_added_rimz_message_is_settled_at_launch() {
         );
     }
 }
+
+/// Settling a seat-added `rimz-message` entry and discovering `reminders.rimz_skills` read
+/// the same effective environment the two skill enforcers read: login env extended with the
+/// trusted project `[[agents]]` env, while a named-login override still wins, an untrusted
+/// project's env is never read, and earlier `compile` refusals keep their order.
+#[test]
+fn seat_added_rimz_message_reads_trusted_project_env() {
+    if std::env::var_os("RIMZ_TEST_SEAT_TRUSTED_ENV").is_none() {
+        let rimz_home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch_plan::tests::mcp::seat_added_rimz_message_reads_trusted_project_env",
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", rimz_home.path().join(".rimz"))
+            .env("RIMZ_TEST_SEAT_TRUSTED_ENV", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let room = Room::new();
+    let home = Path::new(&room.ambient["HOME"]);
+    let agents_home = home.join(".rimz");
+    std::fs::create_dir_all(agents_home.join("agents")).unwrap();
+    std::fs::create_dir_all(agents_home.join("teams")).unwrap();
+    std::fs::write(
+        agents_home.join("agents/claude.md"),
+        "---\ndescription: Base.\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        agents_home.join("agents/listed.md"),
+        "---\ndescription: Listed.\nagent: claude\ntools: [Bash, Skill]\nskills: [work]\n---\nCraft.",
+    )
+    .unwrap();
+    std::fs::write(
+        agents_home.join("teams/probe.md"),
+        "---\nleader: judge\nstages: [Review]\nroles:\n  - agent: listed\n    role: judge\n    owns: [Review]\n---\nPipeline.",
+    )
+    .unwrap();
+    let write_skill = |path: &Path, body: &str| {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("SKILL.md"), body).unwrap();
+    };
+    write_skill(
+        &agents_home.join("skills/work"),
+        "---\nname: work\ndescription: Work.\n---\nWork.\n",
+    );
+
+    let mut ambient = room.ambient.clone();
+    ambient.insert("RIMZ_AGENTS_HOME".into(), agents_home.display().to_string());
+    let unmoved_claude = PathBuf::from(&ambient["CLAUDE_CONFIG_DIR"]);
+    let moved_claude = home.join(".claude-project");
+    let named_claude = home.join(".claude-work");
+    std::fs::create_dir_all(&unmoved_claude).unwrap();
+    std::fs::create_dir_all(&moved_claude).unwrap();
+    std::fs::create_dir_all(&named_claude).unwrap();
+
+    let machine_toml = format!(
+        "[agents]\nallow-routine-rimz = true\nrimz-mcp-server = false\n\
+         [accounts.claude.work]\nhome = '{}'\n",
+        named_claude.display()
+    );
+    let base_machine: crate::config::MachineConfig = toml::from_str(&machine_toml).unwrap();
+    let loaded = crate::config::definitions::load(
+        &agents_home,
+        crate::config::definitions::SkillCheck::Skip,
+        &base_machine.agents.commands,
+        &agents_home.join("config.toml"),
+        &base_machine.tiers,
+        base_machine.harness.auto_compact,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let layout = crate::harness::spec::resolve_spec_with_agent_override(
+        Some("probe.judge"),
+        &loaded.agent_profiles,
+        &loaded.agent_profiles,
+        &base_machine.agents.commands,
+        &loaded.teams,
+        None,
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap().clone();
+    assert!(cell.seat_consensus_skill);
+
+    let mut machine = base_machine.clone();
+    machine.agents.profiles = loaded.agent_profiles.clone();
+    machine.agents.teams = loaded.teams.clone();
+
+    let try_compile = |req: &ExecRequest, isolation: Isolation| {
+        let effective = crate::config::effective::load_with_roots(
+            &machine,
+            room.project.path(),
+            room.project.path(),
+        )
+        .unwrap();
+        compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: req,
+            cwd: room.project.path(),
+            project_root: room.project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &room.runtime,
+            state: &room.state,
+            effective: Some(&effective),
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation,
+            bwrap: isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+    };
+    let launch_skill_names = |plan: &LaunchPlan| {
+        plan.request
+            .launch_skills(&plan.withheld_skills)
+            .map(|skills| {
+                skills
+                    .into_iter()
+                    .map(|skill| skill.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+
+    // Configure a trusted project env that moves CLAUDE_CONFIG_DIR.
+    std::fs::create_dir_all(room.project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        room.project.path().join(".rimz/config.toml"),
+        format!(
+            "[[agents]]\nname = 'claude'\nenv = {{ CLAUDE_CONFIG_DIR = '{}' }}\n",
+            moved_claude.display()
+        ),
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(room.project.path(), &crate::disk::paths::rimz_home()).unwrap();
+
+    let msg_body = "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n";
+    let moved_msg = moved_claude.join("skills/rimz-message");
+    let unmoved_msg = unmoved_claude.join("skills/rimz-message");
+    let named_msg = named_claude.join("skills/rimz-message");
+    let req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+
+    // 1. Skill installed only under the moved root: kept, listed, prompt names skill(rimz-message).
+    write_skill(&moved_msg, msg_body);
+    let mut moved_outcomes = Vec::new();
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let outcome = try_compile(&req, isolation).map(|plan| {
+            let skills = launch_skill_names(&plan);
+            let reach_has_msg = plan
+                .rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned()));
+            let prompt_names_skill = plan
+                .prompt
+                .composed
+                .as_deref()
+                .is_some_and(|text| text.contains("skill(rimz-message)"));
+            let host_listed = matches!(
+                &plan.process().host_skills,
+                Some(crate::agents::skills::HostSkillPlan::Applied { listed, .. })
+                    if serde_json::to_value(listed)
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!("rimz-message"))
+            );
+            (
+                isolation,
+                skills,
+                reach_has_msg,
+                prompt_names_skill,
+                host_listed,
+            )
+        });
+        moved_outcomes.push(outcome.map_err(|err| format!("{isolation:?}: {err}")));
+    }
+    assert_eq!(
+        moved_outcomes,
+        vec![
+            Ok((
+                Isolation::Host,
+                Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+                true,
+                true,
+                true,
+            )),
+            Ok((
+                Isolation::Scoped,
+                Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+                true,
+                true,
+                false,
+            )),
+        ]
+    );
+    std::fs::remove_dir_all(&moved_msg).unwrap();
+
+    // 2. Skill installed only under the unmoved root: dropped, launch compiles cleanly.
+    write_skill(&unmoved_msg, msg_body);
+    let mut unmoved_outcomes = Vec::new();
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let outcome = try_compile(&req, isolation).map(|plan| {
+            let skills = launch_skill_names(&plan);
+            let reach_has_msg = plan
+                .rimz_reach
+                .iter()
+                .any(|(name, _)| name == "rimz-message");
+            let prompt_names_skill = plan
+                .prompt
+                .composed
+                .as_deref()
+                .is_some_and(|text| text.contains("skill(rimz-message)"));
+            (isolation, skills, reach_has_msg, prompt_names_skill)
+        });
+        unmoved_outcomes.push(outcome.map_err(|err| format!("{isolation:?}: {err}")));
+    }
+    assert_eq!(
+        unmoved_outcomes,
+        vec![
+            Ok((Isolation::Host, Some(vec!["work".to_owned()]), false, false)),
+            Ok((
+                Isolation::Scoped,
+                Some(vec!["work".to_owned()]),
+                false,
+                false
+            )),
+        ]
+    );
+    std::fs::remove_dir_all(&unmoved_msg).unwrap();
+
+    // 3. Named-login override still wins over trusted project env.
+    write_skill(&moved_msg, msg_body);
+    let mut named_req = req.clone();
+    named_req.identity.params.login = Some("work".parse().unwrap());
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&named_req, isolation)
+            .unwrap_or_else(|err| panic!("named login over moved root ({isolation:?}): {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned()]),
+            "named login must ignore moved root ({isolation:?})"
+        );
+        assert!(
+            !plan
+                .rimz_reach
+                .iter()
+                .any(|(name, _)| name == "rimz-message"),
+            "named login reach ({isolation:?}): {:?}",
+            plan.rimz_reach
+        );
+    }
+    std::fs::remove_dir_all(&moved_msg).unwrap();
+    write_skill(&named_msg, msg_body);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&named_req, isolation)
+            .unwrap_or_else(|err| panic!("named login own root ({isolation:?}): {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+            "named login own root ({isolation:?})"
+        );
+        assert!(
+            plan.rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned())),
+            "named login own root reach ({isolation:?}): {:?}",
+            plan.rimz_reach
+        );
+    }
+    std::fs::remove_dir_all(&named_msg).unwrap();
+
+    // 4. Untrusted project env is never read and trust refusal stays behind earlier refusals.
+    let untrusted_claude = home.join(".claude-untrusted");
+    std::fs::create_dir_all(&untrusted_claude).unwrap();
+    write_skill(&untrusted_claude.join("skills/rimz-message"), msg_body);
+    std::fs::write(
+        room.project.path().join(".rimz/config.toml"),
+        format!(
+            "[[agents]]\nname = 'claude'\nenv = {{ CLAUDE_CONFIG_DIR = '{}' }}\n",
+            untrusted_claude.display()
+        ),
+    )
+    .unwrap();
+    let blocked = try_compile(&req, Isolation::Host)
+        .err()
+        .expect("must refuse");
+    assert!(
+        matches!(
+            blocked,
+            LaunchPlanErr::Process(launch::AgentProcessStageErr::Compile(
+                launch::AgentProcessCompileErr::BlockedEnv { .. }
+            ))
+        ),
+        "expected BlockedEnv, got: {blocked:?}"
+    );
+    let mut bad_prompt_req = req.clone();
+    bad_prompt_req.action.extra_args_mut().extend([
+        "--append-system-prompt-file".to_owned(),
+        room.project
+            .path()
+            .join("missing-native-prompt.md")
+            .display()
+            .to_string(),
+    ]);
+    let earlier = try_compile(&bad_prompt_req, Isolation::Host)
+        .err()
+        .expect("must refuse");
+    assert!(
+        matches!(earlier, LaunchPlanErr::Prompt(_)),
+        "trust refusal must not jump ahead of prompt digest refusal: {earlier:?}"
+    );
+}
