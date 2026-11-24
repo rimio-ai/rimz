@@ -17,7 +17,7 @@ Evidence comes from these sources. Binary observations and live captures carry v
 | Official docs | the `antigravity.google/docs` pages in [Upstream sources](#upstream-sources), a living site without versioned snapshots, read 2026-11-22 | cited by URL |
 | Release notes | `CHANGELOG.md` at tag `1.5.14`, which `agy changelog` prints verbatim | "1.5.14 changelog" |
 | Installed 1.5.14 binary | `agy --version`, `--help`, and subcommand help, the embedded `/hooks` contract, protobuf descriptors (`exa.hooks_pb`, `ExecutorTerminationReason`), Go JSON struct tags, and binary strings | "1.5.14 help", "1.5.14 embedded hook doc", "1.5.14 binary" |
-| Live captures | a 1.1.1 SQLite schema probe, a stock 1.1.2 session (hook payloads, transcripts, subagents), a historical 1.2.2 credential-file observation and untrusted-workspace session (hook payloads and statusline only, no completed tool step), 1.5.12 scratch-home probes (plugin hooks, `settings.json`, `/usage`, statusline stages, transcripts, file-store token), 1.5.13 scratch-home probes (custom agents, skills, effort ceilings, `/compact`, queued-message timing), and 1.5.14 scratch-home probes (permissions, `--settings`, sandbox, `--add-dir`, plugin and inline MCP servers, and on 2026-11-22 statusline `cost`, `/usage` under `GEMINI_API_KEY`, skill roots, Orchestrator ids, child hook fields, `PreToolUse`, background commands, and `SessionStart`), and 1.5.15 scratch-home probes (Esc over an unsubmitted draft, and on 2026-11-23 prompt-cache lifetime) | "1.1.1 probe", "1.1.2 capture", "1.2.2 capture", "1.5.12 probe", "1.5.13 capture", "1.5.14 capture", "1.5.15 capture" |
+| Live captures | a 1.1.1 SQLite schema probe, a stock 1.1.2 session (hook payloads, transcripts, subagents), a historical 1.2.2 credential-file observation and untrusted-workspace session (hook payloads and statusline only, no completed tool step), 1.5.12 scratch-home probes (plugin hooks, `settings.json`, `/usage`, statusline stages, transcripts, file-store token), 1.5.13 scratch-home probes (custom agents, skills, effort ceilings, `/compact`, queued-message timing), and 1.5.14 scratch-home probes (permissions, `--settings`, sandbox, `--add-dir`, plugin and inline MCP servers, and on 2026-11-22 statusline `cost`, `/usage` under `GEMINI_API_KEY`, skill roots, Orchestrator ids, child hook fields, `PreToolUse`, background commands, and `SessionStart`), 1.5.15 scratch-home probes (Esc over an unsubmitted draft, and on 2026-11-23 prompt-cache lifetime), and a 1.5.16 scratch-home probe (workspace trust, 2026-11-24) | "1.1.1 probe", "1.1.2 capture", "1.2.2 capture", "1.5.12 probe", "1.5.13 capture", "1.5.14 capture", "1.5.15 capture", "1.5.16 capture" |
 | Third-party source | CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8) for the private local service | cited by path |
 
 Where two tiers disagree, the claim follows the wire and [Documentation drift](#documentation-drift) records the disagreement.
@@ -676,12 +676,26 @@ Read-only slash commands answer without an agent turn, quota, or conversation: `
 | `hideActiveItems` | boolean, default `false` (hides active subagents and background tasks below prompt) |
 | `copyOnSelect` | boolean, default `true`: copy mouse selections in alt-screen mode |
 | `useG1Credits` | boolean, default `false`: spend AI credits once plan quota is exhausted (hidden on business accounts and `GEMINI_API_KEY`) |
-| `clearScrollbackOnResize`, `disableSlashCommands`, `historySize`, `trustedWorkspaces`, `useTerminalCursor` | `settings.json`-only preferences (`historySize` default `2000`, `-1` unlimited, `0` clears) |
+| `clearScrollbackOnResize`, `disableSlashCommands`, `historySize`, `trustedWorkspaces`, `useTerminalCursor` | `settings.json`-only preferences (`historySize` default `2000`, `-1` unlimited, `0` clears; `trustedWorkspaces` in [Workspace trust](#workspace-trust)) |
 | `colorScheme`, `runningLightSpeed`, `editor`, `editorMode`, `vimInsertFirst`, `showTips`, `showFeedbackSurvey` | presentation and editor preferences |
 
 Telemetry (`Enable Telemetry` in `/config`) is saved with the account rather than `settings.json`, and is forced off for Business and `AGY_ADC_AUTH` accounts (1.4.1 changelog).
 
 Managed organization admin settings also govern the CLI: `pluginControls` (`pluginsDisabled`, `marketplaceDisabled`, 1.5.9), `gateway.routeWebFetch` and `featureControls.remoteControlEnabled` (1.5.8), and `models.list[].supportsThoughtCirculation` (1.5.6).
+
+### Workspace trust
+
+On first launch in a folder, agy asks `Do you trust the contents of this project?` and saves an accepted folder to `trustedWorkspaces`, an array of absolute paths in `settings.json`. A 1.5.16 capture (isolated home, `modelProvider: "gemini"`, a placeholder `GEMINI_API_KEY`, onboarding done, no model turn) showed that only an entry naming the launch directory exactly skips the prompt:
+
+| `trustedWorkspaces` | Launch directory | Prompt |
+| --- | --- | --- |
+| none | a linked worktree `repo-worktrees/wt1` | shown |
+| `repo-worktrees/wt1` | `repo-worktrees/wt1` | skipped |
+| the parent `repo-worktrees` | `repo-worktrees/wt1` | shown |
+| the main checkout `repo` | its subdirectory `repo/sub` | shown |
+| the main checkout `repo` | its linked worktree `repo-worktrees/wt1` | shown |
+
+A `trustedWorkspaces` list naming the launch directory in `--settings`, inline or as a file, also skipped the prompt, and `settings.json` kept its saved list unchanged: `--settings` trust lasts for the session only. Whether agy compares the path as written or resolved through symlinks was not captured.
 
 ### Permission resources
 
