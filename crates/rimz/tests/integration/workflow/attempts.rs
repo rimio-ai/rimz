@@ -785,23 +785,39 @@ fn hook_woken_attempt_keeps_the_emitting_shell() {
         .unwrap()
         .replace("on.done = '@done'", "on.done = 'build'");
     fs::write(definition, spec).unwrap();
-    let inner = write_fake_login_shell(&room.env, "inner-workflow-shell", &[]);
-    let log = room.env.home_root.join("shell-invocations.log");
-    fs::write(
-        &room.shell,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexec {} \"$@\"\n",
+    // The launching process opens each attempt's tab; its `SHELL` is what the attempt's
+    // launch compiles under.
+    let log = room.env.home_root.join("tab-shells.log");
+    let zellij = crate::common::write_path_shim(
+        &room.env.home_root.join("zellij-bin"),
+        "zellij",
+        &format!(
+            "case \" $* \" in *' new-tab '*) printf '%s\\n' \"$SHELL\" >> {} ;; esac\nexec {} \"$@\"",
             shlex::try_quote(log.to_str().unwrap()).unwrap(),
-            shlex::try_quote(inner.to_str().unwrap()).unwrap(),
+            shlex::try_quote(
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+                    .to_str()
+                    .unwrap()
+            )
+            .unwrap(),
         ),
-    )
-    .unwrap();
-    let (id, run) = room.launch();
-    let invocations = fs::read_to_string(&log).unwrap();
+    );
+    let receipt = success(
+        room.command(&["workflow", "run", "review", "--prompt", "Review this"])
+            .env("RIMZ_ZELLIJ_BIN", &zellij)
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap().to_owned();
+    let run = room.attempt(&id);
+    let shell = room.shell.display().to_string();
     assert_eq!(
-        invocations.matches("__RIMZ_ENV_PROBE_START__").count(),
-        1,
-        "the initial attempt probes through the fake shell: {invocations}"
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [shell.as_str()],
+        "the initial attempt opens its tab under the fake shell"
     );
     fs::write(
         room.env.project_root.join("panes.json"),
@@ -809,27 +825,35 @@ fn hook_woken_attempt_keeps_the_emitting_shell() {
     )
     .unwrap();
     let mut owner = dummy_agent_process();
-    room.hook_with_owner(
+    let variables = [("RIMZ_ZELLIJ_BIN", zellij.as_path())];
+    room.hook_with_environment(
         &id,
         &run,
         owner.id(),
         json!({"hook_event_name":"SessionStart"}),
+        &variables,
     );
     owner.kill().unwrap();
     owner.wait().unwrap();
     fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
-    room.hook_with_owner(&id, &run, owner.id(), json!({"hook_event_name":"Stop"}));
+    room.hook_with_environment(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"Stop"}),
+        &variables,
+    );
     let value = until(&room.env, &id, |value| {
         (value["record"]["attempt"]["run"].is_object()
             && value["record"]["attempt"]["run"]["run_id"] != run.run_id.as_str())
             || value["record"]["state"] != "active"
     });
-    let invocations = fs::read_to_string(&log).unwrap();
+    let tabs = fs::read_to_string(&log).unwrap();
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     assert_eq!(
-        invocations.matches("__RIMZ_ENV_PROBE_START__").count(),
-        2,
-        "the hook-woken attempt must also probe through the emitter's shell: {invocations}\n{value:#}"
+        tabs.lines().collect::<Vec<_>>(),
+        [shell.as_str(), shell.as_str()],
+        "the hook-woken attempt must open its tab under the emitter's shell: {tabs}\n{value:#}"
     );
     assert!(value["record"]["attempt"]["run"].is_object(), "{value:#}");
 }

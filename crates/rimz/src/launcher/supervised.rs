@@ -634,7 +634,7 @@ fn prepare(
         (!isolation.is_scoped()).then_some(store.runtime_paths()),
     )?;
     // Judge the agent's hooks in the account home it will run under before
-    // probing the program or touching the multiplexer.
+    // touching the multiplexer.
     if request.workflow.is_some() {
         let problems = trust::workflow_problems(
             trust::TrustRecipe::Supervised,
@@ -650,7 +650,7 @@ fn prepare(
     } else {
         preflight_agent(adapter, &launch, &login, home_fix)?;
     }
-    preflight_program(adapter, &process, &launch.cwd)?;
+    preflight_launch_blocker(adapter, &process, &launch.cwd)?;
     if !request.subagent {
         super::lsp_admission::admit(&launch.cwd, &machine_config, interaction)?;
     }
@@ -905,7 +905,7 @@ fn preflight_agent(
     }
 }
 
-fn preflight_program(
+fn preflight_launch_blocker(
     adapter: &AgentDefinition,
     process: &crate::harness::launch::CompiledAgentProcess,
     cwd: &Path,
@@ -915,14 +915,6 @@ fn preflight_program(
     if let Some(error) = adapter.launch_blocker(cwd, &launch_env, &process.provider_argv) {
         return Err(error.into());
     }
-    let program = &process.provider_program;
-    let path = process
-        .resolve_program_after_shell_rc()
-        .with_context(|| format!("checking `{program}` after shell startup"))?;
-    let Some(path) = path else {
-        bail!("finding `{program}` on PATH after shell startup");
-    };
-    crate::agents::version::check_launch_version_floor(adapter, &path)?;
     Ok(())
 }
 

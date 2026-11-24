@@ -5833,7 +5833,7 @@ allowed-dependencies = [
 # Fresh requests and selectively redacted process plans serve launch inspection.
 # Argument rejection uses the existing action accessor (+1).
 # `validate_agent_shell` and its error serve room start and config set (+2).
-# `CompiledAgentProcess::login_shell_argv` rewraps version-gated args after launch resolution (+1).
+# `CompiledAgentProcess::login_shell_argv` wraps a stepped argv for launch-plan tests (+1).
 # `ExecRequest::launch_skills` shares child selection across host and scoped views (+1).
 # ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
 # CompiledAgentProcess::rebuild_argv preserves session steps across every argv rebuild (+1).
@@ -9803,13 +9803,8 @@ reason = "Carried by LaunchPlanErr::Process #[from] and returned by pub stage co
 
 [[verdict]]
 kind = "item"
-key = "harness::launch::ProgramLookupErr"
-reason = "Source field of pub AgentProcessCompileErr; atlas caveat 13 (pass 20a)."
-
-[[verdict]]
-kind = "item"
 key = "harness::launch::CompiledAgentProcess::login_shell_argv"
-reason = "Launch planning rewraps provider argv after the resolved executable's version selects snapshot arguments. Visible only within harness."
+reason = "Launch-plan tests compare a stage's argv with its shell-wrapped session step. Visible only within harness."
 
 [[verdict]]
 kind = "item"
@@ -12239,7 +12234,7 @@ reason = "The CLI enters the library's layout room, maps posture and selection i
 [[verdict]]
 kind = "item"
 key = "cli::agents_cmd::exec::run_exec"
-reason = "The residue is the ordered process edge: apply before chdir before the version floor, pane stamps before spawn, direct exec against supervised. What to launch is decided in the harness entry launch_plan::prepare_exec (pass 32b)."
+reason = "The residue is the ordered process edge: apply before chdir, pane stamps before spawn, direct exec against supervised. What to launch is decided in the harness entry launch_plan::prepare_exec (pass 32b)."
 
 [[verdict]]
 kind = "item"

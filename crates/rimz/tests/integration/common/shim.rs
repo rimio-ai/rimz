@@ -144,10 +144,10 @@ pub fn write_env_dump_shim(env: &Env, agent: &str) -> PathBuf {
 /// Write a provider stand-in that stays alive without firing a hook, so the
 /// row it backs keeps a live runtime owner and never registers.
 ///
-/// It answers `--version` at once with no readable version: a launch plan
-/// probes `<agent> --version` under a 3 s budget before it spawns the
-/// provider, and a stand-in that hangs there delays the pane bind by the
-/// whole budget.
+/// It answers `--version` at once with no readable version: the in-pane
+/// session step probes `<agent> --version` under a 3 s budget before it
+/// execs the provider, and a stand-in that hangs there delays the provider by
+/// the whole budget.
 #[cfg(unix)]
 pub fn write_long_lived_agent_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("agent-bin");

@@ -986,7 +986,7 @@ fn unreadable_checkout_metadata_refuses_only_scoped_launches() {
 }
 
 #[test]
-fn configured_prompt_changes_control_snapshot_reuse() {
+fn configured_prompt_changes_flag_the_step_without_probing_the_provider() {
     use std::os::unix::fs::PermissionsExt;
 
     if std::env::var_os("RIMZ_TEST_SNAPSHOT_CLI").is_none() {
@@ -1006,11 +1006,10 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "harness::launch_plan::tests::configured_prompt_changes_control_snapshot_reuse",
+                "harness::launch_plan::tests::configured_prompt_changes_flag_the_step_without_probing_the_provider",
                 "--nocapture",
             ])
             .env("RIMZ_TEST_SNAPSHOT_CLI", "1")
-            .env(crate::proc::USER_SHELL_ENV, "/definitely/not/a/shell")
             .env("RIMZ_TEST_SNAPSHOT_PROBES", bin.path().join("probes"))
             .env("PATH", std::env::join_paths(paths).unwrap())
             .output()
@@ -1025,7 +1024,6 @@ fn configured_prompt_changes_control_snapshot_reuse() {
     }
     let project = tempfile::tempdir().unwrap();
     let probes = std::path::PathBuf::from(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap());
-    let cli = probes.with_file_name("claude");
     let fresh = request("claude", action_with_args("launch", vec![]));
     let baseline = compile_prompt_request(project.path(), &fresh, None, None).system_prompt_digest;
     for (action, recorded, expected) in [
@@ -1036,67 +1034,33 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         ("fork", Some("different"), true),
         ("fork", Some(baseline.as_str()), false),
     ] {
-        // Growing the stub changes its file stamp, so the per-binary version
-        // memo cannot hide a probe this compile makes.
-        let mut stub = std::fs::OpenOptions::new().append(true).open(&cli).unwrap();
-        std::io::Write::write_all(&mut stub, b"#\n").unwrap();
-        drop(stub);
         let request = request("claude", action_with_args(action, vec![]));
         let plan = compile_prompt_request(project.path(), &request, recorded, None);
-        let flags: Vec<_> = plan
-            .process()
-            .provider_argv
-            .windows(2)
-            .filter(|args| args[0] == "--system-prompt-snapshot")
-            .collect();
+        let argv = &plan.process().argv;
+        let step = argv
+            .iter()
+            .position(|arg| arg == "session-step")
+            .expect("every launch steps");
+        let separator = step + argv[step..].iter().position(|arg| arg == "--").unwrap();
         assert_eq!(
-            flags.len(),
-            usize::from(expected),
-            "{action} with baseline {recorded:?}"
+            argv[step..separator].contains(&"--changed-system-prompt".to_owned()),
+            expected,
+            "{action} with baseline {recorded:?}: {argv:?}"
         );
-        assert!(flags.iter().all(|args| args[1] == "off"));
+        assert!(
+            !plan
+                .process()
+                .provider_argv
+                .iter()
+                .any(|arg| arg == "--system-prompt-snapshot"),
+            "the step, not the compile, adds the switch"
+        );
         assert_eq!(plan.system_prompt_digest, baseline);
     }
-    let probes = std::fs::read_to_string(&probes).unwrap();
-    assert_eq!(
-        probes.lines().count(),
-        3,
-        "only changed resumed prompts probe the CLI"
-    );
-
-    for (version, expected) in [("2.1.256", false), ("2.1.257", true), ("unknown", false)] {
-        let bin = tempfile::tempdir().unwrap();
-        let pinned = bin.path().join("claude");
-        std::fs::write(&pinned, format!("#!/bin/sh\nprintf '{version}\\n'\n")).unwrap();
-        std::fs::set_permissions(&pinned, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let shell = bin.path().join("bash");
-        std::fs::write(&shell, format!(
-            "#!/bin/sh\nexport PATH='{}':\"$PATH\"\nwhile [ \"$#\" -gt 0 ]; do\ncase \"$1\" in\n-c) shift; script=$1; shift; exec /bin/sh -c \"$script\" \"$@\" ;;\n*) shift ;;\nesac\ndone\nexit 127\n",
-            bin.path().display()
-        )).unwrap();
-        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let request = request("claude", action_with_args("resume", vec![]));
-        let plan = compile_prompt_request(project.path(), &request, None, Some(&shell));
-        assert_eq!(
-            plan.process().resolve_program_after_shell_rc().unwrap(),
-            Some(pinned)
-        );
-        let has_snapshot_flag = plan
-            .process()
-            .provider_argv
-            .windows(2)
-            .any(|args| args == ["--system-prompt-snapshot", "off"]);
-        assert_eq!(
-            has_snapshot_flag, expected,
-            "launch binary {version}, PATH claude 2.1.296"
-        );
-    }
-    let probes =
-        std::fs::read_to_string(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap()).unwrap();
-    assert_eq!(
-        probes.lines().count(),
-        3,
-        "pinned launches must not probe PATH claude"
+    assert!(
+        !probes.exists(),
+        "compiling a launch never runs the provider: {}",
+        std::fs::read_to_string(&probes).unwrap_or_default()
     );
 }
 

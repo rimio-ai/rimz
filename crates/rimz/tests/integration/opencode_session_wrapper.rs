@@ -432,3 +432,47 @@ fn wrapper_model_refusals_do_not_retry_or_report_a_startup_crash() {
         );
     }
 }
+
+#[test]
+fn wrapper_floor_refusals_fail_the_run_from_the_pane_without_a_retry() {
+    let env = Env::new();
+    let (request, run) = wrapper_request(&env, None, false);
+    let mut command = wrapper_command(&env, &request, "http://127.0.0.1:9");
+    let shim = crate::common::write_path_shim(
+        &env.home_root.join("opencode-bin"),
+        "opencode",
+        "if [ \"${1:-}\" = --version ]; then echo 1.9.0; exit 0; fi\nprintf ran > \"$CHECK_LOG/final-argv\"",
+    );
+    let output = command.bounded_output().unwrap();
+    let tail = pane_tail(&env);
+    let refusal = format!(
+        "rimz: opencode 1.9.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
+        shim.display()
+    );
+    assert_eq!(output.status.code(), Some(78), "{tail}");
+    for absent in ["failed to start", "relaunching", "died at startup"] {
+        assert!(!tail.contains(absent), "{tail}");
+    }
+    assert!(!env.home_root.join("final-argv").exists());
+    assert!(launch_retries(&env).is_empty());
+    let workspace = env.resolve_workspace(&env.project_root);
+    assert!(
+        !env.diag_records(&workspace.session_name)
+            .iter()
+            .any(|entry| matches!(
+                &entry.event,
+                rimz::diag::record::DiagEvent::ProviderStartupExit { .. }
+            ))
+    );
+    let run =
+        rimz::harness::run::load(&env.state_path_for(&env.project_root), &run.run_id).unwrap();
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        run.failure_tail
+            .as_deref()
+            .and_then(|tail| tail.lines().rev().find(|line| !line.trim().is_empty()))
+            .map(str::trim),
+        Some(refusal.as_str()),
+        "{tail}"
+    );
+}

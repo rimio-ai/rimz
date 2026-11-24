@@ -151,7 +151,7 @@ Rules are applied before the hook config is written, so a rules failure cannot l
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 
-`--no-daemon` keeps the session inside the pane, so its hooks come from the in-pane process. It needs Codex 0.163.0 or newer (`MIN_MANAGED_LAUNCH`) for embedded sessions and Guardian review. The version check runs before the pane opens when the launch `PATH` is known, otherwise in the exec wrapper. An unreadable version passes. `tui.question_esc_back=false` makes Escape interrupt the turn instead of collapsing an expanded question editor, and a later user override wins.
+`--no-daemon` keeps the session inside the pane, so its hooks come from the in-pane process. It needs Codex 0.163.0 or newer (`MIN_MANAGED_LAUNCH`) for embedded sessions and Guardian review. The version check runs inside the pane, in the [session step](../harness/fleet.md#the-launch-plan). An unreadable version passes. `tui.question_esc_back=false` makes Escape interrupt the turn instead of collapsing an expanded question editor, and a later user override wins.
 
 The descriptor also sets `registers_lazily`, `daemon_hooked_sessions`, `ThreadKey::PerFile`, the `KeepPrimary` same-pane policy, and process names `codex` and `node` (Codex commonly runs as a `node` bundle).
 

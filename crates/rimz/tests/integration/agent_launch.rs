@@ -10286,6 +10286,8 @@ async fn exec_spawn_failure_fails_the_run_with_its_reason_and_releases_run_waite
         .args(exec_args(&env, &request))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", "/nonexistent")
+        // The wrapper spawns the in-pane step, which runs this binary.
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
         .bounded_output()
         .expect("wrapper exits");
     assert!(!output.status.success());

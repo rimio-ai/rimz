@@ -1168,8 +1168,8 @@ mod pane_exec {
             )
         );
 
-        // A refused fresh launch left no conversation; a refused model switch
-        // left the resumed one intact, so its hint resumes it.
+        // A refused fresh launch left no conversation; a refused resume left
+        // its conversation intact, so its hint resumes it.
         let refused = exit_status(rimz::agents::capabilities::SESSION_STEP_REFUSED);
         let mut solo = bare_exec_args();
         solo.identity.name = Some("plain-fig".into());
@@ -1179,13 +1179,13 @@ mod pane_exec {
                 (
                     &request,
                     true,
-                    "resume with `rimz agents forge.coder --continue` and a corrected model",
+                    "fix it, then resume with `rimz agents forge.coder --continue`",
                 ),
                 (&solo, false, "relaunch with `rimz agents codex`"),
                 (
                     &solo,
                     true,
-                    "resume with `rimz agents resume @plain-fig` and a corrected model",
+                    "fix it, then resume with `rimz agents resume @plain-fig`",
                 ),
             ] {
                 assert_eq!(
