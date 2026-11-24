@@ -89,7 +89,7 @@ pub fn catalog(
         specs.retain(|spec| {
             allowed
                 .iter()
-                .any(|name| subagent_profiles.key(name) == spec.name)
+                .any(|name| name == &spec.name || subagent_profiles.key(name) == spec.name)
         });
     }
     if specs.is_empty() {
@@ -292,6 +292,23 @@ mod tests {
                 );
             }
         }
+
+        let (agent, profiles) = caller(Some(vec!["agy"]));
+        let commands = CommandsConfig(BTreeMap::from([("agy".to_owned(), "echo hi".to_owned())]));
+        let listed = catalog(
+            Some("planner"),
+            &profiles,
+            &ProfilesConfig::default(),
+            &commands,
+        );
+        assert!(
+            matches!(&listed, SubagentCatalog::Available(specs)
+                if specs.len() == 1
+                    && specs[0].name == "agy"
+                    && specs[0].source == SubagentProfileSource::Command),
+            "command agy: {listed:?}"
+        );
+        assert!(check_allowed(&agent, &profiles, "agy", None).is_ok());
     }
 
     #[test]

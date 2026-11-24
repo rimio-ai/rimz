@@ -482,7 +482,8 @@ upward-dependencies = [
 # saved settings hold and a session document would replace or miss (+1).
 # AgentState::rest_clears_background_shells lets record_provider_rest decide in log order whether a
 # provider rest report empties listed background shells (+1).
-surface-budget = 1350
+# skills::available_skills exposes full on-disk skill names so `agents validate` checks `skill(x)` (+1).
+surface-budget = 1351
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1235,10 +1236,9 @@ upward-dependencies = [
 # The [harness.auto_redeem] table exports its config, level, and resolved policy to every ladder reader.
 # served_marks gives the launch env and explain each served capability's load mark (+1).
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
-# rimz_references is the one rimz(x) scanner the launch warning and `rimz agents validate` share (+1).
 # RimzEntry carries a `capabilities:` grant's entries through ToolSet to the launch (+1).
 # prompt_references, PromptReference, and PromptReferenceKind share positional rimz(x), skill(x), and subagent(x) scanning between launch rewrite and `rimz agents validate` (+3).
-surface-budget = 309
+surface-budget = 308
 
 [[verdict]]
 kind = "item"
