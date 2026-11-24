@@ -642,26 +642,57 @@ pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedD
             let paths = loaded.failed.entry(name.clone()).or_default();
             paths.insert(resolver.tree.definitions[name].path.clone());
             let mut dependency = name.as_str();
+            let mut in_foreign = false;
             let mut seen = BTreeSet::new();
             // Failed qualified ancestors have no launchable name to own their diagnostics.
-            while seen.insert(dependency) {
-                let definition = &resolver.tree.definitions[dependency];
+            while seen.insert((in_foreign, dependency)) {
+                let definition = if in_foreign {
+                    &resolver.foreign.definitions[dependency]
+                } else {
+                    &resolver.tree.definitions[dependency]
+                };
                 if dependency.contains(':') {
                     paths.insert(definition.path.clone());
                 }
-                let Some(parent) = definition
-                    .frontmatter
-                    .agent
-                    .as_deref()
-                    .filter(|parent| matches!(resolver.resolved.get(*parent), Some(None)))
-                else {
+                let Some(parent) = definition.frontmatter.agent.as_deref() else {
                     break;
                 };
-                dependency = parent;
+                if !in_foreign && matches!(resolver.resolved.get(parent), Some(None)) {
+                    dependency = parent;
+                } else if resolver.namespace == "subagents"
+                    && resolver
+                        .foreign_resolver
+                        .as_ref()
+                        .is_some_and(|foreign| matches!(foreign.resolved.get(parent), Some(None)))
+                {
+                    in_foreign = true;
+                    dependency = parent;
+                } else {
+                    break;
+                }
             }
         }
     }
     loaded.errors.extend(resolver.errors);
+    if let Some(foreign) = resolver.foreign_resolver {
+        let bare_paths: BTreeSet<&Path> = resolver
+            .foreign
+            .definitions
+            .iter()
+            .filter(|(name, _)| !name.contains(':'))
+            .map(|(_, def)| def.path.as_path())
+            .collect();
+        for error in foreign.errors {
+            if !bare_paths.contains(error.path.as_path())
+                && !loaded
+                    .errors
+                    .iter()
+                    .any(|existing| existing.path == error.path)
+            {
+                loaded.errors.push(error);
+            }
+        }
+    }
     for (name, resolved) in resolver.resolved {
         if name.contains(':') {
             continue;
@@ -693,6 +724,8 @@ impl<'a> Resolver<'a> {
             namespace,
             tree,
             foreign,
+            skip_subagents: false,
+            foreign_resolver: None,
             seat: None,
             seat_ancestors: Vec::new(),
             seat_crafts: Vec::new(),
@@ -809,6 +842,10 @@ pub(super) struct Resolver<'a> {
     namespace: &'static str,
     tree: &'a Namespace,
     foreign: &'a Namespace,
+    /// When resolving an `agents/` parent on behalf of a `subagents/` child, the parent's own
+    /// `subagents:` list is dropped and never validated for the child.
+    skip_subagents: bool,
+    foreign_resolver: Option<Box<Resolver<'a>>>,
     seat: Option<SeatInfo>,
     seat_ancestors: Vec<String>,
     seat_crafts: Vec<PromptSource>,
@@ -830,6 +867,9 @@ pub(super) fn loadable(mut resolver: Resolver<'_>) -> (BTreeSet<String>, Vec<Def
         .into_iter()
         .filter(|name| resolver.resolve(name).is_some())
         .collect();
+    if let Some(foreign) = resolver.foreign_resolver {
+        resolver.errors.extend(foreign.errors);
+    }
     (loaded, resolver.errors)
 }
 
@@ -870,10 +910,26 @@ impl Resolver<'_> {
         resolved
     }
 
+    fn resolve_foreign(&mut self, name: &str) -> Option<Resolved> {
+        let scope = self.scope;
+        let tree = self.foreign;
+        let foreign = self.tree;
+        self.foreign_resolver
+            .get_or_insert_with(|| {
+                let mut resolver = Resolver::new(scope, "agents", [tree, foreign]);
+                resolver.skip_subagents = true;
+                Box::new(resolver)
+            })
+            .resolve(name)
+    }
+
     fn materialize(&mut self, name: &str) -> Result<Resolved, DefinitionErr> {
         let definition = &self.tree.definitions[name];
         let path = &definition.path;
         let mut fm = definition.frontmatter.clone();
+        if self.skip_subagents {
+            fm.subagents = None;
+        }
         if fm.model.is_some() && fm.tier.is_some() {
             return Err(DefinitionErr::new(
                 path,
@@ -959,46 +1015,66 @@ impl Resolver<'_> {
                 profile.append_system_prompt_files = self.seat_crafts.clone();
             }
             profile
-        } else if self.tree.lookup(&parent_name, path)?.is_some()
-            || self.tree.failed.contains(&parent_name)
-        {
-            let parent = self.resolve(&parent_name).ok_or_else(|| {
-                DefinitionErr::new(
-                    path,
-                    format!("follows `{parent_name}`, which failed to load"),
-                )
-                .with_cause(DefinitionCause::DependsOnFailed {
-                    name: parent_name.clone(),
-                })
-            })?;
-            fm.inherit(&parent.frontmatter);
-            for ancestor in &parent.chain {
-                if !chain.contains(ancestor) {
-                    chain.push(ancestor.clone());
-                }
-            }
-            if runtime_kind.is_none() {
-                runtime_kind = parent.runtime_kind;
-            }
-            if !own_runtime {
-                preference = parent.preference;
-            }
-            let mut profile = empty_profile(&parent.profile.agent);
-            profile.variant = parent.profile.variant;
-            profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
-            profile
         } else {
-            let hint = if self.foreign.definitions.contains_key(&parent_name)
-                || self.foreign.failed.contains(&parent_name)
-            {
-                format!("; rimz resolves `agent:` within {}", self.namespace)
+            let in_own = self.tree.problems.contains_key(&parent_name)
+                || self.tree.definitions.contains_key(&parent_name)
+                || self.tree.failed.contains(&parent_name);
+            let in_foreign = self.namespace == "subagents"
+                && (self.foreign.problems.contains_key(&parent_name)
+                    || self.foreign.definitions.contains_key(&parent_name)
+                    || self.foreign.failed.contains(&parent_name));
+            if in_own || in_foreign {
+                let parent = if in_own {
+                    self.tree.lookup(&parent_name, path)?;
+                    self.resolve(&parent_name)
+                } else {
+                    self.foreign.lookup(&parent_name, path)?;
+                    self.resolve_foreign(&parent_name)
+                }
+                .ok_or_else(|| {
+                    DefinitionErr::new(
+                        path,
+                        format!("follows `{parent_name}`, which failed to load"),
+                    )
+                    .with_cause(DefinitionCause::DependsOnFailed {
+                        name: parent_name.clone(),
+                    })
+                })?;
+                if in_foreign {
+                    let parent_fm = parent.frontmatter.clone().for_namespace(self.namespace);
+                    fm.inherit(&parent_fm);
+                } else {
+                    fm.inherit(&parent.frontmatter);
+                }
+                for ancestor in &parent.chain {
+                    if !chain.contains(ancestor) {
+                        chain.push(ancestor.clone());
+                    }
+                }
+                if runtime_kind.is_none() {
+                    runtime_kind = parent.runtime_kind;
+                }
+                if !own_runtime {
+                    preference = parent.preference;
+                }
+                let mut profile = empty_profile(&parent.profile.agent);
+                profile.variant = parent.profile.variant;
+                profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
+                profile
             } else {
-                String::new()
-            };
-            return Err(DefinitionErr::new(
-                path,
-                format!("follows unknown profile '{parent_name}'{hint}"),
-            ));
+                self.tree.lookup(&parent_name, path)?;
+                let hint = if self.foreign.definitions.contains_key(&parent_name)
+                    || self.foreign.failed.contains(&parent_name)
+                {
+                    format!("; rimz resolves `agent:` within {}", self.namespace)
+                } else {
+                    String::new()
+                };
+                return Err(DefinitionErr::new(
+                    path,
+                    format!("follows unknown profile '{parent_name}'{hint}"),
+                ));
+            }
         };
         let unresolved = fm.clone();
         if let Some(shift) = fm
@@ -1183,21 +1259,27 @@ impl Resolver<'_> {
 
     /// The definition along `name`'s `agent:` chain whose own frontmatter sets `effort:`.
     fn effort_source<'n>(&'n self, mut name: &'n str) -> &'n str {
+        let mut tree = self.tree;
         loop {
-            let Ok(Some(definition)) = self.tree.lookup(name, &self.scope.context.shared.home)
-            else {
-                return name;
+            let definition = match tree.definitions.get(name) {
+                Some(definition) => definition,
+                None if self.namespace == "subagents"
+                    && std::ptr::eq(tree, self.tree)
+                    && self.foreign.definitions.contains_key(name) =>
+                {
+                    tree = self.foreign;
+                    &self.foreign.definitions[name]
+                }
+                None => return name,
             };
             let own = &definition.frontmatter;
             match own.agent.as_deref() {
                 Some(parent)
                     if own.effort.is_none()
-                        && self
-                            .tree
-                            .lookup(parent, &definition.path)
-                            .ok()
-                            .flatten()
-                            .is_some() =>
+                        && (tree.definitions.contains_key(parent)
+                            || (self.namespace == "subagents"
+                                && std::ptr::eq(tree, self.tree)
+                                && self.foreign.definitions.contains_key(parent))) =>
                 {
                     name = parent;
                 }

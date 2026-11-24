@@ -2999,7 +2999,7 @@ fn a_kind_base_failure_is_named_once_from_home_and_packs() {
 
 #[test]
 fn a_kind_base_refused_for_its_subagent_keeps_that_subagents_own_error() {
-    let refusal = |pack: bool| {
+    let refusal = |pack: bool, parent_namespace: &str| {
         let dir = tempdir().unwrap();
         let home = dir.path();
         let source = tempdir().unwrap();
@@ -3009,7 +3009,8 @@ fn a_kind_base_refused_for_its_subagent_keeps_that_subagents_own_error() {
         let base_fields = "description: Base\nsubagents: [helper]";
         write_definition(root, "agents/codex.md", base_fields, "Base.");
         let parent_fields = "description: Parent\nagent: codex\ntools: [Skill]\nskills: [absent]";
-        write_definition(root, "subagents/parent.md", parent_fields, "");
+        let parent_rel = format!("{parent_namespace}/parent.md");
+        write_definition(root, &parent_rel, parent_fields, "");
         let helper_fields = "description: Helper\nagent: parent";
         write_definition(root, "subagents/helper.md", helper_fields, "");
         let mut owner = home.to_owned();
@@ -3055,14 +3056,19 @@ fn a_kind_base_refused_for_its_subagent_keeps_that_subagents_own_error() {
         );
         let root_cause = format!(
             "caused by: {}: lists skill 'absent', missing at ",
-            at("subagents/parent.md")
+            at(&parent_rel)
         );
         assert!(lines[3].starts_with(&root_cause), "{missing}");
-        let tail = format!("the `skills:` that lists it{}", fix("parent", "subagents"));
+        let tail = format!(
+            "the `skills:` that lists it{}",
+            fix("parent", parent_namespace)
+        );
         assert!(lines[3].ends_with(&tail), "{missing}");
     };
-    refusal(false);
-    refusal(true);
+    refusal(false, "subagents");
+    refusal(true, "subagents");
+    refusal(false, "agents");
+    refusal(true, "agents");
 }
 
 #[test]

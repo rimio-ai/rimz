@@ -342,8 +342,23 @@ fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
 
     std::fs::create_dir(root.path().join("subagents")).unwrap();
     std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\nkeep-warm: 2h\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
         root.path().join("subagents/child.md"),
         "---\ndescription: Test\nagent: claude\nkeep-warm: 2h\ntools: []\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/inherited_base.md"),
+        "---\ndescription: Test\nagent: claude\ntools: []\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/inherited_parent.md"),
+        "---\ndescription: Test\nagent: warm\n---\nBase.",
     )
     .unwrap();
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
@@ -361,6 +376,17 @@ fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
             .contains("keep-warm has no effect on a subagents definition"),
         "{}",
         child.message
+    );
+    assert!(
+        !inert.iter().any(|warning| {
+            warning.path.ends_with("subagents/inherited_base.md")
+                || warning.path.ends_with("subagents/inherited_parent.md")
+        }),
+        "keep-warm from a kind base or direct parent must be dropped on a child without warning: {:?}",
+        inert
+            .iter()
+            .map(|w| (&w.path, &w.message))
+            .collect::<Vec<_>>()
     );
 }
 

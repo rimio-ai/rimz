@@ -1059,11 +1059,6 @@ fn load_resolved(
         agent::Resolver::new(subagents_scope, "subagents", [&subagents, &agents]),
         &mut loaded,
     );
-    for error in &mut loaded.errors[resolved_from..] {
-        if let Some(first) = first_errors.iter().find(|first| first.path == error.path) {
-            *error = first.clone();
-        }
-    }
     let children: BTreeSet<String> = loaded
         .subagent_profiles
         .0
@@ -1085,6 +1080,13 @@ fn load_resolved(
         agent::Resolver::new(agents_scope, "agents", [&agents, &subagents]),
         &mut loaded,
     );
+    // Restore any first error recorded during the kind-base probe across both trees,
+    // including a `subagents/` child's failed `agents/` parent.
+    for error in &mut loaded.errors[resolved_from..] {
+        if let Some(first) = first_errors.iter().find(|first| first.path == error.path) {
+            *error = first.clone();
+        }
+    }
     // The resolver knows paths, not pack items; team::load appends its own fixes.
     for error in &mut loaded.errors[resolved_from..] {
         if let Some(item) = sources
