@@ -1091,7 +1091,7 @@ fn a_closed_pull_request_worktree_refusal_hints_a_retry_the_tool_accepts() {
     assert_eq!(
         refused["hint"],
         json!(
-            "`team` cannot start a new session in this worktree; name a `worktree` in place of `from_pr` to launch outside the pull request"
+            "`team` cannot start a new session in this worktree; name another `worktree` in place of `from_pr` to launch outside the pull request"
         ),
         "{refused}"
     );

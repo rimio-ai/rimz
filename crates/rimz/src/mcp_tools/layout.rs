@@ -231,10 +231,11 @@ fn with_closed_cohort_hint(
     };
     let hint = match (tool, from_pr) {
         (TaskKind::Team, false) => "name another `worktree`".to_owned(),
-        (TaskKind::Team, true) => "`team` cannot start a new session in this worktree; name a \
-                                   `worktree` in place of `from_pr` to launch outside the pull \
-                                   request"
-            .to_owned(),
+        (TaskKind::Team, true) => {
+            "`team` cannot start a new session in this worktree; name another \
+             `worktree` in place of `from_pr` to launch outside the pull request"
+                .to_owned()
+        }
         (_, false) => "set `fresh` to start a new session in this worktree".to_owned(),
         (_, true) => format!(
             "to start a new session in this worktree, call again with `worktree` {name:?} and \
@@ -341,8 +342,8 @@ mod tests {
         assert_eq!(
             hint(closed, Some("pr-1"), TaskKind::Team, true),
             Some(
-                "`team` cannot start a new session in this worktree; name a `worktree` in \
-                 place of `from_pr` to launch outside the pull request"
+                "`team` cannot start a new session in this worktree; name another `worktree` \
+                 in place of `from_pr` to launch outside the pull request"
                     .to_owned()
             ),
         );
