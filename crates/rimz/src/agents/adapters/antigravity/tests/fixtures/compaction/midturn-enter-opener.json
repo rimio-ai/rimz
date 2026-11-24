@@ -1,0 +1,1 @@
+{"event":"PreInvocation","payload":{"conversationId":"3f40e237-57b2-4bb9-9c91-e22fea2df8d2","cwd":"/workspace/project","hookEventName":"PreInvocation","initialNumSteps":19,"invocationNum":0,"lastUserInput":"/compact","modelName":"gemini-3.8-flash-low","transcriptPath":"","workspacePaths":["/workspace/project"]}}

@@ -215,19 +215,25 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
         auto: Some(false),
         failed,
     };
+    let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
+        errored,
+        parked_on_background,
+        turn_id: None,
+    };
     for input in ["/compact", "  /compact\n"] {
+        // Without `initialNumSteps`, `lastUserInput` decides the opener without a read.
         let opened = observe_lifecycle_with_prompt_reader(
             "PreInvocation",
             &with(
                 &common,
                 [("invocationNum", json!(0)), ("lastUserInput", json!(input))],
             ),
-            |_, _, _| panic!("a compaction reads no prompt"),
+            |_, _, _| panic!("an unbounded compaction reads no prompt"),
         )
         .unwrap();
         assert_eq!(opened.signal, LifecycleSignal::Compacting, "{input:?}");
         assert!(opened.prompt.is_none());
-        for (stop, expected) in [
+        for (stop, expected, expected_message) in [
             (
                 with(
                     &common,
@@ -238,6 +244,18 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
                     ],
                 ),
                 closed(false),
+                None,
+            ),
+            (
+                with(
+                    &common,
+                    [
+                        ("lastUserInput", json!(input)),
+                        ("terminationReason", json!("terminal_custom_hook")),
+                    ],
+                ),
+                closed(false),
+                None,
             ),
             (
                 with(
@@ -245,9 +263,12 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
                     [
                         ("lastUserInput", json!(input)),
                         ("terminationReason", json!("TERMINAL_CUSTOM_HOOK")),
+                        ("error", json!("compaction failed")),
+                        ("fullyIdle", json!(true)),
                     ],
                 ),
-                closed(false),
+                closed(true),
+                None,
             ),
             (
                 with(
@@ -258,7 +279,20 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
                         ("fullyIdle", json!(true)),
                     ],
                 ),
-                closed(true),
+                ended(true, false),
+                Some("noted."),
+            ),
+            (
+                with(
+                    &common,
+                    [
+                        ("lastUserInput", json!(input)),
+                        ("terminationReason", json!("NO_TOOL_CALL")),
+                        ("fullyIdle", json!(false)),
+                    ],
+                ),
+                ended(false, true),
+                Some("noted."),
             ),
         ] {
             let decoded = AntigravityAdapter.decode_hook("Stop", &stop).unwrap();
@@ -267,7 +301,7 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
                 Some(&expected),
                 "{stop}"
             );
-            assert_eq!(decoded.final_message(), None, "{stop}");
+            assert_eq!(decoded.final_message(), expected_message, "{stop}");
             assert_eq!(
                 hook_output(&AntigravityAdapter, "Stop", &stop)
                     .json_reply()
@@ -411,27 +445,6 @@ fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     );
     assert!(snake.lifecycle().cloned().is_none());
 }
-/// The catalog event whose `PostToolUse` matcher names `tool`. Each matcher is an anchored
-/// alternation of names, and a name ending in `.*` matches by prefix.
-fn post_tool_event(tool: &str) -> Option<&'static str> {
-    ANTIGRAVITY_HOOKS
-        .iter()
-        .filter(|hook| hook.config_event == "PostToolUse")
-        .find(|hook| {
-            let names = hook.config_matcher.unwrap();
-            let names = names.strip_prefix('^').unwrap().strip_suffix('$').unwrap();
-            let names = names
-                .strip_prefix('(')
-                .and_then(|names| names.strip_suffix(')'))
-                .unwrap_or(names);
-            names.split('|').any(|name| match name.strip_suffix(".*") {
-                Some(prefix) => tool.starts_with(prefix),
-                None => tool == name,
-            })
-        })
-        .map(|hook| hook.hook.event)
-}
-
 #[test]
 fn post_tool_use_matchers_route_legacy_and_current_tool_names() {
     for (tool, event, effect) in [
@@ -536,6 +549,7 @@ fn stop_termination_reasons_fail_only_on_errors_and_limits() {
         ("USER_CANCELED", false),
         ("TERMINAL_STEP_TYPE", false),
         ("TERMINAL_CUSTOM_HOOK", false),
+        ("terminal_custom_hook", false),
         ("INJECTED_RESPONSE", false),
         ("no_tool_call", false),
         ("SOMETHING_NEW", false),
@@ -554,21 +568,40 @@ fn stop_termination_reasons_fail_only_on_errors_and_limits() {
                 ended(failed, !fully_idle && !failed),
                 "{reason} fullyIdle={fully_idle}"
             );
+            let compact = with(&payload, [("lastUserInput", json!("/compact"))]);
+            let expected = if reason.trim().eq_ignore_ascii_case("TERMINAL_CUSTOM_HOOK") {
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(false),
+                    failed,
+                }
+            } else {
+                ended(failed, !fully_idle && !failed)
+            };
+            assert_eq!(
+                hook_signal(&AntigravityAdapter, "Stop", &compact),
+                expected,
+                "{reason} with /compact fullyIdle={fully_idle}"
+            );
         }
-        let compact = with(
+        let compact_no_idle = with(
             &hook_payload(),
             [
                 ("terminationReason", json!(reason)),
                 ("lastUserInput", json!("/compact")),
             ],
         );
-        assert_eq!(
-            hook_signal(&AntigravityAdapter, "Stop", &compact),
-            LifecycleSignal::CompactionEnded {
+        let expected_no_idle = reason
+            .trim()
+            .eq_ignore_ascii_case("TERMINAL_CUSTOM_HOOK")
+            .then_some(LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed,
-            },
-            "{reason} closing a compaction"
+            });
+        assert_eq!(
+            hook_observation(&AntigravityAdapter, "Stop", &compact_no_idle)
+                .map(|observation| observation.signal),
+            expected_no_idle,
+            "{reason} with /compact and no fullyIdle"
         );
     }
 }
@@ -3653,6 +3686,67 @@ fn background_shell_reports_handle_edges_guards_and_queued_post_tool_use() {
         );
     }
 
+    // A post-compaction continuation's Stop still carries `lastUserInput: "/compact"` but ends
+    // as an ordinary turn (`NO_TOOL_CALL`), so it carries the background shell snapshot for both
+    // `fullyIdle: false` (transcript read) and `fullyIdle: true` (empty repair snapshot).
+    let continuation_parked = decode(
+        "Stop",
+        &json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": mounted_transcript.display().to_string(),
+            "fullyIdle": false,
+            "terminationReason": "NO_TOOL_CALL",
+            "lastUserInput": "/compact",
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        continuation_parked.signal,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        }
+    );
+    assert_eq!(
+        continuation_parked.background_shells,
+        Some(BackgroundShellReport::Snapshot {
+            shells: vec![BackgroundShell {
+                id: format!("{SESSION_ID}/task-2"),
+                command: Some("sleep 60".to_owned()),
+                description: None,
+                started_at: AT_10.parse().unwrap(),
+            }],
+        }),
+        "post-compaction continuation Stop with fullyIdle: false carries running shells"
+    );
+    let continuation_idle = decode(
+        "Stop",
+        &json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": mounted_transcript.display().to_string(),
+            "fullyIdle": true,
+            "terminationReason": "NO_TOOL_CALL",
+            "lastUserInput": "/compact",
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        continuation_idle.signal,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        }
+    );
+    assert_eq!(
+        continuation_idle.background_shells,
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() }),
+        "post-compaction continuation Stop with fullyIdle: true carries an empty snapshot"
+    );
+
     // PostToolUse negative cases: missing stepIdx, non-kill manage_task, missing/blank/failed
     // TaskId, and unrelated tools all report nothing.
     for (label, event, payload) in [
@@ -4553,19 +4647,60 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
         Some("Also include APPLE.\n\nAlso include BERRY.".to_owned()),
         "a row that is no answer between two steers ends nothing"
     );
-    let compact = with(
+    // A prompt steered into a post-compaction continuation (`lastUserInput: "/compact"`) is
+    // reported once, and the read stops at a `CHECKPOINT` row so a late pre-compaction
+    // report never picks up a post-compaction prompt.
+    let continuation_steer = [
+        user_record(0, AT_09, "run background"),
+        planner_record(1, AT_09, None),
+        user_record(4, AT_10, "/compact"),
+        record(5, "SYSTEM", "CHECKPOINT", "DONE", AT_10, "summary").to_string(),
+        user_record(7, AT_11, "Also include STEERAFTER."),
+        planner_record(8, AT_11, None),
+    ];
+    let continuation_path = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &continuation_steer.join("\n"),
+    );
+    let compact_steer = with(
         &hook_payload(),
         [
+            ("transcriptPath", json!(continuation_path)),
             ("invocationNum", json!(1)),
-            ("initialNumSteps", json!(0)),
+            ("initialNumSteps", json!(7)),
             ("lastUserInput", json!("/compact")),
         ],
     );
-    assert!(
-        observe_lifecycle_with_prompt_reader("PostInvocation", &compact, |_, _, _| {
-            panic!("a compaction reads no prompt")
+    let reported =
+        observe_lifecycle_with_prompt_reader("PostInvocation", &compact_steer, |p, id, from| {
+            session::prompt_taken_in_under(dir.path(), p, id, from?)
         })
-        .is_none()
+        .expect("a steer into a post-compaction continuation is reported");
+    assert_eq!(reported.prompt.as_deref(), Some("Also include STEERAFTER."));
+    assert!(reported.is_state_snapshot());
+    let after_steer = with(
+        &compact_steer,
+        [("invocationNum", json!(2)), ("initialNumSteps", json!(9))],
+    );
+    assert!(
+        observe_lifecycle_with_prompt_reader("PostInvocation", &after_steer, |p, id, from| {
+            session::prompt_taken_in_under(dir.path(), p, id, from?)
+        })
+        .is_none(),
+        "a later invocation begins past the steered prompt"
+    );
+    let pre_checkpoint = with(
+        &compact_steer,
+        [("invocationNum", json!(0)), ("initialNumSteps", json!(4))],
+    );
+    assert!(
+        observe_lifecycle_with_prompt_reader("PostInvocation", &pre_checkpoint, |p, id, from| {
+            session::prompt_taken_in_under(dir.path(), p, id, from?)
+        })
+        .is_none(),
+        "a read starting before a CHECKPOINT stops at the checkpoint and drops /compact"
     );
     let unreadable = with(
         &hook_payload(),
@@ -4775,6 +4910,292 @@ fn an_opener_that_cannot_read_its_evidence_still_starts_the_turn() {
     assert_eq!(
         decode(&with(&child, [("transcriptPath", json!(child_path))])),
         started(None)
+    );
+}
+#[test]
+fn parked_turn_compaction_capture_decodes_every_hook_by_its_opener_and_stop_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = include_str!("tests/fixtures/compaction/parked-transcript.jsonl");
+    let lines: Vec<&str> = transcript.lines().collect();
+    let payloads: Vec<Value> = include_str!("tests/fixtures/compaction/parked-payloads.jsonl")
+        .lines()
+        .map(json_value)
+        .collect();
+    let env = BTreeMap::from([(
+        "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let decode_sequence = |full_transcript: bool| {
+        let mut decoded_rows = Vec::new();
+        for row in &payloads {
+            let payload = &row["payload"];
+            let event = catalog_event_for_capture(row["event"].as_str().unwrap(), payload);
+            let id = payload["conversationId"].as_str().unwrap();
+            let content = if full_transcript {
+                transcript.to_owned()
+            } else {
+                let count = row
+                    .get("steps")
+                    .and_then(Value::as_u64)
+                    .map_or(lines.len(), |n| n as usize);
+                format!("{}\n", lines[..count].join("\n"))
+            };
+            let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", &content);
+            let payload = with(payload, [("transcriptPath", json!(path))]);
+            let output = AntigravityAdapter
+                .decode_hook_in(event, &payload, &env)
+                .unwrap();
+            assert_eq!(
+                output.event_agent_id().map(AgentSessionId::as_str),
+                Some(id)
+            );
+            decoded_rows.push((
+                output.lifecycle().map(|obs| obs.signal.clone()),
+                output
+                    .lifecycle()
+                    .and_then(|obs| obs.prompt.as_deref().map(ToOwned::to_owned)),
+                output.final_message().map(ToOwned::to_owned),
+            ));
+        }
+        decoded_rows
+    };
+    let expected = vec![
+        (
+            Some(LifecycleSignal::TurnStarted { turn_id: None }),
+            Some(
+                "Call run_command with CommandLine \"sleep 150 && echo SLEPT\" and WaitMsBeforeAsync 500. Do not poll or wait for the command; immediately reply STARTED and end the turn. If later woken by the background result, reply only SLEPT with no tools."
+                    .to_owned(),
+            ),
+            None,
+        ),
+        (None, None, None),
+        (None, None, None),
+        (None, None, None),
+        (
+            Some(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+                turn_id: None,
+            }),
+            None,
+            Some("STARTED".to_owned()),
+        ),
+        (Some(LifecycleSignal::Compacting), None, None),
+        (
+            Some(LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            }),
+            None,
+            None,
+        ),
+        (
+            Some(LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Mutating,
+                name: Some("run_command".to_owned()),
+                native_key: None,
+                turn_id: None,
+            }),
+            None,
+            None,
+        ),
+        (None, None, None),
+        (None, None, None),
+        (
+            Some(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            }),
+            None,
+            Some("SLEPT".to_owned()),
+        ),
+    ];
+    assert_eq!(
+        decode_sequence(false),
+        expected,
+        "at-hook transcript snapshots"
+    );
+    // Applying the openers late against the final transcript produces the exact same signals.
+    let late = decode_sequence(true);
+    let late_signals: Vec<_> = late.iter().map(|(signal, _, _)| signal.clone()).collect();
+    let expected_signals: Vec<_> = expected
+        .iter()
+        .map(|(signal, _, _)| signal.clone())
+        .collect();
+    assert_eq!(
+        late_signals, expected_signals,
+        "late apply against final transcript"
+    );
+}
+#[test]
+fn queued_midturn_compact_opener_decodes_to_compacting() {
+    let dir = tempfile::tempdir().unwrap();
+    let opener = json_value(include_str!(
+        "tests/fixtures/compaction/midturn-enter-opener.json"
+    ));
+    let payload = &opener["payload"];
+    let id = payload["conversationId"].as_str().unwrap();
+    let path = write_transcript_named(
+        dir.path(),
+        id,
+        "transcript_full.jsonl",
+        include_str!("tests/fixtures/compaction/midturn-enter-transcript.jsonl"),
+    );
+    let payload = with(payload, [("transcriptPath", json!(path))]);
+    let fields = decode_lifecycle_fields("PreInvocation", &payload, |path, id, read| {
+        session::read_prompt_under(dir.path(), path, id, read)
+    });
+    let obs = fields.lifecycle.expect("queued /compact opens compaction");
+    assert_eq!(obs.signal, LifecycleSignal::Compacting);
+    assert!(obs.prompt.is_none());
+    // Transcript evidence classifies the opener even without `lastUserInput`.
+    let mut without_last = payload.clone();
+    without_last
+        .as_object_mut()
+        .unwrap()
+        .remove("lastUserInput");
+    let from_transcript =
+        decode_lifecycle_fields("PreInvocation", &without_last, |path, id, read| {
+            session::read_prompt_under(dir.path(), path, id, read)
+        })
+        .lifecycle
+        .expect("step initialNumSteps - 1 being /compact opens compaction");
+    assert_eq!(from_transcript.signal, LifecycleSignal::Compacting);
+    assert!(from_transcript.prompt.is_none());
+}
+#[test]
+fn opener_with_unread_evidence_or_missing_bound_falls_back_to_last_user_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let decode = |payload: &Value| {
+        decode_lifecycle_fields("PreInvocation", payload, |path, id, read| {
+            session::read_prompt_under(dir.path(), path, id, read)
+        })
+        .lifecycle
+        .map(|obs| (obs.signal, obs.prompt.map(|p| p.to_string())))
+    };
+    let missing_path = dir.path().join("missing.jsonl");
+    let compact_unbounded = with(
+        &hook_payload(),
+        [
+            ("invocationNum", json!(0)),
+            ("lastUserInput", json!("/compact")),
+            ("transcriptPath", json!(missing_path)),
+        ],
+    );
+    assert_eq!(
+        decode(&compact_unbounded),
+        Some((LifecycleSignal::Compacting, None)),
+        "missing initialNumSteps falls back to lastUserInput"
+    );
+    let compact_unread = with(&compact_unbounded, [("initialNumSteps", json!(5))]);
+    assert_eq!(
+        decode(&compact_unread),
+        Some((LifecycleSignal::Compacting, None)),
+        "Unread transcript falls back to lastUserInput"
+    );
+    let prompt_unread = with(
+        &hook_payload(),
+        [
+            ("invocationNum", json!(0)),
+            ("initialNumSteps", json!(5)),
+            ("lastUserInput", json!("hello")),
+            ("transcriptPath", json!(missing_path)),
+        ],
+    );
+    assert_eq!(
+        decode(&prompt_unread),
+        Some((LifecycleSignal::TurnStarted { turn_id: None }, None)),
+        "Unread non-compact opener falls back to TurnStarted"
+    );
+    // A CHECKPOINT row starts an opener interval on its own, even when the 64 KiB tail
+    // starts after the earlier /compact row.
+    let big_checkpoint = format!(
+        "{}\n{}\n{}\n",
+        user_record(0, AT_09, "initial"),
+        user_record(1, AT_10, "/compact"),
+        record(
+            2,
+            "SYSTEM",
+            "CHECKPOINT",
+            "DONE",
+            AT_10,
+            &"s".repeat(70_000)
+        ),
+    );
+    let checkpoint_path = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &big_checkpoint,
+    );
+    let continuation = with(
+        &hook_payload(),
+        [
+            ("invocationNum", json!(0)),
+            ("initialNumSteps", json!(3)),
+            ("lastUserInput", json!("/compact")),
+            ("transcriptPath", json!(checkpoint_path)),
+        ],
+    );
+    assert_eq!(
+        decode(&continuation),
+        None,
+        "a CHECKPOINT row at initialNumSteps - 1 classifies a continuation as routing only"
+    );
+}
+#[test]
+fn steered_altm_compact_capture_decodes_without_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = include_str!("tests/fixtures/compaction/midturn-altm-transcript.jsonl");
+    let payloads: Vec<Value> =
+        include_str!("tests/fixtures/compaction/midturn-altm-payloads.jsonl")
+            .lines()
+            .map(json_value)
+            .collect();
+    let env = BTreeMap::from([(
+        "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let mut signals = Vec::new();
+    for row in &payloads {
+        let event = match row["event"].as_str().unwrap() {
+            "PostToolUse" => "PostToolUse:mutating",
+            other => other,
+        };
+        let payload = &row["payload"];
+        let id = payload["conversationId"].as_str().unwrap();
+        let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", transcript);
+        let payload = with(payload, [("transcriptPath", json!(path))]);
+        let output = AntigravityAdapter
+            .decode_hook_in(event, &payload, &env)
+            .unwrap();
+        signals.push(output.lifecycle().map(|obs| obs.signal.clone()));
+    }
+    assert_eq!(
+        signals,
+        vec![
+            Some(LifecycleSignal::TurnStarted { turn_id: None }),
+            Some(LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Mutating,
+                name: Some("run_command".to_owned()),
+                native_key: None,
+                turn_id: None,
+            }),
+            None,
+            None,
+            Some(LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            }),
+            Some(LifecycleSignal::TurnStarted { turn_id: None }),
+            None,
+            Some(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            }),
+        ]
     );
 }
 #[cfg(unix)]

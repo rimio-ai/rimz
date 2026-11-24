@@ -551,6 +551,8 @@ pub(super) enum PromptRead {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PromptEvidence {
     Prompt(String),
+    /// Step `initialNumSteps - 1` is a bare `/compact` user row: the opener starts a compaction.
+    Compact,
     /// The rows the read needs were read and hold no user row.
     NoPrompt,
     /// The transcript, or the rows the read needs, could not be read.
@@ -607,27 +609,40 @@ fn prompt_opened_under(home: &Path, path: &Path, session_id: &str, bound: u64) -
         .unwrap_or(PromptEvidence::Unread)
 }
 
-/// The opener's evidence when `lines` cover its interval, from the answer or `/compact` row that
-/// ends the previous execution (or the file's first row, when `lines` start there) through step
-/// `bound - 1`; `None` when they do not.
+/// The opener's evidence when `lines` cover its interval, from the answer, checkpoint, or
+/// `/compact` row that ends the previous execution (or the file's first row, when `lines` start
+/// there) through step `bound - 1`; `None` when they do not. A bare `/compact` at `bound - 1`
+/// classifies the opener as a compaction.
 fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<PromptEvidence> {
     let mut interval_started = from_file_start;
     let mut read_last = false;
     let mut opener = None;
+    let mut compact_at_bound = false;
     for record in parse_records(lines).filter(|record| record.step_index < bound) {
-        read_last |= record.step_index + 1 == bound;
+        let at_bound = record.step_index + 1 == bound;
+        read_last |= at_bound;
         let prompt =
             is_turn_start(&record).then(|| normalize_user_content(record.content.as_deref()));
-        if record.record_type == "PLANNER_RESPONSE"
-            || prompt
-                .as_ref()
-                .is_some_and(|text| text.as_deref() == Some(super::COMPACT_COMMAND))
+        let is_compact = prompt
+            .as_ref()
+            .is_some_and(|text| text.as_deref() == Some(super::COMPACT_COMMAND));
+        if at_bound {
+            compact_at_bound = is_compact;
+        }
+        if is_compact
+            || matches!(
+                record.record_type.as_str(),
+                "PLANNER_RESPONSE" | "CHECKPOINT"
+            )
         {
             interval_started = true;
             opener = None;
         } else if prompt.is_some() {
             opener = prompt;
         }
+    }
+    if compact_at_bound {
+        return Some(PromptEvidence::Compact);
     }
     match opener {
         Some(prompt) if read_last => Some(prompt.into()),
@@ -644,11 +659,16 @@ pub(super) fn prompt_taken_in_under(
 ) -> Option<String> {
     valid_transcript_under(home, path, session_id).then_some(())?;
     let lines = read_transcript_tail(path)?;
-    // The invocation's own answer ends what it took in: a frame applied late reads a
-    // transcript that already holds the next invocation's rows.
+    // The invocation's own answer or a compaction checkpoint ends what it took in: a frame
+    // applied late reads a transcript that already holds later rows.
     let prompts = parse_records(&lines)
         .skip_while(|record| record.step_index < from_step)
-        .take_while(|record| record.record_type != "PLANNER_RESPONSE")
+        .take_while(|record| {
+            !matches!(
+                record.record_type.as_str(),
+                "PLANNER_RESPONSE" | "CHECKPOINT"
+            )
+        })
         .filter(is_turn_start)
         .filter_map(|record| normalize_user_content(record.content.as_deref()))
         .filter(|text| text != super::COMPACT_COMMAND)

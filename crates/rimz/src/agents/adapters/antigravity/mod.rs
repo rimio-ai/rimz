@@ -336,7 +336,7 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "no out-of-band answer API or verified native-key planner",
     },
     compaction: ConcernCoverage::Wired {
-        via: "PreInvocation and Stop hooks whose lastUserInput is a bare /compact",
+        via: "PreInvocation opener for a bare /compact and Stop with TERMINAL_CUSTOM_HOOK",
     },
     subagents: ConcernCoverage::Partial {
         via: "child hooks joined to ordered invoke_subagent parent transcript results",
@@ -1023,16 +1023,16 @@ fn decode_lifecycle_fields(
                 return DecodedLifecycleFields::default();
             };
             let signal = match invocation.invocation_num {
-                Some(0) if invocation.common.runs_compact_command() => {
-                    Some(LifecycleSignal::Compacting)
-                }
                 Some(0) => {
-                    prompt_read = Some(
-                        invocation
-                            .initial_num_steps
-                            .map_or(PromptRead::Newest, PromptRead::OpenedBelow),
-                    );
-                    Some(LifecycleSignal::TurnStarted { turn_id: None })
+                    if let Some(bound) = invocation.initial_num_steps {
+                        prompt_read = Some(PromptRead::OpenedBelow(bound));
+                        Some(LifecycleSignal::TurnStarted { turn_id: None })
+                    } else if invocation.common.runs_compact_command() {
+                        Some(LifecycleSignal::Compacting)
+                    } else {
+                        prompt_read = Some(PromptRead::Newest);
+                        Some(LifecycleSignal::TurnStarted { turn_id: None })
+                    }
                 }
                 _ => None,
             };
@@ -1044,10 +1044,7 @@ fn decode_lifecycle_fields(
             let Some(invocation) = payloads::parse_invocation(payload) else {
                 return DecodedLifecycleFields::default();
             };
-            prompt_read = invocation
-                .initial_num_steps
-                .filter(|_| !invocation.common.runs_compact_command())
-                .map(PromptRead::TakenInFrom);
+            prompt_read = invocation.initial_num_steps.map(PromptRead::TakenInFrom);
             let signal = prompt_read.map(|_| LifecycleSignal::TurnStarted { turn_id: None });
             (invocation.common, signal)
         }
@@ -1084,9 +1081,10 @@ fn decode_lifecycle_fields(
                 return DecodedLifecycleFields::default();
             };
             let failed = stop.failed();
-            // A bare `/compact` ends on a Stop of its own (`TERMINAL_CUSTOM_HOOK`), which
-            // closes the compaction whether or not it carries `fullyIdle`.
-            let signal = if stop.common.runs_compact_command() {
+            // A bare `/compact` closes only on `TERMINAL_CUSTOM_HOOK`, whether or not it carries
+            // `fullyIdle`. Every other `Stop` follows the turn rule, even while `lastUserInput`
+            // still names `/compact` on a post-compaction continuation.
+            let signal = if stop.closes_compaction() {
                 Some(LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed,
@@ -1136,6 +1134,7 @@ fn observation_with_prompt_reader(
     else {
         return DecodedLifecycleFields::default();
     };
+    let runs_compact = common.runs_compact_command();
     let worktree_path = common
         .workspace_paths
         .into_iter()
@@ -1155,9 +1154,18 @@ fn observation_with_prompt_reader(
         _ => PromptEvidence::Unread,
     };
     let snapshot = matches!(prompt_read, Some(PromptRead::TakenInFrom(_)));
-    let prompt = match evidence {
-        PromptEvidence::Prompt(prompt) => Some(prompt),
-        PromptEvidence::Unread if !snapshot => None,
+    let (signal, prompt) = match evidence {
+        PromptEvidence::Prompt(prompt) => (signal, Some(prompt)),
+        PromptEvidence::Compact => (LifecycleSignal::Compacting, None),
+        PromptEvidence::Unread if !snapshot => {
+            let signal = if matches!(prompt_read, Some(PromptRead::OpenedBelow(_))) && runs_compact
+            {
+                LifecycleSignal::Compacting
+            } else {
+                signal
+            };
+            (signal, None)
+        }
         // A steer report with no steer, and an opener no prompt opened (a continuation),
         // report nothing.
         PromptEvidence::Unread | PromptEvidence::NoPrompt => {
@@ -1186,6 +1194,51 @@ fn observation_with_prompt_reader(
         worktree_path,
         lifecycle: Some(observation),
     }
+}
+
+/// The catalog event whose `PostToolUse` matcher names `tool`. Each matcher is an anchored
+/// alternation of names, and a name ending in `.*` matches by prefix.
+#[cfg(test)]
+fn post_tool_event(tool: &str) -> Option<&'static str> {
+    ANTIGRAVITY_HOOKS
+        .iter()
+        .filter(|hook| hook.config_event == "PostToolUse")
+        .find(|hook| {
+            let names = hook.config_matcher.unwrap();
+            let names = names.strip_prefix('^').unwrap().strip_suffix('$').unwrap();
+            let names = names
+                .strip_prefix('(')
+                .and_then(|names| names.strip_suffix(')'))
+                .unwrap_or(names);
+            names.split('|').any(|name| match name.strip_suffix(".*") {
+                Some(prefix) => tool.starts_with(prefix),
+                None => tool == name,
+            })
+        })
+        .map(|hook| hook.hook.event)
+}
+
+#[cfg(test)]
+pub(in crate::agents) fn catalog_event_for_capture(
+    native_event: &str,
+    payload: &Value,
+) -> &'static str {
+    if native_event == "PostToolUse" {
+        let tool = payload
+            .get("toolCall")
+            .and_then(|call| call.get("name"))
+            .and_then(Value::as_str);
+        return tool.and_then(post_tool_event).unwrap_or_else(|| {
+            panic!("captured PostToolUse (tool {tool:?}) matches no installed Antigravity hook")
+        });
+    }
+    ANTIGRAVITY_HOOKS
+        .iter()
+        .find(|entry| entry.config_event == native_event && entry.config_matcher.is_none())
+        .map(|entry| entry.hook.event)
+        .unwrap_or_else(|| {
+            panic!("captured event {native_event:?} matches no installed Antigravity hook")
+        })
 }
 
 #[cfg(test)]

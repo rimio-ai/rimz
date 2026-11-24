@@ -250,6 +250,12 @@ pub(crate) fn hook_signal(
     hook_lifecycle(adapter, event, payload).signal
 }
 
+/// Map a captured native Antigravity hook event and payload onto the catalog
+/// event name the installed RimZ hook command passes to `--event`.
+pub(crate) fn antigravity_catalog_event(native_event: &str, payload: &Value) -> &'static str {
+    super::adapters::antigravity::catalog_event_for_capture(native_event, payload)
+}
+
 /// Every [`LifecycleSignal`] value, with each payload-carrying variant swept
 /// over its full flag space — the enumeration the state machine's totality
 /// tests fold through `step`.
