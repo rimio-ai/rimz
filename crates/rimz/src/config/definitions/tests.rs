@@ -5756,7 +5756,10 @@ fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
 
 #[test]
 fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_user_lists() {
-    let mark = "but a load mark applies only to a capability with MCP tools (rimz-lsp";
+    let mark = "but a load mark applies only to `rimz` and a capability with MCP tools (rimz-lsp";
+    let skill = "which holds only RimZ's capabilities with MCP tools (rimz-lsp, rimz-wait, \
+                 rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
+                 rimz-control, rimz-notes), or `rimz` for all of them;";
     for (fields, needle) in [
         (
             "agent: claude\ncapabilities: [bash]\ntools: [Bash]",
@@ -5765,9 +5768,24 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
         (
             "agent: claude\ncapabilities: [Bash]",
             "lists `Bash` in `capabilities:`, which is neither one of the words bash, read, \
-             write, ask, and web nor a RimZ capability `rimz-<name>`; a provider's own tool \
-             names go in `tools:`"
+             write, ask, and web, nor `rimz` or a RimZ capability (rimz-lsp"
                 .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: ['rimz-*']",
+            "lists `rimz-*` in `capabilities:`, which is neither one of the words".to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [rimz-lsp:eager]",
+            "lists `rimz-lsp:eager` in `capabilities:`, which is neither one of the words"
+                .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash, rimz-reflect]",
+            format!(
+                "lists `rimz-reflect` in `capabilities:`, {skill} `rimz-reflect` is a skill, so \
+                 list it in `skills:` instead"
+            ),
         ),
         (
             "agent: claude\ncapabilities: [read:always]",
@@ -5775,17 +5793,29 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
         ),
         (
             "agent: claude\ncapabilities: [rimz-reflect:deferred]",
-            format!("lists `rimz-reflect:deferred` in `capabilities:`, {mark}"),
+            format!("lists `rimz-reflect:deferred` in `capabilities:`, {skill}"),
         ),
         (
             "agent: claude\ncapabilities: [rimz-lsp:always, rimz-lsp:deferred]",
             "lists `rimz-lsp` in `capabilities:` with two different marks; keep one".to_owned(),
         ),
         (
+            "agent: claude\ncapabilities: ['rimz:always', 'rimz:deferred']",
+            "lists `rimz` in `capabilities:` with two different marks; keep one".to_owned(),
+        ),
+        (
             "agent: claude\ncapabilities: [bash]\nskills: [work, rimz-lsp]",
-            "sets `capabilities:`, and its `skills:` lists `rimz-lsp`; beside `capabilities:` that \
-             list holds only your own, so list RimZ's in `capabilities:` instead"
+            "sets `capabilities:`, and its `skills:` lists `rimz-lsp`; beside `capabilities:` \
+             RimZ's MCP capabilities go only in `capabilities:`, so list them there instead"
                 .to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash, rimz-lsp]\nskills: [rimz-lsp]",
+            "sets `capabilities:`, and its `skills:` lists `rimz-lsp`".to_owned(),
+        ),
+        (
+            "agent: claude\ncapabilities: [bash]\nmcps: [rimz-wait]",
+            "sets `capabilities:`, and its `mcps:` lists `rimz-wait`".to_owned(),
         ),
         (
             "agent: claude\ncapabilities: [bash]\nmcps: [github, 'rimz:always']",
@@ -5816,6 +5846,7 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
         definition(root.path(), "agents/probe.md", fields, "");
         error(root.path(), &needle);
     }
+    // A `rimz-*` skill alone goes in `skills:`, checked on disk as any listed skill is.
     let root = fixture();
     write(
         root.path(),
@@ -5825,26 +5856,103 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
     definition(
         root.path(),
         "agents/probe.md",
-        "agent: claude\ncapabilities: [rimz-present, rimz-lsp, rimz-nope]",
+        "agent: claude\ncapabilities: [rimz-lsp]\nskills: [rimz-present, rimz-nope]",
         "",
     );
     let loaded = load_checked(root.path());
     assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
     assert!(
-        loaded.errors[0].message.starts_with(
-            "lists `rimz-nope` in `capabilities:`, which is neither a capability of RimZ's MCP \
-             server nor a skill on disk for claude; missing at "
-        ),
+        loaded.errors[0].message.contains("rimz-nope"),
         "{}",
         loaded.errors[0]
     );
     definition(
         root.path(),
         "agents/probe.md",
-        "agent: claude\ncapabilities: [rimz-present, rimz-lsp]",
+        "agent: claude\ncapabilities: [rimz-lsp]\nskills: [rimz-present]",
         "",
     );
-    assert!(load_checked(root.path()).errors.is_empty());
+    let loaded = load_checked(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(
+        seat_skills(&loaded, "probe"),
+        Some(vec!["rimz-present".to_owned()])
+    );
+}
+
+/// `rimz` grants every capability, an entry's own mark standing beside `rimz`'s, and `+` lists
+/// merge `rimz` and capability entries by name as `mcps` does.
+#[test]
+fn rimz_grants_every_capability_and_merges_marks_as_mcps_does() {
+    let root = fixture();
+    for (path, fields) in [
+        (
+            "agents/wild.md",
+            "agent: claude\ncapabilities: [read, rimz:deferred]",
+        ),
+        (
+            "agents/lsp.md",
+            "agent: claude\ncapabilities: [read, rimz-lsp:always]",
+        ),
+        (
+            "agents/wild-lsp.md",
+            "agent: wild\ncapabilities: [+rimz-lsp:always]",
+        ),
+        (
+            "agents/lsp-wild.md",
+            "agent: lsp\ncapabilities: [+rimz:deferred]",
+        ),
+        (
+            "agents/rewild.md",
+            "agent: wild\ncapabilities: [+rimz:always]",
+        ),
+        ("agents/bare.md", "agent: wild\ncapabilities: [+rimz-lsp]"),
+        (
+            "agents/quiet.md",
+            "agent: claude\ncapabilities: [read, rimz]\nskills: []",
+        ),
+    ] {
+        definition(root.path(), path, fields, "");
+    }
+    let loaded = clean(root.path());
+    let grant = |name: &str| {
+        let tools = loaded.agent_profiles.0[name].tools.as_ref().unwrap();
+        tools
+            .rimz()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    // Each capability keeps its own mark, and `rimz` follows with the mark for the rest.
+    let every = |lsp: &str, server: &str| {
+        crate::mcp::catalog::Capability::ALL
+            .iter()
+            .map(|capability| match capability.name() {
+                "rimz-lsp" => format!("rimz-lsp{lsp}"),
+                name => name.to_owned(),
+            })
+            .chain([format!("rimz{server}")])
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(grant("wild"), every("", ":deferred"));
+    assert_eq!(grant("wild-lsp"), every(":always", ":deferred"));
+    assert_eq!(grant("lsp-wild"), every(":always", ":deferred"));
+    assert_eq!(grant("rewild"), every("", ":always"));
+    assert_eq!(grant("bare"), every("", ":deferred"));
+    assert_eq!(grant("quiet"), every("", ""));
+    let quiet = loaded.agent_profiles.0["quiet"].tools.as_ref().unwrap();
+    assert_eq!(quiet.bases().join(","), "Read,Grep,Glob,LS,Skill");
+    definition(
+        root.path(),
+        "agents/clash.md",
+        "agent: wild\ncapabilities: [+rimz:always, +rimz:deferred]",
+        "",
+    );
+    error(
+        root.path(),
+        "lists `rimz` in `capabilities:` with two different marks; keep one",
+    );
 }
 
 /// A pending `+` subagents list meets the namespace and delegation refusals a plain list meets,
@@ -5884,8 +5992,8 @@ fn plus_subagents_meet_the_plain_refusals_and_a_bare_rimz_skill_is_the_users() {
     );
     error(
         root.path(),
-        "sets `capabilities:`, and its `mcps:` lists `rimz`; beside `capabilities:` that list \
-         holds only your own",
+        "sets `capabilities:`, and its `mcps:` lists `rimz`; beside `capabilities:` RimZ's MCP \
+         capabilities go only in `capabilities:`",
     );
 }
 
@@ -5907,7 +6015,7 @@ fn a_grant_of_catalog_capabilities_loads_beside_an_unreadable_skill_root() {
 }
 
 #[test]
-fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill_is_implied() {
+fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_reflect() {
     let root = fixture();
     definition(
         root.path(),
@@ -5921,10 +6029,22 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill
         "agent: claude\ncapabilities: [bash, ask]\nskills: []",
         "",
     );
+    definition(
+        root.path(),
+        "agents/listed.md",
+        "agent: claude\ncapabilities: [bash]\nskills: [work]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/wild.md",
+        "agent: claude\ncapabilities: [bash, 'rimz:deferred']\nskills: []",
+        "",
+    );
     team_definition(
         root.path(),
         &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
-        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: mute\n    role: aide\n  - agent: seat\n    role: judge\n    owns: [Review, Reflect]",
+        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: mute\n    role: aide\n  - agent: seat\n    role: judge\n    owns: [Review, Reflect]\n  - agent: listed\n    role: scribe\n  - agent: wild\n    role: scout",
         "Pipeline.",
     );
     let loaded = clean(root.path());
@@ -5940,13 +6060,33 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill
                 .collect::<Vec<_>>(),
         )
     };
-    let consensus = vec!["rimz-message".to_owned(), "rimz-reflect".to_owned()];
+    // `rimz-message` joins the grant where Skill is implied; `rimz-reflect`, a skill alone,
+    // joins only a non-empty skills list, and an omitted one admits it already.
+    let consensus = vec!["rimz-message".to_owned()];
     assert_eq!(
         form("probe.lead"),
         ("Bash,AskUserQuestion,Skill".to_owned(), consensus.clone())
     );
-    assert_eq!(form("probe.judge"), ("Bash,Skill".to_owned(), consensus));
+    assert_eq!(
+        form("probe.judge"),
+        ("Bash,Skill".to_owned(), consensus.clone())
+    );
+    assert_eq!(seat_skills(&loaded, "probe.judge"), None);
     assert_eq!(form("probe.aide"), ("Bash".to_owned(), Vec::new()));
+    assert_eq!(seat_skills(&loaded, "probe.aide"), Some(Vec::new()));
+    assert_eq!(form("probe.scribe"), ("Bash,Skill".to_owned(), consensus));
+    assert_eq!(
+        seat_skills(&loaded, "probe.scribe"),
+        Some(vec!["work".to_owned(), "rimz-reflect".to_owned()])
+    );
+    // `rimz` already grants `rimz-message`, and grants Skill beside `skills: []`.
+    let every: Vec<String> = crate::mcp::catalog::Capability::ALL
+        .iter()
+        .map(|capability| capability.name().to_owned())
+        .chain(["rimz:deferred".to_owned()])
+        .collect();
+    assert_eq!(form("probe.scout"), ("Bash,Skill".to_owned(), every));
+    assert_eq!(seat_skills(&loaded, "probe.scout"), Some(Vec::new()));
     // A team that does not reflect still runs the built-in consensus, which names
     // `rimz-message`.
     team_definition(
@@ -5970,9 +6110,10 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_reflect_where_skill
     assert_eq!(grant("probe.judge"), ["rimz-message"]);
 }
 
-/// Every `Skill(rimz-x)` the built-in team text names is in a capabilities seat's grant, the
-/// reflect text's only on a reflecting team, so a name added to the text fails here until
-/// `SeatEdits::edit` grants it.
+/// Every `Skill(rimz-x)` the built-in team text names reaches a capabilities seat with a skills
+/// list, a capability through its grant and a skill alone through its skills, the reflect text's
+/// only on a reflecting team, so a name added to the text fails here until `SeatEdits::edit`
+/// adds it.
 #[test]
 fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     let named = |text: &str| {
@@ -5990,7 +6131,7 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     definition(
         root.path(),
         "agents/seat.md",
-        "agent: claude\ncapabilities: [bash]",
+        "agent: claude\ncapabilities: [bash]\nskills: [work]",
         "",
     );
     let seats = |judged: &str| {
@@ -6009,16 +6150,23 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
         team_definition(root.path(), &stages, &seats(judged), "Pipeline.");
         let loaded = clean(root.path());
         for seat in ["probe.lead", "probe.judge"] {
-            let granted: std::collections::BTreeSet<_> = loaded.agent_profiles.0[seat]
+            let granted = loaded.agent_profiles.0[seat]
                 .tools
                 .as_ref()
                 .unwrap()
                 .rimz()
                 .unwrap()
                 .iter()
-                .map(|entry| entry.name().to_owned())
-                .collect();
-            actual.push(granted);
+                .map(|entry| entry.name().to_owned());
+            let listed = seat_skills(&loaded, seat)
+                .unwrap()
+                .into_iter()
+                .filter(|name| name.starts_with("rimz-"));
+            actual.push(
+                granted
+                    .chain(listed)
+                    .collect::<std::collections::BTreeSet<_>>(),
+            );
         }
     }
     let reflecting: std::collections::BTreeSet<_> = consensus.union(&reflect).cloned().collect();
@@ -6029,7 +6177,7 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
 }
 
 /// The `rimz-message` a seat gains loads with no such skill on disk, since it is a capability
-/// with MCP tools, while a `rimz-` name that is neither a capability nor on disk is refused.
+/// with MCP tools.
 #[test]
 fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     let root = fixture();
@@ -6058,19 +6206,4 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     assert_eq!(grant, ["rimz-message"]);
-    definition(
-        root.path(),
-        "agents/seat.md",
-        "agent: claude\ncapabilities: [bash, read, rimz-absent]",
-        "",
-    );
-    let loaded = load_checked(root.path());
-    assert!(loaded.teams.0.is_empty());
-    assert!(
-        loaded.errors.iter().any(|error| error
-            .message
-            .starts_with("lists `rimz-absent` in `capabilities:`, which is neither")),
-        "{:?}",
-        loaded.errors
-    );
 }

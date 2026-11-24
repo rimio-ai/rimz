@@ -461,7 +461,8 @@ fn own_rows(
 /// machine config and the profile's `tools`, `skills`, and `mcps`: the reasons
 /// its MCP tools are out of reach, then the reasons its skill is. An empty side is
 /// a way in; the skill side does not look at the disk. A profile whose tools carry
-/// a `capabilities:` grant reaches only what the grant names, on either side.
+/// a `capabilities:` grant reaches a capability of RimZ's MCP server only when the
+/// grant names it, on either side, and a `rimz-*` skill alone as its skills say.
 fn shut_out(
     machine: &rimz::config::MachineConfig,
     kind: &str,
@@ -475,7 +476,11 @@ fn shut_out(
         let reason = vec![format!("a subagent cannot launch {launched}")];
         return (reason.clone(), reason);
     }
-    let grant = profile.tools.as_ref().and_then(rimz::agents::ToolSet::rimz);
+    let grant = profile
+        .tools
+        .as_ref()
+        .and_then(rimz::agents::ToolSet::rimz)
+        .filter(|_| Capability::from_name(name).is_some());
     if let Some(grant) = grant
         && !grant.iter().any(|entry| entry.name() == name)
     {

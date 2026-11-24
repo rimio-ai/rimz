@@ -1069,7 +1069,7 @@ impl<'a> ExplainReport<'a> {
                             .filter(|skill| {
                                 let skill = skill.to_string();
                                 request.rimz_capabilities.is_none()
-                                    || !skill.starts_with("rimz-")
+                                    || rimz::mcp::catalog::Capability::from_name(&skill).is_none()
                                     || plan.rimz_reach.iter().any(|(name, _)| *name == skill)
                             })
                             .collect()

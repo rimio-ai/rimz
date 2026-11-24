@@ -98,13 +98,12 @@ fn plan_view(
         }
     }
     changed |= !owned.is_empty();
-    // A grant restricts only the `rimz-*` skills it would withhold, so a kind that cannot mark
+    // A grant restricts only the capability skills it would withhold, so a kind that cannot mark
     // skills user-only refuses only when the inventory holds one.
     if inputs.manual == ManualSkill::Unsupported
         && inputs.grant.is_some()
         && entries.iter().any(|(name, entry)| {
-            name.starts_with("rimz-")
-                && entry.source.join("SKILL.md").is_file()
+            entry.source.join("SKILL.md").is_file()
                 && !crate::agents::skills::launch_callable(None, &[], inputs.grant, name)
         })
     {

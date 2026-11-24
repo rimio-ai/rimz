@@ -10,7 +10,10 @@ use crate::mcp::catalog::{Capability, LoadMode};
 
 /// One RimZ capability a `capabilities:` list grants: `rimz-<name>`, a lowercase name of
 /// letters, digits, and hyphens that starts with a letter, with an optional load mark
-/// (`rimz-lsp:deferred`). The name is a capability of RimZ's MCP server or a `rimz-*` skill.
+/// (`rimz-lsp:deferred`), or `rimz`, which carries the mark of a grant that names every
+/// capability. A loaded definition grants only a capability of RimZ's MCP server
+/// (`Capability::ALL`); the text form takes any `rimz-` name so an exec request written by an
+/// older build still decodes, and a name outside `Capability::ALL` there grants nothing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct RimzEntry {
@@ -19,6 +22,25 @@ pub struct RimzEntry {
 }
 
 impl RimzEntry {
+    pub(crate) fn new(capability: Capability, mode: Option<LoadMode>) -> Self {
+        Self {
+            name: capability.name().to_owned(),
+            mode,
+        }
+    }
+
+    /// The `rimz` entry, whose mark applies to each capability with none of its own.
+    pub(crate) fn server(mode: Option<LoadMode>) -> Self {
+        Self {
+            name: crate::mcp::catalog::SERVER_NAME.to_owned(),
+            mode,
+        }
+    }
+
+    pub(crate) fn is_server(&self) -> bool {
+        self.name == crate::mcp::catalog::SERVER_NAME
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -27,7 +49,8 @@ impl RimzEntry {
         self.mode
     }
 
-    /// The capability of RimZ's MCP server the entry names; none for a skills-only name.
+    /// The capability of RimZ's MCP server the entry names; none for a name an older build
+    /// granted that is a skill alone.
     pub(crate) fn capability(&self) -> Option<Capability> {
         Capability::from_name(&self.name)
     }
@@ -36,7 +59,7 @@ impl RimzEntry {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RimzEntryErr {
     #[error(
-        "invalid RimZ capability `{0}`: write `rimz-<name>`, a lowercase name of letters, digits, and hyphens that starts with a letter, with an optional `:always` or `:deferred`"
+        "invalid RimZ capability `{0}`: write `rimz` or `rimz-<name>`, a lowercase name of letters, digits, and hyphens that starts with a letter, with an optional `:always` or `:deferred`"
     )]
     Invalid(String),
 }
@@ -54,6 +77,9 @@ impl FromStr for RimzEntry {
             ),
             None => (entry, None),
         };
+        if name == crate::mcp::catalog::SERVER_NAME {
+            return Ok(Self::server(mode));
+        }
         let mut rest = name.strip_prefix("rimz-").ok_or_else(invalid)?.chars();
         if !rest.next().is_some_and(|first| first.is_ascii_lowercase())
             || !rest.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -102,6 +128,7 @@ mod tests {
             (" rimz-reflect ", "rimz-reflect", None),
             ("rimz-lsp:deferred", "rimz-lsp", Some(LoadMode::Deferred)),
             ("rimz-wait : always", "rimz-wait", Some(LoadMode::Always)),
+            ("rimz:deferred", "rimz", Some(LoadMode::Deferred)),
         ] {
             let entry: RimzEntry = input.parse().unwrap();
             assert_eq!((entry.name(), entry.mode()), (name, mode), "{input}");
@@ -121,7 +148,6 @@ mod tests {
         );
         for input in [
             "",
-            "rimz",
             "rimz-",
             "rimz-Lsp",
             "rimz-1x",

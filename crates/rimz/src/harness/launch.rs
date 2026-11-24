@@ -821,8 +821,9 @@ impl ExecRequest {
     /// less the rimz skills `hidden` because the launch registers the MCP
     /// tools of the same name.
     ///
-    /// On a request with a RimZ grant, a `skills` list names the user's own skills and the grant
-    /// names RimZ's, so the list's `rimz-*` names grant nothing and the granted names join it.
+    /// On a request with a RimZ grant, the grant names the skills of RimZ's MCP capabilities and
+    /// a `skills` list every other skill, so the list's capability names grant nothing and the
+    /// granted names join it.
     pub fn callable_skills(&self, hidden: &[&str]) -> Option<Vec<crate::config::SkillName>> {
         if self.no_skill_tool {
             return Some(Vec::new());
@@ -831,12 +832,13 @@ impl ExecRequest {
         self.skills.as_ref().map(|skills| {
             skills
                 .iter()
-                .filter(|skill| grant.is_none() || !is_rimz_name(skill.as_str()))
+                .filter(|skill| grant.is_none() || !is_capability_name(skill.as_str()))
                 .cloned()
                 .chain(
                     grant
                         .into_iter()
                         .flatten()
+                        .filter(|entry| entry.capability().is_some())
                         .filter_map(|entry| entry.name().parse().ok()),
                 )
                 .filter(|skill| !hidden.contains(&skill.as_str()))
@@ -844,10 +846,10 @@ impl ExecRequest {
         })
     }
 
-    /// Whether skill `name` is callable on this launch: under a RimZ grant a `rimz-*` skill is
-    /// callable only when the grant names it, and any other skill as the `skills` list says.
+    /// Whether skill `name` is callable on this launch: under a RimZ grant a capability's skill
+    /// is callable only when the grant names it, and any other skill as the `skills` list says.
     pub(super) fn skill_callable(&self, hidden: &[&str], name: &str) -> bool {
-        if self.rimz_capabilities.is_some() && is_rimz_name(name) {
+        if self.rimz_capabilities.is_some() && is_capability_name(name) {
             return !self.no_skill_tool && self.granted(name);
         }
         crate::config::skill_is_callable(self.callable_skills(hidden).as_deref(), name)
@@ -861,7 +863,7 @@ impl ExecRequest {
             .any(|entry| entry.name() == name)
     }
 
-    /// The request's RimZ grant, which each skill enforcer applies to the `rimz-*` skills it
+    /// The request's RimZ grant, which each skill enforcer applies to the capability skills it
     /// enumerates: a restriction the profile set, which a launch applies or refuses, never skips.
     pub(super) fn skill_grant(&self) -> Option<&[crate::config::RimzEntry]> {
         self.rimz_capabilities.as_deref()
@@ -906,7 +908,8 @@ impl ExecRequest {
         capabilities
     }
 
-    /// Each capability the grant, or else the `mcps` selection, serves, with its load mark.
+    /// Each capability the grant, or else the `mcps` selection, serves, with its load mark: its
+    /// own entry's, else the `rimz` entry's.
     pub(super) fn served_marks(
         &self,
     ) -> Vec<(
@@ -916,20 +919,24 @@ impl ExecRequest {
         let Some(grant) = &self.rimz_capabilities else {
             return crate::config::served_marks(self.mcps.as_deref());
         };
+        let server_mark = grant
+            .iter()
+            .find(|entry| entry.is_server())
+            .and_then(crate::config::RimzEntry::mode);
         crate::mcp::catalog::Capability::ALL
             .into_iter()
             .filter_map(|capability| {
                 let entry = grant
                     .iter()
                     .find(|entry| entry.capability() == Some(capability))?;
-                Some((capability, entry.mode()))
+                Some((capability, entry.mode().or(server_mark)))
             })
             .collect()
     }
 
     /// The `mcps` list a provider's MCP code reads. With no grant it is the profile's own.
     /// Under a grant it is the user's entries of `mcps` (`*` and their own servers), or `*`
-    /// when `mcps` is absent, then each granted capability with its mark.
+    /// when `mcps` is absent, then each granted capability and the `rimz` entry, with their marks.
     pub(super) fn mcp_list(&self) -> Option<std::borrow::Cow<'_, [crate::config::McpName]>> {
         let Some(grant) = &self.rimz_capabilities else {
             return self.mcps.as_deref().map(std::borrow::Cow::Borrowed);
@@ -946,7 +953,7 @@ impl ExecRequest {
         );
         let granted = grant
             .iter()
-            .filter(|entry| entry.capability().is_some())
+            .filter(|entry| entry.capability().is_some() || entry.is_server())
             .filter_map(|entry| entry.to_string().parse().ok());
         Some(std::borrow::Cow::Owned(
             own.into_iter().chain(granted).collect(),
@@ -954,22 +961,24 @@ impl ExecRequest {
     }
 
     /// The profile list handed to the provider, less the skills `withheld` from the model
-    /// (`LaunchReminders::withheld_skills`). Under a RimZ grant the list holds only the user's
-    /// own names: each enforcer admits the granted `rimz-*` skills it finds through
+    /// (`LaunchReminders::withheld_skills`). Under a RimZ grant the list holds no capability's
+    /// name: each enforcer admits the granted capability skills it finds through
     /// `ExecRequest::skill_grant`.
     pub(super) fn launch_skills(&self, withheld: &[&str]) -> Option<Vec<crate::config::SkillName>> {
         self.skills.as_ref().map(|skills| {
             skills
                 .iter()
-                .filter(|skill| self.rimz_capabilities.is_none() || !is_rimz_name(skill.as_str()))
+                .filter(|skill| {
+                    self.rimz_capabilities.is_none() || !is_capability_name(skill.as_str())
+                })
                 .filter(|skill| !withheld.contains(&skill.as_str()))
                 .cloned()
                 .collect()
         })
     }
 
-    /// The skills a provider's allow rules name: `listed` and each granted `rimz-*` name that
-    /// is not `withheld`.
+    /// The skills a provider's allow rules name: `listed` and each granted capability that is
+    /// not `withheld`.
     fn allowed_skills(
         &self,
         listed: &[crate::config::SkillName],
@@ -982,6 +991,7 @@ impl ExecRequest {
                 self.rimz_capabilities
                     .iter()
                     .flatten()
+                    .filter(|entry| entry.capability().is_some())
                     .filter(|entry| !withheld.contains(&entry.name()))
                     .filter_map(|entry| entry.name().parse().ok()),
             )
@@ -1043,9 +1053,10 @@ impl ExecRequest {
     }
 }
 
-/// A `rimz-*` name, which under a RimZ grant only the grant can make callable.
-fn is_rimz_name(name: &str) -> bool {
-    name.starts_with("rimz-")
+/// The name of a capability of RimZ's MCP server, whose skill under a RimZ grant only the grant
+/// can make callable.
+fn is_capability_name(name: &str) -> bool {
+    crate::mcp::catalog::Capability::from_name(name).is_some()
 }
 
 #[derive(Serialize, Deserialize)]

@@ -73,9 +73,12 @@ impl McpLaunch<'_> {
             .collect()
     }
 
-    /// The profile key `entry` came from: `capabilities` for a granted capability, else `mcps`.
+    /// The profile key `entry` came from: `capabilities` for a granted capability or `rimz`
+    /// (refused in `mcps` beside a grant), else `mcps`.
     pub(super) fn key(&self, entry: &crate::config::McpName) -> &'static str {
-        if self.granted && entry.capability().is_some() {
+        let from_grant =
+            entry.capability().is_some() || entry.name() == crate::mcp::catalog::SERVER_NAME;
+        if self.granted && from_grant {
             "capabilities"
         } else {
             "mcps"
