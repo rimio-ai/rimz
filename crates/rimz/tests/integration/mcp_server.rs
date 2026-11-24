@@ -1034,6 +1034,69 @@ fn a_closed_worktree_refusal_hints_in_the_called_tools_terms() {
     );
 }
 
+/// A pull request's worktree whose cohort has closed refuses a team seat or team launched with
+/// `from_pr`, and the hint names a retry the called tool accepts: `agent` cannot take `fresh`
+/// with `from_pr`, so its hint names the worktree, which then launches; `team` has no `fresh`.
+#[cfg(unix)]
+#[test]
+fn a_closed_pull_request_worktree_refusal_hints_a_retry_the_tool_accepts() {
+    use crate::common::git::{configure_github_origin_rewrite, publish_pr_ref};
+
+    let room = LayoutRoom::new();
+    publish_pr_ref(&room.env, "refs/pull/1/head");
+    configure_github_origin_rewrite(&room.env);
+    crate::common::write_path_shim(
+        &room.agent_bin,
+        "gh",
+        &format!("printf '%s\\n' '{}'", crate::common::gh_same_repo_head()),
+    );
+    let mut server = room.serve("parent-launch");
+    let call = json!({"profile": "solo.lead", "prompt": "p", "from_pr": "1"});
+    let (opened, is_error) = server.answer(1, "agent", call.clone());
+    assert!(!is_error, "{opened}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.team.as_deref() == Some("solo"))
+        .expect("the seat's launch row");
+    let mut process = room.register(seat, "terminal_3");
+    process.kill().unwrap();
+    process.wait().unwrap();
+    let (refused, is_error) = server.answer(2, "agent", call);
+    assert!(is_error, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("worktree `pr-1` "),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["hint"],
+        json!(
+            "to start a new session in this worktree, call again with `worktree` \"pr-1\" and `fresh` in place of `from_pr`"
+        ),
+        "{refused}"
+    );
+    let retry = json!({"profile": "solo.lead", "prompt": "p", "worktree": "pr-1", "fresh": true});
+    let (relaunched, is_error) = server.answer(3, "agent", retry);
+    assert!(!is_error, "{relaunched}");
+
+    let (refused, is_error) = server.answer(
+        4,
+        "team",
+        json!({"team": "solo", "prompt": "p", "from_pr": "1"}),
+    );
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["hint"],
+        json!(
+            "`team` cannot start a new session in this worktree; name a `worktree` in place of `from_pr` to launch outside the pull request"
+        ),
+        "{refused}"
+    );
+}
+
 /// A caller whose recorded checkout is in another repository gets the tools' cross-repository
 /// refusal from `agent` and `team`, worded for a tool caller, and no worktree appears in the
 /// room's repository.
