@@ -5254,7 +5254,7 @@ mod folder_trust {
             let mut args = args.iter().map(|arg| (*arg).to_owned()).collect();
             let mut artifact = None;
             AntigravityAdapter
-                .bridge_folder_trust_args(&self.env, (cwd, &self.root), &mut args, &mut artifact)
+                .bridge_saved_settings_args(&self.env, (cwd, &self.root), &mut args, &mut artifact)
                 .unwrap();
             assert!(artifact.is_none(), "an inline document stays inline");
             args

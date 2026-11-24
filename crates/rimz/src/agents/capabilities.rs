@@ -866,10 +866,10 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
-    /// Pass a launch directory the provider would prompt to trust, though its folder-trust
-    /// decision (`InstallationCapability::folder_trust`) already covers it, as session-only
-    /// trust in the launch's one settings document. The default leaves argv alone.
-    fn bridge_folder_trust_args(
+    /// Carry into the launch's one settings document what the login's saved settings hold and a
+    /// session document would replace or miss (such as inherited folder trust and saved allow
+    /// rules). The default leaves argv alone.
+    fn bridge_saved_settings_args(
         &self,
         _login_env: &BTreeMap<String, String>,
         _paths: (&Path, &Path),

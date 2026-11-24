@@ -739,7 +739,7 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         permissions::pin_modes(&ASK_SETTINGS, paths, extra_args, artifact)
     }
 
-    fn bridge_folder_trust_args(
+    fn bridge_saved_settings_args(
         &self,
         login_env: &BTreeMap<String, String>,
         paths: (&Path, &Path),

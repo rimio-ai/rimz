@@ -1433,7 +1433,7 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
-    adapter.bridge_folder_trust_args(
+    adapter.bridge_saved_settings_args(
         &skill_env,
         (cwd, artifact_dir),
         action.extra_args_mut(),

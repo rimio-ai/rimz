@@ -478,8 +478,8 @@ upward-dependencies = [
 # account_history_shareable, foreign_login, and decode_hook_in for the frame's login (+4).
 # MessageKeys and agents::message_keys give delivery and the budget park each agent's declared
 # key sequences, read by kind (+4).
-# bridge_folder_trust_args passes a launch directory trusted by inheritance into the launch's
-# settings document, for a provider that trusts only exact folders (+1).
+# bridge_saved_settings_args carries into the launch's one settings document what the login's
+# saved settings hold and a session document would replace or miss (+1).
 surface-budget = 1349
 
 [[module]]
