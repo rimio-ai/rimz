@@ -1479,6 +1479,12 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
+    adapter.bridge_folder_trust_args(
+        &skill_env,
+        (cwd, artifact_dir),
+        action.extra_args_mut(),
+        &mut settings_artifact,
+    )?;
     for run in reminders.notes_runs.iter().chain(&reminders.notes_store) {
         adapter.allow_team_notes_args(
             run,

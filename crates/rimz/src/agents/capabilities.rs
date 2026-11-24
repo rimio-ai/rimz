@@ -866,6 +866,19 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Pass a launch directory the provider would prompt to trust, though its folder-trust
+    /// decision (`InstallationCapability::folder_trust`) already covers it, as session-only
+    /// trust in the launch's one settings document. The default leaves argv alone.
+    fn bridge_folder_trust_args(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Switch off a provider sandbox that cannot nest under scoped isolation.
     /// Approval flags stay as the mode set them; other providers keep their sandbox.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}

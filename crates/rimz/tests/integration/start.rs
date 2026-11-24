@@ -1291,7 +1291,10 @@ fn start_warns_about_saved_untrusted_on_birth_and_reattach() {
         assert!(output.status.success(), "{stderr}");
         assert!(stderr.contains("saved untrusted"), "{stderr}");
         assert!(stderr.contains("Open restricted"), "{stderr}");
-        assert!(!stderr.contains("rimz trust grant --agents"), "{stderr}");
+        assert!(
+            !stderr.contains("rimz trust grant --agents codex"),
+            "{stderr}"
+        );
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     }
 }

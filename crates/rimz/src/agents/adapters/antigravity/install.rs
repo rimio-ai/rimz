@@ -24,7 +24,8 @@ use serde_json::{Map, Value, json};
 use crate::agents::{
     AgentErr, AgentSpec, HookInstallFilePreview, HookInstallPreview, HookInstallReport,
     HookPreflightErr, HookUninstallReport, ManagedIntegration, Result, ShippedMcpServer,
-    ShippedMcpState, agent_config_path, jsonc, provider_file, read_optional_file,
+    ShippedMcpState, agent_config_path, agent_config_path_in, jsonc, provider_file,
+    read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
@@ -92,17 +93,12 @@ impl AntigravityManagedIntegration {
         if let Some(paths) = &self.paths {
             return Ok(paths.clone());
         }
-        let hooks = hooks_path()?;
-        Ok(match super::session::mounted_view(login_env) {
-            Some((account, _)) => Paths {
-                hooks,
-                settings: account.join("settings.json"),
-                state: account.join("rimz-statusline.json"),
-            },
-            None => Paths {
-                hooks,
-                settings: settings_path()?,
-                state: crate::disk::paths::rimz_home().join("antigravity-statusline.json"),
+        Ok(Paths {
+            hooks: hooks_path()?,
+            settings: settings_path(login_env)?,
+            state: match super::session::mounted_view(login_env) {
+                Some((account, _)) => account.join("rimz-statusline.json"),
+                None => crate::disk::paths::rimz_home().join("antigravity-statusline.json"),
             },
         })
     }
@@ -281,11 +277,17 @@ pub(super) fn hooks_path() -> Result<PathBuf> {
     )
 }
 
-pub(super) fn settings_path() -> Result<PathBuf> {
-    agent_config_path(
+/// The login's `settings.json`: a named account's own, else the override or `HOME`'s, each
+/// read from the login env.
+pub(super) fn settings_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    if let Some((account, _)) = super::session::mounted_view(login_env) {
+        return Ok(account.join("settings.json"));
+    }
+    agent_config_path_in(
         AGENT,
         "RIMZ_ANTIGRAVITY_SETTINGS",
         Path::new(".gemini/antigravity-cli/settings.json"),
+        login_env,
     )
 }
 

@@ -458,6 +458,82 @@ fn folder_trust_status_grant_and_revoke_scope() {
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "[");
 }
 
+/// agy trusts only an exact `trustedWorkspaces` entry: a grant writes the project root to the
+/// account's saved list, and a launch from a folder below it carries that folder as
+/// session-only trust while the saved file stays as granted.
+#[cfg(unix)]
+#[test]
+fn antigravity_grant_saves_the_project_root_and_a_subfolder_launch_bridges_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::create_dir(env.project_root.join(".git")).unwrap();
+    std::fs::write(env.project_root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let root = env.project_root.canonicalize().unwrap();
+    let sub = root.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let bin = write_env_dump_shim(&env, "agy");
+    let settings = env.home_root.join(".gemini/antigravity-cli/settings.json");
+    let command = || {
+        let mut cmd = env.rimz();
+        cmd.env("PATH", path_with_front(&bin));
+        cmd
+    };
+    let state = || {
+        let output = command().args(["trust", "--json"]).output().unwrap();
+        assert!(output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == "antigravity")
+            .map(|row| row["state"].clone())
+    };
+    assert_eq!(state(), Some("undecided".into()));
+    command()
+        .args(["trust", "grant", "--agents", "antigravity"])
+        .assert()
+        .success();
+    let granted = std::fs::read_to_string(&settings).unwrap();
+    let saved: serde_json::Value = serde_json::from_str(&granted).unwrap();
+    assert_eq!(saved, serde_json::json!({"trustedWorkspaces": [root]}));
+    assert_eq!(state(), Some("decided".into()));
+
+    let dump = env.home_root.join("agy.env");
+    command()
+        .current_dir(&sub)
+        .env("RIMZ_PROJECT_ROOT", &env.project_root)
+        .env(
+            "RIMZ_WORKSPACE_ID",
+            rimz::WorkspaceId::from_project_root(&env.project_root).as_str(),
+        )
+        .args(fresh_exec(&env, "antigravity"))
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert_success_within_timeout("agy launch below a trusted project");
+    let dumped = std::fs::read_to_string(&dump).expect("read env dump");
+    let argv: Vec<&str> = dumped
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("ARGV_")
+                .and_then(|rest| rest.split_once('='))
+        })
+        .map(|(_, value)| value)
+        .collect();
+    let documents: Vec<serde_json::Value> = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--settings")
+        .map(|pair| serde_json::from_str(pair[1]).unwrap())
+        .collect();
+    assert_eq!(documents.len(), 1, "{dumped}");
+    assert_eq!(
+        documents[0]["trustedWorkspaces"],
+        serde_json::json!([root, sub]),
+        "{dumped}"
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), granted);
+}
+
 #[test]
 fn folder_trust_without_record_uses_the_trusted_project_account() {
     let env = Env::new();

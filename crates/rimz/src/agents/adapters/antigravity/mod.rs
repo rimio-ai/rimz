@@ -7,6 +7,7 @@
 //! `PostToolUse` matchers recover tool phase after execution instead.
 
 mod agent_file;
+mod folder_trust;
 mod install;
 mod payloads;
 mod permissions;
@@ -645,6 +646,15 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&install::MANAGED_INTEGRATION)
     }
+
+    fn folder_trust(
+        &self,
+        cwd: &Path,
+        repo_root: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<crate::agents::FolderTrust> {
+        Some(folder_trust::folder_trust(cwd, repo_root, login_env))
+    }
 }
 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
@@ -727,6 +737,16 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
         permissions::pin_modes(&ASK_SETTINGS, paths, extra_args, artifact)
+    }
+
+    fn bridge_folder_trust_args(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        folder_trust::bridge(login_env, paths, extra_args, artifact)
     }
 
     /// `--sandbox` confines agy's terminal commands to the workspace and added dirs, with no
