@@ -775,3 +775,145 @@ fn adopted_session_applies_model_mode_isolation_without_history_warning() {
     );
     assert!(plan.warnings.is_empty());
 }
+
+#[test]
+fn single_resume_resolves_agents_override_for_subagent_scope_and_refuses_cross_provider_model() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/advisor.md"),
+        "---\ndescription: Advisor\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]\n---\nAdvise.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let mut subagent_saved = AgentState {
+        name: Some("wise-owl".into()),
+        profile: Some("advisor".into()),
+        profile_scope: Some(ProfileScope::Subagents),
+        mode: Some(PermissionMode::Auto),
+        record: Some(Box::new(LaunchRecord {
+            model: Some("astra".into()),
+            effort: Some("high".into()),
+            agent: Some("astra".into()),
+            ..Default::default()
+        })),
+        ..agent("codex", "sub-saved", "/repo", 0)
+    };
+    let mut both_ctx = ctx(1, None, &machine.agents.profiles);
+    both_ctx.subagent_profiles = &machine.subagents.profiles;
+
+    let (plan, _) = plan_recorded_resume(
+        &subagent_saved,
+        both_ctx,
+        &SingleResumeOptions::default(),
+        |_| true,
+        |_| true,
+    );
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(
+        request
+            .identity
+            .params
+            .record
+            .as_ref()
+            .and_then(|r| r.agent.as_deref()),
+        Some("astra")
+    );
+    assert_eq!(request.identity.params.model.as_deref(), Some("astra"));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
+    let base_prompt = std::fs::read_to_string(
+        request
+            .system_prompt_file
+            .as_ref()
+            .expect("base prompt")
+            .origin(),
+    )
+    .unwrap();
+    assert!(base_prompt.contains("Codex house."), "{base_prompt}");
+    assert!(!base_prompt.contains("Claude house."), "{base_prompt}");
+    let appended: String = request
+        .append_system_prompt_files
+        .iter()
+        .map(|src| std::fs::read_to_string(src.origin()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(appended.contains("Advise."), "{appended}");
+
+    // Explicit resume with `--agent astra` (from agents table, subagent scope) and `--model opus`
+    // across providers must refuse with the exact cross-provider line.
+    subagent_saved.record = Some(Box::new(LaunchRecord {
+        model: Some("astra".into()),
+        ..Default::default()
+    }));
+    let (rejected, _) = plan_recorded_resume(
+        &subagent_saved,
+        both_ctx,
+        &SingleResumeOptions {
+            overrides: ResumeOverrides {
+                agent: Some("astra"),
+                preset: LaunchPreset {
+                    model: Some("opus".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        |_| true,
+        |_| true,
+    );
+    assert!(rejected.tabs.is_empty());
+    assert_eq!(rejected.skipped.len(), 1, "{:?}", rejected.skipped);
+    assert_eq!(
+        rejected.skipped[0].reason,
+        ResumeSkipReason::OverrideRejected(
+            "--agent astra runs on codex but --model opus runs on claude; choose the same family"
+                .into()
+        )
+    );
+
+    // Same cross-provider refusal on agents scope too (`--agent claude --model astra`).
+    let (rejected_agents, _) = single(
+        &saved(),
+        &machine.agents.profiles,
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                agent: Some("claude"),
+                preset: LaunchPreset {
+                    model: Some("astra".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert!(rejected_agents.tabs.is_empty());
+    assert_eq!(
+        rejected_agents.skipped[0].reason,
+        ResumeSkipReason::OverrideRejected(
+            "--agent claude runs on claude but --model astra runs on codex; choose the same family"
+                .into()
+        )
+    );
+}

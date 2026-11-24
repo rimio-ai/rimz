@@ -27,6 +27,7 @@ fn mini_relaunch_replays_each_name_source_and_current_definition() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         (
             posture.degraded.is_none(),
@@ -78,6 +79,7 @@ fn null_mode_resumes_default_with_or_without_records_profiles_and_degradation() 
                         stamped_tier: None,
                     },
                     &profiles("worker", profile(configured_kind)),
+                    None,
                 );
                 assert_eq!(
                     posture.degraded.is_some(),
@@ -154,6 +156,7 @@ fn recorded_agent_override_resolves_defaults_for_its_kind() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         actual.push((posture.degraded, posture.launch.mode, posture.launch.effort));
     }
@@ -227,6 +230,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
                 stamped_tier: Some(&stamp),
             },
             &profiles,
+            None,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
         assert_eq!(posture.launch.model, record.model);
@@ -246,6 +250,7 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
             stamped_tier: Some(&stamp),
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert_eq!(posture.launch.tier, Some(stamp));
@@ -264,6 +269,7 @@ fn relaunch_renders_code_mode_from_the_current_profile() {
                 stamped_tier: None,
             },
             &profiles("coder", profile),
+            None,
         )
     };
     let switch = ["--tools", "+codemode"];
@@ -327,6 +333,7 @@ fn recorded_fast_replays_over_the_current_profile() {
                 stamped_tier: None,
             },
             &profiles("coder", profile),
+            None,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
         posture.launch
@@ -395,6 +402,7 @@ fn pi_recorded_fast_replays_without_argv_or_warnings() {
             stamped_tier: None,
         },
         &profiles("worker", profile("pi")),
+        None,
     );
     let replayed = crate::agents::LaunchRecord::replay_or_new(
         posture.launch.record.as_deref(),
@@ -438,6 +446,7 @@ fn resume_posture_reresolves_the_native_auto_compact_count() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
         let cell = posture
@@ -479,6 +488,7 @@ fn resume_posture_records_auto_compact_without_refinalizing_argv() {
                     stamped_tier: None,
                 },
                 &profiles,
+                None,
             );
             assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
             let mut expected_args = Vec::new();
@@ -524,6 +534,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
         assert_eq!(
@@ -559,6 +570,7 @@ fn off_record_keeps_a_fast_switch_the_profile_writes_in_raw_args() {
                 stamped_tier: None,
             },
             &profiles("coder", profile),
+            None,
         );
         assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
         posture.launch
@@ -605,6 +617,7 @@ fn recorded_model_override_keeps_the_stamped_family_render() {
             stamped_tier: Some(&stamp),
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert!(posture.launch.args.iter().any(|arg| arg == "--search"));
@@ -628,6 +641,7 @@ fn recorded_provider_survives_a_cleared_tier() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert!(posture.launch.args.iter().any(|arg| arg == "--search"));
@@ -654,6 +668,7 @@ fn modelless_posture_in(profiles: &ProfilesConfig, effort: Option<&str>) -> Resu
             stamped_tier: None,
         },
         profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     posture.launch
@@ -762,6 +777,7 @@ fn record_without_model_ignores_a_model_the_role_gained() {
                 stamped_tier: None,
             },
             &table,
+            None,
             Some(&role),
             None,
         )
@@ -790,6 +806,7 @@ fn recorded_mode_beats_the_profile_default() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert_eq!(posture.launch.mode, Some(PermissionMode::Ask));
     assert!(
@@ -831,6 +848,7 @@ fn absent_record_effort_adopts_kind_default_and_replays_it() {
                     stamped_tier: None,
                 },
                 &profiles,
+                None,
             );
             assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
             assert_eq!(posture.launch.effort.as_deref(), Some("xhigh"));
@@ -868,6 +886,7 @@ fn absent_record_effort_canonicalizes_declared_and_raw_profile_args() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     let matcher = find_definition("claude")
@@ -909,6 +928,7 @@ fn absent_record_effort_preserves_raw_profile_args() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert!(posture.launch.effort.is_none());
@@ -949,6 +969,7 @@ fn recorded_base_replays_and_missing_base_degrades() {
                 stamped_tier: None,
             },
             profiles,
+            None,
         )
     };
     let posture = resolve(&profiles);
@@ -1021,6 +1042,7 @@ fn tier_stamped_model_clients_restart_without_degrading() {
                     stamped_tier: Some(&stamp),
                 },
                 &loaded.agent_profiles,
+                None,
             );
             (posture.degraded, posture.launch.model)
         })
@@ -1078,6 +1100,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
             stamped_tier: Some(&stamp),
         },
         &rebound.agent_profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     assert_eq!(posture.launch.model.as_deref(), Some(model));
@@ -1127,6 +1150,7 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
             stamped_tier: Some(&stamp),
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none());
     assert_eq!(posture.launch.model.as_deref(), Some("astra"));
@@ -1528,6 +1552,7 @@ fn unsupported_record_effort_replays_without_degrading() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert_eq!(posture.degraded, None);
     assert_eq!(posture.launch.effort, None);
@@ -1554,6 +1579,7 @@ fn unsupported_profile_effort_replays_without_degrading() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         assert_eq!(posture.degraded, None);
         assert_eq!(posture.launch.effort, None);
@@ -1591,6 +1617,7 @@ fn orchestrator_profile_effort_relaunches_without_effort() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         assert_eq!(posture.degraded, None);
         assert_eq!(posture.launch.effort, None);
@@ -1621,6 +1648,7 @@ fn invalid_record_effort_degrades_to_the_bare_posture() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert_eq!(
         posture,
@@ -1671,6 +1699,7 @@ fn stamped_resume_degrades_when_the_profile_loses_its_family_render() {
             stamped_tier: Some(&stamp),
         },
         &profiles,
+        None,
     );
     assert_eq!(
         posture.degraded,
@@ -1702,8 +1731,233 @@ fn a_pre_upgrade_alias_stamp_replays_the_recorded_model_over_its_kinds_base() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
         );
         assert!(posture.degraded.is_none(), "{name}: {:?}", posture.degraded);
         assert_eq!(posture.launch.model, record.model, "{name}");
     }
+}
+
+#[test]
+fn replay_rebuilds_tier_fallback_unversioned_model_and_team_seats_under_one_chain() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("teams")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base\n---\nAntigravity house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/tiered.md"),
+        "---\ndescription: Tiered worker\ntier: senior\neffort: high\ntools: [Read]\n---\nTiered craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/finder.md"),
+        "---\ndescription: Finder\nagent: codex\nmodel: sol\neffort: medium\ntools: [Read]\n---\nFind code.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("teams/squad.md"),
+        "---\nleader: lead\nstages: [Build]\nroles:\n  - role: lead\n    agent: finder\n    model: sol\n    effort: high\n    owns: [Build]\n---\nTeam body.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+
+    // 1. Tier fallback under X (`astra` on codex) that landed on claude (`opus`) replays on claude
+    //    without `KindChanged` degrade and keeps X's craft and claude's base prompt.
+    let fallback_record = crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+        agent: Some("astra".into()),
+        ..Default::default()
+    };
+    let fallback_stamp = crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: "opus".into(),
+        used_tier: None,
+        unbuildable: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let fallback_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&fallback_record),
+            profile: Some("tiered"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: Some(&fallback_stamp),
+        },
+        &machine.agents.profiles,
+        None,
+    );
+    assert!(
+        fallback_posture.degraded.is_none(),
+        "tier fallback under X must not degrade: {:?}",
+        fallback_posture.degraded
+    );
+    assert_eq!(fallback_posture.launch.model.as_deref(), Some("opus"));
+    assert_eq!(fallback_posture.launch.effort.as_deref(), Some("high"));
+    assert!(
+        fallback_posture
+            .launch
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/claude.md")),
+        "{:?}",
+        fallback_posture.launch.system_prompt_file
+    );
+
+    // 2. `--model neon` on an unversioned kind (`antigravity`, absent from the tier table) replays
+    //    on antigravity without `KindChanged` degrade and carries antigravity's base prompt.
+    let unversioned_record = crate::agents::LaunchRecord {
+        model: Some("neon".into()),
+        effort: Some("medium".into()),
+        agent: None,
+        ..Default::default()
+    };
+    let unversioned_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&unversioned_record),
+            profile: Some("finder"),
+            kind: &AgentKind::new_unchecked("antigravity"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &machine.agents.profiles,
+        None,
+    );
+    assert!(
+        unversioned_posture.degraded.is_none(),
+        "unversioned --model kind must not degrade: {:?}",
+        unversioned_posture.degraded
+    );
+    assert_eq!(unversioned_posture.launch.model.as_deref(), Some("neon"));
+    assert_eq!(unversioned_posture.launch.effort.as_deref(), Some("medium"));
+    assert!(
+        unversioned_posture
+            .launch
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/antigravity.md")),
+        "{:?}",
+        unversioned_posture.launch.system_prompt_file
+    );
+
+    // 3. Pre-change record with `agent: None` (bare kind consumed by old routing) still replays on
+    //    its recorded kind without degrading.
+    let legacy_record = crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+        agent: None,
+        ..Default::default()
+    };
+    let legacy_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&legacy_record),
+            profile: Some("tiered"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &machine.agents.profiles,
+        None,
+    );
+    assert!(
+        legacy_posture.degraded.is_none(),
+        "{:?}",
+        legacy_posture.degraded
+    );
+    assert_eq!(legacy_posture.launch.model.as_deref(), Some("opus"));
+
+    // 4. Team seat with role writing model `sol` and effort `high`, launched under `--agent astra`
+    //    (which writes model `astra`, effort `low`): replay keeps `astra` model (stripping role
+    //    model) and role's `high` effort — matching fresh launch.
+    let team_record = crate::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: None,
+        agent: Some("astra".into()),
+        ..Default::default()
+    };
+    let team_posture = resolve_member_posture(
+        PostureRequest {
+            record: Some(&team_record),
+            profile: Some("squad.lead"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &machine.agents.profiles,
+        None,
+        &machine.agents.teams,
+        Some("squad"),
+        Some("lead"),
+    );
+    assert!(
+        team_posture.degraded.is_none(),
+        "{:?}",
+        team_posture.degraded
+    );
+    assert_eq!(team_posture.launch.model.as_deref(), Some("astra"));
+    assert_eq!(team_posture.launch.effort.as_deref(), Some("high"));
+
+    // Same team seat replay for a TOML RoleBinding writing `model = "opus"` and `effort = "high"`,
+    // launched under `--agent codex` (bare kind, no model written) with recorded model `sol`:
+    // role's `opus` must be stripped so replay neither overwrites `sol` nor emits DroppedModel.
+    let mut toml_profiles: ProfilesConfig =
+        toml::from_str("[worker]\nagent = 'claude'\n[codex]\nagent = 'codex'\n").unwrap();
+    toml_profiles.0.get_mut("codex").unwrap().kind_base = true;
+    let toml_teams: TeamsConfig = toml::from_str(
+        "[squad]\nroles = [{ role = 'lead', profile = 'worker', model = 'opus', effort = 'high' }]",
+    )
+    .unwrap();
+    let toml_record = crate::agents::LaunchRecord {
+        model: Some("sol".into()),
+        effort: None,
+        agent: Some("codex".into()),
+        ..Default::default()
+    };
+    let toml_team_posture = resolve_member_posture(
+        PostureRequest {
+            record: Some(&toml_record),
+            profile: Some("worker"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &toml_profiles,
+        None,
+        &toml_teams,
+        Some("squad"),
+        Some("lead"),
+    );
+    assert!(
+        toml_team_posture.degraded.is_none(),
+        "{:?}",
+        toml_team_posture.degraded
+    );
+    assert_eq!(toml_team_posture.launch.model.as_deref(), Some("sol"));
+    assert_eq!(toml_team_posture.launch.effort.as_deref(), Some("high"));
+    assert!(
+        toml_team_posture.launch.notices.is_empty(),
+        "replaying a recorded model must not emit DroppedModel for stripped role model: {:?}",
+        toml_team_posture.launch.notices
+    );
 }

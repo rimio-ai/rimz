@@ -404,6 +404,7 @@ fn posture_for(
             stamped_tier: None,
         },
         profiles,
+        None,
     )
 }
 

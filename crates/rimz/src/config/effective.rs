@@ -989,12 +989,15 @@ impl LaunchAgents {
         profile: Option<&str>,
         record: Option<&crate::agents::LaunchRecord>,
         profiles: &ProfilesConfig,
+        fallback: Option<&ProfilesConfig>,
     ) -> Result<()> {
-        profile
-            .or_else(|| record.map(|_| kind.as_str()))
-            .into_iter()
-            .chain(record.and_then(|record| record.agent.as_deref()))
-            .try_for_each(|name| self.block_failed_profile(name, profiles))
+        if let Some(name) = profile.or_else(|| record.map(|_| kind.as_str())) {
+            self.block_failed_profile(name, profiles)?;
+        }
+        if let Some(agent) = record.and_then(|record| record.agent.as_deref()) {
+            self.block_failed_override(agent, profiles, fallback)?;
+        }
+        Ok(())
     }
 
     /// Refuse unresolved names whose Markdown definitions failed to load.

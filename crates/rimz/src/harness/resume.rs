@@ -475,21 +475,26 @@ pub struct PostureRequest<'a> {
 /// Recovery paths run unattended at room birth, so this never fails: a profile
 /// that is gone, broken, or now resolves to a different provider degrades to a
 /// bare resume carrying a warning.
-pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
+pub fn resolve_posture(
+    request: PostureRequest<'_>,
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+) -> ResumePosture {
     ResumePosture::degrade_to_bare(
         request,
-        resolve_posture_with_role(request, profiles, None, None),
+        resolve_posture_with_role(request, profiles, fallback, None, None),
     )
 }
 
 /// [`resolve_posture`] for a member's restart, molt, or explain: its recorded
-/// team's role layers its prompts and args, and the rebased cell receives the
+/// team's role layers its prompts and args, and the resolved cell receives the
 /// same team prompt layer as a fresh seat before prompt validation. A declared
 /// layer the seat cannot receive is reported for the caller to refuse. A team
 /// or role no longer configured resolves as a solo agent.
 pub fn resolve_member_posture(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
     teams: &TeamsConfig,
     team: Option<&str>,
     role: Option<&str>,
@@ -502,7 +507,7 @@ pub fn resolve_member_posture(
         .unzip();
     ResumePosture::degrade_to_bare(
         request,
-        resolve_posture_with_role(request, profiles, binding, team),
+        resolve_posture_with_role(request, profiles, fallback, binding, team),
     )
 }
 
@@ -519,6 +524,7 @@ fn member_binding<'a>(
 fn resolve_posture_with_role(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
     role: Option<&crate::config::RoleBinding>,
     team: Option<(&str, &crate::config::Team)>,
 ) -> Result<ResumeLaunchPosture, PostureDegrade> {
@@ -527,28 +533,42 @@ fn resolve_posture_with_role(
     }
     let name = request.profile.unwrap_or(request.kind.as_str());
     let mut profiles = std::borrow::Cow::Borrowed(profiles);
+    let base_name = request.record.and_then(|record| record.agent.as_deref());
     if (request.stamped_tier.is_some() || request.record.is_some())
-        && request
-            .record
-            .and_then(|record| record.agent.as_ref())
-            .is_none()
+        && base_name.is_none()
         && let Some(profile) = profiles.0.get(name)
     {
-        let rendered = profile.definition_renders.as_ref().and_then(|renders| {
-            renders.renders.get(request.kind.as_str()).map(|profile| {
-                let mut profile = profile.clone();
-                if let Some(stamp) = request.stamped_tier {
-                    profile.model = Some(stamp.model.clone());
-                    // A kind base keeps its own effort; under a definition the kind base and
-                    // then the built-in default fill what the definition leaves unwritten.
-                    if !profile.kind_base {
-                        profile.effort = renders.effort.clone();
+        let rendered = profile
+            .definition_renders
+            .as_ref()
+            .and_then(|renders| {
+                renders.renders.get(request.kind.as_str()).map(|profile| {
+                    let mut profile = profile.clone();
+                    if let Some(stamp) = request.stamped_tier {
+                        profile.model = Some(stamp.model.clone());
+                        // A kind base keeps its own effort; under a definition the kind base and
+                        // then the built-in default fill what the definition leaves unwritten.
+                        if !profile.kind_base {
+                            profile.effort = renders.effort.clone();
+                        }
+                        profile.tier_stamp = Some(Box::new(stamp.clone()));
                     }
-                    profile.tier_stamp = Some(Box::new(stamp.clone()));
-                }
-                profile
+                    profile
+                })
             })
-        });
+            .or_else(|| {
+                if profile.definition.is_none() || profile.agent == request.kind.as_str() {
+                    return None;
+                }
+                let mut built = profile
+                    .build_under(None, Some(request.kind.as_str()), None)?
+                    .ok()?;
+                if let Some(stamp) = request.stamped_tier {
+                    built.model = Some(stamp.model.clone());
+                    built.tier_stamp = Some(Box::new(stamp.clone()));
+                }
+                Some(built)
+            });
         // Without a stamp the record's model is the launch's, none included: a
         // render's Intern model, or a model the profile or any layer it
         // resolves onto gained since, would move the agent and the effort
@@ -579,25 +599,39 @@ fn resolve_posture_with_role(
             });
         }
     }
-    let base_name = request.record.and_then(|record| record.agent.as_deref());
-    // The role is the last layer over the profile, so it loses its model
-    // where the table's layers do; a `--model` in its raw `args` stays too.
+    // The role is the last layer over the profile, so it loses its model when
+    // a launch record decides the model (with or without a recorded `--agent`);
+    // a `--model` in its raw `args` stays too.
     let modelless_role = role
         .filter(|_| {
-            request.stamped_tier.is_none() && request.record.is_some() && base_name.is_none()
+            request.record.is_some() && (request.stamped_tier.is_none() || base_name.is_some())
         })
         .map(|role| crate::config::RoleBinding {
             model: None,
             ..role.clone()
         });
     let role = modelless_role.as_ref().or(role);
-    let resolved = crate::harness::spec::resolve_agent_override(base_name, &profiles, None)
+    let resolved = crate::harness::spec::resolve_agent_override(base_name, &profiles, fallback)
         .and_then(|base| {
-            crate::harness::spec::profile_cell_with_base_override(
+            let replay = if base.is_some() {
+                crate::harness::spec::ReplayOptions {
+                    target_kind: Some(request.kind.as_str()),
+                    recorded_model: request
+                        .stamped_tier
+                        .is_none()
+                        .then(|| request.record.and_then(|record| record.model.as_deref())),
+                    stamped_tier: request.stamped_tier,
+                }
+            } else {
+                crate::harness::spec::ReplayOptions::default()
+            };
+            crate::harness::spec::profile_cell_for_replay(
                 name,
                 &profiles,
+                fallback,
                 base.as_ref(),
                 role,
+                replay,
             )
         });
     let mut cell = match resolved {
@@ -2233,6 +2267,7 @@ fn plan_team_restore_tabs(
             &mut layout,
             &cohort.seeds,
             profiles,
+            None,
             &ResumeOverrides {
                 team: teams.0.get(&team),
                 ..Default::default()
@@ -2512,16 +2547,23 @@ impl SplitMemberRestore<'_> {
         candidate: &ResumeCandidate,
         request: PostureRequest<'_>,
         profiles: &ProfilesConfig,
+        fallback: Option<&ProfilesConfig>,
     ) -> (ResumePosture, Option<SplitMemberWarning>) {
         let identity = &candidate.identity;
         let Some((name, role)) = identity.team.as_deref().zip(identity.role.as_deref()) else {
-            return (resolve_posture(request, profiles), None);
+            return (resolve_posture(request, profiles, fallback), None);
         };
         let Some((team, binding)) = member_binding(&self.restore.teams, name, role) else {
             let warning = self.warning(identity, name, self.unbound_cause(name, role));
-            return (resolve_posture(request, profiles), Some(warning));
+            return (resolve_posture(request, profiles, fallback), Some(warning));
         };
-        match resolve_posture_with_role(request, profiles, Some(binding), Some((name, team))) {
+        match resolve_posture_with_role(
+            request,
+            profiles,
+            fallback,
+            Some(binding),
+            Some((name, team)),
+        ) {
             Ok(launch) => (
                 ResumePosture {
                     launch,
@@ -2530,7 +2572,7 @@ impl SplitMemberRestore<'_> {
                 None,
             ),
             Err(reason) => {
-                let solo = resolve_posture(request, profiles);
+                let solo = resolve_posture(request, profiles, fallback);
                 // A solo posture that degrades too warns for itself, and a team
                 // notice would only repeat the broken profile.
                 let warning = solo
@@ -2647,12 +2689,13 @@ fn plan_resume_candidates_detailed(
             continue;
         }
         // Resume plans root sessions only, so no candidate is a launched child.
-        let (_, profiles) = ProfileScope::for_launch(candidate.identity.profile_scope, false)
+        let (scope, profiles) = ProfileScope::for_launch(candidate.identity.profile_scope, false)
             .resolve_launch(
                 candidate.identity.profile.as_deref(),
                 ctx.profiles,
                 ctx.subagent_profiles,
             );
+        let fallback = (scope == ProfileScope::Subagents).then_some(ctx.profiles);
         // The pane runs the supervised exec wrapper, not the agent CLI
         // directly: every agent launch funnels through `rimz agents exec`,
         // which replays the durable launch identity, applies trusted
@@ -2666,11 +2709,11 @@ fn plan_resume_candidates_detailed(
             stamped_tier: candidate.identity.tier.as_deref(),
         };
         let (mut posture, member_warning) = if let Some(split) = &split {
-            split.posture(&candidate, request, profiles)
+            split.posture(&candidate, request, profiles, fallback)
         } else if single.is_some_and(|options| options.overrides.agent.is_some()) {
             (ResumePosture::default(), None)
         } else {
-            (resolve_posture(request, profiles), None)
+            (resolve_posture(request, profiles, fallback), None)
         };
         let mut launch_warnings = Vec::new();
         if let Some(options) = single {
@@ -2688,6 +2731,7 @@ fn plan_resume_candidates_detailed(
                     &mut cell,
                     request,
                     profiles,
+                    fallback,
                     overrides,
                     Some(posture.launch),
                     true,
@@ -3160,7 +3204,7 @@ fn fresh_cohort_plan(
 }
 
 /// Overrides applied after durable posture replay, before stamping the next
-/// launch record; `agent` replaces that replay with the rebased profile.
+/// launch record; `agent` replaces that replay with the overridden chain.
 #[derive(Default)]
 pub struct ResumeOverrides<'a> {
     pub team: Option<&'a crate::config::Team>,
@@ -3182,6 +3226,7 @@ pub fn restore_routed_cells(
     layout: &mut LayoutSpec,
     seeds: &[CohortSeed],
     profiles: &ProfilesConfig,
+    subagent_profiles: Option<&ProfilesConfig>,
     overrides: &ResumeOverrides<'_>,
 ) -> Result<Vec<crate::harness::plan::LaunchFinalizeWarning>, PostureDegrade> {
     let mut warnings = Vec::new();
@@ -3189,6 +3234,19 @@ pub fn restore_routed_cells(
         let (kind, profile) = match seed {
             CohortSeed::Resume(agent) => (agent.kind.clone(), agent.profile.clone()),
             CohortSeed::Fresh => (cell.kind.clone(), cell.launch.profile.clone()),
+        };
+        let (own_profiles, fallback) = match seed {
+            CohortSeed::Resume(agent) => {
+                let scope =
+                    ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
+                let (resolved_scope, own) = match subagent_profiles {
+                    Some(sub) => scope.resolve_launch(profile.as_deref(), profiles, sub),
+                    None => (ProfileScope::Agents, profiles),
+                };
+                let fallback = (resolved_scope == ProfileScope::Subagents).then_some(profiles);
+                (own, fallback)
+            }
+            CohortSeed::Fresh => (profiles, None),
         };
         let request = match seed {
             CohortSeed::Resume(agent) => PostureRequest {
@@ -3209,7 +3267,8 @@ pub fn restore_routed_cells(
         warnings.extend(restore_resume_cell(
             cell,
             request,
-            profiles,
+            own_profiles,
+            fallback,
             overrides,
             None,
             matches!(seed, CohortSeed::Resume(_)),
@@ -3222,6 +3281,7 @@ fn restore_resume_cell(
     cell: &mut crate::harness::spec::AgentCell,
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
     overrides: &ResumeOverrides<'_>,
     replayed: Option<ResumeLaunchPosture>,
     is_resume: bool,
@@ -3237,19 +3297,34 @@ fn restore_resume_cell(
     });
     // Legacy unstamped members retain the resolved layout, including role prompt layers.
     let mut posture = if let Some(base_name) = overrides.agent {
-        let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles, None)
-            .map_err(|err| error(err.to_string()))?;
-        let rebased = crate::harness::spec::profile_cell_with_base_override(
+        let base =
+            crate::harness::spec::resolve_agent_override(Some(base_name), profiles, fallback)
+                .map_err(|err| error(err.to_string()))?;
+        if let Some(base_override) = &base
+            && let Some(model) = preset
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+        {
+            crate::harness::spec::check_agent_model_family(
+                base_override.name.as_str(),
+                base_override.resolved.kind.as_str(),
+                model,
+            )
+            .map_err(error)?;
+        }
+        let overridden = crate::harness::spec::profile_cell_with_base_override(
             profile.unwrap_or(kind.as_str()),
             profiles,
             base.as_ref(),
             role,
         )
         .map_err(|err| error(err.to_string()))?;
-        if rebased.kind != kind {
+        if overridden.kind != kind {
             return Err(error(format!(
                 "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
-                rebased.kind
+                overridden.kind
             )));
         }
         ResumeLaunchPosture {
@@ -3257,19 +3332,19 @@ fn restore_resume_cell(
                 .as_ref()
                 .and_then(|base| base.resolved.launch.mode)
                 .or(request.stamped_mode)
-                .or(rebased.launch.mode),
+                .or(overridden.launch.mode),
             record: Some(Box::new(crate::agents::LaunchRecord {
-                model: rebased.launch.model.clone(),
-                effort: rebased.launch.effort.clone(),
+                model: overridden.launch.model.clone(),
+                effort: overridden.launch.effort.clone(),
                 agent: Some(base_name.to_owned()),
-                fast: rebased.launch.fast,
+                fast: overridden.launch.fast,
                 auto_compact: None,
                 notes: request.record.and_then(|record| record.notes.clone()),
                 loop_section: request
                     .record
                     .and_then(|record| record.loop_section.clone()),
             })),
-            ..ResumeLaunchPosture::from(&rebased)
+            ..ResumeLaunchPosture::from(&overridden)
         }
     } else if let Some(replayed) = replayed {
         replayed
@@ -3280,6 +3355,7 @@ fn restore_resume_cell(
                 ..request
             },
             profiles,
+            fallback,
             role,
             None,
         )?

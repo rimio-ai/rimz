@@ -206,6 +206,7 @@ fn restart_cell_carries_the_current_postures_auto_compact_count() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
     let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
@@ -757,6 +758,105 @@ fn restart_posture_refuses_failed_kind_chains_before_degrading() {
     assert_eq!(
         Vec::from(actual),
         vec![machine.definition_failure_for("claude"); 5]
+    );
+}
+
+#[test]
+fn restart_posture_resolves_subagent_recorded_override_from_agents_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("rimz-home");
+    std::fs::create_dir_all(home.join("agents")).unwrap();
+    std::fs::create_dir_all(home.join("subagents")).unwrap();
+    std::fs::write(
+        home.join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("subagents/advisor.md"),
+        "---\ndescription: Advisor\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]\n---\nAdvise.\n",
+    )
+    .unwrap();
+    let workspace = crate::WorkspaceResolver::resolve_under(dir.path(), None, &home).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.join("config.toml"), "", &home).unwrap();
+
+    let mut child = crate::testkit::agent_state("codex", "child", jiff::Timestamp::UNIX_EPOCH);
+    child.profile = Some("advisor".into());
+    child.parent_agent_id = Some("parent".into());
+    child.parent_agent_kind = Some(crate::ids::AgentKind::new_unchecked("claude"));
+    child.launch_depth = Some(1);
+    child.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: Some("high".into()),
+        agent: Some("astra".into()),
+        ..Default::default()
+    }));
+    let mut forked = child.clone();
+    forked.parent_agent_id = None;
+    forked.parent_agent_kind = None;
+    forked.launch_depth = None;
+    forked.profile_scope = Some(ProfileScope::Subagents);
+
+    for agent in [&child, &forked] {
+        let (posture, warning) = restart_posture(agent, &workspace, &machine).unwrap();
+        assert!(warning.is_none(), "{warning:?}");
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        assert_eq!(posture.launch.model.as_deref(), Some("astra"));
+        assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+        assert!(
+            posture
+                .launch
+                .system_prompt_file
+                .as_ref()
+                .is_some_and(|src| src.origin().ends_with("agents/codex.md")),
+            "{:?}",
+            posture.launch.system_prompt_file
+        );
+        assert!(
+            posture
+                .launch
+                .append_system_prompt_files
+                .iter()
+                .any(|src| src.origin().ends_with("subagents/advisor.md")),
+            "{:?}",
+            posture.launch.append_system_prompt_files
+        );
+    }
+
+    // A recorded agents-table override whose kind base failed must refuse before degrading.
+    let bad_dir = tempfile::tempdir().unwrap();
+    let bad_home = bad_dir.path().join("rimz-home");
+    std::fs::create_dir_all(bad_home.join("agents")).unwrap();
+    std::fs::write(bad_home.join("agents/codex.md"), "invalid frontmatter").unwrap();
+    let bad_ws = crate::WorkspaceResolver::resolve_under(bad_dir.path(), None, &bad_home).unwrap();
+    let mut bad_machine =
+        crate::config::MachineConfig::parse_text(&bad_home.join("config.toml"), "", &bad_home)
+            .unwrap();
+    bad_machine.subagents.profiles.0.insert(
+        "advisor".into(),
+        toml::from_str("agent = 'claude'").unwrap(),
+    );
+    bad_machine
+        .agents
+        .profiles
+        .0
+        .insert("astra".into(), toml::from_str("agent = 'codex'").unwrap());
+    let err = restart_posture(&child, &bad_ws, &bad_machine)
+        .expect_err("failed kind base on agents override must refuse");
+    assert_eq!(
+        Some(err.to_string()),
+        bad_machine.definition_failure_for("codex")
     );
 }
 

@@ -138,6 +138,7 @@ fn recordless_resume_attach_preserves_mode_and_profile_replay() {
             stamped_tier: row.tier.as_deref(),
         },
         &profiles,
+        None,
     );
     assert!(posture.degraded.is_none());
     assert_eq!(posture.launch.model.as_deref(), Some("sonnet"));

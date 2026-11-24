@@ -205,6 +205,92 @@ fn fork_posture_resolves_a_launched_child_in_the_subagent_table() {
 }
 
 #[test]
+fn fork_posture_resolves_subagent_recorded_override_from_agents_table() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+    std::fs::create_dir_all(dir.path().join("subagents")).unwrap();
+    std::fs::write(
+        dir.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("subagents/advisor.md"),
+        "---\ndescription: Advisor\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]\n---\nAdvise.\n",
+    )
+    .unwrap();
+    let machine =
+        rimz::config::MachineConfig::parse_text(&dir.path().join("config.toml"), "", dir.path())
+            .unwrap();
+    let effective =
+        rimz::config::effective::load_with_roots(&machine, dir.path(), &dir.path().join("home"))
+            .unwrap();
+    let mut child = seed("codex", Some("advisor"), None);
+    child.launch.profile_scope = Some(ProfileScope::Subagents);
+    child.launch.record = Some(Box::new(rimz::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: Some("high".into()),
+        agent: Some("astra".into()),
+        ..Default::default()
+    }));
+
+    let posture = super::fork_posture(&child, &effective).unwrap();
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert_eq!(posture.launch.model.as_deref(), Some("astra"));
+    assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+    assert!(
+        posture
+            .launch
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/codex.md")),
+        "{:?}",
+        posture.launch.system_prompt_file
+    );
+    assert!(
+        posture
+            .launch
+            .append_system_prompt_files
+            .iter()
+            .any(|src| src.origin().ends_with("subagents/advisor.md")),
+        "{:?}",
+        posture.launch.append_system_prompt_files
+    );
+
+    // Failed kind base reached through the agents-table override must refuse too.
+    let bad = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(bad.path().join("agents")).unwrap();
+    std::fs::write(bad.path().join("agents/codex.md"), "invalid frontmatter").unwrap();
+    let mut bad_machine =
+        rimz::config::MachineConfig::parse_text(&bad.path().join("config.toml"), "", bad.path())
+            .unwrap();
+    bad_machine.subagents.profiles = profiles("advisor", profile("claude"));
+    bad_machine.agents.profiles = profiles("astra", profile("codex"));
+    let bad_effective = rimz::config::effective::load_with_roots(
+        &bad_machine,
+        bad.path(),
+        &bad.path().join("home"),
+    )
+    .unwrap();
+    let err = super::fork_posture(&child, &bad_effective)
+        .expect_err("failed kind base on agents override must refuse");
+    assert_eq!(
+        Some(err.to_string()),
+        bad_machine.definition_failure_for("codex")
+    );
+}
+
+#[test]
 fn fork_posture_refuses_provider_change() {
     let profiles = profiles("planner", profile("codex"));
 

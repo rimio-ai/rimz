@@ -511,23 +511,26 @@ fn definition_failure(
     let Some(effective) = effective else {
         return machine.definition_failure_for(profile?);
     };
-    let refusal = |profiles: &crate::config::ProfilesConfig| {
+    let refusal = |profiles: &crate::config::ProfilesConfig,
+                   fallback: Option<&crate::config::ProfilesConfig>| {
         effective
             .block_failed_launch(
                 &request.kind,
                 profile,
                 request.identity.params.record.as_deref(),
                 profiles,
+                fallback,
             )
             .err()
     };
     let scope = ProfileScope::for_launch(request.identity.params.profile_scope, request.subagent);
-    let error = refusal(effective.profiles_for_launch(scope, profile))?;
+    let fallback = (scope == ProfileScope::Subagents).then_some(&effective.profiles);
+    let error = refusal(effective.profiles_for_launch(scope, profile), fallback)?;
     let maybe_seat = request.subagent
         && request.identity.params.role.is_some()
         && profile.is_some_and(|name| effective.profiles.0.contains_key(name));
     if maybe_seat {
-        refusal(&effective.profiles)?;
+        refusal(&effective.profiles, None)?;
     }
     Some(error.to_string())
 }

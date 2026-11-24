@@ -286,6 +286,7 @@ fn team_restore_warns_when_a_recorded_seat_profile_is_gone() {
             stamped_tier: planner.tier.as_deref(),
         },
         &profiles,
+        None,
     )
     .degraded
     .unwrap()
@@ -468,6 +469,7 @@ fn member_posture_keeps_role_layers_for_a_restart() {
     let posture = resolve_member_posture(
         request,
         &profiles,
+        None,
         &teams,
         planner.team.as_deref(),
         planner.role.as_deref(),
@@ -481,7 +483,7 @@ fn member_posture_keeps_role_layers_for_a_restart() {
     assert_eq!(posture.launch.system_prompt_file, expected);
     assert_eq!(posture.launch.model.as_deref(), Some("opus"));
 
-    let roleless = resolve_member_posture(request, &profiles, &teams, None, None);
+    let roleless = resolve_member_posture(request, &profiles, None, &teams, None, None);
     assert!(!roleless.launch.args.contains(&"--verbose".into()));
     assert_eq!(roleless.launch.system_prompt_file, None);
 }
@@ -556,8 +558,14 @@ fn member_posture_carries_the_fresh_team_prompt_layer() {
             stamped_mode: None,
             stamped_tier: None,
         };
-        let posture =
-            resolve_member_posture(request, &profiles, &teams, Some("forge"), Some("planner"));
+        let posture = resolve_member_posture(
+            request,
+            &profiles,
+            None,
+            &teams,
+            Some("forge"),
+            Some("planner"),
+        );
         actual.push((posture.degraded, posture.launch.team_prompt));
         expected.push((None, layer.clone()));
 
@@ -566,8 +574,14 @@ fn member_posture_carries_the_fresh_team_prompt_layer() {
         team.roles
             .push(toml::from_str("role = 'broken'\nprofile = 'deleted'").unwrap());
         team.scratch_files = Some(vec!["../invalid".into()]);
-        let posture =
-            resolve_member_posture(request, &profiles, &teams, Some("forge"), Some("planner"));
+        let posture = resolve_member_posture(
+            request,
+            &profiles,
+            None,
+            &teams,
+            Some("forge"),
+            Some("planner"),
+        );
         actual.push((posture.degraded, posture.launch.team_prompt));
         expected.push((None, layer));
     }
@@ -606,6 +620,7 @@ fn member_posture_rebases_into_the_fresh_team_prompt_layer() {
             stamped_tier: None,
         },
         &profiles,
+        None,
         &teams,
         Some("forge"),
         Some("planner"),
@@ -645,6 +660,7 @@ fn member_posture_omits_inapplicable_team_layers() {
         let posture = resolve_member_posture(
             request,
             &profiles,
+            None,
             &teams,
             (case != "solo").then_some(if case == "deleted-team" {
                 "deleted"
@@ -658,7 +674,7 @@ fn member_posture_omits_inapplicable_team_layers() {
             }),
         );
         if case == "solo" {
-            assert_eq!(posture, resolve_posture(request, &profiles));
+            assert_eq!(posture, resolve_posture(request, &profiles, None));
         }
         actual.push((posture.degraded, posture.launch.team_prompt));
     }
@@ -693,6 +709,7 @@ fn member_posture_rejects_undeliverable_team_layers() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
             &teams,
             Some("forge"),
             Some("planner"),
@@ -753,6 +770,7 @@ fn member_posture_degrades_when_team_prompt_files_are_missing() {
                 stamped_tier: None,
             },
             &profiles,
+            None,
             &teams,
             Some("forge"),
             Some("planner"),
@@ -799,6 +817,7 @@ fn check_replacement_base(saved_base: Option<&str>) {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent))],
         &profiles,
+        None,
         &ResumeOverrides {
             agent: Some("reviewer"),
             ..Default::default()
@@ -845,7 +864,8 @@ fn legacy_cohort_resume_preserves_the_resolved_team_prompts() {
         } else {
             CohortSeed::Resume(Box::new(agent))
         }];
-        let result = restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default());
+        let result =
+            restore_routed_cells(&mut layout, &seeds, &profiles, None, &Default::default());
         result.unwrap();
         let cell = layout.agent_cells().next().unwrap();
         assert_eq!(cell.system_prompt_file, base);
@@ -907,6 +927,7 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
             &mut layout,
             &seeds,
             &profiles,
+            None,
             &ResumeOverrides {
                 preset: crate::agents::LaunchPreset {
                     model: override_model
@@ -1018,7 +1039,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
     ));
     let mut seeds = vec![CohortSeed::Resume(Box::new(agent))];
-    restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default()).unwrap();
+    restore_routed_cells(&mut layout, &seeds, &profiles, None, &Default::default()).unwrap();
     assert_eq!(
         layout.agent_cells().next().unwrap().launch.model.as_deref(),
         Some("opus[1m]")
@@ -1031,7 +1052,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
         },
         ..Default::default()
     };
-    restore_routed_cells(&mut layout, &seeds, &profiles, &overrides).unwrap();
+    restore_routed_cells(&mut layout, &seeds, &profiles, None, &overrides).unwrap();
     let cell = layout.agent_cells().next().unwrap();
     let record = cell.launch.record.as_ref().unwrap();
     assert_eq!(record.model.as_deref(), Some("sonnet"));
@@ -1048,7 +1069,7 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
                 crate::harness::spec::profile_cell(name, &profiles).unwrap(),
             ));
     }
-    restore_routed_cells(&mut layout, &seeds, &profiles, &overrides).unwrap();
+    restore_routed_cells(&mut layout, &seeds, &profiles, None, &overrides).unwrap();
     for cell in layout.agent_cells() {
         let record = cell.launch.record.as_ref().unwrap();
         assert_eq!(record.model.as_deref(), Some("sonnet"));
@@ -1071,7 +1092,7 @@ fn absent_record_effort_reaches_the_cohort_exec_request() {
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
     ));
     let seeds = [CohortSeed::Resume(Box::new(agent))];
-    restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default()).unwrap();
+    restore_routed_cells(&mut layout, &seeds, &profiles, None, &Default::default()).unwrap();
     let root = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
@@ -1153,6 +1174,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                     &mut layout,
                     &seeds,
                     &profiles,
+                    None,
                     &ResumeOverrides {
                         agent: base,
                         tier,
@@ -1228,6 +1250,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                         record: Some(record),
                     },
                     &profiles,
+                    None,
                 );
                 assert!(reopened.degraded.is_none());
                 assert_eq!(reopened.launch.record.as_ref().unwrap().agent, record.agent);
@@ -1258,6 +1281,7 @@ fn mini_cohort_restore_replays_and_can_drop_the_variant() {
             &mut layout,
             &seeds,
             &profiles,
+            None,
             &ResumeOverrides {
                 agent: base,
                 ..Default::default()
@@ -1298,6 +1322,7 @@ fn resume_agent_override_requires_same_kind_and_records_base() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             agent: Some("reviewer"),
             ..Default::default()
@@ -1315,6 +1340,7 @@ fn resume_agent_override_requires_same_kind_and_records_base() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             agent: Some("coder"),
             ..Default::default()
@@ -1339,6 +1365,7 @@ fn resume_agent_override_requires_same_kind_and_records_base() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             agent: Some("reviewer"),
             ..Default::default()
@@ -1372,6 +1399,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             tier: Some((ModelTier::Junior, &tiers)),
             ..Default::default()
@@ -1388,6 +1416,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             tier: Some((ModelTier::Principal, &tiers)),
             ..Default::default()
@@ -1416,6 +1445,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &mut layout,
         &seeds,
         &profiles,
+        None,
         &ResumeOverrides {
             tier: Some((ModelTier::Principal, &tiers)),
             ..Default::default()
@@ -1440,6 +1470,7 @@ fn unavailable_resume_tier_keeps_the_requested_row() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent))],
         &profiles,
+        None,
         &ResumeOverrides {
             tier: Some((ModelTier::Junior, &tiers)),
             unavailable: Some(&|_, _| Some(crate::agents::TierSkipReason::LoggedOut)),
@@ -1875,6 +1906,7 @@ fn stamped_cohort_resume_reapplies_explicit_model_and_effort() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent))],
         &profiles,
+        None,
         &ResumeOverrides {
             preset,
             ..Default::default()
@@ -1925,6 +1957,7 @@ fn stamped_cohort_resume_replays_and_rewrites_fast() {
             &mut layout,
             &[CohortSeed::Resume(Box::new(agent))],
             &profiles,
+            None,
             &ResumeOverrides {
                 preset: crate::agents::LaunchPreset {
                     fast: flag,
@@ -3312,6 +3345,7 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent))],
         &profiles,
+        None,
         &ResumeOverrides {
             permission_mode: Some(PermissionMode::Plan),
             preset: crate::agents::LaunchPreset {
@@ -3355,6 +3389,7 @@ fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
             &mut layout,
             &[CohortSeed::Resume(Box::new(agent))],
             &profiles,
+            None,
             &ResumeOverrides {
                 agent: Some("base"),
                 ..Default::default()
@@ -3415,6 +3450,7 @@ fn agent_override_mode_precedence_and_refusals() {
             &mut layout,
             &[seed],
             &profiles,
+            None,
             &ResumeOverrides {
                 agent: Some(base),
                 ..Default::default()
@@ -3531,6 +3567,7 @@ fn tier_stamped_legacy_seat_keeps_the_layout_mode() {
             &mut layout,
             &[CohortSeed::Resume(Box::new(agent))],
             &profiles,
+            None,
             &Default::default(),
         )
         .unwrap();
@@ -3585,6 +3622,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
                 stamped_tier: seat.tier.as_deref(),
             },
             &profiles,
+            None,
         )
         .degraded
         .expect(label);
@@ -3601,6 +3639,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
             &mut layout,
             &[CohortSeed::Fresh, CohortSeed::Resume(Box::new(seat))],
             &profiles,
+            None,
             &Default::default(),
         );
         assert_eq!(result, Err(reason), "{label}");
@@ -3653,6 +3692,7 @@ fn invalid_record_effort_refuses_its_cohort_restore() {
             stamped_tier: None,
         },
         &profiles,
+        None,
     )
     .degraded
     .unwrap();
@@ -3663,6 +3703,7 @@ fn invalid_record_effort_refuses_its_cohort_restore() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(seat))],
         &profiles,
+        None,
         &Default::default(),
     );
     assert_eq!(result, Err(reason));
@@ -3696,6 +3737,7 @@ fn resumed_and_fresh_seats_record_their_postures_auto_compact_count() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent)), CohortSeed::Fresh],
         &profiles,
+        None,
         &Default::default(),
     )
     .unwrap();
@@ -3746,4 +3788,104 @@ fn a_failed_bound_replacement_hides_the_session_it_replaced_from_cohorts() {
         ),
         CohortRelaunchState::Absent
     ));
+}
+
+#[test]
+fn cohort_continue_resolves_subagent_override_and_refuses_cross_provider_model() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\ntools: [Bash, Read]\n---\nAstra craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("subagents/advisor.md"),
+        "---\ndescription: Advisor\nagent: claude\nmodel: opus\neffort: high\ntools: [Read]\n---\nAdvise.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+
+    // 1. Cohort `--continue` for a subagent-scope record whose recorded `agent` (`astra`) sits in
+    //    `[agents.profiles]` resolves cleanly onto codex without degrading.
+    let mut subagent_seed = agent("codex", "a1", "/repo", 1);
+    subagent_seed.profile = Some("advisor".into());
+    subagent_seed.profile_scope = Some(ProfileScope::Subagents);
+    subagent_seed.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: Some("high".into()),
+        agent: Some("astra".into()),
+        ..Default::default()
+    }));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("advisor", &machine.subagents.profiles).unwrap(),
+    ));
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(subagent_seed.clone()))],
+        &machine.agents.profiles,
+        Some(&machine.subagents.profiles),
+        &ResumeOverrides::default(),
+    )
+    .expect("subagent-scope cohort member with agents-table override must resolve");
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind.as_str(), "codex");
+    assert_eq!(cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+    assert!(
+        cell.system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/codex.md")),
+        "{:?}",
+        cell.system_prompt_file
+    );
+    assert!(
+        cell.append_system_prompt_files
+            .iter()
+            .any(|src| src.origin().ends_with("subagents/advisor.md")),
+        "{:?}",
+        cell.append_system_prompt_files
+    );
+
+    // 2. Cohort `--continue` with `--agent astra` (in agents table) and `--model opus` across
+    //    providers must refuse with the exact cross-provider line.
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("advisor", &machine.subagents.profiles).unwrap(),
+    ));
+    let err = restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(subagent_seed))],
+        &machine.agents.profiles,
+        Some(&machine.subagents.profiles),
+        &ResumeOverrides {
+            agent: Some("astra"),
+            preset: crate::agents::LaunchPreset {
+                model: Some("opus".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .expect_err("cross-provider --agent + --model on cohort resume must refuse");
+    assert_eq!(
+        err,
+        PostureDegrade::OverrideRejected {
+            reason:
+                "--agent astra runs on codex but --model opus runs on claude; choose the same family"
+                    .into()
+        }
+    );
 }

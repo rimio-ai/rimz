@@ -315,11 +315,13 @@ fn fork_posture(
 ) -> Result<ResumePosture> {
     let scope = ProfileScope::for_launch(seed.launch.profile_scope, false);
     let profiles = effective.profiles_for_launch(scope, seed.launch.profile.as_deref());
+    let fallback = (scope == ProfileScope::Subagents).then_some(&effective.profiles);
     effective.block_failed_launch(
         &seed.kind,
         seed.launch.profile.as_deref(),
         seed.launch.record.as_deref(),
         profiles,
+        fallback,
     )?;
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
@@ -330,6 +332,7 @@ fn fork_posture(
             stamped_tier: seed.launch.tier.as_deref(),
         },
         profiles,
+        fallback,
     );
     if let Some(reason @ PostureDegrade::KindChanged { .. }) = &posture.degraded {
         bail!("{reason}; a fork stays on the source provider — fix the profile and retry");

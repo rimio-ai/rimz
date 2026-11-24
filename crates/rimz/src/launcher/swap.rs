@@ -691,13 +691,15 @@ pub fn restart_posture(
     launch.block_set_failure()?;
     let scope = ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child());
     let profiles = launch.profiles_for_launch(scope, agent.profile.as_deref());
+    let fallback = (scope == ProfileScope::Subagents).then_some(&launch.profiles);
     launch.block_failed_launch(
         &agent.kind,
         agent.profile.as_deref(),
         agent.record.as_deref(),
         profiles,
+        fallback,
     )?;
-    let posture = member_posture(agent, profiles, &launch.teams);
+    let posture = member_posture(agent, profiles, fallback, &launch.teams);
     let warning = match &posture.degraded {
         Some(reason @ PostureDegrade::KindChanged { .. }) => {
             return Err(SwapErr::Refused(format!(
@@ -718,6 +720,7 @@ pub fn restart_posture(
 pub fn member_posture(
     agent: &AgentState,
     profiles: &crate::config::ProfilesConfig,
+    fallback: Option<&crate::config::ProfilesConfig>,
     teams: &crate::config::TeamsConfig,
 ) -> ResumePosture {
     crate::harness::resume::resolve_member_posture(
@@ -729,6 +732,7 @@ pub fn member_posture(
             stamped_tier: agent.tier.as_deref(),
         },
         profiles,
+        fallback,
         teams,
         agent.team.as_deref(),
         agent.role.as_deref(),
