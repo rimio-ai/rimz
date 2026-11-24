@@ -136,7 +136,21 @@ const FAILED_REASONS: [&str; 5] = [
     "max_steps_exceeded",
 ];
 
+/// The `terminationReason` agy sends when a bare `/compact` finishes. Every other `Stop`
+/// reason ends an ordinary turn, even while `lastUserInput` still names `/compact` on a
+/// post-compaction continuation.
+const COMPACTION_STOP_REASON: &str = "TERMINAL_CUSTOM_HOOK";
+
 impl StopPayload {
+    pub(super) fn closes_compaction(&self) -> bool {
+        self.common.runs_compact_command()
+            && self
+                .termination_reason
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|reason| reason.eq_ignore_ascii_case(COMPACTION_STOP_REASON))
+    }
+
     pub(super) fn failed(&self) -> bool {
         let reason = self
             .termination_reason

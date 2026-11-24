@@ -2671,6 +2671,7 @@ fn an_antigravity_escape_after_a_self_compaction_cancels_its_continue_for_good()
     feed_antigravity(&store, adapter, "PreInvocation", compact.clone());
     owed.push(antigravity_continue_owed(&store, "compacted"));
     compact["fullyIdle"] = serde_json::json!(true);
+    compact["terminationReason"] = serde_json::json!("TERMINAL_CUSTOM_HOOK");
     feed_antigravity(&store, adapter, "Stop", compact);
     assert!(
         antigravity_signals(&store, "compacted")
