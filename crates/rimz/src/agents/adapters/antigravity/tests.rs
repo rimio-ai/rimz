@@ -4716,3 +4716,348 @@ fn with<const N: usize>(base: &Value, fields: [(&str, Value); N]) -> Value {
     }
     value
 }
+
+mod folder_trust {
+    use super::AntigravityAdapter;
+    use crate::agents::capabilities::{InstallationCapability as _, LaunchCapability as _};
+    use crate::agents::{FolderTrust, FolderTrustGap};
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    /// A primary checkout with a subdirectory, a linked worktree and a pull-request worktree of
+    /// it (`.git` metadata written by hand, as `git worktree add` and RimZ leave it), an
+    /// empty-dir agent directory, and an agy home.
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        env: BTreeMap<String, String>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            std::fs::create_dir_all(root.join("repo/.git")).unwrap();
+            std::fs::write(root.join("repo/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+            std::fs::create_dir_all(root.join("repo/sub")).unwrap();
+            std::fs::create_dir_all(root.join("empty/room/agent")).unwrap();
+            std::fs::create_dir_all(root.join("home")).unwrap();
+            let fixture = Self {
+                env: BTreeMap::from([("HOME".into(), root.join("home").display().to_string())]),
+                _dir: dir,
+                root,
+            };
+            fixture.link("wt", None);
+            fixture.link("pr", Some(7));
+            fixture
+        }
+
+        fn link(&self, name: &str, from_pr: Option<u64>) {
+            let tree = self.path(&format!("worktrees/{name}"));
+            let admin = self.repo().join(".git/worktrees").join(name);
+            std::fs::create_dir_all(tree.join("sub")).unwrap();
+            std::fs::create_dir_all(&admin).unwrap();
+            std::fs::write(tree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+            std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+            let marker = json!({
+                "version": 2,
+                "name": name,
+                "branch": name,
+                "from_pr": from_pr,
+                "base_ref": "0123456789abcdef0123456789abcdef01234567",
+                "repo_root": self.repo(),
+                "worktree_path": tree,
+                "created_at": "2026-06-10T00:00:00Z",
+            });
+            std::fs::write(admin.join("rimz-worktree.json"), marker.to_string()).unwrap();
+        }
+
+        fn path(&self, rel: &str) -> PathBuf {
+            self.root.join(rel)
+        }
+
+        fn repo(&self) -> PathBuf {
+            self.path("repo")
+        }
+
+        fn settings(&self) -> PathBuf {
+            self.path("home/.gemini/antigravity-cli/settings.json")
+        }
+
+        fn write_settings(&self, text: &str) {
+            std::fs::create_dir_all(self.settings().parent().unwrap()).unwrap();
+            std::fs::write(self.settings(), text).unwrap();
+        }
+
+        fn trust(&self, entries: &[PathBuf]) {
+            self.write_settings(
+                &json!({"theme": "dark", "trustedWorkspaces": entries}).to_string(),
+            );
+        }
+
+        fn decide(&self, cwd: &Path, repo_root: Option<&Path>) -> FolderTrust {
+            AntigravityAdapter
+                .folder_trust(cwd, repo_root, &self.env)
+                .expect("agy models folder trust")
+        }
+
+        fn gap(&self, cwd: &Path, repo_root: Option<&Path>) -> FolderTrustGap {
+            match self.decide(cwd, repo_root) {
+                FolderTrust::Undecided(gap) => gap,
+                other => panic!("expected a gap at {}, got {other:?}", cwd.display()),
+            }
+        }
+
+        /// The launch argv after the bridge, from `args`.
+        fn bridge(&self, cwd: &Path, args: &[&str]) -> Vec<String> {
+            let mut args = args.iter().map(|arg| (*arg).to_owned()).collect();
+            let mut artifact = None;
+            AntigravityAdapter
+                .bridge_folder_trust_args(&self.env, (cwd, &self.root), &mut args, &mut artifact)
+                .unwrap();
+            assert!(artifact.is_none(), "an inline document stays inline");
+            args
+        }
+    }
+
+    fn candidate(gap: &FolderTrustGap) -> Value {
+        let preview = gap.grant.as_ref().expect("a grantable gap");
+        serde_json::from_str(&preview.candidate).unwrap()
+    }
+
+    fn settings_arg(args: &[String]) -> Value {
+        assert_eq!(args.len(), 2, "{args:?}");
+        assert_eq!(args[0], "--settings");
+        serde_json::from_str(&args[1]).unwrap()
+    }
+
+    #[test]
+    fn trust_keys_on_the_primary_checkout_and_inherits_below_it() {
+        let f = Fixture::new();
+        let (repo, wt, pr) = (f.repo(), f.path("worktrees/wt"), f.path("worktrees/pr"));
+        let gap = f.gap(&repo, Some(&repo));
+        assert_eq!(
+            (gap.path.clone(), gap.key.clone()),
+            (f.settings(), repo.clone())
+        );
+        assert_eq!(gap.grant.as_ref().unwrap().original, None);
+        assert_eq!(candidate(&gap), json!({"trustedWorkspaces": [repo]}));
+        assert_eq!(
+            f.gap(&wt.join("sub"), None).key,
+            repo,
+            "a worktree keys on its primary"
+        );
+        assert_eq!(
+            f.gap(&pr, Some(&repo)).key,
+            pr,
+            "a pull request keys on itself"
+        );
+        let agent = f.path("empty/room/agent");
+        assert_eq!(f.gap(&agent, None).key, agent);
+
+        f.trust(std::slice::from_ref(&repo));
+        for cwd in [repo.clone(), repo.join("sub"), wt.clone(), wt.join("sub")] {
+            assert_eq!(
+                f.decide(&cwd, Some(&repo)),
+                FolderTrust::Decided,
+                "{}",
+                cwd.display()
+            );
+            assert_eq!(
+                f.decide(&cwd, None),
+                FolderTrust::Decided,
+                "{}",
+                cwd.display()
+            );
+        }
+        let gap = f.gap(&pr, Some(&repo));
+        assert_eq!(
+            candidate(&gap),
+            json!({"theme": "dark", "trustedWorkspaces": [repo, pr]})
+        );
+        assert_eq!(f.gap(&pr.join("sub"), Some(&repo)).key, pr.join("sub"));
+
+        f.trust(&[repo.clone(), pr.clone()]);
+        assert_eq!(f.decide(&pr, Some(&repo)), FolderTrust::Decided);
+        assert!(
+            matches!(
+                f.decide(&pr.join("sub"), Some(&repo)),
+                FolderTrust::Undecided(_)
+            ),
+            "a pull-request worktree inherits nothing, its own root included"
+        );
+
+        f.trust(&[f.path("worktrees")]);
+        assert_eq!(f.decide(&wt, None), FolderTrust::Decided);
+        assert!(matches!(f.decide(&pr, None), FolderTrust::Undecided(_)));
+
+        f.trust(&[f.path("empty")]);
+        assert_eq!(f.decide(&f.path("empty"), None), FolderTrust::Decided);
+        assert_eq!(f.decide(&agent, None), FolderTrust::Decided);
+    }
+
+    #[test]
+    fn unreadable_settings_leave_a_gap_that_names_the_repair() {
+        let f = Fixture::new();
+        let repo = f.repo();
+        for (text, reason) in [
+            ("[", "invalid JSON"),
+            ("[]", "expected a JSON object"),
+            (
+                r#"{"trustedWorkspaces":"x"}"#,
+                "expected trustedWorkspaces to be an array",
+            ),
+        ] {
+            f.write_settings(text);
+            let gap = f.gap(&repo, Some(&repo));
+            let error = gap.grant.unwrap_err();
+            let prefix = format!("repair `{}`: ", f.settings().display());
+            assert!(
+                error.starts_with(&prefix) && error.contains(reason),
+                "{text}: {error}"
+            );
+        }
+        f.write_settings(&format!(
+            "\u{feff}{{\n  // agy's own\n  \"trustedWorkspaces\": [{:?}]\n}}",
+            repo.display().to_string()
+        ));
+        assert_eq!(f.decide(&repo, Some(&repo)), FolderTrust::Decided);
+        let gap = AntigravityAdapter.folder_trust(&repo, Some(&repo), &BTreeMap::new());
+        let Some(FolderTrust::Undecided(gap)) = gap else {
+            panic!("expected a gap without HOME, got {gap:?}");
+        };
+        assert!(gap.grant.unwrap_err().contains("$HOME is not set"));
+    }
+
+    #[test]
+    fn a_named_account_reads_and_grants_its_own_settings() {
+        let mut f = Fixture::new();
+        let repo = f.repo();
+        f.trust(std::slice::from_ref(&repo));
+        let account = f.path("accounts/work");
+        std::fs::create_dir_all(&account).unwrap();
+        f.env.insert(
+            "RIMZ_ANTIGRAVITY_HOME".into(),
+            account.display().to_string(),
+        );
+        let gap = f.gap(&repo, Some(&repo));
+        assert_eq!(gap.path, account.join("settings.json"));
+        crate::agents::grant_folder_trust(&gap).unwrap();
+        assert_eq!(f.decide(&repo, Some(&repo)), FolderTrust::Decided);
+    }
+
+    #[test]
+    fn a_grant_appends_its_key_once_and_keeps_the_other_keys() {
+        let f = Fixture::new();
+        let (repo, other) = (f.repo(), f.path("other"));
+        f.trust(std::slice::from_ref(&other));
+        crate::agents::grant_folder_trust(&f.gap(&f.path("worktrees/wt"), None)).unwrap();
+        assert_eq!(
+            f.decide(&f.path("worktrees/wt"), None),
+            FolderTrust::Decided
+        );
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(f.settings()).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({"theme": "dark", "trustedWorkspaces": [other, repo]})
+        );
+    }
+
+    /// agy trusts only an exact `trustedWorkspaces` entry (agy 1.5.16), so a launch RimZ judges
+    /// trusted by inheritance carries the saved list and its own directory in the one settings
+    /// document, and every other launch leaves argv alone.
+    #[test]
+    fn launch_bridges_inherited_trust_into_the_one_settings_document() {
+        let f = Fixture::new();
+        let (repo, wt, pr) = (f.repo(), f.path("worktrees/wt"), f.path("worktrees/pr"));
+        f.trust(std::slice::from_ref(&repo));
+        assert_eq!(
+            settings_arg(&f.bridge(&wt, &[])),
+            json!({"trustedWorkspaces": [repo, wt]})
+        );
+        assert_eq!(
+            settings_arg(&f.bridge(&repo.join("sub"), &[])),
+            json!({"trustedWorkspaces": [repo, repo.join("sub")]})
+        );
+        let user = r#"{"agentMode":"","queuedMessages":"queue","trustedWorkspaces":["/user"]}"#;
+        assert_eq!(
+            settings_arg(&f.bridge(&wt.join("sub"), &["--settings", user])),
+            json!({
+                "agentMode": "",
+                "queuedMessages": "queue",
+                "trustedWorkspaces": ["/user", repo, wt.join("sub")],
+            })
+        );
+        assert!(
+            f.bridge(&repo, &[]).is_empty(),
+            "an exact entry needs no bridge"
+        );
+        assert!(
+            f.bridge(&pr, &[]).is_empty(),
+            "a pull-request worktree is never bridged"
+        );
+        assert_eq!(f.bridge(&pr, &["--settings", user]), ["--settings", user]);
+
+        f.trust(&[]);
+        assert!(
+            f.bridge(&wt, &[]).is_empty(),
+            "an untrusted primary bridges nothing"
+        );
+
+        f.trust(&[f.path("empty")]);
+        let agent = f.path("empty/room/agent");
+        assert_eq!(
+            settings_arg(&f.bridge(&agent, &[])),
+            json!({"trustedWorkspaces": [f.path("empty"), agent]})
+        );
+
+        f.write_settings("[");
+        assert!(
+            f.bridge(&wt, &[]).is_empty(),
+            "agy asks for itself past a broken file"
+        );
+    }
+
+    /// Which spelling of a symlinked directory agy compares is unobserved, so an entry for only
+    /// one spelling still bridges both.
+    #[test]
+    fn a_symlinked_launch_bridges_both_spellings() {
+        let f = Fixture::new();
+        let (repo, link) = (f.repo(), f.path("link"));
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        for saved in [&repo, &link] {
+            f.trust(std::slice::from_ref(saved));
+            assert_eq!(f.decide(&link, None), FolderTrust::Decided);
+            let mut expected = vec![saved.clone()];
+            expected.extend(
+                [link.clone(), repo.clone()]
+                    .into_iter()
+                    .filter(|dir| dir != saved),
+            );
+            assert_eq!(
+                settings_arg(&f.bridge(&link, &[])),
+                json!({"trustedWorkspaces": expected})
+            );
+        }
+        f.trust(&[repo.clone(), link.clone()]);
+        assert!(f.bridge(&link, &[]).is_empty(), "both spellings are saved");
+    }
+
+    /// A worktree whose RimZ marker cannot be read might be a pull request's, so it takes trust
+    /// only from an entry naming it.
+    #[test]
+    fn an_unreadable_marker_reads_as_a_pull_request() {
+        let f = Fixture::new();
+        let (repo, wt) = (f.repo(), f.path("worktrees/wt"));
+        std::fs::write(
+            repo.join(".git/worktrees/wt/rimz-worktree.json"),
+            "invalid marker",
+        )
+        .unwrap();
+        f.trust(std::slice::from_ref(&repo));
+        assert_eq!(f.gap(&wt, Some(&repo)).key, wt);
+        assert!(f.bridge(&wt, &[]).is_empty());
+    }
+}

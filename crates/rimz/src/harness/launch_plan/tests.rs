@@ -2166,6 +2166,74 @@ fn antigravity_pins_queue_mode_and_ask_mode_in_the_one_settings_document() {
     }
 }
 
+/// A linked worktree of a primary checkout the account trusts launches agy with that trust
+/// bridged into the same one settings document as the queue pin, on a fresh launch and a resume.
+#[test]
+fn antigravity_bridges_a_trusted_primarys_worktree_into_the_one_settings_document() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path().canonicalize().unwrap();
+    let (primary, worktree) = (root.join("repo"), root.join("repo-worktrees/wt"));
+    let admin = primary.join(".git/worktrees/wt");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(primary.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    let settings = root.join(".gemini/antigravity-cli/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings,
+        serde_json::json!({"trustedWorkspaces": [primary]}).to_string(),
+    )
+    .unwrap();
+    let id = crate::WorkspaceId::from_project_root(&root);
+    let runtime = RuntimePaths::under(id.clone(), &root).unwrap();
+    let state = StatePaths::under(id, &root).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), root.display().to_string())]);
+    for action in ["launch", "resume"] {
+        let request = request("antigravity", action_with_args(action, Vec::new()));
+        let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &request,
+            cwd: &worktree,
+            project_root: &primary,
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+        .unwrap();
+        let argv = &plan.process().provider_argv;
+        let settings: Vec<serde_json::Value> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(
+            settings,
+            [serde_json::json!({
+                "queuedMessages": "queue",
+                "trustedWorkspaces": [primary, worktree],
+            })],
+            "{action}: {argv:?}"
+        );
+    }
+}
+
 #[test]
 fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
     let project = tempfile::tempdir().unwrap();

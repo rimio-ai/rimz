@@ -170,7 +170,13 @@ surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/agents"
-upward-dependencies = ["address"]
+upward-dependencies = [
+    "address",
+    "worktree",
+]
+# agy's folder trust reads a linked worktree's primary checkout and pull-request marker from
+# `worktree::linked_worktree`, which reads `.git` metadata without spawning git: every launch
+# and preflight caller then agrees on a worktree whatever repository root it passes.
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wait vocabulary and rest projection are shared by harness and renderers.
@@ -472,7 +478,9 @@ upward-dependencies = ["address"]
 # account_history_shareable, foreign_login, and decode_hook_in for the frame's login (+4).
 # MessageKeys and agents::message_keys give delivery and the budget park each agent's declared
 # key sequences, read by kind (+4).
-surface-budget = 1348
+# bridge_folder_trust_args passes a launch directory trusted by inheritance into the launch's
+# settings document, for a provider that trusts only exact folders (+1).
+surface-budget = 1349
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -982,6 +990,8 @@ surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
+upward-dependencies = ["worktree"]
+# Folder trust follows a linked worktree to its primary checkout, never a pull-request one.
 surface-budget = 1
 
 [[module]]

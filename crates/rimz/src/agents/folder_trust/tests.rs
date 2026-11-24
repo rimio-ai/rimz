@@ -318,11 +318,11 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
         let rows = rows_with_locator(&logins, dir.path(), dir.path(), |_| {
             Some("/detected".into())
         });
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         for row in rows {
             assert_eq!(
                 row.login.as_str(),
-                if row.kind == "qoder" {
+                if matches!(row.kind, "qoder" | "antigravity") {
                     "default"
                 } else {
                     "work"
@@ -337,6 +337,9 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
                 ("codex", true) => dir.path().join("override.toml"),
                 ("claude", true) => dir.path().join("override.json"),
                 ("qoder", _) => dir.path().join("ambient/.qoder/settings.json"),
+                ("antigravity", _) => dir
+                    .path()
+                    .join("ambient/.gemini/antigravity-cli/settings.json"),
                 _ => panic!("unexpected model"),
             };
             assert_eq!(gap.path, expected);
