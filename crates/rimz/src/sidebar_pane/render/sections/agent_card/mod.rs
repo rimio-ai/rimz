@@ -568,7 +568,8 @@ fn delegation_halves(
 /// Up to two indented lines for each visible child. Line 1 leads with the same
 /// live cell an agent row wears — the thinking head while the child reasons,
 /// the working fill while it acts, or the static `✓`/`!` verdict once it
-/// finishes — then its type and description, with its known cost pinned right.
+/// finishes — then its type, description, and an optional `⋯ bg` marker when
+/// its turn parked on background work, with its known cost pinned right.
 /// Line 2 carries the typed token figure, model, reasoning effort, then the
 /// optional still fast-mode bolt and compactions on a per-card column grid.
 /// Without effort, the bolt follows the model. A five-cell clock pins right:
@@ -663,6 +664,15 @@ fn sub_agent_entry_lines(
         } else {
             theme.muted()
         };
+        let marker = (sub.phase == TurnPhase::Parked)
+            .then(|| {
+                Span::styled(
+                    format!("  {} bg", theme.glyph(GlyphRole::CardParkedBg)),
+                    theme.styled(Component::EntryParkedBg, Modifier::empty()),
+                )
+            })
+            .into_iter()
+            .collect();
         push_entry(
             ctx,
             &mut entry_lines,
@@ -687,6 +697,7 @@ fn sub_agent_entry_lines(
                     })
                     .into_iter()
                     .collect(),
+                marker,
                 clip_who: false,
                 right,
                 detail: detail_line,
@@ -720,9 +731,12 @@ fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
     })
 }
 
-/// A finished subagent has a verdict and no longer needs a live elapsed clock.
+/// A finished subagent has a verdict, is not stalled, and is not parked on
+/// pending background work.
 fn sub_agent_finished(sub: &SidebarSubAgent) -> bool {
-    matches!(sub.status, AgentStatus::Success | AgentStatus::Failed) && !sub.stalled
+    matches!(sub.status, AgentStatus::Success | AgentStatus::Failed)
+        && !sub.stalled
+        && sub.phase != TurnPhase::Parked
 }
 
 fn sub_agent_metadata_line(

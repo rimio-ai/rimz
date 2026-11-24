@@ -145,6 +145,8 @@ pub(crate) enum Component {
     EntryTeamName,
     /// A team entry's current-stage mark; the stage name beside it takes the body tone.
     EntryStage,
+    /// The `⋯ bg` background-work marker on a nested entry whose turn parked.
+    EntryParkedBg,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
@@ -276,6 +278,7 @@ impl Component {
         Component::EntryTeamTag,
         Component::EntryTeamName,
         Component::EntryStage,
+        Component::EntryParkedBg,
         Component::RemoteControl,
         Component::RemoteControlDown,
         Component::RemoteControlOff,
@@ -323,7 +326,7 @@ impl Component {
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix
             | EntryAgentName => palette.body,
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent
-            | UploadTrack => palette.faint,
+            | UploadTrack | EntryParkedBg => palette.faint,
             WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good

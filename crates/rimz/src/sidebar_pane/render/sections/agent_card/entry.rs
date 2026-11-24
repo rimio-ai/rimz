@@ -8,6 +8,10 @@ pub(super) struct Entry {
     /// Who the entry names: a type word, an agent's profile and lane, or a team.
     pub(super) who: Vec<Span<'static>>,
     pub(super) headline: Vec<Span<'static>>,
+    /// Trailing marker drawn after the headline (such as `  ⋯ bg`). The
+    /// headline clips or drops before the marker yields; a marker that cannot fit
+    /// beside `who` drops, and the entry draws as one without it.
+    pub(super) marker: Vec<Span<'static>>,
     /// The who text ellipsizes to the room the headline and right cluster leave, so a
     /// team's stage never clips; otherwise the line clips from its tail.
     pub(super) clip_who: bool,
@@ -36,6 +40,11 @@ pub(super) fn push_entry(ctx: &RowCtx<'_>, lines: &mut Vec<Line<'static>>, entry
     };
     let seam = (spans_width(&who) > 0).then_some(seam);
     left.extend(who);
+    let marker = if spans_width(&left) + spans_width(&entry.marker) <= room {
+        entry.marker
+    } else {
+        Vec::new()
+    };
     // The seam goes with a headline whose first character gets no cells, so it never ends
     // the line; a who with no room takes its seam with it.
     let first = entry
@@ -45,10 +54,20 @@ pub(super) fn push_entry(ctx: &RowCtx<'_>, lines: &mut Vec<Line<'static>>, entry
         .next()
         .map_or(0, |first| text_width(first.encode_utf8(&mut [0; 4])));
     let seam_width = seam.as_ref().map_or(0, Span::width);
-    if first > 0 && spans_width(&left) + seam_width + first <= room {
+    let budget = room.saturating_sub(spans_width(&left) + seam_width + spans_width(&marker));
+    // Before a marker the headline ends in `…`, which takes a cell of its own; with none
+    // the line clips from its tail.
+    let headline = if marker.is_empty() {
+        (first <= budget).then_some(entry.headline)
+    } else {
+        (spans_width(&entry.headline) <= budget || first < budget)
+            .then(|| ellipsize_spans(entry.headline, budget))
+    };
+    if let Some(headline) = headline.filter(|_| first > 0) {
         left.extend(seam);
-        left.extend(entry.headline);
+        left.extend(headline);
     }
+    left.extend(marker);
     lines.push(pin_right(left, entry.right, width));
     if let Some(detail) = entry.detail {
         lines.push(detail);
@@ -150,6 +169,7 @@ mod tests {
             lead: Span::raw(">"),
             who,
             headline,
+            marker: Vec::new(),
             clip_who,
             right: Vec::new(),
             detail: None,
