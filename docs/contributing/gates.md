@@ -46,7 +46,7 @@ Escalate when the change touches the matching surface:
 
 - `cargo xtask test -P live` for the live-backend tests and deep mux smokes.
 - `cargo xtask test -P journey` for rendered journeys.
-- `cargo xtask externals` when dependencies change.
+- `cargo xtask externals` when a `Cargo.toml` dependency changes, optional and feature-gated ones included.
 - `cargo xtask perf` for the benches and their regression ceilings.
 - `cargo xtask ci` for the checks and the full suite.
 
@@ -163,7 +163,7 @@ Inside the sandbox every `common::Env` and live `ZellijNamespace` owns narrower 
 
 ## Architectural invariants
 
-`cargo xtask invariants` is a grep-and-shape gate over the tracked tree. Its matches are shallow strings, so it is a cheap trip-wire beside the type system and review, never a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `disk/atomic.rs`, pane-primitive use, the render snapshot clock, the sidebar image-permit mint, [UI-color provenance](../guide/theme.md#color-slots), CLI color-carrier provenance, single-home provider-brand resolution, glyph provenance, vendored presence-plugin freshness, the inline-test size gate, and the deep-journey backend prefix that schedules a test in its live-mux group. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs). A new boundary lands there as an `ensure_*` check with a self-test.
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree. Its matches are shallow strings, so it is a cheap trip-wire beside the type system and review, never a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `disk/atomic.rs`, pane-primitive use, the render snapshot clock, the sidebar image-permit mint, [UI-color provenance](../guide/theme.md#color-slots), CLI color-carrier provenance, single-home provider-brand resolution, glyph provenance, vendored presence-plugin freshness, the inline-test size gate, and the deep-journey backend prefix that schedules a test in its live-mux group. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs). A new boundary lands there as an `ensure_*` check with a self-test. The greps cover Rust and Markdown alike, each `AGENTS.md` included: describe a boundary in prose and leave the banned path unwritten.
 
 A boundary on who may construct a value (a permit, a grant, a proof that a check ran) is held by the compiler before any grep. Give the type a file to itself and keep its field private: a module and every module under it can write a private-field literal, so a type declared in a `mod.rs` can be forged from each child. The `ensure_*` check is then needed only for what the compiler cannot see, the call sites of the named constructor. `ImagePermit` in [pixel/permit.rs](../../crates/rimz/src/sidebar_pane/pixel/permit.rs) is the shape, with `ensure_image_permit_minted_only_by_host` holding its one mint.
 
