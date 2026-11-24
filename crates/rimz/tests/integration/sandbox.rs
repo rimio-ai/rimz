@@ -1584,6 +1584,67 @@ fn antigravity_shared_login_file_binds_overlay_default_home_under_tmp() {
 }
 
 #[test]
+fn sandbox_shared_antigravity_account_directory_under_tmp_stays_reachable() {
+    let env = Env::new();
+    let home = &env.home_root;
+    let default_dir = home.join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    let state = env.store();
+    let vars = environment(&env);
+    // Outside the home, so no other rebound root contains the account.
+    let outside = tempfile::tempdir_in("/tmp").unwrap();
+    let directory = outside.path().join("directory");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("antigravity-oauth-token"), "work-token").unwrap();
+    let symlink = outside.path().join("symlink");
+    std::os::unix::fs::symlink(&directory, &symlink).unwrap();
+    let missing = outside.path().join("missing");
+
+    for (account_dir, rebound) in [(&directory, true), (&symlink, true), (&missing, false)] {
+        let plan = rimz::sandbox::plan(&SandboxInputs {
+            env: &vars,
+            cwd: home,
+            project_root: home,
+            worktree: None,
+            checkout: None,
+            add_dirs: &[],
+            read_only: Vec::new(),
+            tmp_dir: &state.paths().temp_unit_dir(None),
+            skills_dir: &state.paths().skills_dir,
+            ssh_config_file: &env.home_root.join("missing-ssh-config"),
+            ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+            provider_home: Some(rimz::sandbox::ProviderHome {
+                source: default_dir.clone(),
+                target: default_dir.clone(),
+                file_binds: vec![(
+                    account_dir.join("antigravity-oauth-token"),
+                    default_dir.join("antigravity-oauth-token"),
+                )],
+            }),
+            provider_home_env_keys: &["RIMZ_ANTIGRAVITY_HOME", "RIMZ_ANTIGRAVITY_LOGIN_HOME"],
+            default_home: Some(default_dir.clone()),
+            skills: SkillInputs {
+                kind: "antigravity",
+                home: None,
+                manual: ManualSkill::Frontmatter,
+                withheld: &[],
+                callable: None,
+                grant: None,
+            },
+        })
+        .unwrap();
+        let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, home, &[]);
+        let account = account_dir.to_str().unwrap();
+        assert_eq!(
+            argv.windows(3)
+                .any(|args| args == ["--bind", account, account]),
+            rebound,
+            "{account}: {argv:?}"
+        );
+    }
+}
+
+#[test]
 fn sandbox_shared_antigravity_file_bind_entry_kinds() {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 

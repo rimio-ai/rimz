@@ -480,6 +480,16 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         });
         required.push(home.source.clone());
     }
+    // A launch made inside the view resolves the account by the directory its
+    // login files come from, which a shared mounted-login account does not
+    // run on.
+    required.extend(
+        inputs
+            .provider_home
+            .iter()
+            .flat_map(|home| &home.file_binds)
+            .filter_map(|(source, _)| source.parent().map(Path::to_path_buf)),
+    );
     validate_path(inputs.tmp_dir)?;
     // bwrap resolves each bind source against the host root, so the second
     // mount sees the unit and not the first mount.
