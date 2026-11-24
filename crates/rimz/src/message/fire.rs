@@ -4,6 +4,8 @@
 //! with its workspace id and mux in argv; store reads and writes stay in that helper. The
 //! refresh loop retains the last spawned stamp and its pass time, bounding unchanged-stamp
 //! retries to one prompt delivery window without delaying a changed due stamp.
+//!
+//! This runs on the sidebar host's cache-refresh tick, so keep it as light as that path demands.
 
 use std::ffi::OsString;
 use std::path::Path;
