@@ -221,11 +221,12 @@ fn message_keys_of(kind: &str) -> super::MessageKeys {
 const FIRST_TIER: [&str; 4] = ["claude", "codex", "pi", "antigravity"];
 
 #[test]
-fn claude_sends_now_with_ctrl_x_ctrl_s_and_queues_with_enter() {
+fn claude_sends_now_with_enter_ctrl_x_ctrl_s_and_queues_with_enter() {
     use crate::pane::keys::{KeyStep, NamedKey};
 
     const EXPECTED: super::MessageKeys = super::MessageKeys {
         send_now: &[
+            KeyStep::now(NamedKey::Enter),
             KeyStep::now(NamedKey::CtrlX),
             KeyStep::after_ms(100, NamedKey::CtrlS),
         ],
@@ -266,11 +267,11 @@ fn pi_sends_now_with_enter_and_queues_with_alt_enter() {
 }
 
 #[test]
-fn antigravity_sends_now_with_alt_m_and_queues_with_enter() {
+fn antigravity_sends_now_with_enter_alt_m_and_queues_with_enter() {
     use crate::pane::keys::{KeyStep, NamedKey};
 
     const EXPECTED: super::MessageKeys = super::MessageKeys {
-        send_now: &[KeyStep::now(NamedKey::AltM)],
+        send_now: &[KeyStep::now(NamedKey::Enter), KeyStep::now(NamedKey::AltM)],
         queue: &[KeyStep::now(NamedKey::Enter)],
         interrupt: &[KeyStep::now(NamedKey::Escape)],
         command: &[KeyStep::now(NamedKey::Enter)],

@@ -2642,14 +2642,14 @@ fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
         .lines()
         .filter(|line| line.contains("\taction\twrite\t"))
         .collect();
-    // The wake's paste, then Claude's send-now keys, Ctrl+X and Ctrl+S.
-    assert_eq!(writes.len(), 3, "{trace}");
+    // The wake's paste, then Claude's send-now keys, Enter, Ctrl+X and Ctrl+S.
+    assert_eq!(writes.len(), 4, "{trace}");
     assert!(
         writes[0].contains("\taction\twrite\t--pane-id\tterminal_3\t27\t91\t50\t48\t48\t126\t")
             && writes[0].ends_with("\t27\t91\t50\t48\t49\t126"),
         "{trace}"
     );
-    for (write, key) in writes[1..].iter().zip(["24", "19"]) {
+    for (write, key) in writes[1..].iter().zip(["13", "24", "19"]) {
         assert!(
             write.ends_with(&format!("\taction\twrite\t--pane-id\tterminal_3\t{key}")),
             "{trace}"
