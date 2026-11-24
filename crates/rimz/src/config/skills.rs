@@ -156,18 +156,6 @@ pub fn prompt_references(text: &str) -> Vec<PromptReference<'_>> {
     found
 }
 
-/// The RimZ capabilities `text` names in the `rimz(x)` notation, each as `rimz-x`: a
-/// lowercase name (`[a-z][a-z0-9-]*`) between `rimz(` and `)`, where `rimz` follows no
-/// identifier character, so `spawn_detached_rimz(x)` names nothing. Any other casing or shape
-/// is plain text, and a code span counts like any other text.
-pub fn rimz_references(text: &str) -> BTreeSet<String> {
-    prompt_references(text)
-        .into_iter()
-        .filter(|reference| reference.kind == PromptReferenceKind::Rimz)
-        .map(|reference| format!("rimz-{}", reference.name))
-        .collect()
-}
-
 pub(crate) fn deserialize_optional_skill_list<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<SkillName>>, D::Error>
@@ -233,31 +221,40 @@ mod tests {
     }
 
     #[test]
-    fn rimz_references_take_lowercase_names_after_a_non_identifier_boundary() {
-        let text = "Use rimz(wait), `rimz(lsp)`, and (rimz(workflow-write)); rimz(wait) again.\n\
-                    rimz(notes2) and x-rimz(control) count. spawn_detached_rimz(foo), \
-                    rimz2(bar), Rimz(baz), RIMZ(qux), rimz(Wait), rimz( wait), rimz(), \
-                    rimz(1x), rimz(-x), rimz(a_b), rimz(a b), Skill(rimz-message), rimz(open";
+    fn prompt_references_scan_all_three_forms_with_ranges_and_grammars() {
+        let rimz_text = "Use rimz(wait), `rimz(lsp)`, and (rimz(workflow-write)); rimz(wait) again.\n\
+                         rimz(notes2) and x-rimz(control) count. spawn_detached_rimz(foo), \
+                         rimz2(bar), Rimz(baz), RIMZ(qux), rimz(Wait), rimz( wait), rimz(), \
+                         rimz(1x), rimz(-x), rimz(a_b), rimz(a b), Skill(rimz-message), rimz(open";
+        let rimz_found: Vec<_> = prompt_references(rimz_text)
+            .into_iter()
+            .map(|r| (r.kind, r.name, &rimz_text[r.range]))
+            .collect();
         assert_eq!(
-            rimz_references(text).into_iter().collect::<Vec<_>>(),
+            rimz_found,
             [
-                "rimz-control",
-                "rimz-lsp",
-                "rimz-notes2",
-                "rimz-wait",
-                "rimz-workflow-write"
+                (PromptReferenceKind::Rimz, "wait", "rimz(wait)"),
+                (PromptReferenceKind::Rimz, "lsp", "rimz(lsp)"),
+                (
+                    PromptReferenceKind::Rimz,
+                    "workflow-write",
+                    "rimz(workflow-write)"
+                ),
+                (PromptReferenceKind::Rimz, "wait", "rimz(wait)"),
+                (PromptReferenceKind::Rimz, "notes2", "rimz(notes2)"),
+                (PromptReferenceKind::Rimz, "control", "rimz(control)"),
             ]
         );
+        let lone = "rimz(wait)";
         assert_eq!(
-            rimz_references("rimz(wait)")
-                .into_iter()
-                .collect::<Vec<_>>(),
-            ["rimz-wait"]
+            prompt_references(lone),
+            [PromptReference {
+                kind: PromptReferenceKind::Rimz,
+                name: "wait",
+                range: 0..lone.len(),
+            }]
         );
-    }
 
-    #[test]
-    fn prompt_references_scan_all_three_forms_with_ranges_and_grammars() {
         let text = "Use rimz(lsp), `skill(rimz-lsp)`, skill(_shared), skill(rimz.skills), \
                     skill(s), subagent(explorer), subagent(opencode-mini), subagent(forge.lint), \
                     subagent(My_Profile), and subagent(s).\n\

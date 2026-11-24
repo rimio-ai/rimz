@@ -908,3 +908,232 @@ fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
     let reasons = |name| shut_out(&machine, "claude", &profile, false, name);
     assert_eq!(reasons("rimz-reflect"), (no_tools, Vec::new()));
 }
+
+#[test]
+fn skill_references_check_lists_disk_and_capability_shorthand() {
+    let root = tempfile::tempdir().unwrap();
+    for namespace in ["agents", "teams"] {
+        std::fs::create_dir(root.path().join(namespace)).unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    for (name, fields, body) in [
+        (
+            "open",
+            "tools: [Bash, Skill]\n",
+            "Use skill(commit), skill(_shared), skill(rimz-reflect), skill(missing), Skill(missing), and Agent(missing).",
+        ),
+        (
+            "listed",
+            "tools: [Bash, Skill]\nskills: [commit]\n",
+            "Use skill(commit), skill(rebase), and skill(rimz-reflect).",
+        ),
+        ("no-skill-tool", "tools: [Bash]\n", "Use skill(commit)."),
+        (
+            "cap-skill",
+            "capabilities: [read, rimz-lsp]\nskills: []\n",
+            "Use skill(rimz-lsp) and skill(rimz-wait).",
+        ),
+        (
+            "cap-skill-unlisted",
+            "tools: [Bash, Skill]\nmcps: []\nskills: []\n",
+            "Use skill(rimz-lsp).",
+        ),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\nagent: claude\n{fields}---\n{body}"),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("teams/probe.md"),
+        "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: open\n    role: lead\n    owns: [Plan]\n---\nTeam body mentions skill(team-missing) and subagent(team-missing).",
+    )
+    .unwrap();
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let on_disk = |kind: &str| {
+        assert_eq!(kind, "claude");
+        Some(
+            ["commit", "_shared", "rebase", "rimz-reflect"]
+                .map(str::to_owned)
+                .into(),
+        )
+    };
+    let collect = |disk: Option<std::collections::BTreeSet<String>>| {
+        let mut messages: Vec<_> =
+            capability_errors(&loaded, &Default::default(), |_| disk.clone())
+                .into_iter()
+                .map(|error| {
+                    let file = error.path.strip_prefix(root.path()).unwrap().to_owned();
+                    format!("{}: {}", file.display(), error.message)
+                })
+                .collect();
+        messages.sort();
+        messages
+    };
+    assert_eq!(
+        collect(on_disk("claude")),
+        [
+            "agents/cap-skill-unlisted.md: profile cap-skill-unlisted: rimz(lsp) names `rimz-lsp`, \
+             which this profile cannot reach: its mcps leave out rimz-lsp; its skills leave out \
+             rimz-lsp",
+            "agents/cap-skill.md: profile cap-skill: rimz(wait) names `rimz-wait`, which this \
+             profile cannot reach: its capabilities leave out rimz-wait",
+            "agents/listed.md: profile listed: skill(rebase) names `rebase`, which this profile \
+             cannot reach: its skills leave out rebase",
+            "agents/listed.md: profile listed: skill(rimz-reflect) names `rimz-reflect`, which \
+             this profile cannot reach: its skills leave out rimz-reflect",
+            "agents/no-skill-tool.md: profile no-skill-tool: skill(commit) names `commit`, which \
+             this profile cannot reach: its tools leave out Skill",
+            "agents/open.md: profile open: skill(missing) names `missing`, which is not a skill on \
+             disk for claude",
+        ]
+    );
+    // Inside a scoped view the disk check is skipped, while list and tool checks still run.
+    assert_eq!(
+        collect(None),
+        [
+            "agents/cap-skill-unlisted.md: profile cap-skill-unlisted: rimz(lsp) names `rimz-lsp`, \
+             which this profile cannot reach: its mcps leave out rimz-lsp; its skills leave out \
+             rimz-lsp",
+            "agents/cap-skill.md: profile cap-skill: rimz(wait) names `rimz-wait`, which this \
+             profile cannot reach: its capabilities leave out rimz-wait",
+            "agents/listed.md: profile listed: skill(rebase) names `rebase`, which this profile \
+             cannot reach: its skills leave out rebase",
+            "agents/listed.md: profile listed: skill(rimz-reflect) names `rimz-reflect`, which \
+             this profile cannot reach: its skills leave out rimz-reflect",
+            "agents/no-skill-tool.md: profile no-skill-tool: skill(commit) names `commit`, which \
+             this profile cannot reach: its tools leave out Skill",
+        ]
+    );
+}
+
+#[test]
+fn subagent_references_check_allowlists_catalog_commands_aliases_and_children() {
+    let root = tempfile::tempdir().unwrap();
+    for namespace in ["agents", "subagents"] {
+        std::fs::create_dir(root.path().join(namespace)).unwrap();
+    }
+    for kind in ["claude", "antigravity", "opencode"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    for name in ["explorer", "reviewer"] {
+        std::fs::write(
+            root.path().join(format!("subagents/{name}.md")),
+            "---\ndescription: Child\nagent: claude\ntools: [Read]\n---\nChild.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("subagents/child.md"),
+        "---\ndescription: Child\nagent: claude\ntools: [Read]\n---\nUse subagent(explorer).",
+    )
+    .unwrap();
+    for (name, fields, body) in [
+        (
+            "open",
+            "tools: [Bash, Skill]\n",
+            "Use subagent(explorer), subagent(lint), subagent(agy), subagent(opencode-mini), subagent(missing), and Agent(missing).",
+        ),
+        (
+            "narrow",
+            "tools: [Bash, Skill]\nsubagents: [explorer]\n",
+            "Use subagent(explorer), subagent(reviewer), subagent(lint), subagent(opencode-mini), and subagent(missing).",
+        ),
+        (
+            "none",
+            "tools: [Bash, Skill]\nsubagents: []\n",
+            "Use subagent(explorer).",
+        ),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\nagent: claude\n{fields}---\n{body}"),
+        )
+        .unwrap();
+    }
+    let machine: rimz::config::MachineConfig =
+        toml::from_str("[agents.commands]\nlint = 'cargo clippy'\n").unwrap();
+    let loaded = load(root.path(), SkillCheck::Skip, &machine);
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut messages: Vec<_> = capability_errors(&loaded, &machine, |_| None)
+        .into_iter()
+        .map(|error| {
+            let file = error.path.strip_prefix(root.path()).unwrap().to_owned();
+            format!("{}: {}", file.display(), error.message)
+        })
+        .collect();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "agents/narrow.md: profile narrow: subagent(lint) names `lint`, which this profile \
+             cannot reach: its subagents leave out lint",
+            "agents/narrow.md: profile narrow: subagent(missing) names `missing`, which is not a \
+             configured subagent profile",
+            "agents/narrow.md: profile narrow: subagent(opencode-mini) names `opencode-mini`, \
+             which this profile cannot reach: its subagents leave out opencode-mini",
+            "agents/narrow.md: profile narrow: subagent(reviewer) names `reviewer`, which this \
+             profile cannot reach: its subagents leave out reviewer",
+            "agents/none.md: profile none: subagent(explorer) names `explorer`, which this profile \
+             cannot reach: its subagents leave out explorer",
+            "agents/open.md: profile open: subagent(missing) names `missing`, which is not a \
+             configured subagent profile",
+            "subagents/child.md: profile child: subagent(explorer) names `explorer`, which this \
+             profile cannot reach: a subagent cannot launch subagents",
+        ]
+    );
+
+    // A `[agents.commands]` key equal to a provider alias matches the catalog directly even when
+    // that provider has no kind base.
+    let cmd_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(cmd_root.path().join("agents")).unwrap();
+    std::fs::write(
+        cmd_root.path().join("agents/claude.md"),
+        "---\ndescription: Base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        cmd_root.path().join("agents/open.md"),
+        "---\ndescription: Test\nagent: claude\ntools: [Bash, Skill]\n---\nUse subagent(agy).",
+    )
+    .unwrap();
+    std::fs::write(
+        cmd_root.path().join("agents/narrow.md"),
+        "---\ndescription: Test\nagent: claude\ntools: [Bash, Skill]\nsubagents: [claude]\n---\nUse subagent(agy).",
+    )
+    .unwrap();
+    std::fs::write(
+        cmd_root.path().join("agents/allow-agy.md"),
+        "---\ndescription: Test\nagent: claude\ntools: [Bash, Skill]\nsubagents: [agy]\n---\nUse subagent(agy).",
+    )
+    .unwrap();
+    let cmd_machine: rimz::config::MachineConfig =
+        toml::from_str("[agents.commands]\nagy = 'echo hi'\n").unwrap();
+    let cmd_loaded = load(cmd_root.path(), SkillCheck::Skip, &cmd_machine);
+    assert!(cmd_loaded.errors.is_empty(), "{:?}", cmd_loaded.errors);
+    let mut cmd_messages: Vec<_> = capability_errors(&cmd_loaded, &cmd_machine, |_| None)
+        .into_iter()
+        .map(|error| {
+            let file = error.path.strip_prefix(cmd_root.path()).unwrap().to_owned();
+            format!("{}: {}", file.display(), error.message)
+        })
+        .collect();
+    cmd_messages.sort();
+    assert_eq!(
+        cmd_messages,
+        [
+            "agents/narrow.md: profile narrow: subagent(agy) names `agy`, which this profile \
+             cannot reach: its subagents leave out agy",
+        ]
+    );
+}

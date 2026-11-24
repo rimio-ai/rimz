@@ -32,7 +32,7 @@ pub(super) fn run(json: bool) -> Result<()> {
         .errors
         .extend(capability_errors(&loaded, &machine, |kind| {
             (!in_sandbox).then(|| {
-                rimz::agents::skills::rimz_skills(
+                rimz::agents::skills::available_skills(
                     rimz::agents::find_definition(kind)
                         .and_then(|definition| definition.skills_home(&env))
                         .as_deref(),
@@ -520,20 +520,51 @@ fn shut_out(
     (tool, skill)
 }
 
-/// Each `rimz(x)` in a profile's resolved prompt sources that names no capability
-/// and no skill on disk for its kind, or that the profile cannot reach. `on_disk`
-/// gives a kind's `rimz-*` skills, or `None` when the disk is not checked, and
-/// then only the lists judge. The launch only warns for these, so they stay out of
-/// the definition loader, whose errors refuse a launch.
+/// Whether `catalog` lists `name`, matching exact catalog names first and then kind aliases the
+/// way `subagent_policy::catalog` resolves `subagents:` entries.
+fn catalog_contains(
+    catalog: &rimz::harness::subagent_policy::SubagentCatalog,
+    subagent_profiles: &rimz::config::ProfilesConfig,
+    name: &str,
+) -> bool {
+    let rimz::harness::subagent_policy::SubagentCatalog::Available(specs) = catalog else {
+        return false;
+    };
+    if specs.iter().any(|spec| spec.name == name) {
+        return true;
+    }
+    if subagent_profiles.0.contains_key(name) {
+        return false;
+    }
+    rimz::agents::find_runtime(name)
+        .filter(|runtime| runtime.variant.is_none())
+        .is_some_and(|runtime| specs.iter().any(|spec| spec.name == runtime.kind()))
+}
+
+/// Each `rimz(x)`, `skill(x)`, and `subagent(x)` in a profile's resolved prompt sources that
+/// names an unknown target or one the profile cannot reach. A `skill(rimz-x)` for one of the ten
+/// MCP capabilities is judged as `rimz(x)`, never against `skills:`. `on_disk` gives a kind's
+/// skills on disk, or `None` when the disk is not checked, and then only the lists judge. The
+/// launch only warns for unreachable capabilities, so these checks stay out of the definition
+/// loader, whose errors refuse a launch.
 fn capability_errors(
     loaded: &LoadedDefinitions,
     machine: &rimz::config::MachineConfig,
     on_disk: impl Fn(&str) -> Option<std::collections::BTreeSet<String>>,
 ) -> Vec<definitions::DefinitionErr> {
     let mut inventories = std::collections::BTreeMap::new();
+    let full_catalog = rimz::harness::subagent_policy::catalog(
+        None,
+        &loaded.agent_profiles,
+        &loaded.subagent_profiles,
+        &machine.agents.commands,
+    );
     let mut errors = Vec::new();
     for (row, profile) in own_rows(loaded) {
-        let names: std::collections::BTreeSet<String> = profile
+        let mut rimz_names = std::collections::BTreeSet::new();
+        let mut skill_names = std::collections::BTreeSet::new();
+        let mut subagent_names = std::collections::BTreeSet::new();
+        for text in profile
             .system_prompt_file
             .iter()
             .chain(&profile.append_system_prompt_files)
@@ -541,12 +572,29 @@ fn capability_errors(
                 rimz::config::PromptSource::Text { text, .. } => Some(text.clone()),
                 rimz::config::PromptSource::File(path) => std::fs::read_to_string(path).ok(),
             })
-            .flat_map(|text| rimz::config::rimz_references(&text))
-            .collect();
+        {
+            for reference in rimz::config::prompt_references(&text) {
+                match reference.kind {
+                    rimz::config::PromptReferenceKind::Rimz => {
+                        rimz_names.insert(format!("rimz-{}", reference.name));
+                    }
+                    rimz::config::PromptReferenceKind::Skill => {
+                        if rimz::mcp::catalog::Capability::from_name(reference.name).is_some() {
+                            rimz_names.insert(reference.name.to_owned());
+                        } else {
+                            skill_names.insert(reference.name.to_owned());
+                        }
+                    }
+                    rimz::config::PromptReferenceKind::Subagent => {
+                        subagent_names.insert(reference.name.to_owned());
+                    }
+                }
+            }
+        }
         let inventory = inventories
             .entry(row.kind.clone())
             .or_insert_with(|| on_disk(&row.kind));
-        for name in names {
+        for name in rimz_names {
             let present = inventory
                 .as_ref()
                 .is_none_or(|skills| skills.contains(&name));
@@ -590,6 +638,77 @@ fn capability_errors(
                 message,
                 cause: definitions::DefinitionCause::Invalid,
             });
+        }
+        for name in skill_names {
+            let present = inventory
+                .as_ref()
+                .is_none_or(|skills| skills.contains(&name));
+            let (_, reasons) = shut_out(
+                machine,
+                &row.kind,
+                profile,
+                row.namespace == "subagents",
+                &name,
+            );
+            let message = if !present {
+                format!(
+                    "profile {}: skill({name}) names `{name}`, which is not a skill on disk for {}",
+                    row.name, row.kind
+                )
+            } else if reasons.is_empty() {
+                continue;
+            } else {
+                format!(
+                    "profile {}: skill({name}) names `{name}`, which this profile cannot reach: {}",
+                    row.name,
+                    reasons.join("; ")
+                )
+            };
+            errors.push(definitions::DefinitionErr {
+                path: row.source.clone(),
+                message,
+                cause: definitions::DefinitionCause::Invalid,
+            });
+        }
+        if !subagent_names.is_empty() {
+            let profile_catalog = (row.namespace != "subagents").then(|| {
+                rimz::harness::subagent_policy::catalog(
+                    Some(&row.name),
+                    &loaded.agent_profiles,
+                    &loaded.subagent_profiles,
+                    &machine.agents.commands,
+                )
+            });
+            for name in subagent_names {
+                let message = if let Some(catalog) = profile_catalog.as_ref() {
+                    if catalog_contains(catalog, &loaded.subagent_profiles, &name) {
+                        continue;
+                    } else if catalog_contains(&full_catalog, &loaded.subagent_profiles, &name) {
+                        format!(
+                            "profile {}: subagent({name}) names `{name}`, which this profile \
+                             cannot reach: its subagents leave out {name}",
+                            row.name
+                        )
+                    } else {
+                        format!(
+                            "profile {}: subagent({name}) names `{name}`, which is not a \
+                             configured subagent profile",
+                            row.name
+                        )
+                    }
+                } else {
+                    format!(
+                        "profile {}: subagent({name}) names `{name}`, which this profile cannot \
+                         reach: a subagent cannot launch subagents",
+                        row.name
+                    )
+                };
+                errors.push(definitions::DefinitionErr {
+                    path: row.source.clone(),
+                    message,
+                    cause: definitions::DefinitionCause::Invalid,
+                });
+            }
         }
     }
     errors
