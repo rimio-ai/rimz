@@ -1002,6 +1002,10 @@ fn a_team_call_opens_its_cohort_in_the_named_worktree() {
 
 /// A worktree whose cohort has closed refuses a plain launch, and the hint names what the called
 /// tool offers: `agent` has `fresh`, which then launches, and `team` does not.
+///
+/// The seat never goes live, so the refusal comes from `worktree_entry::check`; a `from_pr` call
+/// skips that check and reaches the closed-cohort branch only for a seat that went live and ended,
+/// as `a_closed_pull_request_worktree_refusal_hints_a_retry_the_tool_accepts` shows.
 #[cfg(unix)]
 #[test]
 fn a_closed_worktree_refusal_hints_in_the_called_tools_terms() {
