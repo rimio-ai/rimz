@@ -2231,6 +2231,446 @@ mod spend_rows {
             .collect();
         assert_eq!(files, [full]);
     }
+
+    fn timed_model_row(step: u64, at: &str, output: u64) -> String {
+        json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": at,
+            "content": "answer",
+            "model": "gemini-4-neon-high",
+            "input_tokens": 100,
+            "cache_read_tokens": 0,
+            "output_tokens": output,
+            "tool_calls": [{"name": "run_command", "args": {}}]
+        })
+        .to_string()
+    }
+
+    fn generic_row(step: u64, status: &str, at: &str) -> String {
+        json!({
+            "step_index": step,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": status,
+            "created_at": at,
+            "content": "tool output"
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn response_timing_times_only_model_rows_followed_by_a_generic_row() {
+        use crate::agents::spending::response_timing;
+
+        const AT_15: &str = "2026-07-13T23:23:15Z";
+        const AT_19: &str = "2026-07-13T23:23:19Z";
+        const AT_OVER_MAX: &str = "2026-07-13T23:28:11Z";
+
+        let dir = tempfile::tempdir().unwrap();
+        let book = PriceBook::from_litellm_json(NEON);
+        let checkpoint = |step, at| {
+            json!({
+                "step_index": step,
+                "source": "SYSTEM",
+                "type": "CHECKPOINT",
+                "status": "DONE",
+                "created_at": at,
+                "input_tokens": 100,
+                "output_tokens": 250
+            })
+            .to_string()
+        };
+        let cases = [
+            (
+                "done generic follower",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    generic_row(2, "DONE", AT_15),
+                ],
+                vec![response_timing(250, 5_000)],
+            ),
+            (
+                "running generic follower",
+                vec![
+                    timed_model_row(1, AT_10, 300),
+                    generic_row(2, "RUNNING", AT_12),
+                ],
+                vec![response_timing(300, 2_000)],
+            ),
+            (
+                "no follower",
+                vec![timed_model_row(1, AT_10, 250)],
+                vec![None],
+            ),
+            (
+                "user input follower",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    user_record(2, AT_15, "next"),
+                ],
+                vec![None],
+            ),
+            (
+                "system message follower",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    record(2, "SYSTEM", "SYSTEM_MESSAGE", "DONE", AT_15, "notice").to_string(),
+                ],
+                vec![None],
+            ),
+            (
+                "checkpoint follower stays priced and untimed",
+                vec![timed_model_row(1, AT_10, 250), checkpoint(2, AT_15)],
+                vec![None, None],
+            ),
+            (
+                "model row follower leaves first untimed and times second",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    timed_model_row(2, AT_15, 200),
+                    generic_row(3, "DONE", AT_19),
+                ],
+                vec![None, response_timing(200, 4_000)],
+            ),
+            (
+                "invoke_subagent follower stays untimed",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    record(2, "MODEL", "INVOKE_SUBAGENT", "DONE", AT_15, "{}").to_string(),
+                ],
+                vec![None],
+            ),
+            (
+                "non-model generic follower stays untimed",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    record(2, "SYSTEM", "GENERIC", "DONE", AT_15, "other").to_string(),
+                ],
+                vec![None],
+            ),
+            (
+                "later generic past another row stays untimed",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    user_record(2, AT_12, "interleaved"),
+                    generic_row(3, "DONE", AT_15),
+                ],
+                vec![None],
+            ),
+            (
+                "checkpoint start row stays untimed",
+                vec![checkpoint(1, AT_10), generic_row(2, "DONE", AT_15)],
+                vec![None],
+            ),
+            (
+                "zero second gap fails shared floor",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    generic_row(2, "DONE", AT_10),
+                ],
+                vec![None],
+            ),
+            (
+                "under 100 output tokens stays untimed",
+                vec![timed_model_row(1, AT_10, 99), generic_row(2, "DONE", AT_15)],
+                vec![None],
+            ),
+            (
+                "exact 100 output tokens and 1s gap is timed",
+                vec![
+                    timed_model_row(1, AT_10, 100),
+                    generic_row(2, "DONE", AT_11),
+                ],
+                vec![response_timing(100, 1_000)],
+            ),
+            (
+                "gap over 300s ceiling stays untimed",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    generic_row(2, "DONE", AT_OVER_MAX),
+                ],
+                vec![None],
+            ),
+            (
+                "negative clock skew gap stays untimed",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    generic_row(2, "DONE", AT_09),
+                ],
+                vec![None],
+            ),
+            (
+                "quoted generic text in user content does not time",
+                vec![
+                    timed_model_row(1, AT_10, 250),
+                    user_record(2, AT_15, r#"source "MODEL" type "GENERIC""#),
+                ],
+                vec![None],
+            ),
+        ];
+
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (label, rows, want) in cases {
+            let body = format!("{}\n", rows.join("\n"));
+            let path =
+                write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &body);
+            let got: Vec<_> = AntigravityAdapter
+                .parse_spend(&path, None, &book)
+                .entries
+                .into_iter()
+                .map(|entry| entry.timing)
+                .collect();
+            actual.push((label, got));
+            expected.push((label, want));
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn resumed_parse_matches_cold_parse_at_every_line_boundary() {
+        use crate::agents::spending::{response_timing, session_entries};
+
+        const AT_15: &str = "2026-07-13T23:23:15Z";
+        const AT_16: &str = "2026-07-13T23:23:16Z";
+        const AT_19: &str = "2026-07-13T23:23:19Z";
+        const AT_20: &str = "2026-07-13T23:23:20Z";
+        const AT_21: &str = "2026-07-13T23:23:21Z";
+        const AT_25: &str = "2026-07-13T23:23:25Z";
+        const AT_26: &str = "2026-07-13T23:23:26Z";
+        const AT_27: &str = "2026-07-13T23:23:27Z";
+
+        let dir = tempfile::tempdir().unwrap();
+        let book = PriceBook::from_litellm_json(NEON);
+        let lines = [
+            user_record(0, AT_09, "start"),
+            timed_model_row(1, AT_10, 400),
+            generic_row(2, "DONE", AT_15),
+            timed_model_row(3, AT_16, 250),
+            generic_row(4, "RUNNING", AT_19),
+            record(5, "SYSTEM", "SYSTEM_MESSAGE", "DONE", AT_20, "bg done").to_string(),
+            timed_model_row(6, AT_21, 80),
+            generic_row(7, "DONE", AT_25),
+            json!({
+                "step_index": 8,
+                "source": "SYSTEM",
+                "type": "CHECKPOINT",
+                "status": "DONE",
+                "created_at": AT_26,
+                "input_tokens": 50,
+                "output_tokens": 200
+            })
+            .to_string(),
+            timed_model_row(9, AT_27, 300),
+        ];
+        let full_body = format!("{}\n", lines.join("\n"));
+        let full_path =
+            write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &full_body);
+        let cold = AntigravityAdapter.parse_spend(&full_path, None, &book);
+        let cold_timings: Vec<_> = cold.entries.iter().map(|entry| entry.timing).collect();
+        assert_eq!(
+            cold_timings,
+            [
+                response_timing(400, 5_000),
+                response_timing(250, 3_000),
+                None,
+                None,
+                None,
+            ]
+        );
+
+        for split in 1..lines.len() {
+            for trailing_newline in [true, false] {
+                let prefix = if trailing_newline {
+                    format!("{}\n", lines[..split].join("\n"))
+                } else {
+                    lines[..split].join("\n")
+                };
+                let path = write_transcript_named(
+                    dir.path(),
+                    SESSION_ID,
+                    "transcript_full.jsonl",
+                    &prefix,
+                );
+                let first = AntigravityAdapter.parse_spend(&path, None, &book);
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap();
+                if !trailing_newline {
+                    file.write_all(b"\n").unwrap();
+                }
+                for line in &lines[split..] {
+                    writeln!(file, "{line}").unwrap();
+                }
+                let resumed = AntigravityAdapter.parse_spend(&path, Some(&first.cursor), &book);
+                assert_eq!(
+                    resumed.cursor, cold.cursor,
+                    "cursor mismatch at split {split} (newline={trailing_newline})"
+                );
+                // Cut between the <100-token model row (index 6) and its follower (index 7)
+                // must not re-emit step 6 because it still has no timing.
+                if split == 7 {
+                    assert!(
+                        resumed
+                            .entries
+                            .iter()
+                            .all(|entry| entry.message_id.as_deref()
+                                != Some(&format!("{SESSION_ID}:6"))),
+                        "untimed row must not re-emit at split {split} (newline={trailing_newline})"
+                    );
+                }
+                // Cut between step 1 (index 1) and its DONE follower (index 2) re-emits step 1 timed.
+                if split == 2 {
+                    assert_eq!(
+                        resumed.entries.first().and_then(|entry| entry.timing),
+                        response_timing(400, 5_000),
+                        "timed re-emit expected at split {split} (newline={trailing_newline})"
+                    );
+                }
+                let mut combined = first.entries;
+                combined.extend(resumed.entries);
+                let mut deduped: Vec<_> = session_entries(&combined, SESSION_ID)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                deduped.sort_by_key(|entry| entry.ts_secs);
+                assert_eq!(
+                    deduped, cold.entries,
+                    "deduped entries mismatch at split {split} (newline={trailing_newline})"
+                );
+                let combined_usd: f64 = deduped.iter().map(|entry| entry.cost_usd).sum();
+                let cold_usd: f64 = cold.entries.iter().map(|entry| entry.cost_usd).sum();
+                assert!(
+                    (combined_usd - cold_usd).abs() < 1e-12,
+                    "cost mismatch at split {split} (newline={trailing_newline})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn live_cost_shows_trailing_model_row_at_once_and_counts_it_once_after_follower() {
+        use crate::agents::RefreshTrigger;
+        use crate::agents::spending::response_timing;
+
+        const AT_15: &str = "2026-07-13T23:23:15Z";
+        const AT_20: &str = "2026-07-13T23:23:20Z";
+        const AT_24: &str = "2026-07-13T23:23:24Z";
+
+        let mut live = LiveCost::new();
+        let row1 = timed_model_row(1, AT_10, 200);
+        let path = live.write(std::slice::from_ref(&row1));
+        let first = live.refresh(RefreshTrigger::Tick).expect("priced at once");
+        let first_usd = neon_cost(100, 0, 200);
+        assert!((cost_of(&first).unwrap() - first_usd).abs() < 1e-12);
+        let crate::agents::FieldPatch::Set(fold1) = &first.spend_fold else {
+            panic!("first fold stored: {:?}", first.spend_fold);
+        };
+
+        // Follower lands: a resumed parse emits the timed copy, and the live fold keeps the same total.
+        let follower1 = generic_row(2, "DONE", AT_15);
+        live.write(&[row1.clone(), follower1.clone()]);
+        let resumed = AntigravityAdapter.parse_spend(
+            &path,
+            Some(&fold1.cursor),
+            &PriceBook::from_litellm_json(NEON),
+        );
+        assert_eq!(resumed.entries.len(), 1);
+        assert_eq!(resumed.entries[0].timing, response_timing(200, 5_000));
+
+        let after_follower = live.refresh(RefreshTrigger::Watch).expect("grown");
+        assert!(
+            (cost_of(&after_follower).unwrap() - first_usd).abs() < 1e-12,
+            "re-emitted timed row must not double-count live cost"
+        );
+        let crate::agents::FieldPatch::Set(fold2) = &after_follower.spend_fold else {
+            panic!("second fold stored: {:?}", after_follower.spend_fold);
+        };
+        assert_eq!((fold2.input, fold2.output), (100, 200));
+
+        // Second trailing model row lands, then its follower and a third model row arrive together.
+        let row3 = timed_model_row(3, AT_20, 150);
+        live.write(&[row1.clone(), follower1.clone(), row3.clone()]);
+        let with_row3 = live.refresh(RefreshTrigger::Watch).expect("row3 priced");
+        let two_usd = first_usd + neon_cost(100, 0, 150);
+        assert!((cost_of(&with_row3).unwrap() - two_usd).abs() < 1e-12);
+
+        let follower3 = generic_row(4, "RUNNING", AT_24);
+        let row5 = timed_model_row(5, AT_24, 120);
+        live.write(&[row1, follower1, row3, follower3, row5]);
+        let with_row5 = live.refresh(RefreshTrigger::Watch).expect("row5 priced");
+        let three_usd = two_usd + neon_cost(100, 0, 120);
+        assert!(
+            (cost_of(&with_row5).unwrap() - three_usd).abs() < 1e-12,
+            "batched follower + next model row counts each once"
+        );
+    }
+
+    #[test]
+    fn truncated_or_rewritten_file_with_pending_cursor_parses_without_panic_or_wrong_timing() {
+        const AT_15: &str = "2026-07-13T23:23:15Z";
+
+        let dir = tempfile::tempdir().unwrap();
+        let book = PriceBook::from_litellm_json(NEON);
+        let prefix = format!(
+            "{}\n{}\n",
+            user_record(0, AT_09, "prompt"),
+            timed_model_row(1, AT_10, 250)
+        );
+        let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &prefix);
+        let first = AntigravityAdapter.parse_spend(&path, None, &book);
+        assert!(
+            first.cursor.state().is_some(),
+            "trailing model row must record pending start in cursor state"
+        );
+        let cursor = first.cursor;
+
+        // Truncated shorter than pending_start (empty and short).
+        for truncated in ["", "{\"short\":1}\n"] {
+            std::fs::write(&path, truncated).unwrap();
+            let parsed = AntigravityAdapter.parse_spend(&path, Some(&cursor), &book);
+            assert!(parsed.entries.is_empty(), "truncated {truncated:?}");
+        }
+
+        // Truncated between pending_start and cursor.offset.
+        std::fs::write(&path, &prefix[..prefix.len() - 20]).unwrap();
+        let mid_truncated = AntigravityAdapter.parse_spend(&path, Some(&cursor), &book);
+        assert!(mid_truncated.entries.is_empty());
+
+        // Rewritten longer than cursor.offset where pending_start is now a non-model row.
+        let mut rewritten = format!("{}\n", user_record(0, AT_09, "prompt"));
+        let pad_len = (cursor.offset as usize).saturating_sub(rewritten.len());
+        let non_model = user_record(1, AT_10, &"x".repeat(pad_len));
+        rewritten.push_str(&non_model);
+        rewritten.push('\n');
+        rewritten.push_str(&generic_row(2, "DONE", AT_15));
+        rewritten.push('\n');
+        std::fs::write(&path, &rewritten).unwrap();
+        let after_non_model = AntigravityAdapter.parse_spend(&path, Some(&cursor), &book);
+        assert!(
+            after_non_model
+                .entries
+                .iter()
+                .all(|entry| entry.timing.is_none()),
+            "rewritten non-model prefix must not produce timing"
+        );
+
+        // Corrupted cursor whose pending_start is past the file end and past offset.
+        let valid_body = format!(
+            "{}\n{}\n",
+            timed_model_row(1, AT_10, 250),
+            generic_row(2, "DONE", AT_15)
+        );
+        std::fs::write(&path, &valid_body).unwrap();
+        let bad_cursor =
+            crate::agents::spending::SpendCursor::with_state(0, &json!({"pending_start": 999_999}));
+        let from_bad = AntigravityAdapter.parse_spend(&path, Some(&bad_cursor), &book);
+        assert_eq!(from_bad.entries.len(), 1);
+    }
 }
 #[test]
 fn visible_transcript_contract_exposes_only_normalized_messages() {

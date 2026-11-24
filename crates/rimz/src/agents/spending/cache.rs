@@ -85,7 +85,9 @@ use super::aggregate::{
 /// v29 prices Codex ChatGPT-plan turns as plan burn from each `token_count`'s
 /// `rate_limits`, so finalized Codex sessions reprice once.
 /// v30 drops cached rows from finalized Codex helper-thread rollouts once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 30;
+/// v31 times Antigravity model responses followed by a `MODEL` / `GENERIC` row,
+/// so finalized Antigravity sessions re-parse once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 31;
 
 /// Output tokens and elapsed milliseconds for timed responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,9 +174,10 @@ pub struct FileCacheEntry {
 /// last consumed line, plus the adapter's cross-line state, held as JSON text
 /// and decoded on use (Codex carries its cumulative token totals and tracked
 /// model so a resumed delta subtraction stays exact; Claude carries its
-/// pricing fingerprint and the input and in-flight message timestamps).
-/// Stored per file in the spending cache; a state shape change bumps
-/// `SPENDING_CACHE_VERSION`.
+/// pricing fingerprint and the input and in-flight message timestamps;
+/// Antigravity carries the byte start of a trailing model row awaiting its
+/// follower for response timing). Stored per file in the spending cache; a
+/// state shape change bumps `SPENDING_CACHE_VERSION`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SpendCursor {
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
