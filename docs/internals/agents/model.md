@@ -256,7 +256,7 @@ The session's next real lifecycle signal closes the bracket, with two exceptions
 | Close | Lands | Because |
 | --- | --- | --- |
 | automatic | `running` stays; `waiting` → `running`; resting statuses hold | only an interrupted turn resumes |
-| manual | `running` → `idle`; `waiting` → `running`; other statuses hold | `/compact` runs between turns, so a still-running row is stale |
+| manual | `running` → `idle` (`parked` stays `running` / `parked`); `waiting` → `running`; other statuses hold | `/compact` runs between foreground turns, so a non-parked running row is stale while a parked row still holds background work |
 | trigger unknown, or failed | status and phase held; `waiting` → `running` | the provider reported no trigger, or the compaction did not complete |
 
 A `compaction_ended` with no open bracket that changes neither status nor phase is ignored: it stamps no `turn_ended_at`. A successful close that lands at rest after a turn has opened advances both turn-start boundaries, ignored or not, retiring the prior turn's subagents the same way `/clear` does. It never opens a new turn. Because the start can then pass the carried `turn_ended_at`, the [request estimate](#activity-clocks) can move to that carried end.

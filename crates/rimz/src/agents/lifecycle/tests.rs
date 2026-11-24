@@ -1600,3 +1600,81 @@ fn only_a_start_with_a_new_id_supersedes_the_started_turn() {
     assert_eq!(idless, (None, owned("p2")));
     assert_eq!(fold(&idless, &start(None)), idless);
 }
+
+#[test]
+fn manual_compaction_keeps_parked_row_running_and_rests_other_running_phases() {
+    let manual_ok = LifecycleSignal::CompactionEnded {
+        auto: Some(false),
+        failed: false,
+    };
+    let parked_open = state(AgentStatus::Running, TurnPhase::Parked, true);
+    let parked_closed = assert_next(
+        "bracketed manual close on parked",
+        Some(parked_open),
+        manual_ok.clone(),
+        state(AgentStatus::Running, TurnPhase::Parked, false),
+    );
+    assert_eq!(
+        (parked_closed.kind, parked_closed.compaction_closed),
+        (TransitionKind::Normal, true)
+    );
+
+    let parked_unbracketed = assert_next(
+        "unbracketed manual close on parked",
+        Some(state(AgentStatus::Running, TurnPhase::Parked, false)),
+        manual_ok.clone(),
+        state(AgentStatus::Running, TurnPhase::Parked, false),
+    );
+    assert_eq!(
+        (
+            parked_unbracketed.kind,
+            parked_unbracketed.compaction_closed
+        ),
+        (
+            TransitionKind::Ignored {
+                reason: "compaction end without an open bracket"
+            },
+            false,
+        )
+    );
+
+    for (label, phase) in [
+        ("reasoning", TurnPhase::Reasoning),
+        ("acting", TurnPhase::Acting),
+    ] {
+        let rested = assert_next(
+            label,
+            Some(state(AgentStatus::Running, phase, true)),
+            manual_ok.clone(),
+            state(AgentStatus::Idle, TurnPhase::Idle, false),
+        );
+        assert_eq!(
+            (rested.kind, rested.compaction_closed),
+            (TransitionKind::Normal, true)
+        );
+    }
+
+    for (label, signal) in [
+        (
+            "auto on parked",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            },
+        ),
+        (
+            "failed manual on parked",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: true,
+            },
+        ),
+    ] {
+        assert_next(
+            label,
+            Some(parked_open),
+            signal,
+            state(AgentStatus::Running, TurnPhase::Parked, false),
+        );
+    }
+}

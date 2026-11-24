@@ -552,7 +552,7 @@ pub(crate) fn step(
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-    let status = map_status(signal, prior_status, &mut kind);
+    let status = map_status(signal, prior_status, prior_phase, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
     let waiting_cleared =
@@ -657,6 +657,7 @@ fn opened_turn(
 fn map_status(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
+    prior_phase: TurnPhase,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
     use AgentStatus::{Failed, Idle, Running, Success, Waiting};
@@ -713,12 +714,14 @@ fn map_status(
         }
         LifecycleSignal::CompactionEnded { .. } if prior == Waiting => Running,
         // A stale running row rests: the manual close proves the user typed at
-        // the prompt, and no Stop will end the turn the row remembers. An
-        // automatic close resumes only the turn it interrupted, so it preserves.
+        // the prompt, and no Stop will end the turn the row remembers. A parked
+        // row already ended its foreground turn and is waiting on background
+        // work, so the manual close keeps it parked. An automatic close resumes
+        // only the turn it interrupted, so it preserves.
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
-        } if prior == Running => Idle,
+        } if prior == Running && prior_phase != TurnPhase::Parked => Idle,
         LifecycleSignal::Compacting | LifecycleSignal::CompactionEnded { .. } => prior,
         // A session ending mid-turn delivered nothing, matching
         // `terminal_disposition` and the supervised run's failed verdict.

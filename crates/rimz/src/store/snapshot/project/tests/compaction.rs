@@ -965,3 +965,45 @@ fn second_end_of_one_compaction_keeps_the_fresh_figure() {
     assert_eq!(agent.usage.total_tokens, Some(5_717));
     assert_eq!(agent.usage.context_pct, Some(2));
 }
+
+#[test]
+fn manual_compaction_on_parked_row_keeps_parked_and_preserves_turn_clocks() {
+    for source in ["claude", "antigravity"] {
+        let prompt = lifecycle_at(source, 1, "UserPromptSubmit", signal("turn_started"));
+        let edit = lifecycle_at(source, 2, "PostToolUse", tool_used());
+        let parked_stop = lifecycle_at(
+            source,
+            3,
+            "Stop",
+            serde_json::json!({
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": true
+            }),
+        );
+        let compact = lifecycle_at(source, 4, "PreCompact", signal("compacting"));
+        let post = lifecycle_at(source, 5, "PostCompact", compaction_ended(Some(false)));
+
+        let before = reduce_agent_states(&[prompt.clone(), edit.clone(), parked_stop.clone()]);
+        let after = reduce_agent_states(&[prompt, edit, parked_stop, compact, post]);
+
+        assert_eq!(after[0].status, AgentStatus::Running, "{source}");
+        assert_eq!(after[0].phase, TurnPhase::Parked, "{source}");
+        assert!(after[0].compacting_since.is_none(), "{source}");
+        assert_eq!(after[0].compaction_count, 1, "{source}");
+        assert_eq!(
+            after[0].turn_started_at, before[0].turn_started_at,
+            "{source}"
+        );
+        assert_eq!(
+            after[0].user_turn_started_at, before[0].user_turn_started_at,
+            "{source}"
+        );
+        assert_eq!(after[0].prior_turn, before[0].prior_turn, "{source}");
+        assert_eq!(after[0].finished_at, before[0].finished_at, "{source}");
+        assert_eq!(
+            after[0].keepalive_since, before[0].keepalive_since,
+            "{source}"
+        );
+    }
+}

@@ -395,6 +395,41 @@ fn a_failed_compaction_restarts_the_clock() {
     );
 }
 
+#[test]
+fn manual_compaction_on_parked_row_keeps_idle_stop_held_busy() {
+    let (_dir, store) = fixture();
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+        LifecycleSignal::Compacting,
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
+    ] {
+        observe(&store, "session-1", None, signal);
+    }
+    let agent = store.snapshot_cached().expect("snapshot").agents[0].clone();
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.phase, TurnPhase::Parked);
+    let stop = IdleStop {
+        after_secs: 180,
+        requested_at: Timestamp::UNIX_EPOCH,
+        requested_by: None,
+    };
+    let later = agent.last_activity + jiff::SignedDuration::from_secs(600);
+    assert_eq!(resting(&agent, later), Err(Hold::Busy));
+    assert_eq!(
+        decide_alone(&store, &agent, &stop, later),
+        Verdict::Hold(Hold::Busy)
+    );
+}
+
 /// A live `rimz subagents` child of `parent`, resting with nothing owed.
 fn kept_child(parent: &AgentState, id: &str) -> AgentState {
     let (mut child, _) = rested();
