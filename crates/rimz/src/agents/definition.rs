@@ -239,8 +239,8 @@ pub enum SkippedPresetField {
 /// The keys a message delivery presses into an agent's composer, each a short sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageKeys {
-    /// Submits typed text at once: opens a turn on a resting agent and takes the text into a
-    /// running one. A steer, and an interrupt after its stop, press it.
+    /// Submits typed text for the running turn, or opens a turn on a resting agent. A steer, and
+    /// an interrupt after its stop, press it.
     pub send_now: &'static [KeyStep],
     /// Submits typed text behind a running turn, or opens a turn on a resting agent. A boundary
     /// delivery presses it.
