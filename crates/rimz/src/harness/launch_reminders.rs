@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), scoped view, subagent policy, shared language servers, and how the launch reaches each RimZ capability it has.
+//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), scoped view, subagent policy, and shared language servers.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -247,14 +247,13 @@ impl LaunchReminders {
             .collect()
     }
 
-    /// The reminder's line for each RimZ capability the launch has: its name and how the
-    /// launch reaches it.
+    /// Each RimZ capability the launch has: its name and its short reach
+    /// (`mcp(<tool>)` or `skill(<name>)`).
     pub(super) fn capability_lines(&self, request: &ExecRequest) -> Vec<(String, String)> {
-        let server = server_name(request);
         self.rimz_capabilities(request)
             .into_iter()
             .map(|(name, reach)| {
-                let via = reach_phrase(&name, reach, server);
+                let via = resolve_reach(&name, reach);
                 (name, via)
             })
             .collect()
@@ -275,12 +274,11 @@ pub(super) enum Reach {
     Skill,
 }
 
-/// Resolve RimZ capability `name` under `reach`: `mcp(<tool>)` (comma-separated
-/// when a capability serves several tools) when served on RimZ's MCP server,
-/// `skill(<name>)` when reached as a skill, or `None` when unreachable.
-pub(super) fn resolve_reach(name: &str, reach: Option<Reach>) -> Option<String> {
-    let reach = reach?;
-    Some(match reach {
+/// How the launch reaches capability `name`, as every reminder sentence and the
+/// rewritten prompt word it: `mcp(<tool>)` for each tool `TOOLS` assigns the
+/// capability, comma-separated, or `skill(<name>)`.
+pub(super) fn resolve_reach(name: &str, reach: Reach) -> String {
+    match reach {
         Reach::Skill => format!("skill({})", escape_reminder_text(name)),
         Reach::Tools(capability) => crate::mcp::catalog::TOOLS
             .iter()
@@ -288,7 +286,7 @@ pub(super) fn resolve_reach(name: &str, reach: Option<Reach>) -> Option<String> 
             .map(|tool| format!("mcp({})", tool.name))
             .collect::<Vec<_>>()
             .join(", "),
-    })
+    }
 }
 
 /// Result of rewriting `rimz(x)` and capability `skill(rimz-x)` shorthand in a
@@ -324,7 +322,7 @@ pub(super) fn rewrite_prompt(text: &str, capabilities: &[(String, Reach)]) -> Pr
             .iter()
             .find(|(had, _)| had == &cap_name)
             .map(|(_, reach)| *reach);
-        match resolve_reach(&cap_name, reach) {
+        match reach.map(|reach| resolve_reach(&cap_name, reach)) {
             Some(replacement) => {
                 let original = &text[reference.range.clone()];
                 if replacement != original {
@@ -354,56 +352,6 @@ pub(super) fn rewrite_prompt(text: &str, capabilities: &[(String, Reach)]) -> Pr
         changed: true,
         unreachable,
     }
-}
-
-/// How the launch reaches capability `name`, as every reminder sentence words
-/// it: the tools `TOOLS` assigns the capability, on RimZ's MCP server under the
-/// `server` name the provider knows it by, or the skill.
-fn reach_phrase(name: &str, reach: Reach, server: &str) -> String {
-    let Reach::Tools(capability) = reach else {
-        return format!("Skill({})", escape_reminder_text(name));
-    };
-    let tools: Vec<_> = crate::mcp::catalog::TOOLS
-        .iter()
-        .filter(|tool| tool.capability == Some(capability))
-        .map(|tool| format!("`{}`", tool.name))
-        .collect();
-    format!("the {} of the `{server}` MCP server", tool_list(&tools))
-}
-
-/// `tools`, already quoted, as a list with its noun: "`a` tool", "`a` and `b` tools",
-/// "`a`, `b`, and `c` tools".
-fn tool_list(tools: &[String]) -> String {
-    let (list, noun) = match tools {
-        [] | [_] => (tools.concat(), "tool"),
-        [first, second] => (format!("{first} and {second}"), "tools"),
-        [rest @ .., last] => (format!("{}, and {last}", rest.join(", ")), "tools"),
-    };
-    format!("{list} {noun}")
-}
-
-/// The name RimZ's MCP server goes by for the request's kind.
-fn server_name(request: &ExecRequest) -> &'static str {
-    crate::agents::find_definition(request.kind.as_str())
-        .map_or(crate::mcp::catalog::SERVER_NAME, |adapter| {
-            adapter.mcp_server_name()
-        })
-}
-
-/// The RimZ capabilities paragraph; none when the launch has no capability.
-fn capabilities_paragraph(lines: &[(String, String)]) -> Option<String> {
-    if lines.is_empty() {
-        return None;
-    }
-    let bullets = lines
-        .iter()
-        .map(|(name, via)| format!("- {}: {via}", escape_reminder_text(name)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Some(format!(
-        "### RimZ capabilities\n\nA name written `rimz(x)` or `Skill(rimz-x)` in any text means \
-         RimZ's capability `rimz-x`, which you reach as its bullet says:\n\n{bullets}"
-    ))
 }
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
@@ -473,13 +421,11 @@ pub(super) fn render(
     } else {
         &[]
     };
-    let server = server_name(request);
     let lsp_via = format!(
         "via {}",
-        reach_phrase(
+        resolve_reach(
             Capability::Lsp.name(),
             reminders.reach(request, Capability::Lsp),
-            server
         )
     );
     if reminders.env
@@ -505,14 +451,12 @@ pub(super) fn render(
         && reminders.callable(request, Capability::Subagents)
         && let Some(catalog) = reminders.subagent_catalog.as_ref()
     {
-        let via = reach_phrase(
+        let via = resolve_reach(
             Capability::Subagents.name(),
             reminders.reach(request, Capability::Subagents),
-            server,
         );
         paragraphs.push(subagent_policy::reminder(catalog, &via));
     }
-    paragraphs.extend(capabilities_paragraph(&reminders.capability_lines(request)));
     if skills.is_none_or(|skills| {
         skills
             .iter()

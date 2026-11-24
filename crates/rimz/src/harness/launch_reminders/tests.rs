@@ -152,7 +152,8 @@ fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
     for subagent in [false, true] {
         request.subagent = subagent;
         let text = render(&request, &reminders, Path::new("/checkout"), None);
-        assert!(text.contains("### Environment\n\n- lsp: rust, python, via Skill(rimz-lsp)"));
+        assert!(text.contains("### Environment\n\n- lsp: rust, python, via skill(rimz-lsp)"));
+        assert!(!text.contains("### RimZ capabilities"));
         assert!(!text.contains("### Files"));
         if subagent {
             assert!(text.contains(SUBAGENT_REMINDER_BODY));
@@ -199,22 +200,19 @@ fn lsp_bullet_names_the_mcp_tool_when_live_and_the_skill_when_only_it_is_callabl
             ));
         }
     }
-    let tool = Some("- lsp: rust, via the `lsp` tool of the `rimz` MCP server".to_owned());
-    let agy_tool =
-        Some("- lsp: rust, via the `lsp` tool of the `rimz_tools` MCP server".to_owned());
-    let skill = Some("- lsp: rust, via Skill(rimz-lsp)".to_owned());
-    // Antigravity knows the server by the plugin's name for it.
+    let tool = Some("- lsp: rust, via mcp(lsp)".to_owned());
+    let skill = Some("- lsp: rust, via skill(rimz-lsp)".to_owned());
     assert_eq!(
         actual,
         [
             ("claude", false, true, skill.clone()),
             ("claude", false, false, None),
             ("claude", true, true, tool.clone()),
-            ("claude", true, false, tool),
+            ("claude", true, false, tool.clone()),
             ("antigravity", false, true, skill),
             ("antigravity", false, false, None),
-            ("antigravity", true, true, agy_tool.clone()),
-            ("antigravity", true, false, agy_tool),
+            ("antigravity", true, true, tool.clone()),
+            ("antigravity", true, false, tool),
         ]
     );
 }
@@ -270,18 +268,17 @@ fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_i
         });
         cannot_delegate(&request);
     }
-    let via = |server: &str| {
-        Some(format!(
-            "Launch them through the `subagent` tool of the `{server}` MCP server, subagents \
-             available to you:"
-        ))
-    };
+    let via = Some(
+        "Launch them through mcp(subagent). `subagent(x)` in any text means the profile `x` in \
+         this list:"
+            .to_owned(),
+    );
     assert_eq!(
         actual,
         [
-            ("claude", true, via("rimz")),
-            ("claude", true, via("rimz")),
-            ("antigravity", true, via("rimz_tools")),
+            ("claude", true, via.clone()),
+            ("claude", true, via.clone()),
+            ("antigravity", true, via),
         ]
     );
 }
@@ -320,10 +317,16 @@ fn a_profile_that_allows_no_subagents_gets_no_subagents_paragraph() {
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/checkout"), None);
-        let capabilities = capabilities_paragraph_of(&text).unwrap_or_default();
+        assert!(!text.contains("### RimZ capabilities"), "{text}");
+        let capabilities: Vec<_> = reminders
+            .capability_lines(&request)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
         actual.push((
             text.contains("### Subagents"),
-            capabilities.contains("rimz-message") && !capabilities.contains("rimz-subagents"),
+            capabilities.iter().any(|name| name == "rimz-message")
+                && !capabilities.iter().any(|name| name == "rimz-subagents"),
             reminders
                 .mcp_capabilities(&request)
                 .contains(&Capability::Subagents),
@@ -421,7 +424,7 @@ You are @coder, running on Opus.
 
 - cwd: /checkout
 - shell: zsh
-- lsp: rust, via Skill(rimz-lsp)
+- lsp: rust, via skill(rimz-lsp)
 - tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
 - shared: /home/you/.rimz/ws/room/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
 
@@ -429,7 +432,7 @@ You are @coder, running on Opus.
 
 Whether you could do a piece of work yourself settles nothing; you could do all of it. What decides is what the work leaves in your window: when you need its result but not the output behind it (a gate run, a log, a sweep across files, a long command), a profile below takes it. The launch costs you one turn, and the output you read yourself costs you every turn after.
 
-Launch them through Skill(rimz-subagents), subagents available to you:
+Launch them through skill(rimz-subagents). `subagent(x)` in any text means the profile `x` in this list:
 
 - `explorer`: Finds files and traces code paths
 
@@ -550,7 +553,7 @@ fn unlisted_lsp_does_not_open_environment() {
             request.skills = Some(skills.iter().map(|name| name.parse().unwrap()).collect());
             let text = render(&request, &reminders, Path::new("/checkout"), None);
             assert!(!text.contains("### Environment"), "{text}");
-            assert!(!text.contains("Skill(rimz-lsp)"), "{text}");
+            assert!(!text.contains("skill(rimz-lsp)"), "{text}");
         }
     }
 }
@@ -922,7 +925,7 @@ fn team_files_finish_environment_after_bullets() {
         };
         assert!(
             text.contains(
-                "- shell: zsh\n- lsp: rust, via Skill(rimz-lsp)\n- tmp: /tmp (`$TMPDIR`)"
+                "- shell: zsh\n- lsp: rust, via skill(rimz-lsp)\n- tmp: /tmp (`$TMPDIR`)"
             )
         );
         assert!(text.contains(&format!(
@@ -965,21 +968,8 @@ fn rimz_skills(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|name| (*name).to_owned()).collect()
 }
 
-fn capabilities_paragraph_of(text: &str) -> Option<String> {
-    let start = text.find("### RimZ capabilities")?;
-    let rest = &text[start..];
-    let end = rest[1..]
-        .find("\n\n###")
-        .map_or_else(|| rest.find("\n</").unwrap_or(rest.len()), |end| end + 1);
-    Some(rest[..end].to_owned())
-}
-
-const CAPABILITIES_LEAD: &str = "### RimZ capabilities\n\nA name written `rimz(x)` or \
-    `Skill(rimz-x)` in any text means RimZ's capability `rimz-x`, which you reach as its \
-    bullet says:\n\n";
-
 #[test]
-fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_disk() {
+fn capability_lines_use_short_form_and_reminder_omits_rimz_capabilities_section() {
     let mut actual = Vec::new();
     for kind in ["claude", "antigravity"] {
         let request =
@@ -991,56 +981,35 @@ fn capabilities_paragraph_names_the_served_tools_by_server_and_the_skills_on_dis
         };
         let text = render(&request, &reminders, Path::new("/checkout"), None);
         assert_eq!(text.matches("<system_reminder>").count(), 1, "{text}");
-        actual.push(capabilities_paragraph_of(&text));
+        assert!(!text.contains("### RimZ capabilities"), "{text}");
+        actual.push(reminders.capability_lines(&request));
     }
     // Claude withholds the skills its served tools stand for; Antigravity on the host cannot,
-    // so it has both, and the tool wins. rimz-control's tools come from the catalog, so a tool
-    // trunk adds there leaves this test alone; `tool_list_joins_one_two_and_more_tools` pins
-    // the list wording.
-    let control: Vec<_> = crate::mcp::catalog::TOOLS
+    // so it has both, and the tool wins. Both kinds render the same short form with no server
+    // name.
+    let control = crate::mcp::catalog::TOOLS
         .iter()
         .filter(|tool| tool.capability == Some(Capability::Control))
-        .map(|tool| format!("`{}`", tool.name))
-        .collect();
-    let control = tool_list(&control);
-    let served = |server: &str| {
-        Some(format!(
-            "{CAPABILITIES_LEAD}\
-- rimz-lsp: the `lsp` tool of the `{server}` MCP server
-- rimz-wait: the `wait` tool of the `{server}` MCP server
-- rimz-subagents: the `subagent` tool of the `{server}` MCP server
-- rimz-agents: the `agent` tool of the `{server}` MCP server
-- rimz-teams: the `team` tool of the `{server}` MCP server
-- rimz-workflow: the `workflow` tool of the `{server}` MCP server
-- rimz-loop: the `schedule` tool of the `{server}` MCP server
-- rimz-message: the `message` tool of the `{server}` MCP server
-- rimz-control: the {control} of the `{server}` MCP server
-- rimz-notes: the `notes` tool of the `{server}` MCP server"
-        ))
-    };
-    assert_eq!(actual, [served("rimz"), served("rimz_tools")]);
+        .map(|tool| format!("mcp({})", tool.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let served = vec![
+        ("rimz-lsp".to_owned(), "mcp(lsp)".to_owned()),
+        ("rimz-wait".to_owned(), "mcp(wait)".to_owned()),
+        ("rimz-subagents".to_owned(), "mcp(subagent)".to_owned()),
+        ("rimz-agents".to_owned(), "mcp(agent)".to_owned()),
+        ("rimz-teams".to_owned(), "mcp(team)".to_owned()),
+        ("rimz-workflow".to_owned(), "mcp(workflow)".to_owned()),
+        ("rimz-loop".to_owned(), "mcp(schedule)".to_owned()),
+        ("rimz-message".to_owned(), "mcp(message)".to_owned()),
+        ("rimz-control".to_owned(), control),
+        ("rimz-notes".to_owned(), "mcp(notes)".to_owned()),
+    ];
+    assert_eq!(actual, [served.clone(), served]);
 }
 
 #[test]
-fn tool_list_joins_one_two_and_more_tools() {
-    let quoted =
-        |names: &[&str]| -> Vec<String> { names.iter().map(|name| format!("`{name}`")).collect() };
-    assert_eq!(
-        [
-            tool_list(&quoted(&["a"])),
-            tool_list(&quoted(&["a", "b"])),
-            tool_list(&quoted(&["a", "b", "c", "d"])),
-        ],
-        [
-            "`a` tool",
-            "`a` and `b` tools",
-            "`a`, `b`, `c`, and `d` tools"
-        ]
-    );
-}
-
-#[test]
-fn capabilities_paragraph_on_a_skills_only_launch_follows_the_skills_list() {
+fn capability_lines_on_a_skills_only_launch_follow_the_skills_list() {
     let mut actual = Vec::new();
     for skills in [
         None,
@@ -1055,39 +1024,34 @@ fn capabilities_paragraph_on_a_skills_only_launch_follows_the_skills_list() {
             rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
             ..LaunchReminders::default()
         };
-        actual.push(capabilities_paragraph_of(&render(
-            &request,
-            &reminders,
-            Path::new("/checkout"),
-            None,
-        )));
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        assert!(!text.contains("### RimZ capabilities"), "{text}");
+        actual.push(reminders.capability_lines(&request));
     }
     assert_eq!(
         actual,
         [
-            Some(format!(
-                "{CAPABILITIES_LEAD}\
-- rimz-lsp: Skill(rimz-lsp)
-- rimz-message: Skill(rimz-message)
-- rimz-wait: Skill(rimz-wait)"
-            )),
-            Some(format!(
-                "{CAPABILITIES_LEAD}\
-- rimz-message: Skill(rimz-message)
-- rimz-wait: Skill(rimz-wait)"
-            )),
-            None,
+            vec![
+                ("rimz-lsp".to_owned(), "skill(rimz-lsp)".to_owned()),
+                ("rimz-message".to_owned(), "skill(rimz-message)".to_owned()),
+                ("rimz-wait".to_owned(), "skill(rimz-wait)".to_owned()),
+            ],
+            vec![
+                ("rimz-message".to_owned(), "skill(rimz-message)".to_owned()),
+                ("rimz-wait".to_owned(), "skill(rimz-wait)".to_owned()),
+            ],
+            Vec::new(),
         ]
     );
 }
 
-/// Under a RimZ grant the paragraph names only the granted capabilities, a served one as its
+/// Under a RimZ grant the capability lines name only the granted capabilities, a served one as its
 /// tools and the rest as skills on disk, whatever capability names a `skills` list carries, and
 /// then each `rimz-*` skill alone that the `skills` list admits: `skills: []` withholds it and
 /// still leaves a granted capability its skill. The launch plan's unreachable-reference warning
 /// reads this same list.
 #[test]
-fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
+fn capability_lines_under_a_grant_name_only_the_granted_capabilities() {
     let mut actual = Vec::new();
     for (kind, server) in [("claude", true), ("opencode", false)] {
         for skills in [
@@ -1117,32 +1081,21 @@ fn capabilities_paragraph_under_a_grant_names_only_the_granted_capabilities() {
                 &["rimz-lsp", "rimz-reflect"]
             };
             assert_eq!(names, expected, "{kind}");
-            actual.push(capabilities_paragraph_of(&render(
-                &request,
-                &reminders,
-                Path::new("/checkout"),
-                None,
-            )));
+            let text = render(&request, &reminders, Path::new("/checkout"), None);
+            assert!(!text.contains("### RimZ capabilities"), "{text}");
+            actual.push(reminders.capability_lines(&request));
         }
     }
-    let served = Some(format!(
-        "{CAPABILITIES_LEAD}\
-- rimz-lsp: the `lsp` tool of the `rimz` MCP server
-- rimz-reflect: Skill(rimz-reflect)"
-    ));
-    let served_quiet = Some(format!(
-        "{CAPABILITIES_LEAD}\
-- rimz-lsp: the `lsp` tool of the `rimz` MCP server"
-    ));
-    let skills = Some(format!(
-        "{CAPABILITIES_LEAD}\
-- rimz-lsp: Skill(rimz-lsp)
-- rimz-reflect: Skill(rimz-reflect)"
-    ));
-    let skills_quiet = Some(format!(
-        "{CAPABILITIES_LEAD}\
-- rimz-lsp: Skill(rimz-lsp)"
-    ));
+    let served = vec![
+        ("rimz-lsp".to_owned(), "mcp(lsp)".to_owned()),
+        ("rimz-reflect".to_owned(), "skill(rimz-reflect)".to_owned()),
+    ];
+    let served_quiet = vec![("rimz-lsp".to_owned(), "mcp(lsp)".to_owned())];
+    let skills = vec![
+        ("rimz-lsp".to_owned(), "skill(rimz-lsp)".to_owned()),
+        ("rimz-reflect".to_owned(), "skill(rimz-reflect)".to_owned()),
+    ];
+    let skills_quiet = vec![("rimz-lsp".to_owned(), "skill(rimz-lsp)".to_owned())];
     assert_eq!(
         actual,
         [
@@ -1190,19 +1143,23 @@ fn a_child_has_no_launching_capability_as_tool_or_skill() {
             ]),
             ..LaunchReminders::default()
         };
-        let paragraph =
-            capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
-                .unwrap();
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        assert!(!text.contains("### RimZ capabilities"), "{text}");
+        let lines = reminders.capability_lines(&request);
         let message = if served {
-            "- rimz-message: the `message` tool of the `rimz` MCP server"
+            ("rimz-message".to_owned(), "mcp(message)".to_owned())
         } else {
-            "- rimz-message: Skill(rimz-message)"
+            ("rimz-message".to_owned(), "skill(rimz-message)".to_owned())
         };
-        assert!(paragraph.contains(message), "{paragraph}");
-        for launching in ["rimz-subagents:", "rimz-agents:", "rimz-teams:"] {
-            assert!(!paragraph.contains(launching), "{paragraph}");
+        assert!(lines.contains(&message), "{lines:?}");
+        for launching in ["rimz-subagents", "rimz-agents", "rimz-teams"] {
+            assert!(lines.iter().all(|(name, _)| name != launching), "{lines:?}");
         }
-        assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
+        assert_eq!(
+            lines.iter().any(|(name, _)| name == "rimz-wait"),
+            served,
+            "{lines:?}"
+        );
     }
 }
 
@@ -1240,55 +1197,57 @@ fn a_judge_has_no_launching_capability_as_tool_or_skill() {
                 "{capabilities:?}"
             );
         }
-        let paragraph =
-            capabilities_paragraph_of(&render(&request, &reminders, Path::new("/checkout"), None))
-                .unwrap();
+        let text = render(&request, &reminders, Path::new("/checkout"), None);
+        assert!(!text.contains("### RimZ capabilities"), "{text}");
+        let lines = reminders.capability_lines(&request);
         let message = if served {
-            "- rimz-message: the `message` tool of the `rimz` MCP server"
+            ("rimz-message".to_owned(), "mcp(message)".to_owned())
         } else {
-            "- rimz-message: Skill(rimz-message)"
+            ("rimz-message".to_owned(), "skill(rimz-message)".to_owned())
         };
-        assert!(paragraph.contains(message), "{paragraph}");
-        for launching in ["rimz-subagents:", "rimz-agents:", "rimz-teams:"] {
-            assert!(!paragraph.contains(launching), "{paragraph}");
+        assert!(lines.contains(&message), "{lines:?}");
+        for launching in ["rimz-subagents", "rimz-agents", "rimz-teams"] {
+            assert!(lines.iter().all(|(name, _)| name != launching), "{lines:?}");
         }
-        assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
+        assert_eq!(
+            lines.iter().any(|(name, _)| name == "rimz-wait"),
+            served,
+            "{lines:?}"
+        );
     }
 }
 
 #[test]
-fn resolve_reach_maps_tools_skills_and_unreachable_to_short_form() {
+fn resolve_reach_maps_tools_and_skills_to_short_form() {
     let actual = [
-        resolve_reach("rimz-lsp", Some(Reach::Tools(Capability::Lsp))),
-        resolve_reach("rimz-wait", Some(Reach::Tools(Capability::Wait))),
-        resolve_reach("rimz-subagents", Some(Reach::Tools(Capability::Subagents))),
-        resolve_reach("rimz-agents", Some(Reach::Tools(Capability::Agents))),
-        resolve_reach("rimz-teams", Some(Reach::Tools(Capability::Teams))),
-        resolve_reach("rimz-workflow", Some(Reach::Tools(Capability::Workflow))),
-        resolve_reach("rimz-loop", Some(Reach::Tools(Capability::Loop))),
-        resolve_reach("rimz-message", Some(Reach::Tools(Capability::Message))),
-        resolve_reach("rimz-control", Some(Reach::Tools(Capability::Control))),
-        resolve_reach("rimz-notes", Some(Reach::Tools(Capability::Notes))),
-        resolve_reach("rimz-lsp", Some(Reach::Skill)),
-        resolve_reach("rimz-reflect", Some(Reach::Skill)),
-        resolve_reach("rimz-lsp", None),
+        resolve_reach("rimz-lsp", Reach::Tools(Capability::Lsp)),
+        resolve_reach("rimz-wait", Reach::Tools(Capability::Wait)),
+        resolve_reach("rimz-subagents", Reach::Tools(Capability::Subagents)),
+        resolve_reach("rimz-agents", Reach::Tools(Capability::Agents)),
+        resolve_reach("rimz-teams", Reach::Tools(Capability::Teams)),
+        resolve_reach("rimz-workflow", Reach::Tools(Capability::Workflow)),
+        resolve_reach("rimz-loop", Reach::Tools(Capability::Loop)),
+        resolve_reach("rimz-message", Reach::Tools(Capability::Message)),
+        resolve_reach("rimz-control", Reach::Tools(Capability::Control)),
+        resolve_reach("rimz-notes", Reach::Tools(Capability::Notes)),
+        resolve_reach("rimz-lsp", Reach::Skill),
+        resolve_reach("rimz-reflect", Reach::Skill),
     ];
     assert_eq!(
         actual,
         [
-            Some("mcp(lsp)".to_owned()),
-            Some("mcp(wait)".to_owned()),
-            Some("mcp(subagent)".to_owned()),
-            Some("mcp(agent)".to_owned()),
-            Some("mcp(team)".to_owned()),
-            Some("mcp(workflow)".to_owned()),
-            Some("mcp(schedule)".to_owned()),
-            Some("mcp(message)".to_owned()),
-            Some("mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)".to_owned()),
-            Some("mcp(notes)".to_owned()),
-            Some("skill(rimz-lsp)".to_owned()),
-            Some("skill(rimz-reflect)".to_owned()),
-            None,
+            "mcp(lsp)",
+            "mcp(wait)",
+            "mcp(subagent)",
+            "mcp(agent)",
+            "mcp(team)",
+            "mcp(workflow)",
+            "mcp(schedule)",
+            "mcp(message)",
+            "mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)",
+            "mcp(notes)",
+            "skill(rimz-lsp)",
+            "skill(rimz-reflect)",
         ]
     );
 }

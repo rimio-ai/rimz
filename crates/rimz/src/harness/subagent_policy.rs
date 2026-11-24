@@ -119,7 +119,7 @@ pub(super) fn reminder(catalog: &SubagentCatalog, via: &str) -> String {
                 .collect::<Vec<_>>()
                 .join("\n");
             // The skill owns the how (batching, the settle digest, joins); this only says what.
-            format!("{AVAILABLE_PREAMBLE}Launch them through {via}, subagents available to you:\n\n{list}")
+            format!("{AVAILABLE_PREAMBLE}Launch them through {via}. `subagent(x)` in any text means the profile `x` in this list:\n\n{list}")
         }
     }
 }
@@ -443,22 +443,31 @@ mod tests {
                 description: None,
             },
         ]);
-        let text = reminder(&available, "Skill(rimz-subagents)");
+        let text = reminder(&available, "skill(rimz-subagents)");
         assert_eq!(
             text,
             format!(
-                "{AVAILABLE_PREAMBLE}Launch them through Skill(rimz-subagents), subagents available \
-                 to you:\n\n\
+                "{AVAILABLE_PREAMBLE}Launch them through skill(rimz-subagents). `subagent(x)` in \
+                 any text means the profile `x` in this list:\n\n\
                  - `explorer`: Finds files and traces code paths\n\
                  - `lint`"
             )
         );
         assert_eq!(
-            reminder(&SubagentCatalog::Disabled, "Skill(rimz-subagents)"),
+            reminder(&available, "mcp(subagent)"),
+            format!(
+                "{AVAILABLE_PREAMBLE}Launch them through mcp(subagent). `subagent(x)` in any text \
+                 means the profile `x` in this list:\n\n\
+                 - `explorer`: Finds files and traces code paths\n\
+                 - `lint`"
+            )
+        );
+        assert_eq!(
+            reminder(&SubagentCatalog::Disabled, "skill(rimz-subagents)"),
             "### Subagents\n\nNo subagent profile is configured for you, so none is listed here. Do the work yourself with your direct tools."
         );
         assert_eq!(
-            reminder(&SubagentCatalog::NoneAllowed, "Skill(rimz-subagents)"),
+            reminder(&SubagentCatalog::NoneAllowed, "skill(rimz-subagents)"),
             "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any subagent launch is refused. Do the work yourself with your direct tools."
         );
     }
