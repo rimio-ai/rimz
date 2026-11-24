@@ -5388,3 +5388,255 @@ fn a_restarted_seat_keeps_its_team_run_open() {
     let failed = fail_peer_run(&store, &seat, "peer launch failed").unwrap();
     assert_eq!(failed.map(|run| run.run_id), Some(record.run_id));
 }
+
+#[test]
+fn antigravity_parked_turn_compaction_keeps_row_parked_acks_compact_once_and_settles_run() {
+    use std::collections::BTreeMap;
+
+    use crate::Store;
+    use crate::agents::{AgentCardRef, TurnPhase};
+    use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+    use crate::store::writer::{AgentLifecycleIntent, DeliveryAck};
+
+    let (dir, paths, mut record) = setup_for("antigravity");
+    let runtime = RuntimePaths::under(paths.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let agent_id = crate::ids::AgentSessionId::from("e1457049-618d-4846-83b5-0331adc6ddc5");
+    record.agent_id = Some(agent_id.clone());
+    record.status = RunStatus::Running;
+    crate::store::run::write(&paths.runs_dir, &record).unwrap();
+
+    let agy = crate::agents::definition_by_kind("antigravity").unwrap();
+    let payloads_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/agents/adapters/antigravity/tests/fixtures/compaction/parked-payloads.jsonl");
+    let transcript_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/agents/adapters/antigravity/tests/fixtures/compaction/parked-transcript.jsonl");
+    let payload_lines: Vec<serde_json::Value> = std::fs::read_to_string(&payloads_path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let transcript_lines: Vec<String> = std::fs::read_to_string(&transcript_path)
+        .unwrap()
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect();
+    let agy_home = dir.path().join("agy-home");
+    let live_transcript = agy_home
+        .join("brain")
+        .join(agent_id.as_str())
+        .join(".system_generated/logs/transcript.jsonl");
+    std::fs::create_dir_all(live_transcript.parent().unwrap()).unwrap();
+    let mut login_env = BTreeMap::new();
+    login_env.insert(
+        "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+        agy_home.to_string_lossy().into_owned(),
+    );
+
+    let send_compact = |store: &Store| {
+        let mut msg = MessageRecord::new_for_card(
+            paths.workspace_id.clone(),
+            AgentKind::new_unchecked("antigravity"),
+            agent_id.clone(),
+            None,
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        );
+        msg.body = MessageBody::Command;
+        store.queue_message(&msg, "session").unwrap();
+        let sent = store.record_sent_batch(&[msg], "session").unwrap();
+        assert_eq!(sent.len(), 1);
+        sent.into_iter().next().unwrap()
+    };
+
+    let mut compact_acks = 0usize;
+    let mut second_compact_id = None;
+    let current_agent = || {
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == agent_id)
+            .cloned()
+            .expect("agent row")
+    };
+
+    const ROUTING_ONLY_INDICES: &[usize] = &[1, 2, 3, 8, 9];
+    let expected_task_id = format!("{}/task-2", agent_id.as_str());
+
+    for (index, entry) in payload_lines.iter().enumerate() {
+        if let Some(steps) = entry.get("steps").and_then(serde_json::Value::as_u64) {
+            let prefix = transcript_lines[..steps as usize].join("\n") + "\n";
+            std::fs::write(&live_transcript, prefix).unwrap();
+        }
+        let mut payload = entry["payload"].clone();
+        payload["transcriptPath"] = serde_json::json!(live_transcript.to_str().unwrap());
+        let event = crate::agents::testkit::antigravity_catalog_event(
+            entry["event"].as_str().unwrap(),
+            &payload,
+        );
+
+        if index == 5 {
+            send_compact(&store);
+        } else if index == 8 {
+            second_compact_id = Some(send_compact(&store).message_id);
+        }
+
+        let mut decoded = agy.decode_hook_in(event, &payload, &login_env).unwrap();
+        let final_message = decoded.final_message().map(ToOwned::to_owned);
+        let observation = decoded.take_lifecycle();
+        if ROUTING_ONLY_INDICES.contains(&index) {
+            assert!(
+                observation.is_none(),
+                "entry {index} ({event}) should decode to routing only, got {observation:?}"
+            );
+        } else {
+            let observation = observation.unwrap_or_else(|| {
+                panic!("entry {index} ({event}) unexpectedly decoded to no lifecycle signal")
+            });
+            let kind = AgentKind::new_unchecked("antigravity");
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "session",
+                    agent_kind: kind.clone(),
+                    event_name: event,
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+            let ack = match &observation.signal {
+                LifecycleSignal::TurnStarted { .. } => Some(DeliveryAck::TurnStarted {
+                    prompt: observation.prompt.as_deref(),
+                }),
+                LifecycleSignal::Compacting => Some(DeliveryAck::Compaction),
+                _ => None,
+            };
+            if let Some(ack) = ack {
+                let card = AgentCardRef::new(&kind, &agent_id, None);
+                let delivered = store
+                    .confirm_delivered_for_card_with(card, ack, None, 0, "session", |_, _| {})
+                    .unwrap();
+                compact_acks += delivered.len();
+            }
+            record_lifecycle(
+                &paths,
+                &record.run_id,
+                "antigravity",
+                &observation,
+                final_message,
+                || None,
+            )
+            .unwrap();
+        }
+
+        match index {
+            4 => {
+                let agent = current_agent();
+                assert_eq!(
+                    (agent.status, agent.phase),
+                    (AgentStatus::Running, TurnPhase::Parked)
+                );
+                let shell_ids: Vec<&str> = agent
+                    .background_shells
+                    .iter()
+                    .map(|shell| shell.id.as_str())
+                    .collect();
+                assert_eq!(
+                    shell_ids,
+                    vec![expected_task_id.as_str()],
+                    "parked Stop snapshots the running background command into background_shells"
+                );
+                assert_eq!(
+                    load(&paths, &record.run_id).unwrap().status,
+                    RunStatus::Running
+                );
+            }
+            5 => {
+                let agent = current_agent();
+                assert_eq!(
+                    (agent.status, agent.phase),
+                    (AgentStatus::Running, TurnPhase::Parked)
+                );
+                assert!(agent.compacting_since.is_some());
+                assert_eq!(
+                    compact_acks, 1,
+                    "compaction opener acks the sent compact command once"
+                );
+            }
+            6 => {
+                let agent = current_agent();
+                assert_eq!(
+                    (agent.status, agent.phase),
+                    (AgentStatus::Running, TurnPhase::Parked),
+                    "manual compaction close keeps parked row parked"
+                );
+                assert!(agent.compacting_since.is_none());
+                assert_eq!(agent.compaction_count, 1);
+                let shell_ids: Vec<&str> = agent
+                    .background_shells
+                    .iter()
+                    .map(|shell| shell.id.as_str())
+                    .collect();
+                assert_eq!(
+                    shell_ids,
+                    vec![expected_task_id.as_str()],
+                    "manual compaction close leaves running background_shells intact"
+                );
+                assert_eq!(
+                    load(&paths, &record.run_id).unwrap().status,
+                    RunStatus::Running
+                );
+            }
+            7 => {
+                let agent = current_agent();
+                assert_eq!(
+                    (agent.status, agent.phase),
+                    (AgentStatus::Running, TurnPhase::Acting),
+                    "PostToolUse:mutating for the finished command wakes the parked row to Acting"
+                );
+                assert_eq!(agent.compaction_count, 1);
+                assert_eq!(
+                    compact_acks, 1,
+                    "tool-use wake must not ack a sent compact command"
+                );
+                assert!(
+                    agent.background_shells.is_empty(),
+                    "PostToolUse:mutating for run_command clears its background shell"
+                );
+                assert_eq!(
+                    load(&paths, &record.run_id).unwrap().status,
+                    RunStatus::Running
+                );
+            }
+            8 => {
+                assert_eq!(
+                    compact_acks, 1,
+                    "continuation opener must not ack a sent compact command"
+                );
+                let second = store
+                    .list_messages()
+                    .unwrap()
+                    .into_iter()
+                    .find(|msg| Some(&msg.message_id) == second_compact_id.as_ref())
+                    .expect("second compact message");
+                assert_eq!(second.status, MessageStatus::Sent);
+                assert_eq!(current_agent().compaction_count, 1);
+            }
+            10 => {
+                let agent = current_agent();
+                assert_eq!(
+                    (agent.status, agent.phase),
+                    (AgentStatus::Success, TurnPhase::Idle)
+                );
+                assert_eq!(agent.compaction_count, 1);
+                assert!(agent.background_shells.is_empty());
+                let done = load(&paths, &record.run_id).unwrap();
+                assert_eq!(done.status, RunStatus::Completed);
+                assert_eq!(done.last_message.as_deref(), Some("SLEPT"));
+            }
+            _ => {}
+        }
+    }
+}
