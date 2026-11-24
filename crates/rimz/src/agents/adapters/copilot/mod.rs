@@ -82,6 +82,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         native_ask_ui: true,
         permission_before_auto_review: false,
         transcript_tail_context: true,
+        context_lags_compaction: false,
         registers_lazily: false,
         reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::Unsupported,

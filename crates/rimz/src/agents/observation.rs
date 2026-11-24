@@ -639,6 +639,12 @@ pub struct AgentLifecycleObservation {
     /// provider evidence that compaction created a successor session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_from: Option<AgentSessionId>,
+    /// Context occupancy read from the agent's context sidecar when the store
+    /// appended a usage-retiring compaction close for a kind whose sidecar lags
+    /// compaction. Omitted when unstamped; the fold retires it only when prior
+    /// hook usage gave no occupancy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_context_tokens: Option<u64>,
     /// Token and context enrichment, flattened to preserve lifecycle event
     /// compatibility.
     #[serde(default, flatten)]
@@ -693,6 +699,7 @@ impl AgentLifecycleObservation {
             transcript_path: None,
             origin: None,
             compacted_from: None,
+            retired_context_tokens: None,
             usage: AgentUsageSummary::default(),
             pane_id: None,
             pane_stamp: None,

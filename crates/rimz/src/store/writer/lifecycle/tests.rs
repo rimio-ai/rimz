@@ -2046,3 +2046,351 @@ fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
         "the holder's own frame claims rotation"
     );
 }
+
+#[test]
+fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kinds_omit_it() {
+    use crate::agents::context::{AgentContext, AgentTokenUsage};
+    use crate::store::agent_context;
+
+    let write_sidecar = |store: &Store, kind: &str, agent_id: &str, used: Option<u64>| {
+        let mut ctx = AgentContext::new(kind, jiff::Timestamp::now());
+        ctx.tokens = used.map(|tokens| AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            used_percentage: Some(((tokens * 100) / 1_000_000) as u8),
+            remaining_percentage: Some(100 - ((tokens * 100) / 1_000_000) as u8),
+            current_context_tokens: Some(tokens),
+            current_usage: None,
+            session_usage: None,
+        });
+        agent_context::write(store.runtime_paths(), kind, agent_id, &ctx, None).unwrap();
+    };
+    let append =
+        |store: &Store, kind: &str, agent_id: &str, event: &str, signal: LifecycleSignal| {
+            let obs = AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked(kind),
+                    event_name: event,
+                    observation: &obs,
+                    spawned_subagents: &[],
+                })
+                .unwrap()
+        };
+    let sess = AgentSessionId::from("sess-1");
+    let last_params = |store: &Store| {
+        store
+            .read_events()
+            .unwrap()
+            .last()
+            .expect("last event")
+            .params_value()
+    };
+
+    // 1. Explicit bracketed close on Antigravity stamps sidecar occupancy and withholds it until a
+    // new reading lands.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::Compacting,
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "Stop",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
+        );
+        let params = last_params(&store);
+        assert_eq!(
+            params.get("retired_context_tokens"),
+            Some(&serde_json::json!(26_700))
+        );
+
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, Some(26_700));
+        assert_eq!(row.context_used_tokens(), None);
+        assert_eq!(row.occupied_context_tokens(), None);
+        assert_eq!(row.context_fill_pct(), None);
+        assert_eq!(row.resolved_context_window(), Some(1_000_000));
+
+        write_sidecar(&store, "antigravity", "sess-1", Some(14_038));
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.context_used_tokens(), Some(14_038));
+        assert_eq!(row.occupied_context_tokens(), Some(14_038));
+        assert!(row.context_fill_pct().is_some());
+    }
+
+    // 2. Unbracketed close stamps once; an echo close right after stamps nothing.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "Stop",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
+        );
+        assert_eq!(
+            last_params(&store).get("retired_context_tokens"),
+            Some(&serde_json::json!(26_700))
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "Stop",
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
+        );
+        assert_eq!(last_params(&store).get("retired_context_tokens"), None);
+    }
+
+    // 3. Derived close (bracket closed by a subsequent signal) stamps too.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::Compacting,
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        assert_eq!(
+            last_params(&store).get("retired_context_tokens"),
+            Some(&serde_json::json!(26_700))
+        );
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, Some(26_700));
+        assert_eq!(row.context_used_tokens(), None);
+    }
+
+    // 4. Failed compaction stamps and retires nothing.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::Compacting,
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "Stop",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: true,
+            },
+        );
+        assert_eq!(last_params(&store).get("retired_context_tokens"), None);
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, None);
+        assert_eq!(row.context_used_tokens(), Some(26_700));
+    }
+
+    // 5. Missing, corrupt, tokenless, and zero-token sidecars stamp nothing and proceed cleanly.
+    for case in ["missing", "corrupt", "tokenless", "zero"] {
+        let (_dir, store) = test_store();
+        match case {
+            "missing" => {}
+            "corrupt" => {
+                let path = agent_context::path_for(store.runtime_paths(), "antigravity", "sess-1");
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, b"{not valid json").unwrap();
+            }
+            "tokenless" => write_sidecar(&store, "antigravity", "sess-1", None),
+            "zero" => write_sidecar(&store, "antigravity", "sess-1", Some(0)),
+            _ => unreachable!(),
+        }
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::Compacting,
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "Stop",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
+        );
+        assert_eq!(
+            last_params(&store).get("retired_context_tokens"),
+            None,
+            "{case}"
+        );
+    }
+
+    // 6. Non-declaring kinds never stamp the field and omit it from serialized bytes.
+    for kind in ["claude", "kimi", "copilot"] {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, kind, "sess-1", Some(26_700));
+        append(
+            &store,
+            kind,
+            "sess-1",
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            kind,
+            "sess-1",
+            "PreCompact",
+            LifecycleSignal::Compacting,
+        );
+        append(
+            &store,
+            kind,
+            "sess-1",
+            "PostCompact",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
+        );
+        let raw = store
+            .read_events()
+            .unwrap()
+            .last()
+            .unwrap()
+            .params
+            .get()
+            .to_owned();
+        assert!(
+            !raw.contains("retired_context_tokens"),
+            "{kind} must omit retired_context_tokens from event bytes: {raw}"
+        );
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, kind, &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, None, "{kind}");
+        assert_eq!(row.context_used_tokens(), Some(26_700), "{kind}");
+    }
+
+    // 7. A replayed close frame reuses the appended event and never re-reads a changed sidecar.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::Compacting,
+        );
+        let close_obs = observation(LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        });
+        let at = jiff::Timestamp::now();
+        let receipt = store
+            .for_hook_ingress(EventId::new(), at)
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("antigravity"),
+                event_name: "Stop",
+                observation: &close_obs,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        let close_event = store.read_events().unwrap().last().unwrap().clone();
+        assert_eq!(
+            close_event.params_value().get("retired_context_tokens"),
+            Some(&serde_json::json!(26_700))
+        );
+
+        write_sidecar(&store, "antigravity", "sess-1", Some(99_000));
+        let replayed = store
+            .recover_hook_lifecycle(&close_event)
+            .unwrap()
+            .expect("recovered replay");
+        assert_eq!(replayed.transition, receipt.transition);
+        assert_eq!(
+            store.read_events().unwrap().last().unwrap().params_value(),
+            close_event.params_value()
+        );
+        std::fs::remove_file(store.paths().rollup_cache().unwrap()).ok();
+        let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
+        let snap = cold.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, Some(26_700));
+        assert_eq!(row.context_used_tokens(), Some(99_000));
+    }
+}

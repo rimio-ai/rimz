@@ -1194,19 +1194,31 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
-    if retires_usage && let Some(carried) = &mut carried_usage {
-        // An estimate carries no per-call split. Retiring it again before a
-        // model call keeps the earlier count: the sidecar still holds that
-        // pre-compaction reading, and the attach must keep withholding it.
-        let measured = carried
-            .input_context_tokens()
-            .is_some_and(|input| input > 0);
-        if let Some(occupancy) = carried.context_used_tokens()
-            && (measured || state.retired_context_tokens.is_none())
+    if retires_usage {
+        let mut retired_from_prior = false;
+        if let Some(carried) = &mut carried_usage {
+            // An estimate carries no per-call split. Retiring it again before a
+            // model call keeps the earlier count: the sidecar still holds that
+            // pre-compaction reading, and the attach must keep withholding it.
+            let measured = carried
+                .input_context_tokens()
+                .is_some_and(|input| input > 0);
+            if let Some(occupancy) = carried.context_used_tokens() {
+                retired_from_prior = true;
+                if measured || state.retired_context_tokens.is_none() {
+                    state.retired_context_tokens = Some(occupancy);
+                }
+            }
+            clear_current_window(carried);
+        }
+        if !retired_from_prior
+            && let Some(occupancy) = input
+                .observation
+                .retired_context_tokens
+                .filter(|used| *used > 0)
         {
             state.retired_context_tokens = Some(occupancy);
         }
-        clear_current_window(carried);
     }
     let mut observed_usage = input.observation.usage.clone();
     if state.retired_context_tokens.is_some()
@@ -1501,6 +1513,34 @@ fn clear_owed_continue(state: &mut AgentState) {
     }
 }
 
+/// Whether folding `signal` with `transition` over `prior` retires prior context
+/// occupancy: a bracket that did not close as failed, or an unfailed
+/// `CompactionEnded` outside a bracket that is not echoing an already-retired
+/// compaction. Shared by the fold and the lifecycle writer's lagging-sidecar
+/// stamp so both agree on every close edge.
+pub(in crate::store) fn compaction_retires_usage(
+    prior: Option<&AgentState>,
+    signal: &lifecycle::LifecycleSignal,
+    mode: TransitionMode,
+    transition: Transition,
+) -> bool {
+    if transition.ping.is_some() || mode == TransitionMode::Snapshot {
+        return false;
+    }
+    let completed_compaction = transition.compaction_closed
+        && !matches!(
+            signal,
+            lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
+        );
+    let already_retired = prior.is_some_and(|prior| prior.compaction_retired);
+    completed_compaction
+        || (!already_retired
+            && matches!(
+                signal,
+                lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
+            ))
+}
+
 /// Returns whether this event retires the usage measured before a
 /// compaction: a completed bracket close, or a successful end whose open was
 /// lost. `compaction_count` stays on the bracket close alone.
@@ -1514,6 +1554,7 @@ fn fold_lifecycle(
     mode: TransitionMode,
 ) -> bool {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
+    let transition = AgentState::transition(prior, &signal, mode);
     let Transition {
         next,
         kind,
@@ -1521,7 +1562,7 @@ fn fold_lifecycle(
         opened_turn,
         ping,
         ..
-    } = AgentState::transition(prior, &signal, mode);
+    } = transition;
     if let (Some(edge), Some(prior)) = (ping, prior) {
         carry_across_ping(state, prior, timestamp, edge);
         return false;
@@ -1744,12 +1785,7 @@ fn fold_lifecycle(
     // sends `PostCompact` and a compact `SessionStart`), and what the row
     // carries is the post-compaction figure.
     let already_retired = prior.is_some_and(|prior| prior.compaction_retired);
-    let retires_usage = completed_compaction
-        || (!already_retired
-            && matches!(
-                signal,
-                lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
-            ));
+    let retires_usage = compaction_retires_usage(prior, &signal, mode, transition);
     state.compaction_retired = retires_usage
         || (already_retired
             && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));

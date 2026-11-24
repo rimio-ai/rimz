@@ -299,6 +299,34 @@ impl Store {
                 );
                 let primary_event_id = if append_primary {
                     let mut observation = event::observation_for_event(intent.observation);
+                    let mode = crate::store::message::transition_mode(intent.observation);
+                    if !stale
+                        && observation.retired_context_tokens.is_none()
+                        && crate::agents::spec_by_kind(intent.agent_kind.as_str())
+                            .is_some_and(|spec| spec.capabilities.context_lags_compaction)
+                        && transition.is_some_and(|transition| {
+                            crate::store::snapshot::compaction_retires_usage(
+                                row,
+                                &intent.observation.signal,
+                                mode,
+                                transition,
+                            )
+                        })
+                        && let Some(agent_id) = intent.observation.agent_id.as_ref()
+                    {
+                        // Stated weak spot: a close applied late carries whatever the
+                        // sidecar holds at append time, with no timestamp check dating
+                        // the reading. A replayed frame reuses its appended event and
+                        // never reads the sidecar again.
+                        observation.retired_context_tokens = crate::store::agent_context::read_one(
+                            &self.inner.runtime,
+                            intent.agent_kind.as_str(),
+                            agent_id.as_str(),
+                        )
+                        .and_then(|record| record.context.tokens)
+                        .and_then(|tokens| tokens.used_tokens())
+                        .filter(|used| *used > 0);
+                    }
                     if prior_status.is_none() {
                         // The event that creates a row carries its lane, whatever the signal,
                         // and a native child's is its parent's: a row without one is in no lane.
