@@ -1096,14 +1096,10 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
 #[test]
 fn an_antigravity_allow_list_carries_the_served_tools_while_routine_is_on() {
     let room = Room::new();
-    let write_rule = |path: &Path| {
-        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        format!("write_file({})", resolved.display())
-    };
     let room_rules = [
-        write_rule(&room.state.root),
-        write_rule(&room.runtime.root),
-        write_rule(&room.runtime.shared_root),
+        antigravity_write_rule(&room.state.root),
+        antigravity_write_rule(&room.runtime.root),
+        antigravity_write_rule(&room.runtime.shared_root),
     ];
     let with_room = |prefix: &[&str]| {
         let rules: Vec<String> = prefix

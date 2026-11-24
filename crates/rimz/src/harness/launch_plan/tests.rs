@@ -1141,6 +1141,12 @@ fn exec_launch_reminders(
     reminders(request, effective.as_ref().ok(), &machine.agents.commands).0
 }
 
+/// The allow rule Antigravity gets for one granted folder, on its resolved path.
+fn antigravity_write_rule(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    format!("write_file({})", resolved.display())
+}
+
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         isolation_default: None,
@@ -2019,10 +2025,6 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                         .map(|pair| pair[1].clone())
                         .collect();
                     assert_eq!(settings.len(), 1, "{case}: {argv:?}");
-                    let write_rule = |path: &Path| {
-                        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                        format!("write_file({})", resolved.display())
-                    };
                     // An ask launch pins agy's Default over the passthrough's own mode; yolo
                     // writes no mode, so the passthrough's stays.
                     assert_eq!(
@@ -2034,9 +2036,9 @@ fn antigravity_carries_one_settings_sandbox_and_added_dir_flags_on_every_launch(
                                 "allow": [
                                     "command(git status)",
                                     "mcp(rimz_tools/*)",
-                                    write_rule(&state.root),
-                                    write_rule(&runtime.root),
-                                    write_rule(&runtime.shared_root),
+                                    antigravity_write_rule(&state.root),
+                                    antigravity_write_rule(&runtime.root),
+                                    antigravity_write_rule(&runtime.shared_root),
                                 ]
                             },
                             "queuedMessages": "queue"
@@ -2117,15 +2119,11 @@ fn antigravity_pins_queue_mode_and_ask_mode_in_the_one_settings_document() {
                     .map(|pair| serde_json::from_str(&pair[1]).unwrap())
                     .collect();
                 let queue = serde_json::json!("queue");
-                let write_rule = |path: &Path| {
-                    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                    format!("write_file({})", resolved.display())
-                };
                 let permissions = serde_json::json!({
                     "allow": [
-                        write_rule(&state.root),
-                        write_rule(&runtime.root),
-                        write_rule(&runtime.shared_root),
+                        antigravity_write_rule(&state.root),
+                        antigravity_write_rule(&runtime.root),
+                        antigravity_write_rule(&runtime.shared_root),
                     ]
                 });
                 let expected = match (mode, user_settings) {
@@ -2217,18 +2215,14 @@ fn antigravity_bridges_a_trusted_primarys_worktree_into_the_one_settings_documen
             .filter(|pair| pair[0] == "--settings")
             .map(|pair| serde_json::from_str(&pair[1]).unwrap())
             .collect();
-        let write_rule = |path: &Path| {
-            let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            format!("write_file({})", resolved.display())
-        };
         assert_eq!(
             settings,
             [serde_json::json!({
                 "permissions": {
                     "allow": [
-                        write_rule(&state.root),
-                        write_rule(&runtime.root),
-                        write_rule(&runtime.shared_root),
+                        antigravity_write_rule(&state.root),
+                        antigravity_write_rule(&runtime.root),
+                        antigravity_write_rule(&runtime.shared_root),
                     ]
                 },
                 "queuedMessages": "queue",
@@ -2277,10 +2271,6 @@ fn antigravity_grants_room_roots_note_store_and_saved_allows_on_every_launch() {
     let machine = crate::config::MachineConfig::default();
     let ambient = BTreeMap::from([("HOME".into(), home.display().to_string())]);
     let adapter = crate::agents::find_definition("antigravity").unwrap();
-    let write_rule = |path: &Path| {
-        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        format!("write_file({})", resolved.display())
-    };
     let profile_settings = r#"{"permissions":{"allow":["command(cargo test)","read_file(docs)"],"deny":["command(rm)"]}}"#;
 
     for store_exists in [false, true] {
@@ -2372,13 +2362,13 @@ fn antigravity_grants_room_roots_note_store_and_saved_allows_on_every_launch() {
                                 expected.push("read_file(/docs)".to_owned());
                             }
                             expected.push("mcp(rimz_tools/*)".to_owned());
-                            expected.push(write_rule(&team_run));
+                            expected.push(antigravity_write_rule(&team_run));
                             if store_exists {
-                                expected.push(write_rule(&store));
+                                expected.push(antigravity_write_rule(&store));
                             }
-                            expected.push(write_rule(&state.root));
-                            expected.push(write_rule(&runtime.root));
-                            expected.push(write_rule(&runtime.shared_root));
+                            expected.push(antigravity_write_rule(&state.root));
+                            expected.push(antigravity_write_rule(&runtime.root));
+                            expected.push(antigravity_write_rule(&runtime.shared_root));
                             let expected_refs: Vec<&str> =
                                 expected.iter().map(String::as_str).collect();
                             assert_eq!(allow, expected_refs, "{case}: {doc}");
@@ -2432,11 +2422,11 @@ fn antigravity_grants_room_roots_note_store_and_saved_allows_on_every_launch() {
     assert_eq!(
         docs[0]["permissions"]["allow"],
         serde_json::json!([
-            write_rule(&team_run),
-            write_rule(&state.notes_store()),
-            write_rule(&state.root),
-            write_rule(&runtime.root),
-            write_rule(&runtime.shared_root),
+            antigravity_write_rule(&team_run),
+            antigravity_write_rule(&state.notes_store()),
+            antigravity_write_rule(&state.root),
+            antigravity_write_rule(&runtime.root),
+            antigravity_write_rule(&runtime.shared_root),
         ])
     );
 }
@@ -5167,10 +5157,6 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
-    let write_rule = |path: &Path| {
-        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        format!("write_file({})", resolved.display())
-    };
     assert_eq!(
         plan.process().provider_argv,
         [
@@ -5181,9 +5167,9 @@ fn antigravity_fresh_launch_selects_an_agent_file_in_rimz_plugin() {
             &serde_json::json!({
                 "permissions": {
                     "allow": [
-                        write_rule(&state.root),
-                        write_rule(&runtime.root),
-                        write_rule(&runtime.shared_root),
+                        antigravity_write_rule(&state.root),
+                        antigravity_write_rule(&runtime.root),
+                        antigravity_write_rule(&runtime.shared_root),
                     ]
                 },
                 "queuedMessages": "queue"
