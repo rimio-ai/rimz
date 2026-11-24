@@ -2129,11 +2129,13 @@ fn ensure_provider_files_follow_symlinks(root: &Path, files: &[PathBuf]) -> Resu
     )
 }
 
-/// A provider home is an account: host-side code resolves it from the login
-/// env it is handed, never the process env, or a named account would read the
-/// default home. Under `agents/`, only the ambient snapshot in `agents/login.rs`
-/// reads the whole process env, so no home key escapes the per-key needles
-/// through a snapshot map; tests may set up their own.
+/// A provider home (and a shared mounted-login account's login directory) is an
+/// account: host-side code resolves both from the login env it is handed
+/// (`config_home`, or the adapter's own credential resolution for mounted login
+/// files), never the process env, or a named account would read the default
+/// home. Under `agents/`, only the ambient snapshot in `agents/login.rs` reads
+/// the whole process env, so no home or login-home key escapes the per-key
+/// needles through a snapshot map; tests may set up their own.
 fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) -> Result<()> {
     let src = root.join("crates/rimz/src");
     let is_test = |path: &Path| {

@@ -2,7 +2,7 @@
 
 A provider home is an account. RimZ resolves a room's account selection into a login ([`ProviderLogin`](../../../crates/rimz/src/agents/login.rs)): a provider kind, an account name, and the environment that points the provider at that account's home. This page owns which login a room and each agent run on, the environment a login builds, and the reconciler that links a named account's home into the provider's own. What RimZ reads under a login (plan, windows, credits) is [providers.md](./providers.md).
 
-A login never changes a process-wide variable. It is an override on an ambient environment map, and every host-side read of a provider home (launch, discovery, install, probes) resolves that map through the adapter's `config_home` (`crates/rimz/src/agents/login.rs` module header). A CI grep keeps the provider home keys out of process-environment reads outside tests ([agents contract](../../../crates/rimz/src/agents/AGENTS.md#the-boundary)).
+A login never changes a process-wide variable. It is an override on an ambient environment map: every host-side read of a provider home (launch, discovery, install, spending) resolves that map through the adapter's `config_home`, and for a mounted-login provider in shared mode, credential readers and mount planning resolve the account's login directory from that same map through the adapter's own credential resolution (`crates/rimz/src/agents/login.rs` module header). A CI grep keeps every provider home and login-home key out of process-environment reads outside tests ([agents contract](../../../crates/rimz/src/agents/AGENTS.md#the-boundary)).
 
 ## Terms
 

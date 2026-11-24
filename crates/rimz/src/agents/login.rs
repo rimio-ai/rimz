@@ -1,13 +1,16 @@
 //! Provider logins: the resolution of a room's *account* selection into the
 //! environment a provider reads its home from.
 //!
-//! A login is a standalone provider home. `default` is the provider's own
-//! native resolution and carries no path; every other name is a directory the
-//! user declared under `[accounts.<kind>.<name>]`. RimZ never swaps a home in
-//! place and never sets a process-wide variable: a login is expressed only as
-//! an override on top of an ambient environment map, and every home-resolving
-//! read — launch, host-side discovery, install — resolves that map through the
-//! adapter's own [`LaunchCapability::config_home`].
+//! A login is a provider account. `default` is the provider's own native
+//! resolution and carries no path; every other name is a directory the user
+//! declared under `[accounts.<kind>.<name>]`. RimZ never swaps a home in place
+//! and never sets a process-wide variable: a login is expressed only as an
+//! override on top of an ambient environment map. Every provider-home read
+//! (launch, host-side discovery, install, spending) resolves that map through
+//! the adapter's own [`LaunchCapability::config_home`], and for a mounted-login
+//! provider in shared mode, credential readers and mount planning resolve the
+//! account's login directory from that same map through the adapter's own
+//! credential resolution.
 //!
 //! [`LaunchCapability::config_home`]: crate::agents::capabilities::LaunchCapability::config_home
 
