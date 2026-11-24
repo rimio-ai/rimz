@@ -788,6 +788,68 @@ mod tests {
     }
 
     #[test]
+    fn molt_under_already_recorded_agent_does_not_duplicate_crafts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("agents")).unwrap();
+        std::fs::write(
+            dir.path().join("agents/claude.md"),
+            "---\ndescription: Claude\n---\nClaude base.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("agents/codex.md"),
+            "---\ndescription: Codex\n---\nCodex base.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("agents/astra.md"),
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\ntools: [Bash]\n---\nAstra craft.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("agents/worker.md"),
+            "---\ndescription: Worker\nagent: claude\nmodel: opus\ntools: [Read]\n---\nWorker craft.",
+        )
+        .unwrap();
+        let mut machine = crate::config::MachineConfig::default();
+        let loaded = crate::config::definitions::load(
+            dir.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &machine.agents.commands,
+            &dir.path().join("config.toml"),
+            &machine.tiers,
+            None,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        machine.agents.profiles = loaded.agent_profiles;
+        let effective =
+            crate::config::effective::load_with_roots(&machine, dir.path(), dir.path()).unwrap();
+        let mut agent = crate::testkit::agent_state("codex", "old", jiff::Timestamp::UNIX_EPOCH);
+        agent.profile = Some("worker".into());
+        agent.record = Some(Box::new(crate::agents::LaunchRecord {
+            agent: Some("astra".into()),
+            model: Some("astra".into()),
+            ..Default::default()
+        }));
+        let (kind, first) =
+            replacement_posture(&agent, &machine, &effective, "astra", None, &mut |_| Ok(()))
+                .unwrap();
+        let (_, second) =
+            replacement_posture(&agent, &machine, &effective, "astra", None, &mut |_| Ok(()))
+                .unwrap();
+        assert_eq!(kind.as_str(), "codex");
+        assert_eq!(first.launch.append_system_prompt_files.len(), 2);
+        assert_eq!(
+            first.launch.append_system_prompt_files,
+            second.launch.append_system_prompt_files
+        );
+        assert_eq!(
+            first.launch.record.as_ref().unwrap().agent.as_deref(),
+            Some("astra")
+        );
+    }
+
+    #[test]
     fn molt_request_copies_the_seat_and_lineage_without_opening_a_peer_turn() {
         let mut agent =
             crate::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);

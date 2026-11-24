@@ -3470,7 +3470,7 @@ fn agent_override_mode_precedence_and_refusals() {
         );
         assert!(cell.resume_model_override, "{label}");
     }
-    let unknown = crate::harness::spec::resolve_agent_override(Some("ghost"), &profiles)
+    let unknown = crate::harness::spec::resolve_agent_override(Some("ghost"), &profiles, None)
         .unwrap_err()
         .to_string();
     let retired = crate::harness::spec::profile_cell("retired", &profiles)

@@ -127,16 +127,60 @@ pub struct LaunchAgents {
     repo_sources: AgentSpecSources,
     state: TrustState,
     config_path: PathBuf,
+    /// Profiles already built under the launch's `--agent` override by [`Self::route`].
+    routed_overrides: BTreeSet<(ProfileScope, String)>,
+}
+
+struct OwnedOverride {
+    kind: String,
+    runtime: crate::agents::Runtime,
+    profile: Option<super::Profile>,
+    writes_engine: bool,
+    written_tier: Option<super::tiers::ModelTier>,
+    preference: Option<super::tiers::TierPreference>,
+    toml_model: Option<String>,
+}
+
+impl OwnedOverride {
+    fn from_resolved(ov: &agents_spec::AgentOverride<'_>) -> Self {
+        let profile = ov
+            .profile
+            .filter(|profile| profile.definition.is_some() || profile.kind_base)
+            .or(ov.inherited_markdown)
+            .cloned();
+        Self {
+            kind: ov.resolved.kind.as_str().to_owned(),
+            runtime: ov.runtime,
+            profile,
+            writes_engine: ov.writes_engine,
+            written_tier: ov.written_tier(),
+            preference: ov.preference().cloned(),
+            toml_model: ov.toml_model.clone(),
+        }
+    }
+
+    fn build_base(&self) -> super::definitions::BuildBase<'_> {
+        use super::definitions::BuildBase;
+        if let Some(profile) = &self.profile
+            && (profile.definition.is_some() || profile.kind_base)
+            && self.toml_model.is_none()
+        {
+            return BuildBase::Profile(profile);
+        }
+        BuildBase::Runtime(self.runtime)
+    }
 }
 
 impl LaunchAgents {
+    /// Profiles in this launch snapshot that [`Self::route`] already built under `--agent`.
+    pub(crate) fn routed_overrides(&self) -> &BTreeSet<(ProfileScope, String)> {
+        &self.routed_overrides
+    }
+
     /// Overlay a fresh launch without changing the memoized machine profiles.
-    /// Explicit tiers walk the table on the preferred model-client engine, or across native
-    /// families. Concrete models select their family's render unless
-    /// the requested engine runs other providers' models, or no engine is requested and the
-    /// target's own kind runs them.
-    /// Returns whether rendered definitions consumed the family request. Finalization applies
-    /// model overrides only to cells without a routed stamp.
+    /// Explicit tiers and tiered profiles walk the tier table preferring `--agent`'s family when
+    /// given; concrete models build the definition on the model's family unless the target kind
+    /// keeps the model. `--agent` is never dropped or consumed by routing.
     #[expect(
         clippy::too_many_arguments,
         reason = "launch target and CLI routing inputs stay explicit"
@@ -150,11 +194,10 @@ impl LaunchAgents {
         model: Option<&str>,
         family: Option<&str>,
         mut unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
-    ) -> std::result::Result<bool, super::tiers::TierError> {
+    ) -> std::result::Result<(), super::tiers::TierError> {
+        self.routed_overrides.clear();
         let model = model.map(str::trim).filter(|value| !value.is_empty());
         let family = family.map(str::trim).filter(|value| !value.is_empty());
-        let base = family
-            .and_then(|family| agents_spec::resolve_profile(family, self.profiles_for(scope)).ok());
         if tier.is_some() && model.is_some() {
             return Err(super::tiers::TierError(
                 "choose one of --tier and --model".to_owned(),
@@ -163,32 +206,34 @@ impl LaunchAgents {
         if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
             return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
         }
-        let mut model_kind = model.and_then(crate::agents::definition_model_kind);
-        if let (Some(implied), Some(model), Some(family), Some(base)) =
-            (model_kind, model, family, &base)
-        {
-            if crate::agents::keeps_model(&base.kind, model) {
-                model_kind = None;
-            } else if base.kind.as_str() != implied {
-                return Err(super::tiers::TierError(format!(
-                    "--agent {family} runs on {} but --model {model} runs on {implied}; choose the same family",
-                    base.kind,
-                )));
-            }
+        let fallback = (scope == ProfileScope::Subagents).then_some(&self.profiles);
+        let owned_override = if let Some(family_str) = family {
+            let Ok(Some(ov)) = agents_spec::resolve_agent_override(
+                Some(family_str),
+                self.profiles_for(scope),
+                fallback,
+            ) else {
+                // Unresolved `--agent` names flow into `resolve_launch` so its failure ladder
+                // reports failed definitions, wrong doorway, and unknown overrides in order.
+                return Ok(());
+            };
+            Some(OwnedOverride::from_resolved(&ov))
+        } else {
+            None
+        };
+        if let (Some(family_str), Some(ov), Some(model_str)) = (family, &owned_override, model) {
+            agents_spec::check_agent_model_family(family_str, &ov.kind, model_str)
+                .map_err(super::tiers::TierError)?;
         }
         let targets = launched_profile
             .map(str::trim)
-            .map(|name| {
-                let (name, _) = agents_spec::split_inline_role(
-                    name,
-                    self.profiles_for(scope),
-                    &CommandsConfig::default(),
-                );
-                let role = self.teams.role_spec(name);
+            .filter(|name| !name.is_empty())
+            .map(|raw| {
+                let role = self.teams.role_spec(raw);
                 let team = self
                     .teams
                     .0
-                    .get(name)
+                    .get(raw)
                     .or_else(|| role.and_then(|(team, _)| self.teams.0.get(team)));
                 if let Some(team) = team {
                     team.roles
@@ -203,28 +248,64 @@ impl LaunchAgents {
                         })
                         .collect::<Vec<_>>()
                 } else {
-                    // `<base>-fast` launches its base, so the base is what routes;
-                    // a profile literally named `<base>-fast` wins, as at launch.
                     let profiles = self.profiles_for(scope);
-                    let name = agents_spec::fast_suffix_base(name)
-                        .filter(|base| {
-                            !profiles.0.contains_key(name) && profiles.0.contains_key(*base)
-                        })
-                        .unwrap_or(name);
-                    vec![(scope, profiles.key(name).to_owned(), name.to_owned())]
+                    let raw = if raw == "peer" && !profiles.0.contains_key("peer") {
+                        "claude,codex"
+                    } else {
+                        raw
+                    };
+                    let mut list = Vec::new();
+                    for token in raw
+                        .split([',', '+', '/'])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        let (cell_word, _) = agents_spec::split_inline_role(
+                            token,
+                            profiles,
+                            &CommandsConfig::default(),
+                        );
+                        // `<base>-fast` launches its base, so the base is what routes;
+                        // a profile literally named `<base>-fast` wins, as at launch.
+                        let base_word = agents_spec::fast_suffix_base(cell_word)
+                            .filter(|base| {
+                                !profiles.0.contains_key(cell_word)
+                                    && (profiles.0.contains_key(*base)
+                                        || agents_spec::virtual_agent_parts(base).is_some())
+                            })
+                            .unwrap_or(cell_word);
+                        let word = if !profiles.0.contains_key(base_word)
+                            && let Some((kind_name, _)) =
+                                agents_spec::virtual_agent_parts(base_word)
+                        {
+                            kind_name
+                        } else {
+                            base_word
+                        };
+                        let key = profiles.key(word).to_owned();
+                        if !list.iter().any(|(s, k, _)| *s == scope && k == &key) {
+                            list.push((scope, key, word.to_owned()));
+                        }
+                    }
+                    list
                 }
             })
             .unwrap_or_default();
         if tier.is_some() {
             if targets.is_empty() {
-                return Err(super::tiers::TierError("--tier needs Markdown definitions; model tiers resolve in Markdown definitions".to_owned()));
+                return Err(super::tiers::TierError(
+                    "--tier needs Markdown definitions; model tiers resolve in Markdown definitions"
+                        .to_owned(),
+                ));
             }
             for (scope, name, role) in &targets {
                 if !self
                     .profiles_for(*scope)
                     .0
                     .get(name)
-                    .is_some_and(|profile| profile.definition_renders.is_some())
+                    .is_some_and(|profile| {
+                        profile.definition.is_some() || profile.definition_renders.is_some()
+                    })
                 {
                     return Err(super::tiers::TierError(format!(
                         "{role}: --tier needs Markdown definitions; model tiers resolve in Markdown definitions"
@@ -232,71 +313,237 @@ impl LaunchAgents {
                 }
             }
         }
-        let mut consumed = false;
-        for (profile_scope, profiles) in [
-            (ProfileScope::Agents, &mut self.profiles),
-            (ProfileScope::Subagents, &mut self.subagent_profiles),
+        let agent_bases: BTreeMap<String, super::Profile> = self
+            .profiles
+            .0
+            .iter()
+            .filter(|(_, p)| p.kind_base)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let subagent_bases: BTreeMap<String, super::Profile> = self
+            .subagent_profiles
+            .0
+            .iter()
+            .filter(|(_, p)| p.kind_base)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (profile_scope, profiles, kind_bases) in [
+            (ProfileScope::Agents, &mut self.profiles, &agent_bases),
+            (
+                ProfileScope::Subagents,
+                &mut self.subagent_profiles,
+                &subagent_bases,
+            ),
         ] {
             for (name, profile) in &mut profiles.0 {
-                let Some(mut renders) = profile.definition_renders.clone() else {
-                    continue;
-                };
                 let target = targets
                     .iter()
                     .find(|(scope, target, _)| *scope == profile_scope && target == name);
                 let targeted = target.is_some();
-                if let (Some((_, _, role)), Some(model)) = (target, model) {
-                    let model_kind = model_kind.filter(|_| {
-                        family.is_some()
-                            || !crate::agents::runs_other_providers_models(&profile.agent)
-                    });
-                    if let Some(kind) = model_kind
-                        && let Some(error) = renders.exclusions.get(kind)
-                    {
-                        return Err(super::tiers::TierError(format!(
-                            "{role}: model '{model}' ({kind}) cannot run this definition: {error}"
-                        )));
-                    }
-                    if let Some(kind) = model_kind
-                        && let Some(render) = renders.renders.get(kind)
-                    {
-                        let mut selected = render.clone();
-                        selected.model = Some(model.to_owned());
-                        if !selected.kind_base {
-                            selected.effort = renders.effort.clone();
+                if let (Some((_, _, role)), Some(model_str)) = (target, model) {
+                    let implied = crate::agents::definition_model_kind(model_str);
+                    if profile.definition.is_some() {
+                        let target_kind = if let Some(ov) = &owned_override {
+                            ov.kind.as_str()
+                        } else if crate::agents::keeps_model(&profile.agent, model_str) {
+                            profile.agent.as_str()
+                        } else {
+                            implied.unwrap_or(profile.agent.as_str())
+                        };
+                        if owned_override.is_none()
+                            && let Some(error) = profile
+                                .definition_renders
+                                .as_ref()
+                                .and_then(|renders| renders.exclusions.get(target_kind))
+                        {
+                            return Err(super::tiers::TierError(format!(
+                                "{role}: model '{model_str}' ({target_kind}) cannot run this definition: {error}"
+                            )));
                         }
+                        let built = profile
+                            .build_under(
+                                owned_override.as_ref().map(OwnedOverride::build_base),
+                                None,
+                                Some(model_str),
+                            )
+                            .expect("definition.is_some()")
+                            .map_err(|error| {
+                                super::tiers::TierError(format!(
+                                    "{role}: model '{model_str}' ({target_kind}) cannot run this definition: {}",
+                                    error.message
+                                ))
+                            })?;
+                        let mut selected = built;
                         selected.model_tier = None;
                         selected.tier_stamp = None;
-                        consumed |= base.as_ref().is_none_or(|base| {
-                            renders.renders.contains_key(base.kind.as_str())
-                                && (selected.agent != base.kind.as_str()
-                                    || selected.variant == base.variant)
-                        });
-                        selected.definition_renders = Some(renders);
+                        selected.definition_renders = profile.definition_renders.clone();
                         *profile = selected;
+                        if owned_override.is_some() {
+                            self.routed_overrides.insert((profile_scope, name.clone()));
+                        }
                         continue;
+                    }
+                    if profile.kind_base && owned_override.is_none() {
+                        let model_kind = implied
+                            .filter(|_| !crate::agents::keeps_model(&profile.agent, model_str));
+                        if let Some(kind) = model_kind {
+                            if let Some(error) = profile
+                                .definition_renders
+                                .as_ref()
+                                .and_then(|renders| renders.exclusions.get(kind))
+                            {
+                                return Err(super::tiers::TierError(format!(
+                                    "{role}: model '{model_str}' ({kind}) cannot run this definition: {error}"
+                                )));
+                            }
+                            if let Some(base_row) = kind_bases.get(kind) {
+                                let mut selected = base_row.clone();
+                                selected.model = Some(model_str.to_owned());
+                                selected.model_tier = None;
+                                selected.tier_stamp = None;
+                                *profile = selected;
+                                continue;
+                            }
+                        }
                     }
                     profile.model_tier = None;
                     profile.tier_stamp = None;
                     continue;
                 }
-                let requested = targeted
-                    .then_some(tier)
-                    .flatten()
-                    .or_else(|| profile.model_tier.as_ref().map(|route| route.tier));
+
+                let default_preference = || {
+                    profile
+                        .definition_renders
+                        .as_ref()
+                        .map(|renders| renders.preference.clone())
+                        .or_else(|| {
+                            profile
+                                .definition
+                                .as_ref()
+                                .map(|def| def.preference().clone())
+                        })
+                        .unwrap_or_else(|| super::tiers::TierPreference {
+                            model: None,
+                            family: Some(profile.agent.clone()),
+                        })
+                };
+                let (requested, preference) = if targeted && tier.is_some() {
+                    let pref = owned_override
+                        .as_ref()
+                        .map(|ov| super::tiers::TierPreference {
+                            model: None,
+                            family: Some(ov.kind.clone()),
+                        })
+                        .unwrap_or_else(default_preference);
+                    (tier, pref)
+                } else if targeted && let Some(ov) = &owned_override {
+                    if let Some(x_tier) = ov.written_tier {
+                        let pref =
+                            ov.preference
+                                .clone()
+                                .unwrap_or_else(|| super::tiers::TierPreference {
+                                    model: None,
+                                    family: Some(ov.kind.clone()),
+                                });
+                        (Some(x_tier), pref)
+                    } else if ov.writes_engine {
+                        // X writes a concrete model: drop L's tier without walking it.
+                        profile.model_tier = None;
+                        profile.tier_stamp = None;
+                        continue;
+                    } else {
+                        (
+                            profile.model_tier.as_ref().map(|route| route.tier),
+                            super::tiers::TierPreference {
+                                model: None,
+                                family: Some(ov.kind.clone()),
+                            },
+                        )
+                    }
+                } else {
+                    (
+                        profile.model_tier.as_ref().map(|route| route.tier),
+                        default_preference(),
+                    )
+                };
                 let Some(requested) = requested else {
                     continue;
                 };
-                let preference = if targeted && (tier.is_some() || family.is_some()) {
-                    super::tiers::TierPreference {
-                        model: None,
-                        family: base
-                            .as_ref()
-                            .map(|base| base.kind.to_string())
-                            .or_else(|| renders.preference.family.clone()),
+
+                if profile.definition.is_some()
+                    && targeted
+                    && let Some(ov) = &owned_override
+                {
+                    let engine = preference
+                        .family
+                        .as_deref()
+                        .filter(|kind| crate::agents::runs_other_providers_models(kind));
+                    let candidates: Vec<(&str, Option<&str>)> = if let Some(engine) = engine {
+                        vec![(engine, None)]
+                    } else {
+                        table
+                            .entries(requested)
+                            .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
+                            .collect()
+                    };
+                    let mut exclusions = BTreeMap::new();
+                    let mut built_candidates = BTreeMap::new();
+                    for (kind, candidate_model) in candidates {
+                        if built_candidates.contains_key(kind) || exclusions.contains_key(kind) {
+                            continue;
+                        }
+                        match profile
+                            .build_under(Some(ov.build_base()), Some(kind), candidate_model)
+                            .expect("definition.is_some()")
+                        {
+                            Ok(built) => {
+                                built_candidates.insert(kind.to_owned(), built);
+                            }
+                            Err(error) => {
+                                exclusions.insert(kind.to_owned(), error.message);
+                            }
+                        }
                     }
-                } else {
-                    renders.preference.clone()
+                    let pick = table.walk(
+                        requested,
+                        &preference,
+                        |kind| exclusions.get(kind).map(String::as_str),
+                        &mut unavailable,
+                    )?;
+                    let mut selected = if engine.is_some() {
+                        profile
+                            .build_under(Some(ov.build_base()), Some(&pick.kind), Some(&pick.model))
+                            .expect("definition.is_some()")
+                            .map_err(|error| super::tiers::TierError(error.message))?
+                    } else {
+                        built_candidates.remove(&pick.kind).ok_or_else(|| {
+                            super::tiers::TierError(format!("no eligible build for {}", pick.kind))
+                        })?
+                    };
+                    selected.model = Some(pick.model.clone());
+                    selected.tier_stamp = Some(Box::new(crate::agents::TierStamp {
+                        tier: requested,
+                        model: pick.model,
+                        used_tier: pick.used_tier,
+                        unbuildable: pick.unbuildable,
+                        skipped: pick
+                            .skipped
+                            .into_iter()
+                            .map(|(model, reason)| crate::agents::TierSkip { model, reason })
+                            .collect(),
+                    }));
+                    selected.model_tier = Some(super::tiers::TierProvenance {
+                        tier: requested,
+                        fell_back: pick.used_tier.is_some(),
+                    });
+                    selected.definition_renders = profile.definition_renders.clone();
+                    *profile = selected;
+                    self.routed_overrides.insert((profile_scope, name.clone()));
+                    continue;
+                }
+
+                let Some(mut renders) = profile.definition_renders.clone() else {
+                    continue;
                 };
                 let pick = table.walk(
                     requested,
@@ -304,8 +551,18 @@ impl LaunchAgents {
                     |kind| renders.exclusions.get(kind).map(String::as_str),
                     &mut unavailable,
                 )?;
-                // Load covers native families and model-client engines; the walk skips exclusions.
-                let mut selected = renders.renders[&pick.kind].clone();
+                let mut selected = if let Some(rendered) = renders.renders.get(&pick.kind) {
+                    rendered.clone()
+                } else if let Some(built) =
+                    profile.build_under(None, Some(&pick.kind), Some(&pick.model))
+                {
+                    built.map_err(|error| super::tiers::TierError(error.message))?
+                } else {
+                    return Err(super::tiers::TierError(format!(
+                        "no eligible build for {}",
+                        pick.kind
+                    )));
+                };
                 // A bare kind routes to another kind's base, whose effort is its own.
                 if !selected.kind_base {
                     selected.effort = renders.effort.clone();
@@ -322,13 +579,6 @@ impl LaunchAgents {
                         .map(|(model, reason)| crate::agents::TierSkip { model, reason })
                         .collect(),
                 }));
-                // A native fallback consumes its preference; a variant change still needs a rebase.
-                consumed |= targeted
-                    && base.as_ref().is_none_or(|base| {
-                        renders.renders.contains_key(base.kind.as_str())
-                            && (selected.agent != base.kind.as_str()
-                                || selected.variant == base.variant)
-                    });
                 renders.preference = preference;
                 selected.model_tier = Some(super::tiers::TierProvenance {
                     tier: requested,
@@ -336,9 +586,12 @@ impl LaunchAgents {
                 });
                 selected.definition_renders = Some(renders);
                 *profile = selected;
+                if targeted && owned_override.is_some() {
+                    self.routed_overrides.insert((profile_scope, name.clone()));
+                }
             }
         }
-        Ok(consumed && family.is_none_or(|family| crate::agents::find_runtime(family).is_some()))
+        Ok(())
     }
 }
 
@@ -431,6 +684,7 @@ pub fn load_with_roots(
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
+            routed_overrides: BTreeSet::new(),
         });
     }
 
@@ -449,6 +703,7 @@ pub fn load_with_roots(
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
+            routed_overrides: BTreeSet::new(),
         });
     };
     let mut repo =
@@ -602,6 +857,7 @@ pub fn load_with_roots(
         repo_sources,
         state: report.state,
         config_path,
+        routed_overrides: BTreeSet::new(),
     })
 }
 
@@ -704,6 +960,26 @@ impl LaunchAgents {
             self.block_failed_reference(Some(profile.kind.as_str()), None)?;
         }
         Ok(())
+    }
+
+    /// Refuse failed definitions or kind bases referenced by `name`, checking `own` then `fallback`.
+    pub(crate) fn block_failed_override(
+        &self,
+        name: &str,
+        own: &ProfilesConfig,
+        fallback: Option<&ProfilesConfig>,
+    ) -> Result<()> {
+        let name = name.trim();
+        let table = if own.0.contains_key(own.key(name)) {
+            own
+        } else if let Some(fb) = fallback
+            && fb.0.contains_key(fb.key(name))
+        {
+            fb
+        } else {
+            own
+        };
+        self.block_failed_profile(name, table)
     }
 
     /// Refuse failed definitions consumed by a launch, leaving legacy bare rows alone.
@@ -815,7 +1091,7 @@ impl LaunchAgents {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfileScope {
     Agents,

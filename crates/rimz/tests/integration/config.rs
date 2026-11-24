@@ -878,16 +878,14 @@ fn agents_explain_names_definition_prompt_on_kind_override() {
         .assert()
         .code(1)
         .stderr(
-            contains("amp takes no system prompt")
-                .and(contains(
-                    env.rimz_home()
-                        .join("agents/claude.md")
-                        .display()
-                        .to_string(),
-                ))
-                .and(contains("launch on a kind that takes a system prompt"))
-                .and(contains("does not support profile field `effort`").not())
-                .and(contains("system-prompt-file").not()),
+            contains(
+                "invalid profile `reviewer`: cannot run on amp: runs on amp, which takes no system \
+                 prompt, so its craft body cannot be delivered; remove the body or run this \
+                 definition on a kind that takes a system prompt",
+            )
+            .and(contains("agents/claude.md").not())
+            .and(contains("does not support profile field `effort`").not())
+            .and(contains("system-prompt-file").not()),
         );
 }
 

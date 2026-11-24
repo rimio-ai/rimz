@@ -411,7 +411,7 @@ pub(crate) struct LaunchOverrideArgs {
     /// Capability tier; on resume, picks a same-provider entry and saves the launch record.
     #[arg(long, value_name = "TIER")]
     pub(crate) tier: Option<rimz::config::tiers::ModelTier>,
-    /// Prefer this provider kind, or re-base onto a replacement profile. On resume, must match the provider and becomes the saved launch record.
+    /// Inherit this profile or provider kind below the launched profile. On resume, must match the provider and becomes the saved launch record.
     #[arg(long, value_name = "PROFILE|KIND")]
     pub(crate) agent: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
@@ -468,7 +468,7 @@ struct SessionResumeOverrides {
     /// Select a same-provider tier and save it (@handle only).
     #[arg(long, value_name = "TIER")]
     tier: Option<rimz::config::tiers::ModelTier>,
-    /// Rebase onto a same-provider profile or kind (@handle only).
+    /// Inherit a same-provider profile or kind below the launched profile (@handle only).
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
     /// Save this reasoning effort for later resumes (@handle only).

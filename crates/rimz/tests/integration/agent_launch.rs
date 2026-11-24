@@ -6176,6 +6176,7 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
     )
     .unwrap();
     for kind in ["qwen", "opencode"] {
+        crate::common::write_kind_base(&env, kind);
         crate::common::write_definition(
             &env,
             "agents",
@@ -6849,13 +6850,13 @@ fn explain_prints_the_plan_without_side_effects() {
             "worker",
             " codex ",
             "codex",
-            serde_json::json!(["worker", "claude", "codex"]),
+            serde_json::json!(["worker", "writer", "codex"]),
         ),
         (
             "worker",
             "fast",
             "codex",
-            serde_json::json!(["worker", "claude", "fast", "codex"]),
+            serde_json::json!(["worker", "writer", "fast", "codex"]),
         ),
         (
             "codex",

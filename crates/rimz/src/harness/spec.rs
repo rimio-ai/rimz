@@ -224,7 +224,7 @@ pub enum TuningSource {
 }
 
 impl TuningSource {
-    /// The kind-defaults step's own fill, cleared when a role override or a re-base fills again.
+    /// The kind-defaults step's own fill, cleared when a role override or `--agent` override fills again.
     fn is_kind_default(source: &Option<Self>) -> bool {
         matches!(source, Some(Self::KindBase(_) | Self::BuiltIn))
     }
@@ -442,7 +442,7 @@ impl ResolvedProfile {
         }
     }
 
-    /// A role's own `fast`, on, off, or `unset`, over everything the chain and a re-base set.
+    /// A role's own `fast`, on, off, or `unset`, over everything the chain and an `--agent` override set.
     fn apply_role_fast(&mut self, binding: &RoleBinding) {
         if binding.fast.is_some() {
             self.fast = binding.fast;
@@ -1114,16 +1114,47 @@ pub(super) fn resolve_spec_with_agent_override(
     teams: &TeamsConfig,
     agent_override: Option<&str>,
 ) -> Result<LayoutSpec> {
+    resolve_spec_in_scope(
+        arg,
+        crate::config::effective::ProfileScope::Agents,
+        profiles,
+        team_profiles,
+        None,
+        commands,
+        teams,
+        agent_override,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "launch layout resolution carries both profile tables, scope, and routed-override set"
+)]
+pub(super) fn resolve_spec_in_scope(
+    arg: Option<&str>,
+    scope: crate::config::effective::ProfileScope,
+    profiles: &ProfilesConfig,
+    team_profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+    agent_override: Option<&str>,
+    routed_overrides: Option<&BTreeSet<(crate::config::effective::ProfileScope, String)>>,
+) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
     validate_team_names(teams.0.keys().map(String::as_str))?;
-    let base_override = resolve_agent_override(agent_override, profiles)?;
+    let mut base_override = resolve_agent_override(agent_override, profiles, fallback)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
     if teams.0.contains_key(raw) {
         if is_cell_word(raw, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
+        }
+        if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
+            ov.set_routed(crate::config::effective::ProfileScope::Agents, routed);
         }
         return resolve_team_with_base_override(
             raw,
@@ -1134,6 +1165,9 @@ pub(super) fn resolve_spec_with_agent_override(
         );
     }
     if let Some((team, role)) = teams.role_spec(raw) {
+        if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
+            ov.set_routed(crate::config::effective::ProfileScope::Agents, routed);
+        }
         return resolve_team_role(
             team,
             role,
@@ -1142,6 +1176,9 @@ pub(super) fn resolve_spec_with_agent_override(
             commands,
             base_override.as_ref(),
         );
+    }
+    if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
+        ov.set_routed(scope, routed);
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands, base_override.as_ref());
@@ -1184,7 +1221,7 @@ fn resolve_team_with_base_override(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<LayoutSpec> {
     let team = teams
         .0
@@ -1261,7 +1298,7 @@ fn resolve_team_role(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<LayoutSpec> {
     let team = teams
         .0
@@ -1318,7 +1355,7 @@ fn compile_team(
     prepared: PreparedTeam<'_>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<CompiledTeam> {
     let mut role_cells = BTreeMap::new();
     for mut role in prepared.roles {
@@ -1395,7 +1432,7 @@ fn compile_team_layout(
     role_cells: &BTreeMap<String, AgentCell>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<LayoutSpec> {
     let structure = parse_layout_structure(raw)?;
     let mut placements: BTreeMap<String, usize> = role_cells
@@ -1582,33 +1619,582 @@ pub fn listed_tuning(name: &str, profiles: &ProfilesConfig) -> (Option<String>, 
     }
 }
 
-/// Resolve a profile with the same replacement base used by launch layouts.
-pub fn resolve_profile_rebased(
+/// Whether a model inherited from `from_kind` survives a switch to `to_kind`.
+pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str) -> bool {
+    from_kind == to_kind
+        || crate::agents::definition_model_kind(model) == Some(to_kind)
+        || crate::agents::keeps_model(to_kind, model)
+}
+
+/// Refuse an explicit `--agent` and `--model` pair whose providers disagree, unless the
+/// `--agent` provider keeps that model.
+pub(crate) fn check_agent_model_family(
+    family: &str,
+    kind: &str,
+    model: &str,
+) -> std::result::Result<(), String> {
+    let Some(implied) = crate::agents::definition_model_kind(model) else {
+        return Ok(());
+    };
+    if kind == implied || crate::agents::keeps_model(kind, model) {
+        return Ok(());
+    }
+    Err(format!(
+        "--agent {family} runs on {kind} but --model {model} runs on {implied}; choose the same family"
+    ))
+}
+
+/// The resolved target of an `--agent` flag or recorded `LaunchRecord.agent`, looked up in the
+/// active table, then the fallback table (`[agents.profiles]` on a subagent-scope launch), then
+/// registered runtimes.
+pub(crate) struct AgentOverride<'a> {
+    pub name: String,
+    pub table: Option<&'a ProfilesConfig>,
+    pub profile: Option<&'a Profile>,
+    pub resolved: ResolvedProfile,
+    /// Whether the override's own written chain (excluding kind bases) sets a `model` or `tier`.
+    pub writes_engine: bool,
+    /// Non-kind-base TOML rows in the override's chain (nearest first); empty for Markdown
+    /// profiles, kind bases, and bare runtimes.
+    pub toml_layers: Vec<(String, &'a Profile)>,
+    /// Model written by the override's TOML layers (excluding kind bases), if any.
+    pub toml_model: Option<String>,
+    /// A Markdown profile inherited by a TOML override chain, if any.
+    pub inherited_markdown: Option<&'a Profile>,
+    /// The resolved provider runtime (kind + optional variant).
+    pub runtime: crate::agents::Runtime,
+    /// Profile keys in the active scope already built under this override by `LaunchAgents::route`.
+    pub routed: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for AgentOverride<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentOverride")
+            .field("name", &self.name)
+            .field("kind", &self.resolved.kind)
+            .field("writes_engine", &self.writes_engine)
+            .finish()
+    }
+}
+
+impl<'a> AgentOverride<'a> {
+    pub(crate) fn build_base(&self) -> crate::config::definitions::BuildBase<'a> {
+        use crate::config::definitions::BuildBase;
+        if let Some(profile) = self.profile {
+            if profile.definition.is_some() || profile.kind_base {
+                return BuildBase::Profile(profile);
+            }
+            if self.toml_model.is_none()
+                && let Some(md) = self.inherited_markdown
+            {
+                return BuildBase::Profile(md);
+            }
+        }
+        BuildBase::Runtime(self.runtime)
+    }
+
+    pub(crate) fn written_tier(&self) -> Option<crate::config::tiers::ModelTier> {
+        self.profile
+            .and_then(|profile| profile.definition.as_ref())
+            .or_else(|| {
+                self.inherited_markdown
+                    .and_then(|profile| profile.definition.as_ref())
+            })
+            .and_then(|def| def.written_tier())
+    }
+
+    pub(crate) fn preference(&self) -> Option<&crate::config::tiers::TierPreference> {
+        self.profile
+            .and_then(|profile| profile.definition.as_ref())
+            .or_else(|| {
+                self.inherited_markdown
+                    .and_then(|profile| profile.definition.as_ref())
+            })
+            .map(|def| def.preference())
+    }
+
+    fn toml_model_for_build(&self) -> Option<&str> {
+        self.profile
+            .is_some_and(|profile| profile.definition.is_none() && !profile.kind_base)
+            .then_some(self.toml_model.as_deref())
+            .flatten()
+    }
+
+    fn set_routed(
+        &mut self,
+        scope: crate::config::effective::ProfileScope,
+        routed: &BTreeSet<(crate::config::effective::ProfileScope, String)>,
+    ) {
+        self.routed = routed
+            .iter()
+            .filter(|(entry_scope, _)| *entry_scope == scope)
+            .map(|(_, name)| name.clone())
+            .collect();
+    }
+}
+
+/// Resolve a profile under an optional `--agent` override using the launch chain rule.
+pub fn resolve_profile_under(
     name: &str,
     agent_override: Option<&str>,
     profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
 ) -> Result<ResolvedProfile> {
-    let base = resolve_agent_override(agent_override, profiles)?;
-    Ok(rebase_onto(resolve_profile(name, profiles)?, base.as_ref()))
+    let base = resolve_agent_override(agent_override, profiles, fallback)?;
+    resolve_profile_with_override(name, profiles, base.as_ref(), None)
 }
 
-pub(super) fn resolve_agent_override(
+pub(crate) fn resolve_agent_override<'a>(
     agent_override: Option<&str>,
-    profiles: &ProfilesConfig,
-) -> Result<Option<ResolvedProfile>> {
+    own: &'a ProfilesConfig,
+    fallback: Option<&'a ProfilesConfig>,
+) -> Result<Option<AgentOverride<'a>>> {
     let Some(value) = agent_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Ok(None);
     };
-    if !profiles.0.contains_key(value) && crate::agents::find_runtime(value).is_none() {
+    let own_key = own.key(value);
+    let (key, table) = if own.0.contains_key(own_key) {
+        (own_key, Some(own))
+    } else if let Some(fb) = fallback
+        && fb.0.contains_key(fb.key(value))
+    {
+        (fb.key(value), Some(fb))
+    } else if crate::agents::find_runtime(value).is_some() {
+        (value, None)
+    } else {
         return Err(LayoutErr::UnknownAgentOverride {
             value: value.to_owned(),
-            valid: valid_agent_overrides(profiles),
+            valid: valid_agent_overrides_in(own, fallback),
         });
+    };
+    let lookup_table = table.unwrap_or(own);
+    let resolved = resolve_profile(key, lookup_table)?;
+    let profile = table.and_then(|table| table.0.get(key));
+    let mut toml_layers = Vec::new();
+    let mut toml_model = None;
+    let mut inherited_markdown = None;
+    if let (Some(table), Some(root)) = (table, profile)
+        && root.definition.is_none()
+        && !root.kind_base
+    {
+        let mut cur = key.to_owned();
+        let mut seen = BTreeSet::new();
+        while seen.insert(cur.clone()) {
+            let Some(layer) = table.0.get(&cur) else {
+                break;
+            };
+            if layer.kind_base {
+                break;
+            }
+            if layer.definition.is_some() {
+                inherited_markdown = Some(layer);
+                break;
+            }
+            if toml_model.is_none() && layer.model.is_some() {
+                toml_model.clone_from(&layer.model);
+            }
+            toml_layers.push((cur.clone(), layer));
+            let next = table.key(&layer.agent);
+            if next == cur || !table.0.contains_key(next) {
+                break;
+            }
+            cur = next.to_owned();
+        }
     }
-    resolve_profile(value, profiles).map(Some)
+    let writes_engine = match profile {
+        Some(profile) if profile.kind_base => false,
+        Some(profile) => match &profile.definition {
+            Some(def) => def.writes_engine(),
+            None => {
+                toml_model.is_some()
+                    || inherited_markdown
+                        .and_then(|md| md.definition.as_ref())
+                        .is_some_and(|def| def.writes_engine())
+            }
+        },
+        None => false,
+    };
+    let runtime = crate::agents::Runtime {
+        definition: crate::agents::find_definition(resolved.kind.as_str())
+            .expect("resolved override terminal kind is known"),
+        variant: resolved.variant,
+    };
+    Ok(Some(AgentOverride {
+        name: key.to_owned(),
+        table,
+        profile,
+        resolved,
+        writes_engine,
+        toml_layers,
+        toml_model,
+        inherited_markdown,
+        runtime,
+        routed: BTreeSet::new(),
+    }))
+}
+
+fn finalize_resolved_profile(resolved: &mut ResolvedProfile, name: &str) -> Result<()> {
+    normalize_auto_compact(&mut resolved.auto_compact, name)?;
+    normalize_auto_compact(&mut resolved.kind_base.auto_compact, name)?;
+    let adapter = crate::agents::find_definition(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    adapter
+        .spec()
+        .render_preset(&profile_preset(resolved))
+        .map_err(|err| LayoutErr::InvalidProfile {
+            profile: name.to_owned(),
+            reason: err.to_string(),
+        })?;
+    normalize_budget(&mut resolved.launch.budget, name)?;
+    refuse_rimz_lists_beside_a_grant(resolved, name)?;
+    Ok(())
+}
+
+fn fill_toml_layer(
+    resolved: &mut ResolvedProfile,
+    layer: &Profile,
+    name: &str,
+    skip_model: bool,
+    skip_args: bool,
+) {
+    if !skip_model && !skip_args {
+        resolved.fill_missing(layer, name);
+        return;
+    }
+    let mut adjusted = layer.clone();
+    if skip_model {
+        adjusted.model = None;
+        adjusted.tier_stamp = None;
+    }
+    if skip_args {
+        adjusted.args = None;
+    }
+    resolved.fill_missing(&adjusted, name);
+}
+
+fn kind_base_for<'a>(
+    kind: &str,
+    profiles: &'a ProfilesConfig,
+    fallback: Option<&'a ProfilesConfig>,
+) -> Option<&'a Profile> {
+    profiles
+        .0
+        .get(kind)
+        .filter(|base| base.agent == kind)
+        .or_else(|| {
+            fallback
+                .and_then(|table| table.0.get(kind))
+                .filter(|base| base.agent == kind)
+        })
+}
+
+fn apply_role_under(
+    resolved: &mut ResolvedProfile,
+    binding: &RoleBinding,
+    original_kind: &str,
+    x: &AgentOverride<'_>,
+) {
+    let same_kind = original_kind == resolved.kind.as_str();
+    let mut effective = binding.clone();
+    if !same_kind {
+        effective.args = None;
+    }
+    if x.writes_engine {
+        effective.model = None;
+    } else if let Some(role_model) = effective.model.as_deref()
+        && !keeps_inherited_model(original_kind, &resolved.kind, role_model)
+    {
+        let dropped = role_model.to_owned();
+        effective.model = None;
+        resolved
+            .notices
+            .push(CellNotice::DroppedModel { model: dropped });
+    }
+    resolved.apply_role(&effective);
+}
+
+fn resolve_profile_with_override(
+    name: &str,
+    profiles: &ProfilesConfig,
+    base_override: Option<&AgentOverride<'_>>,
+    role: Option<&RoleBinding>,
+) -> Result<ResolvedProfile> {
+    let Some(x) = base_override else {
+        let mut resolved = resolve_profile(name, profiles)?;
+        if let Some(binding) = role {
+            resolved.apply_role(binding);
+        }
+        return Ok(resolved);
+    };
+
+    let key = profiles.key(name);
+    let root = profiles.0.get(key);
+
+    // Bare runtime or kind-base row: contributes no layer of its own.
+    if root.is_none() || root.is_some_and(|profile| profile.kind_base) {
+        let original_kind = root
+            .map(|profile| profile.agent.as_str())
+            .or_else(|| crate::agents::find_runtime(key).map(crate::agents::Runtime::kind))
+            .unwrap_or(key);
+        let mut resolved = if x.routed.contains(key) && profiles.0.contains_key(key) {
+            let mut resolved = resolve_profile(key, profiles)?;
+            resolved.clear_kind_defaults();
+            let same_kind = x.resolved.kind == resolved.kind;
+            for (layer_name, layer) in &x.toml_layers {
+                fill_toml_layer(&mut resolved, layer, layer_name, true, !same_kind);
+            }
+            resolved.fill_kind_defaults();
+            resolved
+        } else {
+            let mut resolved = x.resolved.clone();
+            resolved.layers.insert(0, key.to_owned());
+            dedup_first(&mut resolved.layers);
+            resolved
+        };
+        if let Some(binding) = role {
+            apply_role_under(&mut resolved, binding, original_kind, x);
+        }
+        finalize_resolved_profile(&mut resolved, name)?;
+        return Ok(resolved);
+    }
+
+    let l_profile = root.expect("checked root.is_some()");
+
+    // Markdown definition or Markdown team seat: build L under X through the loader.
+    if let Some(l_def) = &l_profile.definition {
+        let already_routed = x.routed.contains(key);
+        let l_natural_kind = l_def.natural_kind();
+        let (built, dropped_model) = if already_routed {
+            (Cow::Borrowed(l_profile), None)
+        } else {
+            let built = l_profile
+                .build_under(Some(x.build_base()), None, x.toml_model_for_build())
+                .expect("Markdown definition always builds")
+                .map_err(|err| LayoutErr::InvalidProfile {
+                    profile: name.to_owned(),
+                    reason: format!("cannot run on {}: {}", x.resolved.kind, err.message),
+                })?;
+            let dropped = (!x.writes_engine
+                && role.is_none_or(|binding| binding.model.is_none())
+                && l_def.written_tier().is_none())
+            .then(|| l_def.written_model())
+            .flatten()
+            .filter(|model| !keeps_inherited_model(l_natural_kind, &built.agent, model))
+            .map(str::to_owned);
+            (Cow::Owned(built), dropped)
+        };
+        let mut resolved = ResolvedProfile::bare(&built.agent);
+        resolved.variant = built.variant;
+        resolved.fill_missing(&built, key);
+        if !already_routed {
+            let x_def = x
+                .profile
+                .and_then(|profile| profile.definition.as_ref())
+                .or_else(|| {
+                    x.inherited_markdown
+                        .and_then(|profile| profile.definition.as_ref())
+                });
+            if let Some(x_def) = x_def {
+                let x_source = Some(TuningSource::Profile(x.name.clone()));
+                if !l_def.writes_effort()
+                    && x_def.writes_effort()
+                    && resolved.launch.effort.is_some()
+                {
+                    resolved.sources.effort.clone_from(&x_source);
+                }
+                if !l_def.writes_fast() && x_def.writes_fast() && resolved.fast.is_some() {
+                    resolved.sources.fast.clone_from(&x_source);
+                }
+                if !l_def.writes_code_mode()
+                    && x_def.writes_code_mode()
+                    && resolved.code_mode.is_some()
+                {
+                    resolved.sources.code_mode.clone_from(&x_source);
+                }
+                if !l_def.writes_auto_compact()
+                    && x_def.writes_auto_compact()
+                    && resolved.auto_compact.is_some()
+                {
+                    resolved.sources.auto_compact = x_source;
+                }
+            }
+        }
+        let same_as_x = x.resolved.kind.as_str() == built.agent.as_str();
+        for (layer_name, layer) in &x.toml_layers {
+            fill_toml_layer(&mut resolved, layer, layer_name, true, !same_as_x);
+        }
+        let mut layers = built
+            .definition
+            .as_ref()
+            .map_or_else(|| vec![key.to_owned()], |def| def.chain().to_vec());
+        for (layer_name, _) in &x.toml_layers {
+            layers.push(layer_name.clone());
+        }
+        if let Some(base) = kind_base_for(&built.agent, profiles, x.table) {
+            resolved.fill_missing(base, &built.agent);
+            layers.push(built.agent.clone());
+        }
+        dedup_first(&mut layers);
+        resolved.layers = layers;
+        if let Some(model) = dropped_model {
+            resolved.notices.push(CellNotice::DroppedModel { model });
+        }
+        resolved.fill_kind_defaults();
+        if let Some(binding) = role {
+            apply_role_under(&mut resolved, binding, l_natural_kind, x);
+        }
+        finalize_resolved_profile(&mut resolved, name)?;
+        return Ok(resolved);
+    }
+
+    // TOML profile chain: collect L's own layers before any kind base, then follow with X and the
+    // final kind base.
+    let mut cur = key.to_owned();
+    let mut seen = Vec::<String>::new();
+    let mut l_layers = Vec::<(String, &Profile)>::new();
+    let mut l_md_ancestor: Option<&Profile> = None;
+    let l_terminal = loop {
+        if l_layers.len() >= MAX_PROFILE_DEPTH {
+            return Err(LayoutErr::ProfileChainTooDeep {
+                profile: name.to_owned(),
+            });
+        }
+        let Some(profile) = profiles.0.get(&cur) else {
+            return Err(LayoutErr::UnknownProfileBase {
+                profile: name.to_owned(),
+                base: cur,
+            });
+        };
+        if profile.kind_base {
+            break crate::agents::find_runtime(&profile.agent).ok_or_else(|| {
+                LayoutErr::UnknownProfileBase {
+                    profile: cur.clone(),
+                    base: profile.agent.clone(),
+                }
+            })?;
+        }
+        if profile.definition.is_some() {
+            l_md_ancestor = Some(profile);
+            break crate::agents::find_runtime(&profile.agent).ok_or_else(|| {
+                LayoutErr::UnknownProfileBase {
+                    profile: cur.clone(),
+                    base: profile.agent.clone(),
+                }
+            })?;
+        }
+        seen.push(cur.clone());
+        l_layers.push((cur.clone(), profile));
+        let next = profiles.key(&profile.agent);
+        if next == cur
+            && let Some(runtime) = crate::agents::find_runtime(next)
+        {
+            break runtime;
+        }
+        if profiles.0.contains_key(next) {
+            if seen.iter().any(|visited| visited == next) {
+                let mut chain = seen;
+                chain.push(next.to_owned());
+                return Err(LayoutErr::ProfileCycle {
+                    chain: chain.join(" -> "),
+                });
+            }
+            cur = next.to_owned();
+            continue;
+        }
+        if let Some(runtime) = crate::agents::find_runtime(next) {
+            break runtime;
+        }
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: cur,
+            base: next.to_owned(),
+        });
+    };
+
+    let l_kind = l_terminal.kind();
+    let final_kind = x.resolved.kind.as_str();
+    let same_kind = l_kind == final_kind;
+    let mut resolved = ResolvedProfile::bare(final_kind);
+    resolved.variant = x.resolved.variant;
+    resolved.kind_defaults =
+        l_layers.iter().any(|(_, layer)| layer.kind_defaults) || x.resolved.kind_defaults;
+
+    let l_written_model = l_layers
+        .iter()
+        .find_map(|(_, layer)| layer.model.as_deref())
+        .or_else(|| {
+            l_md_ancestor
+                .and_then(|md| md.definition.as_ref())
+                .and_then(|def| def.written_model())
+        });
+    let mut skip_l_model = x.writes_engine;
+    let mut dropped_model = None;
+    if !x.writes_engine
+        && role.is_none_or(|binding| binding.model.is_none())
+        && let Some(model) = l_written_model
+        && !keeps_inherited_model(l_kind, final_kind, model)
+    {
+        skip_l_model = true;
+        dropped_model = Some(model.to_owned());
+    }
+
+    for (layer_name, layer) in &l_layers {
+        fill_toml_layer(&mut resolved, layer, layer_name, skip_l_model, !same_kind);
+    }
+
+    let mut layers = seen;
+    if let Some(md) = l_md_ancestor {
+        let built = md
+            .build_under(Some(x.build_base()), None, x.toml_model_for_build())
+            .expect("Markdown ancestor always builds")
+            .map_err(|err| LayoutErr::InvalidProfile {
+                profile: name.to_owned(),
+                reason: format!("cannot run on {}: {}", x.resolved.kind, err.message),
+            })?;
+        resolved.fill_missing(&built, &cur);
+        if let Some(def) = &built.definition {
+            layers.extend(def.chain().iter().cloned());
+        }
+        for (layer_name, layer) in &x.toml_layers {
+            fill_toml_layer(&mut resolved, layer, layer_name, true, false);
+            layers.push(layer_name.clone());
+        }
+    } else if let Some(x_profile) = x.profile {
+        if let Some(x_def) = &x_profile.definition {
+            resolved.fill_missing(x_profile, &x.name);
+            layers.extend(x_def.chain().iter().cloned());
+        } else if !x_profile.kind_base {
+            for (layer_name, layer) in &x.toml_layers {
+                resolved.fill_missing(layer, layer_name);
+                layers.push(layer_name.clone());
+            }
+            if let Some(md) = x.inherited_markdown {
+                resolved.fill_missing(md, &x.name);
+                if let Some(def) = &md.definition {
+                    layers.extend(def.chain().iter().cloned());
+                }
+            }
+        }
+    }
+    if !layers.iter().any(|layer| layer == final_kind)
+        && let Some(base) = kind_base_for(final_kind, profiles, x.table)
+    {
+        resolved.fill_missing(base, final_kind);
+        layers.push(final_kind.to_owned());
+    }
+    dedup_first(&mut layers);
+    resolved.layers = layers;
+    if let Some(model) = dropped_model {
+        resolved.notices.push(CellNotice::DroppedModel { model });
+    }
+    resolved.fill_kind_defaults();
+    if let Some(binding) = role {
+        apply_role_under(&mut resolved, binding, l_kind, x);
+    }
+    finalize_resolved_profile(&mut resolved, name)?;
+    Ok(resolved)
 }
 
 fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
@@ -1689,7 +2275,7 @@ fn parse_layout_spec_validated(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<LayoutSpec> {
     let structure = parse_layout_structure(raw)?;
     let mut seen_roles = BTreeSet::new();
@@ -1832,7 +2418,7 @@ fn parse_cell(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<Cell> {
     if let Some(command) = commands.0.get(raw) {
         return command_cell(raw, command);
@@ -1849,8 +2435,7 @@ fn parse_cell(
         return Ok(Cell::shell());
     }
     if let Some(runtime) = crate::agents::find_runtime(raw) {
-        let original = resolve_profile(raw, profiles)?;
-        let resolved = rebase_onto(original, base_override);
+        let resolved = resolve_profile_with_override(raw, profiles, base_override, None)?;
         return Ok(Cell::Agent(agent_cell_from(
             &resolved,
             render_profile_args(raw, &resolved)?,
@@ -1894,14 +2479,10 @@ pub(super) fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<Agen
 pub(super) fn profile_cell_with_base_override(
     name: &str,
     profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
     role: Option<&RoleBinding>,
 ) -> Result<AgentCell> {
-    let resolved = resolve_profile(name, profiles)?;
-    let mut resolved = rebase_onto(resolved, base_override);
-    if let Some(role) = role {
-        resolved.apply_role(role);
-    }
+    let resolved = resolve_profile_with_override(name, profiles, base_override, role)?;
     cell_from_profile(name, &resolved)
 }
 
@@ -2056,7 +2637,7 @@ fn command_cell(name: &str, raw: &str) -> Result<Cell> {
 fn virtual_agent_cell(
     raw: &str,
     profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<Option<Cell>> {
     let Some((kind_name, mode)) = virtual_agent_parts(raw) else {
         return Ok(None);
@@ -2101,23 +2682,18 @@ fn virtual_cell_from(
 fn virtual_base(
     kind_name: &str,
     profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<(Option<ResolvedProfile>, Option<String>)> {
     if crate::agents::find_definition(kind_name).is_none() {
         return Ok((None, None));
     }
     let kind_name = profiles.key(kind_name);
-    if profiles.0.contains_key(kind_name) {
-        let resolved = resolve_profile(kind_name, profiles)?;
-        return Ok((
-            Some(rebase_onto(resolved, base_override)),
-            Some(kind_name.to_owned()),
-        ));
-    }
-    Ok((
-        Some(rebase_onto(ResolvedProfile::bare(kind_name), base_override)),
-        None,
-    ))
+    let profile_name = profiles
+        .0
+        .contains_key(kind_name)
+        .then(|| kind_name.to_owned());
+    let resolved = resolve_profile_with_override(kind_name, profiles, base_override, None)?;
+    Ok((Some(resolved), profile_name))
 }
 
 /// The base of a `<base>-fast` cell word, before any check that it names a
@@ -2134,24 +2710,17 @@ pub(crate) fn fast_suffix_base(raw: &str) -> Option<&str> {
 fn fast_suffix_cell(
     raw: &str,
     profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<Option<Cell>> {
     let Some(base) = fast_suffix_base(raw).map(|base| profiles.key(base)) else {
         return Ok(None);
     };
     let (mut resolved, profile_name, mode) = if profiles.0.contains_key(base) {
-        let resolved = resolve_profile(base, profiles)?;
-        (
-            rebase_onto(resolved, base_override),
-            Some(base.to_owned()),
-            None,
-        )
+        let resolved = resolve_profile_with_override(base, profiles, base_override, None)?;
+        (resolved, Some(base.to_owned()), None)
     } else if crate::agents::find_definition(base).is_some() {
-        (
-            rebase_onto(ResolvedProfile::bare(base), base_override),
-            None,
-            None,
-        )
+        let resolved = resolve_profile_with_override(base, profiles, base_override, None)?;
+        (resolved, None, None)
     } else if let Some((kind_name, mode)) = virtual_agent_parts(base) {
         let (resolved, profile_name) = virtual_base(kind_name, profiles, base_override)?;
         let Some(resolved) = resolved else {
@@ -2186,7 +2755,7 @@ fn fast_suffix_cell(
     )?))
 }
 
-pub(super) fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
+pub(crate) fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
     let (kind, mode) = raw.rsplit_once('-')?;
     let mode = PermissionMode::from_str(mode).ok()?;
     (crate::agents::find_definition(kind).is_some()).then_some((kind, mode))
@@ -2438,7 +3007,7 @@ fn prepare_team<'a>(
     name: &str,
     team: &'a Team,
     profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
+    base_override: Option<&AgentOverride<'_>>,
 ) -> Result<PreparedTeam<'a>> {
     validate_team_stages(name, team)?;
     let stages = team
@@ -2547,11 +3116,13 @@ fn prepare_team<'a>(
                 profile: binding.profile.clone(),
             });
         }
-        let mut resolved = resolve_role(binding, profiles)?;
+        let mut resolved = resolve_profile_with_override(
+            &binding.profile,
+            profiles,
+            base_override,
+            Some(binding),
+        )?;
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
-        let mut resolved = rebase_onto(resolved, base_override);
-        // The role is the nearest layer, so its fast outlives the re-base, as on replay.
-        resolved.apply_role_fast(binding);
         if resolved.empty_dir == Some(true) {
             return Err(LayoutErr::TeamEmptyDir {
                 definition: binding.profile.clone(),
@@ -2656,110 +3227,6 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
     Ok(())
 }
 
-fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) -> ResolvedProfile {
-    let Some(base) = base else {
-        return original;
-    };
-    original.clear_kind_defaults();
-    original.kind_defaults |= base.kind_defaults;
-    original.kind_base.clone_from(&base.kind_base);
-    let mut base = base.clone();
-    base.clear_kind_defaults();
-    let base = &base;
-    let same_kind = original.kind == base.kind;
-    if !same_kind || base.layers.iter().any(|layer| layer != base.kind.as_str()) {
-        original.launch.tier = None;
-    }
-
-    // The base supplies the engine; the original keeps the role.
-    original.kind.clone_from(&base.kind);
-    original.variant = base.variant;
-    original.layers.retain(|layer| !base.layers.contains(layer));
-    original.layers.extend_from_slice(&base.layers);
-    if base.launch.effort.is_some() {
-        original.launch.effort.clone_from(&base.launch.effort);
-        original.sources.effort.clone_from(&base.sources.effort);
-    }
-    if original.skills.is_none() {
-        original.skills.clone_from(&base.skills);
-        original.seat_consensus_skill = base.seat_consensus_skill;
-    }
-    if original.mcps.is_none() {
-        original.mcps.clone_from(&base.mcps);
-    }
-    if original.tools.is_none() {
-        original.tools.clone_from(&base.tools);
-    }
-    if original.allowed_tools.is_none() {
-        original.allowed_tools.clone_from(&base.allowed_tools);
-    }
-    // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
-    original.isolation_default = original.isolation_default.or(base.isolation_default);
-    original.empty_dir = original.empty_dir.or(base.empty_dir);
-    original.timeout = original.timeout.or(base.timeout);
-    original.launch.mode = original.launch.mode.or(base.launch.mode);
-    if original.launch.budget.is_none() {
-        original.launch.budget.clone_from(&base.launch.budget);
-    }
-    if original.auto_compact.is_none() {
-        original.auto_compact.clone_from(&base.auto_compact);
-        original
-            .sources
-            .auto_compact
-            .clone_from(&base.sources.auto_compact);
-    }
-    if original.auto_compact_default.is_none() {
-        original
-            .auto_compact_default
-            .clone_from(&base.auto_compact_default);
-    }
-    if original.system_prompt_file.is_none() {
-        original
-            .system_prompt_file
-            .clone_from(&base.system_prompt_file);
-    }
-    if !base.append_system_prompt_files.is_empty() {
-        let mut fragments = base.append_system_prompt_files.clone();
-        fragments.append(&mut original.append_system_prompt_files);
-        original.append_system_prompt_files = fragments;
-    }
-
-    let carry_model = same_kind || crate::agents::runs_other_providers_models(&base.kind);
-    if base.launch.model.is_some() && original.launch.tier.is_none() {
-        original.launch.model.clone_from(&base.launch.model);
-    } else if !carry_model && let Some(model) = original.launch.model.take() {
-        original.notices.push(CellNotice::DroppedModel { model });
-    }
-    if same_kind {
-        if base.fast.is_some() {
-            original.fast = base.fast;
-            original.sources.fast.clone_from(&base.sources.fast);
-        }
-        if base.code_mode.is_some() {
-            original.code_mode = base.code_mode;
-            original
-                .sources
-                .code_mode
-                .clone_from(&base.sources.code_mode);
-        }
-        if original.args.is_none() {
-            original.args.clone_from(&base.args);
-        }
-    } else {
-        original.fast = base.fast;
-        original.code_mode = base.code_mode;
-        original.sources.fast.clone_from(&base.sources.fast);
-        original
-            .sources
-            .code_mode
-            .clone_from(&base.sources.code_mode);
-        original.args.clone_from(&base.args);
-    }
-
-    original.fill_kind_defaults();
-    original
-}
-
 fn dedup_first(layers: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     layers.retain(|layer| seen.insert(layer.clone()));
@@ -2814,11 +3281,17 @@ fn cell_names(profiles: &ProfilesConfig, commands: &CommandsConfig) -> BTreeSet<
     values
 }
 
-fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
+fn valid_agent_overrides_in(
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+) -> String {
     let mut values = crate::agents::runtime_names()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     values.extend(profiles.0.keys().cloned());
+    if let Some(fallback) = fallback {
+        values.extend(fallback.0.keys().cloned());
+    }
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 

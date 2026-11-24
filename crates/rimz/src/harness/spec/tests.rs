@@ -120,7 +120,7 @@ fn mini_runtime_is_listed_without_permission_or_fast_suffixes() {
     });
     assert_eq!(actual, [true, true]);
     assert!(
-        valid_agent_overrides(&profiles)
+        valid_agent_overrides_in(&profiles, None)
             .split(", ")
             .any(|name| name == "opencode-mini")
     );
@@ -588,15 +588,30 @@ fn tools_survive_profile_cells_fresh_requests_and_the_exec_wire() {
 }
 
 #[test]
-fn allowed_tools_rebase_preserves_explicit_empty() {
-    let mut base = ResolvedProfile::bare("codex");
-    base.allowed_tools = Some(vec!["Read".parse().unwrap()]);
+fn allowed_tools_override_preserves_explicit_empty() {
+    let base_rules = Some(vec!["Read".parse().unwrap()]);
     for rules in [None, Some(Vec::new()), Some(vec!["Write".parse().unwrap()])] {
-        let mut original = ResolvedProfile::bare("claude");
-        original.allowed_tools = rules.clone();
+        let profiles = profiles([
+            (
+                "target",
+                Profile {
+                    allowed_tools: base_rules.clone(),
+                    ..profile("codex")
+                },
+            ),
+            (
+                "worker",
+                Profile {
+                    allowed_tools: rules.clone(),
+                    ..profile("claude")
+                },
+            ),
+        ]);
         assert_eq!(
-            rebase_onto(original, Some(&base)).allowed_tools,
-            rules.or_else(|| base.allowed_tools.clone())
+            resolve_profile_under("worker", Some("target"), &profiles, None)
+                .unwrap()
+                .allowed_tools,
+            rules.or_else(|| base_rules.clone())
         );
     }
 }
@@ -664,21 +679,41 @@ fn profile_isolation_inherits_without_becoming_a_launch_override() {
 }
 
 #[test]
-fn rebased_profile_skills_preserve_explicit_empty() {
-    let mut base = ResolvedProfile::bare("codex");
-    base.skills = Some(vec!["merge".parse().unwrap()]);
-    let original = ResolvedProfile::bare("claude");
+fn overridden_profile_skills_preserve_explicit_empty() {
+    let base_skills = Some(vec!["merge".parse().unwrap()]);
+    let profiles = profiles([
+        (
+            "target",
+            Profile {
+                skills: base_skills.clone(),
+                ..profile("codex")
+            },
+        ),
+        ("worker", profile("claude")),
+        (
+            "cleared",
+            Profile {
+                skills: Some(Vec::new()),
+                ..profile("claude")
+            },
+        ),
+    ]);
     assert_eq!(
-        rebase_onto(original.clone(), Some(&base)).skills,
-        base.skills
+        resolve_profile_under("worker", Some("target"), &profiles, None)
+            .unwrap()
+            .skills,
+        base_skills
     );
-    let mut cleared = original;
-    cleared.skills = Some(Vec::new());
-    assert_eq!(rebase_onto(cleared, Some(&base)).skills, Some(Vec::new()));
+    assert_eq!(
+        resolve_profile_under("cleared", Some("target"), &profiles, None)
+            .unwrap()
+            .skills,
+        Some(Vec::new())
+    );
 }
 
 #[test]
-fn profile_mcps_inherit_replace_clear_and_survive_a_rebase() {
+fn profile_mcps_inherit_replace_clear_and_survive_override() {
     let parent = Profile {
         mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
         ..profile("claude")
@@ -698,33 +733,65 @@ fn profile_mcps_inherit_replace_clear_and_survive_a_rebase() {
                     ..profile("parent")
                 },
             ),
+            (
+                "target".to_owned(),
+                Profile {
+                    mcps: parent.mcps.clone(),
+                    ..profile("codex")
+                },
+            ),
+            (
+                "leaf".to_owned(),
+                Profile {
+                    mcps: child_mcps,
+                    ..profile("claude")
+                },
+            ),
         ]));
         assert_eq!(resolve_profile("child", &profiles).unwrap().mcps, expected);
         assert_eq!(
             agent_cell("child", &profiles, &CommandsConfig::default()).mcps,
             expected
         );
-        let mut base = ResolvedProfile::bare("codex");
-        base.mcps.clone_from(&parent.mcps);
-        let mut original = ResolvedProfile::bare("claude");
-        original.mcps.clone_from(&child_mcps);
-        assert_eq!(rebase_onto(original, Some(&base)).mcps, expected);
+        assert_eq!(
+            resolve_profile_under("leaf", Some("target"), &profiles, None)
+                .unwrap()
+                .mcps,
+            expected
+        );
     }
 }
 
 #[test]
-fn rebased_profile_isolation_keeps_the_job_default() {
+fn overridden_profile_isolation_keeps_the_job_default() {
     use crate::config::Isolation::{Host, Scoped};
-    let mut base = ResolvedProfile::bare("codex");
-    base.isolation_default = Some(Scoped);
-    let mut original = ResolvedProfile::bare("claude");
+    let profiles = profiles([
+        (
+            "target",
+            Profile {
+                isolation: Some(Scoped),
+                ..profile("codex")
+            },
+        ),
+        ("unset", profile("claude")),
+        (
+            "host_job",
+            Profile {
+                isolation: Some(Host),
+                ..profile("claude")
+            },
+        ),
+    ]);
     assert_eq!(
-        rebase_onto(original.clone(), Some(&base)).isolation_default,
+        resolve_profile_under("unset", Some("target"), &profiles, None)
+            .unwrap()
+            .isolation_default,
         Some(Scoped)
     );
-    original.isolation_default = Some(Host);
     assert_eq!(
-        rebase_onto(original, Some(&base)).isolation_default,
+        resolve_profile_under("host_job", Some("target"), &profiles, None)
+            .unwrap()
+            .isolation_default,
         Some(Host)
     );
 }
@@ -1726,7 +1793,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
     assert_eq!(resolved.layers, ["codex"]);
     assert_eq!(resolved.kind, "codex");
     assert_eq!(resolved.into_chain(), ["codex"]);
-    let rebased = resolve_profile_rebased("codex", Some("claude"), &self_named).unwrap();
+    let rebased = resolve_profile_under("codex", Some("claude"), &self_named, None).unwrap();
     assert_eq!(rebased.layers, ["codex"]);
     assert_eq!(rebased.kind, "claude");
     assert_eq!(rebased.into_chain(), ["codex", "claude"]);
@@ -1749,7 +1816,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         ),
         ("claude", None, Vec::new(), "claude", vec!["claude"]),
     ] {
-        let resolved = resolve_profile_rebased(name, agent_override, &writer_profiles).unwrap();
+        let resolved = resolve_profile_under(name, agent_override, &writer_profiles, None).unwrap();
         assert_eq!(resolved.layers, layers);
         assert_eq!(resolved.kind, kind);
         assert_eq!(resolved.into_chain(), chain);
@@ -1758,7 +1825,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         .0
         .insert("claude".to_owned(), profile("claude"));
     let original = resolve_profile("writer", &writer_profiles).unwrap();
-    let rebased = resolve_profile_rebased("writer", Some("writer"), &writer_profiles).unwrap();
+    let rebased = resolve_profile_under("writer", Some("writer"), &writer_profiles, None).unwrap();
     assert_eq!(original.layers, ["writer", "claude"]);
     assert_eq!(rebased.layers, original.layers);
     assert_eq!(rebased.kind, original.kind);
@@ -1787,7 +1854,7 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
             "codex",
         ),
     ] {
-        let resolved = resolve_profile_rebased("planner", agent_override, &profiles).unwrap();
+        let resolved = resolve_profile_under("planner", agent_override, &profiles, None).unwrap();
         assert_eq!(resolved.layers, layers);
         assert_eq!(resolved.kind, kind);
     }
@@ -1943,7 +2010,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             "codex",
             None,
             Some(Plan),
-            Some("low"),
+            Some("high"),
         ),
         (
             "written",
@@ -2092,7 +2159,7 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
             fast,
             ..role("coder", "worker")
         };
-        let base = resolve_agent_override(Some(target), &profiles).unwrap();
+        let base = resolve_agent_override(Some(target), &profiles, None).unwrap();
         let configured = team(vec![binding.clone()]);
         let prepared = prepare_team("forge", &configured, &profiles, base.as_ref())
             .map(|team| {
@@ -2195,7 +2262,7 @@ fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
             "opus",
             "claude",
             Some("opus[1m]"),
-            "high",
+            "medium",
             vec!["fixer", "opus", "claude"],
         ),
         (
@@ -2209,11 +2276,12 @@ fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
             "luna",
             "codex",
             None,
-            "xhigh",
+            "medium",
             vec!["fixer", "luna", "codex"],
         ),
     ] {
-        let resolved = resolve_profile_rebased("fixer", Some(agent_override), &profiles).unwrap();
+        let resolved =
+            resolve_profile_under("fixer", Some(agent_override), &profiles, None).unwrap();
         assert_eq!(resolved.kind, kind, "{agent_override}");
         assert_eq!(resolved.launch.model.as_deref(), model, "{agent_override}");
         assert_eq!(
@@ -2553,10 +2621,10 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
         }
     }
     for (name, want) in [
-        ("cdx-base", Some("features.code_mode=false")),
-        ("cdx-bare", None),
+        ("cdx-base", Some("features.code_mode=true")),
+        ("cdx-bare", Some("features.code_mode=true")),
     ] {
-        let base = resolve_agent_override(Some(name), &profiles).unwrap();
+        let base = resolve_agent_override(Some(name), &profiles, None).unwrap();
         let rebased =
             profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
         assert_eq!(rebased.kind.as_str(), "codex");
@@ -2625,14 +2693,14 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
     );
     assert!(pilot.args.is_empty(), "{:?}", pilot.args);
 
-    // A kind change through `--agent` takes the base's setting.
-    let base = resolve_agent_override(Some("base"), &profiles).unwrap();
+    // L's written code-mode wins over a replacement base's value on another kind too.
+    let base = resolve_agent_override(Some("base"), &profiles, None).unwrap();
     let rebased =
         profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
     assert_eq!(rebased.kind.as_str(), "pi");
-    assert_eq!(rebased.launch.code_mode, None);
+    assert_eq!(rebased.launch.code_mode, Some(true));
     assert!(
-        !rebased.args.iter().any(|arg| arg.contains("codemode")),
+        rebased.args.iter().any(|arg| arg.contains("codemode")),
         "{:?}",
         rebased.args
     );
@@ -3364,15 +3432,17 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
     use crate::config::FlipCompact;
     use crate::store::message::AutoCompact;
 
-    let preflight = |candidate: &Team, base: Option<&ResolvedProfile>, default| {
-        let prepared = prepare_team("forge", candidate, &no_profiles(), base)?;
+    let empty_profiles = no_profiles();
+    let preflight = |candidate: &Team, base: Option<&str>, default| {
+        let base_override = resolve_agent_override(base, &empty_profiles, None)?;
+        let prepared = prepare_team("forge", candidate, &empty_profiles, base_override.as_ref())?;
         validate_flip_compact("forge", &prepared, default)
     };
     let mut candidate = team(vec![role("coder", "claude")]);
     candidate.roles[0].flip_compact = Some(FlipCompact::Threshold(AutoCompact::Tokens(180_000)));
     preflight(&candidate, None, None).expect("Claude supports compact");
     assert!(matches!(
-        preflight(&candidate, Some(&ResolvedProfile::bare("amp")), None),
+        preflight(&candidate, Some("amp"), None),
         Err(LayoutErr::FlipCompactUnsupported { kind, .. }) if kind.as_str() == "amp"
     ));
     candidate.roles[0].profile = "amp".to_owned();
@@ -3386,8 +3456,7 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
         preflight(&candidate, None, None),
         Err(LayoutErr::FlipCompactUnsupported { .. })
     ));
-    preflight(&candidate, Some(&ResolvedProfile::bare("claude")), None)
-        .expect("override supports compact");
+    preflight(&candidate, Some("claude"), None).expect("override supports compact");
     candidate.roles[0].flip_compact = Some(FlipCompact::Off);
     let machine: crate::config::HarnessConfig = toml::from_str("flip_compact = \"180k\"").unwrap();
     preflight(&candidate, None, machine.flip_compact).expect("disabled on unsupported adapter");
@@ -4149,18 +4218,28 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             (
                 "codex".to_owned(),
                 Some(Off),
-                None,
+                Some(Off),
                 Some("high".to_owned()),
                 Some("200000".to_owned()),
             ),
         ),
-        ("eager", Some("codex"), codex.clone()),
+        (
+            "eager",
+            Some("codex"),
+            (
+                "codex".to_owned(),
+                Some(On),
+                None,
+                Some("medium".to_owned()),
+                None,
+            ),
+        ),
         ("markdown", Some("claude"), based.clone()),
     ] {
         actual.push((
             name,
             agent,
-            resolve_profile_rebased(name, agent, &profiles)
+            resolve_profile_under(name, agent, &profiles, None)
                 .map(tuning)
                 .map_err(|error| error.to_string()),
         ));
@@ -4323,7 +4402,7 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
     let lsp = Some(vec!["rimz-lsp".to_owned()]);
     assert_eq!(grant(resolve_profile("child", &profiles).unwrap()), lsp);
     assert_eq!(
-        grant(resolve_profile_rebased("switched", Some("claude"), &profiles).unwrap()),
+        grant(resolve_profile_under("switched", Some("claude"), &profiles, None).unwrap()),
         Some(vec!["rimz-wait".to_owned()])
     );
     // A skill named exactly `rimz` is the user's own, as is a `rimz-*` skill alone; in `mcps`,
@@ -4349,4 +4428,186 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
         ),
         "{error}"
     );
+}
+
+#[test]
+fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_replay() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("teams")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\n---\nClaude house.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\n---\nCodex house.",
+        ),
+        (
+            "agents/parent.md",
+            "---\ndescription: Parent\nagent: claude\nmodel: opus\neffort: medium\n\
+             tools: [Bash, Read]\n---\nParent craft.",
+        ),
+        (
+            "agents/child.md",
+            "---\ndescription: Child\nagent: parent\neffort: low\n---\nChild craft.",
+        ),
+        (
+            "agents/astra.md",
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: high\n\
+             fast: on\ntools: [Bash, Read]\n---\nAstra craft.",
+        ),
+        (
+            "teams/forge.md",
+            "---\ndescription: Forge\nleader: lead\nstages: [Plan, Implement, Review]\nroles:\n\
+             - agent: parent\n  role: lead\n  owns: [Plan]\n  model: sonnet\n  effort: low\n\
+             - agent: parent\n  role: builder\n  owns: [Implement]\n\
+             - agent: parent\n  role: judge\n  owns: [Review]\n---\nPipeline.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut profiles = loaded.agent_profiles;
+    profiles.0.insert(
+        "toml_l".into(),
+        Profile {
+            model: Some("opus".into()),
+            effort: Some("low".into()),
+            args: Some("--claude-only".into()),
+            ..profile("claude")
+        },
+    );
+    profiles.0.insert(
+        "toml_x_base".into(),
+        Profile {
+            model: Some("sol".into()),
+            effort: Some("high".into()),
+            ..profile("codex")
+        },
+    );
+    profiles.0.insert("toml_x".into(), profile("toml_x_base"));
+
+    // Markdown team seat: role writes model: sonnet and effort: low; X (astra) writes model: astra
+    // and effort: high. X replaces the role's model, while the role's effort beats X's, and fresh
+    // launch equals replay.
+    let forge = &loaded.teams.0["forge"];
+    let lead_binding = &forge.roles[0];
+    let fresh_layout = resolve_spec_with_agent_override(
+        Some("forge"),
+        &profiles,
+        &profiles,
+        &CommandsConfig::default(),
+        &loaded.teams,
+        Some("astra"),
+    )
+    .expect("fresh forge --agent astra");
+    let fresh_lead = fresh_layout
+        .agent_cells()
+        .find(|cell| cell.launch.role.as_deref() == Some("lead"))
+        .unwrap();
+    let base_astra = resolve_agent_override(Some("astra"), &profiles, None).unwrap();
+    let replay_lead = profile_cell_with_base_override(
+        &lead_binding.profile,
+        &profiles,
+        base_astra.as_ref(),
+        Some(lead_binding),
+    )
+    .expect("replay forge.lead --agent astra");
+    assert_eq!(fresh_lead.kind.as_str(), "codex");
+    assert_eq!(fresh_lead.launch.model.as_deref(), Some("astra"));
+    assert_eq!(fresh_lead.launch.effort.as_deref(), Some("low"));
+    assert_eq!(fresh_lead.kind, replay_lead.kind);
+    assert_eq!(fresh_lead.launch.model, replay_lead.launch.model);
+    assert_eq!(fresh_lead.launch.effort, replay_lead.launch.effort);
+    assert_eq!(fresh_lead.launch.fast, replay_lead.launch.fast);
+    assert!(
+        fresh_lead
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md")
+    );
+
+    // TOML RoleBinding writing model + effort + fast + args under X (astra): X replaces model,
+    // role keeps effort + fast, raw args drop across kind switch, and fresh equals replay.
+    let toml_binding = RoleBinding {
+        model: Some("opus".into()),
+        effort: Some("low".into()),
+        fast: Some(crate::agents::Toggle::Off),
+        args: Some("--claude-only".into()),
+        ..role("coder", "parent")
+    };
+    let toml_team = team(vec![toml_binding.clone()]);
+    let prepared = prepare_team("toml_t", &toml_team, &profiles, base_astra.as_ref())
+        .expect("fresh toml team");
+    let fresh_toml = &prepared.roles[0].resolved;
+    let replay_toml = profile_cell_with_base_override(
+        "parent",
+        &profiles,
+        base_astra.as_ref(),
+        Some(&toml_binding),
+    )
+    .expect("replay toml team");
+    assert_eq!(fresh_toml.kind.as_str(), "codex");
+    assert_eq!(fresh_toml.launch.model.as_deref(), Some("astra"));
+    assert_eq!(fresh_toml.launch.effort.as_deref(), Some("low"));
+    assert_eq!(fresh_toml.fast, Some(crate::agents::Toggle::Off));
+    assert_eq!(fresh_toml.args, None);
+    assert_eq!(replay_toml.kind.as_str(), "codex");
+    assert_eq!(replay_toml.launch.model.as_deref(), Some("astra"));
+    assert_eq!(replay_toml.launch.effort.as_deref(), Some("low"));
+    assert_eq!(replay_toml.launch.fast, Some(false));
+    assert!(!replay_toml.args.iter().any(|arg| arg == "--claude-only"));
+
+    // TOML L under Markdown X: takes X's model, keeps L's effort, drops raw args across kind switch.
+    let toml_l_cell =
+        profile_cell_with_base_override("toml_l", &profiles, base_astra.as_ref(), None)
+            .expect("toml_l --agent astra");
+    assert_eq!(toml_l_cell.kind.as_str(), "codex");
+    assert_eq!(toml_l_cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(toml_l_cell.launch.effort.as_deref(), Some("low"));
+    assert!(!toml_l_cell.args.iter().any(|arg| arg == "--claude-only"));
+    assert!(
+        toml_l_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md")
+    );
+
+    // Multi-hop TOML X under Markdown L: X's resolved runtime and written model replace L's.
+    let base_toml_x = resolve_agent_override(Some("toml_x"), &profiles, None).unwrap();
+    let multi_toml =
+        profile_cell_with_base_override("child", &profiles, base_toml_x.as_ref(), None)
+            .expect("child --agent toml_x");
+    assert_eq!(multi_toml.kind.as_str(), "codex");
+    assert_eq!(multi_toml.launch.model.as_deref(), Some("sol"));
+    assert_eq!(multi_toml.launch.effort.as_deref(), Some("low"));
+
+    // Idempotence: X equal to L or an ancestor of L changes nothing and duplicates no crafts.
+    let plain_child = profile_cell("child", &profiles).unwrap();
+    for ancestor in ["child", "parent"] {
+        let base = resolve_agent_override(Some(ancestor), &profiles, None).unwrap();
+        let same =
+            profile_cell_with_base_override("child", &profiles, base.as_ref(), None).unwrap();
+        assert_eq!(same.kind, plain_child.kind);
+        assert_eq!(same.launch.model, plain_child.launch.model);
+        assert_eq!(same.launch.effort, plain_child.launch.effort);
+        assert_eq!(
+            same.append_system_prompt_files, plain_child.append_system_prompt_files,
+            "ancestor {ancestor} must not duplicate crafts"
+        );
+    }
 }

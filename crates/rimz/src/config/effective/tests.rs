@@ -190,10 +190,14 @@ fn agent_override_errors_reach_the_launch_failure_ladder() {
         "main-only".into(),
         toml::from_str("agent = 'claude'").unwrap(),
     );
+    machine.subagents.profiles.0.insert(
+        "sub-only".into(),
+        toml::from_str("agent = 'claude'").unwrap(),
+    );
     let errors = [
         (ProfileScope::Agents, "bogus"),
         (ProfileScope::Agents, "broken"),
-        (ProfileScope::Subagents, "main-only"),
+        (ProfileScope::Agents, "sub-only"),
     ]
     .map(|(scope, name)| {
         let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
@@ -208,13 +212,13 @@ fn agent_override_errors_reach_the_launch_failure_ladder() {
                 |_, _| None,
             )
             .map_err(|error| error.to_string())
-            .and_then(|consumed| {
+            .and_then(|()| {
                 crate::harness::plan::resolve_launch(
                     &launch,
                     scope,
                     &machine.agents.commands,
                     Some("claude"),
-                    (!consumed).then_some(name),
+                    Some(name),
                 )
                 .map_err(|error| error.to_string())
             })
@@ -227,12 +231,33 @@ fn agent_override_errors_reach_the_launch_failure_ladder() {
                 "unknown agent profile or kind `bogus` for --agent; valid profiles and kinds: ",
             ),
             errors[1] == broken,
-            errors[2].contains("is defined under [agents.profiles]")
-                && errors[2].contains("`rimz subagents` resolves [subagents.profiles]"),
+            errors[2].contains("is defined under [subagents.profiles]")
+                && errors[2].contains("`rimz agents` resolves [agents.profiles]"),
         ],
         [true; 3],
         "{errors:#?}"
     );
+    // On subagent scope, `--agent main-only` resolves from `[agents.profiles]`.
+    let mut sub_launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    sub_launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Subagents,
+            Some("claude"),
+            None,
+            None,
+            Some("main-only"),
+            |_, _| None,
+        )
+        .unwrap();
+    crate::harness::plan::resolve_launch(
+        &sub_launch,
+        ProfileScope::Subagents,
+        &machine.agents.commands,
+        Some("claude"),
+        Some("main-only"),
+    )
+    .expect("subagents scope resolves --agent from [agents.profiles]");
 }
 
 #[test]
@@ -266,15 +291,14 @@ fn profile_agent_overrides_are_not_consumed_by_model_or_tier_routing() {
         toml::from_str("agent = 'claude'\nmodel = 'haiku'").unwrap(),
     );
     let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
-    let mut actual = Vec::new();
     for base in ["fast", "quick"] {
         for (tier, model) in [
             (None, None),
             (Some(crate::config::tiers::ModelTier::Junior), None),
             (None, Some("sonnet")),
         ] {
-            let consumed = launch
-                .clone()
+            let mut routed = launch.clone();
+            routed
                 .route(
                     &machine.tiers,
                     ProfileScope::Agents,
@@ -285,10 +309,18 @@ fn profile_agent_overrides_are_not_consumed_by_model_or_tier_routing() {
                     |_, _| None,
                 )
                 .unwrap();
-            actual.push(consumed);
+            let resolved = crate::harness::plan::resolve_launch(
+                &routed,
+                ProfileScope::Agents,
+                &machine.agents.commands,
+                Some("worker"),
+                Some(base),
+            )
+            .unwrap();
+            let cell = resolved.layout.agent_cells().next().unwrap();
+            assert_eq!(cell.kind.as_str(), "claude");
         }
     }
-    assert_eq!(actual, [false; 6]);
 }
 
 #[test]
@@ -460,19 +492,17 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         machine.agents.profiles.0["other"].model
     );
     for name in ["principal", "exact", "concrete", "claude"] {
-        assert!(
-            launch
-                .route(
-                    &machine.tiers,
-                    ProfileScope::Agents,
-                    Some(name),
-                    Some(super::super::tiers::ModelTier::Intern),
-                    None,
-                    Some("codex"),
-                    |_, _| None
-                )
-                .unwrap()
-        );
+        launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(name),
+                Some(super::super::tiers::ModelTier::Intern),
+                None,
+                Some("codex"),
+                |_, _| None,
+            )
+            .unwrap();
         assert_eq!(launch.profiles.0[name].agent, "codex");
         assert_eq!(launch.profiles.0[name].model.as_deref(), Some("luna"));
         assert_eq!(
@@ -549,23 +579,22 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         assert!(launch.profiles.0["concrete"].model_tier.is_none());
     }
     let mut concrete = load_with_roots(&machine, project.path(), root.path()).unwrap();
-    assert!(
-        !concrete
-            .route(
-                &machine.tiers,
-                ProfileScope::Agents,
-                Some("concrete"),
-                None,
-                None,
-                Some("codex"),
-                |_, _| None,
-            )
-            .unwrap()
-    );
-    let cell = crate::harness::spec::resolve_profile_rebased(
+    concrete
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("concrete"),
+            None,
+            None,
+            Some("codex"),
+            |_, _| None,
+        )
+        .unwrap();
+    let cell = crate::harness::spec::resolve_profile_under(
         "concrete",
         Some("codex"),
         &concrete.profiles,
+        None,
     )
     .unwrap();
     assert_eq!(cell.kind.as_str(), "codex");
@@ -757,7 +786,7 @@ fn tier_launches_keep_the_requested_model_client_engine() {
     ]
     .map(|(target, family)| {
         let mut launch = launch.clone();
-        let consumed = launch
+        launch
             .route(
                 &machine.tiers,
                 ProfileScope::Agents,
@@ -768,10 +797,16 @@ fn tier_launches_keep_the_requested_model_client_engine() {
                 |kind, _| (kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut),
             )
             .unwrap();
-        let base = family.filter(|_| !consumed);
-        let resolved =
-            crate::harness::spec::resolve_profile_rebased(target, base, &launch.profiles).unwrap();
-        (resolved.kind.to_string(), resolved.launch.model)
+        let resolved = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(target),
+            family,
+        )
+        .unwrap();
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        (cell.kind.to_string(), cell.launch.model.clone())
     })
     .into();
     assert_eq!(
@@ -853,7 +888,7 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
     ]
     .map(|(scope, target)| {
         let mut launch = launch.clone();
-        let consumed = launch
+        launch
             .route(
                 &machine.tiers,
                 scope,
@@ -893,7 +928,6 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         .unwrap();
         let cell = layout.agent_cells().next().unwrap();
         (
-            consumed,
             cell.kind.to_string(),
             cell.launch.model.clone(),
             cell.launch.tier.is_none(),
@@ -905,16 +939,9 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
     });
     assert_eq!(
         outcomes,
-        std::array::from_fn(|_| (
-            false,
-            "pi".to_owned(),
-            Some("sonnet".to_owned()),
-            true,
-            true,
-            true
-        ))
+        std::array::from_fn(|_| ("pi".to_owned(), Some("sonnet".to_owned()), true, true, true))
     );
-    let consumed = launch
+    launch
         .route(
             &machine.tiers,
             ProfileScope::Agents,
@@ -927,8 +954,8 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         .unwrap();
     let worker = &launch.profiles.0["worker"];
     assert_eq!(
-        (consumed, worker.agent.as_str(), worker.model.as_deref()),
-        (true, "claude", Some("sonnet")),
+        (worker.agent.as_str(), worker.model.as_deref()),
+        ("claude", Some("sonnet")),
         "--agent still selects another family's complete render"
     );
 }
@@ -1052,9 +1079,9 @@ fn pi_model_routing_does_not_require_the_models_native_family_render() {
             )
             .map_err(|error| error.to_string())
     });
-    assert_eq!(results, [Ok(false), Ok(false)]);
+    assert_eq!(results, [Ok(()), Ok(())]);
     let cell =
-        agents_spec::resolve_profile_rebased("worker", Some("pi"), &launch.profiles).unwrap();
+        agents_spec::resolve_profile_under("worker", Some("pi"), &launch.profiles, None).unwrap();
     assert_eq!(cell.kind, "pi");
 }
 
@@ -1090,7 +1117,7 @@ fn fast_suffix_routes_the_base_definition() {
 
     // `reviewer-fast --tier senior --family codex` routes the `reviewer`
     // definition, as `reviewer --tier senior --family codex` would.
-    let consumed = launch
+    launch
         .route(
             &machine.tiers,
             ProfileScope::Agents,
@@ -1101,7 +1128,6 @@ fn fast_suffix_routes_the_base_definition() {
             |_, _| None,
         )
         .unwrap();
-    assert!(consumed);
     let reviewer = &launch.profiles.0["reviewer"];
     assert_eq!(reviewer.agent, "codex");
     assert_eq!(reviewer.model.as_deref(), Some("astra"));
