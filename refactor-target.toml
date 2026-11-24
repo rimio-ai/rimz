@@ -483,7 +483,9 @@ upward-dependencies = [
 # AgentState::rest_clears_background_shells lets record_provider_rest decide in log order whether a
 # provider rest report empties listed background shells (+1).
 # skills::available_skills exposes full on-disk skill names so `agents validate` checks `skill(x)` (+1).
-surface-budget = 1351
+# skills::{SkillMarkerErr, is_user_only, is_model_callable_on_disk} share the one user-only marker read
+# and launch-time optional-skill check across definition loading and launch settlement (+3).
+surface-budget = 1354
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

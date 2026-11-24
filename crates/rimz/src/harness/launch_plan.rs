@@ -869,6 +869,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.accounts,
     )?;
     let login_env = login.env(inputs.ambient_env);
+    request.settle_seat_skills(adapter, &login_env);
     reminders.settings = Some((inputs.runtime.prompt_dir(), login_env.clone()));
     reminders.rimz_skills = crate::agents::skills::rimz_skills(
         adapter.skills_home(&login_env).as_deref(),

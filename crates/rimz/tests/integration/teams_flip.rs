@@ -1627,6 +1627,7 @@ impl Fixture {
             follow_up_message: None,
             reminder_section: None,
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             no_skill_tool: false,
             allowed_tools: None,

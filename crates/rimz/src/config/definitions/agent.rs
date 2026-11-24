@@ -35,6 +35,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         isolation: None,
         empty_dir: None,
         skills: None,
+        seat_consensus_skill: false,
         mcps: None,
         allowed_tools: None,
         description: None,
@@ -147,11 +148,20 @@ pub(super) struct SeatEdits {
     pub reflects: bool,
 }
 
-/// The skill every Markdown team seat's built-in consensus tells it to use.
+/// The capability every Markdown team seat's built-in consensus names (`rimz(message)`).
 const CONSENSUS_SKILL: &str = "rimz-message";
 
+#[derive(Clone, Copy, Default)]
+struct SeatSkillEdits {
+    added_consensus: bool,
+    added_reflect: bool,
+}
+
 impl SeatEdits {
-    fn edit(self, fm: &mut AgentFrontmatter) {
+    /// Applies seat edits to resolved frontmatter and reports whether the seat should append an
+    /// optional `CONSENSUS_SKILL` entry to `profile.skills` after `skill_policy` checks the
+    /// author-written entries (and whether the seat also appended `rimz-reflect`).
+    fn edit(self, fm: &mut AgentFrontmatter) -> SeatSkillEdits {
         if !self.leader
             && let Some(tools) = &mut fm.tools
         {
@@ -160,29 +170,49 @@ impl SeatEdits {
                     != "AskUserQuestion"
             });
         }
+        let had_skills = fm.skills.as_ref().is_some_and(|skills| !skills.is_empty());
+        let mut edits = SeatSkillEdits::default();
         if let Some(capabilities) = &mut fm.capabilities {
             if !self.leader {
                 capabilities.retain(|entry| entry.trim() != "ask");
             }
-            // A capability stays out of a `capabilities:` seat's skills, so the grant takes the
-            // one the team's consensus names wherever the seat's Skill tool is implied: every
-            // Markdown team runs the built-in consensus, which names `rimz-message`.
-            if skill_implied(capabilities, fm.skills.as_deref())
-                && !capabilities.iter().any(|entry| {
-                    let name = frontmatter::marked_name(entry);
-                    name == CONSENSUS_SKILL || name == SERVER_NAME
+            // Every Markdown team runs the built-in consensus, which names `rimz(message)`.
+            // Beside `capabilities:`, RimZ capabilities go only in the grant, even beside
+            // `skills: []` where adding one implies `Skill`.
+            if !capabilities.iter().any(|entry| {
+                matches!(
+                    frontmatter::marked_name(entry),
+                    CONSENSUS_SKILL | SERVER_NAME
+                )
+            }) {
+                capabilities.push(CONSENSUS_SKILL.to_owned());
+            }
+        } else {
+            if let Some(mcps) = &mut fm.mcps
+                && !mcps.iter().any(|entry| {
+                    matches!(
+                        frontmatter::marked_name(entry),
+                        CONSENSUS_SKILL | SERVER_NAME | "*"
+                    )
                 })
             {
-                capabilities.push(CONSENSUS_SKILL.to_owned());
+                mcps.push(CONSENSUS_SKILL.to_owned());
+            }
+            if let Some(skills) = &fm.skills
+                && !skills.iter().any(|skill| skill.trim() == CONSENSUS_SKILL)
+            {
+                edits.added_consensus = true;
             }
         }
         if self.reflects
+            && had_skills
             && let Some(skills) = &mut fm.skills
-            && !skills.is_empty()
             && !skills.iter().any(|skill| skill.trim() == "rimz-reflect")
         {
             skills.push("rimz-reflect".to_owned());
+            edits.added_reflect = true;
         }
+        edits
     }
 }
 
@@ -583,9 +613,9 @@ impl Resolver<'_> {
         }
         fm.settle_plus(kind)
             .map_err(|message| DefinitionErr::new(path, message))?;
-        if let Some(seat) = self.seat {
-            seat.edit(&mut fm);
-        }
+        let seat_edits = self
+            .seat
+            .map_or_else(SeatSkillEdits::default, |seat| seat.edit(&mut fm));
         profile.allowed_tools = fm
             .allowed_tools
             .as_ref()
@@ -735,7 +765,8 @@ impl Resolver<'_> {
             check => check,
         };
         profile.skills = match fm.skills.as_deref() {
-            // `capabilities:` beside `skills: []` leaves Skill out on purpose (`skill_implied`).
+            // `capabilities:` beside `skills: []` keeps the empty list; its RimZ capabilities
+            // live in the grant.
             Some([]) if fm.capabilities.is_some() => Some(Vec::new()),
             listed => skill_policy(
                 path,
@@ -746,6 +777,19 @@ impl Resolver<'_> {
                 self.scope.skills,
             )?,
         };
+        if seat_edits.added_consensus
+            && let Some(skills) = &mut profile.skills
+        {
+            // Impossible: `CONSENSUS_SKILL` ("rimz-message") is a valid bare skill name.
+            let skill = CONSENSUS_SKILL
+                .parse()
+                .expect("built-in consensus skill name is a valid SkillName");
+            let index = skills
+                .len()
+                .saturating_sub(usize::from(seat_edits.added_reflect));
+            skills.insert(index, skill);
+            profile.seat_consensus_skill = true;
+        }
         profile.mcps = fm
             .mcps
             .as_deref()
@@ -1109,86 +1153,41 @@ pub(super) fn skill_policy(
                 .with_cause(DefinitionCause::MissingSkill { skill, roots }));
             };
             let skill_path = found.source.join("SKILL.md");
-            let text = catalog.read_text(&skill_path).map_err(|error| {
-                DefinitionErr::new(
-                    path,
-                    format!(
-                        "lists skill '{name}', unreadable at {}: {error}",
-                        skill_path.display()
-                    ),
-                )
-            })?;
-            let skill_path = skill_path.as_path();
-            let directory = skill_path.parent().unwrap_or(skill_path);
             let marker = definition.map_or(ManualSkill::Unsupported, |definition| {
                 definition.manual_skill()
             });
-            let manual = match marker {
-                ManualSkill::Unsupported => false,
-                ManualSkill::Frontmatter => {
-                    let (block, _) = frontmatter::split(skill_path, &text).map_err(|error| {
-                        DefinitionErr::new(
+            let manual =
+                agents::skills::is_user_only(&found.source, marker, |file| catalog.read_text(file))
+                    .map_err(|error| match error {
+                        agents::skills::SkillMarkerErr::Unreadable {
+                            path: file,
+                            message,
+                        } => DefinitionErr::new(
                             path,
                             format!(
-                                "lists skill '{name}', invalid at {}: {}",
-                                error.path.display(),
-                                error.message
+                                "lists skill '{name}', unreadable at {}: {message}",
+                                file.display()
                             ),
-                        )
+                        ),
+                        agents::skills::SkillMarkerErr::Invalid {
+                            path: file,
+                            message,
+                        } => DefinitionErr::new(
+                            path,
+                            format!(
+                                "lists skill '{name}', invalid at {}: {message}",
+                                file.display()
+                            ),
+                        ),
                     })?;
-                    block.lines().any(|line| {
-                        line.strip_prefix("disable-model-invocation:")
-                            .is_some_and(|value| value.trim() == "true")
-                    })
-                }
-                ManualSkill::OpenAiPolicy => {
-                    let policy_path = directory.join("agents/openai.yaml");
-                    match catalog.read_text(&policy_path) {
-                        Ok(text) => {
-                            #[derive(serde::Deserialize)]
-                            struct Document {
-                                policy: Option<Policy>,
-                            }
-                            #[derive(serde::Deserialize)]
-                            struct Policy {
-                                allow_implicit_invocation: Option<bool>,
-                            }
-                            let document: Option<Document> = serde_saphyr::from_str(&text)
-                                .map_err(|error| {
-                                    DefinitionErr::new(
-                                        path,
-                                        format!(
-                                            "lists skill '{name}', invalid at {}: {error}",
-                                            policy_path.display()
-                                        ),
-                                    )
-                                })?;
-                            document
-                                .and_then(|document| document.policy)
-                                .and_then(|policy| policy.allow_implicit_invocation)
-                                == Some(false)
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                        Err(error) => {
-                            return Err(DefinitionErr::new(
-                                path,
-                                format!(
-                                    "lists skill '{name}', unreadable at {}: {error}",
-                                    policy_path.display()
-                                ),
-                            ));
-                        }
-                    }
-                }
-            };
             if manual {
                 let (marker_file, marker_line) = if matches!(marker, ManualSkill::OpenAiPolicy) {
                     (
-                        directory.join("agents/openai.yaml"),
+                        found.source.join("agents/openai.yaml"),
                         "policy.allow_implicit_invocation: false",
                     )
                 } else {
-                    (skill_path.to_owned(), "disable-model-invocation: true")
+                    (skill_path, "disable-model-invocation: true")
                 };
                 return Err(DefinitionErr::new(
                     path,

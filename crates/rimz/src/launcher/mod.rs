@@ -1544,6 +1544,7 @@ fn check_cell(
         });
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
+    request.seat_consensus_skill = cell.seat_consensus_skill;
     request.mcps.clone_from(&cell.mcps);
     request.no_skill_tool = cell.no_skill_tool;
     request

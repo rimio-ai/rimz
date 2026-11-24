@@ -730,6 +730,11 @@ pub struct ExecRequest {
         deserialize_with = "crate::config::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<crate::config::SkillName>>,
+    /// Whether `rimz-message` in `skills` was added by a Markdown team seat rather than written
+    /// by the author. Settled at launch against the launch's kind, login, and skill inventory;
+    /// omitted by older binaries, which read as author-written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seat_consensus_skill: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcps: Option<Vec<crate::config::McpName>>,
     /// Whether the applied tools list excludes `Skill`.
@@ -914,6 +919,27 @@ impl ExecRequest {
         ))
     }
 
+    /// Settle a seat-added `rimz-message` skill entry against this launch's kind, login, and
+    /// skill inventory: keep it when installed and model-callable there, else drop it silently.
+    /// Author-written entries (`!self.seat_consensus_skill`) are left untouched.
+    pub(super) fn settle_seat_skills(
+        &mut self,
+        adapter: &crate::agents::AgentDefinition,
+        env: &BTreeMap<String, String>,
+    ) {
+        if !self.seat_consensus_skill {
+            return;
+        }
+        self.seat_consensus_skill = false;
+        let Some(skills) = &mut self.skills else {
+            return;
+        };
+        let consensus = crate::mcp::catalog::Capability::Message.name();
+        if !crate::agents::skills::is_model_callable_on_disk(consensus, adapter, env, skills) {
+            skills.retain(|skill| skill.as_str() != consensus);
+        }
+    }
+
     /// The profile list handed to the provider, less the skills `withheld` from the model
     /// (`LaunchReminders::withheld_skills`). Under a RimZ grant the list holds no capability's
     /// name: each enforcer admits the granted capability skills it finds through
@@ -963,6 +989,7 @@ impl ExecRequest {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            seat_consensus_skill: cell.seat_consensus_skill,
             mcps: cell.mcps.clone(),
             no_skill_tool: cell.no_skill_tool,
             rimz_capabilities: cell.rimz_capabilities.clone(),
@@ -987,6 +1014,7 @@ impl ExecRequest {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             no_skill_tool: false,
             rimz_capabilities: None,
@@ -1244,6 +1272,14 @@ fn compile_agent_process_with_extra_env(
         .env(&crate::agents::ambient_env()),
     };
     login_env.extend(env.clone());
+    let mut settled;
+    let request = if request.seat_consensus_skill {
+        settled = request.clone();
+        settled.settle_seat_skills(adapter, &login_env);
+        &settled
+    } else {
+        request
+    };
     for dir in &request.identity.params.add_dirs {
         let repo_root = crate::workspace::main_repo_root(Path::new(dir))?;
         crate::agents::preflight_launch_dir(

@@ -382,6 +382,7 @@ fn profile(agent: &str) -> Profile {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         skills: None,
+        seat_consensus_skill: false,
         mcps: None,
         args: None,
     }
@@ -1538,6 +1539,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             system_prompt_file: Some("/prompts/system.md".into()),
             append_system_prompt_files: vec!["/prompts/fragment.md".into()],
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             args: Some("--strict-mcp-config".to_owned()),
         },

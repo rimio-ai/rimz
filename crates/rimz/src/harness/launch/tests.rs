@@ -491,6 +491,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        seat_consensus_skill: false,
         mcps: None,
         no_skill_tool: false,
         rimz_capabilities: None,
@@ -3162,6 +3163,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap(), "rebase".parse().unwrap()]),
+        seat_consensus_skill: false,
         mcps: None,
         no_skill_tool: false,
         rimz_capabilities: None,
@@ -3282,6 +3284,25 @@ fn exec_wire_defaults_missing_skill_tool_flag_and_round_trips_true() {
     let decoded = decode_exec_request("claude", None, &payload.to_string()).unwrap();
     assert_eq!(
         (payload.get("no_skill_tool"), decoded),
+        (Some(&serde_json::json!(true)), request)
+    );
+}
+
+#[test]
+fn exec_wire_defaults_missing_seat_consensus_skill_and_round_trips_true() {
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let legacy = serde_json::to_value(&request).unwrap();
+    assert!(legacy.get("seat_consensus_skill").is_none());
+    assert!(
+        !decode_exec_request("claude", None, &legacy.to_string())
+            .unwrap()
+            .seat_consensus_skill
+    );
+    request.seat_consensus_skill = true;
+    let payload = serde_json::to_value(&request).unwrap();
+    let decoded = decode_exec_request("claude", None, &payload.to_string()).unwrap();
+    assert_eq!(
+        (payload.get("seat_consensus_skill"), decoded),
         (Some(&serde_json::json!(true)), request)
     );
 }

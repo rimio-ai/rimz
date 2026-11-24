@@ -143,8 +143,10 @@ mod tests {
     fn reflection_lives_only_in_the_shipped_piece() {
         assert!(!BUILT_IN_CONSENSUS.to_lowercase().contains("reflect"));
         for text in [BUILT_IN_CONSENSUS, SHIPPED_REFLECT] {
-            assert!(!text.contains("Skill(reflect)"));
+            assert!(!text.contains("Skill("), "{text}");
         }
-        assert!(SHIPPED_REFLECT.contains("Skill(rimz-reflect)"));
+        assert!(BUILT_IN_CONSENSUS.contains("rimz(message)"));
+        assert!(!SHIPPED_REFLECT.contains("rimz(reflect)"));
+        assert!(SHIPPED_REFLECT.contains("skill(rimz-reflect)"));
     }
 }

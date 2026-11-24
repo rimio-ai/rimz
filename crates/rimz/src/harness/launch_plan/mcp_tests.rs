@@ -1518,3 +1518,451 @@ fn system_prompt_digest_tracks_the_rewritten_text_across_reaches_and_replays() {
             .system_prompt_digest
     );
 }
+
+#[test]
+fn seat_added_rimz_message_is_settled_at_launch() {
+    let room = Room::new();
+    let home = Path::new(&room.ambient["HOME"]);
+    let agents_home = home.join(".rimz");
+    std::fs::create_dir_all(agents_home.join("agents")).unwrap();
+    std::fs::create_dir_all(agents_home.join("teams")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            agents_home.join(format!("agents/{kind}.md")),
+            "---\ndescription: Base.\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        agents_home.join("agents/listed.md"),
+        "---\ndescription: Listed.\nagent: claude\ntools: [Bash, Skill]\nskills: [work]\n---\nCraft.",
+    )
+    .unwrap();
+    std::fs::write(
+        agents_home.join("agents/empty.md"),
+        "---\ndescription: Empty.\nagent: claude\ntools: [Bash, Skill]\nskills: []\n---\nCraft.",
+    )
+    .unwrap();
+    std::fs::write(
+        agents_home.join("teams/probe.md"),
+        "---\nleader: judge\nstages: [Review]\nroles:\n  - agent: listed\n    role: judge\n    owns: [Review]\n  - agent: empty\n    role: scribe\n---\nPipeline.",
+    )
+    .unwrap();
+    let write_skill = |path: PathBuf, body: &str| {
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("SKILL.md"), body).unwrap();
+    };
+    let lib_skills = agents_home.join("skills");
+    write_skill(
+        lib_skills.join("work"),
+        "---\nname: work\ndescription: Work.\n---\nWork.\n",
+    );
+
+    let mut ambient = room.ambient.clone();
+    ambient.insert("RIMZ_AGENTS_HOME".into(), agents_home.display().to_string());
+    let named_claude = home.join(".claude-work");
+    std::fs::create_dir_all(&named_claude).unwrap();
+    let machine_toml = format!(
+        "[agents]\nallow-routine-rimz = true\nrimz-mcp-server = false\n\
+         [accounts.claude.work]\nhome = '{}'\n",
+        named_claude.display()
+    );
+    let base_machine: crate::config::MachineConfig = toml::from_str(&machine_toml).unwrap();
+
+    let load_defs = |check: bool| {
+        let skill_check = if check {
+            crate::config::definitions::SkillCheck::Check {
+                env: &ambient,
+                machine_isolation: Isolation::Host,
+            }
+        } else {
+            crate::config::definitions::SkillCheck::Skip
+        };
+        let loaded = crate::config::definitions::load(
+            &agents_home,
+            skill_check,
+            &base_machine.agents.commands,
+            &agents_home.join("config.toml"),
+            &base_machine.tiers,
+            base_machine.harness.auto_compact,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        loaded
+    };
+    let seat_cell = |loaded: &crate::config::definitions::LoadedDefinitions,
+                     spec: &str,
+                     agent_override: Option<&str>| {
+        let layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some(spec),
+            &loaded.agent_profiles,
+            &loaded.agent_profiles,
+            &base_machine.agents.commands,
+            &loaded.teams,
+            agent_override,
+        )
+        .unwrap();
+        layout.agent_cells().next().unwrap().clone()
+    };
+    let try_compile = |loaded: &crate::config::definitions::LoadedDefinitions,
+                       req: &ExecRequest,
+                       isolation: Isolation| {
+        let mut machine = base_machine.clone();
+        machine.agents.profiles = loaded.agent_profiles.clone();
+        machine.agents.teams = loaded.teams.clone();
+        let effective = crate::config::effective::load_with_roots(
+            &machine,
+            room.project.path(),
+            room.project.path(),
+        )
+        .unwrap();
+        compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: req,
+            cwd: room.project.path(),
+            project_root: room.project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &room.runtime,
+            state: &room.state,
+            effective: Some(&effective),
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation,
+            bwrap: isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+    };
+    let launch_skill_names = |plan: &LaunchPlan| {
+        plan.request
+            .launch_skills(&plan.withheld_skills)
+            .map(|skills| {
+                skills
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+
+    // 1. Load with SkillCheck::Skip (scoped pane), no rimz-message on disk: Claude seats with
+    //    `skills: [work]` and `skills: []` compile under Host and Scoped, dropping rimz-message.
+    let skipped = load_defs(false);
+    for (spec, expected) in [("probe.judge", vec!["work"]), ("probe.scribe", Vec::new())] {
+        let cell = seat_cell(&skipped, spec, None);
+        let req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+        for isolation in [Isolation::Host, Isolation::Scoped] {
+            let plan = try_compile(&skipped, &req, isolation)
+                .unwrap_or_else(|err| panic!("{spec} {isolation:?}: {err}"));
+            assert_eq!(
+                launch_skill_names(&plan),
+                Some(expected.iter().map(|s| (*s).to_owned()).collect()),
+                "{spec} {isolation:?}"
+            );
+            assert!(
+                !plan
+                    .rimz_reach
+                    .iter()
+                    .any(|(name, _)| name == "rimz-message"),
+                "{spec} {isolation:?}: {:?}",
+                plan.rimz_reach
+            );
+        }
+        // Marker also survives ResumeLaunchPosture and swap::restart_cell.
+        let posture = crate::harness::plan::ResumeLaunchPosture::from(&cell);
+        let resumed_req = posture.exec_request(
+            cell.kind.clone(),
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        let plan = try_compile(&skipped, &resumed_req, Isolation::Host).unwrap();
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(expected.iter().map(|s| (*s).to_owned()).collect()),
+            "resumed {spec}"
+        );
+        let agent = crate::agents::AgentState::stub(
+            cell.kind.as_str(),
+            "seat",
+            crate::agents::AgentStatus::Running,
+        );
+        let crate::harness::spec::Cell::Agent(restarted) = crate::launcher::swap::restart_cell(
+            &agent,
+            &crate::harness::resume::ResumePosture {
+                launch: posture,
+                degraded: None,
+            },
+        ) else {
+            panic!("restart cell");
+        };
+        let restarted_req = ExecRequest::fresh(&restarted, ExecIdentity::default(), None, false);
+        let plan = try_compile(&skipped, &restarted_req, Isolation::Host).unwrap();
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(expected.iter().map(|s| (*s).to_owned()).collect()),
+            "restarted {spec}"
+        );
+    }
+
+    // 2. `--agent codex` rebase where only Claude's root has rimz-message: Codex compiles and
+    //    drops rimz-message; when only Codex's root has it, Codex keeps and names it.
+    let claude_msg = Path::new(&ambient["CLAUDE_CONFIG_DIR"]).join("skills/rimz-message");
+    let codex_msg = home.join(".agents/skills/rimz-message");
+    write_skill(
+        claude_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+    );
+    let checked = load_defs(true);
+    let rebased = seat_cell(&checked, "probe.judge", Some("codex"));
+    let rebased_req = ExecRequest::fresh(&rebased, ExecIdentity::default(), None, false);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&checked, &rebased_req, isolation)
+            .unwrap_or_else(|err| panic!("codex rebase missing {isolation:?}: {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned()]),
+            "codex rebase missing {isolation:?}"
+        );
+        assert!(
+            !plan
+                .rimz_reach
+                .iter()
+                .any(|(name, _)| name == "rimz-message"),
+            "codex rebase missing {isolation:?}: {:?}",
+            plan.rimz_reach
+        );
+    }
+    std::fs::remove_dir_all(&claude_msg).unwrap();
+    write_skill(
+        codex_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+    );
+    let checked = load_defs(true);
+    let rebased = seat_cell(&checked, "probe.judge", Some("codex"));
+    let rebased_req = ExecRequest::fresh(&rebased, ExecIdentity::default(), None, false);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&checked, &rebased_req, isolation)
+            .unwrap_or_else(|err| panic!("codex rebase present {isolation:?}: {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+            "codex rebase present {isolation:?}"
+        );
+        assert!(
+            plan.rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned())),
+            "codex rebase present {isolation:?}: {:?}",
+            plan.rimz_reach
+        );
+        assert!(
+            plan.prompt
+                .composed
+                .as_deref()
+                .unwrap()
+                .contains("skill(rimz-message)"),
+            "codex rebase present {isolation:?}"
+        );
+    }
+    std::fs::remove_dir_all(&codex_msg).unwrap();
+
+    // 3. `--login work` where only the default login's root has rimz-message drops it, and
+    //    where only `work`'s root has it lists it.
+    let work_msg = named_claude.join("skills/rimz-message");
+    write_skill(
+        claude_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+    );
+    let checked = load_defs(true);
+    let cell = seat_cell(&checked, "probe.judge", None);
+    let mut login_req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+    login_req.identity.params.login = Some("work".parse().unwrap());
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&checked, &login_req, isolation)
+            .unwrap_or_else(|err| panic!("login work missing {isolation:?}: {err}"));
+        assert_eq!(launch_skill_names(&plan), Some(vec!["work".to_owned()]));
+        assert!(
+            !plan
+                .rimz_reach
+                .iter()
+                .any(|(name, _)| name == "rimz-message")
+        );
+    }
+    std::fs::remove_dir_all(&claude_msg).unwrap();
+    write_skill(
+        work_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+    );
+    let checked = load_defs(true);
+    let cell = seat_cell(&checked, "probe.judge", None);
+    let mut login_req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+    login_req.identity.params.login = Some("work".parse().unwrap());
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&checked, &login_req, isolation)
+            .unwrap_or_else(|err| panic!("login work present {isolation:?}: {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned(), "rimz-message".to_owned()])
+        );
+        assert!(
+            plan.rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned()))
+        );
+    }
+    std::fs::remove_dir_all(&work_msg).unwrap();
+
+    // 4. User-only copy on disk (loaded under SkillCheck::Skip): dropped silently, never callable
+    //    and never named as reachable for Claude or Codex.
+    let lib_msg = lib_skills.join("rimz-message");
+    write_skill(
+        lib_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\ndisable-model-invocation: true\n---\nMessage.\n",
+    );
+    std::fs::create_dir_all(lib_msg.join("agents")).unwrap();
+    std::fs::write(
+        lib_msg.join("agents/openai.yaml"),
+        "policy:\n  allow_implicit_invocation: false\n",
+    )
+    .unwrap();
+    let skipped = load_defs(false);
+    for (label, agent_override) in [("claude", None), ("codex", Some("codex"))] {
+        let cell = seat_cell(&skipped, "probe.judge", agent_override);
+        let req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+        for isolation in [Isolation::Host, Isolation::Scoped] {
+            let plan = try_compile(&skipped, &req, isolation)
+                .unwrap_or_else(|err| panic!("user-only {label} {isolation:?}: {err}"));
+            assert_eq!(
+                launch_skill_names(&plan),
+                Some(vec!["work".to_owned()]),
+                "user-only {label} {isolation:?}"
+            );
+            assert!(
+                !plan
+                    .rimz_reach
+                    .iter()
+                    .any(|(name, _)| name == "rimz-message"),
+                "user-only {label} {isolation:?}: {:?}",
+                plan.rimz_reach
+            );
+            assert!(
+                !plan
+                    .prompt
+                    .composed
+                    .as_deref()
+                    .unwrap()
+                    .contains("skill(rimz-message)"),
+                "user-only {label} {isolation:?}"
+            );
+            if isolation == Isolation::Host {
+                let Some(crate::agents::skills::HostSkillPlan::Applied {
+                    listed, unlisted, ..
+                }) = &plan.process().host_skills
+                else {
+                    panic!(
+                        "user-only {label} host plan: {:?}",
+                        plan.process().host_skills
+                    );
+                };
+                assert!(
+                    !serde_json::to_value(listed)
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!("rimz-message")),
+                    "user-only {label} listed: {listed:?}"
+                );
+                assert!(
+                    serde_json::to_value(unlisted)
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!("rimz-message")),
+                    "user-only {label} unlisted: {unlisted:?}"
+                );
+            }
+        }
+    }
+
+    // 5. Installed callable copy on disk (loaded under SkillCheck::Skip): listed and reachable.
+    write_skill(
+        lib_msg.clone(),
+        "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+    );
+    std::fs::remove_file(lib_msg.join("agents/openai.yaml")).unwrap();
+    let skipped = load_defs(false);
+    let cell = seat_cell(&skipped, "probe.judge", None);
+    let req = ExecRequest::fresh(&cell, ExecIdentity::default(), None, false);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&skipped, &req, isolation)
+            .unwrap_or_else(|err| panic!("callable {isolation:?}: {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+            "callable {isolation:?}"
+        );
+        assert!(
+            plan.rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned())),
+            "callable {isolation:?}: {:?}",
+            plan.rimz_reach
+        );
+        assert!(
+            plan.prompt
+                .composed
+                .as_deref()
+                .unwrap()
+                .contains("skill(rimz-message)"),
+            "callable {isolation:?}"
+        );
+        if isolation == Isolation::Host {
+            let Some(crate::agents::skills::HostSkillPlan::Applied { listed, .. }) =
+                &plan.process().host_skills
+            else {
+                panic!("callable host plan: {:?}", plan.process().host_skills);
+            };
+            assert!(
+                serde_json::to_value(listed)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("rimz-message")),
+                "callable listed: {listed:?}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(&lib_msg).unwrap();
+
+    // 6. Older wire request (no seat marker) and author-written `skills: [rimz-message]` still
+    //    refuse when rimz-message is missing on disk.
+    let mut legacy_src = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    legacy_src.skills = Some(vec![
+        "work".parse().unwrap(),
+        "rimz-message".parse().unwrap(),
+    ]);
+    let legacy_json = serde_json::to_value(&legacy_src).unwrap();
+    assert!(legacy_json.get("seat_consensus_skill").is_none());
+    let legacy: ExecRequest = serde_json::from_value(legacy_json).unwrap();
+    assert!(!legacy.seat_consensus_skill);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        assert!(
+            try_compile(&skipped, &legacy, isolation).is_err(),
+            "legacy wire request must refuse missing skill ({isolation:?})"
+        );
+    }
+    std::fs::write(
+        agents_home.join("teams/probe.md"),
+        "---\nleader: judge\nstages: [Review]\nroles:\n  - agent: listed\n    role: judge\n    owns: [Review]\n    skills: [work, rimz-message]\n---\nPipeline.",
+    )
+    .unwrap();
+    let authored_skipped = load_defs(false);
+    let authored_cell = seat_cell(&authored_skipped, "probe.judge", None);
+    let authored_req = ExecRequest::fresh(&authored_cell, ExecIdentity::default(), None, false);
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        assert!(
+            try_compile(&authored_skipped, &authored_req, isolation).is_err(),
+            "author-written rimz-message must refuse when missing ({isolation:?})"
+        );
+    }
+}

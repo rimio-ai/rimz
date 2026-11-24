@@ -3404,6 +3404,7 @@ fn restore_resume_cell(
     cell.system_prompt_file = posture.system_prompt_file;
     cell.append_system_prompt_files = posture.append_system_prompt_files;
     cell.skills = posture.skills;
+    cell.seat_consensus_skill = posture.seat_consensus_skill;
     cell.mcps = posture.mcps;
     cell.no_skill_tool = posture.no_skill_tool;
     cell.rimz_capabilities = posture.rimz_capabilities;
