@@ -53,7 +53,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 [gates.md](./docs/contributing/gates.md) defines the gate stack and the test profiles.
 
 - While iterating, run `cargo fmt --all`, then `cargo xtask check`, then `cargo xtask lint`, and `cargo xtask doc` when you touched rustdoc.
-- Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree, run it as `RIMZ_XTASK_TIMEOUT=60m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure.
+- Run `cargo xtask gate` before a PR or hand-off. On a cold or loaded tree, run it as `RIMZ_XTASK_TIMEOUT=60m cargo xtask gate`. Escalate past it (journey, live, perf, externals, full CI) when the change touches those surfaces, their fixtures, or shared infrastructure. A subagent or background run prefixes the command with `setsid --wait` ([Background runs](./docs/contributing/running-gates.md#background-runs)).
 - Run one Cargo-family command at a time in a worktree. When another worktree's Cargo process holds the lock, start yours and let it queue.
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
