@@ -36,7 +36,7 @@ Ask and plan add no flag. Hermes's `/plan` is a prompt convention with no enforc
 Hermes launches carry no RimZ text outside the user's prompt:
 
 - No launch reminder. The adapter keeps the default `LaunchCapability::append_system_text_channel` of `None`, so `harness/launch.rs` renders the reminder but adds it to no argv, environment variable, or prompt. `HERMES_EPHEMERAL_SYSTEM_PROMPT` is Hermes's only system-text input, and a nonempty value replaces the user's `display.personality` and `agent.system_prompt` ([reference](../../externals/agent-adapter/hermes-reference.md#planning-and-added-system-text)).
-- No system-prompt replacement. The spec has no `SystemPromptFile` matcher, so a profile's system-prompt fields fail with `PromptComposeErr::Unsupported` (`crates/rimz/src/harness/prompt_compose.rs::plan_system_prompt`).
+- No system-prompt replacement. The spec has no `SystemPromptFile` matcher, so a profile's system-prompt fields fail with `PromptComposeErr::Unsupported` (`crates/rimz/src/harness/prompt_compose.rs::read_system_prompt`).
 
 Every interactive launch checks the binary against `install::MIN_VERSION` (0.22.2) inside the pane, in the [session step](../harness/fleet.md#the-launch-plan) that resolves the program on the pane's `PATH` (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). An unreadable version passes.
 
