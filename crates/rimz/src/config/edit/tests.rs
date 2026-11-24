@@ -278,6 +278,8 @@ fn model_tier_list_edit_keeps_the_unwritten_tier_defaults() {
     );
 }
 
+/// Paths only: nothing creates them, and another process may leave a file there, so a test
+/// that loads or writes config takes a tempdir (`inline_editor`).
 fn test_files() -> MachineConfigFiles {
     MachineConfigFiles::from_paths("/tmp/rimz/config.toml", "/tmp/rimz/agents-home")
 }
@@ -2680,7 +2682,7 @@ fn harness_idle_compact_validation_accepts_off_and_token_floors() {
         );
     }
 
-    let editor = ConfigEditor::new(test_files());
+    let (_dir, editor) = inline_editor("");
     assert!(matches!(
         editor.get(Some("harness.idle_compact_after")),
         Err(ConfigEditErr::UnknownKey { .. })
