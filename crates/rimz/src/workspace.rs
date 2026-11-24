@@ -461,6 +461,10 @@ impl WorkspaceResolver {
     /// Resolve on behalf of a participant in a live room: the session's
     /// verified env pin ([`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`]) beats the
     /// static ladder; an explicit `root_override` beats both.
+    ///
+    /// Every room pane exports that pin, so a `rimz` child that acts on an object
+    /// of another room passes `--root <that room's root>`, or removes both
+    /// variables when it must keep a checkout of its own.
     pub fn resolve_participant(
         start: impl AsRef<Path>,
         root_override: Option<PathBuf>,

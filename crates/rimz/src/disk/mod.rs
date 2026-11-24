@@ -3,6 +3,9 @@
 //! This module imports only `ids`, `sock` and `utils`; every fsync lives in
 //! `atomic.rs`. Rotating JSONL appends are best-effort, skip the per-record
 //! fsync, and sync the parent directory only when they create the file.
+//!
+//! A new module here gets a row in the Disk module table of
+//! `docs/internals/store.md`.
 
 pub mod atomic;
 pub(crate) mod buckets;
