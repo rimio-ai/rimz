@@ -1,0 +1,28 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 1
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌○ claude                                       $0.36▐
+▌  delegate background check                         ▐
+▌  ▢ ────────────────────────────────────  0.0%      ▐
+▌  ▤ 0                                               ▐
+▌  ⧉ subagents (2)                              $0.36▐
+▌    ✓ coder · build in background  ⋯ bg        $0.24▐
+▌      ▤ 14k · Sonnet 4.6                          1m▐
+▌    ✓ reviewer · checked diff                  $0.12▐
+▌      ▤  8k · Haiku 4.5                           1m▐
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

@@ -223,6 +223,7 @@ fn entry(
             .map(|headline| Span::styled(headline, theme.body()))
             .into_iter()
             .collect(),
+        marker: Vec::new(),
         clip_who: false,
         right: since
             .map(|at| {

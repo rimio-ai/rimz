@@ -1978,3 +1978,250 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
         );
     }
 }
+
+#[test]
+fn parked_launched_child_stays_unfinished_with_background_marker_and_frozen_clock() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate background check"),
+    );
+    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(3_600));
+
+    let mut finished = agent(
+        "child-done",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("review"),
+    );
+    finished.parent_agent_id = Some("parent".into());
+    finished.launch_depth = Some(1);
+    finished.profile = Some("reviewer".to_owned());
+    finished.subagent_description = Some("checked diff".to_owned());
+    finished.subagent_started_at = Some(fixed_now() - Duration::from_secs(120));
+    finished.finished_at = Some(fixed_now() - Duration::from_secs(30));
+    finished.last_activity = fixed_now() - Duration::from_secs(30);
+    finished.last_seen = finished.last_activity;
+    finished.registered_at = Some(fixed_now() - Duration::from_secs(120));
+    finished.model = Some("claude-haiku-4-5".to_owned());
+    finished.usage.fresh_input_tokens = Some(8_000);
+    finished.subagent_cost_usd = Some(0.12);
+
+    let mut parked = agent(
+        "child-parked",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("worker"),
+    );
+    parked.parent_agent_id = Some("parent".into());
+    parked.launch_depth = Some(1);
+    parked.profile = Some("coder".to_owned());
+    parked.phase = TurnPhase::Parked;
+    parked.subagent_description = Some("build in background".to_owned());
+    parked.subagent_started_at = Some(fixed_now() - Duration::from_secs(600));
+    parked.finished_at = Some(fixed_now() - Duration::from_secs(540));
+    parked.last_activity = fixed_now() - Duration::from_secs(540);
+    parked.last_seen = parked.last_activity;
+    parked.registered_at = Some(fixed_now() - Duration::from_secs(600));
+    parked.model = Some("claude-sonnet-4-6".to_owned());
+    parked.usage.fresh_input_tokens = Some(14_000);
+    parked.subagent_cost_usd = Some(0.24);
+    parked.pane = Some(crate::pane::PaneRef::from_id(
+        "zellij:terminal_parked".parse().unwrap(),
+    ));
+
+    let snapshot = snapshot_with(vec![parent, finished, parked]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        &UiState::default(),
+        54,
+        24,
+    );
+    let lines: Vec<_> = rendered.lines().collect();
+    let parked_idx = lines
+        .iter()
+        .position(|line| line.contains("coder"))
+        .unwrap_or_else(|| panic!("missing parked child:\n{rendered}"));
+    let finished_idx = lines
+        .iter()
+        .position(|line| line.contains("reviewer"))
+        .unwrap_or_else(|| panic!("missing finished child:\n{rendered}"));
+    assert!(
+        parked_idx < finished_idx,
+        "parked child must precede finished children:\n{rendered}"
+    );
+    assert!(
+        lines[parked_idx].contains("✓ coder · build in background  ⋯ bg"),
+        "expected parked marker on line 1:\n{rendered}"
+    );
+    assert!(
+        lines[parked_idx + 1].contains("1m"),
+        "expected frozen 1m clock on line 2:\n{rendered}"
+    );
+    assert_snapshot("parked_launched_child", rendered);
+}
+
+#[test]
+fn parked_child_marker_covers_turn_error_focus_no_description_and_drop_widths() {
+    let theme = Theme::fixed(false);
+    let pane: PaneId = "zellij:terminal_parked".parse().unwrap();
+
+    // Marker beside a turn-error headline, on a focused entry, and with no description.
+    let mut cases = Vec::new();
+    for (case, status, description, turn_error, focused) in [
+        (
+            "turn_error",
+            AgentStatus::Success,
+            Some("ignored"),
+            Some("rate limited"),
+            false,
+        ),
+        (
+            "focused",
+            AgentStatus::Success,
+            Some("run checks"),
+            None,
+            true,
+        ),
+        ("no_desc", AgentStatus::Success, None, None, false),
+        (
+            "running_parked",
+            AgentStatus::Running,
+            Some("shell runs"),
+            None,
+            false,
+        ),
+        (
+            "sleeping_parked",
+            AgentStatus::Sleeping,
+            Some("waits timer"),
+            None,
+            false,
+        ),
+    ] {
+        let mut snapshot = fast_child_snapshot(status, false);
+        let child = &mut fast_children_mut(&mut snapshot)[0];
+        child.name = "coder".to_owned();
+        child.fast = false;
+        child.phase = TurnPhase::Parked;
+        child.pane = Some(pane.clone());
+        child.description = description.map(str::to_owned);
+        child.task = None;
+        child.first_prompt = None;
+        child.turn_error_label = turn_error.map(str::to_owned);
+        let rolls = CostRolls::default();
+        let cursor = EntryCursor::SubAgent(pane.clone());
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        if focused {
+            ctx.entry_cursor = Some(&cursor);
+        }
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], true, None);
+        let line = block
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("coder"))
+            .unwrap_or_else(|| panic!("{case}: missing child line"));
+        let text = line.to_string();
+        let marker_fg = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("⋯ bg"))
+            .map(|span| span.style.fg);
+        cases.push((
+            case,
+            text.contains("⋯ bg"),
+            marker_fg == Some(theme.styled(Component::EntryParkedBg, Modifier::empty()).fg),
+            focused == text.contains(theme.glyph(GlyphRole::ChromeSpineEntry)),
+            case != "no_desc" || !text.contains("·"),
+            case != "turn_error" || text.contains("rate limited  ⋯ bg"),
+        ));
+    }
+    assert_eq!(
+        cases,
+        vec![
+            ("turn_error", true, true, true, true, true),
+            ("focused", true, true, true, true, true),
+            ("no_desc", true, true, true, true, true),
+            ("running_parked", true, true, true, true, true),
+            ("sleeping_parked", true, true, true, true, true),
+        ]
+    );
+
+    let render_line = |width: usize, description: Option<&str>| {
+        let mut snapshot = fast_child_snapshot(AgentStatus::Success, false);
+        let child = &mut fast_children_mut(&mut snapshot)[0];
+        child.name = "coder".to_owned();
+        child.fast = false;
+        child.phase = TurnPhase::Parked;
+        child.pane = Some(pane.clone());
+        child.description = description.map(str::to_owned);
+        child.task = None;
+        child.first_prompt = None;
+        child.cost_usd = None;
+        let rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &rolls);
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        block
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("coder"))
+            .unwrap_or_else(|| panic!("width {width}: missing child line"))
+            .to_string()
+    };
+
+    // Content width is the pane's minus 2. The lead and who take 11 cells, the seam 3
+    // and the marker 6: the marker needs a pane of 19, a headline beside it one of 24
+    // for its first character and `…`, and a headline that fills its room draws whole.
+    let long = Some("a very long background build description");
+    let seen: Vec<_> = [
+        (18, None),
+        (19, None),
+        (20, None),
+        (18, long),
+        (19, long),
+        (20, long),
+        (23, long),
+        (24, long),
+        (25, long),
+        (23, Some("ab")),
+        (24, Some("ab")),
+    ]
+    .into_iter()
+    .map(|(width, description)| {
+        // The line as drawn between the card's two spine cells.
+        let line = render_line(width, description);
+        let spine = line.char_indices().last().map_or(0, |(at, _)| at);
+        let lead = line.find('✓').unwrap_or(0);
+        (width, line[lead..spine].trim_end().to_owned())
+    })
+    .collect();
+    assert_eq!(
+        seen,
+        [
+            (18, "✓ coder"),
+            (19, "✓ coder  ⋯ bg"),
+            (20, "✓ coder  ⋯ bg"),
+            (18, "✓ coder · a"),
+            (19, "✓ coder  ⋯ bg"),
+            (20, "✓ coder  ⋯ bg"),
+            (23, "✓ coder  ⋯ bg"),
+            (24, "✓ coder · a…  ⋯ bg"),
+            (25, "✓ coder · a …  ⋯ bg"),
+            (23, "✓ coder  ⋯ bg"),
+            (24, "✓ coder · ab  ⋯ bg"),
+        ]
+        .map(|(width, line)| (width, line.to_owned()))
+    );
+}

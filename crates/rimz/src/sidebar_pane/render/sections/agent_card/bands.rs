@@ -1,8 +1,9 @@
 //! Visibility bands for an open delegation section over the current turn's
-//! children. Unfinished children come first in spawn order, uncapped; finished
-//! children follow newest finish first, up to [`MAX_FINISHED`], and the rest
-//! are only counted. A child that finishes leaves the unfinished band for the
-//! top of the finished band, and nothing else moves.
+//! children. Unfinished children (any without a `success` or `failed` verdict,
+//! a stalled one, and one parked on background work) come first in spawn order,
+//! uncapped; finished children follow newest finish first, up to
+//! [`MAX_FINISHED`], and the rest are only counted. A child that finishes leaves
+//! the unfinished band for the top of the finished band, and nothing else moves.
 
 use crate::store::snapshot::SidebarSubAgent;
 
@@ -162,5 +163,25 @@ mod tests {
         );
         assert_eq!(ids(&after.finished)[0], "b");
         assert_eq!(ids(&after.finished)[1..], before_finished[..]);
+    }
+
+    #[test]
+    fn a_parked_child_stays_unfinished_above_finished_and_outside_the_finished_cap() {
+        let mut parked = child("parked", AgentStatus::Success, 1_200);
+        parked.phase = crate::agents::TurnPhase::Parked;
+        let mut children: Vec<_> = (0..6)
+            .map(|index| {
+                child(
+                    &format!("f{index}"),
+                    AgentStatus::Success,
+                    i64::from(index) * 60,
+                )
+            })
+            .collect();
+        children.push(parked);
+        let bands = delegation_bands(&children);
+        assert_eq!(ids(&bands.unfinished), ["parked"]);
+        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
+        assert_eq!(bands.more_finished, 1);
     }
 }

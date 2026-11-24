@@ -349,6 +349,7 @@ fn booking_entry(ctx: &RowCtx<'_>, booking: &SidebarBooking, focused: bool) -> E
         lead,
         who,
         headline,
+        marker: Vec::new(),
         clip_who: team && one_line,
         right: fired
             .filter(|_| one_line)
