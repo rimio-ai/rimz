@@ -1,10 +1,10 @@
-//! RimZ `allowed-tools` rules in agy's permission grammar, merged into the launch's one
-//! `--settings` document as `permissions.allow`. agy's matching was observed on agy 1.5.14:
-//! `command(P)` matches P word by word with any trailing arguments, a file target covers a
-//! directory's descendants and expands no glob or `~`, and a rule string agy cannot read is
-//! accepted and matches nothing, so a rule with no translation is left out, never passed on.
-//! The same document carries every launch's `queuedMessages` pin and an ask launch's
-//! `agentMode` pin (`pin_modes`).
+//! RimZ `allowed-tools` and room/notes write rules in agy's permission grammar, merged into the
+//! launch's one `--settings` document as `permissions.allow`. agy's matching was observed on agy
+//! 1.5.14 and 1.5.16: `command(P)` matches P word by word with any trailing arguments, a file
+//! target covers a directory's descendants on its resolved path and expands no glob or `~`, and a
+//! rule string agy cannot read is accepted and matches nothing, so an `allowed-tools` rule with
+//! no translation is left out, never passed on. The same document carries every launch's
+//! `queuedMessages` pin and an ask launch's `agentMode` pin (`pin_modes`).
 
 use std::path::Path;
 
@@ -172,5 +172,32 @@ pub(super) fn render(
         },
         error => error,
     })?;
+    Ok(())
+}
+
+/// Union `write_file(<resolved path>)` allow rules into the launch's one settings document.
+/// agy matches file permission rules on the resolved path (observed on agy 1.5.16), so each
+/// path is canonicalized, falling back to the path as written when it does not exist yet.
+pub(super) fn allow_write_dirs<'a>(
+    dirs: impl IntoIterator<Item = &'a Path>,
+    (cwd, artifact_dir): (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    let rules: Vec<String> = dirs
+        .into_iter()
+        .map(|dir| {
+            let resolved = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+            format!("write_file({})", resolved.display())
+        })
+        .collect();
+    *artifact = merge_settings(
+        cwd,
+        artifact_dir,
+        extra_args,
+        artifact.as_ref(),
+        false,
+        |object| union_settings_array(object, "permissions", "allow", rules),
+    )?;
     Ok(())
 }

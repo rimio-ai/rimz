@@ -4391,3 +4391,61 @@ fn exec_wire_carries_marked_and_star_mcps_entries() {
     assert!(mcps[0].is_all());
     assert_eq!(mcps[2].mode(), Some(crate::mcp::catalog::LoadMode::Always));
 }
+
+/// A preflight compile carries no room roots or notes paths, so this launch's one `--settings`
+/// document holds the queue pin and the login's saved `permissions.allow` rules with no
+/// `write_file` rule for a room root (and no `permissions` key when the saved file is absent).
+#[test]
+fn antigravity_preflight_compile_keeps_saved_allows_without_room_roots() {
+    let project = tempfile::tempdir().unwrap();
+    let home = project.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let invocation = request(
+        "antigravity",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let extra_env = BTreeMap::from([("HOME".to_owned(), home.display().to_string())]);
+    let compile_preflight = || {
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &extra_env,
+            &LaunchReminders::default(),
+        )
+        .unwrap();
+        let docs: Vec<serde_json::Value> = process
+            .provider_argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(docs.len(), 1, "{:?}", process.provider_argv);
+        docs.into_iter().next().unwrap()
+    };
+
+    assert_eq!(
+        compile_preflight(),
+        serde_json::json!({"queuedMessages": "queue"})
+    );
+
+    let settings = home.join(".gemini/antigravity-cli/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings,
+        serde_json::json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        compile_preflight(),
+        serde_json::json!({
+            "queuedMessages": "queue",
+            "permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}
+        })
+    );
+}
