@@ -40,6 +40,9 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         .expect("work pane id");
 
     let mut client = AttachedClient::attach(&room, 200, 50);
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     let work_pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{work_id}"));
     client.press_alt_until('l', &work_pane, "fixture work pane");
 

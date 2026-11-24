@@ -247,6 +247,24 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     assert!(layout.contains("session_serialization false"), "{layout}");
     assert!(layout.contains("disable_session_metadata true"), "{layout}");
     assert!(layout.contains("stacked_pane_list false"), "{layout}");
+    for style in [
+        crate::config::RoomStyle::Native,
+        crate::config::RoomStyle::Rimz,
+    ] {
+        let mut machine = crate::config::MachineConfig::default();
+        machine.room.style = style;
+        let mut opts = sidebar_opts("rimz-contract", None, None);
+        opts.config = crate::config::MultiplexerConfig::from(&machine);
+        let layout = render_session_layout(&opts, None, &[], None).unwrap();
+        let document: kdl::KdlDocument = layout.parse().expect("whole layout parses as KDL");
+        assert_eq!(
+            document
+                .get_arg("default_mode")
+                .and_then(kdl::KdlValue::as_string),
+            Some("locked"),
+            "{style:?} room is born with every client starting locked:\n{layout}"
+        );
+    }
 }
 
 fn status_bar_layouts(mode: crate::config::MuxStatusBar) -> [String; 4] {

@@ -103,6 +103,9 @@ fn hidden_sidebar_mirrors_a_new_card_before_native_switch() {
         .unwrap()
         .pane_ref(room.name())
         .pane_id;
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     client.go_to_tab(1);
     client.press_alt_until('h', &home, "home sidebar before the card appears");
     wait_frame(
@@ -220,6 +223,9 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
             "printf '\\126IEW-HOME\\n'\n",
         )
         .unwrap();
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    first.send(b"\x07");
     first.go_to_tab(1);
     first.press_alt_until('h', &home_id, "first client's home sidebar");
     wait_screen(
@@ -227,6 +233,9 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         |s| s.contains("VIEW-HOME") && s.contains("⢿ 12"),
         "all twelve running cards reach the first client",
     );
+    // Zellij hands typed keys to the pane only in the base mode, locked here, so Ctrl g
+    // returns the client there after its stock-key steps.
+    first.send(b"\x07");
     first.send(b"gg");
     wait_screen(
         || first.screen(),
@@ -246,6 +255,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         .unwrap()
         .client_id
         .clone();
+    second.send(b"\x07");
     second.go_to_tab(2);
     let clients = poll_until(
         Duration::from_secs(15),
@@ -293,6 +303,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         },
         &format!("host resolves the split before independent input: {second_id:?} on {away_id}"),
     );
+    second.send(b"\x07");
     second.send(b"gg");
     wait_screen(
         || second.screen(),
@@ -330,6 +341,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
     );
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(sidebar_view(&first.screen()), bottom);
+    second.send(b"\x07");
     second.go_to_tab(1);
     poll_until(
         Duration::from_secs(15),
@@ -379,6 +391,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         |s| s.contains("VIEW-AGENTS") && sidebar_view(s) == bottom,
         "leaving carries the joined view",
     );
+    second.send(b"\x07");
     second.send(b"gg");
     wait_screen(
         || second.screen(),
@@ -398,6 +411,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         &format!("host resolves the departed co-viewer: only {second_id:?} remains"),
     );
     std::thread::sleep(Duration::from_secs(23));
+    second.send(b"\x07");
     second.press_alt('l');
     let clients = poll_until(
         Duration::from_secs(15),
@@ -548,6 +562,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         "entry working-pane baseline reaches the selection before the hold",
     );
     second.press_alt_until('h', &away_id, "sidebar before the retention browse");
+    second.send(b"\x07");
     second.send(b"gg");
     wait_screen(
         || second.screen(),
@@ -600,7 +615,9 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         |s| sidebar_view(s) == held && !s.contains("zᶻ away"),
         "returning client receives its retained view after resolution",
     );
+    returning.send(b"\x07");
     returning.press_alt_until('h', &away_id, "returning client's sidebar");
+    returning.send(b"\x07");
     returning.send(b"k");
     wait_screen(
         || returning.screen(),
@@ -645,11 +662,13 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
     } else {
         &away_id
     };
+    fresh.send(b"\x07");
     fresh.press_alt_until(
         'h',
         sidebar,
         "fresh client's sidebar for the browse-offset proof",
     );
+    fresh.send(b"\x07");
     fresh.send(b"gg");
     let homed = sidebar_view(&wait_screen(
         || fresh.screen(),

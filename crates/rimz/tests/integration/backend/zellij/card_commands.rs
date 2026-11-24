@@ -20,11 +20,11 @@ fn walk_slot_last_close_and_reopen_follow_the_attached_view() {
     command()
         .args(["start", "--no-attach"])
         .assert_success_within_timeout("start card command room");
-    let mut client = AttachedClient::attach(&room, 160, 50);
+    // RimZ's own attach argv, and no Ctrl g: the room is born locked, so its keys are live at
+    // once on every Zellij, including those that ignore the attach's `--default-mode`.
+    let mut client = AttachedClient::attach_with_lineage(&room, "0123456789abcdef", 160, 50);
+    wait_for_human_client_count(room.backend(), &session, 1);
     client.send_line("true");
-    // RimZ's keymap binds normal-mode keys in Zellij's locked mode, and an attach to a live
-    // session starts in normal mode: Ctrl g takes it to locked.
-    client.send(b"\x07");
     let mut press_close = || client.press_alt('x');
     check_cards(
         &env,

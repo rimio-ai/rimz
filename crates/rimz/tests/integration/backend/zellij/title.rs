@@ -34,6 +34,9 @@ fn attached_terminal_title_ignores_shell_osc_title() {
         .clone();
     let mut client = AttachedClient::attach(&room, 120, 40);
     client.wait_until_focused(&work_pane, "work pane");
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     client.press_alt_until('h', &sidebar_pane, "sidebar pane");
     client.press_alt_until('l', &work_pane, "work pane after sidebar");
 

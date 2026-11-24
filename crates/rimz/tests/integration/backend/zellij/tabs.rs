@@ -1177,6 +1177,9 @@ fn native_focused_split_preserves_docked_sidebar() {
     let client_columns: u16 = 380;
     let client_rows: u16 = 46;
     let mut client = AttachedClient::attach(&room, client_columns, client_rows);
+    // The room is born locked: Ctrl g takes this native-style client to Zellij's normal
+    // mode, where its stock keys live.
+    client.send(b"\x07");
     write_topology_cache_from_list_panes(xdg, &sidebar.workspace_id, &name);
     let _mirror = topology_cache_mirror(xdg, &sidebar.workspace_id, &name);
     let work_pane = || PaneCmd {
