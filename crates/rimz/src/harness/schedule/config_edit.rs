@@ -296,9 +296,40 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
 mod tests {
     use super::*;
 
+    /// Reruns `test` in a child test process with a home of its own and asserts it passed;
+    /// `false` in that child, which then runs the body. A gate run gives every unit test one
+    /// shared home, so a test that holds or replaces the home's edit lock would meet the others.
+    fn reran_in_own_home(test: &str) -> bool {
+        const CHILD: &str = "RIMZ_TEST_CONFIG_EDIT_OWN_HOME";
+        if std::env::var_os(CHILD).is_some() {
+            return false;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("harness::schedule::config_edit::tests::{test}"),
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
     /// A writer waits for the lock another thread holds, and the holder takes it again freely.
     #[test]
     fn a_task_store_edit_waits_for_the_edit_lock() {
+        if reran_in_own_home("a_task_store_edit_waits_for_the_edit_lock") {
+            return;
+        }
         let entry = TaskEntry {
             cron: Some("0 9 * * *".to_owned()),
             root: PathBuf::from("/repo"),
@@ -329,6 +360,9 @@ mod tests {
     /// command sandbox leaves the home's `loops/` read-only; a row it holds is removed under it.
     #[test]
     fn removing_an_absent_row_needs_no_edit_lock() {
+        if reran_in_own_home("removing_an_absent_row_needs_no_edit_lock") {
+            return;
+        }
         let entry = TaskEntry {
             cron: Some("0 9 * * *".to_owned()),
             root: PathBuf::from("/repo"),
