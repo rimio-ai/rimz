@@ -2246,7 +2246,39 @@ fn seat_added_rimz_message_reads_trusted_project_env() {
     }
     std::fs::remove_dir_all(&named_msg).unwrap();
 
-    // 4. Untrusted project env is never read and trust refusal stays behind earlier refusals.
+    // 4. The project env moves only RIMZ_AGENTS_HOME: the RimZ skill chain follows it.
+    let moved_agents = home.join(".rimz-project");
+    write_skill(
+        &moved_agents.join("skills/work"),
+        "---\nname: work\ndescription: Work.\n---\nWork.\n",
+    );
+    write_skill(&moved_agents.join("skills/rimz-message"), msg_body);
+    std::fs::write(
+        room.project.path().join(".rimz/config.toml"),
+        format!(
+            "[[agents]]\nname = 'claude'\nenv = {{ RIMZ_AGENTS_HOME = '{}' }}\n",
+            moved_agents.display()
+        ),
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(room.project.path(), &crate::disk::paths::rimz_home()).unwrap();
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let plan = try_compile(&req, isolation)
+            .unwrap_or_else(|err| panic!("moved agents home ({isolation:?}): {err}"));
+        assert_eq!(
+            launch_skill_names(&plan),
+            Some(vec!["work".to_owned(), "rimz-message".to_owned()]),
+            "moved agents home ({isolation:?})"
+        );
+        assert!(
+            plan.rimz_reach
+                .contains(&("rimz-message".to_owned(), "skill(rimz-message)".to_owned())),
+            "moved agents home reach ({isolation:?}): {:?}",
+            plan.rimz_reach
+        );
+    }
+
+    // 5. Untrusted project env is never read and trust refusal stays behind earlier refusals.
     let untrusted_claude = home.join(".claude-untrusted");
     std::fs::create_dir_all(&untrusted_claude).unwrap();
     write_skill(&untrusted_claude.join("skills/rimz-message"), msg_body);
