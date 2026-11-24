@@ -11,7 +11,7 @@ use crate::utils::path::normalize_path_lexical;
 
 #[derive(Clone, Debug)]
 pub struct SkillChain {
-    library: PathBuf,
+    pub(crate) library: PathBuf,
     packs_dir: PathBuf,
     packs: Vec<ResolvedPack>,
 }

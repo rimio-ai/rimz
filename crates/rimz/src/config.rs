@@ -1001,22 +1001,52 @@ impl MachineConfig {
         resolve_time_zone(read_core_lenient(&Self::config_path()).timezone.as_deref())
     }
 
-    /// Failures for one unloaded definition name, including each source path.
+    /// Failures for one unloaded definition name, including each source path, then the
+    /// failures they rest on down to the files to fix.
     /// A loader drops a definition that fails to load, so its name is absent
     /// from the loaded tables yet not undefined: a path that reports a missing
     /// team or profile asks this first and calls the name undefined only on
     /// `None`.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
-        let paths = self.notices.failed_definitions.get(name)?;
-        Some(
+        let failed = &self.notices.failed_definitions;
+        let errors_at = |paths: &BTreeSet<PathBuf>| {
             self.notices
                 .definition_errors
                 .iter()
                 .filter(|notice| paths.contains(&notice.path))
-                .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
                 .collect::<Vec<_>>()
-                .join("\n\n"),
-        )
+        };
+        let line = |notice: &definitions::DefinitionErr| {
+            format!("{}: {}", notice.path.display(), notice.message)
+        };
+        let mut seen = failed.get(name)?.clone();
+        let mut chain = errors_at(&seen);
+        let mut detail = chain
+            .iter()
+            .map(|notice| line(notice))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut next = 0;
+        while let Some(notice) = chain.get(next).copied() {
+            next += 1;
+            let definitions::DefinitionCause::DependsOnFailed { name } = &notice.cause else {
+                continue;
+            };
+            let Some(paths) = failed.get(name) else {
+                continue;
+            };
+            let unseen = paths.difference(&seen).cloned().collect();
+            for cause in errors_at(&unseen) {
+                // A name conflict's dependents already carry its message.
+                if !notice.message.contains(&cause.message) {
+                    detail.push_str("\ncaused by: ");
+                    detail.push_str(&line(cause));
+                }
+                chain.push(cause);
+            }
+            seen.extend(unseen);
+        }
+        Some(detail)
     }
 
     /// Unowned definition-set failures (a namespace collision, an unreadable home tree)

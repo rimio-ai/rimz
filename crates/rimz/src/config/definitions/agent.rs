@@ -1,5 +1,6 @@
 //! Chain resolution and profile materialization for both definition namespaces.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -228,8 +229,8 @@ pub(super) struct Resolver<'a> {
     errors: Vec<DefinitionErr>,
 }
 
-/// The names of `resolver`'s tree that load, resolved without recording anything.
-pub(super) fn loadable(mut resolver: Resolver<'_>) -> BTreeSet<String> {
+/// The names of `resolver`'s tree that load and the errors of the rest, recording neither.
+pub(super) fn loadable(mut resolver: Resolver<'_>) -> (BTreeSet<String>, Vec<DefinitionErr>) {
     let names: Vec<String> = resolver
         .tree
         .definitions
@@ -237,10 +238,11 @@ pub(super) fn loadable(mut resolver: Resolver<'_>) -> BTreeSet<String> {
         .filter(|name| !name.contains(':'))
         .cloned()
         .collect();
-    names
+    let loaded = names
         .into_iter()
         .filter(|name| resolver.resolve(name).is_some())
-        .collect()
+        .collect();
+    (loaded, resolver.errors)
 }
 
 impl Resolver<'_> {
@@ -455,18 +457,26 @@ impl Resolver<'_> {
                     renders.insert(kind.to_owned(), rendered);
                 }
                 Err(error) => {
-                    exclusions.insert(kind.to_owned(), error.message);
+                    exclusions.insert(kind.to_owned(), error);
                 }
             }
         }
         let mut profile = if let Some(tier) = tier {
+            // Any one model clears the tier, so the first failed dependency met is the one to fix.
+            let blocked = OnceCell::new();
             let pick = self
                 .scope
                 .tiers
                 .walk(
                     tier,
                     &preference,
-                    |kind| exclusions.get(kind).map(String::as_str),
+                    |kind| {
+                        let error: &DefinitionErr = exclusions.get(kind)?;
+                        if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
+                            blocked.get_or_init(|| error.cause.clone());
+                        }
+                        Some(error.message.as_str())
+                    },
                     |_, _| None::<()>,
                 )
                 .map_err(|error| {
@@ -476,11 +486,12 @@ impl Resolver<'_> {
                             "{error}; {}",
                             exclusions
                                 .iter()
-                                .map(|(kind, reason)| format!("{kind}: {reason}"))
+                                .map(|(kind, reason)| format!("{kind}: {}", reason.message))
                                 .collect::<Vec<_>>()
                                 .join("; ")
                         ),
                     )
+                    .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
                 })?;
             // The probe covers native families and model-client engines; the walk skips exclusions.
             let mut selected = renders[&pick.kind].clone();
@@ -508,7 +519,10 @@ impl Resolver<'_> {
         profile.definition_renders = Some(DefinitionRenders {
             preference: preference.clone(),
             renders,
-            exclusions,
+            exclusions: exclusions
+                .into_iter()
+                .map(|(kind, error)| (kind, error.message))
+                .collect(),
             effort: fm.effort,
         });
         Ok(Resolved {
@@ -578,7 +592,7 @@ impl Resolver<'_> {
         let takes_system_prompt = agents::find_definition(kind)
             .is_some_and(|definition| definition.spec().launch.takes_system_prompt());
         if let Some(error) = self.scope.failed_bases.get(kind) {
-            let message = if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
+            let message = if error.is_conflict_over(kind) {
                 error.message.clone()
             } else if takes_system_prompt {
                 format!("runs on {kind}, {}", super::failed_kind_base(&error.path))
@@ -1146,8 +1160,10 @@ pub(super) fn skill_policy(
                 return Err(DefinitionErr::new(
                     path,
                     format!(
-                        "lists skill '{name}', missing at {}",
-                        searched.join(" and ")
+                        "lists skill '{name}', missing at {}; add it under {} or remove it from \
+                         the `skills:` that lists it",
+                        searched.join(" and "),
+                        catalog.chain.library.display()
                     ),
                 )
                 .with_cause(DefinitionCause::MissingSkill { skill, roots }));

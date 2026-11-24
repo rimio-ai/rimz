@@ -246,6 +246,12 @@ impl DefinitionErr {
         self.cause = cause;
         self
     }
+
+    /// Whether this kind base failure is packs claiming `kind` at once, which a dependent
+    /// repeats whole: no one file is the one to fix.
+    fn is_conflict_over(&self, kind: &str) -> bool {
+        matches!(&self.cause, DefinitionCause::DependsOnFailed { name } if name == kind)
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -402,7 +408,12 @@ impl Failed<'_> {
     ) {
         let (path, name) = (&item.path, &item.name);
         let error = if item.pack.is_some() && error.cause != DefinitionCause::PackProblem {
-            item.error(error.message)
+            let owned = item.error(error.message);
+            // A launch refusal follows a typed cause to the file to fix.
+            match error.cause {
+                DefinitionCause::Invalid => owned,
+                cause => owned.with_cause(cause),
+            }
         } else {
             error
         };
@@ -778,6 +789,8 @@ fn load_resolved(
     }
     // A base's `subagents:` names a subagent that loads. A base that names a failed one fails,
     // which fails its kind's subagents in turn, so this settles before either tree resolves.
+    // A subagent's first error here predates any refusal its own failure causes.
+    let mut first_errors: Vec<DefinitionErr> = Vec::new();
     while pending.iter().any(|base| base.rows.0.subagents.is_some()) {
         let scope = LoadScope {
             home: agents_home,
@@ -788,16 +801,22 @@ fn load_resolved(
             tiers,
             native_auto_compact,
         };
-        let children: BTreeSet<String> = agent::loadable(agent::Resolver::new(
+        let (loadable, errors) = agent::loadable(agent::Resolver::new(
             scope,
             "subagents",
             [&subagents, &agents],
             &BTreeSet::new(),
-        ))
-        .into_iter()
-        .chain(pending.iter().map(|base| base.keys[0].clone()))
-        .chain(commands.0.keys().cloned())
-        .collect();
+        ));
+        for error in errors {
+            if first_errors.iter().all(|first| first.path != error.path) {
+                first_errors.push(error);
+            }
+        }
+        let children: BTreeSet<String> = loadable
+            .into_iter()
+            .chain(pending.iter().map(|base| base.keys[0].clone()))
+            .chain(commands.0.keys().cloned())
+            .collect();
         let mut refused = Vec::new();
         for (index, base) in pending.iter_mut().enumerate() {
             let Some(listed) = &base.rows.0.subagents else {
@@ -843,9 +862,7 @@ fn load_resolved(
             continue;
         }
         let message = match failed_bases.get(*kind) {
-            Some(error) if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) => {
-                error.message.clone()
-            }
+            Some(error) if error.is_conflict_over(kind) => error.message.clone(),
             Some(error) => failed_kind_base(&error.path),
             None => missing_kind_base(agents_home, kind),
         };
@@ -891,6 +908,11 @@ fn load_resolved(
         agent::Resolver::new(scope, "subagents", [&subagents, &agents], &BTreeSet::new()),
         &mut loaded,
     );
+    for error in &mut loaded.errors[resolved_from..] {
+        if let Some(first) = first_errors.iter().find(|first| first.path == error.path) {
+            *error = first.clone();
+        }
+    }
     let children: BTreeSet<String> = loaded
         .subagent_profiles
         .0
