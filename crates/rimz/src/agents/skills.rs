@@ -908,4 +908,89 @@ mod tests {
             ["rimz-reflect".to_owned()].into()
         );
     }
+
+    #[test]
+    fn is_model_callable_on_disk_drops_same_directory_alias_and_shared_provider_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let claude_skills = home.join(".claude/skills");
+        let codex_skills = home.join(".agents/skills");
+        let rimz_home = home.join(".rimz");
+        std::fs::create_dir_all(&claude_skills).unwrap();
+        std::fs::create_dir_all(&codex_skills).unwrap();
+        std::fs::create_dir_all(&rimz_home).unwrap();
+
+        let env = BTreeMap::from([
+            ("HOME".to_owned(), home.display().to_string()),
+            (
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                home.join(".claude").display().to_string(),
+            ),
+            (
+                "RIMZ_AGENTS_HOME".to_owned(),
+                rimz_home.display().to_string(),
+            ),
+        ]);
+        let msg_name: SkillName = "rimz-message".parse().unwrap();
+
+        // Branch 1: two names pointing at the same canonical directory (Claude keys by
+        // directory name, so `other-alias` and `rimz-message` have distinct provider keys
+        // and only the canonical-source check catches the collision).
+        let claude_msg = claude_skills.join("rimz-message");
+        std::fs::create_dir_all(&claude_msg).unwrap();
+        std::fs::write(
+            claude_msg.join("SKILL.md"),
+            "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&claude_msg, claude_skills.join("other-alias")).unwrap();
+        let claude = crate::agents::find_definition("claude").unwrap();
+        let alias_name: SkillName = "other-alias".parse().unwrap();
+        assert!(
+            !is_model_callable_on_disk(
+                "rimz-message",
+                claude,
+                &env,
+                std::slice::from_ref(&msg_name)
+            ),
+            "unlisted alias to the same directory must drop seat-added rimz-message"
+        );
+        assert!(
+            is_model_callable_on_disk(
+                "rimz-message",
+                claude,
+                &env,
+                &[msg_name.clone(), alias_name]
+            ),
+            "listing both aliases removes the collision"
+        );
+
+        // Branch 2: two distinct directories sharing one provider key (Codex keys by
+        // frontmatter `name`, so separate directories collide only on the provider-key check).
+        let codex_msg = codex_skills.join("rimz-message");
+        let codex_dup = codex_skills.join("duplicate");
+        for dir in [&codex_msg, &codex_dup] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
+            )
+            .unwrap();
+        }
+        let codex = crate::agents::find_definition("codex").unwrap();
+        let dup_name: SkillName = "duplicate".parse().unwrap();
+        assert!(
+            !is_model_callable_on_disk(
+                "rimz-message",
+                codex,
+                &env,
+                std::slice::from_ref(&msg_name)
+            ),
+            "unlisted directory with the same provider key must drop seat-added rimz-message"
+        );
+        assert!(
+            is_model_callable_on_disk("rimz-message", codex, &env, &[msg_name, dup_name]),
+            "listing both directories removes the provider-key collision"
+        );
+    }
 }

@@ -4470,3 +4470,85 @@ fn antigravity_preflight_compile_keeps_saved_allows_without_room_roots() {
         })
     );
 }
+
+#[test]
+fn preflight_agent_process_settles_seat_consensus_skill_on_host_runtime() {
+    if std::env::var_os("RIMZ_TEST_PREFLIGHT_SEAT_SKILL").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home.path().join(".claude");
+        let rimz_dir = home.path().join(".rimz");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch::tests::preflight_agent_process_settles_seat_consensus_skill_on_host_runtime",
+                "--nocapture",
+            ])
+            .env("HOME", home.path())
+            .env("CLAUDE_CONFIG_DIR", &claude_dir)
+            .env("RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_AGENTS_HOME", &rimz_dir)
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_TEST_PREFLIGHT_SEAT_SKILL", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let claude_dir = PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+    let work_skill = claude_dir.join("skills/work");
+    std::fs::create_dir_all(&work_skill).unwrap();
+    std::fs::write(
+        work_skill.join("SKILL.md"),
+        "---\nname: work\ndescription: Work.\n---\nWork.\n",
+    )
+    .unwrap();
+
+    let project = tempfile::tempdir().unwrap();
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id, project.path()).unwrap();
+
+    let mut invocation = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    invocation.skills = Some(vec![
+        "work".parse().unwrap(),
+        "rimz-message".parse().unwrap(),
+    ]);
+    invocation.seat_consensus_skill = true;
+
+    let process =
+        preflight_agent_process(project.path(), &invocation, project.path(), Some(&runtime))
+            .unwrap_or_else(|err| {
+                panic!("seat-added rimz-message must settle at preflight: {err}")
+            });
+    let Some(crate::agents::skills::HostSkillPlan::Applied { listed, .. }) = process.host_skills
+    else {
+        panic!(
+            "expected Applied host skill plan, got {:?}",
+            process.host_skills
+        );
+    };
+    assert_eq!(
+        serde_json::to_value(&listed).unwrap(),
+        serde_json::json!(["work"])
+    );
+
+    invocation.seat_consensus_skill = false;
+    let err = preflight_agent_process(project.path(), &invocation, project.path(), Some(&runtime))
+        .expect_err("author-written missing rimz-message must still refuse at preflight");
+    assert!(
+        matches!(
+            &err,
+            AgentProcessCompileErr::LaunchSettings(
+                crate::agents::skills::LaunchSettingsErr::Skills(
+                    crate::agents::skills::SkillErr::UnknownSkill { name, .. }
+                )
+            ) if name.as_str() == "rimz-message"
+        ),
+        "expected UnknownSkill('rimz-message'), got: {err:?}"
+    );
+}
