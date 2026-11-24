@@ -413,12 +413,7 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
             "{:?}",
             plan.process().provider_argv
         );
-        let warnings: Vec<_> = plan
-            .warnings
-            .iter()
-            .map(ToString::to_string)
-            .filter(|warning| warning.contains("mcps"))
-            .collect();
+        let warnings = mcp_warnings(&plan);
         let expected: &[&str] = if mcps.is_some() {
             &[
                 "opencode takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual",
@@ -496,7 +491,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         plan.mcp_capabilities,
         [crate::mcp::catalog::Capability::Lsp]
     );
-    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     no_mcp_argv(&plan);
 
     let plan = room.compile(
@@ -535,11 +530,11 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     );
     serves(&plan, marks);
     let github = "the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities";
-    assert_eq!(mcps_warnings(&plan), [github]);
+    assert_eq!(mcp_warnings(&plan), [github]);
     assert_eq!(plan.process().mcp_warnings, [github]);
     let plan = room.compile(&switches(true, false), &marked);
     assert_eq!(
-        mcps_warnings(&plan),
+        mcp_warnings(&plan),
         [
             "the mcps entry `rimz:deferred` is not applied: RimZ's MCP server is off for this launch",
             "the mcps entry `rimz-lsp:always` is not applied: RimZ's MCP server is off for this launch",
@@ -573,7 +568,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
         assert_eq!(plan.agent_file, None);
         serves(&plan, value);
-        assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+        assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
         no_mcp_argv(&plan);
     }
 
@@ -588,11 +583,18 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     }
 }
 
-fn mcps_warnings(plan: &LaunchPlan) -> Vec<String> {
+/// The plan's MCP warnings, whichever key they name: the launch's own MCP warnings (carried as
+/// `LaunchEnv`), the wording warnings, and a kind's refusal of an `mcps` list.
+fn mcp_warnings(plan: &LaunchPlan) -> Vec<String> {
+    let own = &plan.process().mcp_warnings;
     plan.warnings
         .iter()
+        .filter(|warning| match warning {
+            LaunchPlanWarning::LaunchEnv(text) => own.contains(text),
+            LaunchPlanWarning::McpWording(_) | LaunchPlanWarning::McpsUnsupported { .. } => true,
+            _ => false,
+        })
         .map(ToString::to_string)
-        .filter(|warning| warning.contains("mcps"))
         .collect()
 }
 
@@ -651,7 +653,7 @@ fn claude_marks_become_always_load_and_serve_flags() {
     let compile = |mcps: &[&str]| {
         let plan = room.compile(&switches(true, true), &launch("claude", Some(mcps), &[]));
         let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
-        (entry, mcps_warnings(&plan))
+        (entry, mcp_warnings(&plan))
     };
     for (mcps, always_load, args) in [
         (&["rimz:always"][..], Some(true), &["mcp", "serve"][..]),
@@ -720,7 +722,7 @@ fn claude_marks_it_cannot_apply_warn_once_each() {
     let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
     assert_eq!(entry.get("alwaysLoad"), None);
     assert_eq!(
-        mcps_warnings(&plan),
+        mcp_warnings(&plan),
         [
             "the mcps entry `github:always` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
             "the mcps entry `linear:deferred` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
@@ -736,7 +738,7 @@ fn claude_marks_it_cannot_apply_warn_once_each() {
     );
     assert_eq!(claude_entry(&plan.process().provider_argv), None);
     assert_eq!(
-        mcps_warnings(&plan),
+        mcp_warnings(&plan),
         [
             "the mcps entry `rimz:always` is not applied: RimZ's MCP server is off for this launch",
             "the mcps entry `rimz-lsp:deferred` is not applied: RimZ's MCP server is off for this launch",
@@ -771,7 +773,7 @@ fn codex_marks_set_omit_tools_from_per_server() {
     let always = toml::Value::try_from(["deferred"]).unwrap();
     let compile = |mcps: &[&str], args: &[&str]| {
         let plan = room.compile(&switches(true, true), &launch("codex", Some(mcps), args));
-        (plan.process().provider_argv.clone(), mcps_warnings(&plan))
+        (plan.process().provider_argv.clone(), mcp_warnings(&plan))
     };
     let (argv, warnings) = compile(&["*", "rimz:always", "github:deferred"], &[]);
     assert_eq!(codex_omit(&argv, "rimz"), Some(always.clone()));
@@ -818,7 +820,7 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
         (&["*", "github"], true),
     ] {
         let plan = room.compile(&switches(true, true), &launch("opencode", Some(mcps), &[]));
-        assert_eq!(mcps_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
+        assert_eq!(mcp_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
     }
 }
 
@@ -1164,7 +1166,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
         actual.push((
             claude_entry(argv).map(|(entry, _)| entry["args"].clone()),
             allowlist(&claude_settings(argv)),
-            mcps_warnings(&plan),
+            mcp_warnings(&plan),
         ));
     }
     assert_eq!(
@@ -1190,7 +1192,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
         None
     );
     let plan = compile("opencode", &grant, None);
-    assert_eq!(mcps_warnings(&plan), Vec::<String>::new());
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
 }
 
 /// A grant of every capability through `rimz` hands the provider `rimz`'s mark as an
@@ -1221,7 +1223,7 @@ fn a_rimz_grant_marks_the_server_as_an_mcps_rimz_entry_does() {
                 (
                     codex_omit(argv, "rimz"),
                     claude_entry(argv).map(|(entry, _)| entry["alwaysLoad"].clone()),
-                    mcps_warnings(&plan),
+                    mcp_warnings(&plan),
                 )
             });
             assert_eq!(granted, listed, "{kind} {mark}");
@@ -1255,12 +1257,7 @@ fn a_rimz_grant_marks_the_server_as_an_mcps_rimz_entry_does() {
             .collect(),
     );
     assert_eq!(
-        room.compile(&switches(true, false), &granted)
-            .warnings
-            .iter()
-            .map(ToString::to_string)
-            .filter(|warning| warning.contains("not applied"))
-            .collect::<Vec<_>>(),
+        mcp_warnings(&room.compile(&switches(true, false), &granted)),
         [
             "the capabilities entry `rimz:deferred` is not applied: RimZ's MCP server is off for \
              this launch"
