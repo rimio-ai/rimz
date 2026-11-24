@@ -211,6 +211,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: Some("--max-turns"),
         message_keys: crate::agents::MessageKeys {
             send_now: &[
+                crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::Enter),
                 crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::CtrlX),
                 crate::pane::keys::KeyStep::after_ms(100, crate::pane::keys::NamedKey::CtrlS),
             ],

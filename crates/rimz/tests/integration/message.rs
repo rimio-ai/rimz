@@ -206,8 +206,8 @@ fn is_escape_key(line: &str) -> bool {
 /// The trace bytes of each key `kind`'s send-now sequence presses, in order.
 fn send_now_keys(kind: &str) -> &'static [&'static str] {
     match kind {
-        "claude" => &["24", "19"],
-        "antigravity" => &["27\t109"],
+        "claude" => &["13", "24", "19"],
+        "antigravity" => &["13", "27\t109"],
         _ => &["13"],
     }
 }
@@ -14130,7 +14130,8 @@ fn compact_first_sends_once_when_its_recovery_wake_cannot_be_registered() {
             .count(),
         1
     );
-    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    // The command's Enter and the Enter that opens Claude's send-now keys.
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 2);
     assert_eq!(keys_after_text(&lines, "go"), send_now_keys("claude"));
     assert_compact_segments_then_enter(
         &lines,
@@ -15293,13 +15294,11 @@ fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
         .iter()
         .position(|line| is_paste(line, &user_message("hello from coder")))
         .unwrap();
-    let enters: Vec<_> = lines
+    let enters_before_paste = lines[..paste_at]
         .iter()
-        .enumerate()
-        .filter_map(|(index, line)| is_enter_key(line).then_some(index))
-        .collect();
-    assert_eq!(enters.len(), 1, "{lines:?}");
-    assert!(enters[0] < paste_at, "{lines:?}");
+        .filter(|line| is_enter_key(line))
+        .count();
+    assert_eq!(enters_before_paste, 1, "{lines:?}");
     assert_eq!(
         keys_after_text(&lines, "hello from coder"),
         send_now_keys("claude"),
