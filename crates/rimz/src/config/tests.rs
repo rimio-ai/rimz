@@ -2853,6 +2853,265 @@ fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditi
     assert_eq!(broken[0].to_string(), detail);
 }
 
+/// The launch refusals in `home` with skills checked, read by name.
+fn definition_failures(home: &Path) -> impl Fn(&str) -> String {
+    let path = home.join("config.toml");
+    std::fs::write(&path, "[agents]\nisolation = 'scoped'\n").unwrap();
+    let env = BTreeMap::from([("HOME".to_owned(), home.display().to_string())]);
+    let config = MachineConfig::load_lenient_from(&path, home, &env);
+    move |name| config.definition_failure_for(name).unwrap()
+}
+
+#[test]
+fn a_dependent_definition_failure_names_every_root_and_its_fix() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let absent = "agent: codex\ntools: [Skill]\nskills: [absent]";
+    let [first, second] = ["subagents/first.md", "subagents/second.md"]
+        .map(|file| write_definition(home, file, &format!("description: Helper\n{absent}"), ""));
+    let missing = format!(
+        "lists skill 'absent', missing at {home}/.agents/skills/absent/SKILL.md and \
+         {home}/skills/absent/SKILL.md; add it under {home}/skills or remove it \
+         from the `skills:` that lists it",
+        home = home.display()
+    );
+    let middle = write_definition(
+        home,
+        "agents/middle.md",
+        "description: Middle\nagent: codex\ntools: []\nsubagents: [first]",
+        "",
+    );
+    let other = write_definition(
+        home,
+        "agents/other.md",
+        "description: Other\nagent: codex\ntools: []\nsubagents: [second]",
+        "",
+    );
+    let top = write_definition(home, "agents/top.md", "description: Top\nagent: middle", "");
+    let team = write_definition(
+        home,
+        "teams/crew.md",
+        "description: Crew\nleader: lead\nstages: [Plan, Review]\nroles:\n  - {agent: top, role: lead, owns: [Plan]}\n  - {agent: other, role: judge, owns: [Review]}",
+        "Pipeline.",
+    );
+    let failure = definition_failures(home);
+    assert_eq!(failure("first"), format!("{}: {missing}", first.display()));
+    assert_eq!(
+        failure("top"),
+        format!(
+            "{}: follows `middle`, which failed to load\n\
+             caused by: {}: allows subagent 'first', which failed to load\n\
+             caused by: {}: {missing}",
+            top.display(),
+            middle.display(),
+            first.display()
+        )
+    );
+    assert_eq!(
+        failure("crew"),
+        format!(
+            "{team}: team 'crew' role 'lead' selects failed agent 'top'\n\n\
+             {team}: team 'crew' role 'judge' selects failed agent 'other'\n\
+             caused by: {}: follows `middle`, which failed to load\n\
+             caused by: {}: allows subagent 'second', which failed to load\n\
+             caused by: {}: allows subagent 'first', which failed to load\n\
+             caused by: {}: {missing}\n\
+             caused by: {}: {missing}",
+            top.display(),
+            other.display(),
+            middle.display(),
+            second.display(),
+            first.display(),
+            team = team.display()
+        )
+    );
+}
+
+#[test]
+fn a_kind_base_failure_is_named_once_from_home_and_packs() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let worker = write_definition(
+        home,
+        "agents/worker.md",
+        "description: Worker\nagent: codex",
+        "",
+    );
+    let broken = write_definition(
+        home,
+        "subagents/broken.md",
+        "description: Broken\nagent: none",
+        "",
+    );
+    let base_fields = "description: Base\nsubagents: [broken]";
+    let base = write_definition(home, "agents/codex.md", base_fields, "Base.");
+    let expected = |base: &Path, fix: &str| {
+        format!(
+            "{}: runs on codex, whose kind base {base} failed to load; fix that file\n\
+             caused by: {base}: allows subagent 'broken', which failed to load{fix}\n\
+             caused by: {}: follows unknown profile 'none'",
+            worker.display(),
+            broken.display(),
+            base = base.display()
+        )
+    };
+    assert_eq!(definition_failures(home)("worker"), expected(&base, ""));
+
+    std::fs::remove_file(base).unwrap();
+    let install = |name: &str| {
+        let source = tempdir().unwrap();
+        let manifest = format!("[[pack]]\nname = '{name}'\ndescription = 'Crew'\npath = '.'\n");
+        std::fs::write(source.path().join("rimz-packs.toml"), manifest).unwrap();
+        write_definition(source.path(), "agents/codex.md", base_fields, "Base.");
+        crate::packs::install(home, source.path()).unwrap();
+        source
+    };
+    let one = install("one");
+    write_definition(
+        one.path(),
+        "teams/crew.md",
+        "description: Crew\nleader: lead\nstages: [Plan]\nroles:\n  - {agent: worker, role: lead, owns: [Plan]}",
+        "Pipeline.",
+    );
+    let root = crate::packs::resolve(home).packs[0].root.clone();
+    let failure = definition_failures(home);
+    let detail = expected(
+        &root.join("agents/codex.md"),
+        "; run `rimz packs exclude one:codex --type agents`",
+    );
+    assert_eq!(failure("worker"), detail);
+    assert_eq!(
+        failure("crew"),
+        format!(
+            "{}: team 'crew' role 'lead' selects failed agent 'worker'\n\
+             caused by: {detail}",
+            root.join("teams/crew.md").display()
+        )
+    );
+
+    let _two = install("two");
+    let detail = definition_failures(home)("worker");
+    assert_eq!(detail.lines().count(), 1, "{detail}");
+    assert!(detail.contains("pack conflict for `codex`"), "{detail}");
+}
+
+#[test]
+fn a_kind_base_refused_for_its_subagent_keeps_that_subagents_own_error() {
+    let refusal = |pack: bool| {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let source = tempdir().unwrap();
+        let worker_fields = "description: Worker\nagent: codex";
+        let worker = write_definition(home, "agents/worker.md", worker_fields, "");
+        let root = if pack { source.path() } else { home };
+        let base_fields = "description: Base\nsubagents: [helper]";
+        write_definition(root, "agents/codex.md", base_fields, "Base.");
+        let parent_fields = "description: Parent\nagent: codex\ntools: [Skill]\nskills: [absent]";
+        write_definition(root, "subagents/parent.md", parent_fields, "");
+        let helper_fields = "description: Helper\nagent: parent";
+        write_definition(root, "subagents/helper.md", helper_fields, "");
+        let mut owner = home.to_owned();
+        let fix = |name: &str, kind: &str| {
+            if pack {
+                format!("; run `rimz packs exclude one:{name} --type {kind}`")
+            } else {
+                String::new()
+            }
+        };
+        if pack {
+            let manifest = "[[pack]]\nname = 'one'\ndescription = 'Crew'\npath = '.'\n";
+            std::fs::write(root.join("rimz-packs.toml"), manifest).unwrap();
+            crate::packs::install(home, root).unwrap();
+            owner = crate::packs::resolve(home).packs[0].root.clone();
+            // The helper above seeded it, and it would override the pack's.
+            std::fs::remove_file(home.join("agents/codex.md")).unwrap();
+        }
+        let missing = definition_failures(home)("worker");
+        let lines: Vec<_> = missing.lines().collect();
+        assert_eq!(lines.len(), 4, "{missing}");
+        let base = owner.join("agents/codex.md");
+        let at = |file: &str| owner.join(file).display().to_string();
+        assert_eq!(
+            lines[..3],
+            [
+                format!(
+                    "{}: runs on codex, whose kind base {} failed to load; fix that file",
+                    worker.display(),
+                    base.display()
+                ),
+                format!(
+                    "caused by: {}: allows subagent 'helper', which failed to load{}",
+                    base.display(),
+                    fix("codex", "agents")
+                ),
+                format!(
+                    "caused by: {}: follows `parent`, which failed to load{}",
+                    at("subagents/helper.md"),
+                    fix("helper", "subagents")
+                ),
+            ]
+        );
+        let root_cause = format!(
+            "caused by: {}: lists skill 'absent', missing at ",
+            at("subagents/parent.md")
+        );
+        assert!(lines[3].starts_with(&root_cause), "{missing}");
+        let tail = format!("the `skills:` that lists it{}", fix("parent", "subagents"));
+        assert!(lines[3].ends_with(&tail), "{missing}");
+    };
+    refusal(false);
+    refusal(true);
+}
+
+#[test]
+fn a_tiered_definition_failure_names_the_root_that_blocks_its_first_model() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let write = |file: &str, fields: &str, body: &str| {
+        write_definition(home, file, &format!("description: Test\n{fields}"), body)
+    };
+    let worker = write("agents/worker.md", "agent: codex\ntier: senior", "");
+    let broken = write("subagents/broken.md", "agent: none", "");
+    let base = write("agents/codex.md", "subagents: [broken]", "Base.");
+    let roots = |failure: String| {
+        let (first, causes) = failure.split_once('\n').expect(&failure);
+        let start = format!("{}: no eligible model at tier senior", worker.display());
+        assert!(first.starts_with(&start), "{failure}");
+        causes.to_owned()
+    };
+    let broken_line = format!(
+        "caused by: {}: follows unknown profile 'none'",
+        broken.display()
+    );
+    assert_eq!(
+        roots(definition_failures(home)("worker")),
+        format!(
+            "caused by: {}: allows subagent 'broken', which failed to load\n{broken_line}",
+            base.display()
+        )
+    );
+
+    std::fs::remove_file(&base).unwrap();
+    let sources = [tempdir().unwrap(), tempdir().unwrap()];
+    for (pack, source) in ["one", "two"].into_iter().zip(&sources) {
+        let manifest = format!("[[pack]]\nname = '{pack}'\ndescription = 'Crew'\npath = '.'\n");
+        std::fs::write(source.path().join("rimz-packs.toml"), manifest).unwrap();
+        write_definition(
+            source.path(),
+            "agents/codex.md",
+            "description: Base",
+            "Base.",
+        );
+        crate::packs::install(home, source.path()).unwrap();
+    }
+    let failure = definition_failures(home)("worker");
+    assert_eq!(
+        failure.matches("pack conflict for `codex`").count(),
+        1,
+        "{failure}"
+    );
+}
+
 #[test]
 fn definition_stamp_tracks_definitions_traits_and_skill_files() {
     let dir = tempdir().unwrap();
