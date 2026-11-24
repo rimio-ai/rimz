@@ -278,10 +278,6 @@ pub(super) enum Reach {
 /// Resolve RimZ capability `name` under `reach`: `mcp(<tool>)` (comma-separated
 /// when a capability serves several tools) when served on RimZ's MCP server,
 /// `skill(<name>)` when reached as a skill, or `None` when unreachable.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired by prompt rewrite and reminders next")
-)]
 pub(super) fn resolve_reach(name: &str, reach: Option<Reach>) -> Option<String> {
     let reach = reach?;
     Some(match reach {
@@ -293,6 +289,71 @@ pub(super) fn resolve_reach(name: &str, reach: Option<Reach>) -> Option<String> 
             .collect::<Vec<_>>()
             .join(", "),
     })
+}
+
+/// Result of rewriting `rimz(x)` and capability `skill(rimz-x)` shorthand in a
+/// composed prompt against one launch's reach.
+pub(super) struct PromptRewrite {
+    pub text: String,
+    pub changed: bool,
+    pub unreachable: BTreeSet<String>,
+}
+
+/// Rewrite each `rimz(x)` and each `skill(rimz-x)` for one of the ten MCP
+/// capabilities in `text` to this launch's short form (`mcp(<tool>)` or
+/// `skill(<name>)`). Unreachable references stay written as the author wrote
+/// them and are recorded in `unreachable` as their short capability name `x`.
+pub(super) fn rewrite_prompt(text: &str, capabilities: &[(String, Reach)]) -> PromptRewrite {
+    let references = crate::config::prompt_references(text);
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    let mut unreachable = BTreeSet::new();
+    for reference in references {
+        let cap_name = match reference.kind {
+            crate::config::PromptReferenceKind::Rimz => format!("rimz-{}", reference.name),
+            crate::config::PromptReferenceKind::Skill
+                if Capability::from_name(reference.name).is_some() =>
+            {
+                reference.name.to_owned()
+            }
+            crate::config::PromptReferenceKind::Skill
+            | crate::config::PromptReferenceKind::Subagent => continue,
+        };
+        let reach = capabilities
+            .iter()
+            .find(|(had, _)| had == &cap_name)
+            .map(|(_, reach)| *reach);
+        match resolve_reach(&cap_name, reach) {
+            Some(replacement) => {
+                let original = &text[reference.range.clone()];
+                if replacement != original {
+                    out.push_str(&text[cursor..reference.range.start]);
+                    out.push_str(&replacement);
+                    cursor = reference.range.end;
+                    changed = true;
+                }
+            }
+            None => {
+                if let Some(short) = cap_name.strip_prefix("rimz-") {
+                    unreachable.insert(short.to_owned());
+                }
+            }
+        }
+    }
+    if !changed {
+        return PromptRewrite {
+            text: text.to_owned(),
+            changed: false,
+            unreachable,
+        };
+    }
+    out.push_str(&text[cursor..]);
+    PromptRewrite {
+        text: out,
+        changed: true,
+        unreachable,
+    }
 }
 
 /// How the launch reaches capability `name`, as every reminder sentence words

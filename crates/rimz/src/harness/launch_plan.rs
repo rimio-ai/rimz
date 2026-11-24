@@ -758,28 +758,18 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     }
     let adapter = crate::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
-    let prompt = prompt_compose::plan_system_prompt(
-        &request.kind,
-        &SystemPromptSources {
-            system_prompt_file: request.system_prompt_file.clone(),
-            append_system_prompt_files: request.append_system_prompt_files.clone(),
-            team_prompt: request.team_prompt.clone(),
-        },
-        inputs.runtime,
-    )?;
-    let system_prompt_digest = configured_system_prompt_digest(
-        adapter,
-        request.action.extra_args(),
-        prompt.composed.as_deref(),
-        inputs.cwd,
-    )?;
-    apply_materialized_system_prompt(&mut request, &prompt.materialized);
+    let prompt_sources = SystemPromptSources {
+        system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_files: request.append_system_prompt_files.clone(),
+        team_prompt: request.team_prompt.clone(),
+    };
+    let composed = prompt_compose::read_system_prompt(&request.kind, &prompt_sources)?;
     let agent_file_flag = match adapter
         .spec()
         .launch
         .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
     {
-        Some(crate::agents::PresetArgMatcher::AgentFile(flag)) if prompt.composed.is_some() => {
+        Some(crate::agents::PresetArgMatcher::AgentFile(flag)) if composed.is_some() => {
             // The composed prompt replaces any agent the profile selected, on every action.
             crate::agents::PresetArgMatcher::AgentFile(flag.clone())
                 .remove_occurrences(request.action.extra_args_mut());
@@ -873,7 +863,6 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .is_none_or(|effective| effective.env_reminder);
     reminders.worktree = crate::worktree::linked_worktree(inputs.cwd);
     reminders.agent_shell = inputs.agent_shell.map(Path::to_path_buf);
-    reminders.system_prompt_file = prompt.materialized.hook_path.clone();
     let login = crate::agents::session_login(
         &request.kind,
         request.identity.params.login.as_ref(),
@@ -897,16 +886,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             crate::agents::TurnLifecycleNeed::None,
         )
         .is_ok();
-    let mut extra_env = prompt.materialized.env.clone();
-    extra_env.extend(login.overrides(inputs.ambient_env));
-    if let Some(checkout) = &request.identity.params.checkout {
-        extra_env.insert(
-            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-            checkout.clone(),
-        );
-    }
     let isolation = inputs.isolation;
-    extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
     let params = &request.identity.params;
     let parent = params.parent_agent_id.as_ref().map(|id| {
         (
@@ -1041,16 +1021,44 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 .map(|warning| LaunchPlanWarning::McpWording(warning.to_string())),
         );
     }
-    if let Some(composed) = &prompt.composed {
-        let has = reminders.rimz_capabilities(&request);
-        warnings.extend(
-            crate::config::rimz_references(composed)
-                .into_iter()
-                .filter(|name| !has.iter().any(|(had, _)| had == name))
-                .filter_map(|name| name.strip_prefix("rimz-").map(str::to_owned))
-                .map(LaunchPlanWarning::UnreachableCapability),
+    let (composed, rewritten) = match composed {
+        Some(text) => {
+            let has = reminders.rimz_capabilities(&request);
+            let outcome = super::launch_reminders::rewrite_prompt(&text, &has);
+            warnings.extend(
+                outcome
+                    .unreachable
+                    .into_iter()
+                    .map(LaunchPlanWarning::UnreachableCapability),
+            );
+            (Some(outcome.text), outcome.changed)
+        }
+        None => (None, false),
+    };
+    let prompt = prompt_compose::materialize_system_prompt(
+        &request.kind,
+        &prompt_sources,
+        composed,
+        rewritten,
+        inputs.runtime,
+    )?;
+    let system_prompt_digest = configured_system_prompt_digest(
+        adapter,
+        request.action.extra_args(),
+        prompt.composed.as_deref(),
+        inputs.cwd,
+    )?;
+    apply_materialized_system_prompt(&mut request, &prompt.materialized);
+    reminders.system_prompt_file = prompt.materialized.hook_path.clone();
+    let mut extra_env = prompt.materialized.env.clone();
+    extra_env.extend(login.overrides(inputs.ambient_env));
+    if let Some(checkout) = &request.identity.params.checkout {
+        extra_env.insert(
+            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+            checkout.clone(),
         );
     }
+    extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
     let hidden_skills = reminders.hidden_skills(&request);
     let withheld_skills = reminders.withheld_skills(&request);
     let only_all = request.mcps.as_deref().is_some_and(|entries| {
