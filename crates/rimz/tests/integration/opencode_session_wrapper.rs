@@ -228,7 +228,7 @@ fn explain_shows_the_model_step_without_changing_the_provider_command() {
                 "--model",
                 "deepseek-v4.1-flash",
                 "--effort",
-                "high",
+                "medium",
                 "--"
             ]),
         "{argv:?}"
@@ -244,6 +244,7 @@ fn explain_opencode_keeps_effort_for_carried_and_cli_models() {
     let env = Env::new();
     env.record(&env.project_root);
     write_startup_relaunch_config(&env, "isolation = \"host\"");
+    crate::common::write_kind_base(&env, "opencode");
     crate::common::write_definition(
         &env,
         "agents",

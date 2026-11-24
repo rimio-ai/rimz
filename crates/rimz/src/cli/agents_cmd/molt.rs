@@ -12,7 +12,7 @@ pub(super) struct MoltArgs {
     /// Read the note from stdin; an inline instruction goes first.
     #[arg(long)]
     stdin: bool,
-    /// Re-base the same job onto this profile or provider.
+    /// Inherit this profile or provider kind below the same job.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
     /// Keep this session open until it has rested this long after its turn ends (`3m`);

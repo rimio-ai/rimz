@@ -842,11 +842,12 @@ impl<'a> ExplainReport<'a> {
         let adapter = rimz::agents::find_definition(request.kind.as_str())
             .expect("compiled agent has an adapter");
         let resolved = params.profile.as_deref().and_then(|name| {
-            rimz::harness::spec::resolve_profile_rebased(
+            rimz::harness::spec::resolve_profile_under(
                 name,
                 rimz::harness::plan::normalized_preset_value(args.overrides.agent.as_deref())
                     .as_deref(),
                 profiles,
+                None,
             )
             .ok()
         });

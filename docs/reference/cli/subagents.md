@@ -54,13 +54,13 @@ rimz subagents wait "$first" "$second"
 | `--isolation host\|scoped\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | Ordered host < scoped < sandbox: looser explicit overrides refuse; looser defaults clamp to the parent's level with a note. |
 | `--yolo` | off | Run the child in yolo mode, up to the parent's own recorded mode. A parent with no recorded mode is treated as auto, so the flag refuses there. Launch the parent with `--yolo` or a `mode: yolo` definition to allow it. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
-| `--model`, `--tier`, `--agent`, `--effort`, `--fast` or `--no-fast`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, turn the provider's [fast mode](../agent-support.md#fast-mode) on or off, cap agentic turns, or append provider argv. |
+| `--model`, `--tier`, `--agent`, `--effort`, `--fast` or `--no-fast`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), inherit another profile (from `subagents/` or `agents/`) or kind below the child profile, set reasoning effort, turn the provider's [fast mode](../agent-support.md#fast-mode) on or off, cap agentic turns, or append provider argv. |
 
 Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
 
 A child's permission mode comes from `--yolo`, its definition or `<kind>-<mode>` cell, otherwise auto. RimZ maps both the request and the parent's recorded ceiling through the [child kind's supported modes](../agent-support.md#permission-modes), then compares plan < ask < auto < yolo; an unrecorded parent counts as auto before mapping. A parent whose profile `args` or `-- <ARGS>` carry raw permission flags records no mode, even beside a declared `mode`, so its children are capped at auto. Pi children always map to yolo and are never clamped or refused on permission mode, because Pi has no permission system. An explicit `--yolo` above the mapped ceiling refuses before any launch is recorded, including OpenCode yolo under an auto parent. A higher default instead lowers to the ceiling with a stderr note naming its source. In-session permission switches do not change the recorded ceiling. A yolo child that resolves to scoped isolation prints a note that sudo and setuid binaries do not work there and names `--isolation host`, unless the parent is itself scoped.
 
-`--tier` and the fanout JSON `tier` field select a [model tier with the same resolution and effort precedence as agents](./agents.md#shared-launch-params), including on a concrete profile, Pi's included. `--model` and JSON `model` normally run exactly on the model's family's Markdown render, without a tier stamp or usage fallback; tier names there are refused. Pi and OpenCode profiles keep their engine under both `--model` and `--tier` (tiers try models in list order, including unowned names), and `--agent pi` or `--agent opencode` also runs other providers' models without requiring their native-family render. For other engines, an unbuildable family or conflicting `--agent` family refuses with the fix instead of moving the child. Each task may set `tier` or `model`, not both.
+`--tier` and the fanout JSON `tier` field select a [model tier with the same resolution and effort precedence as agents](./agents.md#shared-launch-params), including on a concrete profile, Pi's included. `--model` and JSON `model` build the definition under the model's family on demand (including kinds outside the tier table), without a tier stamp or usage fallback; tier names there are refused. Pi and OpenCode profiles keep their engine under both `--model` and `--tier` (tiers try models in list order, including unowned names), and `--agent pi` or `--agent opencode` also runs other providers' models without switching to their native family. For other engines, an unbuildable family or conflicting `--agent` family refuses with the fix instead of moving the child. Each task may set `tier` or `model`, not both.
 
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
@@ -77,7 +77,7 @@ An `empty-dir: true` profile starts in its own directory under `~/.rimz/empty/<w
 A launch refuses before it writes a run record or opens a pane when:
 
 - the caller is not an identifiable agent, or is itself a subagent;
-- the profile or `--agent` re-base is outside the caller's [allowlist](#discover-profiles), or names a direct profile from `agents/` (the error names both namespaces);
+- the profile or `--agent` override is outside the caller's [allowlist](#discover-profiles), or the positional profile names a direct profile from `agents/` (the error names both namespaces);
 - the [supervised-run requirements](./agents.md#supervised-runs--p) fail: RimZ's hooks for the agent are not installed and trusted, the child's directory is the home directory (pass `--cwd <DIR>`, or launch the parent from a project directory), or a Claude or Codex child's checkout would show a folder-trust screen (an inherited undecided project or a Codex folder saved as untrusted);
 - the room's daily cap or provider account's day or month cap has no headroom, or a fresh Qwen run's account has an exhausted quota window. This refusal exits `125` ([What a cap blocks](./budget.md#what-a-cap-blocks)).
 
@@ -120,7 +120,7 @@ JSON
 | `grace` | no | Reporting time after the deadline, as a duration string (`"5m"`); `"0s"` kills at the deadline |
 | `model` | no | Model override |
 | `tier` | no | `intern`, `junior`, `senior`, or `principal`; conflicts with `model` |
-| `agent` | no | Re-base onto another profile or kind |
+| `agent` | no | Inherit another profile (from `subagents/` or `agents/`) or kind below the child profile |
 | `effort` | no | Reasoning effort |
 | `fast` | no | `true` as `--fast`, `false` as `--no-fast` |
 | `max_turns` | no | Maximum agentic turns |

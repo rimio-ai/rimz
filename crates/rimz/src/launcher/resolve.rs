@@ -170,7 +170,7 @@ fn resolve_routed(
     }
     let spec = qualified_spec.as_deref().or(spec);
     let mut effective = effective.clone();
-    let routed = effective.route(
+    effective.route(
         &machine_config.tiers,
         scope,
         spec,
@@ -184,11 +184,7 @@ fn resolve_routed(
         scope,
         &machine_config.agents.commands,
         spec,
-        if routed {
-            None
-        } else {
-            overrides.agent.as_deref()
-        },
+        overrides.agent.as_deref(),
     )?;
     let preset = validate_resolved_launch_inputs(
         spec,
@@ -209,11 +205,7 @@ fn resolve_routed(
                 scope,
                 resolved.team_name.as_deref(),
             )),
-            agent_base: if routed {
-                None
-            } else {
-                overrides.agent.as_deref()
-            },
+            agent_base: overrides.agent.as_deref(),
             permission_mode: overrides
                 .mode
                 .map(PermissionModeChoice::Explicit)

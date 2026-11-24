@@ -296,18 +296,16 @@ const AGY_MCPS_REFUSAL: &str = "error: antigravity applies a `mcps` list only th
      file its system prompt rides, and this launch has no system prompt; add the kind base \
      `agents/antigravity.md` or another prompt source, or remove `mcps`";
 
-/// Installs Antigravity's hooks and writes the Amp profile `seat` with `mcps: []`, which
-/// carries no prompt onto Antigravity, and Antigravity's kind base, a prompt source there, when
-/// `prompted`.
+/// Installs Antigravity's hooks and writes the trusted project TOML profile `seat` with
+/// `mcps = []`, which carries no prompt onto Antigravity, and Antigravity's kind base, a prompt
+/// source there, when `prompted`.
 fn write_seat(env: &Env, prompted: bool) {
     env.install_agent_hooks("antigravity");
-    crate::common::write_definition(
-        env,
-        "agents",
-        "seat",
-        "description: Seat.\nagent: amp\nmcps: []",
-        "",
+    env.write_config(
+        &env.project_root,
+        "[profiles.seat]\nagent = \"amp\"\nmcps = []\n",
     );
+    env.rimz().args(["trust", "grant"]).assert().success();
     if prompted {
         crate::common::write_kind_base(env, "antigravity");
     }

@@ -155,8 +155,48 @@ fn merge_crafts(base: &[PromptSource], leaf: &[PromptSource]) -> Vec<PromptSourc
 }
 
 impl DefinitionSource {
-    pub(super) fn chain(&self) -> &[String] {
+    pub(crate) fn chain(&self) -> &[String] {
         &self.inner.chain
+    }
+
+    pub(crate) fn natural_kind(&self) -> &str {
+        &self.inner.natural_kind
+    }
+
+    pub(crate) fn written_model(&self) -> Option<&str> {
+        self.inner.frontmatter.model.as_deref()
+    }
+
+    pub(crate) fn written_tier(&self) -> Option<ModelTier> {
+        self.inner
+            .frontmatter
+            .tier
+            .as_deref()
+            .and_then(|raw| raw.parse().ok())
+    }
+
+    pub(crate) fn writes_engine(&self) -> bool {
+        self.inner.frontmatter.model.is_some() || self.inner.frontmatter.tier.is_some()
+    }
+
+    pub(crate) fn preference(&self) -> &TierPreference {
+        &self.inner.preference
+    }
+
+    pub(crate) fn writes_effort(&self) -> bool {
+        self.inner.frontmatter.effort.is_some()
+    }
+
+    pub(crate) fn writes_fast(&self) -> bool {
+        self.inner.frontmatter.fast.is_some()
+    }
+
+    pub(crate) fn writes_code_mode(&self) -> bool {
+        self.inner.frontmatter.code_mode.is_some()
+    }
+
+    pub(crate) fn writes_auto_compact(&self) -> bool {
+        self.inner.frontmatter.auto_compact.is_some()
     }
 
     pub(crate) fn build(

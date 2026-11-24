@@ -793,11 +793,11 @@ fn resolve_layout(
             return Err(err.into());
         }
         Err(err) => {
-            block_failed_team_prompt(launch, &launch.profiles, &err, None)?;
+            block_failed_team_prompt(launch, &launch.profiles, None, &err, None)?;
             return Err(err.into());
         }
     };
-    block_failed_kind_bases(launch, &launch.profiles, &layout, Some(spec), None)?;
+    block_failed_kind_bases(launch, &launch.profiles, None, &layout, Some(spec), None)?;
     Ok(layout)
 }
 
@@ -854,6 +854,7 @@ fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
 fn block_failed_team_prompt(
     launch: &crate::config::effective::LaunchAgents,
     profiles: &crate::config::ProfilesConfig,
+    fallback: Option<&crate::config::ProfilesConfig>,
     err: &crate::harness::spec::LayoutErr,
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
@@ -868,7 +869,7 @@ fn block_failed_team_prompt(
         .expect("team prompt refusal names a prepared role");
     launch.block_failed_profile(&binding.profile, &launch.profiles)?;
     if let Some(name) = agent_override {
-        launch.block_failed_profile(name, profiles)?;
+        launch.block_failed_override(name, profiles, fallback)?;
     }
     Ok(())
 }
@@ -876,6 +877,7 @@ fn block_failed_team_prompt(
 fn block_failed_kind_bases(
     launch: &crate::config::effective::LaunchAgents,
     profiles: &crate::config::ProfilesConfig,
+    fallback: Option<&crate::config::ProfilesConfig>,
     layout: &LayoutSpec,
     spec: Option<&str>,
     agent_override: Option<&str>,
@@ -886,7 +888,7 @@ fn block_failed_kind_bases(
         launch.block_failed_profile(name, profiles)?;
     }
     if let Some(name) = agent_override {
-        launch.block_failed_profile(name, profiles)?;
+        launch.block_failed_override(name, profiles, fallback)?;
     }
     let cell_profiles = if spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
@@ -960,13 +962,18 @@ pub fn resolve_launch(
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
     launch.block_set_failure()?;
     let profiles = launch.profiles_for(scope);
-    let layout = match crate::harness::spec::resolve_spec_with_agent_override(
+    let fallback =
+        (scope == crate::config::effective::ProfileScope::Subagents).then_some(&launch.profiles);
+    let layout = match crate::harness::spec::resolve_spec_in_scope(
         spec,
+        scope,
         profiles,
         &launch.profiles,
+        fallback,
         commands,
         &launch.teams,
         agent_override,
+        Some(launch.routed_overrides()),
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
@@ -993,11 +1000,11 @@ pub fn resolve_launch(
             return Err(err.into());
         }
         Err(err) => {
-            block_failed_team_prompt(launch, profiles, &err, agent_override)?;
+            block_failed_team_prompt(launch, profiles, fallback, &err, agent_override)?;
             return Err(err.into());
         }
     };
-    block_failed_kind_bases(launch, profiles, &layout, spec, agent_override)?;
+    block_failed_kind_bases(launch, profiles, fallback, &layout, spec, agent_override)?;
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);
@@ -1204,7 +1211,7 @@ pub fn plan_supervised_launch(
         jiff::Timestamp::now(),
         login,
     );
-    let routed = effective.route(
+    effective.route(
         &machine_config.tiers,
         scope,
         Some(&spec),
@@ -1220,7 +1227,7 @@ pub fn plan_supervised_launch(
             }
         },
     )?;
-    let agent_base = request.agent.as_deref().filter(|_| !routed);
+    let agent_base = request.agent.as_deref();
     let mut resolved = resolve_launch(&effective, scope, commands, Some(&spec), agent_base)?;
     reject_prompt_that_looks_like_spec(
         Some(&spec),

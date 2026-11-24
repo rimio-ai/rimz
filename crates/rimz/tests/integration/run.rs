@@ -1866,6 +1866,9 @@ fn assert_subagent_checkout_case(
     };
     if empty.is_some() {
         let profile_kind = if agent.is_some() { "claude" } else { kind };
+        if let Some(agent) = agent {
+            crate::common::write_kind_base(&env, agent);
+        }
         crate::common::write_definition(
             &env,
             "subagents",

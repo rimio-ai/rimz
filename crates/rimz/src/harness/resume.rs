@@ -591,8 +591,8 @@ fn resolve_posture_with_role(
             ..role.clone()
         });
     let role = modelless_role.as_ref().or(role);
-    let resolved =
-        crate::harness::spec::resolve_agent_override(base_name, &profiles).and_then(|base| {
+    let resolved = crate::harness::spec::resolve_agent_override(base_name, &profiles, None)
+        .and_then(|base| {
             crate::harness::spec::profile_cell_with_base_override(
                 name,
                 &profiles,
@@ -3237,7 +3237,7 @@ fn restore_resume_cell(
     });
     // Legacy unstamped members retain the resolved layout, including role prompt layers.
     let mut posture = if let Some(base_name) = overrides.agent {
-        let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles)
+        let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles, None)
             .map_err(|err| error(err.to_string()))?;
         let rebased = crate::harness::spec::profile_cell_with_base_override(
             profile.unwrap_or(kind.as_str()),
@@ -3255,7 +3255,7 @@ fn restore_resume_cell(
         ResumeLaunchPosture {
             mode: base
                 .as_ref()
-                .and_then(|base| base.launch.mode)
+                .and_then(|base| base.resolved.launch.mode)
                 .or(request.stamped_mode)
                 .or(rebased.launch.mode),
             record: Some(Box::new(crate::agents::LaunchRecord {

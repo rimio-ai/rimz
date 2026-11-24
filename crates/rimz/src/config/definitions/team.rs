@@ -216,7 +216,7 @@ fn roster(
             model: None,
             effort: None,
             // The overlay carries it too; the binding keeps the role's own value, so it
-            // outlives an `--agent` re-base as a TOML role's does.
+            // stays above an `--agent` override as a TOML role's does.
             fast: role.fast,
             budget: None,
             auto_compact: None,

@@ -196,7 +196,7 @@ struct SubagentLaunchArgs {
     /// Capability tier for the child.
     #[arg(long, value_name = "TIER")]
     tier: Option<rimz::config::tiers::ModelTier>,
-    /// Prefer this provider kind, or re-base onto a replacement profile.
+    /// Inherit this profile (subagent or agent) or provider kind below the child profile.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
     /// Reasoning effort for the child.

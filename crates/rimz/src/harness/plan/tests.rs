@@ -3274,16 +3274,46 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
             None,
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let mut profiles = loaded.agent_profiles;
+        // Without `agents/antigravity.md`, switching a Markdown profile onto antigravity refuses
+        // at layout resolution; detach `definition` to exercise `compile_layout_panes`'s
+        // no-prompt agent-file guard on a promptless cell (such as a TOML profile).
+        if let Some(row) = profiles.0.get_mut(profile) {
+            row.definition = None;
+        }
         crate::harness::spec::resolve_spec_with_agent_override(
             Some(profile),
-            &loaded.agent_profiles,
-            &loaded.agent_profiles,
+            &profiles,
+            &profiles,
             &Default::default(),
             &Default::default(),
             Some("antigravity"),
         )
-        .expect("switched profile renders")
+        .expect("promptless cell renders")
     };
+    let loaded_without_base = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &Default::default(),
+        &root.path().join("config.toml"),
+        &Default::default(),
+        None,
+    );
+    let missing_base_err = crate::harness::spec::resolve_spec_with_agent_override(
+        Some("readseat"),
+        &loaded_without_base.agent_profiles,
+        &loaded_without_base.agent_profiles,
+        &Default::default(),
+        &Default::default(),
+        Some("antigravity"),
+    )
+    .expect_err("Markdown profile without antigravity kind base must refuse at layout")
+    .to_string();
+    assert!(
+        missing_base_err.contains("antigravity")
+            && missing_base_err.contains("kind base is missing"),
+        "{missing_base_err}"
+    );
     let identity = [AgentLaunchIdentity {
         launch_id: None,
         kind: AgentKind::new_unchecked("antigravity"),
@@ -5750,14 +5780,24 @@ fn profile_agent_override_replaces_the_tier_model_and_is_recorded() {
     });
     assert_eq!(
         actual,
-        [(); 2].map(|_| (
-            Some("haiku".into()),
-            Some("low".into()),
-            Some(PermissionMode::Yolo),
-            true,
-            Some("fast".into()),
-            false,
-        ))
+        [
+            (
+                Some("haiku".into()),
+                Some("low".into()),
+                Some(PermissionMode::Yolo),
+                true,
+                Some("fast".into()),
+                false,
+            ),
+            (
+                Some("sonnet".into()),
+                Some("low".into()),
+                Some(PermissionMode::Yolo),
+                true,
+                Some("fast".into()),
+                true,
+            ),
+        ]
     );
 }
 
@@ -6633,4 +6673,306 @@ fn kind_base_code_mode_on_a_kind_without_it_warns_and_launches_without_it() {
             (Vec::new(), Some(true)),
         ]
     );
+}
+
+#[test]
+fn one_chain_rule_and_handoff_examples_through_supervised_entry() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\n---\nClaude house.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\n---\nCodex house.",
+        ),
+        (
+            "agents/antigravity.md",
+            "---\ndescription: Antigravity base\n---\nAntigravity house.",
+        ),
+        (
+            "agents/opencode.md",
+            "---\ndescription: OpenCode base\n---\nOpenCode house.",
+        ),
+        (
+            "agents/astra.md",
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: medium\n\
+             smart-compact: 60%\nsubagents: [general]\ntools: [Bash, Read]\n---\nAstra craft.",
+        ),
+        (
+            "agents/tiered_codex.md",
+            "---\ndescription: Tiered Codex\nagent: codex\ntier: senior\neffort: low\n\
+             tools: [Bash, Read]\n---\nTiered codex craft.",
+        ),
+        (
+            "agents/tiered_worker.md",
+            "---\ndescription: Tiered worker\nagent: claude\ntier: senior\neffort: medium\n\
+             tools: [Bash]\n---\nWorker craft.",
+        ),
+        (
+            "subagents/advisor.md",
+            "---\ndescription: Advisor\nagent: antigravity\nmodel: neon\neffort: high\n\
+             fast: on\nisolation: sandbox\ntools: [Read, Grep]\n---\nAdvisor craft.",
+        ),
+        (
+            "subagents/advisor_direct_astra.md",
+            "---\ndescription: Advisor on astra\nagent: astra\neffort: high\n\
+             fast: on\nisolation: sandbox\ntools: [Read, Grep]\n---\nAdvisor craft.",
+        ),
+        (
+            "subagents/explorer.md",
+            "---\ndescription: Explorer\nagent: claude\nmodel: sonnet\neffort: medium\n\
+             tools: [Read, Grep]\n---\nExplorer craft.",
+        ),
+        (
+            "subagents/finder.md",
+            "---\ndescription: Finder\nagent: codex\nmodel: astra\neffort: low\n\
+             tools: [Read, Grep]\n---\nFinder craft.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.subagents.profiles = definitions.subagent_profiles;
+
+    let plan_sub = |spec: &str, agent: Option<&str>, model: Option<&str>| {
+        let mut request = supervised_request(spec, "Advise.");
+        request.subagent = true;
+        request.agent = agent.map(str::to_owned);
+        request.model = model.map(str::to_owned);
+        SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(root.path())
+    };
+
+    // One rule + handoff example: advisor --agent astra matches advisor_direct_astra.
+    let (via_flag, flag_warnings) = plan_sub("advisor", Some("astra"), None);
+    let via_flag = via_flag.expect("advisor --agent astra must succeed across tables");
+    let flag_cell = planned_cell(&via_flag);
+    let (direct, _) = plan_sub("advisor_direct_astra", None, None);
+    let direct = direct.unwrap();
+    let direct_cell = planned_cell(&direct);
+    assert_eq!(flag_cell.kind.as_str(), "codex");
+    assert_eq!(flag_cell.launch.model, direct_cell.launch.model);
+    assert_eq!(flag_cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(flag_cell.launch.effort, direct_cell.launch.effort);
+    assert_eq!(flag_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(flag_cell.launch.fast, direct_cell.launch.fast);
+    assert_eq!(flag_cell.launch.fast, Some(true));
+    assert_eq!(flag_cell.isolation_default, direct_cell.isolation_default);
+    assert_eq!(flag_cell.tools, direct_cell.tools);
+    assert_eq!(flag_cell.system_prompt_file, direct_cell.system_prompt_file);
+    assert!(
+        flag_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md"),
+        "{:?}",
+        flag_cell.system_prompt_file
+    );
+    fn crafts(cell: &crate::harness::spec::AgentCell) -> Vec<&str> {
+        cell.append_system_prompt_files
+            .iter()
+            .map(|src| match src {
+                crate::config::PromptSource::Text { text, .. } => text.as_str(),
+                crate::config::PromptSource::File(_) => "<file>",
+            })
+            .collect()
+    }
+    assert_eq!(crafts(flag_cell), vec!["Astra craft.", "Advisor craft."]);
+    assert_eq!(crafts(flag_cell), crafts(direct_cell));
+    assert_eq!(
+        flag_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("astra")
+    );
+    assert!(
+        !flag_warnings
+            .iter()
+            .any(|w| w.to_string().contains("drops model")),
+        "{flag_warnings:?}"
+    );
+
+    // Handoff example: advisor --agent codex drops neon with warning, keeps fast, records codex.
+    let (bare_codex, bare_warnings) = plan_sub("advisor", Some("codex"), None);
+    let bare_codex = bare_codex.expect("advisor --agent codex");
+    let bare_cell = planned_cell(&bare_codex);
+    assert_eq!(bare_cell.kind.as_str(), "codex");
+    assert_eq!(bare_cell.launch.fast, Some(true));
+    assert_eq!(bare_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(
+        bare_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("codex")
+    );
+    assert!(
+        bare_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md")
+    );
+    assert!(
+        bare_warnings.iter().any(|w| {
+            w.to_string() == "warning: profile `advisor` drops model `neon` when switching to codex"
+        }),
+        "{bare_warnings:?}"
+    );
+
+    // Handoff example: explorer --agent opencode keeps sonnet without a drop warning.
+    let (oc, oc_warnings) = plan_sub("explorer", Some("opencode"), None);
+    let oc = oc.expect("explorer --agent opencode");
+    let oc_cell = planned_cell(&oc);
+    assert_eq!(oc_cell.kind.as_str(), "opencode");
+    assert_eq!(oc_cell.launch.model.as_deref(), Some("sonnet"));
+    assert_eq!(
+        oc_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("opencode")
+    );
+    assert!(
+        !oc_warnings
+            .iter()
+            .any(|w| w.to_string().contains("drops model")),
+        "{oc_warnings:?}"
+    );
+
+    // Handoff example: finder --model neon builds antigravity even outside the tier table.
+    let (finder_neon, _) = plan_sub("finder", None, Some("neon"));
+    let finder_neon = finder_neon.expect("finder --model neon");
+    let finder_cell = planned_cell(&finder_neon);
+    assert_eq!(finder_cell.kind.as_str(), "antigravity");
+    assert_eq!(finder_cell.launch.model.as_deref(), Some("neon"));
+    assert_eq!(finder_cell.launch.effort.as_deref(), Some("low"));
+    assert!(
+        finder_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/antigravity.md")
+    );
+
+    // Tier under bare-kind X keeps tier, prefers X's family, and records X.
+    let mut tier_req = supervised_request("tiered_worker", "Work.");
+    tier_req.agent = Some("codex".into());
+    let (tiered_codex, _) = SupervisedPlan {
+        request: &tier_req,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(root.path());
+    let tiered_codex = tiered_codex.unwrap();
+    let tc_cell = planned_cell(&tiered_codex);
+    assert_eq!(tc_cell.kind.as_str(), "codex");
+    assert!(tc_cell.launch.tier.is_some());
+    assert_eq!(
+        tc_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("codex")
+    );
+
+    // Tier under X writing a model drops tier and takes X's model.
+    tier_req.agent = Some("astra".into());
+    let (tiered_astra, _) = SupervisedPlan {
+        request: &tier_req,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(root.path());
+    let tiered_astra = tiered_astra.unwrap();
+    let ta_cell = planned_cell(&tiered_astra);
+    assert_eq!(ta_cell.kind.as_str(), "codex");
+    assert_eq!(ta_cell.launch.model.as_deref(), Some("astra"));
+    assert!(ta_cell.launch.tier.is_none());
+    assert_eq!(
+        ta_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("astra")
+    );
+
+    // Concrete-model L under tier-carrying X takes X's tier.
+    let (adv_tiered, _) = plan_sub("advisor", Some("tiered_codex"), None);
+    let adv_tiered = adv_tiered.unwrap();
+    let adv_tiered_cell = planned_cell(&adv_tiered);
+    assert_eq!(adv_tiered_cell.kind.as_str(), "codex");
+    assert!(adv_tiered_cell.launch.tier.is_some());
+    assert_eq!(adv_tiered_cell.launch.effort.as_deref(), Some("high"));
+
+    // Cross-provider X + M refused even when X sits in `[agents.profiles]` on a subagent launch.
+    let (mismatch, _) = plan_sub("advisor", Some("astra"), Some("neon"));
+    let mismatch_err = mismatch.expect_err("cross-provider --agent + --model must refuse");
+    assert_eq!(
+        mismatch_err.to_string(),
+        "--agent astra runs on codex but --model neon runs on antigravity; choose the same family"
+    );
+
+    // Direct doorway still refuses a subagent-only profile as --agent.
+    let mut wrong_door = supervised_request("tiered_worker", "Work.");
+    wrong_door.agent = Some("advisor".into());
+    let (refused, _) = SupervisedPlan {
+        request: &wrong_door,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(root.path());
+    let err = refused.expect_err("rimz agents must refuse subagent-only --agent");
+    assert!(
+        err.to_string()
+            .contains("defined under [subagents.profiles]"),
+        "{err:#}"
+    );
+
+    // Missing kind base for --model M outside the tier table refuses naming L, M, kind, and reason.
+    std::fs::remove_file(root.path().join("agents/antigravity.md")).unwrap();
+    let defs_no_agy = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    let mut machine_no_agy = MachineConfig::default();
+    machine_no_agy.agents.profiles = defs_no_agy.agent_profiles;
+    machine_no_agy.subagents.profiles = defs_no_agy.subagent_profiles;
+    let mut no_agy_req = supervised_request("finder", "Find.");
+    no_agy_req.subagent = true;
+    no_agy_req.model = Some("neon".into());
+    let (no_agy, _) = SupervisedPlan {
+        request: &no_agy_req,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine_no_agy,
+    }
+    .run(root.path());
+    let no_agy_err = no_agy
+        .expect_err("missing antigravity base must refuse")
+        .to_string();
+    for fragment in ["finder", "neon", "antigravity", "kind base is missing"] {
+        assert!(no_agy_err.contains(fragment), "{no_agy_err}");
+    }
 }

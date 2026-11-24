@@ -1178,3 +1178,227 @@ fn check_cell_copies_seat_consensus_skill_marker_to_host_preflight() {
         "unexpected error: {err:#}"
     );
 }
+
+#[test]
+fn one_chain_rule_and_tier_fallback_through_direct_entry() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\n---\nClaude house.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\n---\nCodex house.",
+        ),
+        (
+            "agents/antigravity.md",
+            "---\ndescription: Antigravity base\n---\nAntigravity house.",
+        ),
+        (
+            "agents/sol.md",
+            "---\ndescription: Sol\nagent: codex\nmodel: sol\neffort: low\n\
+             tools: [Bash, Read]\n---\nSol craft.",
+        ),
+        (
+            "agents/astra.md",
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\neffort: low\n\
+             mode: plan\ntools: [Bash, Read]\n---\nAstra craft.",
+        ),
+        (
+            "agents/reviewer.md",
+            "---\ndescription: Reviewer\nagent: claude\nmodel: opus\neffort: high\n\
+             tools: [Read, Grep]\n---\nReviewer craft.",
+        ),
+        (
+            "agents/reviewer_direct_sol.md",
+            "---\ndescription: Reviewer on sol\nagent: sol\neffort: high\n\
+             tools: [Read, Grep]\n---\nReviewer craft.",
+        ),
+        (
+            "agents/tiered.md",
+            "---\ndescription: Tiered\nagent: claude\ntier: senior\n\
+             tools: [Bash, Read]\n---\nTiered craft.",
+        ),
+        (
+            "subagents/advisor.md",
+            "---\ndescription: Advisor\nagent: antigravity\nmodel: neon\neffort: high\n\
+             tools: [Read, Grep]\n---\nAdvisor craft.",
+        ),
+        (
+            "subagents/finder.md",
+            "---\ndescription: Finder\nagent: codex\nmodel: astra\neffort: low\n\
+             tools: [Read, Grep]\n---\nFinder craft.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    let mut machine = crate::config::MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.subagents.profiles = definitions.subagent_profiles;
+    let effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
+
+    // One rule at direct entry: reviewer --agent sol matches reviewer_direct_sol.
+    let via_flag = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        crate::config::effective::ProfileScope::Agents,
+        Some("reviewer"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("sol".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("reviewer --agent sol");
+    let direct = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        crate::config::effective::ProfileScope::Agents,
+        Some("reviewer_direct_sol"),
+        None,
+        &super::LaunchOverrides::default(),
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("reviewer_direct_sol");
+    let flag_cell = via_flag.resolved.layout.agent_cells().next().unwrap();
+    let direct_cell = direct.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(flag_cell.kind.as_str(), "codex");
+    assert_eq!(flag_cell.launch.model.as_deref(), Some("sol"));
+    assert_eq!(flag_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(flag_cell.launch.effort, direct_cell.launch.effort);
+    assert_eq!(flag_cell.system_prompt_file, direct_cell.system_prompt_file);
+    assert!(
+        flag_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md")
+    );
+    assert_eq!(
+        flag_cell.append_system_prompt_files.len(),
+        direct_cell.append_system_prompt_files.len()
+    );
+    assert_eq!(
+        flag_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("sol")
+    );
+
+    // Subagent scope at direct entry (--subagent-profile): advisor --agent astra and finder --model neon.
+    let sub_flag = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        crate::config::effective::ProfileScope::Subagents,
+        Some("advisor"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("astra".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("advisor --subagent-profile --agent astra");
+    let sub_cell = sub_flag.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(sub_cell.kind.as_str(), "codex");
+    assert_eq!(sub_cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(sub_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(
+        sub_cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("astra")
+    );
+
+    let finder_neon = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        crate::config::effective::ProfileScope::Subagents,
+        Some("finder"),
+        None,
+        &super::LaunchOverrides {
+            preset: crate::agents::LaunchPreset {
+                model: Some("neon".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("finder --subagent-profile --model neon");
+    let finder_cell = finder_neon.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(finder_cell.kind.as_str(), "antigravity");
+    assert_eq!(finder_cell.launch.model.as_deref(), Some("neon"));
+    assert_eq!(finder_cell.launch.effort.as_deref(), Some("low"));
+
+    // Tier fallback under --agent X: codex unavailable falls back to claude while keeping astra's
+    // non-engine lines (mode: plan, craft) and recording astra.
+    let mut fallback_effective = effective.clone();
+    fallback_effective
+        .route(
+            &machine.tiers,
+            crate::config::effective::ProfileScope::Agents,
+            Some("tiered"),
+            Some(crate::config::tiers::ModelTier::Senior),
+            None,
+            Some("astra"),
+            |kind, _| (kind == "codex").then_some(crate::agents::TierSkipReason::LoggedOut),
+        )
+        .expect("tier fallback under astra");
+    let resolved_fb = crate::harness::plan::resolve_launch(
+        &fallback_effective,
+        crate::config::effective::ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("tiered"),
+        Some("astra"),
+    )
+    .expect("resolve fallback");
+    let fb_cell = resolved_fb.layout.agent_cells().next().unwrap();
+    assert_eq!(fb_cell.kind.as_str(), "claude");
+    assert_eq!(
+        fb_cell.launch.mode,
+        Some(crate::agents::PermissionMode::Plan)
+    );
+    assert_eq!(fb_cell.launch.effort.as_deref(), Some("low"));
+    assert!(fb_cell.launch.tier.is_some());
+    assert!(
+        fb_cell
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/claude.md")
+    );
+    assert_eq!(fb_cell.append_system_prompt_files.len(), 2);
+}

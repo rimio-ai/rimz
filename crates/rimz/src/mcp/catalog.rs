@@ -852,7 +852,7 @@ pub struct SubagentArgs {
     pub model: Option<String>,
     /// Override the profile's reasoning effort.
     pub effort: Option<String>,
-    /// Override the profile's agent kind.
+    /// Inherit this profile (subagent or agent) or provider kind below the child profile.
     pub agent: Option<String>,
 }
 
@@ -876,7 +876,7 @@ pub struct AgentArgs {
     pub description: Option<String>,
     /// A distinct handle, when the channel already holds this profile's.
     pub name: Option<String>,
-    /// Re-base the profile onto this model alias for this launch.
+    /// Inherit this profile or provider kind below the launched profile.
     pub agent: Option<String>,
     /// Work in this worktree. A new one branches from `agents.worktree.base` when set, else from
     /// the `HEAD` of your repository's main checkout; a `team.role` branches as its team does.
