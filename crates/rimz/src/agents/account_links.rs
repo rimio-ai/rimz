@@ -1,10 +1,17 @@
-//! Link a named account's home into the provider's own home: everything but
-//! private and transient names for an account that shares the default's
-//! history, settings alone for a standalone one. A link into the provider's
-//! own home at a private or transient name is removed in either mode.
-//! Links under HOME are relative from the account home's real location to
-//! the provider's configured home. Currency is by text; another spelling of
-//! the same existing entry is replaced in place without moving data aside.
+//! Reconcile a named account's home with the provider's own home.
+//!
+//! For link-shared providers, link everything but private and transient names
+//! when sharing history, or settings alone for a standalone account; a link
+//! into the provider's own home at a private or transient name is removed in
+//! either mode. Links under HOME are relative from the account home's real
+//! location to the provider's configured home, and currency is by text (another
+//! spelling of the same existing entry is replaced in place without moving data
+//! aside).
+//!
+//! For mounted-login providers in shared mode, create no links and leave the
+//! default home untouched: validate required login-file slots, set every other
+//! non-login entry aside behind the live-writer gate, and ensure required
+//! placeholders through `provider_file`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -396,13 +403,15 @@ pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<()
     }
 }
 
-/// Bring a named account's home to the link set its history mode asks for.
-/// `default` has no links and answers `None`. `other_live_agents` counts the
-/// live agents on the account besides the one launching, or `None` when the
-/// live rooms cannot be read; it is asked only before a directory would move
-/// aside, and so is the provider, once no agent is counted, for the live
-/// sessions a daemon holds under the account home: a daemon that holds none
-/// does not block, and one that does not report them does.
+/// Bring a named account's home to the layout its history mode asks for.
+/// `default` has nothing to reconcile and answers `None`. `other_live_agents`
+/// counts the live agents on the account besides the one launching, or `None`
+/// when the live rooms cannot be read. For link-shared providers it is asked
+/// only before a directory would move aside or unlink; for a shared
+/// mounted-login account it is asked before any entry would move aside (after
+/// validating required login-file slots). Once no agent is counted, the
+/// provider is also asked for live daemon sessions under the account home: a
+/// daemon holding none does not block, and one that does not report them does.
 pub fn reconcile(
     login: &ProviderLogin,
     ambient: &BTreeMap<String, String>,
@@ -485,6 +494,15 @@ fn reconcile_homes(
     // The kernel resolves relative link text from the account home's real
     // location; one that does not canonicalize is read where it is configured.
     let real_home = real_named.as_deref().unwrap_or(&named_home);
+    if adapter.mounts_login_files(homes.shared) {
+        return reconcile_mounted_login(
+            homes,
+            &named_home,
+            real_home,
+            &default_home,
+            other_live_agents,
+        );
+    }
 
     let included = adapter.shared_home_entries();
     let mut names: Vec<String> = included.iter().map(|entry| entry.name.to_owned()).collect();
@@ -560,68 +578,15 @@ fn reconcile_homes(
         .find(|(name, slot)| !is_unshared(adapter, name) && slot.is_dir())
         .map(|(name, _)| (name.clone(), true));
     if let Some((entry, unlink)) = set_aside.or(unlinked) {
-        let agents = other_live_agents();
-        let account = homes.account.clone();
-        match (agents, unlink) {
-            (Some(0), _) => {
-                let sessions = match (homes.daemon_writes)() {
-                    DaemonSessions::Clear => None,
-                    DaemonSessions::Live(count) => Some(Some(count)),
-                    DaemonSessions::Unknown => Some(None),
-                };
-                if let Some(sessions) = sessions {
-                    return Err(if unlink {
-                        ShareErr::LiveDaemonUnlink {
-                            account,
-                            entry,
-                            default_home,
-                            sessions,
-                        }
-                    } else {
-                        ShareErr::LiveDaemon {
-                            account,
-                            entry,
-                            default_home,
-                            sessions,
-                        }
-                    });
-                }
-            }
-            (_, false) => {
-                return Err(ShareErr::LiveAgents {
-                    account,
-                    entry,
-                    default_home,
-                    agents,
-                });
-            }
-            (_, true) => {
-                return Err(ShareErr::LiveAgentsUnlink {
-                    account,
-                    entry,
-                    default_home,
-                    agents,
-                });
-            }
-        }
+        check_live_writers(homes, &default_home, entry, unlink, other_live_agents)?;
     }
 
-    let mut report = ShareReport {
-        account: homes.account.clone(),
-        account_home: named_home.clone(),
-        default_home: default_home.clone(),
-        shared: homes.shared,
-        linked: Vec::new(),
-        current: Vec::new(),
-        moved: Vec::new(),
-        unlinked: Vec::new(),
-        set_aside: Vec::new(),
-        quiet_set_aside: Vec::new(),
-        repeated: Vec::new(),
-        repaired: Vec::new(),
-        left_local: Vec::new(),
-        notes: Vec::new(),
-    };
+    let mut report = ShareReport::empty(
+        homes.account.clone(),
+        named_home.clone(),
+        default_home.clone(),
+        homes.shared,
+    );
     let applied = apply(
         adapter,
         &named_home,
@@ -632,7 +597,40 @@ fn reconcile_homes(
         stale,
         &mut report,
     );
-    match applied {
+    finish_with_aside(applied, report)
+}
+
+impl ShareReport {
+    fn empty(
+        account: LoginKey,
+        account_home: PathBuf,
+        default_home: PathBuf,
+        shared: bool,
+    ) -> Self {
+        Self {
+            account,
+            account_home,
+            default_home,
+            shared,
+            linked: Vec::new(),
+            current: Vec::new(),
+            moved: Vec::new(),
+            unlinked: Vec::new(),
+            set_aside: Vec::new(),
+            quiet_set_aside: Vec::new(),
+            repeated: Vec::new(),
+            repaired: Vec::new(),
+            left_local: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+fn finish_with_aside(
+    result: Result<(), ShareErr>,
+    report: ShareReport,
+) -> Result<ShareReport, ShareErr> {
+    match result {
         Ok(()) => Ok(report),
         Err(source) if report.warnings().is_empty() => Err(source),
         Err(source) => Err(ShareErr::AfterSetAside {
@@ -640,6 +638,134 @@ fn reconcile_homes(
             source: Box::new(source),
         }),
     }
+}
+
+fn check_live_writers(
+    homes: &Homes<'_>,
+    default_home: &Path,
+    entry: String,
+    unlink: bool,
+    other_live_agents: &dyn Fn() -> Option<usize>,
+) -> Result<(), ShareErr> {
+    let agents = other_live_agents();
+    let account = homes.account.clone();
+    let default_home = default_home.to_path_buf();
+    match (agents, unlink) {
+        (Some(0), _) => {
+            let sessions = match (homes.daemon_writes)() {
+                DaemonSessions::Clear => None,
+                DaemonSessions::Live(count) => Some(Some(count)),
+                DaemonSessions::Unknown => Some(None),
+            };
+            if let Some(sessions) = sessions {
+                return Err(if unlink {
+                    ShareErr::LiveDaemonUnlink {
+                        account,
+                        entry,
+                        default_home,
+                        sessions,
+                    }
+                } else {
+                    ShareErr::LiveDaemon {
+                        account,
+                        entry,
+                        default_home,
+                        sessions,
+                    }
+                });
+            }
+            Ok(())
+        }
+        (_, false) => Err(ShareErr::LiveAgents {
+            account,
+            entry,
+            default_home,
+            agents,
+        }),
+        (_, true) => Err(ShareErr::LiveAgentsUnlink {
+            account,
+            entry,
+            default_home,
+            agents,
+        }),
+    }
+}
+
+/// Shared history for a mounted-login provider: validate required login-file
+/// slots first, keep only the declared login files and `.rimz-aside`, set every
+/// other account entry aside behind the live-writer gate, touch nothing in the
+/// default home, and ensure required login placeholders exist through
+/// `provider_file` so a launch never exposes the default's login.
+fn reconcile_mounted_login(
+    homes: &Homes<'_>,
+    named_home: &Path,
+    real_home: &Path,
+    default_home: &Path,
+    other_live_agents: &dyn Fn() -> Option<usize>,
+) -> Result<ShareReport, ShareErr> {
+    let login_files = homes.adapter.mounted_login_files();
+    for file in login_files.iter().filter(|file| file.required) {
+        let slot = named_home.join(file.name);
+        if let Some(meta) = metadata(&slot)?
+            && !meta.is_file()
+        {
+            return Err(io_err(
+                &slot,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    if meta.is_symlink() {
+                        "expected a regular file, found a symlink; remove or replace it"
+                    } else {
+                        "expected a regular file; remove or replace it"
+                    },
+                ),
+            ));
+        }
+    }
+    let kept = |name: &str| name == ASIDE_DIR || login_files.iter().any(|file| file.name == name);
+    let mut to_aside = Vec::new();
+    for name in top_level(named_home)? {
+        if kept(&name) {
+            continue;
+        }
+        let slot = named_home.join(&name);
+        let Some(meta) = metadata(&slot)? else {
+            continue;
+        };
+        to_aside.push((name, slot, meta.file_type()));
+    }
+    if let Some((entry, _, _)) = to_aside
+        .iter()
+        .find(|(_, slot, _)| slot.is_dir())
+        .or_else(|| to_aside.first())
+    {
+        check_live_writers(homes, default_home, entry.clone(), false, other_live_agents)?;
+    }
+    let mut report = ShareReport::empty(
+        homes.account.clone(),
+        named_home.to_path_buf(),
+        default_home.to_path_buf(),
+        true,
+    );
+    let applied = (|| {
+        let mut aside_dir = None;
+        for (name, slot, kind) in to_aside {
+            let dir = match &aside_dir {
+                Some(dir) => dir,
+                None => aside_dir.insert(new_aside_dir(named_home)?),
+            };
+            let aside = dir.join(&name);
+            set_aside(real_home, &slot, &aside, &kind)?;
+            report.set_aside.push((slot, aside));
+        }
+        for file in login_files.iter().filter(|file| file.required) {
+            let slot = named_home.join(file.name);
+            super::provider_file::create_empty_if_absent(&slot, 0o600)
+                .map_err(|error| io_err(&slot, error))?;
+        }
+        Ok(())
+    })();
+    finish_with_aside(applied, report)
 }
 
 #[expect(

@@ -137,8 +137,8 @@ pub struct AccountsConfig {
     /// Named Pi accounts: each one a standalone `PI_CODING_AGENT_DIR`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pi: BTreeMap<LoginName, NamedAccount>,
-    /// Named Antigravity accounts: each one a standalone data directory that a
-    /// launch mounts over agy's own.
+    /// Named Antigravity accounts: each one a provider directory whose login
+    /// files (shared) or whole directory (standalone) a launch mounts over agy's.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub antigravity: BTreeMap<LoginName, NamedAccount>,
 }

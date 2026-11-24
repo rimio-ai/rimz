@@ -478,6 +478,16 @@ pub struct SharedHomeEntry {
     pub kind: SharedHomeKind,
 }
 
+/// One login file a shared account mounts over the provider's own home instead
+/// of symlinking entries into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MountedLoginFile {
+    pub name: &'static str,
+    /// Always bound (kept as an empty placeholder until signed in); when
+    /// `false`, bound only when both the account and default homes hold one.
+    pub required: bool,
+}
+
 #[derive(Debug)]
 pub struct RejectedLaunchArg {
     pub flag: &'static str,
@@ -533,6 +543,41 @@ pub trait LaunchCapability: CoreCapability {
     /// provider's own home, where a link would leave their sidecar files local.
     fn shared_database_home_env_key(&self) -> Option<&'static str> {
         None
+    }
+
+    /// The variable that carries a shared account's own directory when its
+    /// provider runs on the default home with only login files mounted over it.
+    fn shared_login_home_env_key(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Login files a shared account of a mounted-home kind binds over the
+    /// provider's own home; empty for providers that share via symlinks.
+    fn mounted_login_files(&self) -> &'static [MountedLoginFile] {
+        &[]
+    }
+
+    /// Whether a named login with `shared_history` overlays per-account login
+    /// files onto the provider's own home instead of linking or binding the
+    /// whole directory.
+    fn mounts_login_files(&self, shared_history: bool) -> bool {
+        shared_history && !self.mounted_login_files().is_empty()
+    }
+
+    /// `(source, target)` binds for a shared mounted-login account: every
+    /// required login file unconditionally, and every optional file when both
+    /// directories hold a regular (non-symlink) file.
+    fn mounted_login_binds(&self, account: &Path, target: &Path) -> Vec<(PathBuf, PathBuf)> {
+        let regular =
+            |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file());
+        self.mounted_login_files()
+            .iter()
+            .filter_map(|file| {
+                let source = account.join(file.name);
+                let dest = target.join(file.name);
+                (file.required || (regular(&source) && regular(&dest))).then_some((source, dest))
+            })
+            .collect()
     }
 
     fn rejected_extra_arg(&self, _extra_args: &[String]) -> Option<RejectedLaunchArg> {
@@ -624,11 +669,6 @@ pub trait LaunchCapability: CoreCapability {
     /// pointed at another home. `None` for a provider that reads its home override itself.
     fn mounted_home_target(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
         None
-    }
-
-    /// Whether a named account can link its history into the provider's own home.
-    fn account_history_shareable(&self) -> bool {
-        true
     }
 
     /// The provider's own temp-root override keys, which a launch sets to the

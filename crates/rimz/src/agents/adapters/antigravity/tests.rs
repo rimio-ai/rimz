@@ -6324,6 +6324,472 @@ fn a_named_login_resolves_its_directory_and_its_hook_path_onto_it() {
     assert_eq!(session::mounted_view(&default), None);
 }
 
+fn shared_login(home: &Path, account: &Path) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("HOME".to_owned(), home.display().to_string()),
+        (
+            session::LOGIN_HOME_ENV.to_owned(),
+            account.display().to_string(),
+        ),
+    ])
+}
+
+#[test]
+fn a_shared_login_resolves_history_hooks_and_settings_to_the_default_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let user_home = dir.path().join("user");
+    let default_dir = user_home.join(".gemini/antigravity-cli");
+    let account_dir = dir.path().join("accounts/work");
+    let workspace = dir.path().join("repo");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let env = shared_login(&user_home, &account_dir);
+    assert_eq!(
+        AntigravityAdapter.config_home(&env),
+        Some(default_dir.clone())
+    );
+    assert_eq!(session::mounted_view(&env), None);
+    assert_eq!(session::credential_home(&env), Some(account_dir.clone()));
+    assert_eq!(
+        install::settings_path(&env).unwrap(),
+        default_dir.join("settings.json")
+    );
+
+    let inside = json!({
+        "transcriptPath": format!("{}/brain/a/.system_generated/logs/t.jsonl", default_dir.display())
+    });
+    assert_eq!(*session::payload_on_host(&inside, &env), inside);
+
+    let default_tx = write_transcript_named(
+        &default_dir,
+        SESSION_ID,
+        "transcript_full.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+    let _ = default_tx;
+    let discovered = AntigravityAdapter.discover_local_sessions(&[&workspace], &env);
+    let default_discovered = AntigravityAdapter.discover_local_sessions(
+        &[&workspace],
+        &BTreeMap::from([("HOME".to_owned(), user_home.display().to_string())]),
+    );
+    assert_eq!(discovered.len(), default_discovered.len());
+
+    // Folder trust reads and writes default's settings.json, never the account directory.
+    let Some(crate::agents::FolderTrust::Undecided(gap)) =
+        AntigravityAdapter.folder_trust(&workspace, Some(&workspace), &env)
+    else {
+        panic!("expected undecided folder trust");
+    };
+    assert_eq!(gap.path, default_dir.join("settings.json"));
+    crate::agents::grant_folder_trust(&gap).unwrap();
+    assert!(default_dir.join("settings.json").is_file());
+    assert!(!account_dir.join("settings.json").exists());
+
+    // Account directory stays clean of any RimZ hook or statusline writes.
+    assert!(
+        std::fs::read_dir(&account_dir).unwrap().next().is_none(),
+        "shared account dir must not receive RimZ writes"
+    );
+}
+
+#[test]
+fn an_empty_credential_file_is_not_a_credential_and_shared_probe_reads_own_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let user_home = dir.path().join("user");
+    let default_dir = user_home.join(".gemini/antigravity-cli");
+    let account_dir = dir.path().join("accounts/work");
+    let other_dir = dir.path().join("accounts/other");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::create_dir_all(&other_dir).unwrap();
+
+    // Empty token file never counts as a credential (standalone or shared).
+    std::fs::write(account_dir.join("antigravity-oauth-token"), "").unwrap();
+    assert!(!usage::holds_credential(&account_dir));
+    assert_eq!(
+        usage::own_login(usage::Read::Usage(usage::Quota::Absent), &account_dir),
+        usage::Read::ForeignLogin
+    );
+    assert_eq!(
+        usage::own_login(usage::Read::ApiKey, &account_dir),
+        usage::Read::ForeignLogin
+    );
+    assert_eq!(
+        usage::own_login(usage::Read::LoggedOut, &account_dir),
+        usage::Read::LoggedOut
+    );
+
+    // Shared account's own credential file names its login, distinct from default's.
+    std::fs::write(
+        default_dir.join("antigravity-oauth-token"),
+        r#"{"id_token_email":"default@example.com"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        account_dir.join("antigravity-oauth-token"),
+        r#"{"id_token_email":"work@example.com"}"#,
+    )
+    .unwrap();
+    assert!(usage::holds_credential(&account_dir));
+    let work_env = shared_login(&user_home, &account_dir);
+    let other_env = shared_login(&user_home, &other_dir);
+    let default_env = BTreeMap::from([("HOME".to_owned(), user_home.display().to_string())]);
+    assert_eq!(
+        session::credential_home(&work_env),
+        Some(account_dir.clone())
+    );
+    assert_eq!(
+        session::credential_home(&other_env),
+        Some(other_dir.clone())
+    );
+    assert_eq!(
+        session::credential_home(&default_env),
+        Some(default_dir.clone())
+    );
+    // When both keys appear in an env, credential_home agrees with account_mount.
+    let mut both_env = work_env.clone();
+    both_env.insert(
+        session::HOME_ENV.to_owned(),
+        other_dir.display().to_string(),
+    );
+    assert_eq!(
+        session::account_mount(&both_env),
+        Some(session::AccountMount::Directory {
+            source: other_dir.clone(),
+            target: default_dir.clone(),
+        })
+    );
+    assert_eq!(session::credential_home(&both_env), Some(other_dir.clone()));
+    assert_eq!(AntigravityAdapter.foreign_login(&work_env), None);
+    let crate::agents::account::AccountProbe::Found(account) =
+        usage::Read::Usage(usage::Quota::Absent)
+            .account(session::credential_home(&work_env).as_deref())
+    else {
+        panic!("expected AccountProbe::Found");
+    };
+    assert_eq!(account.account_id.as_deref(), Some("work@example.com"));
+}
+
+#[test]
+fn a_shared_logins_usage_read_mounts_only_its_login_files_over_agys() {
+    let dir = tempfile::tempdir().unwrap();
+    let user_home = dir.path().join("user");
+    let default_dir = user_home.join(".gemini/antigravity-cli");
+    let account_dir = dir.path().join("accounts/work");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::write(default_dir.join("antigravity-oauth-token"), "{}").unwrap();
+    std::fs::write(account_dir.join("antigravity-oauth-token"), "").unwrap();
+
+    let binds = |account: &Path, target: &Path| -> Vec<String> {
+        let command = usage::prepare_login_probe_command(
+            account,
+            target,
+            PathBuf::from("/bin/agy"),
+            Some(user_home.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(command.get_program(), "bwrap");
+        command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // Neither side has installation_id: only the token file is bound, never the directory.
+    let args = binds(&account_dir, &default_dir);
+    let expected_token_src = account_dir
+        .join("antigravity-oauth-token")
+        .display()
+        .to_string();
+    let expected_token_dst = default_dir
+        .join("antigravity-oauth-token")
+        .display()
+        .to_string();
+    assert_eq!(
+        args[..10],
+        [
+            "--dev-bind",
+            "/",
+            "/",
+            "--die-with-parent",
+            "--new-session",
+            "--bind",
+            &expected_token_src,
+            &expected_token_dst,
+            "--",
+            "/bin/agy",
+        ]
+    );
+
+    // Only account has installation_id: still only token bound.
+    std::fs::write(account_dir.join("installation_id"), "work-id").unwrap();
+    let args = binds(&account_dir, &default_dir);
+    assert_eq!(args[8], "--", "{args:?}");
+
+    // Both sides have installation_id: both files bound, never the directory.
+    std::fs::write(default_dir.join("installation_id"), "default-id").unwrap();
+    let args = binds(&account_dir, &default_dir);
+    let expected_id_src = account_dir.join("installation_id").display().to_string();
+    let expected_id_dst = default_dir.join("installation_id").display().to_string();
+    assert_eq!(
+        args[..13],
+        [
+            "--dev-bind",
+            "/",
+            "/",
+            "--die-with-parent",
+            "--new-session",
+            "--bind",
+            &expected_token_src,
+            &expected_token_dst,
+            "--bind",
+            &expected_id_src,
+            &expected_id_dst,
+            "--",
+            "/bin/agy",
+        ]
+    );
+
+    // An optional installation_id that is a symlink is not bound (bwrap refuses symlink targets).
+    let real_id = dir.path().join("real-id");
+    std::fs::write(&real_id, "real-id").unwrap();
+    std::fs::remove_file(default_dir.join("installation_id")).unwrap();
+    std::os::unix::fs::symlink(&real_id, default_dir.join("installation_id")).unwrap();
+    let args = binds(&account_dir, &default_dir);
+    assert_eq!(args[8], "--", "{args:?}");
+}
+
+#[test]
+fn shared_account_with_empty_token_refuses_foreign_login_and_probes_missing_endpoints() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    const CHILD_ENV: &str = "RIMZ_TEST_AGY_SHARED_PROBE_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake_agy = bin.join("agy");
+        // Fake agy: if FAKE_AGY_FORCE_LOGIN=1, always reports logged in (simulating keyring /
+        // GEMINI_API_KEY); otherwise reports logged in iff $HOME/.gemini/antigravity-cli/
+        // antigravity-oauth-token is non-empty, else reports authentication error.
+        let body = "#!/bin/sh\n\
+            cat >/dev/null\n\
+            if [ \"${FAKE_AGY_FORCE_LOGIN:-0}\" = \"1\" ]; then\n\
+              printf '%s\\n' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[]}}}'\n\
+              exit 0\n\
+            fi\n\
+            tok=\"$HOME/.gemini/antigravity-cli/antigravity-oauth-token\"\n\
+            if [ -s \"$tok\" ]; then\n\
+              printf '%s\\n' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[]}}}'\n\
+              exit 0\n\
+            fi\n\
+            printf '%s\\n' '{\"status\":\"ERROR\",\"error\":\"authentication required\"}'\n\
+            exit 1\n";
+        std::fs::write(&fake_agy, body).unwrap();
+        std::fs::set_permissions(&fake_agy, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path_env = match std::env::var("PATH") {
+            Ok(path) if !path.is_empty() => format!("{}:{path}", bin.display()),
+            _ => format!("{}:/usr/bin:/bin", bin.display()),
+        };
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "agents::adapters::antigravity::tests::shared_account_with_empty_token_refuses_foreign_login_and_probes_missing_endpoints",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+            .env("PATH", path_env)
+            .env("HOME", dir.path())
+            .env("RIMZ_HOME", dir.path().join("rimz"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let user_home = dir.path().join("user");
+    let default_dir = user_home.join(".gemini/antigravity-cli");
+    let default_token = default_dir.join("antigravity-oauth-token");
+    std::fs::create_dir_all(&default_dir).unwrap();
+
+    // 1. Empty token + agy reports a login (keyring/API key) => foreign_login refuses.
+    let foreign_dir = dir.path().join("accounts/foreign");
+    std::fs::create_dir_all(&foreign_dir).unwrap();
+    std::fs::write(foreign_dir.join("antigravity-oauth-token"), "").unwrap();
+    let foreign_env = shared_login(&user_home, &foreign_dir);
+    #[expect(unsafe_code, reason = "child test process runs single-threaded")]
+    unsafe {
+        std::env::set_var("FAKE_AGY_FORCE_LOGIN", "1");
+    }
+    let refusal = AntigravityAdapter
+        .foreign_login(&foreign_env)
+        .expect("shared account with empty token must refuse when agy reports a login");
+    assert!(
+        refusal.starts_with("agy found a login outside"),
+        "{refusal}"
+    );
+    assert!(
+        !default_token.exists(),
+        "read-only probe of logged-out account must leave absent default token absent"
+    );
+    #[expect(unsafe_code, reason = "child test process runs single-threaded")]
+    unsafe {
+        std::env::remove_var("FAKE_AGY_FORCE_LOGIN");
+    }
+
+    // 2. Empty token + agy reports logged out => foreign_login allows, probe reads LoggedOut,
+    //    and default token remains absent.
+    let empty_dir = dir.path().join("accounts/empty");
+    std::fs::create_dir_all(&empty_dir).unwrap();
+    std::fs::write(empty_dir.join("antigravity-oauth-token"), "").unwrap();
+    let empty_env = shared_login(&user_home, &empty_dir);
+    assert_eq!(AntigravityAdapter.foreign_login(&empty_env), None);
+    assert!(matches!(
+        AntigravityAdapter.probe_account(&empty_env),
+        crate::agents::account::AccountProbe::LoggedOut
+    ));
+    assert!(
+        !default_token.exists(),
+        "probing a logged-out shared account must not create default token"
+    );
+
+    // 3. Missing account token (e.g. switched via config set) + missing default token =>
+    //    reads as LoggedOut / NoCredentials, never Unavailable ("login unknown").
+    let missing_dir_1 = dir.path().join("accounts/missing1");
+    std::fs::create_dir_all(&missing_dir_1).unwrap();
+    let missing_env_1 = shared_login(&user_home, &missing_dir_1);
+    assert!(matches!(
+        AntigravityAdapter.probe_account(&missing_env_1),
+        crate::agents::account::AccountProbe::LoggedOut
+    ));
+    assert!(matches!(
+        AntigravityAdapter.probe_account_usage(&missing_env_1),
+        crate::agents::AccountUsageProbe::NoCredentials(_)
+    ));
+    assert!(!default_token.exists());
+
+    // 4. Real-bwrap probe cases when bubblewrap is usable on this host.
+    if crate::sandbox::preflight(crate::config::Isolation::Scoped).is_ok() {
+        // 4a. Missing default token + token-holding account => Found (not LoggedOut), and
+        //     default token left behind is 0600 owner-writable, never 0444.
+        let signed_dir = dir.path().join("accounts/signed");
+        std::fs::create_dir_all(&signed_dir).unwrap();
+        std::fs::write(
+            signed_dir.join("antigravity-oauth-token"),
+            r#"{"id_token_email":"signed@example.com"}"#,
+        )
+        .unwrap();
+        let signed_env = shared_login(&user_home, &signed_dir);
+        let crate::agents::account::AccountProbe::Found(account) =
+            AntigravityAdapter.probe_account(&signed_env)
+        else {
+            panic!("token-holding shared account must not read as signed out");
+        };
+        assert_eq!(account.account_id.as_deref(), Some("signed@example.com"));
+        let meta = std::fs::symlink_metadata(&default_token).unwrap();
+        assert!(meta.is_file());
+        assert_eq!(meta.len(), 0);
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            0o600,
+            "default token must be 0600 owner-writable, never bwrap's 0444"
+        );
+
+        // 4b. Signed-in default + missing account token => LoggedOut (not Unavailable/Found),
+        //     default token untouched, account placeholder created empty at 0600.
+        std::fs::write(
+            &default_token,
+            r#"{"id_token_email":"default@example.com"}"#,
+        )
+        .unwrap();
+        let missing_dir_2 = dir.path().join("accounts/missing2");
+        std::fs::create_dir_all(&missing_dir_2).unwrap();
+        let missing_env_2 = shared_login(&user_home, &missing_dir_2);
+        assert!(matches!(
+            AntigravityAdapter.probe_account(&missing_env_2),
+            crate::agents::account::AccountProbe::LoggedOut
+        ));
+        assert!(matches!(
+            AntigravityAdapter.probe_account_usage(&missing_env_2),
+            crate::agents::AccountUsageProbe::NoCredentials(_)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&default_token).unwrap(),
+            r#"{"id_token_email":"default@example.com"}"#
+        );
+        let acct_meta = std::fs::symlink_metadata(missing_dir_2.join("antigravity-oauth-token"))
+            .expect("missing account token must be created as an empty 0600 placeholder");
+        assert!(acct_meta.is_file());
+        assert_eq!(acct_meta.len(), 0);
+        assert_eq!(acct_meta.permissions().mode() & 0o777, 0o600);
+    }
+
+    // 4c. Absent account directory + signed-in default => probe answers Unavailable / Failed
+    //     and never creates the account directory (keeping `home missing` in `accounts list`).
+    std::fs::write(
+        &default_token,
+        r#"{"id_token_email":"default@example.com"}"#,
+    )
+    .unwrap();
+    let absent_account = dir.path().join("accounts/gone");
+    assert!(!absent_account.exists());
+    let absent_env = shared_login(&user_home, &absent_account);
+    assert!(matches!(
+        AntigravityAdapter.probe_account(&absent_env),
+        crate::agents::account::AccountProbe::Unavailable(_)
+    ));
+    assert!(matches!(
+        AntigravityAdapter.probe_account_usage(&absent_env),
+        crate::agents::AccountUsageProbe::Failed(_)
+    ));
+    assert!(
+        !absent_account.exists(),
+        "probing a shared account whose directory is missing must not create it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&default_token).unwrap(),
+        r#"{"id_token_email":"default@example.com"}"#
+    );
+
+    // 4d. Absent account directory + absent default token => probe answers Unavailable and
+    //     creates neither directory nor placeholder.
+    std::fs::remove_file(&default_token).unwrap();
+    let absent_account_2 = dir.path().join("accounts/gone2");
+    let absent_env_2 = shared_login(&user_home, &absent_account_2);
+    assert!(matches!(
+        AntigravityAdapter.probe_account(&absent_env_2),
+        crate::agents::account::AccountProbe::Unavailable(_)
+    ));
+    assert!(!absent_account_2.exists());
+    assert!(!default_token.exists());
+
+    // 5. Symlinked default token destination => probe fails cleanly and foreign_login refuses.
+    let sym_target = dir.path().join("elsewhere-token");
+    std::fs::write(&sym_target, "{}").unwrap();
+    let _ = std::fs::remove_file(&default_token);
+    symlink(&sym_target, &default_token).unwrap();
+    let sym_account = dir.path().join("accounts/sym-check");
+    std::fs::create_dir_all(&sym_account).unwrap();
+    std::fs::write(sym_account.join("antigravity-oauth-token"), "").unwrap();
+    let sym_env = shared_login(&user_home, &sym_account);
+    assert!(matches!(
+        AntigravityAdapter.probe_account(&sym_env),
+        crate::agents::account::AccountProbe::Unavailable(_)
+    ));
+    assert!(AntigravityAdapter.foreign_login(&sym_env).is_some());
+}
+
 #[test]
 fn a_named_login_with_no_credential_file_of_its_own_is_foreign() {
     let dir = tempfile::tempdir().unwrap();

@@ -26,8 +26,11 @@ use crate::agents::{
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
-/// The named account's data directory in a login's environment. RimZ reads it; agy does not.
+/// The standalone account's data directory in a login's environment. RimZ reads it; agy does not.
 pub(super) const HOME_ENV: &str = "RIMZ_ANTIGRAVITY_HOME";
+/// The shared account's own directory in a login's environment, holding only
+/// its login files while history and settings live in the default directory.
+pub(super) const LOGIN_HOME_ENV: &str = "RIMZ_ANTIGRAVITY_LOGIN_HOME";
 const MAX_DISCOVERED_SESSIONS: usize = 512;
 const TRANSCRIPT_BASENAMES: [&str; 2] = ["transcript_full.jsonl", "transcript.jsonl"];
 
@@ -933,13 +936,59 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     }
 }
 
-/// The CLI home of the login whose environment is `login_env`: the named account's directory
+/// The CLI home of the login whose environment is `login_env`: the standalone account's directory
 /// when set, else under that login's `HOME`.
 pub(super) fn login_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
     resolve_home(
         login_env.get(HOME_ENV).map(OsStr::new),
         login_env.get("HOME").map(OsStr::new),
     )
+}
+
+/// The directory holding this login's credential file: the account's own
+/// directory as `account_mount` resolves it, else agy's own (or `LOGIN_HOME_ENV`
+/// if `HOME` is absent).
+pub(super) fn credential_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    account_mount(login_env)
+        .map(|mount| mount.account().to_path_buf())
+        .or_else(|| login_home(login_env))
+        .or_else(|| {
+            login_env
+                .get(LOGIN_HOME_ENV)
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AccountMount {
+    /// A standalone account whose whole directory is mounted over agy's.
+    Directory { source: PathBuf, target: PathBuf },
+    /// A shared account whose login files are mounted over agy's default directory.
+    LoginFiles { account: PathBuf, target: PathBuf },
+}
+
+impl AccountMount {
+    pub(super) fn account(&self) -> &Path {
+        match self {
+            Self::Directory { source, .. } => source,
+            Self::LoginFiles { account, .. } => account,
+        }
+    }
+}
+
+/// How a named account mounts into agy's view, if `login_env` names one.
+pub(super) fn account_mount(login_env: &BTreeMap<String, String>) -> Option<AccountMount> {
+    if let Some((source, target)) = mounted_view(login_env) {
+        return Some(AccountMount::Directory { source, target });
+    }
+    let account = login_env
+        .get(LOGIN_HOME_ENV)
+        .filter(|home| !home.is_empty())?;
+    Some(AccountMount::LoginFiles {
+        account: PathBuf::from(account),
+        target: view_home(login_env)?,
+    })
 }
 
 /// The path agy itself reads, whatever directory is mounted there.

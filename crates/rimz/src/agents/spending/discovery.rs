@@ -41,8 +41,8 @@ pub(super) fn runtime_logins(ambient: &BTreeMap<String, String>) -> Vec<PoolBase
 }
 
 /// The logins whose homes hold history: `default` and each standalone
-/// account. A shared account's home links into the default one, so walking it
-/// would count that history a second time.
+/// account. A shared account's history lives in the default home, so walking
+/// it would count that history a second time.
 pub(super) fn pool_bases(
     catalog: &LoginCatalog,
     ambient: &BTreeMap<String, String>,

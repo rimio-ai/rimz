@@ -144,6 +144,57 @@ fn pool_bases_count_shared_history_once_and_a_standalone_home_apart() {
 }
 
 #[test]
+fn pool_bases_count_shared_antigravity_history_once_and_standalone_apart() {
+    use crate::agents::LoginCatalog;
+
+    let dir = tempdir().unwrap();
+    let default_home = dir.path().join(".gemini/antigravity-cli");
+    let work = dir.path().join("work");
+    let solo = dir.path().join("solo");
+    let default_tx = default_home.join("brain/s1/.system_generated/logs/transcript_full.jsonl");
+    let solo_tx = solo.join("brain/s2/.system_generated/logs/transcript_full.jsonl");
+    for path in [&default_tx, &solo_tx] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    std::fs::create_dir_all(&work).unwrap();
+    let accounts = toml::from_str(&format!(
+        "[antigravity.work]\nhome = {work:?}\n[antigravity.solo]\nhome = {solo:?}\nhistory = \"standalone\"\n"
+    ))
+    .unwrap();
+    let catalog = LoginCatalog::from_config(&accounts).unwrap();
+    let walk = |ambient: &[(&str, &std::path::Path)]| {
+        let ambient = ambient
+            .iter()
+            .map(|(key, path)| ((*key).to_owned(), path.to_string_lossy().into_owned()))
+            .collect();
+        let bases = super::super::discovery::pool_bases(&catalog, &ambient)
+            .into_iter()
+            .filter(|(login, ..)| login.kind().as_str() == "antigravity");
+        let mut files: Vec<_> = SpendingDiscoveryIndex::default()
+            .discover(bases, now_secs())
+            .into_iter()
+            .map(|file| (file.login.to_string(), file.path))
+            .collect();
+        files.sort();
+        files
+    };
+    let expected = [
+        ("antigravity@default".to_owned(), default_tx),
+        ("antigravity@solo".to_owned(), solo_tx),
+    ];
+    assert_eq!(walk(&[("HOME", dir.path())]), expected);
+    assert_eq!(
+        walk(&[("HOME", dir.path()), ("RIMZ_ANTIGRAVITY_LOGIN_HOME", &work)]),
+        expected
+    );
+    assert_eq!(
+        walk(&[("HOME", dir.path()), ("RIMZ_ANTIGRAVITY_HOME", &solo)]),
+        expected
+    );
+}
+
+#[test]
 fn codex_legacy_walk_skips_a_set_aside_tree() {
     let dir = tempdir().unwrap();
     let home = dir.path().join("solo");

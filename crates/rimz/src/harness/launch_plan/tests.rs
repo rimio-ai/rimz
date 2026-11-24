@@ -5637,3 +5637,343 @@ fn agent_tool_definition_ignores_lower_subagents_lists_across_all_readers() {
         );
     }
 }
+
+#[test]
+fn antigravity_shared_launch_binds_login_files_while_standalone_binds_the_directory() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let work = home.path().join("accounts/work");
+    let solo = home.path().join("accounts/solo");
+    let default_dir = home.path().join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(&solo).unwrap();
+    std::fs::write(work.join("antigravity-oauth-token"), "").unwrap();
+
+    let machine: crate::config::MachineConfig = toml::from_str(&format!(
+        "[accounts.antigravity.work]\nhome = '{}'\n\
+         [accounts.antigravity.solo]\nhome = '{}'\nhistory = 'standalone'\n",
+        work.display(),
+        solo.display(),
+    ))
+    .unwrap();
+    let ambient = BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+
+    let compile_for = |login_name: &str, isolation: Isolation, bwrap: Option<&Path>| {
+        let mut req = request(
+            "antigravity",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        req.identity.params.login = Some(login_name.parse().unwrap());
+        compile(LaunchPlanInputs {
+            request: &req,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation,
+            bwrap,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+    };
+
+    let binds_in = |argv: &[String]| -> Vec<(String, String)> {
+        argv.windows(3)
+            .filter(|window| window[0] == "--bind")
+            .map(|window| (window[1].clone(), window[2].clone()))
+            .collect()
+    };
+
+    // Scoped shared launch with missing default_dir: compile is read-only,
+    // binds token file only (never the account dir), pins LOGIN_HOME, unsets HOME_ENV.
+    let plan = compile_for("work", Isolation::Scoped, Some(Path::new("/usr/bin/bwrap"))).unwrap();
+    assert!(!default_dir.exists(), "compile must stay read-only");
+    let token_bind = (
+        work.join("antigravity-oauth-token").display().to_string(),
+        default_dir
+            .join("antigravity-oauth-token")
+            .display()
+            .to_string(),
+    );
+    let id_bind = (
+        work.join("installation_id").display().to_string(),
+        default_dir.join("installation_id").display().to_string(),
+    );
+    let dir_bind = (
+        work.display().to_string(),
+        default_dir.display().to_string(),
+    );
+    let scoped_binds = binds_in(&plan.process().argv);
+    assert!(scoped_binds.contains(&token_bind), "{scoped_binds:?}");
+    assert!(!scoped_binds.contains(&id_bind), "{scoped_binds:?}");
+    assert!(!scoped_binds.contains(&dir_bind), "{scoped_binds:?}");
+    let pins = &plan.sandbox.as_ref().unwrap().pins;
+    assert_eq!(
+        pins.get("RIMZ_ANTIGRAVITY_LOGIN_HOME"),
+        Some(&sandbox::EnvPin::Set(work.display().to_string()))
+    );
+    assert_eq!(
+        pins.get("RIMZ_ANTIGRAVITY_HOME"),
+        Some(&sandbox::EnvPin::Unset)
+    );
+    assert_eq!(
+        plan.process()
+            .env
+            .get("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+            .map(String::as_str),
+        Some(work.to_str().unwrap())
+    );
+    assert!(!plan.process().env.contains_key("RIMZ_ANTIGRAVITY_HOME"));
+
+    // compile creates nothing (read-only for `rimz agents explain`), while apply creates the
+    // missing default directory and its 0600 token target so bwrap never leaves a 0444 file.
+    assert!(!default_dir.exists());
+    apply(&plan).unwrap();
+    let applied_meta = std::fs::symlink_metadata(default_dir.join("antigravity-oauth-token"))
+        .expect("apply creates missing default token target at 0600");
+    assert!(applied_meta.is_file());
+    assert_eq!(applied_meta.len(), 0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(applied_meta.permissions().mode() & 0o777, 0o600);
+    }
+
+    // installation_id is bound only when both sides hold one.
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::write(work.join("installation_id"), "work-id").unwrap();
+    let only_acct =
+        compile_for("work", Isolation::Scoped, Some(Path::new("/usr/bin/bwrap"))).unwrap();
+    assert!(!binds_in(&only_acct.process().argv).contains(&id_bind));
+
+    std::fs::write(default_dir.join("installation_id"), "default-id").unwrap();
+    let both = compile_for("work", Isolation::Scoped, Some(Path::new("/usr/bin/bwrap"))).unwrap();
+    let both_binds = binds_in(&both.process().argv);
+    assert!(both_binds.contains(&token_bind), "{both_binds:?}");
+    assert!(both_binds.contains(&id_bind), "{both_binds:?}");
+    assert!(!both_binds.contains(&dir_bind), "{both_binds:?}");
+
+    // Standalone launch still binds the directory, never the individual login files.
+    let solo_plan =
+        compile_for("solo", Isolation::Scoped, Some(Path::new("/usr/bin/bwrap"))).unwrap();
+    let solo_binds = binds_in(&solo_plan.process().argv);
+    assert!(
+        solo_binds.contains(&(
+            solo.display().to_string(),
+            default_dir.display().to_string()
+        )),
+        "{solo_binds:?}"
+    );
+    assert!(
+        !solo_binds.contains(&(
+            solo.join("antigravity-oauth-token").display().to_string(),
+            default_dir
+                .join("antigravity-oauth-token")
+                .display()
+                .to_string(),
+        )),
+        "{solo_binds:?}"
+    );
+
+    // Account-only branch (Host isolation, bwrap: None) binds login files for
+    // shared and the whole directory for standalone when bwrap is available.
+    if sandbox::preflight(Isolation::Scoped).is_ok() {
+        let host_shared = compile_for("work", Isolation::Host, None).unwrap();
+        let host_binds = binds_in(&host_shared.process().argv);
+        assert!(host_binds.contains(&token_bind), "{host_binds:?}");
+        assert!(host_binds.contains(&id_bind), "{host_binds:?}");
+        assert!(!host_binds.contains(&dir_bind), "{host_binds:?}");
+
+        let host_solo = compile_for("solo", Isolation::Host, None).unwrap();
+        let host_solo_binds = binds_in(&host_solo.process().argv);
+        assert!(
+            host_solo_binds.contains(&(
+                solo.display().to_string(),
+                default_dir.display().to_string()
+            )),
+            "{host_solo_binds:?}"
+        );
+    }
+}
+
+#[test]
+fn prepare_exec_reconciles_shared_antigravity_and_refuses_placeholder_failure() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let named = root.path().join("accounts/work");
+    let default_dir = root.path().join(".gemini/antigravity-cli");
+    let default_token = default_dir.join("antigravity-oauth-token");
+    std::fs::create_dir_all(named.join("conversations")).unwrap();
+    std::fs::write(named.join("conversations/old.db"), "old").unwrap();
+    std::fs::write(named.join("antigravity-oauth-token"), "{\"id\":1}").unwrap();
+    let machine: crate::config::MachineConfig = toml::from_str(&format!(
+        "[accounts.antigravity.work]\nhome = '{}'\n",
+        named.display()
+    ))
+    .unwrap();
+    let mut req = host_request(
+        "antigravity",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    req.identity.params.login = Some("work".parse().unwrap());
+    let ambient = BTreeMap::from([("HOME".into(), root.path().display().to_string())]);
+    assert!(!default_dir.exists());
+    // Reconcile sets aside standalone conversations and creates no links; default dir
+    // stays untouched during reconcile, and prepare_exec_in creates it and its 0600
+    // token destination before launch.
+    let prepared = prepare_exec_in(
+        envelope(&req, None),
+        root.path(),
+        root.path(),
+        Path::new("/bin/rimz"),
+        &machine,
+        None,
+        &|| Ok(Vec::new()),
+        |_, login| {
+            let report = crate::agents::account_links::reconcile(login, &ambient, &|| Some(0))?;
+            assert!(
+                !default_dir.exists(),
+                "reconcile must leave default dir untouched"
+            );
+            Ok(report)
+        },
+        &ambient,
+    );
+    assert!(
+        default_dir.is_dir(),
+        "prepare_exec_in must create missing default directory"
+    );
+    let token_meta = std::fs::symlink_metadata(&default_token)
+        .expect("prepare_exec_in must create missing default token at 0600");
+    assert!(token_meta.is_file());
+    assert_eq!(token_meta.len(), 0);
+    assert_eq!(token_meta.permissions().mode() & 0o777, 0o600);
+    assert!(
+        !named.join("conversations").exists(),
+        "conversations should be set aside"
+    );
+    assert!(named.join(".rimz-aside").is_dir());
+    assert!(
+        !default_dir.join("conversations").exists(),
+        "nothing moved into default dir"
+    );
+    assert!(
+        !prepared.link_warnings.is_empty(),
+        "{:?}",
+        prepared.link_warnings
+    );
+
+    // A symlinked default token destination refuses launch clearly with the path and fix.
+    let elsewhere = root.path().join("elsewhere-token");
+    std::fs::write(&elsewhere, "{}").unwrap();
+    std::fs::remove_file(&default_token).unwrap();
+    symlink(&elsewhere, &default_token).unwrap();
+    let symlinked = prepare_exec_in(
+        envelope(&req, None),
+        root.path(),
+        root.path(),
+        Path::new("/bin/rimz"),
+        &machine,
+        None,
+        &|| Ok(Vec::new()),
+        |_, login| crate::agents::account_links::reconcile(login, &ambient, &|| Some(0)),
+        &ambient,
+    );
+    let sym_err = match symlinked.outcome {
+        Ok(_) => panic!("symlinked default token destination must refuse launch"),
+        Err(err) => err.to_string(),
+    };
+    assert!(
+        sym_err.contains(&default_token.display().to_string()),
+        "{sym_err}"
+    );
+    assert!(sym_err.contains("symlink"), "{sym_err}");
+
+    // Host-isolation compile also refuses a symlinked default token destination. It probes
+    // bubblewrap first, so a host without user namespaces refuses before the target check.
+    if sandbox::preflight(Isolation::Scoped).is_ok() {
+        let state = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&state).unwrap();
+        let host_compile_err = match compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &req,
+            cwd: root.path(),
+            project_root: root.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        }) {
+            Ok(_) => panic!("symlinked default token must refuse host-isolation compile"),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            host_compile_err.contains(&default_token.display().to_string()),
+            "{host_compile_err}"
+        );
+        assert!(host_compile_err.contains("symlink"), "{host_compile_err}");
+    }
+
+    // A placeholder write failure (directory at the token slot) refuses launch with path and error.
+    let bad = tempfile::tempdir().unwrap();
+    let bad_named = bad.path().join("accounts/bad");
+    let bad_token = bad_named.join("antigravity-oauth-token");
+    std::fs::create_dir_all(&bad_token).unwrap();
+    let bad_machine: crate::config::MachineConfig = toml::from_str(&format!(
+        "[accounts.antigravity.bad]\nhome = '{}'\n",
+        bad_named.display()
+    ))
+    .unwrap();
+    let mut bad_req = host_request(
+        "antigravity",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    bad_req.identity.params.login = Some("bad".parse().unwrap());
+    let bad_ambient = BTreeMap::from([("HOME".into(), bad.path().display().to_string())]);
+    let failed = prepare_exec_in(
+        envelope(&bad_req, None),
+        bad.path(),
+        bad.path(),
+        Path::new("/bin/rimz"),
+        &bad_machine,
+        None,
+        &|| Ok(Vec::new()),
+        |_, login| crate::agents::account_links::reconcile(login, &bad_ambient, &|| Some(0)),
+        &bad_ambient,
+    );
+    let err = match failed.outcome {
+        Ok(_) => panic!("placeholder failure must refuse launch"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains(&bad_token.display().to_string()), "{err}");
+}

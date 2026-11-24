@@ -487,7 +487,11 @@ upward-dependencies = [
 # and launch-time optional-skill check across definition loading and launch settlement (+3).
 # ParsedModel, RenderedModel, home_series, home_series_owner, and display_model_for_kind replace
 # model_label_parts and display_factory_custom_selector (+7 net).
-surface-budget = 1361
+# MountedLoginFile, LaunchCapability::{shared_login_home_env_key, mounted_login_files,
+# mounts_login_files, mounted_login_binds}, and create_empty_provider_file let a mounted-home
+# provider share its default history while binding only per-account login files (+6); remove dead
+# account_history_shareable (-1).
+surface-budget = 1366
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

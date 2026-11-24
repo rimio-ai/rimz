@@ -362,6 +362,35 @@ pub fn prepare_exec(
     room_agents: &dyn Fn() -> Result<Vec<crate::agents::AgentState>, String>,
     link_account: impl Fn(&ExecRequest, &ProviderLogin) -> Result<Option<ShareReport>, ShareErr>,
 ) -> ExecPreparation {
+    let ambient_env = crate::agents::ambient_env();
+    prepare_exec_in(
+        envelope,
+        cwd,
+        project_root,
+        rimz_bin,
+        machine,
+        effective,
+        room_agents,
+        link_account,
+        &ambient_env,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the wrapper's launch inputs plus its two room-side steps and ambient map"
+)]
+fn prepare_exec_in(
+    envelope: launch::ExecEnvelope,
+    cwd: &Path,
+    project_root: &Path,
+    rimz_bin: &Path,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+    room_agents: &dyn Fn() -> Result<Vec<crate::agents::AgentState>, String>,
+    link_account: impl Fn(&ExecRequest, &ProviderLogin) -> Result<Option<ShareReport>, ShareErr>,
+    ambient_env: &BTreeMap<String, String>,
+) -> ExecPreparation {
     let mut link_warnings = Vec::new();
     let mut link_maintenance = None;
     let mut model_warnings = Vec::new();
@@ -389,7 +418,6 @@ pub fn prepare_exec(
         let mut request = envelope.materialize().map_err(LaunchPlanErr::Materialize)?;
         let state = StatePaths::for_project_root(project_root)?;
         let runtime = RuntimePaths::for_state(&state)?;
-        let ambient_env = crate::agents::ambient_env();
         let login = crate::agents::session_login(
             &request.kind,
             request.identity.params.login.as_ref(),
@@ -410,12 +438,31 @@ pub fn prepare_exec(
         }
         if !login.is_default()
             && let Some(adapter) = adapter
-            && let Some(reason) = adapter.foreign_login(&login.env(&ambient_env))
         {
-            return Err(LaunchPlanErr::ForeignLogin {
-                login: login.key().to_string(),
-                reason,
-            });
+            let login_env = login.env(ambient_env);
+            if adapter.mounts_login_files(login.shares_history())
+                && let Some(target) = adapter.mounted_home_target(&login_env)
+            {
+                std::fs::create_dir_all(&target).map_err(|source| sandbox::SandboxErr::Io {
+                    path: target.clone(),
+                    source,
+                })?;
+                for file in adapter
+                    .mounted_login_files()
+                    .iter()
+                    .filter(|file| file.required)
+                {
+                    let dest = target.join(file.name);
+                    crate::agents::create_empty_provider_file(&dest, 0o600)
+                        .map_err(|source| sandbox::SandboxErr::Io { path: dest, source })?;
+                }
+            }
+            if let Some(reason) = adapter.foreign_login(&login_env) {
+                return Err(LaunchPlanErr::ForeignLogin {
+                    login: login.key().to_string(),
+                    reason,
+                });
+            }
         }
         let recorded_session = match &request.action {
             launch::ExecAction::Launch { .. } | launch::ExecAction::Pick { .. } => None,
@@ -436,7 +483,7 @@ pub fn prepare_exec(
             &login,
             recorded_session.as_ref(),
             None,
-            &ambient_env,
+            ambient_env,
         )?;
         model_warnings = warnings;
         model_move = movement.map(|movement| (movement, login.key()));
@@ -467,7 +514,7 @@ pub fn prepare_exec(
             isolation,
             bwrap: bwrap.as_deref(),
             agents: agents.as_deref().map_err(String::as_str),
-            ambient_env: &ambient_env,
+            ambient_env,
             agent_shell: machine.agents.shell.as_deref(),
             hibernate: machine.agents.hibernate.enabled()
                 && super::hibernate::Admission::read(&runtime).available,
@@ -1305,6 +1352,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let mounted_home = adapter
         .mounted_home_target(&env)
         .filter(|_| !login.is_default());
+    let mounted_login_files: Vec<(PathBuf, PathBuf)> = mounted_home
+        .as_deref()
+        .zip(login.home())
+        .filter(|_| adapter.mounts_login_files(login.shares_history()))
+        .map(|(target, account)| adapter.mounted_login_binds(account, target))
+        .unwrap_or_default();
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
             let empty_root = inputs.state.empty_dir_root();
@@ -1322,7 +1375,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             let provider_home = adapter.config_home(&env).map(|path| sandbox::ProviderHome {
                 target: mounted_home.clone().unwrap_or_else(|| path.clone()),
                 source: path,
+                file_binds: mounted_login_files.clone(),
             });
+            let mut provider_home_env_keys: Vec<&str> = adapter.config_home_env_keys().to_vec();
+            provider_home_env_keys.extend(adapter.shared_login_home_env_key());
             let listed = request.launch_skills(&withheld_skills);
             let plan = sandbox::plan(&sandbox::SandboxInputs {
                 env: &env,
@@ -1337,7 +1393,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 ssh_config_file: Path::new("/etc/ssh/ssh_config"),
                 ssh_config_copies_dir: &inputs.state.ssh_config_copies_dir,
                 provider_home,
-                provider_home_env_keys: adapter.config_home_env_keys(),
+                provider_home_env_keys: &provider_home_env_keys,
                 default_home: (!login.is_default())
                     .then(|| login.default_home(inputs.ambient_env))
                     .flatten(),
@@ -1367,12 +1423,24 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 reason: error.required_mount_reason(),
             })?
             .expect("a scoped preflight answers with bwrap or an error");
-        let view = sandbox::MountPlan {
-            mounts: vec![sandbox::Mount::Bind {
+        let mounts = if mounted_login_files.is_empty() {
+            vec![sandbox::Mount::Bind {
                 source: source.to_path_buf(),
                 target,
-            }],
+            }]
+        } else {
+            for (_, dest) in &mounted_login_files {
+                sandbox::check_file_bind_target(dest)?;
+            }
+            mounted_login_files
+                .iter()
+                .map(|(source, target)| sandbox::Mount::Bind {
+                    source: source.clone(),
+                    target: target.clone(),
+                })
+                .collect()
         };
+        let view = sandbox::MountPlan { mounts };
         process.argv = sandbox::bwrap_argv(&bwrap, &view, inputs.cwd, &process.argv);
     }
     if cfg!(target_os = "linux")

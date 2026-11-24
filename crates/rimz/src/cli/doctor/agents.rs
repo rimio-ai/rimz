@@ -142,10 +142,6 @@ impl From<&rimz::agents::LoginConfigErr> for super::model::AccountProblem {
                 format!("`accounts.{kind}.default` is reserved for the provider's own home"),
                 format!("remove `accounts.{kind}.default` and declare another name"),
             ),
-            LoginConfigErr::HistoryNotShareable { kind, name } => (
-                text.clone(),
-                format!("set `accounts.{kind}.{name}.history` to `standalone`"),
-            ),
             LoginConfigErr::RelativeHome { kind, name, .. } => (
                 text.clone(),
                 format!("set `accounts.{kind}.{name}.home` to an absolute path"),

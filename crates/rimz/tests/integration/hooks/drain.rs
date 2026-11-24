@@ -3648,6 +3648,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
         provider_home: Some(ProviderHome {
             source: home.path().into(),
             target: home.path().into(),
+            file_binds: Vec::new(),
         }),
         provider_home_env_keys: &["CODEX_HOME"],
         default_home: None,
