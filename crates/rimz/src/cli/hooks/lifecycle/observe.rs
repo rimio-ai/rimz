@@ -137,12 +137,19 @@ pub(super) fn release_resolved_keyed_ask(
     .map(Some)
 }
 
-/// Record the interrupt a provider's report that it rests stands for
-/// (`HookOutput::reports_provider_rest`), decided here in log order: only a turn
-/// the hook-folded row still holds open at the report's instant
-/// (`AgentState::rest_interrupts_turn`) ends, as another provider's interrupt
-/// hook ends it. The audit scope leaves out the transcript overlay, which can
-/// open a turn before its hook. Any other row records nothing.
+/// Record what a provider's report that it rests stands for
+/// (`HookOutput::reports_provider_rest`), decided here in log order on one audit
+/// read. A turn the hook-folded row still holds open at the report's instant
+/// (`AgentState::rest_interrupts_turn`) ends with `TurnInterrupted`, as another
+/// provider's interrupt hook ends it; when the row also lists background shells
+/// (`AgentState::rest_clears_background_shells`), the same observation empties
+/// the list. A resting or parked row that still lists shells clears them with a
+/// keyless `AskResolved` carrying an empty `BackgroundShellReport::Snapshot`:
+/// `lifecycle::step` ignores `AskResolved` on every non-waiting row, leaving
+/// status, phase, an owed compaction continue, and any open supervised run
+/// untouched while `assemble_agent_state` still applies the empty snapshot. The
+/// audit scope leaves out the transcript overlay, which can open a turn before
+/// its hook. Any other row records nothing.
 pub(super) fn record_provider_rest(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -154,22 +161,33 @@ pub(super) fn record_provider_rest(
     let Some(agent_id) = decoded.event_agent_id() else {
         return Ok(None);
     };
-    let row =
-        store.agent_with_context(&agent.spec().kind_id(), agent_id, rimz::RuntimeScope::Audit)?;
-    if !row
-        .is_some_and(|row| row.rest_interrupts_turn(rimz::harness::hook_drain::frame_timestamp()))
-    {
+    let Some(row) =
+        store.agent_with_context(&agent.spec().kind_id(), agent_id, rimz::RuntimeScope::Audit)?
+    else {
         return Ok(None);
+    };
+    let reported_at = rimz::harness::hook_drain::frame_timestamp();
+    let interrupts = row.rest_interrupts_turn(reported_at);
+    let clears_shells = row.rest_clears_background_shells(reported_at);
+    if !interrupts && !clears_shells {
+        return Ok(None);
+    }
+    let signal = if interrupts {
+        LifecycleSignal::TurnInterrupted { turn_id: None }
+    } else {
+        LifecycleSignal::AskResolved { native_key: None }
+    };
+    let mut observation = AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
+    if clears_shells {
+        observation.background_shells =
+            Some(rimz::agents::BackgroundShellReport::Snapshot { shells: Vec::new() });
     }
     record_derived_lifecycle_observation(
         workspace,
         store,
         agent,
         decoded.event_name(),
-        AgentLifecycleObservation::new(
-            Some(agent_id.clone()),
-            LifecycleSignal::TurnInterrupted { turn_id: None },
-        ),
+        observation,
         ingress_owner,
         globals,
     )

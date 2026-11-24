@@ -41,10 +41,10 @@ use super::definition::{
 use super::hook_types::{HookEventSpec, PROVIDER_REST_EVENT, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
-    AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
-    SanitizedPrompt, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
-    SubagentIdentity, SubagentSpawnInput, TranscriptMessage, non_empty_trimmed,
-    resolve_subagent_identity, sanitize_user_prompt,
+    AgentLifecycleObservation, BackgroundShellReport, HookOutput, HookRouting,
+    LocalSessionObservation, Result, SanitizedPrompt, SpawnedSubagent, SubagentCorrelation,
+    SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput, TranscriptMessage,
+    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -348,8 +348,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Wired {
         via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
     },
-    background_shells: ConcernCoverage::Unsupported {
-        reason: "background shells are not mapped",
+    background_shells: ConcernCoverage::Wired {
+        via: "Stop transcript snapshots (emptied on fullyIdle) and PostToolUse run_command and manage_task kill",
     },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
@@ -552,7 +552,7 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             None,
         );
         decoded.set_reply(self.payload_hook_reply(event_name, payload));
-        let fields = decode_lifecycle_fields(event_name, payload, |path, id, read| {
+        let mut fields = decode_lifecycle_fields(event_name, payload, |path, id, read| {
             home.as_deref().map_or(PromptEvidence::Unread, |home| {
                 session::read_prompt_under(home, path, id, read)
             })
@@ -564,7 +564,7 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
         if event_name == PROVIDER_REST_EVENT {
             decoded.set_provider_rest();
         }
-        if let Some(observation) = fields.lifecycle.as_ref()
+        if let Some(observation) = fields.lifecycle.as_mut()
             && matches!(observation.signal, LifecycleSignal::TurnEnded { .. })
         {
             decoded.set_final_message(
@@ -573,6 +573,21 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
                     .as_deref()
                     .and_then(|path| session::last_assistant_message(Path::new(path))),
             );
+            if observation.background_shells.is_none() {
+                observation.background_shells = home
+                    .as_deref()
+                    .zip(observation.transcript_path.as_deref())
+                    .zip(observation.agent_id.as_ref())
+                    .and_then(|((home, path), id)| {
+                        session::running_background_shells_under(
+                            home,
+                            Path::new(path),
+                            id.as_str(),
+                            Timestamp::now(),
+                        )
+                    })
+                    .map(|shells| BackgroundShellReport::Snapshot { shells });
+            }
         }
         if let Some(observation) = fields.lifecycle {
             decoded.attach_lifecycle(observation);
@@ -1001,6 +1016,7 @@ fn decode_lifecycle_fields(
     prompt_reader: impl FnOnce(&Path, &str, PromptRead) -> PromptEvidence,
 ) -> DecodedLifecycleFields {
     let mut prompt_read = None;
+    let mut background_shells = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
@@ -1046,6 +1062,13 @@ fn decode_lifecycle_fields(
                 _ => ToolEffect::Observed,
             };
             let name = tool.tool_name();
+            background_shells = tool
+                .common
+                .conversation_id()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .and_then(|id| tool.finished_task_id(id))
+                .map(|id| BackgroundShellReport::Finished { ids: vec![id] });
             (
                 tool.common,
                 Some(LifecycleSignal::ToolUsed {
@@ -1069,6 +1092,10 @@ fn decode_lifecycle_fields(
                     failed,
                 })
             } else {
+                if stop.fully_idle == Some(true) {
+                    background_shells =
+                        Some(BackgroundShellReport::Snapshot { shells: Vec::new() });
+                }
                 stop.fully_idle
                     .map(|fully_idle| LifecycleSignal::TurnEnded {
                         errored: failed,
@@ -1085,13 +1112,20 @@ fn decode_lifecycle_fields(
             (common, None)
         }
     };
-    observation_with_prompt_reader(common, signal, prompt_read, prompt_reader)
+    observation_with_prompt_reader(
+        common,
+        signal,
+        prompt_read,
+        background_shells,
+        prompt_reader,
+    )
 }
 
 fn observation_with_prompt_reader(
     common: payloads::CommonPayload,
     signal: Option<LifecycleSignal>,
     prompt_read: Option<PromptRead>,
+    background_shells: Option<BackgroundShellReport>,
     prompt_reader: impl FnOnce(&Path, &str, PromptRead) -> PromptEvidence,
 ) -> DecodedLifecycleFields {
     let Some(agent_id) = common
@@ -1139,6 +1173,7 @@ fn observation_with_prompt_reader(
     observation.prompt = SanitizedPrompt::new(prompt.as_deref());
     observation.transcript_path = transcript_path;
     observation.state_snapshot = snapshot.then_some(true);
+    observation.background_shells = background_shells;
     if let Some(model) = common.model_name.as_deref().map(str::trim)
         && !model.is_empty()
     {

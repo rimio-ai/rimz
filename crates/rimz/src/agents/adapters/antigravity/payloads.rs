@@ -54,6 +54,10 @@ pub(super) struct PostToolPayload {
     #[serde(flatten)]
     pub common: CommonPayload,
     pub error: Option<Value>,
+    /// The transcript step index of the completed tool call; paired with `conversationId` it
+    /// forms a `run_command` background task's id (`<conversationId>/task-<stepIdx>`).
+    #[serde(rename = "stepIdx")]
+    pub step_idx: Option<u64>,
     /// The completed tool call; releases that omit it keep unnamed tool progress.
     #[serde(rename = "toolCall")]
     pub tool_call: Option<ToolCall>,
@@ -63,6 +67,7 @@ pub(super) struct PostToolPayload {
 #[serde(default)]
 pub(super) struct ToolCall {
     pub name: Option<String>,
+    pub args: Option<Value>,
 }
 
 impl PostToolPayload {
@@ -81,6 +86,29 @@ impl PostToolPayload {
             Some(Value::Array(values)) => !values.is_empty(),
             Some(Value::Object(values)) => !values.is_empty(),
             Some(_) => true,
+        }
+    }
+
+    /// The background task id this tool completion ended, if any: `run_command` finishes its
+    /// own step id on clean or failed exit, and a successful `manage_task` with `Action: "kill"`
+    /// ends its `TaskId`.
+    pub(super) fn finished_task_id(&self, conversation_id: &str) -> Option<String> {
+        match self.tool_name().as_deref()? {
+            "run_command" => self
+                .step_idx
+                .map(|step| format!("{conversation_id}/task-{step}")),
+            "manage_task" if !self.failed() => {
+                let args = self.tool_call.as_ref()?.args.as_ref()?.as_object()?;
+                let action = args
+                    .get("Action")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_trimmed);
+                (action.as_deref() == Some("kill")).then_some(())?;
+                args.get("TaskId")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_trimmed)
+            }
+            _ => None,
         }
     }
 }

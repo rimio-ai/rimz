@@ -294,7 +294,8 @@ impl Store {
                     &intent.observation.signal,
                     transition,
                     intent.observation.parent_agent_id.is_some()
-                        || intent.observation.background_scripts.is_some(),
+                        || intent.observation.background_scripts.is_some()
+                        || intent.observation.background_shells.is_some(),
                 );
                 let primary_event_id = if append_primary {
                     let mut observation = event::observation_for_event(intent.observation);
