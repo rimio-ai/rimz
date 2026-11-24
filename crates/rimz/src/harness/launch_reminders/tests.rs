@@ -1255,3 +1255,40 @@ fn a_judge_has_no_launching_capability_as_tool_or_skill() {
         assert_eq!(paragraph.contains("- rimz-wait:"), served, "{paragraph}");
     }
 }
+
+#[test]
+fn resolve_reach_maps_tools_skills_and_unreachable_to_short_form() {
+    let actual = [
+        resolve_reach("rimz-lsp", Some(Reach::Tools(Capability::Lsp))),
+        resolve_reach("rimz-wait", Some(Reach::Tools(Capability::Wait))),
+        resolve_reach("rimz-subagents", Some(Reach::Tools(Capability::Subagents))),
+        resolve_reach("rimz-agents", Some(Reach::Tools(Capability::Agents))),
+        resolve_reach("rimz-teams", Some(Reach::Tools(Capability::Teams))),
+        resolve_reach("rimz-workflow", Some(Reach::Tools(Capability::Workflow))),
+        resolve_reach("rimz-loop", Some(Reach::Tools(Capability::Loop))),
+        resolve_reach("rimz-message", Some(Reach::Tools(Capability::Message))),
+        resolve_reach("rimz-control", Some(Reach::Tools(Capability::Control))),
+        resolve_reach("rimz-notes", Some(Reach::Tools(Capability::Notes))),
+        resolve_reach("rimz-lsp", Some(Reach::Skill)),
+        resolve_reach("rimz-reflect", Some(Reach::Skill)),
+        resolve_reach("rimz-lsp", None),
+    ];
+    assert_eq!(
+        actual,
+        [
+            Some("mcp(lsp)".to_owned()),
+            Some("mcp(wait)".to_owned()),
+            Some("mcp(subagent)".to_owned()),
+            Some("mcp(agent)".to_owned()),
+            Some("mcp(team)".to_owned()),
+            Some("mcp(workflow)".to_owned()),
+            Some("mcp(schedule)".to_owned()),
+            Some("mcp(message)".to_owned()),
+            Some("mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)".to_owned()),
+            Some("mcp(notes)".to_owned()),
+            Some("skill(rimz-lsp)".to_owned()),
+            Some("skill(rimz-reflect)".to_owned()),
+            None,
+        ]
+    );
+}

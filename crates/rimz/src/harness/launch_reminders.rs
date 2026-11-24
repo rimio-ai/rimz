@@ -275,6 +275,26 @@ pub(super) enum Reach {
     Skill,
 }
 
+/// Resolve RimZ capability `name` under `reach`: `mcp(<tool>)` (comma-separated
+/// when a capability serves several tools) when served on RimZ's MCP server,
+/// `skill(<name>)` when reached as a skill, or `None` when unreachable.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired by prompt rewrite and reminders next")
+)]
+pub(super) fn resolve_reach(name: &str, reach: Option<Reach>) -> Option<String> {
+    let reach = reach?;
+    Some(match reach {
+        Reach::Skill => format!("skill({})", escape_reminder_text(name)),
+        Reach::Tools(capability) => crate::mcp::catalog::TOOLS
+            .iter()
+            .filter(|tool| tool.capability == Some(capability))
+            .map(|tool| format!("mcp({})", tool.name))
+            .collect::<Vec<_>>()
+            .join(", "),
+    })
+}
+
 /// How the launch reaches capability `name`, as every reminder sentence words
 /// it: the tools `TOOLS` assigns the capability, on RimZ's MCP server under the
 /// `server` name the provider knows it by, or the skill.
