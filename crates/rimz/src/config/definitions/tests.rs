@@ -1351,7 +1351,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
                 .iter()
                 .map(SkillName::as_str)
                 .collect::<Vec<_>>(),
-            ["work"]
+            ["work", "rimz-message"]
         );
         assert_eq!(profile.subagents.as_ref().unwrap(), &["general"]);
         assert_eq!(texts(profile), ["Craft."]);
@@ -1439,7 +1439,7 @@ fn team_overlays_keep_ancestor_crafts_and_move_the_base() {
             .iter()
             .map(SkillName::as_str)
             .collect::<Vec<_>>(),
-        ["replacement", "reflect"]
+        ["replacement", "reflect", "rimz-message"]
     );
     assert!(
         tool_args(&loaded, "rig.judge")
@@ -1468,7 +1468,7 @@ fn team_skill_clear_and_custom_model_keep_the_original_kind() {
     let judge = &loaded.agent_profiles.0["probe.judge"];
     assert_eq!(judge.agent, "claude");
     assert_eq!(judge.model.as_deref(), Some("custom"));
-    assert_eq!(judge.skills, Some(Vec::new()));
+    assert_eq!(judge.skills, Some(vec!["rimz-message".parse().unwrap()]));
     assert_eq!(
         loaded.teams.0["probe"].roles[1].flip_compact,
         Some(crate::config::FlipCompact::Threshold(
@@ -1604,7 +1604,10 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
     let loaded = clean(root.path());
     assert_eq!(
         loaded.agent_profiles.0["probe.judge"].mcps,
-        Some(vec!["rimz-notes".parse().unwrap()])
+        Some(vec![
+            "rimz-notes".parse().unwrap(),
+            "rimz-message".parse().unwrap(),
+        ])
     );
 }
 
@@ -2365,9 +2368,12 @@ fn team_consensus_pieces_follow_the_consensus_in_list_order() {
     );
     assert_eq!(
         seat_skills(&loaded, "probe.lead").unwrap(),
-        ["work", "rimz-reflect"]
+        ["work", "rimz-message", "rimz-reflect"]
     );
-    assert_eq!(seat_skills(&loaded, "probe.judge"), Some(Vec::new()));
+    assert_eq!(
+        seat_skills(&loaded, "probe.judge"),
+        Some(vec!["rimz-message".to_owned()])
+    );
     assert_eq!(seat_skills(&loaded, "probe.aide"), None);
 
     write(root.path(), "traits/reflect.md", "Home reflection.");
@@ -2386,7 +2392,10 @@ fn team_consensus_pieces_follow_the_consensus_in_list_order() {
             body,
         ]
     );
-    assert_eq!(seat_skills(&loaded, "probe.lead").unwrap(), ["work"]);
+    assert_eq!(
+        seat_skills(&loaded, "probe.lead").unwrap(),
+        ["work", "rimz-message"]
+    );
 }
 
 #[test]
@@ -2411,7 +2420,10 @@ fn a_pack_reflect_trait_replaces_the_shipped_piece_below_a_home_one() {
     assert!(
         matches!(first(&loaded), PromptSource::Text { text, .. } if text == "Pack reflection.")
     );
-    assert_eq!(seat_skills(&loaded, "probe.lead").unwrap(), ["work"]);
+    assert_eq!(
+        seat_skills(&loaded, "probe.lead").unwrap(),
+        ["work", "rimz-message"]
+    );
     write(home.path(), "traits/reflect.md", "Home reflection.");
     let loaded = clean(home.path());
     assert_eq!(
@@ -2715,7 +2727,7 @@ fn the_published_consensus_copy_is_not_a_team_definition() {
     );
     assert_eq!(
         seat_skills(&loaded, "probe.lead").unwrap(),
-        ["work", "rimz-reflect"]
+        ["work", "rimz-message", "rimz-reflect"]
     );
     for copy in copies {
         assert!(!source_paths(root.path()).contains(&copy));
@@ -5281,7 +5293,11 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
         );
         assert_eq!(
             seat_skills(&loaded, &binding.profile),
-            Some(vec!["work".to_owned(), "rimz-reflect".to_owned()])
+            Some(vec![
+                "work".to_owned(),
+                "rimz-message".to_owned(),
+                "rimz-reflect".to_owned()
+            ])
         );
     }
 
@@ -6015,6 +6031,27 @@ fn a_grant_of_catalog_capabilities_loads_beside_an_unreadable_skill_root() {
 }
 
 #[test]
+fn an_empty_skills_list_fails_load_beside_an_unreadable_skill_root() {
+    let root = fixture();
+    std::fs::create_dir_all(root.path().join(".claude")).unwrap();
+    std::fs::write(root.path().join(".claude/skills"), "not a directory\n").unwrap();
+    definition(
+        root.path(),
+        "agents/empty.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: []",
+        "",
+    );
+    let loaded = load_checked(root.path());
+    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+    assert!(loaded.errors[0].path.ends_with("agents/empty.md"));
+    assert!(
+        loaded.errors[0].message.contains(".claude/skills"),
+        "{}",
+        loaded.errors[0].message
+    );
+}
+
+#[test]
 fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_reflect() {
     let root = fixture();
     definition(
@@ -6060,8 +6097,9 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_re
                 .collect::<Vec<_>>(),
         )
     };
-    // `rimz-message` joins the grant where Skill is implied; `rimz-reflect`, a skill alone,
-    // joins only a non-empty skills list, and an omitted one admits it already.
+    // `rimz-message` joins every `capabilities:` grant, even beside `skills: []` where it
+    // implies `Skill`; `rimz-reflect`, a skill alone, joins only a non-empty skills list, and an
+    // omitted one admits it already.
     let consensus = vec!["rimz-message".to_owned()];
     assert_eq!(
         form("probe.lead"),
@@ -6072,7 +6110,10 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_re
         ("Bash,Skill".to_owned(), consensus.clone())
     );
     assert_eq!(seat_skills(&loaded, "probe.judge"), None);
-    assert_eq!(form("probe.aide"), ("Bash".to_owned(), Vec::new()));
+    assert_eq!(
+        form("probe.aide"),
+        ("Bash,Skill".to_owned(), consensus.clone())
+    );
     assert_eq!(seat_skills(&loaded, "probe.aide"), Some(Vec::new()));
     assert_eq!(form("probe.scribe"), ("Bash,Skill".to_owned(), consensus));
     assert_eq!(
@@ -6110,18 +6151,28 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_re
     assert_eq!(grant("probe.judge"), ["rimz-message"]);
 }
 
-/// Every `Skill(rimz-x)` the built-in team text names reaches a capabilities seat with a skills
-/// list, a capability through its grant and a skill alone through its skills, the reflect text's
-/// only on a reflecting team, so a name added to the text fails here until `SeatEdits::edit`
+/// Every `rimz(x)` and `skill(rimz-x)` the built-in team text names reaches a seat, whether it
+/// carries a `capabilities:` grant, a `skills:` list, both, or neither: a capability through its
+/// grant or `skills:` list, and a skill alone through its non-empty `skills:` list, the reflect
+/// text's only on a reflecting team, so a name added to the text fails here until `SeatEdits::edit`
 /// adds it.
 #[test]
 fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     let named = |text: &str| {
-        text.split("Skill(")
-            .skip(1)
-            .filter_map(|rest| rest.split_once(')'))
-            .map(|(name, _)| name.to_owned())
-            .filter(|name| name.starts_with("rimz-"))
+        crate::config::prompt_references(text)
+            .into_iter()
+            .filter_map(|reference| match reference.kind {
+                crate::config::PromptReferenceKind::Rimz => {
+                    Some(format!("rimz-{}", reference.name))
+                }
+                crate::config::PromptReferenceKind::Skill
+                    if reference.name.starts_with("rimz-") =>
+                {
+                    Some(reference.name.to_owned())
+                }
+                crate::config::PromptReferenceKind::Skill
+                | crate::config::PromptReferenceKind::Subagent => None,
+            })
             .collect::<std::collections::BTreeSet<_>>()
     };
     let consensus = named(crate::harness::team_prompt::BUILT_IN_CONSENSUS);
@@ -6130,13 +6181,76 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     let root = fixture();
     definition(
         root.path(),
-        "agents/seat.md",
+        "agents/cap-both.md",
         "agent: claude\ncapabilities: [bash]\nskills: [work]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/cap-only.md",
+        "agent: claude\ncapabilities: [bash]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/skills-only.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: [work]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/skills-empty.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/neither.md",
+        "agent: claude\ntools: [Bash, Skill]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/mcps-only.md",
+        "agent: claude\ntools: [Bash]\nmcps: [github]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/mcps-empty.md",
+        "agent: claude\ntools: [Bash]\nmcps: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/mcps-marked.md",
+        "agent: claude\ntools: [Bash]\nmcps: ['rimz:deferred']",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/mcps-wild.md",
+        "agent: claude\ntools: [Bash]\nmcps: ['*']",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/cap-mcps.md",
+        "agent: claude\ncapabilities: [bash]\nmcps: [github]",
         "",
     );
     let seats = |judged: &str| {
         format!(
-            "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: seat\n    role: judge\n    owns: [{judged}]"
+            "  - agent: cap-both\n    role: lead\n    owns: [Plan, Implement]\n\
+             \x20 - agent: cap-only\n    role: cap\n\
+             \x20 - agent: skills-only\n    role: listed\n    owns: [{judged}]\n\
+             \x20 - agent: skills-empty\n    role: empty\n\
+             \x20 - agent: neither\n    role: open\n\
+             \x20 - agent: mcps-only\n    role: mcp\n\
+             \x20 - agent: mcps-empty\n    role: mcp-empty\n\
+             \x20 - agent: mcps-marked\n    role: mcp-marked\n\
+             \x20 - agent: mcps-wild\n    role: mcp-wild\n\
+             \x20 - agent: cap-mcps\n    role: cap-mcp"
         )
     };
     let mut actual = Vec::new();
@@ -6149,14 +6263,13 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     ] {
         team_definition(root.path(), &stages, &seats(judged), "Pipeline.");
         let loaded = clean(root.path());
-        for seat in ["probe.lead", "probe.judge"] {
+        for seat in ["probe.lead", "probe.listed"] {
             let granted = loaded.agent_profiles.0[seat]
                 .tools
                 .as_ref()
-                .unwrap()
-                .rimz()
-                .unwrap()
-                .iter()
+                .and_then(crate::agents::ToolSet::rimz)
+                .into_iter()
+                .flatten()
                 .map(|entry| entry.name().to_owned());
             let listed = seat_skills(&loaded, seat)
                 .unwrap()
@@ -6168,6 +6281,61 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
                     .collect::<std::collections::BTreeSet<_>>(),
             );
         }
+        assert_eq!(
+            loaded.agent_profiles.0["probe.cap"]
+                .tools
+                .as_ref()
+                .and_then(crate::agents::ToolSet::rimz)
+                .unwrap()
+                .iter()
+                .map(|entry| entry.name())
+                .collect::<Vec<_>>(),
+            ["rimz-message"]
+        );
+        assert_eq!(seat_skills(&loaded, "probe.cap"), None);
+        // An empty `skills: []` seat gains `rimz-message`, and still does not gain `rimz-reflect`.
+        assert_eq!(
+            seat_skills(&loaded, "probe.empty"),
+            Some(vec!["rimz-message".to_owned()])
+        );
+        // Neither `capabilities:` nor `skills:` stays open (`None`) and admits `rimz-message`.
+        assert_eq!(seat_skills(&loaded, "probe.open"), None);
+        assert!(crate::config::skill_is_callable(
+            loaded.agent_profiles.0["probe.open"].skills.as_deref(),
+            "rimz-message"
+        ));
+        let mcps = |seat: &str| {
+            loaded.agent_profiles.0[seat]
+                .mcps
+                .as_ref()
+                .map(|list| list.iter().map(ToString::to_string).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            mcps("probe.mcp"),
+            Some(vec!["github".to_owned(), "rimz-message".to_owned()])
+        );
+        assert_eq!(
+            mcps("probe.mcp-empty"),
+            Some(vec!["rimz-message".to_owned()])
+        );
+        assert_eq!(
+            mcps("probe.mcp-marked"),
+            Some(vec!["rimz:deferred".to_owned()])
+        );
+        assert_eq!(mcps("probe.mcp-wild"), Some(vec!["*".to_owned()]));
+        // `capabilities:` beside `mcps:` adds `rimz-message` to `capabilities:` only.
+        assert_eq!(mcps("probe.cap-mcp"), Some(vec!["github".to_owned()]));
+        assert_eq!(
+            loaded.agent_profiles.0["probe.cap-mcp"]
+                .tools
+                .as_ref()
+                .and_then(crate::agents::ToolSet::rimz)
+                .unwrap()
+                .iter()
+                .map(|entry| entry.name())
+                .collect::<Vec<_>>(),
+            ["rimz-message"]
+        );
     }
     let reflecting: std::collections::BTreeSet<_> = consensus.union(&reflect).cloned().collect();
     assert_eq!(
@@ -6176,34 +6344,155 @@ fn a_capabilities_seat_is_granted_every_skill_the_built_in_team_text_names() {
     );
 }
 
-/// The `rimz-message` a seat gains loads with no such skill on disk, since it is a capability
-/// with MCP tools.
+/// The `rimz-message` a seat gains loads whether or not that skill is on disk or marked
+/// user-only: a `capabilities:` grant adds it directly, and a `skills:` list marks it
+/// seat-added (`seat_consensus_skill`) without a load-time disk lookup so launch settles it.
+/// An author-written `rimz-message` in `skills:` keeps `seat_consensus_skill == false` and is
+/// still refused when missing or marked user-only.
 #[test]
 fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     let root = fixture();
+    write(
+        root.path(),
+        "skills/work/SKILL.md",
+        "---\ndescription: Work.\n---\nSkill.",
+    );
     definition(
         root.path(),
-        "agents/seat.md",
+        "agents/cap.md",
         "agent: claude\ncapabilities: [bash, read]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/cap-empty.md",
+        "agent: claude\ncapabilities: [bash]\nskills: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/listed.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: [work]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/empty.md",
+        "agent: claude\ntools: [Bash, Skill]\nskills: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/codex-listed.md",
+        "agent: codex\ntools: [Bash, Skill]\nskills: [work]",
         "",
     );
     team_definition(
         root.path(),
         TEAM_STAGES,
-        "  - agent: seat\n    role: lead\n    owns: [Plan, Implement]\n  - agent: seat\n    role: judge\n    owns: [Review]",
+        "  - agent: cap\n    role: lead\n    owns: [Plan, Implement]\n\
+         \x20 - agent: cap-empty\n    role: mute\n\
+         \x20 - agent: listed\n    role: judge\n    owns: [Review]\n\
+         \x20 - agent: empty\n    role: scribe\n\
+         \x20 - agent: codex-listed\n    role: scout",
         "Pipeline.",
     );
-    let loaded = load_checked(root.path());
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    assert!(!loaded.teams.0.is_empty());
-    let grant = loaded.agent_profiles.0["probe.judge"]
-        .tools
-        .as_ref()
-        .unwrap()
-        .rimz()
-        .unwrap()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    assert_eq!(grant, ["rimz-message"]);
+    let assert_loaded_seats = |loaded: &LoadedDefinitions| {
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        assert!(!loaded.teams.0.is_empty());
+        for seat in ["probe.lead", "probe.mute"] {
+            let grant = loaded.agent_profiles.0[seat]
+                .tools
+                .as_ref()
+                .unwrap()
+                .rimz()
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            assert_eq!(grant, ["rimz-message"], "{seat}");
+            assert!(
+                !loaded.agent_profiles.0[seat].seat_consensus_skill,
+                "{seat}"
+            );
+        }
+        for (seat, expected) in [
+            ("probe.judge", vec!["work", "rimz-message"]),
+            ("probe.scribe", vec!["rimz-message"]),
+            ("probe.scout", vec!["work", "rimz-message"]),
+        ] {
+            assert_eq!(
+                seat_skills(loaded, seat),
+                Some(expected.into_iter().map(str::to_owned).collect()),
+                "{seat}"
+            );
+            assert!(loaded.agent_profiles.0[seat].seat_consensus_skill, "{seat}");
+        }
+    };
+    // Missing on disk: team loads cleanly; capabilities seats carry the grant and skills seats
+    // mark the seat-added `rimz-message` for launch-time settlement without a disk lookup.
+    assert_loaded_seats(&load_checked(root.path()));
+
+    // Marked user-only for Claude and Codex: team still loads cleanly with the seat marker.
+    write(
+        root.path(),
+        "skills/rimz-message/SKILL.md",
+        "---\ndescription: Message.\ndisable-model-invocation: true\n---\nSkill.",
+    );
+    write(
+        root.path(),
+        "skills/rimz-message/agents/openai.yaml",
+        "policy:\n  allow_implicit_invocation: false\n",
+    );
+    assert_loaded_seats(&load_checked(root.path()));
+
+    // Installed and model-callable: team loads with the same seat marker for launch settlement.
+    write(
+        root.path(),
+        "skills/rimz-message/SKILL.md",
+        "---\ndescription: Message.\n---\nSkill.",
+    );
+    std::fs::remove_file(root.path().join("skills/rimz-message/agents/openai.yaml")).unwrap();
+    assert_loaded_seats(&load_checked(root.path()));
+
+    // Author-written `skills: [rimz-message]` on a seat is still refused when user-only or
+    // missing, and when callable carries no seat marker.
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: cap\n    role: lead\n    owns: [Plan, Implement]\n\
+         \x20 - agent: listed\n    role: judge\n    owns: [Review]\n    skills: [rimz-message]",
+        "Pipeline.",
+    );
+    let callable = load_checked(root.path());
+    assert!(callable.errors.is_empty(), "{:?}", callable.errors);
+    assert!(!callable.agent_profiles.0["probe.judge"].seat_consensus_skill);
+    write(
+        root.path(),
+        "skills/rimz-message/SKILL.md",
+        "---\ndescription: Message.\ndisable-model-invocation: true\n---\nSkill.",
+    );
+    let user_only = load_checked(root.path());
+    assert!(
+        user_only
+            .errors
+            .iter()
+            .any(|error| error.path.ends_with("teams/probe.md")
+                && error.message.contains("rimz-message")
+                && error.message.contains("user-only")),
+        "{:?}",
+        user_only.errors
+    );
+    std::fs::remove_file(root.path().join("skills/rimz-message/SKILL.md")).unwrap();
+    let missing = load_checked(root.path());
+    assert!(
+        missing
+            .errors
+            .iter()
+            .any(|error| error.path.ends_with("teams/probe.md")
+                && error.message.contains("rimz-message")
+                && error.message.contains("missing")),
+        "{:?}",
+        missing.errors
+    );
 }

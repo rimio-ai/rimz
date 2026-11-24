@@ -746,6 +746,7 @@ mod tests {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             args: None,
         }

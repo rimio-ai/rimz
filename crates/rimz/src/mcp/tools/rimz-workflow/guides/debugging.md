@@ -9,7 +9,7 @@
    - An agent step held on an error or an interrupted turn, a judge's check over it included: `restart`, with `--continue` to keep its conversation.
    - `died` with a reason naming a fix: the user makes the fix, then `resume --at <node>`.
    - `died` with no `reason:` line: launch the same agent by hand in that checkout (`rimz agents claude -w feat-x -p 'say hello'`) and read what it prints.
-   - `invalid`, or `waits on its definition`: fix the script or the definition through Skill(rimz-workflow-write).
+   - `invalid`, or `waits on its definition`: fix the script or the definition through skill(rimz-workflow-write).
 4. A finished run, `failed` included, stays finished. Make the fix its cause needs first, then start a new run with the old run's flags (propose any change), which gets full visits again, and name the old run's notes folder in its `--prompt` so its steps read what was tried; for `ralph` or `steward`, hand the notes folder to the agent that starts it. The notes folder, which `show` names, holds each step's `<step>-notes.md` and `history.txt`, and outlives the run.
 
 ## What each waiting line means
@@ -31,7 +31,7 @@ What each waiting or held line of `rimz workflow list` and `show` means, and wha
 - `retry: <reason>`: clears on its own at the next advance.
 - `runs: <n> of <total> started runs ended`: a runs step waits on its started runs; debug a stuck one as its own run.
 - `held · <reason>`: waits for capacity and clears on its own. Under NEEDS YOU with `⊘` (a failing capacity check, low disk, an unreadable store) it needs the fix its reason names.
-- `waits on its definition: <error>`: an edit left the definition invalid, and the run holds until it is fixed through Skill(rimz-workflow-write).
+- `waits on its definition: <error>`: an edit left the definition invalid, and the run holds until it is fixed through skill(rimz-workflow-write).
 
 ## Failure causes
 

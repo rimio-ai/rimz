@@ -119,6 +119,7 @@ pub struct AgentCell {
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub seat_consensus_skill: bool,
     pub mcps: Option<Vec<crate::config::McpName>>,
     pub no_skill_tool: bool,
     /// The RimZ grant of a `capabilities:` list, from the tools value it rides on.
@@ -157,6 +158,7 @@ impl Cell {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             no_skill_tool: false,
             rimz_capabilities: None,
@@ -277,6 +279,7 @@ pub struct ResolvedProfile {
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub seat_consensus_skill: bool,
     pub mcps: Option<Vec<crate::config::McpName>>,
     pub tools: Option<crate::agents::ToolSet>,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
@@ -310,6 +313,7 @@ impl ResolvedProfile {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            seat_consensus_skill: false,
             mcps: None,
             tools: None,
             allowed_tools: None,
@@ -336,6 +340,7 @@ impl ResolvedProfile {
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
+            self.seat_consensus_skill = layer.seat_consensus_skill;
         }
         if self.mcps.is_none() {
             self.mcps.clone_from(&layer.mcps);
@@ -1941,6 +1946,7 @@ fn agent_cell_from(
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
         skills: resolved.skills.clone(),
+        seat_consensus_skill: resolved.seat_consensus_skill,
         mcps: resolved.mcps.clone(),
         no_skill_tool: crate::agents::skills_lack_skill_tool(
             resolved.kind.as_str(),
@@ -2676,6 +2682,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
+        original.seat_consensus_skill = base.seat_consensus_skill;
     }
     if original.mcps.is_none() {
         original.mcps.clone_from(&base.mcps);

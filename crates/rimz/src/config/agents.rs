@@ -540,6 +540,10 @@ pub struct Profile {
         deserialize_with = "super::skills::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<super::SkillName>>,
+    /// Whether `rimz-message` in `skills` was added by a Markdown team seat rather than written
+    /// by the author, so launch settles it against the launch's kind, login, and skill inventory.
+    #[serde(skip)]
+    pub seat_consensus_skill: bool,
     /// The RimZ MCP capabilities and the user's own MCP servers a launch keeps;
     /// unset serves every capability and leaves the user's servers alone. A subagent child and
     /// a workflow judge are never served `rimz-subagents`, `rimz-agents`, or `rimz-teams`, and

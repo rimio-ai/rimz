@@ -548,6 +548,137 @@ pub(crate) fn launch_callable(
     }
 }
 
+/// Failure while reading or parsing a skill's `SKILL.md` or `agents/openai.yaml` user-only
+/// marker.
+#[derive(Debug)]
+pub(crate) enum SkillMarkerErr {
+    Unreadable { path: PathBuf, message: String },
+    Invalid { path: PathBuf, message: String },
+}
+
+/// Whether `skill_dir` marks itself user-only for `marker`, reading files through `read_text`
+/// so callers with a read cache reuse it. Always reads `SKILL.md` so an unreadable skill file
+/// fails even when `marker` is [`crate::agents::ManualSkill::Unsupported`].
+pub(crate) fn is_user_only<S, E>(
+    skill_dir: &Path,
+    marker: crate::agents::ManualSkill,
+    mut read_text: impl FnMut(&Path) -> Result<S, E>,
+) -> Result<bool, SkillMarkerErr>
+where
+    S: AsRef<str>,
+    E: std::borrow::Borrow<std::io::Error>,
+{
+    let skill_path = skill_dir.join("SKILL.md");
+    let text = read_text(&skill_path).map_err(|error| SkillMarkerErr::Unreadable {
+        path: skill_path.clone(),
+        message: error.borrow().to_string(),
+    })?;
+    match marker {
+        crate::agents::ManualSkill::Unsupported => Ok(false),
+        crate::agents::ManualSkill::Frontmatter => {
+            let (block, _) =
+                crate::config::definitions::frontmatter::split(&skill_path, text.as_ref())
+                    .map_err(|error| SkillMarkerErr::Invalid {
+                        path: error.path,
+                        message: error.message,
+                    })?;
+            Ok(block.lines().any(|line| {
+                line.strip_prefix("disable-model-invocation:")
+                    .is_some_and(|value| value.trim() == "true")
+            }))
+        }
+        crate::agents::ManualSkill::OpenAiPolicy => {
+            let policy_path = skill_dir.join("agents/openai.yaml");
+            match read_text(&policy_path) {
+                Ok(text) => {
+                    #[derive(serde::Deserialize)]
+                    struct Document {
+                        policy: Option<Policy>,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct Policy {
+                        allow_implicit_invocation: Option<bool>,
+                    }
+                    let document: Option<Document> = serde_saphyr::from_str(text.as_ref())
+                        .map_err(|error| SkillMarkerErr::Invalid {
+                            path: policy_path,
+                            message: error.to_string(),
+                        })?;
+                    Ok(document
+                        .and_then(|document| document.policy)
+                        .and_then(|policy| policy.allow_implicit_invocation)
+                        == Some(false))
+                }
+                Err(error) if error.borrow().kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(SkillMarkerErr::Unreadable {
+                    path: policy_path,
+                    message: error.borrow().to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// Whether skill `name` is installed, readable, non-conflicting, and model-callable for
+/// `adapter` in `env`, without colliding with an unlisted skill in `listed`.
+///
+/// The collision check mirrors the two enforcers so an optional seat-added entry is dropped
+/// before either enforcer would refuse the launch: `HostSkills::apply`
+/// (`LaunchSettingsErr::ConflictingKey` when two directories share one `ProviderSkillKey`
+/// with opposing policies) and `crate::sandbox::skills::plan_view`
+/// (`SandboxErr::ConflictingSkillAliases` when two directory names resolve to the same
+/// canonical `source` with opposing policies).
+pub(crate) fn is_model_callable_on_disk(
+    name: &str,
+    adapter: &crate::agents::AgentDefinition,
+    env: &BTreeMap<String, String>,
+    listed: &[SkillName],
+) -> bool {
+    let provider_root = adapter.skills_home(env);
+    let chain = SkillChain::from_env(env);
+    let Ok(inventory) = enumerate(provider_root.as_deref(), chain.as_ref(), |_| true) else {
+        return false;
+    };
+    if inventory.conflicts.contains_key(name) {
+        return false;
+    }
+    let Some(found) = inventory.skills.get(name) else {
+        return false;
+    };
+    if !matches!(
+        is_user_only(&found.source, adapter.manual_skill(), |path| {
+            std::fs::read_to_string(path)
+        }),
+        Ok(false)
+    ) {
+        return false;
+    }
+    let own_key = match adapter.spec().host_skills {
+        HostSkills::Switch { key, .. } => match key(found) {
+            Ok(key) => Some(key),
+            Err(_) => return false,
+        },
+        HostSkills::Unsupported => None,
+    };
+    // Mirrors `HostSkills::apply` (`LaunchSettingsErr::ConflictingKey`) and
+    // `crate::sandbox::skills::plan_view` (`SandboxErr::ConflictingSkillAliases`).
+    for (other_name, other) in &inventory.skills {
+        if other_name == name || listed.iter().any(|skill| skill.as_str() == other_name) {
+            continue;
+        }
+        if other.source == found.source {
+            return false;
+        }
+        if let (Some(own_key), HostSkills::Switch { key, .. }) =
+            (&own_key, adapter.spec().host_skills)
+            && key(other).ok().as_ref() == Some(own_key)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 impl HostSkills {
     pub(crate) fn apply(
         self,

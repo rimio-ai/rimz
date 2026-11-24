@@ -100,6 +100,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
                 team_prompt: posture.launch.team_prompt.clone(),
                 skills: posture.launch.skills.clone(),
+                seat_consensus_skill: posture.launch.seat_consensus_skill,
                 mcps: None,
                 no_skill_tool: posture.launch.no_skill_tool,
                 rimz_capabilities: posture.launch.rimz_capabilities.clone(),

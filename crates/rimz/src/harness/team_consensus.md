@@ -4,7 +4,7 @@ A team turns one user request into shipped work by moving it through the pipelin
 
 ## The turn
 
-You act only on input. A prompt re-invokes you; between prompts you do nothing. Skill(rimz-message) has the header blocks a prompt arrives in and how to send one.
+You act only on input. A prompt re-invokes you; between prompts you do nothing. rimz(message) has the header blocks a prompt arrives in and how to send one.
 
 - A `STAGE` block opens a stage you own. The board says where the work stands and the pipeline names the files you open first.
 - Anything else is a message from a teammate or the user (see Speaking).

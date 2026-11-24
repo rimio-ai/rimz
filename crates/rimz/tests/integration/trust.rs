@@ -171,6 +171,7 @@ fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        seat_consensus_skill: false,
         mcps: None,
         no_skill_tool: false,
         allowed_tools: None,
