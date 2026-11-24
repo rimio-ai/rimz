@@ -669,6 +669,8 @@ fn env_paragraph_names_worktree_provenance_and_escapes_it() {
             worktree: Some(crate::worktree::LinkedWorktree {
                 base_branch: base.map(str::to_owned),
                 primary: primary.into(),
+                from_pr: None,
+                marker_unreadable: false,
             }),
             lsp_servers: vec!["rust".to_owned()],
             ..Default::default()
@@ -713,6 +715,8 @@ fn stage_handoff_reminder_stays_inside_the_single_team_wrapper() {
         worktree: Some(crate::worktree::LinkedWorktree {
             base_branch: None,
             primary: "/primary".into(),
+            from_pr: None,
+            marker_unreadable: false,
         }),
         ..LaunchReminders::default()
     };

@@ -233,6 +233,10 @@ pub(crate) struct LinkedWorktree {
     pub base_branch: Option<String>,
     /// The primary checkout: the parent of git's common `.git` directory.
     pub primary: PathBuf,
+    /// The pull request the tree checks out, from the RimZ marker; `None` without a marker.
+    pub from_pr: Option<u64>,
+    /// The RimZ marker exists but cannot be read, so `from_pr` and `base_branch` are unknown.
+    pub marker_unreadable: bool,
 }
 
 /// The base branch sat behind its upstream when the tree was cut, as of the last fetch.
@@ -2086,16 +2090,20 @@ pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
         return None;
     }
     let primary = common_dir.parent()?.to_path_buf();
-    let base_branch = match read_marker_from_checkout_metadata(checkout) {
-        Ok(marker) => marker.and_then(|marker| marker.base_branch),
+    let (marker, marker_unreadable) = match read_marker_from_checkout_metadata(checkout) {
+        Ok(marker) => (marker, false),
         Err(error) => {
-            tracing::debug!(%error, "worktree base branch unavailable");
-            None
+            tracing::debug!(%error, "worktree marker unavailable");
+            (None, true)
         }
     };
     Some(LinkedWorktree {
-        base_branch,
+        base_branch: marker
+            .as_ref()
+            .and_then(|marker| marker.base_branch.clone()),
         primary,
+        from_pr: marker.and_then(|marker| marker.from_pr),
+        marker_unreadable,
     })
 }
 

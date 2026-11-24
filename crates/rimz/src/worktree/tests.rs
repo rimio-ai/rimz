@@ -1595,7 +1595,9 @@ fn linked_worktree_resolves_created_base_and_primary() {
             linked_worktree(cwd),
             Some(LinkedWorktree {
                 base_branch: Some("main".to_owned()),
-                primary: repo.clone()
+                primary: repo.clone(),
+                from_pr: None,
+                marker_unreadable: false,
             })
         );
     }
@@ -1615,6 +1617,8 @@ fn linked_worktree_handles_legacy_and_missing_markers() {
     let expected = Some(LinkedWorktree {
         base_branch: None,
         primary: repo,
+        from_pr: None,
+        marker_unreadable: false,
     });
     assert_eq!(linked_worktree(&worktree), expected);
     let marker = marker_path_from_checkout_metadata(&worktree)
@@ -1634,8 +1638,32 @@ fn linked_worktree_handles_legacy_and_missing_markers() {
     )
     .unwrap();
     assert_eq!(linked_worktree(&worktree), expected);
+    std::fs::write(
+        &marker,
+        r#"{
+        "version": 2,
+        "name": "demo",
+        "branch": "demo",
+        "from_pr": 42,
+        "base_ref": "0123456789abcdef0123456789abcdef01234567",
+        "repo_root": "/repo",
+        "worktree_path": "/repo-worktrees/demo",
+        "created_at": "2026-06-10T00:00:00Z"
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        linked_worktree(&worktree).map(|linked| linked.from_pr),
+        Some(Some(42))
+    );
     std::fs::write(marker, "invalid marker").unwrap();
-    assert_eq!(linked_worktree(&worktree), expected);
+    assert_eq!(
+        linked_worktree(&worktree),
+        expected.map(|linked| LinkedWorktree {
+            marker_unreadable: true,
+            ..linked
+        })
+    );
 }
 
 #[test]
@@ -1658,6 +1686,8 @@ fn linked_worktree_resolves_relative_gitdir_and_absolute_commondir() {
             Some(LinkedWorktree {
                 base_branch: None,
                 primary: primary.clone(),
+                from_pr: None,
+                marker_unreadable: false,
             })
         );
     }
@@ -1684,6 +1714,8 @@ fn linked_worktree_omits_unreadable_and_unsupported_metadata() {
         Some(LinkedWorktree {
             base_branch: Some("main".to_owned()),
             primary: repo,
+            from_pr: None,
+            marker_unreadable: false,
         })
     );
     let admin = git_admin_dir_from_checkout_metadata(worktree)
