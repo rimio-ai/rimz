@@ -4279,6 +4279,25 @@ mod usage_probe {
             .collect();
         assert_eq!(removed, ["RIMZ_MCP_CWD", "RIMZ_MCP_SERVE"]);
     }
+    /// A child left in the caller's session takes agy's sign-in prompt from the caller's
+    /// terminal, not from stdin, and waits out the deadline.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_child_leads_its_own_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("session");
+        let agy = script(
+            dir.path(),
+            &format!(
+                "echo \"$$ $(cut -d' ' -f6 /proc/$$/stat)\" > '{}'\n",
+                out.display()
+            ),
+        );
+        usage::run(Some(agy), None, Duration::from_secs(10));
+        let ids = std::fs::read_to_string(&out).unwrap();
+        let (pid, session) = ids.trim().split_once(' ').unwrap();
+        assert_eq!(session, pid, "pid and session id: {ids}");
+    }
     #[test]
     fn the_deadline_kills_and_reaps_the_process_group() {
         let dir = tempfile::tempdir().unwrap();

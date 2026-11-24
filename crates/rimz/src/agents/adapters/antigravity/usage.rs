@@ -217,10 +217,19 @@ fn run_command(mut command: Command, deadline: Duration) -> Read {
 }
 
 /// The read's child. agy starts the rimz plugin's MCP server for this print run too, so the
-/// child drops the selection of any launch the read runs inside.
+/// child drops the selection of any launch the read runs inside. It leads a session of its own:
+/// in the caller's, agy reads its sign-in prompt from the caller's terminal, not from stdin.
 pub(super) fn command(binary: PathBuf, login_home: Option<&str>) -> Command {
     let mut command = base_command(binary, login_home);
     command.args(ARGS);
+    #[expect(
+        unsafe_code,
+        reason = "setsid is async-signal-safe and touches no memory of the forked child"
+    )]
+    // SAFETY: the closure only calls setsid(2), which is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(Into::into));
+    }
     command
 }
 
@@ -233,6 +242,7 @@ pub(super) fn mounted_command(
 ) -> Command {
     let mut command = base_command(PathBuf::from("bwrap"), login_home);
     command
+        .process_group(0)
         // Off the pane's terminal: agy would read its sign-in prompt there, not from stdin.
         .args(["--dev-bind", "/", "/", "--die-with-parent", "--new-session", "--bind"])
         .args([source, target])
@@ -250,8 +260,7 @@ fn base_command(program: PathBuf, login_home: Option<&str>) -> Command {
         .env_remove(crate::mcp::launch_env::ENV_CWD)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     if let Some(home) = login_home {
         command.env("HOME", home);
     }
