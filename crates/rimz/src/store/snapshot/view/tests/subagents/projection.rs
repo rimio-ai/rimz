@@ -1203,3 +1203,49 @@ fn a_child_names_only_an_explicitly_named_lane() {
     let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
     assert_eq!(projected.lane, None, "a lane-less row");
 }
+
+#[test]
+fn parked_launched_child_projects_success_with_parked_phase_and_frozen_clock() {
+    let mut child = child_state("root", "child", AgentStatus::Running, 30);
+    child.launch_depth = Some(1);
+    child.phase = TurnPhase::Parked;
+    child.subagent_started_at = Some(ago(100));
+    child.finished_at = Some(ago(40));
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(
+        (
+            projected.status,
+            projected.phase,
+            projected.elapsed_secs,
+            projected.finished_at,
+            projected.stalled,
+        ),
+        (
+            AgentStatus::Success,
+            TurnPhase::Parked,
+            Some(60),
+            Some(ago(40)),
+            false,
+        )
+    );
+
+    // Silence past the stall window does not stall a parked child, whereas a
+    // running reasoning child stalls with idle phase.
+    child.last_activity = ago(2_000);
+    let quiet_parked = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(
+        (
+            quiet_parked.status,
+            quiet_parked.phase,
+            quiet_parked.stalled
+        ),
+        (AgentStatus::Success, TurnPhase::Parked, false)
+    );
+
+    child.phase = TurnPhase::Reasoning;
+    let stalled = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert_eq!(
+        (stalled.status, stalled.phase, stalled.stalled),
+        (AgentStatus::Failed, TurnPhase::Idle, true)
+    );
+}

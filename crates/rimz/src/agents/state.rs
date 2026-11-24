@@ -2977,8 +2977,12 @@ impl AgentState {
     /// since left rests as if it were gone (a raw-`running` or raw-`failed` row
     /// reads `idle`) unless a budget park outranks it, and a resting agent the
     /// provider [refuses](super::ParkDemotion::refused) then reads `failed`. The
-    /// label belongs to that status: the refusal's sentence when the agent is
-    /// refused, none when the left model rested it, else the displayed marker's.
+    /// phase follows `project_display`: a running turn keeps its phase, a
+    /// clean end parked on background work keeps [`TurnPhase::Parked`] beside
+    /// `running`, `success`, and `sleeping`, and every other result reads
+    /// [`TurnPhase::Idle`]. The label belongs to that status: the refusal's
+    /// sentence when the agent is refused, none when the left model rested it,
+    /// else the displayed marker's.
     pub fn rowless_card(
         &self,
         demotion: &super::ParkDemotion,
@@ -3029,8 +3033,11 @@ impl AgentState {
                 let rested = self.rested_status(now);
                 let status = self.display_rest_status(rested);
                 let (_, resolved_phase) = self.resolved_status_phase(now);
-                let phase = if status == AgentStatus::Running
-                    && (rested == AgentStatus::Running || resolved_phase == TurnPhase::Parked)
+                let phase = if (status == AgentStatus::Running && rested == AgentStatus::Running)
+                    || (matches!(
+                        status,
+                        AgentStatus::Running | AgentStatus::Success | AgentStatus::Sleeping
+                    ) && resolved_phase == TurnPhase::Parked)
                 {
                     resolved_phase
                 } else {

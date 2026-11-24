@@ -1384,7 +1384,8 @@ pub struct SidebarSubAgent {
     /// The child is compacting, or a compaction continue is still owed to it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub compacting: bool,
-    /// The displayed running turn's shape (reasoning / acting).
+    /// The displayed turn's shape: reasoning or acting while running, or
+    /// `parked` when pending background work outlived a clean turn end.
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,
     /// Raw displayed error label; collapsed to one line by the renderer.

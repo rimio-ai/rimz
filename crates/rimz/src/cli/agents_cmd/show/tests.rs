@@ -987,3 +987,69 @@ fn a_failed_started_read_leaves_no_section_and_warns_with_its_error() {
     assert_eq!(started, Some(all_groups()));
     assert!(unread.is_none());
 }
+
+#[test]
+fn show_parked_launched_child_prints_phase_in_text_and_json() {
+    let now = jiff::Timestamp::from_second(200).unwrap();
+    let mut parent = rimz::testkit::agent_state("claude", "parent", now);
+    parent.status = AgentStatus::Idle;
+    let mut parent_pane =
+        rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+    parent_pane.command = Some("claude".into());
+    parent.pane = Some(parent_pane.clone());
+
+    let mut child = rimz::testkit::agent_state("claude", "child", now);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.status = AgentStatus::Running;
+    child.phase = TurnPhase::Parked;
+    child.description = Some("background build".into());
+    let mut child_pane =
+        rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%2"));
+    child_pane.command = Some("claude".into());
+    child.pane = Some(child_pane.clone());
+
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        vec![parent.clone(), child.clone()],
+        now,
+    )
+    .with_live_panes(vec![parent_pane, child_pane], None);
+
+    let child_entry = build_entry(
+        &Default::default(),
+        &child,
+        row_for_agent(&snapshot, &child),
+        None,
+        "@child".into(),
+        None,
+        now,
+        ReportOverrides {
+            child: child_for_agent(&snapshot, &child),
+            ..Default::default()
+        },
+    );
+    let text = strip(|w| render_activity_section(w, &child_entry, None, None, None, false, now));
+    assert!(
+        text.contains("success (parked)"),
+        "expected success (parked) in show text:\n{text}"
+    );
+    let child_json = serde_json::to_value(&child_entry).unwrap();
+    assert_eq!(child_json["status"], "success");
+    assert_eq!(child_json["phase"], "parked");
+
+    let parent_entry = build_entry(
+        &Default::default(),
+        &parent,
+        row_for_agent(&snapshot, &parent),
+        None,
+        "@parent".into(),
+        None,
+        now,
+        ReportOverrides::default(),
+    );
+    let parent_json = serde_json::to_value(&parent_entry).unwrap();
+    assert_eq!(parent_json["sub_agents"][0]["status"], "success");
+    assert_eq!(parent_json["sub_agents"][0]["phase"], "parked");
+}
