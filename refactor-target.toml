@@ -1242,7 +1242,8 @@ upward-dependencies = [
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
 # RimzEntry carries a `capabilities:` grant's entries through ToolSet to the launch (+1).
 # prompt_references, PromptReference, and PromptReferenceKind share positional rimz(x), skill(x), and subagent(x) scanning between launch rewrite and `rimz agents validate` (+3).
-surface-budget = 308
+# BuildBase, DefinitionSource, and Profile::build_under rebuild Markdown definitions on demand (+2).
+surface-budget = 310
 
 [[verdict]]
 kind = "item"

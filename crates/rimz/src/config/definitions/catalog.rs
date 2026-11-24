@@ -80,7 +80,7 @@ impl Catalog {
         packs: &ResolvedPacks,
         commands: &CommandsConfig,
         config_path: &Path,
-        texts: &SkillCatalog<'_>,
+        texts: &SkillCatalog,
         loaded: &mut LoadedDefinitions,
     ) -> Self {
         let mut items = Vec::new();
@@ -244,11 +244,7 @@ impl Catalog {
         Self { items, claims }
     }
 
-    pub fn pack_items(
-        &self,
-        loaded: &LoadedDefinitions,
-        texts: &SkillCatalog<'_>,
-    ) -> Vec<PackItem> {
+    pub fn pack_items(&self, loaded: &LoadedDefinitions, texts: &SkillCatalog) -> Vec<PackItem> {
         self.items
             .iter()
             .filter_map(|item| {

@@ -1416,6 +1416,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         allowed_tools: None,
         variant: None,
         definition_renders: None,
+        definition: None,
         kind_defaults: false,
         kind_base: false,
         tools: None,

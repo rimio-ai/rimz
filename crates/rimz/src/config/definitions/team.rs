@@ -18,13 +18,11 @@ struct SeatLoader<'a> {
     scope: LoadScope<'a>,
     agents: &'a Namespace,
     subagents: &'a Namespace,
-    children: &'a BTreeSet<String>,
 }
 
 pub(super) fn load(
     scope: LoadScope<'_>,
     [agents, subagents]: [&Namespace; 2],
-    children: &BTreeSet<String>,
     sources: &catalog::Catalog,
     commands: &super::CommandsConfig,
     loaded: &mut LoadedDefinitions,
@@ -33,7 +31,6 @@ pub(super) fn load(
         scope,
         agents,
         subagents,
-        children,
     };
     let mut names = BTreeMap::new();
     for item in sources
@@ -50,6 +47,8 @@ pub(super) fn load(
         let mut role_names = Vec::new();
         let result = (|| {
             let text = scope
+                .context
+                .shared
                 .skills
                 .read_text(&path)
                 .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
@@ -245,13 +244,15 @@ fn roster(
     }
     let consensus = fm.consensus.clone().unwrap_or_default();
     let pieces = traits::consensus(
-        scope.home,
+        &scope.context.shared.home,
         scope.traits,
         name,
         &consensus,
         &stages,
         |path| {
             scope
+                .context
+                .shared
                 .skills
                 .read_text(path)
                 .map(|text| text.to_string())
@@ -397,11 +398,30 @@ impl SeatLoader<'_> {
             }
         }
         fm.traits = Some(traits);
-        let edits = agent::SeatEdits {
-            leader: team.leader.as_deref() == Some(role.role.as_deref().unwrap_or(&role.agent)),
-            reflects,
+        let handle = role.role.as_deref().unwrap_or(&role.agent);
+        let seat_info = agent::SeatInfo {
+            edits: agent::SeatEdits {
+                leader: team.leader.as_deref() == Some(handle),
+                reflects,
+            },
+            team: name.to_owned(),
+            role: handle.to_owned(),
+            agent: role.agent.clone(),
+            profile_name: format!("{name}.{handle}"),
         };
-        // Resolve the overlaid leaf through the standalone checks/defaults, then restore its already-rendered ancestor crafts unchanged.
+        let ancestor_crafts: Vec<_> = original
+            .append_system_prompt_files
+            .iter()
+            .filter(|source| source.origin() != definition.path)
+            .cloned()
+            .collect();
+        let ancestor_chain = original
+            .definition
+            .as_ref()
+            .map(|source| source.chain().to_vec())
+            .unwrap_or_else(|| vec![role.agent.clone()]);
+        // Resolve the overlaid leaf through the standalone checks/defaults with its already-rendered
+        // ancestor crafts in place, so precomputed renders and on-demand builds share one path.
         let tree = Namespace {
             definitions: BTreeMap::from([(
                 role.agent.clone(),
@@ -417,55 +437,19 @@ impl SeatLoader<'_> {
         };
         let mut seat = LoadedDefinitions::default();
         agent::resolve_namespace(
-            agent::Resolver::new(self.scope, "agents", [&tree, self.subagents], self.children)
-                .with_seat(edits),
+            agent::Resolver::new(self.scope, "agents", [&tree, self.subagents]).with_seat(
+                seat_info,
+                ancestor_chain,
+                ancestor_crafts,
+            ),
             &mut seat,
         );
         if let Some(error) = seat.errors.into_iter().next() {
             return Err(error);
         }
-        let mut profile = seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
+        seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
             DefinitionErr::new(path, format!("seat '{}' failed to resolve", role.agent))
-        })?;
-        if profile.empty_dir == Some(true) {
-            return Err(DefinitionErr::new(
-                path,
-                format!(
-                    "team '{name}' selects definition '{}' with empty-dir; teams share the worktree",
-                    role.agent
-                ),
-            ));
-        }
-        let kind = &profile.agent;
-        if agents::find_definition(kind)
-            .is_some_and(|definition| !definition.spec().launch.takes_system_prompt())
-        {
-            let handle = role.role.as_deref().unwrap_or(&role.agent);
-            return Err(DefinitionErr::new(
-                path,
-                format!(
-                    "team '{name}' role '{handle}' runs on {kind}, which takes no system prompt; \
-                     every seat carries the team's pipeline in its system prompt — select a \
-                     definition on a kind that takes a system prompt"
-                ),
-            ));
-        }
-        let mut crafts: Vec<_> = original
-            .append_system_prompt_files
-            .iter()
-            .filter(|source| source.origin() != definition.path)
-            .cloned()
-            .collect();
-        if let Some(route) = &mut profile.definition_renders {
-            for rendered in route.renders.values_mut() {
-                let mut inherited = crafts.clone();
-                inherited.append(&mut rendered.append_system_prompt_files);
-                rendered.append_system_prompt_files = inherited;
-            }
-        }
-        crafts.append(&mut profile.append_system_prompt_files);
-        profile.append_system_prompt_files = crafts;
-        Ok(profile)
+        })
     }
 }
 

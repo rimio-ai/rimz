@@ -518,6 +518,9 @@ pub struct Profile {
     /// Complete family renders exist only for Markdown definitions.
     #[serde(skip)]
     pub definition_renders: Option<super::tiers::DefinitionRenders>,
+    /// Retained Markdown loader state for rebuilding this row under an override, kind, or model.
+    #[serde(skip)]
+    pub definition: Option<super::definitions::DefinitionSource>,
     /// Whether unwritten effort takes the definition default of the kind and model
     /// the launch finally runs on.
     #[serde(skip)]
@@ -649,6 +652,22 @@ pub struct Profile {
     pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
+}
+
+impl Profile {
+    /// Rebuild a Markdown-defined row (standalone definition or team seat) under an optional
+    /// `--agent` base, target kind, and model without rereading disk.
+    ///
+    /// Returns `None` for TOML rows and kind bases, which have no Markdown chain build.
+    pub fn build_under(
+        &self,
+        base: Option<super::definitions::BuildBase<'_>>,
+        target_kind: Option<&str>,
+        model: Option<&str>,
+    ) -> Option<std::result::Result<Self, super::definitions::DefinitionErr>> {
+        let source = self.definition.as_ref()?;
+        Some(source.build(self, base, target_kind, model))
+    }
 }
 
 pub(super) fn native_auto_compact(window: Option<u64>, kind: &str) -> Option<String> {

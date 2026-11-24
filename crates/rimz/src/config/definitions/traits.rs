@@ -122,7 +122,7 @@ pub(super) fn render(
     source: &Path,
     body: &str,
     names: &[String],
-    catalog: &SkillCatalog<'_>,
+    catalog: &SkillCatalog,
 ) -> Result<String, DefinitionErr> {
     if !names.is_empty() && !body.contains("${traits}") {
         return Err(DefinitionErr::new(
