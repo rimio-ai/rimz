@@ -151,6 +151,7 @@ pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::PriceBook;
 use pricing::TokenSplit;
+pub(crate) use provider_file::create_empty_if_absent as create_empty_provider_file;
 pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
     usage_limit_fallback_grace,

@@ -62,6 +62,16 @@ const MCP_SERVER_NAME: &str = "rimz_tools";
 const ADD_DIR_FLAG: &str = "--add-dir";
 const SANDBOX_FLAG: &str = "--sandbox";
 const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
+const MOUNTED_LOGIN_FILES: [MountedLoginFile; 2] = [
+    MountedLoginFile {
+        name: "antigravity-oauth-token",
+        required: true,
+    },
+    MountedLoginFile {
+        name: "installation_id",
+        required: false,
+    },
+];
 /// The settings document an ask launch passes: an empty `agentMode` starts agy in its Default
 /// mode, which asks before a write or a command, and wins over `--mode` in either order without
 /// being saved (agy 1.5.14). With no mode flag agy 1.5.7 and later start in Auto instead.
@@ -704,6 +714,14 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         Some(agent_file::plan(input))
     }
 
+    fn shared_login_home_env_key(&self) -> Option<&'static str> {
+        Some(session::LOGIN_HOME_ENV)
+    }
+
+    fn mounted_login_files(&self) -> &'static [MountedLoginFile] {
+        &MOUNTED_LOGIN_FILES
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         session::login_home(env)
     }
@@ -712,15 +730,11 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         &[session::HOME_ENV]
     }
 
-    /// agy reads no variable or flag that moves its data directory (1.5.15), so a named
-    /// account is a directory mounted over it, with `HOME` left as the user's.
+    /// agy reads no variable or flag that moves its data directory (1.5.16), so a named
+    /// account mounts over it with `HOME` left as the user's: login files for a shared
+    /// account, or the whole account directory for a standalone one.
     fn mounted_home_target(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         session::view_home(env)
-    }
-
-    /// A link into the default directory would resolve inside the mount, to the account itself.
-    fn account_history_shareable(&self) -> bool {
-        false
     }
 
     /// `--add-dir` opens a workspace: agy loads its `AGENTS.md`, `.agents/rules`, and
@@ -958,16 +972,16 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
 
 impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
     fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
-        let provider_home = self.config_home(login_env);
-        usage::read(provider_home.clone(), login_env).account(provider_home.as_deref())
+        let credential_home = session::credential_home(login_env);
+        usage::read(credential_home.clone(), login_env).account(credential_home.as_deref())
     }
 
     fn foreign_login(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
-        let (account, _) = session::mounted_view(login_env)?;
-        if usage::holds_credential(&account) {
+        let mount = session::account_mount(login_env)?;
+        if usage::holds_credential(mount.account()) {
             return None;
         }
-        usage::read(self.config_home(login_env), login_env)
+        usage::read(session::credential_home(login_env), login_env)
             .launch_refusal()
             .map(str::to_owned)
     }
@@ -976,7 +990,7 @@ impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
         &self,
         login_env: &BTreeMap<String, String>,
     ) -> super::AccountUsageProbe {
-        usage::read(self.config_home(login_env), login_env).usage()
+        usage::read(session::credential_home(login_env), login_env).usage()
     }
 }
 

@@ -4,7 +4,7 @@
 //! turn. A logged-out agy waits 60 s for a sign-in and opens a browser unless its
 //! environment carries an SSH session variable and its stdin answers the code
 //! prompt, so every run carries both and a deadline that kills its process group.
-//! A read is reused for 60 s per provider home, whichever probe asked.
+//! A read is reused for 60 s per credential home, whichever probe asked.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -62,11 +62,11 @@ pub(super) enum Quota {
 
 impl Read {
     /// The login the read found, named by the credential file under
-    /// `provider_home` where agy keeps one (keyring installs keep none).
-    pub(super) fn account(&self, provider_home: Option<&Path>) -> AccountProbe {
+    /// `credential_home` where agy keeps one (keyring installs keep none).
+    pub(super) fn account(&self, credential_home: Option<&Path>) -> AccountProbe {
         match self {
             Self::Usage(_) => {
-                let credential = provider_home.and_then(credential_email);
+                let credential = credential_home.and_then(credential_email);
                 AccountProbe::Found(AgentAccount {
                     metered: Some(true),
                     credentials_updated_at_ms: credential.as_ref().and_then(|(_, at)| *at),
@@ -105,8 +105,8 @@ impl Read {
 }
 
 /// The read for `provider_home`, run with the login's `HOME` when it has one, inside a mount of
-/// the account's directory for a named login. While account-usage fetches are offline, agy is
-/// never started.
+/// the account's login files (shared) or whole directory (standalone) for a named login. While
+/// account-usage fetches are offline, agy is never started.
 pub(super) fn read(
     provider_home: Option<PathBuf>,
     login_env: &std::collections::BTreeMap<String, String>,
@@ -116,7 +116,7 @@ pub(super) fn read(
     }
     let login_home = login_env.get("HOME").map(String::as_str);
     let binary = crate::agents::locate_binary(&super::ANTIGRAVITY_DESCRIPTOR);
-    let Some((source, target)) = super::session::mounted_view(login_env) else {
+    let Some(mount) = super::session::account_mount(login_env) else {
         return read_with(&READS, provider_home, Instant::now(), || {
             run(binary, login_home, DEADLINE)
         });
@@ -125,8 +125,18 @@ pub(super) fn read(
         let Some(binary) = binary else {
             return Read::Failed(AccountProbeError::SpawnFailed);
         };
-        let command = mounted_command(&source, &target, binary, login_home);
-        own_login(run_command(command, DEADLINE), &source)
+        let command = match &mount {
+            super::session::AccountMount::Directory { source, target } => {
+                mounted_command(source, target, binary, login_home)
+            }
+            super::session::AccountMount::LoginFiles { account, target } => {
+                match prepare_login_probe_command(account, target, binary, login_home) {
+                    Ok(prepared) => prepared,
+                    Err(cause) => return Read::Failed(cause),
+                }
+            }
+        };
+        own_login(run_command(command, DEADLINE), mount.account())
     })
 }
 
@@ -157,7 +167,8 @@ impl Read {
 }
 
 pub(super) fn holds_credential(account: &Path) -> bool {
-    account.join(CREDENTIAL_FILE).is_file()
+    std::fs::metadata(account.join(CREDENTIAL_FILE))
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 pub(super) fn read_with(
@@ -240,15 +251,78 @@ pub(super) fn mounted_command(
     binary: PathBuf,
     login_home: Option<&str>,
 ) -> Command {
+    bwrap_command(
+        &[(source.to_path_buf(), target.to_path_buf())],
+        binary,
+        login_home,
+    )
+}
+
+/// Build the probe command for a shared mounted-login account without letting
+/// bubblewrap create a `0444` default token or fail on a missing account token.
+///
+/// An absent or non-directory `account` refuses with `SourceUnavailable` before
+/// creating either placeholder, so no probe creates a missing account directory
+/// or hides `home missing`. When `account` exists, `target_token` is absent,
+/// and `account` holds no non-empty token, agy runs unmounted and writes
+/// nothing, while keyring and `GEMINI_API_KEY` logins are still caught by
+/// `own_login`. Otherwise each missing token endpoint (and a missing `target`
+/// directory when `account` holds a token) is created as an empty `0600`
+/// regular file through `provider_file::create_empty_if_absent` (matching the
+/// placeholder reconcile leaves) before bubblewrap binds the account's login
+/// files over `target`.
+pub(super) fn prepare_login_probe_command(
+    account: &Path,
+    target: &Path,
+    binary: PathBuf,
+    login_home: Option<&str>,
+) -> Result<Command, AccountProbeError> {
+    use crate::agents::capabilities::LaunchCapability as _;
+
+    if !account.is_dir() {
+        return Err(AccountProbeError::SourceUnavailable);
+    }
+    let target_token = target.join(CREDENTIAL_FILE);
+    let target_exists = match std::fs::symlink_metadata(&target_token) {
+        Ok(meta) if meta.is_file() => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(_) | Err(_) => return Err(AccountProbeError::SourceUnavailable),
+    };
+    let account_token = account.join(CREDENTIAL_FILE);
+    let (account_token_present, has_credential) = match std::fs::symlink_metadata(&account_token) {
+        Ok(meta) if meta.is_file() => (true, meta.len() > 0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, false),
+        Ok(_) | Err(_) => return Err(AccountProbeError::SourceUnavailable),
+    };
+    if !target_exists && !has_credential {
+        return Ok(command(binary, login_home));
+    }
+    if !target_exists {
+        crate::agents::create_empty_provider_file(&target_token, 0o600)
+            .map_err(|_| AccountProbeError::SourceUnavailable)?;
+    }
+    if !account_token_present {
+        crate::agents::create_empty_provider_file(&account_token, 0o600)
+            .map_err(|_| AccountProbeError::SourceUnavailable)?;
+    }
+    let binds = super::AntigravityAdapter.mounted_login_binds(account, target);
+    Ok(bwrap_command(&binds, binary, login_home))
+}
+
+fn bwrap_command(
+    binds: &[(PathBuf, PathBuf)],
+    binary: PathBuf,
+    login_home: Option<&str>,
+) -> Command {
     let mut command = base_command(PathBuf::from("bwrap"), login_home);
     command
         .process_group(0)
         // Off the pane's terminal: agy would read its sign-in prompt there, not from stdin.
-        .args(["--dev-bind", "/", "/", "--die-with-parent", "--new-session", "--bind"])
-        .args([source, target])
-        .arg("--")
-        .arg(binary)
-        .args(ARGS);
+        .args(["--dev-bind", "/", "/", "--die-with-parent", "--new-session"]);
+    for (source, target) in binds {
+        command.arg("--bind").args([source, target]);
+    }
+    command.arg("--").arg(binary).args(ARGS);
     command
 }
 

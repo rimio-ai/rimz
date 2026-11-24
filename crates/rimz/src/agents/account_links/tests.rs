@@ -1448,3 +1448,139 @@ fn a_daemon_refuses_the_unlink_of_a_directory_only_while_it_holds_or_hides_sessi
             .is_empty()
     );
 }
+
+#[test]
+fn reconciling_a_shared_antigravity_account_sets_non_login_entries_aside_without_links() {
+    let home = Fixture::new("antigravity");
+    fs::create_dir_all(home.native.join("conversations")).unwrap();
+    fs::write(
+        home.native.join("antigravity-oauth-token"),
+        "{\"default\":1}",
+    )
+    .unwrap();
+    fs::write(home.native.join("settings.json"), "{\"theme\":\"default\"}").unwrap();
+    fs::write(home.native.join("conversations/default.db"), "d").unwrap();
+
+    fs::create_dir_all(home.named.join("conversations")).unwrap();
+    fs::create_dir_all(home.named.join("brain/s1")).unwrap();
+    fs::write(home.named.join("antigravity-oauth-token"), "{\"work\":1}").unwrap();
+    fs::write(home.named.join("installation_id"), "work-id").unwrap();
+    fs::write(home.named.join("conversations/work.db"), "w").unwrap();
+    fs::write(home.named.join("brain/s1/transcript.jsonl"), "{}\n").unwrap();
+    fs::write(home.named.join("settings.json"), "{\"theme\":\"work\"}").unwrap();
+    fs::write(home.named.join("rimz-statusline.json"), "{}").unwrap();
+    fs::write(home.named.join("history.jsonl"), "h\n").unwrap();
+    fs::write(home.named.join("pending.lock"), "l").unwrap();
+    symlink("log/cli.log", home.named.join("cli.log")).unwrap();
+
+    let native_before = contents(&home.native);
+    let report = home.run(true);
+
+    assert!(report.linked.is_empty(), "{:?}", report.linked);
+    assert!(report.moved.is_empty(), "{:?}", report.moved);
+    assert_eq!(
+        names(&home.named),
+        vec![".rimz-aside", "antigravity-oauth-token", "installation_id"]
+    );
+    assert_eq!(
+        fs::read_to_string(home.named.join("antigravity-oauth-token")).unwrap(),
+        "{\"work\":1}"
+    );
+    assert_eq!(
+        fs::read_to_string(home.named.join("installation_id")).unwrap(),
+        "work-id"
+    );
+    assert_eq!(contents(&home.native), native_before);
+
+    let aside = home.aside();
+    assert_eq!(
+        fs::read_to_string(aside.join("conversations/work.db")).unwrap(),
+        "w"
+    );
+    assert_eq!(
+        fs::read_to_string(aside.join("brain/s1/transcript.jsonl")).unwrap(),
+        "{}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(aside.join("settings.json")).unwrap(),
+        "{\"theme\":\"work\"}"
+    );
+    assert!(aside.join("rimz-statusline.json").is_file());
+    assert!(aside.join("history.jsonl").is_file());
+    assert!(aside.join("pending.lock").is_file());
+    assert!(
+        fs::symlink_metadata(aside.join("cli.log"))
+            .unwrap()
+            .is_symlink()
+    );
+
+    // A second reconcile changes nothing and creates no new aside stamp.
+    let stamps_before = names(&home.named.join(ASIDE_DIR));
+    let again = home.run(true);
+    assert!(again.set_aside.is_empty(), "{:?}", again.set_aside);
+    assert!(again.warnings().is_empty(), "{:?}", again.warnings());
+    assert_eq!(names(&home.named.join(ASIDE_DIR)), stamps_before);
+    assert_eq!(contents(&home.native), native_before);
+}
+
+#[test]
+fn reconciling_a_shared_antigravity_account_creates_placeholder_and_refuses_live_agents_or_errors()
+{
+    let home = Fixture::new("antigravity");
+    // Missing default dir stays untouched while an empty token placeholder is created.
+    assert!(!home.native.exists());
+    let report = home.run(true);
+    assert!(report.linked.is_empty(), "{:?}", report.linked);
+    assert!(!home.native.exists());
+    let token = home.named.join("antigravity-oauth-token");
+    assert!(token.is_file());
+    assert_eq!(fs::metadata(&token).unwrap().len(), 0);
+    assert_eq!(names(&home.named), vec!["antigravity-oauth-token"]);
+
+    // Live agents on the account refuse before any directory moves aside.
+    fs::create_dir_all(home.named.join("conversations")).unwrap();
+    fs::write(home.named.join("conversations/c.db"), "c").unwrap();
+    let error = home.run_with(true, Some(1)).unwrap_err();
+    assert!(
+        matches!(error, ShareErr::LiveAgents { ref entry, .. } if entry == "conversations"),
+        "{error}"
+    );
+    assert!(home.named.join("conversations/c.db").is_file());
+    assert!(!home.named.join(ASIDE_DIR).exists());
+
+    // A non-file at the placeholder slot refuses before setting any other entry aside,
+    // leaving settings, conversations, and `.rimz-aside` untouched (both directory and symlink).
+    for as_symlink in [false, true] {
+        let bad = Fixture::new("antigravity");
+        fs::create_dir_all(bad.named.join("conversations")).unwrap();
+        fs::write(bad.named.join("conversations/c.db"), "keep").unwrap();
+        fs::write(bad.named.join("settings.json"), "{\"keep\":true}").unwrap();
+        let bad_token = bad.named.join("antigravity-oauth-token");
+        if as_symlink {
+            let target = bad.named.join("other-token");
+            fs::write(&target, "tok").unwrap();
+            symlink(&target, &bad_token).unwrap();
+        } else {
+            fs::create_dir(&bad_token).unwrap();
+        }
+        let error = bad.run_with(true, Some(0)).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            matches!(error, ShareErr::Io { ref path, .. } if path == &bad_token),
+            "{text}"
+        );
+        assert!(text.contains(&bad_token.display().to_string()), "{text}");
+        assert!(
+            bad.named.join("conversations/c.db").is_file(),
+            "conversations must not move aside when placeholder slot is invalid"
+        );
+        assert!(
+            bad.named.join("settings.json").is_file(),
+            "settings.json must not move aside when placeholder slot is invalid"
+        );
+        assert!(
+            !bad.named.join(ASIDE_DIR).exists(),
+            "no .rimz-aside directory may be created before placeholder validation"
+        );
+    }
+}

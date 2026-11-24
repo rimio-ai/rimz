@@ -1122,25 +1122,160 @@ fn a_shared_codex_login_points_its_databases_at_the_default_home() {
 }
 
 #[test]
-fn an_antigravity_account_keeps_its_own_history() {
-    for shared in [
-        "[antigravity.work]\n",
-        "[antigravity.work]\nhistory = \"shared\"\n",
-    ] {
-        let accounts: AccountsConfig = toml::from_str(shared).unwrap();
-        assert!(matches!(
-            LoginCatalog::from_config_under(&accounts, Some(Path::new("/home/me"))),
-            Err(LoginConfigErr::HistoryNotShareable { .. })
-        ));
-    }
-    let accounts: AccountsConfig =
-        toml::from_str("[antigravity.work]\nhistory = \"standalone\"\n").unwrap();
+fn an_antigravity_account_shares_history_by_default_and_isolates_standalone() {
+    let accounts: AccountsConfig = toml::from_str(
+        "[antigravity.work]\nhome = \"/srv/work\"\n\
+         [antigravity.shared]\nhome = \"/srv/shared\"\nhistory = \"shared\"\n\
+         [antigravity.solo]\nhome = \"/srv/solo\"\nhistory = \"standalone\"\n",
+    )
+    .unwrap();
     let catalog = LoginCatalog::from_config_under(&accounts, Some(Path::new("/home/me"))).unwrap();
-    let login = catalog.select(&kind("antigravity"), &name("work")).unwrap();
-    assert!(!login.shares_history());
+    let ambient = BTreeMap::from([("HOME".to_owned(), "/home/me".to_owned())]);
+    let default = catalog
+        .select(&kind("antigravity"), &LoginName::default_login())
+        .unwrap();
+    let work = catalog.select(&kind("antigravity"), &name("work")).unwrap();
+    let shared = catalog
+        .select(&kind("antigravity"), &name("shared"))
+        .unwrap();
+    let solo = catalog.select(&kind("antigravity"), &name("solo")).unwrap();
+
+    for login in [&work, &shared] {
+        assert!(login.shares_history(), "{}", login.key());
+        assert_eq!(login.pool(), LoginKey::default_for(kind("antigravity")));
+        assert_eq!(
+            catalog.pool(&login.key()),
+            LoginKey::default_for(kind("antigravity"))
+        );
+        assert_eq!(
+            login.overrides(&ambient),
+            BTreeMap::from([(
+                "RIMZ_ANTIGRAVITY_LOGIN_HOME".to_owned(),
+                login.home().unwrap().display().to_string(),
+            )])
+        );
+        assert!(
+            !login.env(&ambient).contains_key("RIMZ_ANTIGRAVITY_HOME"),
+            "{:?}",
+            login.env(&ambient)
+        );
+    }
+
+    assert!(!solo.shares_history());
+    assert_eq!(solo.pool(), solo.key());
+    assert_eq!(catalog.pool(&solo.key()), solo.key());
+    assert_eq!(
+        solo.overrides(&ambient),
+        BTreeMap::from([("RIMZ_ANTIGRAVITY_HOME".to_owned(), "/srv/solo".to_owned())])
+    );
     assert!(
-        login
-            .overrides(&BTreeMap::new())
+        !solo
+            .env(&ambient)
+            .contains_key("RIMZ_ANTIGRAVITY_LOGIN_HOME"),
+        "{:?}",
+        solo.env(&ambient)
+    );
+
+    // Exported login-home key naming a declared account is dropped for default
+    // and standalone launches, and refused by check_exported_home; an exported
+    // standalone home key is likewise dropped when launching a shared account.
+    let shared_pane = BTreeMap::from([
+        ("HOME".to_owned(), "/home/me".to_owned()),
+        (
+            "RIMZ_ANTIGRAVITY_LOGIN_HOME".to_owned(),
+            "/srv/work".to_owned(),
+        ),
+    ]);
+    assert!(
+        !default
+            .env(&shared_pane)
+            .contains_key("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+    );
+    assert!(
+        !solo
+            .env(&shared_pane)
+            .contains_key("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+    );
+    assert!(matches!(
+        work.check_exported_home(&shared_pane),
+        Err(LoginConfigErr::ExportedHome {
+            env_key: "RIMZ_ANTIGRAVITY_LOGIN_HOME",
+            ..
+        })
+    ));
+
+    let standalone_pane = BTreeMap::from([
+        ("HOME".to_owned(), "/home/me".to_owned()),
+        ("RIMZ_ANTIGRAVITY_HOME".to_owned(), "/srv/solo".to_owned()),
+    ]);
+    assert!(
+        !work
+            .env(&standalone_pane)
             .contains_key("RIMZ_ANTIGRAVITY_HOME")
+    );
+    assert_eq!(
+        work.env(&standalone_pane)
+            .get("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+            .map(String::as_str),
+        Some("/srv/work")
+    );
+
+    let undeclared = BTreeMap::from([
+        ("HOME".to_owned(), "/home/me".to_owned()),
+        (
+            "RIMZ_ANTIGRAVITY_LOGIN_HOME".to_owned(),
+            "/srv/elsewhere".to_owned(),
+        ),
+    ]);
+    assert_eq!(
+        default
+            .env(&undeclared)
+            .get("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+            .map(String::as_str),
+        Some("/srv/elsewhere")
+    );
+
+    // A named login never carries the Antigravity key its mode does not set, even when
+    // the ambient value is undeclared (for instance, a removed account from a sibling pane).
+    let stale_standalone = BTreeMap::from([
+        ("HOME".to_owned(), "/home/me".to_owned()),
+        (
+            "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+            "/srv/removed-solo".to_owned(),
+        ),
+    ]);
+    assert_eq!(
+        default
+            .env(&stale_standalone)
+            .get("RIMZ_ANTIGRAVITY_HOME")
+            .map(String::as_str),
+        Some("/srv/removed-solo")
+    );
+    assert!(
+        !work
+            .env(&stale_standalone)
+            .contains_key("RIMZ_ANTIGRAVITY_HOME"),
+        "{:?}",
+        work.env(&stale_standalone)
+    );
+    assert_eq!(
+        work.env(&stale_standalone)
+            .get("RIMZ_ANTIGRAVITY_LOGIN_HOME")
+            .map(String::as_str),
+        Some("/srv/work")
+    );
+
+    assert!(
+        !solo
+            .env(&undeclared)
+            .contains_key("RIMZ_ANTIGRAVITY_LOGIN_HOME"),
+        "{:?}",
+        solo.env(&undeclared)
+    );
+    assert_eq!(
+        solo.env(&undeclared)
+            .get("RIMZ_ANTIGRAVITY_HOME")
+            .map(String::as_str),
+        Some("/srv/solo")
     );
 }

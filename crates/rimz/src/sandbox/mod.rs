@@ -162,6 +162,7 @@ pub struct SandboxPlan {
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<PlannedCopy>,
     tmp_dir: PathBuf,
+    file_bind_targets: Vec<PathBuf>,
     guarded_entries: Vec<PathBuf>,
 }
 
@@ -216,6 +217,9 @@ impl std::fmt::Display for SkippedSkill {
 pub struct ProviderHome {
     pub source: PathBuf,
     pub target: PathBuf,
+    /// Login files overlaid onto `target` for a shared mounted-login account,
+    /// applied late so ancestor reachability mounts cannot cover them.
+    pub file_binds: Vec<(PathBuf, PathBuf)>,
 }
 
 struct DirView {
@@ -378,8 +382,40 @@ pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {
     for copy in &plan.copies {
         rewrite::apply(copy)?;
     }
+    for target in &plan.file_bind_targets {
+        crate::agents::create_empty_provider_file(target, 0o600).map_err(|source| {
+            SandboxErr::Io {
+                path: target.clone(),
+                source,
+            }
+        })?;
+    }
     crate::disk::paths::ensure_private_runtime_dir(&plan.tmp_dir)?;
     Ok(())
+}
+
+/// Reject a single-file bind destination that is not absent or a regular file
+/// (bubblewrap refuses to bind a file onto a symlink or directory).
+pub(crate) fn check_file_bind_target(target: &Path) -> Result<(), SandboxErr> {
+    match std::fs::symlink_metadata(target) {
+        Ok(meta) if meta.is_file() => Ok(()),
+        Ok(meta) => Err(SandboxErr::Io {
+            path: target.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                if meta.is_symlink() {
+                    "mounted login file destination is a symlink, not a regular file; replace or remove it"
+                } else {
+                    "mounted login file destination is not a regular file; replace or remove it"
+                },
+            ),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(SandboxErr::Io {
+            path: target.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
@@ -486,7 +522,13 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     let provider_homes: Vec<_> = inputs
         .provider_home
         .iter()
-        .flat_map(|home| [&home.source, &home.target])
+        .flat_map(|home| {
+            [&home.source, &home.target].into_iter().chain(
+                home.file_binds
+                    .iter()
+                    .flat_map(|(source, target)| [source, target]),
+            )
+        })
         .chain(inputs.default_home.iter())
         .map(|home| {
             home.canonicalize()
@@ -552,6 +594,19 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             .into_iter()
             .map(|target| Mount::RemountRo { target }),
     );
+    let mut file_bind_targets = Vec::new();
+    if let Some(home) = &inputs.provider_home {
+        for (source, target) in &home.file_binds {
+            validate_path(source)?;
+            validate_path(target)?;
+            check_file_bind_target(target)?;
+            file_bind_targets.push(target.clone());
+            mounts.push(Mount::Bind {
+                source: source.clone(),
+                target: target.clone(),
+            });
+        }
+    }
     let mut copies = views.copies;
     if let Some((copy, name, target)) =
         rewrite::plan_ssh_config(inputs.ssh_config_copies_dir, inputs.ssh_config_file)
@@ -579,6 +634,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         skipped: views.skipped,
         copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
+        file_bind_targets,
         guarded_entries,
     })
 }
@@ -846,6 +902,62 @@ mod tests {
             &["true".into()],
         );
         assert!(argv.windows(3).any(|args| args == ["--bind", "/", "/"]));
+    }
+
+    #[test]
+    fn provider_home_file_binds_follow_tmp_reach_rebinds() {
+        let root = tempfile::tempdir().unwrap();
+        let default_dir = root.path().join(".gemini/antigravity-cli");
+        let account_dir = root.path().join("accounts/work");
+        std::fs::create_dir_all(&default_dir).unwrap();
+        std::fs::create_dir_all(&account_dir).unwrap();
+        let token_src = account_dir.join("antigravity-oauth-token");
+        let token_dst = default_dir.join("antigravity-oauth-token");
+        let env = BTreeMap::from([("HOME".into(), root.path().display().to_string())]);
+
+        let shared = plan(&SandboxInputs {
+            env: &env,
+            cwd: root.path(),
+            project_root: root.path(),
+            worktree: None,
+            checkout: None,
+            add_dirs: &[],
+            read_only: Vec::new(),
+            tmp_dir: Path::new("/state/tmp/unit"),
+            skills_dir: Path::new("/state/skills"),
+            ssh_config_file: Path::new("/state/missing-ssh-config"),
+            ssh_config_copies_dir: Path::new("/state/ssh-config-copies"),
+            provider_home: Some(ProviderHome {
+                source: default_dir.clone(),
+                target: default_dir.clone(),
+                file_binds: vec![(token_src.clone(), token_dst.clone())],
+            }),
+            provider_home_env_keys: &["RIMZ_ANTIGRAVITY_HOME", "RIMZ_ANTIGRAVITY_LOGIN_HOME"],
+            default_home: Some(default_dir.clone()),
+            skills: SkillInputs {
+                kind: "antigravity",
+                home: None,
+                manual: ManualSkill::Frontmatter,
+                withheld: &[],
+                callable: None,
+                grant: None,
+            },
+        })
+        .unwrap();
+        let mounts = &shared.plan.mounts;
+        let reach = mounts
+            .iter()
+            .position(|mount| {
+                matches!(mount, Mount::Bind { source, target } if source == root.path() && target == root.path())
+            })
+            .unwrap();
+        let file_bind = mounts
+            .iter()
+            .position(|mount| {
+                matches!(mount, Mount::Bind { source, target } if source == &token_src && target == &token_dst)
+            })
+            .unwrap();
+        assert!(reach < file_bind, "{mounts:?}");
     }
 
     #[test]

@@ -526,9 +526,6 @@ fn add(
     let declaring = existing.is_none();
     let adapter = rimz::agents::definition_by_kind(kind.as_str())?;
     require_mount_view(kind, &name, &ambient)?;
-    let history = history
-        .or((declaring && !adapter.account_history_shareable())
-            .then_some(AccountHistory::Standalone));
     // Resolve the requested history mode without changing the recorded declaration.
     let mut accounts = machine.accounts.clone();
     if let Some(declared) = accounts.named_mut(kind) {
@@ -626,7 +623,7 @@ fn add(
         let home = render::home_relative(&shared.default_home().display().to_string());
         if shared.shares_history() {
             writeln!(out, "  shares sessions, history, and settings with {home}")?;
-        } else if !adapter.account_history_shareable() {
+        } else if !adapter.mounted_login_files().is_empty() {
             writeln!(
                 out,
                 "  keeps its own login, settings, sessions, and history"

@@ -81,7 +81,6 @@
 ## [accounts.codex.personal]
 ## [accounts.pi.work]
 ## [accounts.antigravity.work]
-## history = "standalone"
 
 # Defaults for new rooms and rooms following the machine selection live,
 # below room pins and trusted project choices. `rimz accounts use --global`

@@ -787,7 +787,10 @@ fn account_rows(
             let mut row = row(
                 login.kind(),
                 login.name(),
-                login.home_dir(ambient),
+                login
+                    .home()
+                    .map(std::path::Path::to_path_buf)
+                    .or_else(|| login.home_dir(ambient)),
                 login.health(ambient).err(),
             );
             row.read(readings.get(&login.key()), || {

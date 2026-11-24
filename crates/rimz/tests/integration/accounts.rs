@@ -849,6 +849,13 @@ fn selecting_a_mounted_account_without_bubblewrap_refuses_without_writing() {
     };
 
     refuses(failed(&run(&["add", "antigravity", "other"])));
+    refuses(failed(&run(&[
+        "add",
+        "antigravity",
+        "other",
+        "--history",
+        "standalone",
+    ])));
     refuses(failed(&run(&["use", "--global", "antigravity", "work"])));
     refuses(failed(&run(&["use", "antigravity", "work"])));
     assert_eq!(std::fs::read(&config).unwrap(), config_before);
@@ -3076,4 +3083,233 @@ fn list_prints_the_plan_its_own_usage_refresh_just_read() {
         .find(|row| row["account"] == "codex@default")
         .unwrap_or_else(|| panic!("no codex row: {rows}"));
     assert_eq!(row["plan"], "pro", "{row}");
+}
+
+#[test]
+fn accounts_add_antigravity_defaults_to_shared_and_keeps_standalone_separate() {
+    let bwrap = match rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        Ok(Some(path)) => path,
+        Ok(None) => unreachable!("scoped preflight returns bwrap"),
+        Err(err) => {
+            crate::common::skip(&format!("bubblewrap unusable: {err}"));
+            return;
+        }
+    };
+    let env = Env::new();
+    let bwrap_bin = env.home_root.join("bwrap-bin");
+    std::fs::create_dir_all(&bwrap_bin).unwrap();
+    std::os::unix::fs::symlink(&bwrap, bwrap_bin.join("bwrap")).unwrap();
+    let run_accounts = |env: &Env, args: &[&str]| {
+        hermetic(env, &mut env.rimz())
+            .env("PATH", &bwrap_bin)
+            .arg("accounts")
+            .args(args)
+            .output()
+            .expect("run rimz accounts")
+    };
+    let default_dir = env.home_root.join(".gemini/antigravity-cli");
+    let work_dir = env.rimz_home().join("accounts/antigravity/work");
+    let solo_dir = env.rimz_home().join("accounts/antigravity/solo");
+
+    // New account without --history defaults to shared; hooks land in default dir only.
+    let added = succeeded(&run_accounts(&env, &["add", "antigravity", "work"]));
+    assert!(
+        added.contains("shares sessions, history, and settings with"),
+        "{added}"
+    );
+    let config = std::fs::read_to_string(env.rimz_home().join("config.toml")).unwrap();
+    let parsed: rimz::config::MachineConfig = toml::from_str(&config).unwrap();
+    assert_eq!(
+        parsed.accounts.antigravity["work"].history,
+        rimz::config::AccountHistory::Shared,
+        "{config}"
+    );
+    assert!(default_dir.join("settings.json").is_file());
+    let work_entries: Vec<_> = std::fs::read_dir(&work_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(work_entries, vec!["antigravity-oauth-token"]);
+    assert_eq!(
+        std::fs::metadata(work_dir.join("antigravity-oauth-token"))
+            .unwrap()
+            .len(),
+        0
+    );
+
+    // `accounts show --json` reports the shared account's own directory.
+    let shown: Value = serde_json::from_str(&succeeded(&run_accounts(
+        &env,
+        &["show", "antigravity@work", "--json"],
+    )))
+    .unwrap();
+    let row = &shown.as_array().unwrap()[0];
+    assert_eq!(
+        row["home"].as_str(),
+        Some(work_dir.to_str().unwrap()),
+        "{row}"
+    );
+    assert_eq!(row["history"].as_str(), Some("shared"), "{row}");
+    assert_eq!(row["pool"].as_str(), Some("antigravity@default"), "{row}");
+
+    // --history standalone keeps its own settings and never claims shared settings.
+    let solo_added = succeeded(&run_accounts(
+        &env,
+        &["add", "antigravity", "solo", "--history", "standalone"],
+    ));
+    assert!(
+        solo_added.contains("keeps its own login, settings, sessions, and history"),
+        "{solo_added}"
+    );
+    assert!(!solo_added.contains("shares settings"), "{solo_added}");
+    assert!(solo_dir.join("settings.json").is_file());
+
+    // Redeclaring standalone without --history keeps it standalone.
+    let solo_rerun = succeeded(&run_accounts(&env, &["add", "antigravity", "solo"]));
+    assert!(
+        solo_rerun.contains("keeps its own login, settings, sessions, and history"),
+        "{solo_rerun}"
+    );
+
+    // Switching standalone to shared sets aside its history/settings without links
+    // and leaves the default directory untouched.
+    std::fs::create_dir_all(solo_dir.join("conversations")).unwrap();
+    std::fs::write(solo_dir.join("conversations/c1.db"), "conv").unwrap();
+    std::fs::write(solo_dir.join("antigravity-oauth-token"), "{\"id\":1}").unwrap();
+    std::fs::write(solo_dir.join("installation_id"), "solo-id").unwrap();
+    let default_settings_before = std::fs::read(default_dir.join("settings.json")).unwrap();
+
+    let switched = succeeded(&run_accounts(
+        &env,
+        &["add", "antigravity", "solo", "--history", "shared"],
+    ));
+    assert!(
+        switched.contains("shares sessions, history, and settings with"),
+        "{switched}"
+    );
+    let mut solo_entries: Vec<_> = std::fs::read_dir(&solo_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    solo_entries.sort();
+    assert_eq!(
+        solo_entries,
+        vec![".rimz-aside", "antigravity-oauth-token", "installation_id"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(aside(&solo_dir).join("conversations/c1.db")).unwrap(),
+        "conv"
+    );
+    assert_eq!(
+        std::fs::read(default_dir.join("settings.json")).unwrap(),
+        default_settings_before
+    );
+    assert!(!default_dir.join("conversations").exists());
+
+    // `rimz config set accounts.antigravity.<n>.history` switches mode in config.toml.
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("PATH", &bwrap_bin)
+            .args([
+                "config",
+                "set",
+                "accounts.antigravity.solo.history",
+                "standalone",
+            ])
+            .output()
+            .unwrap(),
+    );
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("PATH", &bwrap_bin)
+            .args([
+                "config",
+                "set",
+                "accounts.antigravity.solo.history",
+                "shared",
+            ])
+            .output()
+            .unwrap(),
+    );
+    let after_set: Value = serde_json::from_str(&succeeded(&run_accounts(
+        &env,
+        &["show", "antigravity@solo", "--json"],
+    )))
+    .unwrap();
+    assert_eq!(
+        after_set[0]["history"].as_str(),
+        Some("shared"),
+        "{after_set}"
+    );
+    assert_eq!(
+        after_set[0]["pool"].as_str(),
+        Some("antigravity@default"),
+        "{after_set}"
+    );
+
+    // `rimz agents explain` on a shared account plans file binds without creating default dir.
+    let explain_env = Env::new();
+    let explain_default = explain_env.home_root.join(".gemini/antigravity-cli");
+    let explain_work = explain_env.rimz_home().join("accounts/antigravity/work");
+    std::fs::create_dir_all(&explain_work).unwrap();
+    std::fs::write(explain_work.join("antigravity-oauth-token"), "").unwrap();
+    std::fs::write(
+        explain_env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.antigravity.work]\nhome = '{}'\n[accounts.use]\nantigravity = 'work'\n",
+            explain_work.display()
+        ),
+    )
+    .unwrap();
+    let explained = succeeded(
+        &hermetic(&explain_env, &mut explain_env.rimz())
+            .env("PATH", &bwrap_bin)
+            .args(["agents", "explain", "antigravity", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        !explain_default.exists(),
+        "explain must not create default dir"
+    );
+    let explained: Value = serde_json::from_str(&explained).unwrap();
+    assert_eq!(
+        explained["env"]["RIMZ_ANTIGRAVITY_LOGIN_HOME"].as_str(),
+        Some(explain_work.to_str().unwrap()),
+        "{explained}"
+    );
+    assert!(
+        explained["env"].get("RIMZ_ANTIGRAVITY_HOME").is_none(),
+        "{explained}"
+    );
+    let argv: Vec<&str> = explained["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        argv.windows(3).any(|w| {
+            w[0] == "--bind"
+                && w[1]
+                    == explain_work
+                        .join("antigravity-oauth-token")
+                        .to_str()
+                        .unwrap()
+                && w[2]
+                    == explain_default
+                        .join("antigravity-oauth-token")
+                        .to_str()
+                        .unwrap()
+        }),
+        "{argv:?}"
+    );
+    assert!(
+        !argv.windows(3).any(|w| {
+            w[0] == "--bind"
+                && w[1] == explain_work.to_str().unwrap()
+                && w[2] == explain_default.to_str().unwrap()
+        }),
+        "{argv:?}"
+    );
 }

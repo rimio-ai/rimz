@@ -1485,6 +1485,296 @@ fn sandbox_ssh_config_accepts_nested_root_owned_include_in_inactive_host() {
 }
 
 #[test]
+fn antigravity_shared_login_file_binds_overlay_default_home_under_tmp() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let home = &env.home_root;
+    let default_dir = home.join(".gemini/antigravity-cli");
+    let account_dir = home.join("accounts/work");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::write(default_dir.join("antigravity-oauth-token"), "default-token").unwrap();
+    std::fs::write(default_dir.join("installation_id"), "default-id").unwrap();
+    std::fs::write(default_dir.join("settings.json"), "{\"shared\":true}").unwrap();
+    std::fs::write(account_dir.join("antigravity-oauth-token"), "work-token").unwrap();
+    std::fs::write(account_dir.join("installation_id"), "work-id").unwrap();
+
+    let state = env.store();
+    let vars = environment(&env);
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        env: &vars,
+        cwd: home,
+        project_root: home,
+        worktree: None,
+        checkout: None,
+        add_dirs: &[],
+        read_only: Vec::new(),
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: Some(rimz::sandbox::ProviderHome {
+            source: default_dir.clone(),
+            target: default_dir.clone(),
+            file_binds: vec![
+                (
+                    account_dir.join("antigravity-oauth-token"),
+                    default_dir.join("antigravity-oauth-token"),
+                ),
+                (
+                    account_dir.join("installation_id"),
+                    default_dir.join("installation_id"),
+                ),
+            ],
+        }),
+        provider_home_env_keys: &["RIMZ_ANTIGRAVITY_HOME", "RIMZ_ANTIGRAVITY_LOGIN_HOME"],
+        default_home: Some(default_dir.clone()),
+        skills: SkillInputs {
+            kind: "antigravity",
+            home: None,
+            manual: ManualSkill::Frontmatter,
+            withheld: &[],
+            callable: None,
+            grant: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    let bwrap = rimz::sandbox::preflight(Isolation::Scoped)
+        .unwrap()
+        .unwrap();
+    let argv = rimz::sandbox::bwrap_argv(&bwrap, &plan.plan, home, &[]);
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .args([
+            "sh",
+            "-c",
+            "printf '%s|%s|%s' \"$(cat \"$1/antigravity-oauth-token\")\" \"$(cat \"$1/installation_id\")\" \"$(cat \"$1/settings.json\")\" && printf 'refreshed' > \"$1/antigravity-oauth-token\" && printf 'turn' > \"$1/history.jsonl\"",
+            "check",
+            default_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "work-token|work-id|{\"shared\":true}"
+    );
+    // In-place token refresh landed in account_dir while default's token stayed untouched,
+    // and history landed in default_dir.
+    assert_eq!(
+        std::fs::read_to_string(account_dir.join("antigravity-oauth-token")).unwrap(),
+        "refreshed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(default_dir.join("antigravity-oauth-token")).unwrap(),
+        "default-token"
+    );
+    assert_eq!(
+        std::fs::read_to_string(default_dir.join("history.jsonl")).unwrap(),
+        "turn"
+    );
+    assert!(!account_dir.join("history.jsonl").exists());
+}
+
+#[test]
+fn sandbox_shared_antigravity_file_bind_entry_kinds() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let env = Env::new();
+    let home = &env.home_root;
+    let state = env.store();
+    let vars = environment(&env);
+    let account_dir = home.join("accounts/work");
+    std::fs::create_dir_all(&account_dir).unwrap();
+    let account_token = account_dir.join("antigravity-oauth-token");
+    std::fs::write(&account_token, "work-token").unwrap();
+
+    let make_plan = |default_dir: &Path, dst: &Path| {
+        rimz::sandbox::plan(&SandboxInputs {
+            env: &vars,
+            cwd: home,
+            project_root: home,
+            worktree: None,
+            checkout: None,
+            add_dirs: &[],
+            read_only: Vec::new(),
+            tmp_dir: &state.paths().temp_unit_dir(None),
+            skills_dir: &state.paths().skills_dir,
+            ssh_config_file: &env.home_root.join("missing-ssh-config"),
+            ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+            provider_home: Some(rimz::sandbox::ProviderHome {
+                source: default_dir.to_path_buf(),
+                target: default_dir.to_path_buf(),
+                file_binds: vec![(account_token.clone(), dst.to_path_buf())],
+            }),
+            provider_home_env_keys: &["RIMZ_ANTIGRAVITY_HOME", "RIMZ_ANTIGRAVITY_LOGIN_HOME"],
+            default_home: Some(default_dir.to_path_buf()),
+            skills: SkillInputs {
+                kind: "antigravity",
+                home: None,
+                manual: ManualSkill::Frontmatter,
+                withheld: &[],
+                callable: None,
+                grant: None,
+            },
+        })
+    };
+
+    // 1. Missing destination and missing parent: plan writes nothing; apply creates 0600 file.
+    let missing_dir = home.join("case-missing/.gemini/antigravity-cli");
+    let missing_token = missing_dir.join("antigravity-oauth-token");
+    let plan = make_plan(&missing_dir, &missing_token).unwrap();
+    assert!(!missing_dir.exists(), "plan must not write on disk");
+    rimz::sandbox::apply(&plan).unwrap();
+    let meta = std::fs::symlink_metadata(&missing_token).unwrap();
+    assert!(meta.is_file());
+    assert_eq!(meta.len(), 0);
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+
+    // 2. Concurrent file appearing between plan and apply is never overwritten.
+    let race_dir = home.join("case-race/.gemini/antigravity-cli");
+    let race_token = race_dir.join("antigravity-oauth-token");
+    let plan = make_plan(&race_dir, &race_token).unwrap();
+    std::fs::create_dir_all(&race_dir).unwrap();
+    std::fs::write(&race_token, "appeared-concurrently").unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&race_token).unwrap(),
+        "appeared-concurrently"
+    );
+
+    // 3. Symlink to an existing regular file is refused by plan with the path named.
+    let sym_dir = home.join("case-symlink/.gemini/antigravity-cli");
+    std::fs::create_dir_all(&sym_dir).unwrap();
+    let real_file = home.join("real-token");
+    std::fs::write(&real_file, "real").unwrap();
+    let sym_token = sym_dir.join("antigravity-oauth-token");
+    symlink(&real_file, &sym_token).unwrap();
+    let err = make_plan(&sym_dir, &sym_token).err().unwrap().to_string();
+    assert!(err.contains(&sym_token.display().to_string()), "{err}");
+    assert!(err.contains("symlink"), "{err}");
+
+    // 4. Dangling symlink is refused by plan with the path named.
+    let dangling_dir = home.join("case-dangling/.gemini/antigravity-cli");
+    std::fs::create_dir_all(&dangling_dir).unwrap();
+    let dangling_token = dangling_dir.join("antigravity-oauth-token");
+    symlink(home.join("no-such-file"), &dangling_token).unwrap();
+    let err = make_plan(&dangling_dir, &dangling_token)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains(&dangling_token.display().to_string()), "{err}");
+    assert!(err.contains("symlink"), "{err}");
+
+    // 5. Directory at destination is refused by plan with the path named.
+    let dir_case = home.join("case-dir/.gemini/antigravity-cli");
+    let dir_token = dir_case.join("antigravity-oauth-token");
+    std::fs::create_dir_all(&dir_token).unwrap();
+    let err = make_plan(&dir_case, &dir_token).err().unwrap().to_string();
+    assert!(err.contains(&dir_token.display().to_string()), "{err}");
+    assert!(err.contains("regular file"), "{err}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_shared_antigravity_missing_default_token_leaves_owner_writable_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let home = &env.home_root;
+    let default_dir = home.join(".gemini/antigravity-cli");
+    let default_token = default_dir.join("antigravity-oauth-token");
+    let account_dir = home.join("accounts/work");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    std::fs::create_dir_all(&account_dir).unwrap();
+    std::fs::write(account_dir.join("antigravity-oauth-token"), "work-token").unwrap();
+    assert!(!default_token.exists());
+
+    let state = env.store();
+    let vars = environment(&env);
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        env: &vars,
+        cwd: home,
+        project_root: home,
+        worktree: None,
+        checkout: None,
+        add_dirs: &[],
+        read_only: Vec::new(),
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: Some(rimz::sandbox::ProviderHome {
+            source: default_dir.clone(),
+            target: default_dir.clone(),
+            file_binds: vec![(
+                account_dir.join("antigravity-oauth-token"),
+                default_token.clone(),
+            )],
+        }),
+        provider_home_env_keys: &["RIMZ_ANTIGRAVITY_HOME", "RIMZ_ANTIGRAVITY_LOGIN_HOME"],
+        default_home: Some(default_dir.clone()),
+        skills: SkillInputs {
+            kind: "antigravity",
+            home: None,
+            manual: ManualSkill::Frontmatter,
+            withheld: &[],
+            callable: None,
+            grant: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    let bwrap = rimz::sandbox::preflight(Isolation::Scoped)
+        .unwrap()
+        .unwrap();
+    let argv = rimz::sandbox::bwrap_argv(&bwrap, &plan.plan, home, &[]);
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .args([
+            "sh",
+            "-c",
+            "cat \"$1/antigravity-oauth-token\"",
+            "check",
+            default_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "work-token");
+
+    // After bwrap exits, the default token is 0600 owner-writable (never 0444) and empty,
+    // so a subsequent sign-in on default can write to it in place.
+    let meta = std::fs::symlink_metadata(&default_token).unwrap();
+    assert!(meta.is_file());
+    assert_eq!(meta.len(), 0);
+    assert_eq!(
+        meta.permissions().mode() & 0o777,
+        0o600,
+        "missing default token must be 0600 owner-writable, not bwrap's 0444"
+    );
+    std::fs::write(&default_token, "default-signin").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&default_token).unwrap(),
+        "default-signin"
+    );
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn sandbox_ssh_config_survives_include_replacement_in_a_running_view() {
     use std::os::unix::fs::{MetadataExt, symlink};
@@ -2754,6 +3044,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
         provider_home: Some(rimz::sandbox::ProviderHome {
             source: account.clone(),
             target: account.clone(),
+            file_binds: Vec::new(),
         }),
         provider_home_env_keys: &["CODEX_HOME"],
         default_home: Some(home.join(".codex")),
@@ -2774,6 +3065,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
             inputs.provider_home = Some(rimz::sandbox::ProviderHome {
                 source: account.clone(),
                 target: account,
+                file_binds: Vec::new(),
             });
             inputs.default_home = None;
         }

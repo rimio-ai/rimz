@@ -88,7 +88,7 @@ impl AntigravityManagedIntegration {
         Self { paths: Some(paths) }
     }
 
-    /// The plugin and agy's `config.json` are one copy under `HOME` for every account. A named
+    /// The plugin and agy's `config.json` are one copy under `HOME` for every account. A standalone
     /// account keeps its own `settings.json`, and so its own displaced statusline.
     fn paths(&self, login_env: &BTreeMap<String, String>) -> Result<Paths> {
         if let Some(paths) = &self.paths {
@@ -278,7 +278,7 @@ pub(super) fn hooks_path() -> Result<PathBuf> {
     )
 }
 
-/// The login's `settings.json`: a named account's own, else the override or `HOME`'s, each
+/// The login's `settings.json`: a standalone account's own, else the override or `HOME`'s, each
 /// read from the login env.
 pub(super) fn settings_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if let Some((account, _)) = super::session::mounted_view(login_env) {
@@ -559,7 +559,7 @@ fn preview(paths: &Paths) -> Result<HookInstallPreview> {
 }
 
 /// A plugin path RimZ does not own stays; the global file's owned handlers and
-/// the owned statusline are still removed. A named account's uninstall leaves the plugin and
+/// the owned statusline are still removed. A standalone account's uninstall leaves the plugin and
 /// the global file, which every account of this `HOME` runs on.
 fn uninstall(paths: &Paths, account_only: bool) -> Result<HookUninstallReport> {
     let plugin = paths.plugin();

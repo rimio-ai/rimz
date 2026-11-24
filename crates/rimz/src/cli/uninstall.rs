@@ -89,7 +89,12 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         .iter()
         .filter(|(key, _, _)| !key.name.is_default())
         .filter_map(|(key, adapter, env)| {
-            let home = adapter.config_home(env)?;
+            let home = adapter
+                .shared_login_home_env_key()
+                .and_then(|key| env.get(key))
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| adapter.config_home(env))?;
             home.exists().then(|| (hook_label(key), home))
         })
         .collect::<Vec<_>>();

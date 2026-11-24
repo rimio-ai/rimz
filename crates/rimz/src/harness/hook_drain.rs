@@ -175,6 +175,7 @@ pub fn capture_env() -> BTreeMap<String, String> {
             names.extend(HOOK_ENV_EXTRA_NAMES);
             for agent in crate::agents::all_definitions() {
                 names.extend(agent.config_home_env_keys());
+                names.extend(agent.shared_login_home_env_key());
                 names.extend(agent.temp_dir_env_keys());
                 names.extend(agent.hook_env_keys());
             }

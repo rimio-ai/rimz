@@ -60,6 +60,7 @@ pub(super) fn provider_home_keys() -> impl Iterator<Item = &'static str> {
                 .iter()
                 .copied()
                 .chain(definition.shared_database_home_env_key())
+                .chain(definition.shared_login_home_env_key())
         })
         .chain(PROVIDER_SIDECAR_KEYS)
 }
