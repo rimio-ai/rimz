@@ -1,12 +1,12 @@
 use super::*;
 use crate::ids::{MuxClientId, PaneId};
 use crate::sidebar_pane::app::fixtures::{publish_fold, snapshot_with_panes};
-use crate::sidebar_pane::{CardReply, CardRequest, CardTarget};
+use crate::sidebar_pane::{CardReply, CardRequest};
 
 fn request(room: &Room) -> CardReply {
     let stream = room.connect();
     stream.set_read_timeout(Some(SETTLE)).unwrap();
-    attach::write_line(&stream, &CardRequest::CloseTarget { pane: None }).unwrap();
+    attach::write_line(&stream, &CardRequest::CloseTarget {}).unwrap();
     let reply = attach::read_line::<CardReply>(&mut BufReader::new(stream)).unwrap();
     assert!(
         reply.is_some(),
@@ -58,12 +58,7 @@ fn acting_view(clients: &[(u32, u32)], allowed: bool) {
             screen.process(&pty.drain());
             screen.screen().contents().contains("zsh")
         });
-        assert_eq!(
-            request(&room),
-            CardReply::CloseTarget {
-                target: CardTarget::Pane(id(1))
-            }
-        );
+        assert_eq!(request(&room), CardReply::CloseTarget { pane: id(1) });
     } else {
         assert!(matches!(request(&room), CardReply::Refused { .. }));
     }
@@ -122,11 +117,7 @@ fn unresponsive_view() -> (Room, Pane, Pty, Attachment) {
         let (reply, _) = std::sync::mpsc::sync_channel(1);
         room.host
             .plane
-            .card_input(
-                CardRequest::CloseTarget { pane: None },
-                reply,
-                Instant::now() + SETTLE,
-            )
+            .card_input(CardRequest::CloseTarget {}, reply, Instant::now() + SETTLE)
             .is_ok()
     });
     let mut greeting = hello(&attached.instance_id);
@@ -150,7 +141,7 @@ fn assert_host_refusal(room: &Room, reason: &str) {
     let worker = std::thread::spawn(move || {
         host.serve_card(
             &server,
-            CardRequest::CloseTarget { pane: None },
+            CardRequest::CloseTarget {},
             Duration::from_millis(100),
         );
     });
@@ -159,7 +150,7 @@ fn assert_host_refusal(room: &Room, reason: &str) {
     let reply = attach::read_line::<CardReply>(&mut replies).unwrap();
     assert_eq!(
         reply,
-        Some(CardRequest::CloseTarget { pane: None }.refused(reason)),
+        Some(CardRequest::CloseTarget {}.refused(reason)),
         "a transient host refusal must be a reply, not EOF"
     );
     assert_eq!(attach::read_line::<CardReply>(&mut replies).unwrap(), None);
@@ -190,7 +181,7 @@ fn card_host_reply_deadline_replies_with_a_refusal() {
     };
     assert_eq!(
         *command.answer.lock().unwrap(),
-        Some(CardRequest::CloseTarget { pane: None }.refused("sidebar busy; try again")),
+        Some(CardRequest::CloseTarget {}.refused("sidebar busy; try again")),
         "the deadline must answer the queued input before returning its refusal"
     );
 }

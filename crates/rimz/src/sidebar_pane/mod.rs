@@ -6,7 +6,7 @@
 pub mod app;
 mod attach;
 mod commands;
-pub use commands::{CardDirection, CardReply, CardRequest, CardTarget, request_card};
+pub use commands::{CardDirection, CardReply, CardRequest, request_card};
 pub mod host;
 pub mod pets;
 pub(crate) mod pixel;

@@ -305,9 +305,7 @@ fn close_stops_children_before_the_highlighted_session_and_records_only_the_root
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent":{
-            "kind":"claude", "agent_id":"root", "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         command(&env, &["close"]),
     );
     assert_exit(&output, 0);
@@ -350,34 +348,10 @@ fn close_process_does_not_record_an_entry_and_a_stop_failure_records_nothing() {
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent":{
-            "kind":"claude", "agent_id":"root", "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         failed,
     );
     assert_exit(&output, 1);
-    assert!(!closed_path(&env).exists());
-}
-
-#[test]
-fn close_idle_agent_closes_the_row_pane_without_recording() {
-    let id = "zellij:terminal_7";
-    let env = Env::new();
-    env.record(&env.project_root);
-    let output = exchange(
-        &env,
-        json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent": {
-            "kind":"claude", "agent_id":id, "pane":"zellij:terminal_7"
-        }}),
-        command(&env, &["close"]),
-    );
-    assert_exit(&output, 0);
-    assert!(
-        trace_lines(&env.home_root.join("mux.log"))
-            .iter()
-            .any(|line| line.contains("close-pane") && line.ends_with("7"))
-    );
     assert!(!closed_path(&env).exists());
 }
 
@@ -434,13 +408,12 @@ fn closes(env: &Env) -> Vec<String> {
         .collect()
 }
 
-fn close_card(env: &Env, id: &str, command: Command) -> Output {
+/// Close the highlighted card, the host naming terminal_7 as the highlight's pane.
+fn close_card(env: &Env, command: Command) -> Output {
     exchange(
         env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent": {
-            "kind":"claude", "agent_id":id, "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         command,
     )
 }
@@ -453,7 +426,7 @@ fn close_of_a_replaced_session_stops_and_records_the_holder() {
     env.record(&env.project_root);
     launched(&env, "sess-old", 0, "terminal_7");
     launched(&env, "sess-new", 1, "terminal_8");
-    let output = close_card(&env, "sess-old", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     let closes = closes(&env);
     assert_eq!(closes.len(), 1, "{closes:?}");
@@ -480,7 +453,7 @@ fn close_racing_a_bind(env: &Env, reserved: bool, bind: impl Fn(&Env) + Sync) ->
             bind(env);
             held.write_all(&[0]).unwrap();
         });
-        close_card(env, "sess-old", command)
+        close_card(env, command)
     })
 }
 
@@ -533,7 +506,7 @@ fn close_of_a_plain_card_closes_on_the_card_read_alone() {
     let env = Env::new();
     env.record(&env.project_root);
     seed(&env, "plain", |_| {});
-    let output = close_card(&env, "plain", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     assert!(!closes(&env).is_empty());
     assert_eq!(
@@ -570,7 +543,7 @@ fn close_of_a_thawed_card_reads_again_before_the_close() {
         },
     )
     .unwrap();
-    let output = close_card(&env, "frozen", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     assert!(
         rimz::store::hibernate::read(env.store().paths()).is_empty(),
@@ -602,7 +575,7 @@ fn close_of_a_card_with_a_live_run_reads_again_after_the_cancel() {
     run.status = rimz::store::run::RunStatus::Running;
     run.keep = true;
     rimz::harness::run::create(env.store().paths(), &run).unwrap();
-    let _ = close_card(&env, "running", command(&env, &["close"]));
+    let _ = close_card(&env, command(&env, &["close"]));
     assert!(
         rimz::harness::run::load(env.store().paths(), &run.run_id)
             .unwrap()
@@ -619,23 +592,6 @@ fn close_of_a_card_with_a_live_run_reads_again_after_the_cancel() {
     );
 }
 
-/// A stored session the lookup ties to no pane goes to the agent stop, whose verdict is
-/// the answer: the card's pane stays open.
-#[test]
-fn close_of_a_stored_session_hosted_nowhere_leaves_the_card_pane_open() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    seed(&env, "unbound", |observation| observation.pane_id = None);
-    let output = close_card(&env, "unbound", command(&env, &["close"]));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unbound"),
-        "{output:?}"
-    );
-    assert_eq!(closes(&env), Vec::<String>::new());
-    assert!(!closed_path(&env).exists());
-}
-
 /// A listing the multiplexer cannot give closes nothing and says so.
 #[test]
 fn close_with_a_failed_listing_closes_nothing() {
@@ -646,7 +602,7 @@ fn close_with_a_failed_listing_closes_nothing() {
     let garbage = env.home_root.join("garbage-panes.json");
     std::fs::write(&garbage, "not json").unwrap();
     failed.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", garbage);
-    let output = close_card(&env, "unbound", failed);
+    let output = close_card(&env, failed);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -668,9 +624,7 @@ fn close_promoted_child_does_not_record_an_unresumable_card() {
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent": {
-            "kind":"claude", "agent_id":"orphan", "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         command(&env, &["close"]),
     );
     assert_exit(&output, 0);
@@ -688,9 +642,7 @@ fn close_session_without_saved_conversation_does_not_record_a_card() {
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent": {
-            "kind":"claude", "agent_id":"empty", "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         command(&env, &["close"]),
     );
     assert_exit(&output, 0);
@@ -716,9 +668,7 @@ fn close_bounds_the_cache_and_saves_team_worktree_replay() {
     let output = exchange(
         &env,
         json!({"command":"close_target"}),
-        json!({"reply":"close_target", "agent":{
-            "kind":"claude", "agent_id":"team", "pane":"zellij:terminal_7"
-        }}),
+        json!({"reply":"close_target", "pane":"zellij:terminal_7"}),
         command(&env, &["close"]),
     );
     assert_exit(&output, 0);
@@ -770,7 +720,7 @@ fn close_of_a_tabs_last_working_pane_closes_its_tab() {
         ],
     );
     seed(&env, "solo", |_| {});
-    let output = close_card(&env, "solo", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert_eq!(tab_closes(&env).len(), 1, "{log:?}");
@@ -793,7 +743,7 @@ fn close_of_a_sole_tabs_last_working_pane_closes_only_the_pane() {
         &[json!({"id": 7, "is_plugin": false, "tab_id": 1, "pane_command": "claude"})],
     );
     seed(&env, "solo", |_| {});
-    let output = close_card(&env, "solo", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert!(tab_closes(&env).is_empty(), "{log:?}");
@@ -817,7 +767,7 @@ fn close_beside_another_working_pane_closes_only_the_pane() {
         ],
     );
     seed(&env, "paired", |_| {});
-    let output = close_card(&env, "paired", command(&env, &["close"]));
+    let output = close_card(&env, command(&env, &["close"]));
     assert_exit(&output, 0);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert!(tab_closes(&env).is_empty(), "{log:?}");
@@ -921,16 +871,6 @@ fn tab_room_rows(env: &Env, other_tabs: bool) {
     .unwrap();
 }
 
-fn close_pane_request(id: u64) -> Value {
-    json!({"command":"close_target", "pane": format!("zellij:terminal_{id}")})
-}
-
-fn agent_reply(id: &str, pane: u64) -> Value {
-    json!({"reply":"close_target", "agent":{
-        "kind":"claude", "agent_id":id, "pane":format!("zellij:terminal_{pane}")
-    }})
-}
-
 /// The tab close took the focused tab, by its stable id, in one command and no pane close.
 fn assert_one_tab_close(env: &Env) {
     let log = trace_lines(&env.home_root.join("mux.log"));
@@ -963,21 +903,7 @@ fn close_tab_cancels_a_live_run_before_it_closes_the_tab() {
         "RIMZ_TEST_ZELLIJ_RUNS_AT_CLOSE_TAB",
         env.workspace_id.as_str(),
     );
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("running", 7)),
-            (
-                close_pane_request(8),
-                json!({"reply":"close_target", "pane":"zellij:terminal_8"}),
-            ),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        command,
-    );
+    let output = command.output().unwrap();
     assert_exit(&output, 0);
     assert_one_tab_close(&env);
     let log = trace_lines(&env.home_root.join("mux.log"));
@@ -1008,18 +934,7 @@ fn close_tab_closes_every_tiled_pane_but_the_sidebar_and_records_each_root() {
     seed(&env, "other", |observation| {
         observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
     });
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("first", 7)),
-            (close_pane_request(8), agent_reply("second", 8)),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        tab_command(&env, Some("terminal_8")),
-    );
+    let output = tab_command(&env, Some("terminal_8")).output().unwrap();
     assert_exit(&output, 0);
     assert_one_tab_close(&env);
     let entries = read_closed(&env);
@@ -1042,18 +957,9 @@ fn close_tab_of_the_sessions_only_tab_closes_each_pane() {
     seed(&env, "second", |observation| {
         observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_8"));
     });
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("first", 7)),
-            (close_pane_request(8), agent_reply("second", 8)),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        tab_command_in(&env, Some("terminal_8"), false),
-    );
+    let output = tab_command_in(&env, Some("terminal_8"), false)
+        .output()
+        .unwrap();
     assert_exit(&output, 0);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert!(tab_closes(&env).is_empty(), "{log:?}");
@@ -1088,21 +994,7 @@ fn close_tab_fails_when_its_tab_close_fails() {
     });
     let mut command = tab_command(&env, Some("terminal_7"));
     command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_TAB", "1");
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("away", 7)),
-            (
-                close_pane_request(8),
-                json!({"reply":"close_target", "pane":"zellij:terminal_8"}),
-            ),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        command,
-    );
+    let output = command.output().unwrap();
     assert_exit(&output, 1);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert_eq!(tab_closes(&env).len(), 1, "{log:?}");
@@ -1139,18 +1031,7 @@ fn close_tab_leaves_the_tab_when_an_agent_stop_fails_before_its_close() {
         },
     )
     .unwrap();
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("first", 7)),
-            (close_pane_request(8), agent_reply("wedged", 8)),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        tab_command(&env, Some("terminal_7")),
-    );
+    let output = tab_command(&env, Some("terminal_7")).output().unwrap();
     assert_exit(&output, 1);
     let log = trace_lines(&env.home_root.join("mux.log"));
     assert!(tab_closes(&env).is_empty(), "{log:?}");
@@ -1173,18 +1054,7 @@ fn close_tab_records_a_holder_two_cards_name_once() {
     env.record(&env.project_root);
     launched(&env, "sess-old", 0, "terminal_7");
     launched(&env, "sess-new", 1, "terminal_8");
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("sess-old", 7)),
-            (close_pane_request(8), agent_reply("sess-new", 8)),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        tab_command(&env, Some("terminal_7")),
-    );
+    let output = tab_command(&env, Some("terminal_7")).output().unwrap();
     assert_exit(&output, 0);
     let entries = read_closed(&env);
     assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
@@ -1203,18 +1073,7 @@ fn close_tab_stops_a_parent_and_its_launched_child_and_records_the_parent() {
         observation.launch.parent_agent_id = Some("first".into());
         observation.launch.launch_depth = Some(1);
     });
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("first", 7)),
-            (close_pane_request(8), agent_reply("kid", 8)),
-            (
-                close_pane_request(10),
-                json!({"reply":"close_target", "pane":"zellij:terminal_10"}),
-            ),
-        ],
-        tab_command(&env, Some("terminal_8")),
-    );
+    let output = tab_command(&env, Some("terminal_8")).output().unwrap();
     assert_exit(&output, 0);
     assert_one_tab_close(&env);
     let entries = read_closed(&env);
@@ -1227,7 +1086,7 @@ fn close_tab_on_the_sidebar_or_in_the_dashboard_closes_nothing() {
     let env = Env::new();
     env.record(&env.project_root);
     for focus in ["terminal_1", "terminal_5"] {
-        let output = exchanges(&env, &[], tab_command(&env, Some(focus)));
+        let output = tab_command(&env, Some(focus)).output().unwrap();
         assert_exit(&output, 0);
         assert!(output.stderr.is_empty(), "{focus}: {output:?}");
     }
@@ -1245,11 +1104,10 @@ fn close_tab_on_the_sidebar_or_in_the_dashboard_closes_nothing() {
     assert_eq!(closes(&env), Vec::<String>::new());
 }
 
-/// The key's close names the pane it was pressed in, so a host whose highlight moved to
-/// terminal_8 meanwhile still names and closes terminal_7's card, and the one listing the
-/// close acts on also answers whether the pane is a sidebar.
+/// The key's close names the pane it was pressed in and asks no host: its one listing names
+/// the pane's owner, whatever the highlight, and answers whether the pane is a sidebar.
 #[test]
-fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
+fn close_from_a_pressed_pane_closes_its_owner_by_its_own_read() {
     let env = Env::new();
     env.record(&env.project_root);
     tab_room_rows(&env, true);
@@ -1257,8 +1115,6 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
     let wire = renderer_wire(&env);
     let first = wire.try_clone().unwrap();
     let mux_log = env.home_root.join("mux.log");
-    let watched_log = mux_log.clone();
-    // The mark is the close's first act: when it arrives the mux has not been asked anything.
     let first_mark = std::thread::spawn(move || {
         first
             .set_read_timeout(Some(Duration::from_secs(10)))
@@ -1266,25 +1122,14 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
         let mut buf = vec![0; 1 << 16];
         let len = first.recv(&mut buf).unwrap();
         let envelope: Value = serde_json::from_slice(&buf[..len]).unwrap();
-        (
-            envelope["event"]["kind"].as_str().unwrap().to_owned(),
-            trace_lines(&watched_log).len(),
-        )
+        envelope["event"]["kind"].as_str().unwrap().to_owned()
     });
-    let mut listed_at_request = None;
-    let output = exchanges_watching(
-        &env,
-        &[(close_pane_request(7), agent_reply("first", 7))],
-        command(&env, &["close", "--from-pane", "zellij:terminal_7"]),
-        || listed_at_request = Some(listings_before_close(&env)),
-    );
+    // No host is listening: the close asks none, its own read names the pane's owner.
+    let output = command(&env, &["close", "--from-pane", "zellij:terminal_7"])
+        .output()
+        .unwrap();
     assert_exit(&output, 0);
-    assert_eq!(
-        listed_at_request,
-        Some(0),
-        "the read the close acts on follows the host's reply"
-    );
-    assert_eq!(first_mark.join().unwrap(), ("card_closing".to_owned(), 0));
+    assert_eq!(first_mark.join().unwrap(), "card_closing");
     assert_eq!(
         closing_marks(&wire),
         Vec::new(),
@@ -1303,9 +1148,6 @@ fn close_from_a_pressed_pane_names_that_pane_whatever_the_highlight() {
     assert_eq!(entries[0]["agent_id"], "first", "{entries}");
 }
 
-/// A press on the sidebar or in the dashboard closes nothing and says nothing, whether the
-/// host refuses it or is absent; a pane the host has no card for reports the host's refusal,
-/// an absent host fails any other press, and a listing that fails closes nothing.
 /// Publish a pane frame naming pane 1 as a sidebar and pane 5 as a dashboard pane.
 fn publish_chrome_frame(env: &Env) {
     let pane = |id: &str, tab: &str, name: &str, command: &str| {
@@ -1329,30 +1171,22 @@ fn publish_chrome_frame(env: &Env) {
     rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
 }
 
+/// A press on the sidebar or in the dashboard closes nothing and says nothing; with no host at
+/// all a press on a working pane still closes it, a pane the listing lacks is refused, and a
+/// listing that fails closes nothing.
 #[test]
 fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let env = Env::new();
     env.record(&env.project_root);
     tab_room_rows(&env, true);
     let wire = renderer_wire(&env);
-    for (pane, id) in [("zellij:terminal_1", 1), ("zellij:terminal_5", 5)] {
-        let reason = format!("sidebar close: no card owns pane {pane}");
-        let refused = exchange(
-            &env,
-            close_pane_request(id),
-            json!({"reply":"refused", "reason":reason}),
-            command(&env, &["close", "--from-pane", pane]),
-        );
-        let hostless = command(&env, &["close", "--from-pane", pane])
+    for pane in ["zellij:terminal_1", "zellij:terminal_5"] {
+        let output = command(&env, &["close", "--from-pane", pane])
             .output()
             .unwrap();
-        for output in [refused, hostless] {
-            assert_exit(&output, 0);
-            assert!(output.stderr.is_empty(), "{pane}: {output:?}");
-        }
-        let mut twice = marked_and_cleared(pane);
-        twice.extend(marked_and_cleared(pane));
-        assert_eq!(closing_marks(&wire), twice);
+        assert_exit(&output, 0);
+        assert!(output.stderr.is_empty(), "{pane}: {output:?}");
+        assert_eq!(closing_marks(&wire), marked_and_cleared(pane));
     }
     publish_chrome_frame(&env);
     let host = UnixListener::bind(host_socket(&env)).unwrap();
@@ -1384,24 +1218,24 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let hostless = command(&env, &["close", "--from-pane", "zellij:terminal_7"])
         .output()
         .unwrap();
-    assert_exit(&hostless, 1);
-    let stderr = String::from_utf8_lossy(&hostless.stderr);
-    assert!(
-        stderr.contains("sidebar host: ") && stderr.contains("rimz sidebar repair"),
-        "{stderr}"
-    );
+    assert_exit(&hostless, 0);
+    assert!(hostless.stderr.is_empty(), "{hostless:?}");
+    let closed = closes(&env);
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    assert!(closed[0].ends_with("terminal_7"), "{closed:?}");
     assert_eq!(
         closing_marks(&wire),
-        marked_and_cleared("zellij:terminal_7")
+        marked_and_cleared("zellij:terminal_7")[..1],
+        "a close that went ahead lifts no mark"
     );
-    let refusal = "sidebar close: no card owns pane zellij:terminal_99";
+    let refusal = format!(
+        "sidebar close: pane zellij:terminal_99 is not in session {}; nothing was closed",
+        session(&env)
+    );
     for flag in ["--from-pane", "--pane"] {
-        let output = exchange(
-            &env,
-            close_pane_request(99),
-            json!({"reply":"refused", "reason":refusal}),
-            command(&env, &["close", flag, "zellij:terminal_99"]),
-        );
+        let output = command(&env, &["close", flag, "zellij:terminal_99"])
+            .output()
+            .unwrap();
         assert_exit(&output, 0);
         assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), refusal);
         assert_eq!(
@@ -1422,43 +1256,18 @@ fn close_from_the_sidebar_or_the_dashboard_closes_nothing() {
     let garbage = env.home_root.join("garbage-panes.json");
     std::fs::write(&garbage, "not json").unwrap();
     failed.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", garbage);
-    let output = exchange(&env, close_pane_request(7), agent_reply("first", 7), failed);
+    let output = failed.output().unwrap();
     assert_exit(&output, 1);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("sidebar close: listing panes") && stderr.contains("nothing was closed"),
         "{stderr}"
     );
-    assert_eq!(closes(&env), Vec::<String>::new());
+    assert_eq!(closes(&env), closed);
     assert_eq!(
         closing_marks(&wire),
         marked_and_cleared("zellij:terminal_7")
     );
-}
-
-#[test]
-fn close_tab_closes_nothing_when_the_host_refuses_one_pane() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    seed(&env, "first", |_| {});
-    let output = exchanges(
-        &env,
-        &[
-            (close_pane_request(7), agent_reply("first", 7)),
-            (
-                close_pane_request(8),
-                json!({"reply":"refused", "reason":"sidebar view is not ready; try again"}),
-            ),
-        ],
-        tab_command(&env, Some("terminal_7")),
-    );
-    assert_exit(&output, 0);
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr).trim(),
-        "sidebar view is not ready; try again"
-    );
-    assert_eq!(closes(&env), Vec::<String>::new());
-    assert!(!closed_path(&env).exists());
 }
 
 #[test]

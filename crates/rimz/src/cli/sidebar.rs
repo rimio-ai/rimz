@@ -74,7 +74,8 @@ enum SidebarSubcmd {
     /// Close the highlighted card's pane, stopping an agent's children first, and with it the tab
     /// when it is the tab's last working pane and the session has another tab.
     Close {
-        /// Close the card that owns this pane instead of the highlighted one.
+        /// Close the card that owns this pane instead of the highlighted one; a sidebar pane,
+        /// or a pane in the dashboard, closes nothing.
         #[arg(long)]
         pane: Option<PaneId>,
         /// Close every card in the focused tab instead, and with them the tab.
@@ -519,13 +520,18 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             ..
         } => cards::close_tab(globals, session_name),
         SidebarSubcmd::Close {
+            pane: Some(pane),
+            session_name,
+            ..
+        }
+        | SidebarSubcmd::Close {
             from_pane: Some(pane),
             session_name,
             ..
         } => cards::close_from_pane(globals, session_name, pane),
-        SidebarSubcmd::Close {
-            pane, session_name, ..
-        } => cards::request(globals, session_name, CardRequest::CloseTarget { pane }),
+        SidebarSubcmd::Close { session_name, .. } => {
+            cards::request(globals, session_name, CardRequest::CloseTarget {})
+        }
         SidebarSubcmd::Reopen { session_name } => cards::reopen(globals, session_name),
         SidebarSubcmd::Snapshot {
             workspace_id,

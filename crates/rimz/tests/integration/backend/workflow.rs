@@ -501,30 +501,18 @@ pub(super) fn check_closed_card_runs_its_check_on_the_room_path<G>(
         std::thread::sleep(Duration::from_millis(50));
     };
     // The test process's PATH lacks the room's bin directory, as a tmux server's can.
-    // A close before the sidebar host has read the card finds no card to close.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let close = loop {
-        let close = command()
-            .args([
-                "sidebar",
-                "close",
-                "--pane",
-                &pane.to_string(),
-                "--session-name",
-                session,
-            ])
-            .bounded_output()
-            .unwrap();
-        assert!(close.status.success(), "sidebar close: {close:?}");
-        if !String::from_utf8_lossy(&close.stderr).contains("no card owns pane") {
-            break close;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the card never reached the sidebar host: {close:?}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let close = command()
+        .args([
+            "sidebar",
+            "close",
+            "--pane",
+            &pane.to_string(),
+            "--session-name",
+            session,
+        ])
+        .bounded_output()
+        .unwrap();
+    assert!(close.status.success(), "sidebar close: {close:?}");
     let deadline = Instant::now() + Duration::from_secs(30);
     let (record, home) = loop {
         let (record, home) = load_run(&state, &id);

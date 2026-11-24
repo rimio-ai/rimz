@@ -13,7 +13,6 @@ use crate::ids::{MuxClientId, PaneId};
 #[cfg(test)]
 use crate::pane::ClientPaneView;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar_pane::commands::CardRequest;
 use crate::sidebar_pane::render::ViewState;
 #[cfg(test)]
 use crate::store::snapshot::SidebarSnapshot;
@@ -453,26 +452,6 @@ impl Views {
             return Err("sidebar view is not ready; try again");
         }
         Ok((first.view, pane))
-    }
-
-    /// The acting view for `request`. A close that names its pane resolves its
-    /// row by that pane, so any ready client's view acts and clients may view
-    /// different tabs.
-    pub(super) fn command_target_for(
-        &self,
-        request: &CardRequest,
-    ) -> Result<(ViewId, &PaneId), &'static str> {
-        if !matches!(request, CardRequest::CloseTarget { pane: Some(_) }) {
-            return self.command_target();
-        }
-        let mut clients = self.live_clients().peekable();
-        clients.peek().ok_or("no attached clients")?;
-        clients
-            .find_map(|(_, client)| {
-                let pane = client.pane.as_ref()?;
-                (self.panes.get(pane) == Some(&client.view)).then_some((client.view, pane))
-            })
-            .ok_or("sidebar view is not ready; try again")
     }
 
     /// The one live client viewing the sidebar `pane`, if exactly one does.

@@ -183,8 +183,10 @@ pub(super) fn check_cards(
         );
         output
     };
-    // Reopen skips an agent the sidebar's published frame still lists as alive, so a reopen
-    // right after a close can find nothing to reopen until the host republishes.
+    // Reopen refuses with one message for two causes: an empty closed-card list (a close that
+    // recorded no card) and an entry the sidebar's published frame still lists as alive. The
+    // second clears once the host republishes, so the retry waits it out; a failure prints
+    // both the list and the alive view to say which cause held.
     let reopen = || {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -192,10 +194,26 @@ pub(super) fn check_cards(
             if output.stderr != b"sidebar reopen: no closed card to reopen\n" {
                 break output;
             }
-            assert!(
-                Instant::now() < deadline,
-                "the closed card never left the alive view"
-            );
+            if Instant::now() >= deadline {
+                let closed = std::fs::read_to_string(runtime.sidebar_closed_cards_path());
+                let alive = rimz::sidebar::consumer::cached_alive_snapshot(
+                    store.snapshot_cached().unwrap(),
+                    &runtime,
+                    session,
+                );
+                let alive: Vec<_> = alive
+                    .agents
+                    .iter()
+                    .map(|agent| {
+                        let pane = agent.pane.as_ref().map(|pane| &pane.pane_id);
+                        (&agent.kind, &agent.agent_id, agent.status, pane)
+                    })
+                    .collect();
+                panic!(
+                    "reopen found no card: the closed list is empty or every entry is still \
+                     alive; closed={closed:?}; alive={alive:?}"
+                );
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
     };
@@ -290,34 +308,10 @@ pub(super) fn check_cards(
         "reopen needs a new tab: {new_view}, surviving tabs: {surviving_views:?}"
     );
     wait_focus(backend, session, &runtime, &new_pane);
-    // The tab close asks the host which card owns each pane, and a pane the host still shows
-    // without its card closes as a raw pane, with no stop and no closed-card entry to reopen.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let output = command()
-            .args(["sidebar", "snapshot", "--json", "--no-produce"])
-            .bounded_output()
-            .unwrap();
-        assert!(output.status.success(), "consumer snapshot: {output:?}");
-        let snapshot: SidebarSnapshot = serde_json::from_slice(&output.stdout).unwrap();
-        if snapshot.rows().any(|row| {
-            row.id == reopened.agent_id.as_str()
-                && row
-                    .pane
-                    .as_ref()
-                    .is_some_and(|pane| pane.pane_id == new_pane)
-        }) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the reopened card never reached the consumer"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
 
     // The tab close stops the agent as a card close does, so its own reopen brings it back,
-    // and it takes the tab, sidebar included, in one command.
+    // and it takes the tab, sidebar included, in one command. It names each pane's owner from
+    // its own read of the store, so it needs no wait for the host to draw the reopened card.
     let new_view = new_view.clone();
     quiet(card(&["close", "--tab"]));
     let views = pane_views(backend, session, &runtime);

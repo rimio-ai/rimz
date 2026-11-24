@@ -7,7 +7,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::mux::{ClientFocusOptions, ClientView, PaneListOptions, PaneReadConsistency};
 use rimz::sidebar::cache::read_snapshot_cache;
 use rimz::sidebar::produce::hosting::{HostingRead, read_hosting};
-use rimz::sidebar_pane::{CardReply, CardRequest, CardTarget};
+use rimz::sidebar_pane::{CardReply, CardRequest};
 use rimz::wakeup::events::SidebarEvent;
 use serde::{Deserialize, Serialize};
 
@@ -56,27 +56,10 @@ pub(super) fn request(
     request: CardRequest,
 ) -> Result<()> {
     let (session, mux) = resolve_session(globals, session)?;
-    let CardRequest::CloseTarget { pane: Some(pane) } = &request else {
-        return request_with(globals, session, mux, request).map(drop);
-    };
-    let mark = ClosingMark::send(&session, pane.clone());
-    mark.settle(request_with(globals, session, mux, request))
-}
-
-/// Whether the request went on to a close.
-fn request_with(
-    globals: &GlobalFlags,
-    session: String,
-    mux: MuxName,
-    request: CardRequest,
-) -> Result<bool> {
     match rimz::sidebar_pane::request_card(mux, &session, request)? {
-        CardReply::Done => Ok(false),
-        CardReply::Refused { reason } => {
-            writeln!(render::err(), "{reason}")?;
-            Ok(false)
-        }
-        CardReply::CloseTarget { target } => {
+        CardReply::Done => Ok(()),
+        CardReply::Refused { reason } => Ok(writeln!(render::err(), "{reason}")?),
+        CardReply::CloseTarget { pane } => {
             let (ctx, globals) = open_room(globals, &session, mux)?;
             let mut read = read_room(&ctx, &globals, "")?;
             render::room::print_notices(read.take_notices())?;
@@ -84,11 +67,11 @@ fn request_with(
                 &ctx,
                 &globals,
                 &session,
-                vec![target],
+                vec![pane],
                 TabClose::WhenLast,
                 read,
-            )?;
-            Ok(true)
+            )
+            .map(drop)
         }
     }
 }
@@ -141,8 +124,9 @@ impl ClosingMark {
     }
 }
 
-/// Close the card that owns `pane`, the pane a key was pressed in, as `--pane` does. A
-/// sidebar pane or a pane in the dashboard closes nothing.
+/// Close the card that owns `pane`, as `--pane` and `--from-pane` do, by the close's own
+/// hosting read: the sidebar host is not asked, since its view can lag the store. A sidebar
+/// pane or a pane in the dashboard closes nothing.
 pub(super) fn close_from_pane(
     globals: &GlobalFlags,
     session: Option<String>,
@@ -158,37 +142,22 @@ fn close_pressed(globals: &GlobalFlags, session: &str, mux: MuxName, pane: PaneI
     if published_closes_nothing(session, &pane) {
         return Ok(false);
     }
-    let request = CardRequest::CloseTarget {
-        pane: Some(pane.clone()),
-    };
-    let reply = rimz::sidebar_pane::request_card(mux, session, request);
-    // The stop and the tab-when-last verdict act on this read, so it follows the wait on the
-    // host. It is the press's one pane listing, and it also answers the sidebar test, which
-    // holds whatever the host replied.
+    // The press's one pane listing: it answers the sidebar test, the pane's owner, and the
+    // tab-when-last verdict the close acts on.
     let (ctx, room_globals) = open_room(globals, session, mux)?;
     let mut read = read_room(&ctx, &room_globals, "listing panes: ")?;
     if read.listed(&pane).is_some_and(closes_nothing) {
         return Ok(false);
     }
     render::room::print_notices(read.take_notices())?;
-    match reply? {
-        CardReply::Done => Ok(false),
-        CardReply::Refused { reason } => {
-            writeln!(render::err(), "{reason}")?;
-            Ok(false)
-        }
-        CardReply::CloseTarget { target } => {
-            close(
-                &ctx,
-                &room_globals,
-                session,
-                vec![target],
-                TabClose::WhenLast,
-                read,
-            )?;
-            Ok(true)
-        }
-    }
+    close(
+        &ctx,
+        &room_globals,
+        session,
+        vec![pane],
+        TabClose::WhenLast,
+        read,
+    )
 }
 
 /// The room's hosting read, the one pane listing a close acts on, its notices left for the
@@ -258,49 +227,57 @@ pub(super) fn close_tab(globals: &GlobalFlags, session: Option<String>) -> Resul
     if closes_nothing(focused) {
         return Ok(());
     }
-    let mut targets = Vec::new();
-    let mut panes = Vec::new();
-    for pane in listing.panes.iter().filter(|pane| {
-        pane.view_id == focused.view_id && !pane.is_floating && !pane.is_rimz_sidebar()
-    }) {
-        panes.push(pane.pane_id.clone());
-        let request = CardRequest::CloseTarget {
-            pane: Some(pane.pane_id.clone()),
-        };
-        match rimz::sidebar_pane::request_card(mux, &session, request)? {
-            CardReply::CloseTarget { target } => targets.push(target),
-            CardReply::Refused { reason } => return Ok(writeln!(render::err(), "{reason}")?),
-            CardReply::Done => {}
-        }
-    }
+    let panes = listing
+        .panes
+        .iter()
+        .filter(|pane| {
+            pane.view_id == focused.view_id && !pane.is_floating && !pane.is_rimz_sidebar()
+        })
+        .map(|pane| pane.pane_id.clone())
+        .collect::<Vec<_>>();
     let (ctx, globals) = open_room(globals, &session, mux)?;
     let tab = TabClose::Whole {
-        panes,
+        panes: panes.clone(),
         loose: Vec::new(),
     };
     let mut read = read_room(&ctx, &globals, "")?;
     render::room::print_notices(read.take_notices())?;
-    close(&ctx, &globals, &session, targets, tab, read)
+    close(&ctx, &globals, &session, panes, tab, read).map(drop)
 }
 
-/// Close `targets` through `read`, one hosting read: raw panes and agents no pane hosts close
-/// their pane, and every hosted agent stops in one batch, children before parents, acting
+/// Close the cards of `panes` through `read`, one hosting read, which also names each pane's
+/// owner ([`HostingRead::pane_owner`]): a pane `read` does not list refuses the whole close,
+/// with nothing closed; a pane no session holds closes as a raw pane; and every owning agent
+/// stops in one batch, children before parents, acting
 /// on that read unless a pane closed here sat between it and the stop. `tab` is the stop's
 /// [`TabClose`], and these closes keep it: under `WhenLast` (Alt+x) a pane the gating read
 /// finds the last working pane of its tab closes with its tab, and under `Whole` (Alt+Shift+X)
 /// none closes here, the stop carries them as its `loose` panes, and the tab closes once,
 /// after the stop or, with no agent to stop, on this read. A read that gives the tab no
 /// anchor (this process in it, the session's only tab) closes each pane on its own. Each
-/// stopped root that offers a resume enters the closed-card list, in `targets` order, as the
-/// session its stop stopped.
+/// stopped root that offers a resume enters the closed-card list, in `panes` order, as the
+/// session its stop stopped. Whether the close went ahead.
 fn close(
     ctx: &Ctx,
     globals: &GlobalFlags,
     session: &str,
-    targets: Vec<CardTarget>,
+    panes: Vec<PaneId>,
     tab: TabClose,
     read: HostingRead,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut owners = Vec::new();
+    for pane in panes {
+        match read.pane_owner(&pane) {
+            Ok(owner) => owners.push((pane, owner)),
+            Err(unlisted) => {
+                writeln!(
+                    render::err(),
+                    "sidebar close: {unlisted}; nothing was closed"
+                )?;
+                return Ok(false);
+            }
+        }
+    }
     let snapshot = ctx.cached_snapshot()?;
     let own = rimz::mux::own_pane_id(read.mux());
     let mut tab = match tab {
@@ -314,24 +291,8 @@ fn close(
     let mut agents = Vec::new();
     let mut closed_pane = false;
     let mut loose = Vec::new();
-    for target in targets {
-        let (kind, agent_id, pane) = match target {
-            CardTarget::Agent {
-                kind,
-                agent_id,
-                pane,
-            } => (kind, agent_id, pane),
-            CardTarget::Pane(pane) if whole => {
-                loose.push(pane);
-                continue;
-            }
-            CardTarget::Pane(pane) => {
-                close_pane(session, &pane, when_last && !closed_pane, &read)?;
-                closed_pane = true;
-                continue;
-            }
-        };
-        match read.agent_hosting_of_session(&kind, &agent_id).holder {
+    for (pane, owner) in owners {
+        match owner {
             Some(agent) if agents.contains(&agent) => {}
             Some(agent) => agents.push(agent),
             None if whole => loose.push(pane),
@@ -350,7 +311,7 @@ fn close(
         {
             rimz::mux::backend_for(read.mux()).close_tab_of_pane(session, anchor)?;
         }
-        return Ok(());
+        return Ok(true);
     }
     let owned = agents.into_iter().cloned().collect::<Vec<_>>();
     let agents = owned.iter().collect::<Vec<_>>();
@@ -390,7 +351,7 @@ fn close(
         write_closed(ctx, &entries)?;
     }
     anyhow::ensure!(failures.is_empty(), "{}", failures.join("; "));
-    Ok(())
+    Ok(true)
 }
 
 /// Close `pane`, with its tab when `close_tab` holds and `read`, which nothing has acted

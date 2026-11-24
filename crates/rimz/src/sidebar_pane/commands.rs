@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::MuxName;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::PaneId;
 
 pub(super) const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -20,7 +20,8 @@ pub enum CardDirection {
     Prev,
 }
 
-/// A card action resolved by the host, never by a fresh CLI snapshot.
+/// A card action on the acting view's roster and highlight. A close asks only for the
+/// highlight's pane: the CLI decides who owns it from its own hosting read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CardRequest {
@@ -35,11 +36,9 @@ pub enum CardRequest {
     FilterNeedsYou {
         toggle: bool,
     },
-    CloseTarget {
-        /// The pane whose card to close; without it, the acting view's highlight.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pane: Option<PaneId>,
-    },
+    /// Braced so `deny_unknown_fields` refuses a previous build's pane-named close: a unit
+    /// variant of an internally tagged enum drops leftover fields.
+    CloseTarget {},
 }
 
 impl CardRequest {
@@ -49,7 +48,7 @@ impl CardRequest {
             Self::Slot { .. } => "slot",
             Self::Last => "last",
             Self::FilterNeedsYou { .. } => "filter needs-you",
-            Self::CloseTarget { .. } => "close",
+            Self::CloseTarget {} => "close",
         };
         CardReply::Refused {
             reason: format!("sidebar {command}: {reason}"),
@@ -57,30 +56,13 @@ impl CardRequest {
     }
 }
 
-/// The highlight's pane and optional session key, for the CLI's close path.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CardTarget {
-    Agent {
-        kind: AgentKind,
-        agent_id: AgentSessionId,
-        pane: PaneId,
-    },
-    Pane(PaneId),
-}
-
-/// A completed reduction, a no-op reason, or the highlighted close target.
+/// A completed reduction, a no-op reason, or the highlighted card's pane to close.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reply", rename_all = "snake_case")]
 pub enum CardReply {
     Done,
-    Refused {
-        reason: String,
-    },
-    CloseTarget {
-        #[serde(flatten)]
-        target: CardTarget,
-    },
+    Refused { reason: String },
+    CloseTarget { pane: PaneId },
 }
 
 /// Ask the session's sidebar host to act, with a bounded reply wait.
@@ -165,23 +147,36 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn close_keeps_its_bare_wire_and_carries_an_optional_pane() {
+    fn close_keeps_its_bare_wire_and_is_answered_with_the_highlights_pane() {
         let bare = serde_json::json!({"command": "close_target"});
         assert_eq!(
-            serde_json::to_value(CardRequest::CloseTarget { pane: None }).unwrap(),
+            serde_json::to_value(CardRequest::CloseTarget {}).unwrap(),
             bare
         );
         assert_eq!(
             serde_json::from_value::<CardRequest>(bare).unwrap(),
-            CardRequest::CloseTarget { pane: None }
+            CardRequest::CloseTarget {}
         );
-        let pane = PaneId::from_parts(MuxName::Tmux, "%7");
-        let scoped = CardRequest::CloseTarget {
-            pane: Some(pane.clone()),
+        let reply = CardReply::CloseTarget {
+            pane: PaneId::from_parts(MuxName::Tmux, "%7"),
         };
-        let wire = serde_json::to_value(&scoped).unwrap();
-        assert_eq!(wire["pane"], serde_json::json!(pane));
-        assert_eq!(serde_json::from_value::<CardRequest>(wire).unwrap(), scoped);
+        let wire = serde_json::json!({"reply": "close_target", "pane": "tmux:%7"});
+        assert_eq!(serde_json::to_value(&reply).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<CardReply>(wire).unwrap(), reply);
+    }
+
+    /// A previous build's pane-named close must not read as a highlight close, or a new host
+    /// would answer it with the highlight's pane and the old CLI would close that pane raw.
+    #[test]
+    fn a_pane_named_close_from_a_previous_build_fails_to_parse() {
+        let pane_named = serde_json::json!({"command": "close_target", "pane": "tmux:%7"});
+        let parsed = serde_json::from_value::<CardRequest>(pane_named);
+        assert!(
+            parsed
+                .as_ref()
+                .is_err_and(|err| err.to_string().contains("unknown field `pane`")),
+            "{parsed:?}"
+        );
     }
 
     #[test]

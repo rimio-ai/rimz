@@ -4268,7 +4268,9 @@ path = "crates/rimz/src/sidebar"
 # HostingRead::closing_empties_tab answers the Alt+x tab close from the gating read.
 # HostingRead::tab_anchor picks the listed pane the Alt+Shift+X tab close closes by (+1).
 # HostingRead::listed answers the Alt+x sidebar test from the listing the close acts on (+1).
-surface-budget = 268
+# HostingRead::pane_owner and PaneUnlisted give every card close its owner from its own read,
+# not the host's lagging fold (+2).
+surface-budget = 270
 
 [[verdict]]
 kind = "item"
@@ -4485,12 +4487,7 @@ reason = "Walk direction is a typed part of the shared card request wire."
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::commands::CardReply"
-reason = "The CLI distinguishes issued actions, no-op refusals and exact close targets."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::commands::CardTarget"
-reason = "Close targets carry the row pane and an optional session key, never a channel-scoped handle."
+reason = "The CLI distinguishes issued actions, no-op refusals and the highlight's close pane."
 
 [[verdict]]
 kind = "item"
