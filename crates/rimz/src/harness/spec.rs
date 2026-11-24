@@ -332,7 +332,12 @@ impl ResolvedProfile {
             };
         }
         let written = !layer.kind_base;
-        let source = || Some(TuningSource::Profile(name.to_owned()));
+        let writers = layer.definition.as_ref().map(|def| def.writers());
+        let source = |writer: Option<&String>| {
+            Some(TuningSource::Profile(
+                writer.cloned().unwrap_or_else(|| name.to_owned()),
+            ))
+        };
         self.variant = self.variant.or(layer.variant);
         self.kind_defaults |= layer.kind_defaults;
         self.empty_dir = self.empty_dir.or(layer.empty_dir);
@@ -358,14 +363,14 @@ impl ResolvedProfile {
         }
         if written && self.launch.effort.is_none() && layer.effort.is_some() {
             self.launch.effort.clone_from(&layer.effort);
-            self.sources.effort = source();
+            self.sources.effort = source(writers.and_then(|w| w.effort.as_ref()));
         }
         if self.launch.budget.is_none() {
             self.launch.budget.clone_from(&layer.budget);
         }
         if written && self.auto_compact.is_none() && layer.auto_compact.is_some() {
             self.auto_compact.clone_from(&layer.auto_compact);
-            self.sources.auto_compact = source();
+            self.sources.auto_compact = source(writers.and_then(|w| w.auto_compact.as_ref()));
         }
         if self.auto_compact_default.is_none() {
             self.auto_compact_default
@@ -373,11 +378,11 @@ impl ResolvedProfile {
         }
         if written && self.fast.is_none() && layer.fast.is_some() {
             self.fast = layer.fast;
-            self.sources.fast = source();
+            self.sources.fast = source(writers.and_then(|w| w.fast.as_ref()));
         }
         if written && self.code_mode.is_none() && layer.code_mode.is_some() {
             self.code_mode = layer.code_mode;
-            self.sources.code_mode = source();
+            self.sources.code_mode = source(writers.and_then(|w| w.code_mode.as_ref()));
         }
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
@@ -1116,45 +1121,34 @@ pub(super) fn resolve_spec_with_agent_override(
 ) -> Result<LayoutSpec> {
     resolve_spec_in_scope(
         arg,
-        crate::config::effective::ProfileScope::Agents,
         profiles,
         team_profiles,
         None,
         commands,
         teams,
         agent_override,
-        None,
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "launch layout resolution carries both profile tables, scope, and routed-override set"
-)]
 pub(super) fn resolve_spec_in_scope(
     arg: Option<&str>,
-    scope: crate::config::effective::ProfileScope,
     profiles: &ProfilesConfig,
     team_profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
     agent_override: Option<&str>,
-    routed_overrides: Option<&BTreeSet<(crate::config::effective::ProfileScope, String)>>,
 ) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
     validate_team_names(teams.0.keys().map(String::as_str))?;
-    let mut base_override = resolve_agent_override(agent_override, profiles, fallback)?;
+    let base_override = resolve_agent_override(agent_override, profiles, fallback)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
     if teams.0.contains_key(raw) {
         if is_cell_word(raw, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
-        }
-        if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
-            ov.set_routed(crate::config::effective::ProfileScope::Agents, routed);
         }
         return resolve_team_with_base_override(
             raw,
@@ -1165,9 +1159,6 @@ pub(super) fn resolve_spec_in_scope(
         );
     }
     if let Some((team, role)) = teams.role_spec(raw) {
-        if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
-            ov.set_routed(crate::config::effective::ProfileScope::Agents, routed);
-        }
         return resolve_team_role(
             team,
             role,
@@ -1176,9 +1167,6 @@ pub(super) fn resolve_spec_in_scope(
             commands,
             base_override.as_ref(),
         );
-    }
-    if let (Some(ov), Some(routed)) = (&mut base_override, routed_overrides) {
-        ov.set_routed(scope, routed);
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands, base_override.as_ref());
@@ -1490,85 +1478,16 @@ pub fn resolve_role(binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<
 
 /// Resolve `name` through profile inheritance to a canonical kind and launch variant.
 pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
-    let mut cur = profiles.key(name).to_owned();
-    let mut seen = Vec::<String>::new();
-    let mut layers = Vec::<&Profile>::new();
-    let terminal = loop {
-        if layers.len() >= MAX_PROFILE_DEPTH {
-            return Err(LayoutErr::ProfileChainTooDeep {
-                profile: name.to_owned(),
-            });
-        }
-        let Some(profile) = profiles.0.get(&cur) else {
-            if layers.is_empty()
-                && let Some(runtime) = crate::agents::find_runtime(&cur)
-            {
-                break runtime;
-            }
-            return Err(LayoutErr::UnknownProfileBase {
-                profile: name.to_owned(),
-                base: cur,
-            });
-        };
-        seen.push(cur.clone());
-        layers.push(profile);
-        let next = profiles.key(&profile.agent);
-        if next == cur
-            && let Some(runtime) = crate::agents::find_runtime(next)
-        {
-            break runtime;
-        }
-        if profiles.0.contains_key(next) {
-            if seen.iter().any(|visited| visited == next) {
-                let mut chain = seen;
-                chain.push(next.to_owned());
-                return Err(LayoutErr::ProfileCycle {
-                    chain: chain.join(" -> "),
-                });
-            }
-            cur = next.to_owned();
-            continue;
-        }
-        if let Some(runtime) = crate::agents::find_runtime(next) {
-            break runtime;
-        }
-        return Err(LayoutErr::UnknownProfileBase {
-            profile: cur,
-            base: next.to_owned(),
-        });
-    };
-
-    let mut resolved = ResolvedProfile::bare(terminal.kind());
-    for (layer, name) in layers.into_iter().zip(&seen) {
-        resolved.fill_missing(layer, name);
-    }
-    resolved.layers = seen;
-    if terminal.variant.is_some()
-        && !resolved.layers.iter().any(|layer| layer == terminal.kind())
-        && let Some(base) = profiles
-            .0
-            .get(terminal.kind())
-            .filter(|base| base.agent == terminal.kind())
-    {
-        resolved.layers.push(terminal.kind().to_owned());
-        resolved.fill_missing(base, terminal.kind());
-    }
-    resolved.variant = resolved.variant.or(terminal.variant);
-    resolved.fill_kind_defaults();
-    normalize_auto_compact(&mut resolved.auto_compact, name)?;
-    normalize_auto_compact(&mut resolved.kind_base.auto_compact, name)?;
-    let adapter = crate::agents::find_definition(resolved.kind.as_str())
-        .expect("resolved profile terminal kind is known");
-    adapter
-        .spec()
-        .render_preset(&profile_preset(&resolved))
-        .map_err(|err| LayoutErr::InvalidProfile {
-            profile: name.to_owned(),
-            reason: err.to_string(),
-        })?;
-    normalize_budget(&mut resolved.launch.budget, name)?;
-    refuse_rimz_lists_beside_a_grant(&resolved, name)?;
-    Ok(resolved)
+    let chain = launch_layers(ChainRequest {
+        name: Some(name),
+        own: profiles,
+        fallback: None,
+        base_override: None,
+        target_kind: None,
+        subagent_scope: false,
+        detect_dropped_model: false,
+    })?;
+    resolve_chain(name, chain, None, None, ReplayOptions::default())
 }
 
 /// A profile whose tools carry a `capabilities:` grant, a TOML profile over a Markdown kind
@@ -1619,13 +1538,6 @@ pub fn listed_tuning(name: &str, profiles: &ProfilesConfig) -> (Option<String>, 
     }
 }
 
-/// Whether a model inherited from `from_kind` survives a switch to `to_kind`.
-pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str) -> bool {
-    from_kind == to_kind
-        || crate::agents::definition_model_kind(model) == Some(to_kind)
-        || crate::agents::keeps_model(to_kind, model)
-}
-
 /// Refuse an explicit `--agent` and `--model` pair whose providers disagree, unless the
 /// `--agent` provider keeps that model.
 pub(crate) fn check_agent_model_family(
@@ -1656,15 +1568,9 @@ pub(crate) struct AgentOverride<'a> {
     pub writes_engine: bool,
     /// Non-kind-base TOML rows in the override's chain (nearest first); empty for Markdown
     /// profiles, kind bases, and bare runtimes.
-    pub toml_layers: Vec<(String, &'a Profile)>,
-    /// Model written by the override's TOML layers (excluding kind bases), if any.
-    pub toml_model: Option<String>,
-    /// A Markdown profile inherited by a TOML override chain, if any.
-    pub inherited_markdown: Option<&'a Profile>,
+    toml_layers: Vec<(String, &'a Profile)>,
     /// The resolved provider runtime (kind + optional variant).
-    pub runtime: crate::agents::Runtime,
-    /// Profile keys in the active scope already built under this override by `LaunchAgents::route`.
-    pub routed: BTreeSet<String>,
+    runtime: crate::agents::Runtime,
 }
 
 impl std::fmt::Debug for AgentOverride<'_> {
@@ -1677,71 +1583,95 @@ impl std::fmt::Debug for AgentOverride<'_> {
     }
 }
 
-impl<'a> AgentOverride<'a> {
-    pub(crate) fn build_base(&self) -> crate::config::definitions::BuildBase<'a> {
+impl AgentOverride<'_> {
+    pub(crate) fn build_base(&self) -> crate::config::definitions::BuildBase<'_> {
         use crate::config::definitions::BuildBase;
-        if let Some(profile) = self.profile {
-            if profile.definition.is_some() || profile.kind_base {
-                return BuildBase::Profile(profile);
-            }
-            if self.toml_model.is_none()
-                && let Some(md) = self.inherited_markdown
-            {
-                return BuildBase::Profile(md);
-            }
+        match self.profile {
+            Some(p) if p.definition.is_some() => BuildBase::Profile(p),
+            _ => BuildBase::Runtime(
+                self.runtime,
+                self.toml_layers
+                    .iter()
+                    .find_map(|(_, layer)| layer.model.as_deref()),
+            ),
         }
-        BuildBase::Runtime(self.runtime)
     }
 
     pub(crate) fn written_tier(&self) -> Option<crate::config::tiers::ModelTier> {
         self.profile
-            .and_then(|profile| profile.definition.as_ref())
-            .or_else(|| {
-                self.inherited_markdown
-                    .and_then(|profile| profile.definition.as_ref())
-            })
+            .and_then(|p| p.definition.as_ref())
             .and_then(|def| def.written_tier())
     }
 
     pub(crate) fn preference(&self) -> Option<&crate::config::tiers::TierPreference> {
         self.profile
-            .and_then(|profile| profile.definition.as_ref())
-            .or_else(|| {
-                self.inherited_markdown
-                    .and_then(|profile| profile.definition.as_ref())
-            })
+            .and_then(|p| p.definition.as_ref())
             .map(|def| def.preference())
     }
 
-    fn toml_model_for_build(&self) -> Option<&str> {
-        self.profile
-            .is_some_and(|profile| profile.definition.is_none() && !profile.kind_base)
-            .then_some(self.toml_model.as_deref())
-            .flatten()
-    }
-
-    fn set_routed(
-        &mut self,
-        scope: crate::config::effective::ProfileScope,
-        routed: &BTreeSet<(crate::config::effective::ProfileScope, String)>,
-    ) {
-        self.routed = routed
-            .iter()
-            .filter(|(entry_scope, _)| *entry_scope == scope)
-            .map(|(_, name)| name.clone())
-            .collect();
+    fn strip_in(&self, own: &ProfilesConfig, subagent_scope: bool) -> bool {
+        subagent_scope
+            && (self.profile.is_none_or(|p| p.kind_base)
+                || self.table.is_some_and(|table| !std::ptr::eq(table, own)))
     }
 }
 
 /// Resolve a profile under an optional `--agent` override using the launch chain rule.
-pub fn resolve_profile_under(
+#[cfg(test)]
+pub(crate) fn resolve_profile_under(
     name: &str,
     agent_override: Option<&str>,
     profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
 ) -> Result<ResolvedProfile> {
     let base = resolve_agent_override(agent_override, profiles, fallback)?;
-    resolve_profile_with_override(name, profiles, base.as_ref(), None)
+    resolve_profile_with_override_and_replay(
+        name,
+        profiles,
+        fallback,
+        base.as_ref(),
+        None,
+        ReplayOptions::default(),
+    )
+}
+
+/// The inheritance chain `rimz agents explain` reports for `name`: L's file chain, then X's,
+/// then the final kind base, without any other provider base. Without `--agent`, `--model`,
+/// or a kind change from L's natural kind, preserves the stored profile walk.
+pub fn explain_profile_chain(
+    name: &str,
+    agent_override: Option<&str>,
+    target_kind: &str,
+    model_override: bool,
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+) -> Vec<String> {
+    let base = resolve_agent_override(agent_override, profiles, fallback)
+        .ok()
+        .flatten();
+    let key = profiles.key(name);
+    let target_kind_arg = (base.is_some()
+        || model_override
+        || profiles
+            .0
+            .get(key)
+            .and_then(|profile| profile.definition.as_ref())
+            .is_some_and(|def| def.natural_kind() != target_kind))
+    .then_some(target_kind);
+    let Ok(mut chain) = launch_layers(ChainRequest {
+        name: Some(name),
+        own: profiles,
+        fallback,
+        base_override: base.as_ref(),
+        target_kind: target_kind_arg,
+        subagent_scope: fallback.is_some(),
+        detect_dropped_model: false,
+    }) else {
+        return Vec::new();
+    };
+    chain.names.push(chain.kind);
+    dedup_first(&mut chain.names);
+    chain.names
 }
 
 pub(crate) fn resolve_agent_override<'a>(
@@ -1773,47 +1703,19 @@ pub(crate) fn resolve_agent_override<'a>(
     let lookup_table = table.unwrap_or(own);
     let resolved = resolve_profile(key, lookup_table)?;
     let profile = table.and_then(|table| table.0.get(key));
-    let mut toml_layers = Vec::new();
-    let mut toml_model = None;
-    let mut inherited_markdown = None;
-    if let (Some(table), Some(root)) = (table, profile)
+    let toml_layers = if let (Some(table), Some(root)) = (table, profile)
         && root.definition.is_none()
         && !root.kind_base
     {
-        let mut cur = key.to_owned();
-        let mut seen = BTreeSet::new();
-        while seen.insert(cur.clone()) {
-            let Some(layer) = table.0.get(&cur) else {
-                break;
-            };
-            if layer.kind_base {
-                break;
-            }
-            if layer.definition.is_some() {
-                inherited_markdown = Some(layer);
-                break;
-            }
-            if toml_model.is_none() && layer.model.is_some() {
-                toml_model.clone_from(&layer.model);
-            }
-            toml_layers.push((cur.clone(), layer));
-            let next = table.key(&layer.agent);
-            if next == cur || !table.0.contains_key(next) {
-                break;
-            }
-            cur = next.to_owned();
-        }
-    }
+        walk_toml_chain(key, key, table)?.layers
+    } else {
+        Vec::new()
+    };
     let writes_engine = match profile {
         Some(profile) if profile.kind_base => false,
         Some(profile) => match &profile.definition {
             Some(def) => def.writes_engine(),
-            None => {
-                toml_model.is_some()
-                    || inherited_markdown
-                        .and_then(|md| md.definition.as_ref())
-                        .is_some_and(|def| def.writes_engine())
-            }
+            None => toml_layers.iter().any(|(_, layer)| layer.model.is_some()),
         },
         None => false,
     };
@@ -1829,10 +1731,7 @@ pub(crate) fn resolve_agent_override<'a>(
         resolved,
         writes_engine,
         toml_layers,
-        toml_model,
-        inherited_markdown,
         runtime,
-        routed: BTreeSet::new(),
     }))
 }
 
@@ -1853,7 +1752,7 @@ fn finalize_resolved_profile(resolved: &mut ResolvedProfile, name: &str) -> Resu
     Ok(())
 }
 
-fn fill_toml_layer(
+fn fill_layer(
     resolved: &mut ResolvedProfile,
     layer: &Profile,
     name: &str,
@@ -1877,18 +1776,38 @@ fn fill_toml_layer(
 
 fn kind_base_for<'a>(
     kind: &str,
-    profiles: &'a ProfilesConfig,
+    own: &'a ProfilesConfig,
+    other: Option<&'a ProfilesConfig>,
     fallback: Option<&'a ProfilesConfig>,
 ) -> Option<&'a Profile> {
-    profiles
-        .0
-        .get(kind)
-        .filter(|base| base.agent == kind)
-        .or_else(|| {
-            fallback
-                .and_then(|table| table.0.get(kind))
-                .filter(|base| base.agent == kind)
-        })
+    let pick = |table: &'a ProfilesConfig| {
+        table
+            .0
+            .get(kind)
+            .filter(|base| base.kind_base || base.agent == kind)
+    };
+    pick(own)
+        .or_else(|| other.and_then(pick))
+        .or_else(|| fallback.and_then(pick))
+}
+
+/// The row a kind base's launch takes when it moves to `kind`: that kind's base. A project TOML
+/// row is the base of its kind without being a kind-base row, so it answers an empty one, and the
+/// chain places the TOML row below it.
+pub(crate) fn routed_kind_base(
+    kind: &str,
+    own: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+) -> Option<Profile> {
+    let base = kind_base_for(kind, own, None, fallback)?;
+    if base.kind_base {
+        return Some(base.clone());
+    }
+    Some(Profile {
+        agent: kind.to_owned(),
+        kind_base: true,
+        ..Profile::default()
+    })
 }
 
 fn apply_role_under(
@@ -1905,7 +1824,11 @@ fn apply_role_under(
     if x.writes_engine {
         effective.model = None;
     } else if let Some(role_model) = effective.model.as_deref()
-        && !keeps_inherited_model(original_kind, &resolved.kind, role_model)
+        && !crate::config::definitions::keeps_inherited_model(
+            original_kind,
+            &resolved.kind,
+            role_model,
+        )
     {
         let dropped = role_model.to_owned();
         effective.model = None;
@@ -1916,15 +1839,586 @@ fn apply_role_under(
     resolved.apply_role(&effective);
 }
 
+fn strip_direct_only(profile: Cow<'_, Profile>, should_strip: bool) -> Cow<'_, Profile> {
+    if !should_strip
+        || (profile.subagents.is_none()
+            && profile.idle_compact.is_none()
+            && profile.keep_warm.is_none())
+    {
+        return profile;
+    }
+    let mut owned = profile.into_owned();
+    owned.subagents = None;
+    owned.idle_compact = None;
+    owned.keep_warm = None;
+    Cow::Owned(owned)
+}
+
+struct TomlWalk<'a> {
+    layers: Vec<(String, &'a Profile)>,
+    terminal: crate::agents::Runtime,
+}
+
+fn walk_toml_chain<'a>(
+    name: &str,
+    start_key: &str,
+    table: &'a ProfilesConfig,
+) -> Result<TomlWalk<'a>> {
+    let mut cur = start_key.to_owned();
+    let mut seen = Vec::<String>::new();
+    let mut layers = Vec::<(String, &'a Profile)>::new();
+    let terminal = loop {
+        if layers.len() >= MAX_PROFILE_DEPTH {
+            return Err(LayoutErr::ProfileChainTooDeep {
+                profile: name.to_owned(),
+            });
+        }
+        let Some(profile) = table.0.get(&cur) else {
+            return Err(LayoutErr::UnknownProfileBase {
+                profile: name.to_owned(),
+                base: cur,
+            });
+        };
+        if profile.kind_base {
+            break crate::agents::find_runtime(&profile.agent).ok_or_else(|| {
+                LayoutErr::UnknownProfileBase {
+                    profile: cur.clone(),
+                    base: profile.agent.clone(),
+                }
+            })?;
+        }
+        seen.push(cur.clone());
+        layers.push((cur.clone(), profile));
+        let next = table.key(&profile.agent);
+        if next == cur
+            && let Some(runtime) = crate::agents::find_runtime(next)
+        {
+            break runtime;
+        }
+        if table.0.contains_key(next) {
+            if seen.iter().any(|visited| visited == next) {
+                let mut chain = seen;
+                chain.push(next.to_owned());
+                return Err(LayoutErr::ProfileCycle {
+                    chain: chain.join(" -> "),
+                });
+            }
+            cur = next.to_owned();
+            continue;
+        }
+        if let Some(runtime) = crate::agents::find_runtime(next) {
+            break runtime;
+        }
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: cur,
+            base: next.to_owned(),
+        });
+    };
+    Ok(TomlWalk { layers, terminal })
+}
+
+/// Inputs to [`launch_layers`], the single launch chain walk shared by launch resolution,
+/// replay, explain, and post-launch seat settings.
+struct ChainRequest<'a> {
+    name: Option<&'a str>,
+    own: &'a ProfilesConfig,
+    fallback: Option<&'a ProfilesConfig>,
+    base_override: Option<&'a AgentOverride<'a>>,
+    target_kind: Option<&'a str>,
+    subagent_scope: bool,
+    detect_dropped_model: bool,
+}
+
+struct ChainLayer<'a> {
+    name: String,
+    profile: Cow<'a, Profile>,
+    skip_model: bool,
+    skip_args: bool,
+}
+
+fn layer<'a>(name: String, profile: Cow<'a, Profile>) -> ChainLayer<'a> {
+    ChainLayer {
+        name,
+        profile,
+        skip_model: false,
+        skip_args: false,
+    }
+}
+
+#[derive(Default)]
+struct LaunchChain<'a> {
+    layers: Vec<ChainLayer<'a>>,
+    names: Vec<String>,
+    kind: String,
+    variant: Option<&'static crate::agents::Variant>,
+    original_kind: String,
+    dropped_model: Option<String>,
+}
+
+/// Engine choice for non-Markdown launches: replay target kind, else routed kind, else X's kind,
+/// else the original kind; X's variant survives only when the final kind matches X's kind.
+fn non_markdown_engine(
+    original_kind: &str,
+    original_variant: Option<&'static crate::agents::Variant>,
+    routed_kind: Option<&str>,
+    x: Option<&AgentOverride<'_>>,
+    target_kind: Option<&str>,
+) -> (String, Option<&'static crate::agents::Variant>) {
+    let target_rt = target_kind.and_then(crate::agents::find_runtime);
+    let kind = if let Some(rt) = target_rt {
+        rt.kind().to_owned()
+    } else if let Some(target) = target_kind {
+        target.to_owned()
+    } else if let Some(routed) = routed_kind {
+        routed.to_owned()
+    } else if let Some(x) = x {
+        x.resolved.kind.as_str().to_owned()
+    } else {
+        original_kind.to_owned()
+    };
+    let variant = if let Some(x) = x {
+        x.resolved
+            .variant
+            .filter(|_| kind == x.resolved.kind.as_str())
+    } else {
+        target_rt
+            .and_then(|rt| rt.variant)
+            .or_else(|| original_variant.filter(|_| kind == original_kind))
+    };
+    (kind, variant)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared X-layer append for TOML and bare/kind-base launches"
+)]
+fn push_x_layers<'a>(
+    x: &'a AgentOverride<'a>,
+    profile_label: &str,
+    kind: &str,
+    req: &ChainRequest<'a>,
+    existing_own_layers: &[String],
+    skip_x_model: bool,
+    layers: &mut Vec<ChainLayer<'a>>,
+    names: &mut Vec<String>,
+) -> Result<()> {
+    let strip_x = x.strip_in(req.own, req.subagent_scope);
+    if let Some(x_profile) = x.profile {
+        if let Some(x_def) = &x_profile.definition {
+            let built = if kind != x_profile.agent {
+                Cow::Owned(
+                    x_def
+                        .build(x_profile, None, Some(kind), None)
+                        .map_err(|err| LayoutErr::InvalidProfile {
+                            profile: profile_label.to_owned(),
+                            reason: format!("cannot run on {kind}: {}", err.message),
+                        })?,
+                )
+            } else {
+                Cow::Borrowed(x_profile)
+            };
+            match &built.definition {
+                Some(def) => names.extend(def.chain().iter().cloned()),
+                None => names.push(x.name.clone()),
+            }
+            layers.push(layer(x.name.clone(), strip_direct_only(built, strip_x)));
+            return Ok(());
+        }
+        if !x_profile.kind_base {
+            let same_table = x.table.is_some_and(|table| std::ptr::eq(table, req.own));
+            let same_kind = x.resolved.kind.as_str() == kind;
+            for (layer_name, row) in &x.toml_layers {
+                if same_table && existing_own_layers.iter().any(|seen| seen == layer_name) {
+                    continue;
+                }
+                layers.push(ChainLayer {
+                    name: layer_name.clone(),
+                    profile: strip_direct_only(Cow::Borrowed(row), strip_x),
+                    skip_model: skip_x_model || !same_kind,
+                    skip_args: !same_kind,
+                });
+                names.push(layer_name.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pick the first layer value in launch chain order (L -> X -> final kind base) for a
+/// post-launch seat setting, falling back to `L`'s row when the chain cannot build.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "bridges effective seat resolution into the shared launch_layers walk"
+)]
+pub(crate) fn pick_in_launch_chain<T>(
+    name: Option<&str>,
+    own: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+    base_override: Option<&AgentOverride<'_>>,
+    target_kind: Option<&str>,
+    subagent_scope: bool,
+    direct_when_unchanged: bool,
+    pick: impl Fn(&Profile) -> Option<T>,
+) -> Option<T> {
+    if base_override.is_none() && direct_when_unchanged {
+        let row = name.and_then(|name| own.0.get(own.key(name)))?;
+        let unchanged = (row.definition.is_none() && !row.kind_base)
+            || target_kind.is_none_or(|kind| kind == row.agent);
+        if unchanged {
+            return pick(&strip_direct_only(
+                Cow::Borrowed(row),
+                subagent_scope && row.kind_base,
+            ));
+        }
+    }
+    let present = name.filter(|name| own.0.contains_key(own.key(name)));
+    if present.is_none() && base_override.is_none() {
+        return None;
+    }
+    match launch_layers(ChainRequest {
+        name: present,
+        own,
+        fallback,
+        base_override,
+        target_kind,
+        subagent_scope,
+        detect_dropped_model: false,
+    }) {
+        Ok(chain) => chain.layers.iter().find_map(|layer| pick(&layer.profile)),
+        Err(_) => present
+            .and_then(|name| own.0.get(own.key(name)))
+            .and_then(|row| {
+                pick(&strip_direct_only(
+                    Cow::Borrowed(row),
+                    subagent_scope && row.kind_base,
+                ))
+            }),
+    }
+}
+
+fn push_x_toml_layers<'a>(
+    x: &'a AgentOverride<'a>,
+    kind: &str,
+    req: &ChainRequest<'a>,
+    chain: &mut LaunchChain<'a>,
+) {
+    let same_kind = x.resolved.kind.as_str() == kind;
+    let strip_x = x.strip_in(req.own, req.subagent_scope);
+    for (layer_name, row) in &x.toml_layers {
+        chain.layers.push(ChainLayer {
+            name: layer_name.clone(),
+            profile: strip_direct_only(Cow::Borrowed(row), strip_x),
+            skip_model: true,
+            skip_args: !same_kind,
+        });
+        chain.names.push(layer_name.clone());
+    }
+}
+
+fn markdown_launch_layers<'a>(
+    raw_name: &str,
+    key: &str,
+    l_profile: &'a Profile,
+    l_def: &'a crate::config::definitions::DefinitionSource,
+    req: &ChainRequest<'a>,
+    chain: &mut LaunchChain<'a>,
+) -> Result<()> {
+    chain.original_kind = l_def.natural_kind().to_owned();
+    let build_base = req.base_override.map(AgentOverride::build_base);
+    let already_built = req.target_kind.is_none_or(|k| k == l_profile.agent)
+        && build_base.is_none_or(|b| l_def.is_built_under(b));
+    let built = if already_built {
+        Cow::Borrowed(l_profile)
+    } else {
+        let target_label = req
+            .target_kind
+            .or_else(|| req.base_override.map(|x| x.resolved.kind.as_str()))
+            .unwrap_or(&l_profile.agent);
+        Cow::Owned(
+            l_def
+                .build(l_profile, build_base, req.target_kind, None)
+                .map_err(|err| LayoutErr::InvalidProfile {
+                    profile: raw_name.to_owned(),
+                    reason: format!("cannot run on {target_label}: {}", err.message),
+                })?,
+        )
+    };
+    chain.dropped_model = req
+        .base_override
+        .and_then(|x| {
+            (!already_built
+                && req.detect_dropped_model
+                && !x.writes_engine
+                && l_def.written_tier().is_none())
+            .then(|| l_def.written_model())
+            .flatten()
+            .filter(|model| {
+                !crate::config::definitions::keeps_inherited_model(
+                    &chain.original_kind,
+                    &built.agent,
+                    model,
+                )
+            })
+        })
+        .map(str::to_owned);
+    chain.kind = built.agent.clone();
+    chain.variant = built.variant;
+    chain.names = if req.base_override.is_some() || req.target_kind.is_some() {
+        built
+            .definition
+            .as_ref()
+            .map_or_else(|| vec![key.to_owned()], |def| def.chain().to_vec())
+    } else {
+        vec![key.to_owned()]
+    };
+    chain.layers.push(layer(key.to_owned(), built));
+    if let Some(x) = req.base_override {
+        let kind = chain.kind.clone();
+        push_x_toml_layers(x, &kind, req, chain);
+    }
+    Ok(())
+}
+
+fn toml_launch_layers<'a>(
+    raw_name: &str,
+    key: &str,
+    req: &ChainRequest<'a>,
+    chain: &mut LaunchChain<'a>,
+) -> Result<()> {
+    let walk = walk_toml_chain(raw_name, key, req.own)?;
+    chain.original_kind = walk.terminal.kind().to_owned();
+    let (kind, variant) = non_markdown_engine(
+        &chain.original_kind,
+        walk.terminal.variant,
+        None,
+        req.base_override,
+        req.target_kind,
+    );
+    let own_names: Vec<String> = walk.layers.iter().map(|(name, _)| name.clone()).collect();
+    let (mut x_layers, mut x_names) = (Vec::new(), Vec::new());
+    if let Some(x) = req.base_override {
+        push_x_layers(
+            x,
+            raw_name,
+            &kind,
+            req,
+            &own_names,
+            false,
+            &mut x_layers,
+            &mut x_names,
+        )?;
+    }
+    let same_kind = chain.original_kind == kind;
+    let x_same_table = req
+        .base_override
+        .and_then(|x| x.table)
+        .is_some_and(|table| std::ptr::eq(table, req.own));
+    let x_model_owner = req.base_override.filter(|_| x_same_table).and_then(|x| {
+        x.toml_layers
+            .iter()
+            .find_map(|(name, row)| row.model.as_ref().map(|_| name.as_str()))
+    });
+    let mut skip_l_model = req.base_override.is_some_and(|x| x.writes_engine);
+    if let Some(x) = req.base_override
+        && !x.writes_engine
+        && let Some(model) = walk.layers.iter().find_map(|(_, row)| row.model.as_deref())
+        && !crate::config::definitions::keeps_inherited_model(&chain.original_kind, &kind, model)
+    {
+        skip_l_model = true;
+        if req.detect_dropped_model {
+            chain.dropped_model = Some(model.to_owned());
+        }
+    }
+    for (layer_name, row) in walk.layers {
+        let is_x_model_owner = x_model_owner == Some(layer_name.as_str());
+        chain.layers.push(ChainLayer {
+            name: layer_name.clone(),
+            profile: Cow::Borrowed(row),
+            skip_model: skip_l_model && !is_x_model_owner,
+            skip_args: req.base_override.is_some() && !same_kind,
+        });
+        chain.names.push(layer_name);
+    }
+    chain.layers.extend(x_layers);
+    chain.names.extend(x_names);
+    chain.kind = kind;
+    chain.variant = variant;
+    Ok(())
+}
+
+fn bare_or_kind_base_launch_layers<'a>(
+    key: Option<&str>,
+    root: Option<&'a Profile>,
+    bare_runtime: Option<crate::agents::Runtime>,
+    req: &ChainRequest<'a>,
+    chain: &mut LaunchChain<'a>,
+) -> Result<()> {
+    chain.original_kind = root
+        .map(|p| p.agent.as_str())
+        .or_else(|| bare_runtime.map(crate::agents::Runtime::kind))
+        .or(key)
+        .unwrap_or_default()
+        .to_owned();
+    let original_variant = root
+        .and_then(|p| p.variant)
+        .or_else(|| bare_runtime.and_then(|rt| rt.variant));
+    if req.base_override.is_none() && req.name.is_none() {
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: String::new(),
+            base: String::new(),
+        });
+    }
+    let routed_base = root.filter(|profile| {
+        profile.kind_base
+            && profile.tier_stamp.is_some()
+            && req
+                .base_override
+                .is_none_or(|x| x.profile.is_none_or(|p| p.definition.is_none()))
+    });
+    let routed_kind = routed_base.map(|profile| profile.agent.as_str());
+    let (kind, variant) = non_markdown_engine(
+        &chain.original_kind,
+        original_variant,
+        routed_kind,
+        req.base_override,
+        req.target_kind,
+    );
+    if let Some(x) = req.base_override {
+        if let Some(key) = key {
+            chain.names.push(key.to_owned());
+        }
+        push_x_layers(
+            x,
+            req.name.unwrap_or(&x.name),
+            &kind,
+            req,
+            &[],
+            routed_base.is_some(),
+            &mut chain.layers,
+            &mut chain.names,
+        )?;
+        if let Some(profile) = routed_base
+            && profile.agent == kind
+        {
+            chain.layers.push(layer(
+                profile.agent.clone(),
+                strip_direct_only(Cow::Borrowed(profile), req.subagent_scope),
+            ));
+        }
+    } else if kind == chain.original_kind
+        && let (Some(key), Some(profile)) = (key, root)
+    {
+        chain.layers.push(layer(
+            key.to_owned(),
+            strip_direct_only(Cow::Borrowed(profile), req.subagent_scope),
+        ));
+        chain.names.push(key.to_owned());
+    }
+    if chain.original_kind.is_empty() {
+        chain.original_kind = kind.clone();
+    }
+    chain.kind = kind;
+    chain.variant = variant;
+    Ok(())
+}
+
+/// Produce the ordered launch layers (L -> X -> final kind base) for one profile under an
+/// optional `--agent` override and target kind.
+fn launch_layers<'a>(req: ChainRequest<'a>) -> Result<LaunchChain<'a>> {
+    let key = req.name.map(|name| req.own.key(name));
+    let root = key.and_then(|key| req.own.0.get(key));
+    let bare_runtime = key
+        .filter(|_| root.is_none())
+        .and_then(crate::agents::find_runtime);
+    if let Some(raw_name) = req.name
+        && root.is_none()
+        && bare_runtime.is_none()
+    {
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: raw_name.to_owned(),
+            base: key.unwrap_or(raw_name).to_owned(),
+        });
+    }
+
+    let mut chain = LaunchChain::default();
+    match (req.name, key, root.filter(|profile| !profile.kind_base)) {
+        (Some(raw_name), Some(key), Some(l_profile)) => match &l_profile.definition {
+            Some(l_def) => {
+                markdown_launch_layers(raw_name, key, l_profile, l_def, &req, &mut chain)?
+            }
+            None => toml_launch_layers(raw_name, key, &req, &mut chain)?,
+        },
+        _ => bare_or_kind_base_launch_layers(key, root, bare_runtime, &req, &mut chain)?,
+    }
+
+    if !chain.layers.iter().any(|entry| entry.name == chain.kind)
+        && let Some(base) = kind_base_for(
+            &chain.kind,
+            req.own,
+            req.base_override.and_then(|x| x.table),
+            req.fallback,
+        )
+    {
+        chain.layers.push(layer(
+            chain.kind.clone(),
+            strip_direct_only(Cow::Borrowed(base), req.subagent_scope),
+        ));
+        chain.names.push(chain.kind.clone());
+    }
+    dedup_first(&mut chain.names);
+    Ok(chain)
+}
+
 /// Replay constraints carried from `harness::resume` when rebuilding a recorded launch under
 /// its stored kind, model, or tier stamp.
 #[derive(Default)]
 pub(super) struct ReplayOptions<'a> {
     pub target_kind: Option<&'a str>,
     /// `Some(model_opt)` when replaying a `LaunchRecord` without a tier stamp: forces the
-    /// recorded model (including `None`) and prevents kind bases from filling a model.
+    /// recorded model (including `None`) and prevents any layer from filling a model.
     pub recorded_model: Option<Option<&'a str>>,
     pub stamped_tier: Option<&'a crate::agents::TierStamp>,
+}
+
+fn resolve_chain(
+    name: &str,
+    chain: LaunchChain<'_>,
+    base_override: Option<&AgentOverride<'_>>,
+    role: Option<&RoleBinding>,
+    replay: ReplayOptions<'_>,
+) -> Result<ResolvedProfile> {
+    let mut resolved = ResolvedProfile::bare(&chain.kind);
+    resolved.variant = chain.variant;
+    let override_model = replay.stamped_tier.is_some() || replay.recorded_model.is_some();
+    for layer in &chain.layers {
+        fill_layer(
+            &mut resolved,
+            &layer.profile,
+            &layer.name,
+            layer.skip_model || override_model,
+            layer.skip_args,
+        );
+    }
+    if let Some(stamp) = replay.stamped_tier {
+        resolved.launch.model = Some(stamp.model.clone());
+        resolved.launch.tier = Some(Box::new(stamp.clone()));
+    } else if let Some(recorded_model) = replay.recorded_model {
+        resolved.launch.model = recorded_model.map(str::to_owned);
+        resolved.launch.tier = None;
+    }
+    resolved.layers = chain.names;
+    if let Some(model) = chain.dropped_model {
+        resolved.notices.push(CellNotice::DroppedModel { model });
+    }
+    resolved.fill_kind_defaults();
+    finalize_resolved_profile(&mut resolved, name)?;
+    if let Some(binding) = role {
+        match base_override {
+            Some(x) => apply_role_under(&mut resolved, binding, &chain.original_kind, x),
+            None => resolved.apply_role(binding),
+        }
+    }
+    Ok(resolved)
 }
 
 fn resolve_profile_with_override(
@@ -1951,312 +2445,59 @@ fn resolve_profile_with_override_and_replay(
     role: Option<&RoleBinding>,
     replay: ReplayOptions<'_>,
 ) -> Result<ResolvedProfile> {
-    let Some(x) = base_override else {
-        let mut resolved = resolve_profile(name, profiles)?;
-        if let Some(binding) = role {
-            resolved.apply_role(binding);
-        }
-        return Ok(resolved);
+    let chain = launch_layers(ChainRequest {
+        name: Some(name),
+        own: profiles,
+        fallback,
+        base_override,
+        target_kind: replay.target_kind,
+        subagent_scope: fallback.is_some(),
+        detect_dropped_model: replay.target_kind.is_none()
+            && role.is_none_or(|binding| binding.model.is_none()),
+    })?;
+    resolve_chain(name, chain, base_override, role, replay)
+}
+
+/// Profile targets (canonical key and display word) named by an inline layout spec.
+pub(crate) fn inline_layout_profile_targets(
+    raw: &str,
+    profiles: &ProfilesConfig,
+) -> Vec<(String, String)> {
+    let raw = if raw == "peer" && !profiles.0.contains_key("peer") {
+        BUILTIN_PEER
+    } else {
+        raw
     };
-
-    let key = profiles.key(name);
-    let root = profiles.0.get(key);
-    let bare_runtime = root
-        .is_none()
-        .then(|| crate::agents::find_runtime(key))
-        .flatten();
-    if root.is_none() && bare_runtime.is_none() {
-        return Err(LayoutErr::UnknownProfileBase {
-            profile: name.to_owned(),
-            base: key.to_owned(),
-        });
-    }
-
-    // Bare runtime or kind-base row: contributes no layer of its own.
-    if bare_runtime.is_some() || root.is_some_and(|profile| profile.kind_base) {
-        let original_kind = root
-            .map(|profile| profile.agent.as_str())
-            .or_else(|| bare_runtime.map(crate::agents::Runtime::kind))
-            .unwrap_or(key);
-        let mut resolved = if x.routed.contains(key) && profiles.0.contains_key(key) {
-            let mut resolved = resolve_profile(key, profiles)?;
-            resolved.clear_kind_defaults();
-            let same_kind = x.resolved.kind == resolved.kind;
-            for (layer_name, layer) in &x.toml_layers {
-                fill_toml_layer(&mut resolved, layer, layer_name, true, !same_kind);
-            }
-            resolved.fill_kind_defaults();
-            resolved
-        } else {
-            let mut resolved = x.resolved.clone();
-            resolved.layers.insert(0, key.to_owned());
-            dedup_first(&mut resolved.layers);
-            resolved
-        };
-        if let Some(binding) = role {
-            apply_role_under(&mut resolved, binding, original_kind, x);
-        }
-        finalize_resolved_profile(&mut resolved, name)?;
-        return Ok(resolved);
-    }
-
-    let l_profile = root.expect("checked root.is_some()");
-
-    // Markdown definition or Markdown team seat: build L under X through the loader.
-    if let Some(l_def) = &l_profile.definition {
-        let already_routed = x.routed.contains(key) && replay.target_kind.is_none();
-        let l_natural_kind = l_def.natural_kind();
-        let (built, dropped_model) = if already_routed {
-            (Cow::Borrowed(l_profile), None)
-        } else {
-            let build_model = if replay.target_kind.is_some() {
-                None
+    let Ok(structure) = parse_layout_structure(raw) else {
+        return Vec::new();
+    };
+    let commands = CommandsConfig::default();
+    let mut list: Vec<(String, String)> = Vec::new();
+    for column in structure.columns {
+        for token in column.cells {
+            let (cell_word, _) = split_inline_role(token, profiles, &commands);
+            // `<base>-fast` launches its base, so the base is what routes;
+            // a profile literally named `<base>-fast` wins, as at launch.
+            let base_word = fast_suffix_base(cell_word)
+                .filter(|base| {
+                    !profiles.0.contains_key(cell_word)
+                        && (profiles.0.contains_key(*base) || virtual_agent_parts(base).is_some())
+                })
+                .unwrap_or(cell_word);
+            let word = if !profiles.0.contains_key(base_word)
+                && let Some((kind_name, _)) = virtual_agent_parts(base_word)
+            {
+                kind_name
             } else {
-                x.toml_model_for_build()
+                base_word
             };
-            let mut built = l_profile
-                .build_under(Some(x.build_base()), replay.target_kind, build_model)
-                .expect("Markdown definition always builds")
-                .map_err(|err| LayoutErr::InvalidProfile {
-                    profile: name.to_owned(),
-                    reason: format!(
-                        "cannot run on {}: {}",
-                        replay.target_kind.unwrap_or(x.resolved.kind.as_str()),
-                        err.message
-                    ),
-                })?;
-            if let Some(stamp) = replay.stamped_tier {
-                built.model = Some(stamp.model.clone());
-                built.tier_stamp = Some(Box::new(stamp.clone()));
-            } else if let Some(recorded_model) = replay.recorded_model {
-                built.model = recorded_model.map(str::to_owned);
-            }
-            let dropped = (replay.target_kind.is_none()
-                && !x.writes_engine
-                && role.is_none_or(|binding| binding.model.is_none())
-                && l_def.written_tier().is_none())
-            .then(|| l_def.written_model())
-            .flatten()
-            .filter(|model| !keeps_inherited_model(l_natural_kind, &built.agent, model))
-            .map(str::to_owned);
-            (Cow::Owned(built), dropped)
-        };
-        let mut resolved = ResolvedProfile::bare(&built.agent);
-        resolved.variant = built.variant;
-        resolved.fill_missing(&built, key);
-        if !already_routed {
-            let x_def = x
-                .profile
-                .and_then(|profile| profile.definition.as_ref())
-                .or_else(|| {
-                    x.inherited_markdown
-                        .and_then(|profile| profile.definition.as_ref())
-                });
-            if let Some(x_def) = x_def {
-                let x_source = Some(TuningSource::Profile(x.name.clone()));
-                if !l_def.writes_effort()
-                    && x_def.writes_effort()
-                    && resolved.launch.effort.is_some()
-                {
-                    resolved.sources.effort.clone_from(&x_source);
-                }
-                if !l_def.writes_fast() && x_def.writes_fast() && resolved.fast.is_some() {
-                    resolved.sources.fast.clone_from(&x_source);
-                }
-                if !l_def.writes_code_mode()
-                    && x_def.writes_code_mode()
-                    && resolved.code_mode.is_some()
-                {
-                    resolved.sources.code_mode.clone_from(&x_source);
-                }
-                if !l_def.writes_auto_compact()
-                    && x_def.writes_auto_compact()
-                    && resolved.auto_compact.is_some()
-                {
-                    resolved.sources.auto_compact = x_source;
-                }
-            }
-        }
-        let same_as_x = x.resolved.kind.as_str() == built.agent.as_str();
-        for (layer_name, layer) in &x.toml_layers {
-            fill_toml_layer(&mut resolved, layer, layer_name, true, !same_as_x);
-        }
-        let mut layers = built
-            .definition
-            .as_ref()
-            .map_or_else(|| vec![key.to_owned()], |def| def.chain().to_vec());
-        for (layer_name, _) in &x.toml_layers {
-            layers.push(layer_name.clone());
-        }
-        if let Some(base) = kind_base_for(&built.agent, profiles, fallback.or(x.table)) {
-            fill_toml_layer(
-                &mut resolved,
-                base,
-                &built.agent,
-                replay.recorded_model.is_some(),
-                false,
-            );
-            layers.push(built.agent.clone());
-        }
-        dedup_first(&mut layers);
-        resolved.layers = layers;
-        if let Some(model) = dropped_model {
-            resolved.notices.push(CellNotice::DroppedModel { model });
-        }
-        resolved.fill_kind_defaults();
-        if let Some(binding) = role {
-            apply_role_under(&mut resolved, binding, l_natural_kind, x);
-        }
-        finalize_resolved_profile(&mut resolved, name)?;
-        return Ok(resolved);
-    }
-
-    // TOML profile chain: collect L's own layers before any kind base, then follow with X and the
-    // final kind base.
-    let mut cur = key.to_owned();
-    let mut seen = Vec::<String>::new();
-    let mut l_layers = Vec::<(String, &Profile)>::new();
-    let mut l_md_ancestor: Option<&Profile> = None;
-    let l_terminal = loop {
-        if l_layers.len() >= MAX_PROFILE_DEPTH {
-            return Err(LayoutErr::ProfileChainTooDeep {
-                profile: name.to_owned(),
-            });
-        }
-        let Some(profile) = profiles.0.get(&cur) else {
-            return Err(LayoutErr::UnknownProfileBase {
-                profile: name.to_owned(),
-                base: cur,
-            });
-        };
-        if profile.kind_base {
-            break crate::agents::find_runtime(&profile.agent).ok_or_else(|| {
-                LayoutErr::UnknownProfileBase {
-                    profile: cur.clone(),
-                    base: profile.agent.clone(),
-                }
-            })?;
-        }
-        if profile.definition.is_some() {
-            l_md_ancestor = Some(profile);
-            break crate::agents::find_runtime(&profile.agent).ok_or_else(|| {
-                LayoutErr::UnknownProfileBase {
-                    profile: cur.clone(),
-                    base: profile.agent.clone(),
-                }
-            })?;
-        }
-        seen.push(cur.clone());
-        l_layers.push((cur.clone(), profile));
-        let next = profiles.key(&profile.agent);
-        if next == cur
-            && let Some(runtime) = crate::agents::find_runtime(next)
-        {
-            break runtime;
-        }
-        if profiles.0.contains_key(next) {
-            if seen.iter().any(|visited| visited == next) {
-                let mut chain = seen;
-                chain.push(next.to_owned());
-                return Err(LayoutErr::ProfileCycle {
-                    chain: chain.join(" -> "),
-                });
-            }
-            cur = next.to_owned();
-            continue;
-        }
-        if let Some(runtime) = crate::agents::find_runtime(next) {
-            break runtime;
-        }
-        return Err(LayoutErr::UnknownProfileBase {
-            profile: cur,
-            base: next.to_owned(),
-        });
-    };
-
-    let l_kind = l_terminal.kind();
-    let final_kind = x.resolved.kind.as_str();
-    let same_kind = l_kind == final_kind;
-    let mut resolved = ResolvedProfile::bare(final_kind);
-    resolved.variant = x.resolved.variant;
-    resolved.kind_defaults =
-        l_layers.iter().any(|(_, layer)| layer.kind_defaults) || x.resolved.kind_defaults;
-
-    let l_written_model = l_layers
-        .iter()
-        .find_map(|(_, layer)| layer.model.as_deref())
-        .or_else(|| {
-            l_md_ancestor
-                .and_then(|md| md.definition.as_ref())
-                .and_then(|def| def.written_model())
-        });
-    let mut skip_l_model = x.writes_engine;
-    let mut dropped_model = None;
-    if replay.target_kind.is_none()
-        && !x.writes_engine
-        && role.is_none_or(|binding| binding.model.is_none())
-        && let Some(model) = l_written_model
-        && !keeps_inherited_model(l_kind, final_kind, model)
-    {
-        skip_l_model = true;
-        dropped_model = Some(model.to_owned());
-    }
-
-    for (layer_name, layer) in &l_layers {
-        fill_toml_layer(&mut resolved, layer, layer_name, skip_l_model, !same_kind);
-    }
-
-    let mut layers = seen;
-    if let Some(md) = l_md_ancestor {
-        let built = md
-            .build_under(Some(x.build_base()), None, x.toml_model_for_build())
-            .expect("Markdown ancestor always builds")
-            .map_err(|err| LayoutErr::InvalidProfile {
-                profile: name.to_owned(),
-                reason: format!("cannot run on {}: {}", x.resolved.kind, err.message),
-            })?;
-        resolved.fill_missing(&built, &cur);
-        if let Some(def) = &built.definition {
-            layers.extend(def.chain().iter().cloned());
-        }
-        for (layer_name, layer) in &x.toml_layers {
-            fill_toml_layer(&mut resolved, layer, layer_name, true, false);
-            layers.push(layer_name.clone());
-        }
-    } else if let Some(x_profile) = x.profile {
-        if let Some(x_def) = &x_profile.definition {
-            resolved.fill_missing(x_profile, &x.name);
-            layers.extend(x_def.chain().iter().cloned());
-        } else if !x_profile.kind_base {
-            for (layer_name, layer) in &x.toml_layers {
-                resolved.fill_missing(layer, layer_name);
-                layers.push(layer_name.clone());
-            }
-            if let Some(md) = x.inherited_markdown {
-                resolved.fill_missing(md, &x.name);
-                if let Some(def) = &md.definition {
-                    layers.extend(def.chain().iter().cloned());
-                }
+            let key = profiles.key(word).to_owned();
+            if !list.iter().any(|(existing, _)| existing == &key) {
+                list.push((key, word.to_owned()));
             }
         }
     }
-    if !layers.iter().any(|layer| layer == final_kind)
-        && let Some(base) = kind_base_for(final_kind, profiles, x.table)
-    {
-        resolved.fill_missing(base, final_kind);
-        layers.push(final_kind.to_owned());
-    }
-    dedup_first(&mut layers);
-    resolved.layers = layers;
-    if let Some(model) = dropped_model {
-        resolved.notices.push(CellNotice::DroppedModel { model });
-    }
-    resolved.fill_kind_defaults();
-    if let Some(binding) = role {
-        apply_role_under(&mut resolved, binding, l_kind, x);
-    }
-    finalize_resolved_profile(&mut resolved, name)?;
-    Ok(resolved)
+    list
 }
 
 fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
@@ -2779,7 +3020,7 @@ fn virtual_base(
 
 /// The base of a `<base>-fast` cell word, before any check that it names a
 /// profile, kind, or permission-mode cell.
-pub(crate) fn fast_suffix_base(raw: &str) -> Option<&str> {
+pub(super) fn fast_suffix_base(raw: &str) -> Option<&str> {
     raw.strip_suffix("-fast").filter(|base| !base.is_empty())
 }
 
@@ -2836,7 +3077,7 @@ fn fast_suffix_cell(
     )?))
 }
 
-pub(crate) fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
+pub(super) fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
     let (kind, mode) = raw.rsplit_once('-')?;
     let mode = PermissionMode::from_str(mode).ok()?;
     (crate::agents::find_definition(kind).is_some()).then_some((kind, mode))

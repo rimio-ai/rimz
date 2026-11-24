@@ -555,6 +555,9 @@ fn capability_errors(
     let mut inventories = std::collections::BTreeMap::new();
     let full_catalog = rimz::harness::subagent_policy::catalog(
         None,
+        None,
+        None,
+        rimz::config::effective::ProfileScope::Agents,
         &loaded.agent_profiles,
         &loaded.subagent_profiles,
         &machine.agents.commands,
@@ -674,6 +677,9 @@ fn capability_errors(
             let profile_catalog = (row.namespace != "subagents").then(|| {
                 rimz::harness::subagent_policy::catalog(
                     Some(&row.name),
+                    None,
+                    Some(&row.kind),
+                    rimz::config::effective::ProfileScope::Agents,
                     &loaded.agent_profiles,
                     &loaded.subagent_profiles,
                     &machine.agents.commands,

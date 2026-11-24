@@ -351,10 +351,15 @@ pub(super) fn refresh_heavy_lanes(
             &resume_messages,
         )
     });
-    let seated = base
-        .agents
-        .iter()
-        .any(|agent| agent.team.is_some() || agent.profile.is_some());
+    let seated = base.agents.iter().any(|agent| {
+        agent.team.is_some()
+            || agent.profile.is_some()
+            || agent
+                .record
+                .as_ref()
+                .and_then(|record| record.agent.as_deref())
+                .is_some()
+    });
     let policy = if seated {
         SeatPolicy::load(config, base.project_root.as_deref())
     } else {
@@ -655,5 +660,47 @@ mod tests {
             Some(1_000),
             1_000 + ORPHAN_SWEEP_SCAN_TTL.as_millis() as u64
         ));
+    }
+
+    #[test]
+    fn heavy_lanes_load_seat_policy_for_bare_kind_with_recorded_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let state_paths = crate::StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        state_paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let mut config = MachineConfig::default();
+        config.harness.cache_keepalive = true;
+        config.harness.keep_warm = crate::config::KeepWarm::Off;
+        config.agents.profiles =
+            toml::from_str("[astra]\nagent = 'codex'\nkeep-warm = '3h'\n").unwrap();
+        let now = Timestamp::now();
+        let mut bare = crate::testkit::agent_state("codex", "codex-bare", now);
+        bare.status = AgentStatus::Idle;
+        bare.profile = None;
+        bare.team = None;
+        bare.record = Some(Box::new(crate::agents::LaunchRecord {
+            agent: Some("astra".to_owned()),
+            ..Default::default()
+        }));
+        let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![bare.clone()], now);
+        let mut refresh_state = ProducerRefreshState::default();
+        refresh_heavy_lanes(
+            &snapshot,
+            &[],
+            &state_paths,
+            &runtime,
+            &config,
+            crate::agents::spending::service::SpendingServiceStartup::OneShot,
+            git_stats::GitPass::OneShot,
+            &mut refresh_state,
+        );
+        let cache = keep_warm::read_keep_warm_cache(&runtime.keep_warm_path());
+        assert_eq!(
+            cache.horizons.get(&keep_warm::horizon_key(&bare)),
+            Some(&10_800),
+            "bare kind launched under --agent X must load seat policy in refresh_heavy_lanes: {cache:?}"
+        );
     }
 }

@@ -675,18 +675,35 @@ fn long_cache_requested(
     if !machine.harness.cache_keepalive {
         return false;
     }
-    let (teams, profiles) = effective.map_or(
-        (&machine.agents.teams, &machine.agents.profiles),
-        |effective| (&effective.teams, &effective.profiles),
+    let (teams, profiles, subagent_profiles) = effective.map_or(
+        (
+            &machine.agents.teams,
+            &machine.agents.profiles,
+            &machine.subagents.profiles,
+        ),
+        |effective| {
+            (
+                &effective.teams,
+                &effective.profiles,
+                &effective.subagent_profiles,
+            )
+        },
     );
     let params = &request.identity.params;
+    let launched_child = params.parent_agent_id.is_some() && params.launch_depth.is_some();
     crate::config::effective::KeepWarmSeat {
         team: params.team.as_deref(),
         role: params.role.as_deref(),
         profile: params.profile.as_deref(),
-        launched_child: params.parent_agent_id.is_some() && params.launch_depth.is_some(),
+        agent: params
+            .record
+            .as_ref()
+            .and_then(|record| record.agent.as_deref()),
+        kind: Some(request.kind.as_str()),
+        scope: ProfileScope::for_launch(params.profile_scope, request.subagent || launched_child),
+        launched_child,
     }
-    .declared_horizon(teams, profiles, &machine.harness)
+    .declared_horizon(teams, profiles, subagent_profiles, &machine.harness)
     .is_some()
 }
 
@@ -695,18 +712,35 @@ fn idle_compact_covered(
     machine: &crate::config::MachineConfig,
     effective: Option<&LaunchAgents>,
 ) -> bool {
-    let (teams, profiles) = effective.map_or(
-        (&machine.agents.teams, &machine.agents.profiles),
-        |effective| (&effective.teams, &effective.profiles),
+    let (teams, profiles, subagent_profiles) = effective.map_or(
+        (
+            &machine.agents.teams,
+            &machine.agents.profiles,
+            &machine.subagents.profiles,
+        ),
+        |effective| {
+            (
+                &effective.teams,
+                &effective.profiles,
+                &effective.subagent_profiles,
+            )
+        },
     );
     let params = &request.identity.params;
+    let launched_child = params.parent_agent_id.is_some() && params.launch_depth.is_some();
     let floor = crate::config::effective::IdleCompactSeat {
         team: params.team.as_deref(),
         role: params.role.as_deref(),
         profile: params.profile.as_deref(),
-        launched_child: params.parent_agent_id.is_some() && params.launch_depth.is_some(),
+        agent: params
+            .record
+            .as_ref()
+            .and_then(|record| record.agent.as_deref()),
+        kind: Some(request.kind.as_str()),
+        scope: ProfileScope::for_launch(params.profile_scope, request.subagent || launched_child),
+        launched_child,
     }
-    .resolve(teams, profiles, &machine.harness);
+    .resolve(teams, profiles, subagent_profiles, &machine.harness);
     // Sign-in arrives after launch, so every possible reading must admit compaction.
     floor.is_some()
         && [None, Some(SignIn::Subscription), Some(SignIn::ApiKey)]
@@ -1474,17 +1508,24 @@ fn reminders(
             vec![LaunchPlanWarning::DefaultReminders],
         );
     };
-    let scope = ProfileScope::for_launch(request.identity.params.profile_scope, request.subagent);
-    let profiles = effective.profiles_for_launch(scope, request.identity.params.profile.as_deref());
+    let params = &request.identity.params;
+    let scope = ProfileScope::for_launch(params.profile_scope, request.subagent);
+    let recorded_agent = params
+        .record
+        .as_ref()
+        .and_then(|record| record.agent.as_deref());
     let lsp_configured = !effective.lsp_servers.is_empty();
-    let model = request
-        .identity
-        .params
-        .profile
-        .as_deref()
-        .and_then(|name| profiles.0.get(name))
-        .and_then(|profile| profile.model_reminder)
-        .unwrap_or(true);
+    let model = crate::config::effective::resolve_seat_setting(
+        params.profile.as_deref(),
+        recorded_agent,
+        Some(request.kind.as_str()),
+        scope,
+        &effective.profiles,
+        &effective.subagent_profiles,
+        true,
+        |profile| profile.model_reminder,
+    )
+    .unwrap_or(true);
     if request.subagent {
         return (
             LaunchReminders {
@@ -1499,7 +1540,10 @@ fn reminders(
     // writable one.
     let subagent_catalog = (!request.is_judge()).then(|| {
         super::subagent_policy::catalog(
-            request.identity.params.profile.as_deref(),
+            params.profile.as_deref(),
+            recorded_agent,
+            Some(request.kind.as_str()),
+            scope,
             &effective.profiles,
             &effective.subagent_profiles,
             commands,

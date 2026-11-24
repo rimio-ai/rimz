@@ -95,7 +95,7 @@ A failure partway through aborts the remaining launches and names every child al
 
 ## Caller policy
 
-The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` entry: when it sets `subagents = [...]`, both the positional profile and any `--agent` re-base must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation.
+The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then resolves the caller's effective `subagents = [...]` list in launch chain order under its recorded `--agent` and kind: when set, the positional profile must appear literally in the list (any `--agent` override is not checked against it). Refusal happens before provider preflight, store append, or mux mutation.
 
 `subagent_policy::catalog` is the one owner of catalog assembly. Both `rimz subagents profiles` and the parent's launch reminder read it ([below](#parents-learn-their-catalog)). It lists the `[subagents.profiles]` entries, the shared commands, and each runtime variant (such as `opencode-mini`) whose kind has a `[subagents.profiles]` base or that the allowlist names. It returns `NoneAllowed` for `subagents = []`, then filters by the literal allowlist and returns `Disabled` when nothing survives; `Available` is never empty. A caller whose profile sets no `subagents` list, or that resolves to no profile (a user shell included), sees the unfiltered catalog.
 

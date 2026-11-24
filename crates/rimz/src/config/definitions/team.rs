@@ -347,6 +347,7 @@ impl SeatLoader<'_> {
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
         let mut fm = role.overlay();
+        let role_overlay = fm.clone();
         fm.check_plus().map_err(|message| {
             let handle = role.role.as_deref().unwrap_or(&role.agent);
             DefinitionErr::new(path, format!("team '{name}' role '{handle}' {message}"))
@@ -420,6 +421,12 @@ impl SeatLoader<'_> {
             .as_ref()
             .map(|source| source.chain().to_vec())
             .unwrap_or_else(|| vec![role.agent.clone()]);
+        let mut seat_writers = original
+            .definition
+            .as_ref()
+            .map(|source| source.writers().clone())
+            .unwrap_or_default();
+        seat_writers.overlay_from(&role_overlay, &seat_info.profile_name);
         // Resolve the overlaid leaf through the standalone checks/defaults with its already-rendered
         // ancestor crafts in place, so precomputed renders and on-demand builds share one path.
         let tree = Namespace {
@@ -441,6 +448,7 @@ impl SeatLoader<'_> {
                 seat_info,
                 ancestor_chain,
                 ancestor_crafts,
+                seat_writers,
             ),
             &mut seat,
         );

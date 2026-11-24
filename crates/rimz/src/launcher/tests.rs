@@ -907,13 +907,17 @@ fn supervised_selection_checks_subagent_allowlist() {
     .expect("profiles");
     let mut request = supervised_request("fix-it", true);
     request.spec = "explorer".to_owned();
+    request.agent = Some("astra".to_owned());
 
-    resolve::check_supervised_subagent_allowed(&request, Some(&caller), &profiles)
-        .expect("allowed subagent");
+    let empty = crate::config::ProfilesConfig::default();
+    resolve::check_supervised_subagent_allowed(&request, Some(&caller), &profiles, &empty)
+        .expect("allowed subagent with unlisted --agent");
 
     request.spec = "codex".to_owned();
-    let error = resolve::check_supervised_subagent_allowed(&request, Some(&caller), &profiles)
-        .expect_err("unlisted subagent");
+    request.agent = Some("explorer".to_owned());
+    let error =
+        resolve::check_supervised_subagent_allowed(&request, Some(&caller), &profiles, &empty)
+            .expect_err("unlisted subagent");
     assert!(error.to_string().contains("profile `planner`"), "{error:#}");
 }
 
@@ -1401,4 +1405,1317 @@ fn one_chain_rule_and_tier_fallback_through_direct_entry() {
             .ends_with("agents/claude.md")
     );
     assert_eq!(fb_cell.append_system_prompt_files.len(), 2);
+}
+
+#[test]
+fn bare_kind_with_markdown_override_and_routing_keeps_override_lines_and_tuning_sources() {
+    use crate::config::effective::ProfileScope;
+    use crate::harness::spec::TuningSource;
+
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".rimz")).unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\neffort: medium\n---\nClaude house.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\neffort: medium\nfast: off\n---\nCodex house.",
+        ),
+        (
+            "agents/mdp.md",
+            "---\ndescription: Mdp\nagent: codex\nmodel: sol\neffort: low\nfast: on\n\
+             budget: 7\nsubagents: [advisor]\ntools: [Bash, Read]\n---\nMdp craft.",
+        ),
+        (
+            "agents/lead.md",
+            "---\ndescription: Lead\nagent: claude\nmodel: opus\ntools: [Read]\n---\nLead craft.",
+        ),
+        (
+            "subagents/advisor.md",
+            "---\ndescription: Advisor\nagent: codex\ntools: [Read]\n---\nAdvisor craft.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    std::fs::write(
+        root.path().join("config.toml"),
+        "[tiers]\nintern = ['luna', 'haiku']\njunior = ['sol', 'sonnet']\n\
+         senior = ['opus', 'astra']\nprincipal = ['fable']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join(".rimz/config.toml"),
+        "[profiles.tl]\nagent = 'claude'\neffort = 'high'\n\
+         [profiles.tk]\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
+         [subagents.profiles.tsub]\nagent = 'claude'\neffort = 'high'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(&project, root.path()).unwrap();
+
+    let machine = crate::config::MachineConfig::parse_text(
+        &root.path().join("config.toml"),
+        &std::fs::read_to_string(root.path().join("config.toml")).unwrap(),
+        root.path(),
+    )
+    .unwrap();
+    let effective = crate::config::effective::load_with_roots(&machine, &project, root.path())
+        .expect("effective config");
+
+    // Kind-base L under Markdown X with `--tier`: keeps X's effort, fast, budget, and craft,
+    // attributed to X, with chain [claude, mdp, codex].
+    let bare_tier = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("claude"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("mdp".into()),
+            tier: Some(crate::config::tiers::ModelTier::Senior),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("claude --agent mdp --tier senior");
+    let cell = bare_tier.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind.as_str(), "codex");
+    assert_eq!(cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("low"));
+    assert_eq!(
+        cell.tuning.effort,
+        Some(TuningSource::Profile("mdp".into()))
+    );
+    assert_eq!(cell.launch.fast, Some(true));
+    assert_eq!(cell.tuning.fast, Some(TuningSource::Profile("mdp".into())));
+    assert_eq!(cell.launch.budget.as_deref(), Some("$7.00"));
+    assert!(
+        cell.append_system_prompt_files
+            .iter()
+            .any(|src| src.origin().ends_with("agents/mdp.md")),
+        "expected mdp craft in {:?}",
+        cell.append_system_prompt_files
+    );
+    assert_eq!(
+        crate::harness::spec::explain_profile_chain(
+            "claude",
+            Some("mdp"),
+            cell.kind.as_str(),
+            false,
+            &bare_tier.profiles,
+            None,
+        ),
+        vec!["claude", "mdp", "codex"]
+    );
+
+    // Kind-base L under Markdown X with `--model`: keeps X's lines and prompt too.
+    let bare_model = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("claude"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("mdp".into()),
+            preset: crate::agents::LaunchPreset {
+                model: Some("astra".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("claude --agent mdp --model astra");
+    let bare_model_cell = bare_model.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(bare_model_cell.kind.as_str(), "codex");
+    assert_eq!(bare_model_cell.launch.model.as_deref(), Some("astra"));
+    assert_eq!(bare_model_cell.launch.effort.as_deref(), Some("low"));
+    assert_eq!(bare_model_cell.launch.budget.as_deref(), Some("$7.00"));
+    assert!(
+        bare_model_cell
+            .append_system_prompt_files
+            .iter()
+            .any(|src| src.origin().ends_with("agents/mdp.md"))
+    );
+
+    // Markdown L under Markdown X with `--tier` and `--model`: tuning sources credit X, not L.
+    for (label, overrides) in [
+        (
+            "lead --agent mdp --tier senior",
+            super::LaunchOverrides {
+                agent: Some("mdp".into()),
+                tier: Some(crate::config::tiers::ModelTier::Senior),
+                ..Default::default()
+            },
+        ),
+        (
+            "lead --agent mdp --model astra",
+            super::LaunchOverrides {
+                agent: Some("mdp".into()),
+                preset: crate::agents::LaunchPreset {
+                    model: Some("astra".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+    ] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some("lead"),
+            None,
+            &overrides,
+            None,
+            None,
+            None,
+            true,
+            None,
+        )
+        .expect(label);
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.effort.as_deref(), Some("low"), "{label}");
+        assert_eq!(
+            cell.tuning.effort,
+            Some(TuningSource::Profile("mdp".into())),
+            "{label}"
+        );
+        assert_eq!(cell.launch.fast, Some(true), "{label}");
+        assert_eq!(
+            cell.tuning.fast,
+            Some(TuningSource::Profile("mdp".into())),
+            "{label}"
+        );
+    }
+
+    // Project TOML combinations: TOML L under Markdown X, Markdown L under TOML X, and
+    // project TOML child under direct Markdown X.
+    let tl_under_mdp = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("tl"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("mdp".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("tl --agent mdp");
+    let tl_cell = tl_under_mdp.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(tl_cell.kind.as_str(), "codex");
+    assert_eq!(tl_cell.launch.model.as_deref(), Some("sol"));
+    assert_eq!(tl_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(
+        tl_cell.tuning.effort,
+        Some(TuningSource::Profile("tl".into()))
+    );
+
+    let lead_under_tk = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("lead"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("tk".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("lead --agent tk");
+    let tk_cell = lead_under_tk.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(tk_cell.kind.as_str(), "codex");
+    assert_eq!(tk_cell.launch.effort.as_deref(), Some("low"));
+    assert_eq!(
+        tk_cell.tuning.effort,
+        Some(TuningSource::Profile("tk".into()))
+    );
+    assert_eq!(tk_cell.launch.fast, Some(false));
+    assert_eq!(
+        tk_cell.tuning.fast,
+        Some(TuningSource::Profile("tk".into()))
+    );
+
+    let tsub_under_mdp = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Subagents,
+        Some("tsub"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("mdp".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("tsub --subagent-profile --agent mdp");
+    let tsub_cell = tsub_under_mdp.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(tsub_cell.kind.as_str(), "codex");
+    assert_eq!(tsub_cell.launch.model.as_deref(), Some("sol"));
+    assert_eq!(tsub_cell.launch.effort.as_deref(), Some("high"));
+    assert_eq!(
+        crate::harness::subagent_policy::allowed_specs(
+            Some("tsub"),
+            Some("mdp"),
+            Some("codex"),
+            ProfileScope::Subagents,
+            &effective.profiles,
+            &effective.subagent_profiles,
+        ),
+        None
+    );
+
+    // Inline layout holding a bare/kind-base cell and a Markdown cell under one Markdown X,
+    // routed with `--tier` and with `--model`: both cells keep the routed model, tier stamp,
+    // and X's lines without rebuilding `lead` away from its routed row.
+    for (label, overrides, expected_model, expect_tier) in [
+        (
+            "claude,lead --agent mdp --tier senior",
+            super::LaunchOverrides {
+                agent: Some("mdp".into()),
+                tier: Some(crate::config::tiers::ModelTier::Senior),
+                ..Default::default()
+            },
+            "astra",
+            Some(crate::config::tiers::ModelTier::Senior),
+        ),
+        (
+            "claude,lead --agent mdp --model gpt-6",
+            super::LaunchOverrides {
+                agent: Some("mdp".into()),
+                preset: crate::agents::LaunchPreset {
+                    model: Some("gpt-6".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "gpt-6",
+            None,
+        ),
+    ] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some("claude,lead"),
+            None,
+            &overrides,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .expect(label);
+        let cells: Vec<_> = finalized.resolved.layout.agent_cells().collect();
+        assert_eq!(cells.len(), 2, "{label}");
+        for (idx, cell) in cells.iter().enumerate() {
+            assert_eq!(cell.kind.as_str(), "codex", "{label} cell {idx}");
+            assert_eq!(
+                cell.launch.model.as_deref(),
+                Some(expected_model),
+                "{label} cell {idx}"
+            );
+            assert_eq!(
+                cell.launch
+                    .tier
+                    .as_ref()
+                    .map(|stamp| (stamp.tier, stamp.model.as_str())),
+                expect_tier.map(|tier| (tier, expected_model)),
+                "{label} cell {idx}"
+            );
+            assert_eq!(
+                cell.launch.effort.as_deref(),
+                Some("low"),
+                "{label} cell {idx}"
+            );
+            assert_eq!(
+                cell.tuning.effort,
+                Some(TuningSource::Profile("mdp".into())),
+                "{label} cell {idx}"
+            );
+            assert_eq!(cell.launch.fast, Some(true), "{label} cell {idx}");
+            assert_eq!(
+                cell.tuning.fast,
+                Some(TuningSource::Profile("mdp".into())),
+                "{label} cell {idx}"
+            );
+            assert_eq!(
+                cell.launch.budget.as_deref(),
+                Some("$7.00"),
+                "{label} cell {idx}"
+            );
+            assert!(
+                cell.append_system_prompt_files
+                    .iter()
+                    .any(|src| src.origin().ends_with("agents/mdp.md")),
+                "{label} cell {idx}: expected mdp craft in {:?}",
+                cell.append_system_prompt_files
+            );
+        }
+        assert!(
+            cells[1]
+                .append_system_prompt_files
+                .iter()
+                .any(|src| src.origin().ends_with("agents/lead.md")),
+            "{label}: expected lead craft in {:?}",
+            cells[1].append_system_prompt_files
+        );
+    }
+}
+
+#[test]
+fn review_findings_toml_role_ancestor_tiered_model_and_variant() {
+    use crate::config::effective::ProfileScope;
+    let mini_args: Vec<String> = crate::agents::find_runtime("opencode-mini")
+        .unwrap()
+        .variant
+        .unwrap()
+        .args
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("agents")).unwrap();
+    std::fs::create_dir(home.path().join("teams")).unwrap();
+    for (name, body) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\neffort: medium\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\neffort: medium\ntools: [Read]\n---\nCodex house.\n",
+        ),
+        (
+            "agents/opencode.md",
+            "---\ndescription: OpenCode base\neffort: medium\ntools: [Read]\n---\nOpenCode house.\n",
+        ),
+        (
+            "agents/psol.md",
+            "---\ndescription: Sol ancestor\nagent: codex\nmodel: sol\neffort: low\ntools: [+Bash]\n---\nPsol craft.\n",
+        ),
+        (
+            "agents/tiered_anc.md",
+            "---\ndescription: Tiered ancestor\nagent: codex\ntier: senior\ntools: [+Bash]\n---\nTiered anc craft.\n",
+        ),
+        (
+            "agents/oc_base.md",
+            "---\ndescription: OpenCode ancestor\nagent: opencode\ntools: [+Bash]\n---\nOc base craft.\n",
+        ),
+        (
+            "agents/reviewer.md",
+            "---\ndescription: Reviewer\nagent: psol\nmodel: opus\neffort: high\n---\nReviewer craft.\n",
+        ),
+        (
+            "agents/tiered_child.md",
+            "---\ndescription: Tiered child\nagent: psol\ntier: senior\n---\nTiered child craft.\n",
+        ),
+        (
+            "agents/model_child.md",
+            "---\ndescription: Model child\nagent: tiered_anc\nmodel: opus\n---\nModel child craft.\n",
+        ),
+        (
+            "agents/oc_reviewer.md",
+            "---\ndescription: Oc reviewer\nagent: oc_base\nmodel: opus\n---\nOc reviewer craft.\n",
+        ),
+        (
+            "teams/crew.md",
+            "---\ndescription: Crew\nleader: reviewer\nstages: [Review]\nroles:\n  - agent: psol\n    role: reviewer\n    model: opus\n    effort: high\n    owns: [Review]\n---\nTeam.\n",
+        ),
+    ] {
+        std::fs::write(home.path().join(name), body).unwrap();
+    }
+    std::fs::create_dir(repo.path().join(".rimz")).unwrap();
+    std::fs::write(
+        repo.path().join(".rimz/config.toml"),
+        r#"
+[profiles.toml_claude]
+agent = "claude"
+model = "opus"
+
+[profiles.toml_codex]
+agent = "codex"
+model = "sol"
+
+[profiles.toml_sub]
+agent = "toml_codex"
+
+[profiles.toml_sub_opus]
+agent = "toml_codex"
+model = "opus"
+
+[profiles.toml_other]
+agent = "toml_codex"
+model = "astra"
+
+[agents.teams.toml_squad]
+roles = [{ role = "lead", profile = "toml_claude", model = "sonnet" }]
+
+[agents.teams.toml_squad_native]
+roles = [{ role = "lead", profile = "toml_claude", model = "sol" }]
+"#,
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(repo.path(), home.path()).unwrap();
+    let machine = crate::config::MachineConfig::parse_text(
+        &home.path().join("config.toml"),
+        "[tiers]\nintern = [\"luna\"]\njunior = [\"opencode/gpt-5.4-mini\", \"haiku\"]\n",
+        home.path(),
+    )
+    .unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, repo.path(), home.path()).unwrap();
+
+    // Finding 1: TOML role writing foreign model drops both role and profile foreign models with
+    // one warning naming the role's model.
+    let f1 = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("toml_squad"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("codex".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        false,
+        None,
+    )
+    .expect("toml_squad --agent codex");
+    let f1_cell = f1.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(f1_cell.kind.as_str(), "codex");
+    assert_eq!(f1_cell.launch.model, None, "opus must not leak onto seat");
+    let f1_warnings: Vec<String> = f1.warnings.iter().map(ToString::to_string).collect();
+    assert_eq!(f1_warnings.len(), 1, "{f1_warnings:?}");
+    assert!(
+        f1_warnings[0].contains("drops model `sonnet`"),
+        "{f1_warnings:?}"
+    );
+    let f1_native = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("toml_squad_native"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("codex".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        false,
+        None,
+    )
+    .expect("toml_squad_native --agent codex");
+    let f1_native_cell = f1_native.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(f1_native_cell.kind.as_str(), "codex");
+    assert_eq!(f1_native_cell.launch.model.as_deref(), Some("sol"));
+    assert!(f1_native.warnings.is_empty(), "{:?}", f1_native.warnings);
+
+    // The final kind base still fills the model the dropped role model leaves unset.
+    let based = tempfile::tempdir().unwrap();
+    std::fs::create_dir(based.path().join("agents")).unwrap();
+    std::fs::write(
+        based.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\nmodel: gpt-6\ntools: [Read]\n---\nCodex house.\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(repo.path(), based.path()).unwrap();
+    let based_machine = crate::config::MachineConfig::parse_text(
+        &based.path().join("config.toml"),
+        "",
+        based.path(),
+    )
+    .unwrap();
+    let based_effective =
+        crate::config::effective::load_with_roots(&based_machine, repo.path(), based.path())
+            .unwrap();
+    let f1_based = resolve::resolve_finalized_layout(
+        None,
+        &based_machine,
+        &based_effective,
+        ProfileScope::Agents,
+        Some("toml_squad"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("codex".into()),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        false,
+        None,
+    )
+    .expect("toml_squad --agent codex over a base model");
+    let f1_based_cell = f1_based.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(f1_based_cell.launch.model.as_deref(), Some("gpt-6"));
+    assert!(f1_based.warnings.is_empty(), "{:?}", f1_based.warnings);
+
+    // Finding 2: TOML profile under itself or a TOML ancestor keeps X's nearest model.
+    for (spec, agent_override, expected_model) in [
+        ("toml_codex", "toml_codex", "sol"),
+        ("toml_sub", "toml_codex", "sol"),
+        ("toml_sub_opus", "toml_codex", "sol"),
+        ("toml_codex", "toml_other", "astra"),
+    ] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some(spec),
+            None,
+            &super::LaunchOverrides {
+                agent: Some(agent_override.into()),
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{spec} --agent {agent_override}: {err}"));
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(
+            cell.kind.as_str(),
+            "codex",
+            "{spec} --agent {agent_override}"
+        );
+        assert_eq!(
+            cell.launch.model.as_deref(),
+            Some(expected_model),
+            "{spec} --agent {agent_override}"
+        );
+    }
+
+    // Finding 3: ancestor X whose engine L overrides applies C1's engine rule across direct,
+    // supervised, and replay paths, with crafts entering once.
+    for (label, spec, agent_override, model_flag, expected_kind, expected_model, expect_tier) in [
+        (
+            "reviewer --agent psol",
+            "reviewer",
+            "psol",
+            None,
+            "codex",
+            "sol",
+            None,
+        ),
+        (
+            "crew --agent psol",
+            "crew",
+            "psol",
+            None,
+            "codex",
+            "sol",
+            None,
+        ),
+        (
+            "oc_reviewer --agent oc_base --model sonnet",
+            "oc_reviewer",
+            "oc_base",
+            Some("sonnet"),
+            "opencode",
+            "sonnet",
+            None,
+        ),
+        (
+            "tiered_child --agent psol",
+            "tiered_child",
+            "psol",
+            None,
+            "codex",
+            "sol",
+            None,
+        ),
+        (
+            "model_child --agent tiered_anc",
+            "model_child",
+            "tiered_anc",
+            None,
+            "codex",
+            "astra",
+            Some(crate::config::tiers::ModelTier::Senior),
+        ),
+    ] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some(spec),
+            None,
+            &super::LaunchOverrides {
+                agent: Some(agent_override.into()),
+                preset: crate::agents::LaunchPreset {
+                    model: model_flag.map(str::to_owned),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{label}: {err}"));
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), expected_kind, "{label}");
+        assert_eq!(
+            cell.launch.model.as_deref(),
+            Some(expected_model),
+            "{label}"
+        );
+        assert_eq!(
+            cell.launch.tier.as_ref().map(|t| t.tier),
+            expect_tier,
+            "{label}"
+        );
+        // Verify supervised entry matches for non-team profiles.
+        if spec != "crew" {
+            let workspace =
+                crate::workspace::WorkspaceResolver::resolve(repo.path(), None).unwrap();
+            let mut req = crate::harness::run::SupervisedRunRequest::new(
+                spec.to_owned(),
+                "check".to_owned(),
+                None,
+                crate::agents::ManagedLaunchState::PendingResolution,
+            );
+            req.agent = Some(agent_override.to_owned());
+            req.model = model_flag.map(str::to_owned);
+            let planned = crate::harness::plan::plan_supervised_launch(
+                &req,
+                None,
+                None,
+                None,
+                &workspace,
+                &machine,
+                effective.clone(),
+                |_| crate::store::writer::LaunchLogin::RoomDefault,
+                &mut Vec::new(),
+            )
+            .unwrap_or_else(|err| panic!("supervised {label}: {err}"));
+            let sup_cell = planned.layout.agent_cells().next().unwrap();
+            assert_eq!(sup_cell.kind.as_str(), expected_kind, "sup {label}");
+            assert_eq!(
+                sup_cell.launch.model.as_deref(),
+                Some(expected_model),
+                "sup {label}"
+            );
+            assert_eq!(
+                sup_cell.launch.tier.as_ref().map(|t| t.tier),
+                expect_tier,
+                "sup {label}"
+            );
+        }
+        // Replay from what fresh launch recorded must match with no degrade.
+        let record = crate::agents::LaunchRecord {
+            model: cell.launch.model.clone(),
+            effort: cell.launch.effort.clone(),
+            agent: Some(agent_override.into()),
+            ..Default::default()
+        };
+        let posture = if spec == "crew" {
+            crate::harness::resume::resolve_member_posture(
+                crate::harness::resume::PostureRequest {
+                    record: Some(&record),
+                    profile: cell.launch.profile.as_deref(),
+                    kind: &cell.kind,
+                    stamped_mode: cell.launch.mode,
+                    stamped_tier: cell.launch.tier.as_deref(),
+                },
+                &effective.profiles,
+                None,
+                &effective.teams,
+                Some("crew"),
+                Some("reviewer"),
+            )
+        } else {
+            crate::harness::resume::resolve_posture(
+                crate::harness::resume::PostureRequest {
+                    record: Some(&record),
+                    profile: cell.launch.profile.as_deref(),
+                    kind: &cell.kind,
+                    stamped_mode: cell.launch.mode,
+                    stamped_tier: cell.launch.tier.as_deref(),
+                },
+                &effective.profiles,
+                None,
+            )
+        };
+        assert!(
+            posture.degraded.is_none(),
+            "replay {label}: {:?}",
+            posture.degraded
+        );
+        assert_eq!(
+            posture.launch.model.as_deref(),
+            Some(expected_model),
+            "replay {label}"
+        );
+        assert_eq!(
+            posture.launch.tier.as_ref().map(|t| t.tier),
+            expect_tier,
+            "replay {label}"
+        );
+    }
+
+    // Finding 7: TOML launch (and TOML team seat) under tiered Markdown X with `--model` runs the
+    // requested model with no tier stamp.
+    for spec in ["toml_claude", "toml_squad"] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some(spec),
+            None,
+            &super::LaunchOverrides {
+                agent: Some("tiered_anc".into()),
+                preset: crate::agents::LaunchPreset {
+                    model: Some("sol".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{spec} --agent tiered_anc --model sol: {err}"));
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "codex", "{spec}");
+        assert_eq!(cell.launch.model.as_deref(), Some("sol"), "{spec}");
+        assert_eq!(cell.launch.tier, None, "{spec}: tier stamp must be cleared");
+    }
+
+    // Finding 8: `--agent <variant>` with `--tier` on a kind base keeps the variant when the
+    // routed kind matches X's kind, and clears it on fallback to another kind.
+    let f8_match = resolve::resolve_finalized_layout(
+        None,
+        &machine,
+        &effective,
+        ProfileScope::Agents,
+        Some("claude"),
+        None,
+        &super::LaunchOverrides {
+            agent: Some("opencode-mini".into()),
+            tier: Some(crate::config::tiers::ModelTier::Junior),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        false,
+        None,
+    )
+    .expect("claude --agent opencode-mini --tier junior");
+    let f8_cell = f8_match.resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(f8_cell.kind.as_str(), "opencode");
+    assert!(
+        f8_cell.args.starts_with(&mini_args),
+        "expected opencode-mini args {mini_args:?} in {:?}",
+        f8_cell.args
+    );
+
+    // Replay on `opencode` keeps `opencode-mini` variant args; replay on another kind (`claude`)
+    // drops them.
+    let f8_record_oc = crate::agents::LaunchRecord {
+        model: f8_cell.launch.model.clone(),
+        effort: f8_cell.launch.effort.clone(),
+        agent: Some("opencode-mini".into()),
+        ..Default::default()
+    };
+    let f8_replay_oc = crate::harness::resume::resolve_posture(
+        crate::harness::resume::PostureRequest {
+            record: Some(&f8_record_oc),
+            profile: Some("claude"),
+            kind: &crate::ids::AgentKind::new_unchecked("opencode"),
+            stamped_mode: f8_cell.launch.mode,
+            stamped_tier: f8_cell.launch.tier.as_deref(),
+        },
+        &effective.profiles,
+        None,
+    );
+    assert!(
+        f8_replay_oc.degraded.is_none(),
+        "{:?}",
+        f8_replay_oc.degraded
+    );
+    assert!(
+        f8_replay_oc.launch.args.starts_with(&mini_args),
+        "opencode replay must keep opencode-mini args: {:?}",
+        f8_replay_oc.launch.args
+    );
+    let f8_replay_claude = crate::harness::resume::resolve_posture(
+        crate::harness::resume::PostureRequest {
+            record: Some(&f8_record_oc),
+            profile: Some("claude"),
+            kind: &crate::ids::AgentKind::new_unchecked("claude"),
+            stamped_mode: f8_cell.launch.mode,
+            stamped_tier: None,
+        },
+        &effective.profiles,
+        None,
+    );
+    assert!(
+        f8_replay_claude.degraded.is_none(),
+        "{:?}",
+        f8_replay_claude.degraded
+    );
+    assert!(
+        !f8_replay_claude.launch.args.starts_with(&mini_args),
+        "claude replay must drop opencode-mini args: {:?}",
+        f8_replay_claude.launch.args
+    );
+}
+
+#[test]
+fn launch_and_replay_engine_matrix_matches_one_chain_rule() {
+    use crate::config::effective::ProfileScope;
+    let mini_args: Vec<String> = crate::agents::find_runtime("opencode-mini")
+        .unwrap()
+        .variant
+        .unwrap()
+        .args
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("agents")).unwrap();
+    std::fs::create_dir(home.path().join("teams")).unwrap();
+    // Intentionally omit `agents/antigravity.md` so `antigravity` is a bare kind with no kind base.
+    for (name, body) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\neffort: medium\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\neffort: medium\ntools: [Read]\n---\nCodex house.\n",
+        ),
+        (
+            "agents/opencode.md",
+            "---\ndescription: OpenCode base\neffort: medium\ntools: [Read]\n---\nOpenCode house.\n",
+        ),
+        (
+            "agents/md_anc.md",
+            "---\ndescription: Markdown ancestor\nagent: codex\nmodel: sol\neffort: low\n---\nAnc craft.\n",
+        ),
+        (
+            "agents/md_l.md",
+            "---\ndescription: Markdown leaf\nagent: md_anc\nmodel: opus\neffort: high\n---\nLeaf craft.\n",
+        ),
+        (
+            "agents/x_model.md",
+            "---\ndescription: X model\nagent: codex\nmodel: sol\n---\nX model craft.\n",
+        ),
+        (
+            "agents/x_tier.md",
+            "---\ndescription: X tier\nagent: codex\ntier: senior\n---\nX tier craft.\n",
+        ),
+        (
+            "agents/x_plain.md",
+            "---\ndescription: X plain\nagent: codex\n---\nX plain craft.\n",
+        ),
+        (
+            "teams/md_team.md",
+            "---\ndescription: Markdown team\nleader: lead\nstages: [Plan]\nroles:\n  - agent: md_anc\n    role: lead\n    model: sonnet\n    owns: [Plan]\n---\nMd team.\n",
+        ),
+    ] {
+        std::fs::write(home.path().join(name), body).unwrap();
+    }
+    std::fs::create_dir(repo.path().join(".rimz")).unwrap();
+    std::fs::write(
+        repo.path().join(".rimz/config.toml"),
+        r#"
+[profiles.toml_anc]
+agent = "codex"
+model = "sol"
+
+[profiles.toml_l]
+agent = "toml_anc"
+model = "opus"
+
+[profiles.x_toml]
+agent = "codex"
+model = "astra"
+
+[agents.teams.toml_team]
+roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
+"#,
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(repo.path(), home.path()).unwrap();
+    let machine = crate::config::MachineConfig::parse_text(
+        &home.path().join("config.toml"),
+        "[tiers]\nsenior = [\"opus\", \"astra\"]\n",
+        home.path(),
+    )
+    .unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, repo.path(), home.path()).unwrap();
+
+    #[derive(Clone, Copy)]
+    enum LForm {
+        Markdown,
+        Toml,
+        KindBase,
+        BareKind,
+        TomlSeat,
+        MdSeat,
+    }
+    #[derive(Clone, Copy)]
+    enum XForm {
+        None,
+        MdModel,
+        MdTier,
+        MdPlain,
+        TomlModel,
+        KindBase,
+        BareKind,
+        Variant,
+        SelfL,
+        Ancestor,
+    }
+    #[derive(Clone, Copy)]
+    enum Sel {
+        None,
+        Model,
+        Tier,
+    }
+
+    let l_spec = |l: LForm| match l {
+        LForm::Markdown => "md_l",
+        LForm::Toml => "toml_l",
+        LForm::KindBase => "claude",
+        LForm::BareKind => "antigravity",
+        LForm::TomlSeat => "toml_team.lead",
+        LForm::MdSeat => "md_team.lead",
+    };
+
+    for l in [
+        LForm::Markdown,
+        LForm::Toml,
+        LForm::KindBase,
+        LForm::BareKind,
+        LForm::TomlSeat,
+        LForm::MdSeat,
+    ] {
+        for x in [
+            XForm::None,
+            XForm::MdModel,
+            XForm::MdTier,
+            XForm::MdPlain,
+            XForm::TomlModel,
+            XForm::KindBase,
+            XForm::BareKind,
+            XForm::Variant,
+            XForm::SelfL,
+            XForm::Ancestor,
+        ] {
+            let x_name: Option<&str> = match x {
+                XForm::None => None,
+                XForm::MdModel => Some("x_model"),
+                XForm::MdTier => Some("x_tier"),
+                XForm::MdPlain => Some("x_plain"),
+                XForm::TomlModel => Some("x_toml"),
+                XForm::KindBase => Some("codex"),
+                XForm::BareKind => Some("antigravity"),
+                XForm::Variant => Some("opencode-mini"),
+                XForm::SelfL => match l {
+                    LForm::Markdown => Some("md_l"),
+                    LForm::Toml | LForm::TomlSeat => Some("toml_l"),
+                    LForm::KindBase => Some("claude"),
+                    LForm::BareKind => Some("antigravity"),
+                    LForm::MdSeat => Some("md_team.lead"),
+                },
+                XForm::Ancestor => match l {
+                    LForm::Markdown | LForm::MdSeat => Some("md_anc"),
+                    LForm::Toml | LForm::TomlSeat => Some("toml_anc"),
+                    LForm::KindBase | LForm::BareKind => continue,
+                },
+            };
+
+            let x_is_md = matches!(
+                x,
+                XForm::MdModel | XForm::MdTier | XForm::MdPlain | XForm::Ancestor
+                    if !matches!(l, LForm::Toml | LForm::TomlSeat)
+            ) || (matches!(x, XForm::SelfL)
+                && matches!(l, LForm::Markdown | LForm::MdSeat));
+            let l_is_md = matches!(l, LForm::Markdown | LForm::MdSeat);
+            let l_is_toml = matches!(l, LForm::Toml | LForm::TomlSeat);
+            let l_is_bare = matches!(l, LForm::BareKind);
+
+            // Expected X kind, variant, and engine write.
+            let (x_kind, x_variant, x_model, x_tier): (
+                Option<&str>,
+                Option<&str>,
+                Option<&str>,
+                bool,
+            ) = match x {
+                XForm::None => (None, None, None, false),
+                XForm::MdModel => (Some("codex"), None, Some("sol"), false),
+                XForm::MdTier => (Some("codex"), None, None, true),
+                XForm::MdPlain => (Some("codex"), None, None, false),
+                XForm::TomlModel => (Some("codex"), None, Some("astra"), false),
+                XForm::KindBase => (Some("codex"), None, None, false),
+                XForm::BareKind => (Some("antigravity"), None, None, false),
+                XForm::Variant => (Some("opencode"), Some("mini"), None, false),
+                XForm::SelfL => match l {
+                    LForm::Markdown => (Some("claude"), None, Some("opus"), false),
+                    LForm::Toml | LForm::TomlSeat => (Some("codex"), None, Some("opus"), false),
+                    LForm::KindBase => (Some("claude"), None, None, false),
+                    LForm::BareKind => (Some("antigravity"), None, None, false),
+                    LForm::MdSeat => (Some("claude"), None, Some("sonnet"), false),
+                },
+                XForm::Ancestor => (Some("codex"), None, Some("sol"), false),
+            };
+            let l_orig_kind = match l {
+                LForm::Markdown | LForm::KindBase | LForm::MdSeat => "claude",
+                LForm::Toml | LForm::TomlSeat => "codex",
+                LForm::BareKind => "antigravity",
+            };
+            let l_own_model = match l {
+                LForm::Markdown | LForm::Toml => Some("opus"),
+                LForm::TomlSeat | LForm::MdSeat => Some("sonnet"),
+                LForm::KindBase | LForm::BareKind => None,
+            };
+
+            for sel in [Sel::None, Sel::Model, Sel::Tier] {
+                // Skip combinations the loader/router explicitly refuses:
+                // 1. Markdown L built onto bare kind `antigravity` (no `agents/antigravity.md` kind base).
+                if l_is_md && x_kind == Some("antigravity") && !matches!(sel, Sel::Tier) {
+                    continue;
+                }
+                // 2. `--tier` requires Markdown L, kind base L, or bare L with Markdown X.
+                if matches!(sel, Sel::Tier) && (l_is_toml || (l_is_bare && !x_is_md)) {
+                    continue;
+                }
+                // Pick a `--model` compatible with X's kind (or L's kind when X is None).
+                let model_flag = match sel {
+                    Sel::Model => Some(match x_kind.unwrap_or(l_orig_kind) {
+                        "codex" => "gpt-6",
+                        "opencode" => "sonnet",
+                        "antigravity" => "neon",
+                        _ => "haiku",
+                    }),
+                    _ => None,
+                };
+                let tier_flag =
+                    matches!(sel, Sel::Tier).then_some(crate::config::tiers::ModelTier::Senior);
+                let label = format!(
+                    "L={} X={:?} sel={}",
+                    l_spec(l),
+                    x_name,
+                    match sel {
+                        Sel::None => "none",
+                        Sel::Model => "model",
+                        Sel::Tier => "tier",
+                    }
+                );
+
+                // Compute expected (kind, variant, model, tier) from the single C1 engine rule.
+                let (exp_kind, exp_variant, exp_model, exp_tier): (
+                    &str,
+                    Option<&str>,
+                    Option<&str>,
+                    Option<crate::config::tiers::ModelTier>,
+                ) = match sel {
+                    Sel::Model => {
+                        let k = x_kind.unwrap_or(l_orig_kind);
+                        let v = if x_kind == Some(k) { x_variant } else { None };
+                        (k, v, model_flag, None)
+                    }
+                    Sel::Tier => {
+                        // Senior tier table is ["opus" (claude), "astra" (codex)].
+                        // Prefer X's family if X is set, else L's natural family.
+                        // `opencode` runs other providers' models so it picks `opus` on `opencode`.
+                        let pref = x_kind.unwrap_or(l_orig_kind);
+                        let (k, m) = match pref {
+                            "codex" => ("codex", "astra"),
+                            "opencode" => ("opencode", "opus"),
+                            _ => ("claude", "opus"),
+                        };
+                        let v = if x_kind == Some(k) { x_variant } else { None };
+                        (k, v, Some(m), Some(crate::config::tiers::ModelTier::Senior))
+                    }
+                    Sel::None => {
+                        let k = x_kind.unwrap_or(l_orig_kind);
+                        let v = if x_kind == Some(k) { x_variant } else { None };
+                        if x_tier {
+                            // `x_tier` prefers codex -> senior picks `astra` on `codex`.
+                            (
+                                "codex",
+                                None,
+                                Some("astra"),
+                                Some(crate::config::tiers::ModelTier::Senior),
+                            )
+                        } else if let Some(xm) = x_model {
+                            (k, v, Some(xm), None)
+                        } else if x_name.is_some() {
+                            let kept = l_own_model.filter(|m| {
+                                crate::config::definitions::keeps_inherited_model(l_orig_kind, k, m)
+                            });
+                            (k, v, kept, None)
+                        } else {
+                            (k, v, l_own_model, None)
+                        }
+                    }
+                };
+
+                let finalized = resolve::resolve_finalized_layout(
+                    None,
+                    &machine,
+                    &effective,
+                    ProfileScope::Agents,
+                    Some(l_spec(l)),
+                    None,
+                    &super::LaunchOverrides {
+                        agent: x_name.map(str::to_owned),
+                        tier: tier_flag,
+                        preset: crate::agents::LaunchPreset {
+                            model: model_flag.map(str::to_owned),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                    None,
+                    false,
+                    None,
+                )
+                .unwrap_or_else(|err| panic!("fresh {label}: {err}"));
+                let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+                assert_eq!(cell.kind.as_str(), exp_kind, "fresh kind {label}");
+                assert_eq!(
+                    cell.args.starts_with(&mini_args),
+                    exp_variant.is_some(),
+                    "fresh variant {label}: {:?}",
+                    cell.args
+                );
+                assert_eq!(
+                    cell.launch.model.as_deref(),
+                    exp_model,
+                    "fresh model {label}"
+                );
+                assert_eq!(
+                    cell.launch.tier.as_ref().map(|t| t.tier),
+                    exp_tier,
+                    "fresh tier {label}"
+                );
+
+                // Replay from what fresh launch recorded: must end on identical
+                // (kind, variant, model, tier) with no degrade.
+                let record = crate::agents::LaunchRecord {
+                    model: cell.launch.model.clone(),
+                    effort: cell.launch.effort.clone(),
+                    agent: x_name.map(str::to_owned),
+                    ..Default::default()
+                };
+                let (team_name, role_name) = match l {
+                    LForm::TomlSeat => (Some("toml_team"), Some("lead")),
+                    LForm::MdSeat => (Some("md_team"), Some("lead")),
+                    _ => (None, None),
+                };
+                let posture = if team_name.is_some() {
+                    crate::harness::resume::resolve_member_posture(
+                        crate::harness::resume::PostureRequest {
+                            record: Some(&record),
+                            profile: cell.launch.profile.as_deref(),
+                            kind: &cell.kind,
+                            stamped_mode: cell.launch.mode,
+                            stamped_tier: cell.launch.tier.as_deref(),
+                        },
+                        &effective.profiles,
+                        None,
+                        &effective.teams,
+                        team_name,
+                        role_name,
+                    )
+                } else {
+                    crate::harness::resume::resolve_posture(
+                        crate::harness::resume::PostureRequest {
+                            record: Some(&record),
+                            profile: cell.launch.profile.as_deref(),
+                            kind: &cell.kind,
+                            stamped_mode: cell.launch.mode,
+                            stamped_tier: cell.launch.tier.as_deref(),
+                        },
+                        &effective.profiles,
+                        None,
+                    )
+                };
+                assert!(
+                    posture.degraded.is_none(),
+                    "replay {label}: degraded {:?}",
+                    posture.degraded
+                );
+                assert_eq!(
+                    posture.launch.args.starts_with(&mini_args),
+                    exp_variant.is_some(),
+                    "replay variant {label}: {:?}",
+                    posture.launch.args
+                );
+                assert_eq!(
+                    posture.launch.model.as_deref(),
+                    exp_model,
+                    "replay model {label}"
+                );
+                assert_eq!(
+                    posture.launch.tier.as_ref().map(|t| t.tier),
+                    exp_tier,
+                    "replay tier {label}"
+                );
+            }
+        }
+    }
 }

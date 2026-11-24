@@ -977,3 +977,29 @@ fn resume_start_follows_what_the_kind_reports_on_resume() {
     assert_eq!(start("codex"), ResumeStart::Lazy);
     assert_eq!(start("cursor"), ResumeStart::Timed);
 }
+
+#[test]
+fn bare_kind_with_recorded_agent_loads_seat_smart_compact() {
+    let mut bare = agent("codex-bare", AgentStatus::Idle);
+    bare.kind = AgentKind::new_unchecked("codex");
+    bare.profile = None;
+    bare.team = None;
+    assert!(!has_seat_config(&bare));
+    bare.record = Some(Box::new(crate::agents::LaunchRecord {
+        agent: Some("astra".to_owned()),
+        ..Default::default()
+    }));
+    assert!(has_seat_config(&bare));
+    let profiles: ProfilesConfig =
+        toml::from_str("[astra]\nagent = 'codex'\nsmart-compact = '80k'\n").unwrap();
+    let line = SmartCompactSeat::from(&bare).resolve(
+        &TeamsConfig::default(),
+        &profiles,
+        &ProfilesConfig::default(),
+        &HarnessConfig::default(),
+    );
+    assert_eq!(
+        line,
+        Some(crate::store::message::AutoCompact::Tokens(80_000))
+    );
+}

@@ -600,6 +600,9 @@ mod tests {
             let sources = rimz::config::AgentSpecSources::default();
             let catalog = rimz::harness::subagent_policy::catalog(
                 None,
+                None,
+                None,
+                ProfileScope::Agents,
                 &Default::default(),
                 &profiles,
                 &commands,

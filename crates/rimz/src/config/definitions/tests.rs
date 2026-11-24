@@ -6432,7 +6432,28 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     };
     // Missing on disk: team loads cleanly; capabilities seats carry the grant and skills seats
     // mark the seat-added `rimz-message` for launch-time settlement without a disk lookup.
-    assert_loaded_seats(&load_checked(root.path()));
+    // On-demand builds of a seat under another base keep the same post-policy skill and marker.
+    let missing = load_checked(root.path());
+    assert_loaded_seats(&missing);
+    let rebuilt_judge = missing.agent_profiles.0["probe.judge"]
+        .build_under(
+            Some(BuildBase::Profile(
+                &missing.agent_profiles.0["codex-listed"],
+            )),
+            None,
+            None,
+        )
+        .expect("team seat must build")
+        .expect("seat built under codex-listed without rimz-message on disk must succeed");
+    assert_eq!(rebuilt_judge.agent, "codex");
+    assert_eq!(
+        rebuilt_judge
+            .skills
+            .as_ref()
+            .map(|skills| skills.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some(vec!["work", "rimz-message"])
+    );
+    assert!(rebuilt_judge.seat_consensus_skill);
 
     // Marked user-only for Claude and Codex: team still loads cleanly with the seat marker.
     write(
@@ -6807,7 +6828,7 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 
     let codex_rt = crate::agents::find_runtime("codex").unwrap();
     let judge_bare_codex = base.agent_profiles.0["probe.judge"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
         .expect("team seat must build")
         .expect("probe.judge under bare codex must succeed");
     assert_eq!(judge_bare_codex.agent, "codex");
@@ -6817,43 +6838,44 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
         Some(crate::config::tiers::ModelTier::Senior)
     );
 
-    // 7. TOML X resolved to its kind, kind-base X, and bare variant X add no Markdown layer.
-    let mut toml_x = agent::empty_profile("codex");
-    toml_x.model = Some("astra".to_owned());
+    // 7. Runtime+model (TOML X), bare runtime (kind-base X), and bare variant X add no Markdown layer.
     let from_toml = base.agent_profiles.0["leaf"]
-        .build_under(Some(BuildBase::Profile(&toml_x)), None, None)
+        .build_under(
+            Some(BuildBase::Runtime(codex_rt, Some("astra"))),
+            None,
+            None,
+        )
         .expect("Markdown definition must build")
-        .expect("leaf under TOML X must succeed");
+        .expect("leaf under runtime+model base must succeed");
     let from_runtime = base.agent_profiles.0["leaf"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, Some("astra"))
+        .build_under(
+            Some(BuildBase::Runtime(codex_rt, None)),
+            None,
+            Some("astra"),
+        )
         .expect("Markdown definition must build")
-        .expect("leaf under runtime+model must succeed");
+        .expect("leaf under runtime + explicit model must succeed");
     assert_eq!(
         comparable_profile(from_toml, base_root.path()),
         comparable_profile(from_runtime, base_root.path()),
     );
 
-    // Kind-base X adds no layer, so `ranked` keeps its tier and prefers codex instead of taking
-    // the kind base's `model: sol`.
-    let ranked_under_kind_base = base.agent_profiles.0["ranked"]
-        .build_under(
-            Some(BuildBase::Profile(&base.agent_profiles.0["codex"])),
-            None,
-            None,
-        )
+    // Bare/kind-base runtime X adds no layer, so `ranked` keeps its tier and prefers codex.
+    let ranked_under_runtime = base.agent_profiles.0["ranked"]
+        .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
         .expect("Markdown definition must build")
-        .expect("ranked under codex kind base must succeed");
-    assert_eq!(ranked_under_kind_base.agent, "codex");
-    assert_eq!(ranked_under_kind_base.model.as_deref(), Some("astra"));
-    assert_eq!(ranked_under_kind_base.budget.as_deref(), Some("9"));
+        .expect("ranked under codex runtime must succeed");
+    assert_eq!(ranked_under_runtime.agent, "codex");
+    assert_eq!(ranked_under_runtime.model.as_deref(), Some("astra"));
+    assert_eq!(ranked_under_runtime.budget.as_deref(), Some("9"));
     assert_eq!(
-        ranked_under_kind_base.model_tier.as_ref().map(|t| t.tier),
+        ranked_under_runtime.model_tier.as_ref().map(|t| t.tier),
         Some(crate::config::tiers::ModelTier::Senior)
     );
 
     let mini_rt = crate::agents::find_runtime("opencode-mini").unwrap();
     let leaf_mini = base.agent_profiles.0["leaf"]
-        .build_under(Some(BuildBase::Runtime(mini_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(mini_rt, None)), None, None)
         .expect("Markdown definition must build")
         .expect("leaf under opencode-mini must succeed");
     assert_eq!(leaf_mini.agent, "opencode");
@@ -6936,7 +6958,7 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // X writing no model/tier drops an incompatible model.
     let advisor_codex = loaded.subagent_profiles.0["advisor"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
         .unwrap()
         .unwrap();
     assert_eq!(advisor_codex.agent, "codex");
@@ -6957,7 +6979,7 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // Multi-provider engine keeps the model.
     let explorer_oc = loaded.subagent_profiles.0["explorer"]
-        .build_under(Some(BuildBase::Runtime(opencode_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(opencode_rt, None)), None, None)
         .unwrap()
         .unwrap();
     assert_eq!(explorer_oc.agent, "opencode");
@@ -6965,7 +6987,7 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // Same kind keeps a custom model.
     let custom_same = loaded.agent_profiles.0["custom"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
         .unwrap()
         .unwrap();
     assert_eq!(custom_same.agent, "codex");
@@ -6973,7 +6995,7 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // Model belonging to the final kind is kept even across a kind change.
     let oc_to_claude = loaded.agent_profiles.0["opencode_opus"]
-        .build_under(Some(BuildBase::Runtime(claude_rt)), None, None)
+        .build_under(Some(BuildBase::Runtime(claude_rt, None)), None, None)
         .unwrap()
         .unwrap();
     assert_eq!(oc_to_claude.agent, "claude");
@@ -7091,7 +7113,7 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         (
             "missing required tools",
             loaded.agent_profiles.0["no_tools"].build_under(
-                Some(BuildBase::Runtime(codex_rt)),
+                Some(BuildBase::Runtime(codex_rt, None)),
                 None,
                 None,
             ),
@@ -7100,7 +7122,7 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         (
             "skill policy",
             loaded.agent_profiles.0["with_manual_skill"].build_under(
-                Some(BuildBase::Runtime(codex_rt)),
+                Some(BuildBase::Runtime(codex_rt, None)),
                 None,
                 None,
             ),
@@ -7109,7 +7131,7 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         (
             "no system prompt on definition",
             loaded.agent_profiles.0["parent"].build_under(
-                Some(BuildBase::Runtime(amp_rt)),
+                Some(BuildBase::Runtime(amp_rt, None)),
                 None,
                 None,
             ),
@@ -7118,7 +7140,7 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         (
             "no system prompt on seat",
             loaded.agent_profiles.0["probe.lead"].build_under(
-                Some(BuildBase::Runtime(amp_rt)),
+                Some(BuildBase::Runtime(amp_rt, None)),
                 None,
                 None,
             ),
@@ -7193,7 +7215,41 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     assert_eq!(once, twice);
     assert_eq!(once.append_system_prompt_files.len(), 3);
 
-    // Self and ancestor overrides add nothing.
+    // Runtime bases (bare/kind-base and TOML runtime+model) stay idempotent via `built_under`.
+    let codex_rt = crate::agents::find_runtime("codex").unwrap();
+    let under_rt = loaded.agent_profiles.0["child"]
+        .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        under_rt
+            .build_under(Some(BuildBase::Runtime(codex_rt, None)), None, None)
+            .unwrap()
+            .unwrap(),
+        under_rt
+    );
+    let under_rt_model = loaded.agent_profiles.0["child"]
+        .build_under(
+            Some(BuildBase::Runtime(codex_rt, Some("astra"))),
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        under_rt_model
+            .build_under(
+                Some(BuildBase::Runtime(codex_rt, Some("astra"))),
+                None,
+                None,
+            )
+            .unwrap()
+            .unwrap(),
+        under_rt_model
+    );
+
+    // Self keeps the definition's engine and crafts; an ancestor X applies its own engine while
+    // keeping non-engine fields and crafts once.
     let under_self = loaded.agent_profiles.0["child"]
         .build_under(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["child"])),
@@ -7202,7 +7258,13 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(under_self, loaded.agent_profiles.0["child"]);
+    assert_eq!(under_self.agent, loaded.agent_profiles.0["child"].agent);
+    assert_eq!(under_self.model, loaded.agent_profiles.0["child"].model);
+    assert_eq!(under_self.effort, loaded.agent_profiles.0["child"].effort);
+    assert_eq!(
+        under_self.append_system_prompt_files,
+        loaded.agent_profiles.0["child"].append_system_prompt_files
+    );
 
     let under_ancestor = loaded.agent_profiles.0["child"]
         .build_under(
@@ -7212,7 +7274,13 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(under_ancestor, loaded.agent_profiles.0["child"]);
+    assert_eq!(under_ancestor.agent, "claude");
+    assert_eq!(under_ancestor.model.as_deref(), Some("sonnet"));
+    assert_eq!(under_ancestor.effort.as_deref(), Some("high"));
+    assert_eq!(
+        under_ancestor.append_system_prompt_files,
+        loaded.agent_profiles.0["child"].append_system_prompt_files
+    );
 
     TEXT_READS.with(|reads| {
         assert!(
@@ -7556,5 +7624,235 @@ fn subagent_following_failed_agent_parent_reports_once_and_ignores_parent_subage
             .contains("rimz resolves `agent:` within agents"),
         "{}",
         agent_follows_sub[0].message
+    );
+}
+
+#[test]
+fn precomputed_renders_preserve_models_for_multi_provider_and_native_kinds() {
+    let root = fixture();
+    let tiers: crate::config::tiers::TierConfig = toml::from_str(
+        "intern = ['haiku', 'mini']\njunior = ['sonnet', 'sol']\n\
+         senior = ['opus', 'astra']\nprincipal = []\n",
+    )
+    .unwrap();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Claude base\nmodel: sonnet\ntools: [Read]\n---\nClaude base.",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Codex base\n---\nCodex base.",
+    );
+    write(
+        root.path(),
+        "agents/opencode.md",
+        "---\ndescription: Opencode base\nmodel: openrouter/foo\n---\nOpencode base.",
+    );
+    definition(
+        root.path(),
+        "agents/tiered.md",
+        "agent: claude\ntier: junior\ntools: [Read]",
+        "Tiered.",
+    );
+    definition(
+        root.path(),
+        "agents/modeled.md",
+        "agent: claude\nmodel: opus\ntools: [Read]",
+        "Modeled.",
+    );
+    definition(
+        root.path(),
+        "agents/inherited.md",
+        "agent: modeled\ntools: [Read]",
+        "Inherited.",
+    );
+    definition(
+        root.path(),
+        "agents/base_model.md",
+        "agent: claude\ntools: [Read]",
+        "Base model.",
+    );
+    definition(
+        root.path(),
+        "agents/multi.md",
+        "agent: opencode\nmodel: opus\ntools: [Read]",
+        "Multi.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &tiers,
+        Some(272_000),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+
+    for (name, expected_opencode_model, expected_claude_model) in [
+        ("tiered", None, Some("haiku")),
+        ("modeled", Some("opus"), Some("haiku")),
+        ("inherited", Some("opus"), Some("haiku")),
+        ("base_model", Some("openrouter/foo"), Some("haiku")),
+        ("multi", Some("opus"), Some("haiku")),
+    ] {
+        let renders = loaded.agent_profiles.0[name]
+            .definition_renders
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} has renders"));
+        assert_eq!(
+            renders.renders["opencode"].model.as_deref(),
+            expected_opencode_model,
+            "{name} opencode render"
+        );
+        assert_eq!(
+            renders.renders["claude"].model.as_deref(),
+            expected_claude_model,
+            "{name} claude render"
+        );
+    }
+}
+
+#[test]
+fn build_under_ancestor_matches_engine_only_profile_and_dedupes_plus_lists_and_crafts() {
+    let root = fixture();
+    for skill in ["base_skill", "alpha", "beta"] {
+        write(
+            root.path(),
+            &format!("skills/{skill}/SKILL.md"),
+            "---\ndescription: Skill.\n---\nBody.",
+        );
+    }
+    definition(
+        root.path(),
+        "agents/codex.md",
+        "tools: [Skill, Write]\nskills: [base_skill]",
+        "Codex base.",
+    );
+    definition(
+        root.path(),
+        "agents/claude.md",
+        "tools: [Skill, Write]\nskills: [base_skill]",
+        "Claude base.",
+    );
+    definition(
+        root.path(),
+        "agents/psol.md",
+        "agent: codex\nmodel: sol\neffort: low\ntools: [+Bash(a), +Read, +Bash(b)]\nskills: [+alpha]",
+        "Psol craft.",
+    );
+    definition(
+        root.path(),
+        "agents/e_only.md",
+        "agent: codex\nmodel: sol",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/reviewer.md",
+        "agent: psol\nmodel: opus\neffort: high\ntools: [+Grep]\nskills: [+beta]",
+        "Reviewer craft.",
+    );
+
+    let loaded = load_checked(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let reviewer = &loaded.agent_profiles.0["reviewer"];
+    let psol = &loaded.agent_profiles.0["psol"];
+    let e_only = &loaded.agent_profiles.0["e_only"];
+    assert_eq!(reviewer.agent, "claude");
+    assert_eq!(reviewer.model.as_deref(), Some("opus"));
+
+    let under_psol = reviewer
+        .build_under(Some(BuildBase::Profile(psol)), None, None)
+        .expect("markdown row")
+        .expect("build under ancestor");
+    let under_e = reviewer
+        .build_under(Some(BuildBase::Profile(e_only)), None, None)
+        .expect("markdown row")
+        .expect("build under engine-only profile");
+
+    let strip_def = |mut profile: Profile| {
+        profile.definition = None;
+        profile.definition_renders = None;
+        profile
+    };
+    assert_eq!(strip_def(under_psol.clone()), strip_def(under_e));
+    assert_eq!(under_psol.agent, "codex");
+    assert_eq!(under_psol.model.as_deref(), Some("sol"));
+    assert_eq!(under_psol.effort.as_deref(), Some("high"));
+    let tools = under_psol.tools.as_ref().expect("tools");
+    assert_eq!(
+        tools.bases(),
+        &["Skill", "Write", "Bash", "Read", "Grep"],
+        "expected each tool once in order: {tools:?}"
+    );
+    let skills = under_psol.skills.as_ref().expect("skills");
+    for expected in ["base_skill", "alpha", "beta"] {
+        assert_eq!(
+            skills.iter().filter(|s| s.as_str() == expected).count(),
+            1,
+            "expected {expected} once in {skills:?}"
+        );
+    }
+    let craft_origins: Vec<_> = under_psol
+        .append_system_prompt_files
+        .iter()
+        .map(|src| src.origin().to_path_buf())
+        .collect();
+    assert_eq!(craft_origins.len(), 2, "{craft_origins:?}");
+    assert!(craft_origins[0].ends_with("agents/psol.md"));
+    assert!(craft_origins[1].ends_with("agents/reviewer.md"));
+}
+
+#[test]
+fn shadowed_qualified_foreign_parent_failure_is_reported_once() {
+    let root = fixture();
+    let pack = tempfile::tempdir().unwrap();
+    std::fs::write(
+        pack.path().join("rimz-packs.toml"),
+        "[[pack]]\nname = 'one'\ndescription = 'Pack'\npath = '.'\n",
+    )
+    .unwrap();
+    definition(
+        pack.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [Skill]\nskills: [absent]",
+        "Broken pack parent.",
+    );
+    crate::packs::install(root.path(), pack.path()).unwrap();
+    // Home shadows the bare `parent` name so `one:parent` is only reachable qualified.
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [Read]",
+        "Working home parent.",
+    );
+    definition(
+        root.path(),
+        "agents/direct_child.md",
+        "agent: one:parent",
+        "Direct child.",
+    );
+    definition(
+        root.path(),
+        "subagents/sub_child.md",
+        "agent: one:parent",
+        "Subagent child.",
+    );
+
+    let loaded = load_checked(root.path());
+    let pack_parent = crate::packs::resolve(root.path()).packs[0]
+        .root
+        .join("agents/parent.md");
+    let count = loaded
+        .errors
+        .iter()
+        .filter(|err| err.path == pack_parent)
+        .count();
+    assert_eq!(
+        count, 1,
+        "expected pack parent error once: {:?}",
+        loaded.errors
     );
 }

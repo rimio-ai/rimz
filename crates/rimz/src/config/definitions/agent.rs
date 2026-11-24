@@ -16,6 +16,45 @@ use super::{
     Namespace, SkillCatalog, SkillCheck, SubagentCheck, frontmatter, traits,
 };
 
+/// Chain member names that wrote each tuning field on a Markdown definition.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TuningWriters {
+    pub effort: Option<String>,
+    pub fast: Option<String>,
+    pub code_mode: Option<String>,
+    pub auto_compact: Option<String>,
+}
+
+impl TuningWriters {
+    fn from_frontmatter(fm: &AgentFrontmatter, name: &str) -> Self {
+        Self {
+            effort: fm.effort.as_ref().map(|_| name.to_owned()),
+            fast: fm.fast.map(|_| name.to_owned()),
+            code_mode: fm.code_mode.map(|_| name.to_owned()),
+            auto_compact: fm.auto_compact.as_ref().map(|_| name.to_owned()),
+        }
+    }
+
+    fn inherit(&mut self, parent: &Self) {
+        for (dst, src) in [
+            (&mut self.effort, &parent.effort),
+            (&mut self.fast, &parent.fast),
+            (&mut self.code_mode, &parent.code_mode),
+            (&mut self.auto_compact, &parent.auto_compact),
+        ] {
+            if dst.is_none() {
+                dst.clone_from(src);
+            }
+        }
+    }
+
+    pub(super) fn overlay_from(&mut self, fm: &AgentFrontmatter, name: &str) {
+        let mut own = Self::from_frontmatter(fm, name);
+        own.inherit(self);
+        *self = own;
+    }
+}
+
 /// Retained Markdown definition state for rebuilding a stored profile row under an override,
 /// target kind, or model without rereading disk.
 #[derive(Clone, Debug)]
@@ -34,11 +73,13 @@ impl PartialEq for DefinitionSource {
             && a.namespace == b.namespace
             && a.chain == b.chain
             && a.frontmatter == b.frontmatter
+            && a.writers == b.writers
             && a.crafts == b.crafts
             && a.natural_kind == b.natural_kind
             && a.natural_variant == b.natural_variant
             && a.preference == b.preference
             && a.runtime_kind == b.runtime_kind
+            && a.built_under == b.built_under
             && a.seat == b.seat
             && a.context == b.context
     }
@@ -48,46 +89,37 @@ impl Eq for DefinitionSource {}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MemoBase {
-    None,
-    Runtime(String, Option<&'static str>),
-    KindBase(String, Option<&'static str>),
-    Definition(Vec<String>, PathBuf),
-    Toml(String, Option<&'static str>, Option<String>),
+    Runtime(String, Option<&'static str>, Option<String>),
+    Definition(String, PathBuf),
+}
+
+impl MemoBase {
+    fn from_build_base(base: BuildBase<'_>) -> Option<Self> {
+        match base {
+            BuildBase::Runtime(rt, model) => Some(Self::Runtime(
+                rt.kind().to_owned(),
+                rt.variant.map(|v| v.name),
+                model.map(str::to_owned),
+            )),
+            BuildBase::Profile(profile) => profile
+                .definition
+                .as_ref()
+                .map(|def| Self::Definition(def.inner.name.clone(), def.inner.path.clone())),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MemoKey {
-    base: MemoBase,
+    base: Option<MemoBase>,
     target_kind: Option<String>,
     model: Option<String>,
 }
 
 impl MemoKey {
     fn new(base: Option<BuildBase<'_>>, target_kind: Option<&str>, model: Option<&str>) -> Self {
-        let base = match base {
-            None => MemoBase::None,
-            Some(BuildBase::Runtime(rt)) => {
-                MemoBase::Runtime(rt.kind().to_owned(), rt.variant.map(|v| v.name))
-            }
-            Some(BuildBase::Profile(profile)) if profile.kind_base => {
-                MemoBase::KindBase(profile.agent.clone(), profile.variant.map(|v| v.name))
-            }
-            Some(BuildBase::Profile(profile)) => match &profile.definition {
-                Some(def) => MemoBase::Definition(def.inner.chain.clone(), def.inner.path.clone()),
-                None => {
-                    let rt = agents::find_runtime(&profile.agent);
-                    let kind = rt.map_or(profile.agent.as_str(), |rt| rt.kind());
-                    let variant = profile.variant.or_else(|| rt.and_then(|rt| rt.variant));
-                    MemoBase::Toml(
-                        kind.to_owned(),
-                        variant.map(|v| v.name),
-                        profile.model.clone(),
-                    )
-                }
-            },
-        };
         Self {
-            base,
+            base: base.and_then(MemoBase::from_build_base),
             target_kind: target_kind.map(str::to_owned),
             model: model.map(str::to_owned),
         }
@@ -101,11 +133,13 @@ struct DefinitionSourceInner {
     namespace: &'static str,
     chain: Vec<String>,
     frontmatter: AgentFrontmatter,
+    writers: TuningWriters,
     crafts: Vec<PromptSource>,
     natural_kind: String,
     natural_variant: Option<&'static agents::Variant>,
     preference: TierPreference,
     runtime_kind: Option<String>,
+    built_under: Option<MemoBase>,
     seat: Option<SeatInfo>,
     context: Arc<LoadContext>,
     memo: Mutex<BTreeMap<MemoKey, Result<Profile, DefinitionErr>>>,
@@ -135,7 +169,7 @@ fn lists_agent_tool(fm: &AgentFrontmatter) -> bool {
 }
 
 /// Whether a model inherited from `from_kind` survives a switch to `to_kind`.
-fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str) -> bool {
+pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str) -> bool {
     from_kind == to_kind
         || agents::definition_model_kind(model) == Some(to_kind)
         || agents::keeps_model(to_kind, model)
@@ -183,20 +217,14 @@ impl DefinitionSource {
         &self.inner.preference
     }
 
-    pub(crate) fn writes_effort(&self) -> bool {
-        self.inner.frontmatter.effort.is_some()
+    pub(crate) fn writers(&self) -> &TuningWriters {
+        &self.inner.writers
     }
 
-    pub(crate) fn writes_fast(&self) -> bool {
-        self.inner.frontmatter.fast.is_some()
-    }
-
-    pub(crate) fn writes_code_mode(&self) -> bool {
-        self.inner.frontmatter.code_mode.is_some()
-    }
-
-    pub(crate) fn writes_auto_compact(&self) -> bool {
-        self.inner.frontmatter.auto_compact.is_some()
+    /// Whether this row was already built under `base`.
+    pub(crate) fn is_built_under(&self, base: BuildBase<'_>) -> bool {
+        self.inner.built_under.is_some()
+            && self.inner.built_under == MemoBase::from_build_base(base)
     }
 
     pub(crate) fn build(
@@ -206,18 +234,11 @@ impl DefinitionSource {
         target_kind: Option<&str>,
         model: Option<&str>,
     ) -> Result<Profile, DefinitionErr> {
-        if let Some(BuildBase::Profile(profile)) = base
-            && let Some(other) = &profile.definition
-            && self
-                .inner
-                .chain
-                .iter()
-                .any(|entry| entry == &other.inner.name)
+        if model.is_none()
+            && target_kind.is_none_or(|kind| kind == current.agent)
+            && base.is_some_and(|base| self.is_built_under(base))
         {
-            if target_kind.is_none() && model.is_none() {
-                return Ok(current.clone());
-            }
-            return self.build(current, None, target_kind, model);
+            return Ok(current.clone());
         }
         let key = MemoKey::new(base, target_kind, model);
         {
@@ -243,10 +264,115 @@ impl DefinitionSource {
     }
 }
 
+pub(in crate::config) struct TierCandidates {
+    pub(in crate::config) engine: bool,
+    pub(in crate::config) renders: BTreeMap<String, Profile>,
+    pub(in crate::config) exclusions: BTreeMap<String, DefinitionErr>,
+}
+
+/// Build the per-kind candidate rows and exclusions for one tier under `preference`: a single
+/// engine build for providers that run other providers' models, or one build per distinct kind
+/// named in the tier table.
+pub(in crate::config) fn build_tier_candidates(
+    tiers: &crate::config::tiers::TierConfig,
+    tier: ModelTier,
+    preference: &TierPreference,
+    mut build: impl FnMut(&str, Option<&str>) -> Result<Profile, DefinitionErr>,
+) -> TierCandidates {
+    let engine = preference
+        .family
+        .as_deref()
+        .filter(|kind| agents::runs_other_providers_models(kind));
+    let candidates: Vec<(&str, Option<&str>)> = if let Some(engine) = engine {
+        vec![(engine, None)]
+    } else {
+        tiers
+            .entries(tier)
+            .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
+            .collect()
+    };
+    let mut renders = BTreeMap::new();
+    let mut exclusions = BTreeMap::new();
+    for (kind, candidate_model) in candidates {
+        if renders.contains_key(kind) || exclusions.contains_key(kind) {
+            continue;
+        }
+        match build(kind, candidate_model) {
+            Ok(rendered) => {
+                renders.insert(kind.to_owned(), rendered);
+            }
+            Err(error) => {
+                exclusions.insert(kind.to_owned(), error);
+            }
+        }
+    }
+    TierCandidates {
+        engine: engine.is_some(),
+        renders,
+        exclusions,
+    }
+}
+
+fn walk_tier_renders(
+    path: &Path,
+    tiers: &crate::config::tiers::TierConfig,
+    tier: ModelTier,
+    preference: &TierPreference,
+    effort: Option<&str>,
+    renders: &BTreeMap<String, Profile>,
+    exclusions: &BTreeMap<String, DefinitionErr>,
+) -> Result<Profile, DefinitionErr> {
+    // Any one model clears the tier, so the first failed dependency met is the one to fix.
+    let blocked = OnceCell::new();
+    let pick = tiers
+        .walk(
+            tier,
+            preference,
+            |kind| {
+                let error: &DefinitionErr = exclusions.get(kind)?;
+                if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
+                    blocked.get_or_init(|| error.cause.clone());
+                }
+                Some(error.message.as_str())
+            },
+            |_, _| None::<()>,
+        )
+        .map_err(|error| {
+            DefinitionErr::new(
+                path,
+                format!(
+                    "{error}; {}",
+                    exclusions
+                        .iter()
+                        .map(|(kind, reason)| format!("{kind}: {}", reason.message))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            )
+            .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
+        })?;
+    let mut selected = renders
+        .get(&pick.kind)
+        .cloned()
+        .ok_or_else(|| DefinitionErr::new(path, format!("no eligible build for {}", pick.kind)))?;
+    selected.model = Some(pick.model);
+    selected.effort = effort.map(str::to_owned);
+    selected.model_tier = Some(TierProvenance {
+        tier,
+        fell_back: pick.used_tier.is_some(),
+    });
+    Ok(selected)
+}
+
 impl DefinitionSourceInner {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructs the retained source for one rebuilt profile row"
+    )]
     fn built_source(
         &self,
         x_def: Option<&Self>,
+        built_under: Option<MemoBase>,
         frontmatter: AgentFrontmatter,
         crafts: Vec<PromptSource>,
         built: &Profile,
@@ -254,12 +380,14 @@ impl DefinitionSourceInner {
         runtime_kind: Option<String>,
     ) -> DefinitionSource {
         let mut chain = self.chain.clone();
+        let mut writers = self.writers.clone();
         if let Some(x) = x_def {
             for entry in &x.chain {
                 if !chain.contains(entry) {
                     chain.push(entry.clone());
                 }
             }
+            writers.inherit(&x.writers);
         }
         DefinitionSource {
             inner: Arc::new(Self {
@@ -268,11 +396,13 @@ impl DefinitionSourceInner {
                 namespace: self.namespace,
                 chain,
                 frontmatter,
+                writers,
                 crafts,
                 natural_kind: built.agent.clone(),
                 natural_variant: built.variant,
                 preference,
                 runtime_kind,
+                built_under: built_under.or_else(|| self.built_under.clone()),
                 seat: self.seat.clone(),
                 context: Arc::clone(&self.context),
                 memo: Mutex::default(),
@@ -288,45 +418,34 @@ impl DefinitionSourceInner {
         craft: &mut CraftState<'_>,
         attach_definition: bool,
     ) -> Result<Profile, DefinitionErr> {
-        let mut has_base = false;
-        let mut x_def: Option<&Self> = None;
-        let mut base_kind: Option<&str> = None;
-        let mut base_variant: Option<&'static agents::Variant> = None;
-        let mut base_writes_engine = false;
-        let mut base_model_override: Option<&str> = None;
-        match base {
-            None => {}
-            Some(BuildBase::Runtime(rt)) => {
-                has_base = true;
-                base_kind = Some(rt.kind());
-                base_variant = rt.variant;
-            }
-            Some(BuildBase::Profile(profile)) if profile.kind_base => {
-                has_base = true;
-                base_kind = Some(profile.agent.as_str());
-                base_variant = profile.variant;
-            }
-            Some(BuildBase::Profile(profile)) => {
-                if let Some(other) = &profile.definition {
-                    if !self.chain.iter().any(|entry| entry == &other.inner.name) {
-                        has_base = true;
-                        x_def = Some(&other.inner);
-                        base_kind = (!other.inner.natural_kind.is_empty())
-                            .then_some(other.inner.natural_kind.as_str());
-                        base_variant = other.inner.natural_variant;
-                        base_writes_engine = other.inner.frontmatter.model.is_some()
-                            || other.inner.frontmatter.tier.is_some();
+        let mut built_under = base.and_then(MemoBase::from_build_base);
+        let (has_base, x_def, base_kind, base_variant, base_writes_engine, base_model_override) =
+            match base {
+                Some(BuildBase::Runtime(rt, model_override)) => (
+                    true,
+                    None,
+                    Some(rt.kind()),
+                    rt.variant,
+                    model_override.is_some(),
+                    model_override,
+                ),
+                Some(BuildBase::Profile(profile)) => match &profile.definition {
+                    Some(other) => (
+                        true,
+                        Some(other.inner.as_ref()),
+                        (!other.inner.natural_kind.is_empty())
+                            .then_some(other.inner.natural_kind.as_str()),
+                        other.inner.natural_variant,
+                        other.writes_engine(),
+                        None,
+                    ),
+                    _ => {
+                        built_under = None;
+                        (false, None, None, None, false, None)
                     }
-                } else {
-                    has_base = true;
-                    let rt = agents::find_runtime(&profile.agent);
-                    base_kind = Some(rt.map_or(profile.agent.as_str(), |rt| rt.kind()));
-                    base_variant = profile.variant.or_else(|| rt.and_then(|rt| rt.variant));
-                    base_writes_engine = profile.model.is_some();
-                    base_model_override = profile.model.as_deref();
-                }
-            }
-        }
+                },
+                None => (false, None, None, None, false, None),
+            };
 
         let mut fm = self.frontmatter.clone();
         if let Some(explicit_model) = model {
@@ -339,14 +458,24 @@ impl DefinitionSourceInner {
                 fm.model = Some(override_model.to_owned());
             }
         }
+        let x_in_chain = x_def.is_some_and(|x| self.chain.iter().any(|entry| entry == &x.name));
         if let Some(x) = x_def {
-            let mut x_fm = x.frontmatter.clone().for_namespace(self.namespace);
-            if lists_agent_tool(&fm) {
-                x_fm.subagents = None;
+            if x_in_chain {
+                // Non-engine fields and crafts of a shared ancestor are already in `self`;
+                // apply only its engine so `+` lists and crafts enter once.
+                if fm.model.is_none() && fm.tier.is_none() {
+                    fm.model.clone_from(&x.frontmatter.model);
+                    fm.tier.clone_from(&x.frontmatter.tier);
+                }
+            } else {
+                let mut x_fm = x.frontmatter.clone().for_namespace(self.namespace);
+                if lists_agent_tool(&fm) {
+                    x_fm.subagents = None;
+                }
+                fm.inherit(&x_fm);
             }
-            fm.inherit(&x_fm);
         }
-        let crafts = match x_def {
+        let crafts = match x_def.filter(|_| !x_in_chain) {
             Some(x) => merge_crafts(&x.crafts, &self.crafts),
             None => self.crafts.clone(),
         };
@@ -396,222 +525,116 @@ impl DefinitionSourceInner {
                 )
             };
 
-        if let Some(raw_target) = target_kind {
-            let target_rt = agents::find_runtime(raw_target);
-            let kind = target_rt.map_or(raw_target, |rt| rt.kind());
-            let variant = target_rt
-                .and_then(|rt| rt.variant)
-                .or_else(|| effective_variant.filter(|_| kind == effective_kind));
-            if model.is_none() {
-                let from_kind = if base_writes_engine {
-                    effective_kind.as_str()
-                } else {
-                    self.natural_kind.as_str()
-                };
-                if let Some(inherited) = fm.model.as_deref()
-                    && !keeps_inherited_model(from_kind, kind, inherited)
-                {
-                    fm.model = None;
-                }
-            }
-            let pre_base_fm = fm.clone();
-            let mut built = finish_profile(
-                &self.context,
-                &self.path,
-                self.namespace,
-                self.seat.as_ref(),
-                kind,
-                variant,
-                false,
-                fm,
-                crafts.clone(),
-                craft,
-            )?;
-            if attach_definition {
-                built.definition = Some(self.built_source(
-                    x_def,
-                    pre_base_fm,
-                    crafts,
-                    &built,
-                    effective_preference,
-                    effective_runtime_kind,
-                ));
-            }
-            return Ok(built);
-        }
-
-        if let Some(explicit_model) = model {
-            let (kind, variant) = if has_base {
-                let kind = if !effective_kind.is_empty() {
-                    effective_kind.as_str()
-                } else {
-                    agents::definition_model_kind(explicit_model).unwrap_or("")
-                };
-                (kind, effective_variant.filter(|_| kind == effective_kind))
-            } else if agents::keeps_model(&self.natural_kind, explicit_model) {
-                (self.natural_kind.as_str(), self.natural_variant)
-            } else if let Some(implied) = agents::definition_model_kind(explicit_model) {
-                (
-                    implied,
-                    self.natural_variant
-                        .filter(|_| implied == self.natural_kind),
-                )
-            } else {
-                (self.natural_kind.as_str(), self.natural_variant)
-            };
-            let pre_base_fm = fm.clone();
-            let mut built = finish_profile(
-                &self.context,
-                &self.path,
-                self.namespace,
-                self.seat.as_ref(),
-                kind,
-                variant,
-                false,
-                fm,
-                crafts.clone(),
-                craft,
-            )?;
-            if attach_definition {
-                built.definition = Some(self.built_source(
-                    x_def,
-                    pre_base_fm,
-                    crafts,
-                    &built,
-                    effective_preference,
-                    effective_runtime_kind,
-                ));
-            }
-            return Ok(built);
-        }
-
-        if let Some(tier_str) = fm.tier.as_deref() {
+        let (mut built, pre_base_fm) = if target_kind.is_none()
+            && model.is_none()
+            && let Some(tier_str) = fm.tier.as_deref()
+        {
             let tier: ModelTier =
                 tier_str
                     .parse()
                     .map_err(|error: crate::config::tiers::TierError| {
                         DefinitionErr::new(&self.path, error.to_string())
                     })?;
-            let engine = effective_preference
-                .family
-                .as_deref()
-                .filter(|kind| agents::runs_other_providers_models(kind));
-            let mut renders = BTreeMap::new();
-            let mut exclusions = BTreeMap::new();
-            let candidates: Vec<(&str, Option<&str>)> = if let Some(engine) = engine {
-                vec![(engine, None)]
-            } else {
-                self.context
-                    .shared
-                    .tiers
-                    .entries(tier)
-                    .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
-                    .collect()
-            };
-            for (kind, candidate_model) in candidates {
-                if renders.contains_key(kind) || exclusions.contains_key(kind) {
-                    continue;
-                }
-                let mut candidate_fm = fm.clone();
-                candidate_fm.model = candidate_model.map(str::to_owned);
-                let variant = effective_variant.filter(|_| kind == effective_kind);
-                match finish_profile(
-                    &self.context,
-                    &self.path,
-                    self.namespace,
-                    self.seat.as_ref(),
-                    kind,
-                    variant,
-                    false,
-                    candidate_fm,
-                    crafts.clone(),
-                    craft,
-                ) {
-                    Ok(rendered) => {
-                        renders.insert(kind.to_owned(), rendered);
-                    }
-                    Err(error) => {
-                        exclusions.insert(kind.to_owned(), error);
-                    }
-                }
-            }
-            let blocked = OnceCell::new();
-            let pick = self
-                .context
-                .shared
-                .tiers
-                .walk(
-                    tier,
-                    &effective_preference,
-                    |kind| {
-                        let error: &DefinitionErr = exclusions.get(kind)?;
-                        if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
-                            blocked.get_or_init(|| error.cause.clone());
-                        }
-                        Some(error.message.as_str())
-                    },
-                    |_, _| None::<()>,
-                )
-                .map_err(|error| {
-                    DefinitionErr::new(
-                        &self.path,
-                        format!(
-                            "{error}; {}",
-                            exclusions
-                                .iter()
-                                .map(|(kind, reason)| format!("{kind}: {}", reason.message))
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        ),
-                    )
-                    .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
-                })?;
-            let mut built = renders.remove(&pick.kind).ok_or_else(|| {
-                DefinitionErr::new(&self.path, format!("no eligible build for {}", pick.kind))
-            })?;
-            built.model = Some(pick.model);
-            built.effort = fm.effort.clone();
-            built.model_tier = Some(TierProvenance {
+            let candidates = build_tier_candidates(
+                &self.context.shared.tiers,
                 tier,
-                fell_back: pick.used_tier.is_some(),
-            });
-            if attach_definition {
-                built.definition = Some(self.built_source(
-                    x_def,
-                    fm,
-                    crafts,
-                    &built,
-                    effective_preference,
-                    effective_runtime_kind,
-                ));
-            }
-            return Ok(built);
-        }
-
-        let kind = effective_kind.as_str();
-        let variant = effective_variant;
-        if !base_writes_engine
-            && let Some(inherited) = fm.model.as_deref()
-            && !keeps_inherited_model(&self.natural_kind, kind, inherited)
-        {
-            fm.model = None;
-        }
-        let pre_base_fm = fm.clone();
-        let mut built = finish_profile(
-            &self.context,
-            &self.path,
-            self.namespace,
-            self.seat.as_ref(),
-            kind,
-            variant,
-            false,
-            fm,
-            crafts.clone(),
-            craft,
-        )?;
+                &effective_preference,
+                |kind, candidate_model| {
+                    let mut candidate_fm = fm.clone();
+                    candidate_fm.model = candidate_model.map(str::to_owned);
+                    let variant = effective_variant.filter(|_| kind == effective_kind);
+                    finish_profile(
+                        &self.context,
+                        &self.path,
+                        self.namespace,
+                        self.seat.as_ref(),
+                        kind,
+                        variant,
+                        false,
+                        candidate_fm,
+                        crafts.clone(),
+                        craft,
+                    )
+                },
+            );
+            let built = walk_tier_renders(
+                &self.path,
+                &self.context.shared.tiers,
+                tier,
+                &effective_preference,
+                fm.effort.as_deref(),
+                &candidates.renders,
+                &candidates.exclusions,
+            )?;
+            (built, fm)
+        } else {
+            let (kind, variant) = if let Some(raw_target) = target_kind {
+                let target_rt = agents::find_runtime(raw_target);
+                let kind = target_rt.map_or(raw_target, |rt| rt.kind());
+                let variant = target_rt
+                    .and_then(|rt| rt.variant)
+                    .or_else(|| effective_variant.filter(|_| kind == effective_kind));
+                if model.is_none() {
+                    let from_kind = if base_writes_engine {
+                        effective_kind.as_str()
+                    } else {
+                        self.natural_kind.as_str()
+                    };
+                    if let Some(inherited) = fm.model.as_deref()
+                        && !keeps_inherited_model(from_kind, kind, inherited)
+                    {
+                        fm.model = None;
+                    }
+                }
+                (kind, variant)
+            } else if let Some(explicit_model) = model {
+                if has_base {
+                    let kind = if !effective_kind.is_empty() {
+                        effective_kind.as_str()
+                    } else {
+                        agents::definition_model_kind(explicit_model).unwrap_or("")
+                    };
+                    (kind, effective_variant.filter(|_| kind == effective_kind))
+                } else if agents::keeps_model(&self.natural_kind, explicit_model) {
+                    (self.natural_kind.as_str(), self.natural_variant)
+                } else if let Some(implied) = agents::definition_model_kind(explicit_model) {
+                    (
+                        implied,
+                        self.natural_variant
+                            .filter(|_| implied == self.natural_kind),
+                    )
+                } else {
+                    (self.natural_kind.as_str(), self.natural_variant)
+                }
+            } else {
+                let kind = effective_kind.as_str();
+                if !base_writes_engine
+                    && let Some(inherited) = fm.model.as_deref()
+                    && !keeps_inherited_model(&self.natural_kind, kind, inherited)
+                {
+                    fm.model = None;
+                }
+                (kind, effective_variant)
+            };
+            let pre_base_fm = fm.clone();
+            let built = finish_profile(
+                &self.context,
+                &self.path,
+                self.namespace,
+                self.seat.as_ref(),
+                kind,
+                variant,
+                false,
+                fm,
+                crafts.clone(),
+                craft,
+            )?;
+            (built, pre_base_fm)
+        };
         if attach_definition {
             built.definition = Some(self.built_source(
                 x_def,
+                built_under,
                 pre_base_fm,
                 crafts,
                 &built,
@@ -626,6 +649,7 @@ impl DefinitionSourceInner {
 #[derive(Clone)]
 struct Resolved {
     frontmatter: AgentFrontmatter,
+    writers: TuningWriters,
     chain: Vec<String>,
     profile: Profile,
     preference: TierPreference,
@@ -713,7 +737,15 @@ pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedD
             }
         }
     }
-    loaded.errors.extend(resolver.errors);
+    for error in resolver.errors {
+        if !loaded
+            .errors
+            .iter()
+            .any(|existing| existing.path == error.path)
+        {
+            loaded.errors.push(error);
+        }
+    }
     if let Some(foreign) = resolver.foreign_resolver {
         let bare_paths: BTreeSet<&Path> = resolver
             .foreign
@@ -769,6 +801,7 @@ impl<'a> Resolver<'a> {
             seat: None,
             seat_ancestors: Vec::new(),
             seat_crafts: Vec::new(),
+            seat_writers: TuningWriters::default(),
             resolved: BTreeMap::new(),
             trail: Vec::new(),
             errors: Vec::new(),
@@ -780,10 +813,12 @@ impl<'a> Resolver<'a> {
         seat: SeatInfo,
         ancestors: Vec<String>,
         crafts: Vec<PromptSource>,
+        writers: TuningWriters,
     ) -> Self {
         self.seat = Some(seat);
         self.seat_ancestors = ancestors;
         self.seat_crafts = crafts;
+        self.seat_writers = writers;
         self
     }
 }
@@ -889,6 +924,7 @@ pub(super) struct Resolver<'a> {
     seat: Option<SeatInfo>,
     seat_ancestors: Vec<String>,
     seat_crafts: Vec<PromptSource>,
+    seat_writers: TuningWriters,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
@@ -1030,6 +1066,11 @@ impl Resolver<'_> {
                     ),
                 )
             })?;
+        let mut writers = if self.seat.is_some() {
+            self.seat_writers.clone()
+        } else {
+            TuningWriters::from_frontmatter(&definition.frontmatter, name)
+        };
         let mut chain = match &self.seat {
             Some(seat) => {
                 let mut chain = vec![seat.profile_name.clone()];
@@ -1086,6 +1127,7 @@ impl Resolver<'_> {
                 } else {
                     fm.inherit(&parent.frontmatter);
                 }
+                writers.inherit(&parent.writers);
                 for ancestor in &parent.chain {
                     if !chain.contains(ancestor) {
                         chain.push(ancestor.clone());
@@ -1174,11 +1216,13 @@ impl Resolver<'_> {
             namespace: self.namespace,
             chain: chain.clone(),
             frontmatter: unresolved.clone(),
+            writers: writers.clone(),
             crafts: profile.append_system_prompt_files.clone(),
             natural_kind: profile.agent.clone(),
             natural_variant: profile.variant,
             preference: preference.clone(),
             runtime_kind: runtime_kind.clone(),
+            built_under: None,
             seat: self.seat.clone(),
             context: Arc::clone(self.scope.context),
             memo: Mutex::default(),
@@ -1211,48 +1255,16 @@ impl Resolver<'_> {
             }
         }
         let mut profile = if let Some(tier) = tier {
-            // Any one model clears the tier, so the first failed dependency met is the one to fix.
-            let blocked = OnceCell::new();
-            let pick = self
-                .scope
-                .context
-                .shared
-                .tiers
-                .walk(
-                    tier,
-                    &preference,
-                    |kind| {
-                        let error: &DefinitionErr = exclusions.get(kind)?;
-                        if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
-                            blocked.get_or_init(|| error.cause.clone());
-                        }
-                        Some(error.message.as_str())
-                    },
-                    |_, _| None::<()>,
-                )
-                .map_err(|error| {
-                    DefinitionErr::new(
-                        path,
-                        format!(
-                            "{error}; {}",
-                            exclusions
-                                .iter()
-                                .map(|(kind, reason)| format!("{kind}: {}", reason.message))
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        ),
-                    )
-                    .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
-                })?;
             // The probe covers native families and model-client engines; the walk skips exclusions.
-            let mut selected = renders[&pick.kind].clone();
-            selected.model = Some(pick.model.clone());
-            selected.effort = fm.effort.clone();
-            selected.model_tier = Some(TierProvenance {
+            walk_tier_renders(
+                path,
+                &self.scope.context.shared.tiers,
                 tier,
-                fell_back: pick.used_tier.is_some(),
-            });
-            selected
+                &preference,
+                fm.effort.as_deref(),
+                &renders,
+                &exclusions,
+            )?
         } else {
             source
                 .build_with_craft(None, None, None, &mut craft_state, false)
@@ -1290,6 +1302,7 @@ impl Resolver<'_> {
         });
         Ok(Resolved {
             frontmatter: unresolved,
+            writers,
             chain,
             profile,
             preference,

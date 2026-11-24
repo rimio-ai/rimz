@@ -69,6 +69,7 @@ impl SeatPolicy {
             None => crate::config::effective::KeepWarmSeat::from(agent).declared_horizon(
                 &self.teams,
                 &self.profiles,
+                &self.subagent_profiles,
                 harness,
             )?,
         };
@@ -101,6 +102,7 @@ impl SeatPolicy {
             crate::config::effective::IdleCompactSeat::from(agent).resolve(
                 &self.teams,
                 &self.profiles,
+                &self.subagent_profiles,
                 harness,
             )
         })
@@ -132,8 +134,18 @@ impl SeatPolicy {
         let idle_compact = crate::config::effective::IdleCompactSeat::from(agent);
         let smart_compact = crate::config::effective::SmartCompactSeat::from(agent);
         ConfiguredValues {
-            keep_warm: keep_warm.declared_horizon(&self.teams, &self.profiles, harness),
-            idle_compact: idle_compact.resolve(&self.teams, &self.profiles, harness),
+            keep_warm: keep_warm.declared_horizon(
+                &self.teams,
+                &self.profiles,
+                &self.subagent_profiles,
+                harness,
+            ),
+            idle_compact: idle_compact.resolve(
+                &self.teams,
+                &self.profiles,
+                &self.subagent_profiles,
+                harness,
+            ),
             smart_compact: smart_compact.resolve(
                 &self.teams,
                 &self.profiles,

@@ -576,7 +576,7 @@ With a profile target, `--subagent-profile` explains that profile from `[subagen
 The default report shows:
 
 - a routed profile's tier and chosen model, including a `--tier` override, and every entry passed ahead of it with its usage reason or full build error;
-- the profile chain, including a replacement from `--agent` (`writer ← claude` becomes `writer ← codex`, or `writer ← fast ← codex` when the replacement is profile `fast`);
+- the profile chain, including a replacement from `--agent` (or the recorded `--agent` for `@handle`) and kind routing from `--model`, naming the profile's file chain, then the override's, then the final kind base without any earlier provider base (`writer ← claude` becomes `writer ← codex`, or `writer ← fast ← codex` when the replacement is profile `fast`);
 - the action, working directory, and effective settings, with `fast` and `code-mode` as `on`, `off`, or `unset`, an `auto-compact` row when the launch passes a native window, and `(kind base <kind>)` after each of effort, fast, code mode, and auto-compact that the kind base supplied;
 - the provider argv and the wrapped argv;
 - the launch's environment overrides and unset keys (not the whole ambient environment);

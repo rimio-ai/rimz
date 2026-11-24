@@ -3889,3 +3889,104 @@ fn cohort_continue_resolves_subagent_override_and_refuses_cross_provider_model()
         }
     );
 }
+
+#[test]
+fn cohort_resume_same_kind_agent_override_on_tiered_profile_and_kind_base_fallback_succeed() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/principal_worker.md"),
+        "---\ndescription: Principal worker\nagent: claude\ntier: principal\ntools: [Read]\n---\nPrincipal.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+
+    // Finding 9 via `restore_routed_cells`: codex session on a claude-only principal-tier profile
+    // resumed with `--agent codex` (with and without `--model sol`).
+    let codex_seed = AgentState {
+        name: Some("codex-worker".into()),
+        profile: Some("principal_worker".into()),
+        mode: Some(PermissionMode::Auto),
+        record: Some(Box::new(crate::agents::LaunchRecord {
+            model: Some("sol".into()),
+            ..Default::default()
+        })),
+        ..agent("codex", "codex-principal", "/repo", 0)
+    };
+    for (label, model_flag, expected_model) in [
+        ("--agent codex", None, None),
+        ("--agent codex --model sol", Some("sol"), Some("sol")),
+    ] {
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("principal_worker", &machine.agents.profiles)
+                .unwrap(),
+        ));
+        restore_routed_cells(
+            &mut layout,
+            &[CohortSeed::Resume(Box::new(codex_seed.clone()))],
+            &machine.agents.profiles,
+            Some(&machine.subagents.profiles),
+            &ResumeOverrides {
+                agent: Some("codex"),
+                preset: crate::agents::LaunchPreset {
+                    model: model_flag.map(str::to_owned),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{label}: unexpected error: {err:?}"));
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "codex", "{label}");
+        assert_eq!(cell.launch.model.as_deref(), expected_model, "{label}");
+    }
+
+    // Finding 5 via `restore_routed_cells`: kind base `claude` launched `--agent codex --tier senior`
+    // after falling back to `claude`.
+    let fallback_stamp = crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: "opus".into(),
+        used_tier: None,
+        unbuildable: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let fallback_seed = AgentState {
+        name: Some("fallback-claude".into()),
+        profile: Some("claude".into()),
+        mode: Some(PermissionMode::Auto),
+        tier: Some(Box::new(fallback_stamp.clone())),
+        record: Some(Box::new(crate::agents::LaunchRecord {
+            model: Some("opus".into()),
+            agent: Some("codex".into()),
+            ..Default::default()
+        })),
+        ..agent("claude", "fallback-1", "/repo", 0)
+    };
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("claude", &machine.agents.profiles).unwrap(),
+    ));
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(fallback_seed))],
+        &machine.agents.profiles,
+        Some(&machine.subagents.profiles),
+        &ResumeOverrides::default(),
+    )
+    .expect("kind base tier-fallback replay via restore_routed_cells must succeed");
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind.as_str(), "claude");
+    assert_eq!(cell.launch.model.as_deref(), Some("opus"));
+    assert_eq!(cell.launch.tier.as_deref(), Some(&fallback_stamp));
+}

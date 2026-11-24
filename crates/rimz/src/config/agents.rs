@@ -511,7 +511,7 @@ impl std::str::FromStr for Isolation {
 /// at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` and `smart_compact`
 /// its compaction; `empty_dir` selects the cwd and consents to folder trust only on RimZ's
 /// clean empty root).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
     #[serde(skip)]

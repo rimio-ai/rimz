@@ -1961,3 +1961,376 @@ fn replay_rebuilds_tier_fallback_unversioned_model_and_team_seats_under_one_chai
         toml_team_posture.launch.notices
     );
 }
+
+#[test]
+fn replay_rebuilds_bare_kind_and_toml_profiles_under_override_without_returning_dropped_models() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/tiered_x.md"),
+        "---\ndescription: Tiered override\ntier: senior\neffort: low\nbudget: 7\n\
+         tools: [Read]\n---\nTiered override craft.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    // Default senior tier puts opus (claude) ahead of astra (codex), so `tiered_x` resolves to
+    // claude at load time.
+    assert_eq!(machine.agents.profiles.0["tiered_x"].agent, "claude");
+
+    let mut profiles = machine.agents.profiles.clone();
+    profiles.0.insert(
+        "toml_l".into(),
+        Profile {
+            effort: Some("high".into()),
+            model: Some("opus".into()),
+            ..profile("claude")
+        },
+    );
+
+    let fallback_stamp = crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: "astra".into(),
+        used_tier: None,
+        unbuildable: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let fallback_record = crate::agents::LaunchRecord {
+        model: Some("astra".into()),
+        effort: None,
+        agent: Some("tiered_x".into()),
+        ..Default::default()
+    };
+
+    // Bare kind (`profile: None`) and kind base (`profile: Some("claude")`) replayed under a
+    // tier-carrying X whose current tier resolves to claude, while the recorded session ran on
+    // codex with astra.
+    for launched in [None, Some("claude")] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&fallback_record),
+                profile: launched,
+                kind: &AgentKind::new_unchecked("codex"),
+                stamped_mode: Some(PermissionMode::Auto),
+                stamped_tier: Some(&fallback_stamp),
+            },
+            &profiles,
+            None,
+        );
+        assert!(
+            posture.degraded.is_none(),
+            "launched={launched:?} must not degrade: {:?}",
+            posture.degraded
+        );
+        assert_eq!(posture.launch.model.as_deref(), Some("astra"));
+        assert_eq!(posture.launch.effort.as_deref(), Some("low"));
+        assert_eq!(posture.launch.budget.as_deref(), Some("$7.00"));
+        assert!(
+            posture
+                .launch
+                .system_prompt_file
+                .as_ref()
+                .is_some_and(|src| src.origin().ends_with("agents/codex.md")),
+            "{:?}",
+            posture.launch.system_prompt_file
+        );
+        assert!(
+            posture
+                .launch
+                .append_system_prompt_files
+                .iter()
+                .any(|src| src.origin().ends_with("agents/tiered_x.md")),
+            "{:?}",
+            posture.launch.append_system_prompt_files
+        );
+    }
+
+    // TOML L replayed under the same tier-carrying X whose recorded session ran on codex.
+    let toml_fallback = resolve_posture(
+        PostureRequest {
+            record: Some(&fallback_record),
+            profile: Some("toml_l"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: Some(&fallback_stamp),
+        },
+        &profiles,
+        None,
+    );
+    assert!(
+        toml_fallback.degraded.is_none(),
+        "TOML L replay under tiered X must not degrade: {:?}",
+        toml_fallback.degraded
+    );
+    assert_eq!(toml_fallback.launch.model.as_deref(), Some("astra"));
+    assert_eq!(toml_fallback.launch.effort.as_deref(), Some("high"));
+    assert!(
+        toml_fallback
+            .launch
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/codex.md")),
+        "{:?}",
+        toml_fallback.launch.system_prompt_file
+    );
+
+    // TOML L whose claude model (`opus`) was dropped at fresh launch under `--agent codex` must
+    // not get `opus` back on replay when the record carries no model.
+    let dropped_record = crate::agents::LaunchRecord {
+        model: None,
+        effort: None,
+        agent: Some("codex".into()),
+        ..Default::default()
+    };
+    let dropped_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&dropped_record),
+            profile: Some("toml_l"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &profiles,
+        None,
+    );
+    assert!(
+        dropped_posture.degraded.is_none(),
+        "dropped-model replay must not degrade: {:?}",
+        dropped_posture.degraded
+    );
+    assert_eq!(dropped_posture.launch.model, None);
+    assert!(
+        !dropped_posture
+            .launch
+            .args
+            .iter()
+            .any(|arg| arg.contains("opus")),
+        "dropped model must not return in argv: {:?}",
+        dropped_posture.launch.args
+    );
+}
+
+#[test]
+fn kind_base_under_non_markdown_override_replays_after_tier_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let mut profiles = machine.agents.profiles.clone();
+    profiles.0.insert(
+        "toml_codex".into(),
+        toml::from_str("agent = 'codex'\nmodel = 'sol'\n").unwrap(),
+    );
+    let stamp = crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: "opus".into(),
+        used_tier: None,
+        unbuildable: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for override_name in ["codex", "toml_codex"] {
+        let record = crate::agents::LaunchRecord {
+            model: Some("opus".into()),
+            effort: None,
+            agent: Some(override_name.into()),
+            ..Default::default()
+        };
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("claude"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: Some(PermissionMode::Auto),
+                stamped_tier: Some(&stamp),
+            },
+            &profiles,
+            None,
+        );
+        assert!(
+            posture.degraded.is_none(),
+            "{override_name}: fallback replay must not degrade: {:?}",
+            posture.degraded
+        );
+        assert_eq!(
+            posture.launch.model.as_deref(),
+            Some("opus"),
+            "{override_name}"
+        );
+        assert_eq!(
+            posture.launch.tier.as_deref(),
+            Some(&stamp),
+            "{override_name}"
+        );
+    }
+}
+
+#[test]
+fn kind_base_routed_by_model_to_non_tier_kind_replays_without_degrade() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base\n---\nAntigravity house.\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let record = crate::agents::LaunchRecord {
+        model: Some("neon".into()),
+        effort: None,
+        agent: None,
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("claude"),
+            kind: &AgentKind::new_unchecked("antigravity"),
+            stamped_mode: Some(PermissionMode::Auto),
+            stamped_tier: None,
+        },
+        &machine.agents.profiles,
+        None,
+    );
+    assert!(
+        posture.degraded.is_none(),
+        "replaying claude --model neon must not degrade: {:?}",
+        posture.degraded
+    );
+    assert_eq!(posture.launch.model.as_deref(), Some("neon"));
+    assert!(
+        posture
+            .launch
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|src| src.origin().ends_with("agents/antigravity.md")),
+        "{:?}",
+        posture.launch.system_prompt_file
+    );
+}
+
+#[test]
+fn kind_base_routed_by_model_onto_a_project_toml_base_runs_and_replays_there() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (kind, tools) in [("claude", "tools: [Read]\n"), ("codex", "effort: high\n")] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: Base\n{tools}---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.codex]\nagent = \"codex\"\neffort = \"low\"\n\
+         [profiles.antigravity]\nagent = \"antigravity\"\neffort = \"low\"\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let machine = || {
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap()
+    };
+    let route = |scope: ProfileScope, model: &str| {
+        let machine = machine();
+        let mut launch =
+            crate::config::effective::load_with_roots(&machine, project.path(), root.path())
+                .unwrap();
+        let stored = (launch.profiles.clone(), launch.subagent_profiles.clone());
+        launch
+            .route(
+                &machine.tiers,
+                scope,
+                Some("claude"),
+                None,
+                Some(model),
+                None,
+                |_, _| None,
+            )
+            .map(|()| (launch, stored))
+            .map_err(|error| error.to_string())
+    };
+    // `antigravity.md` is absent: the TOML row alone is that kind's base.
+    for (model, kind) in [("sol", "codex"), ("neon", "antigravity")] {
+        let (launch, (stored, _)) =
+            route(ProfileScope::Agents, model).expect("routes onto the TOML base");
+        let fresh = crate::harness::spec::resolve_profile("claude", &launch.profiles).unwrap();
+        assert_eq!(fresh.kind.as_str(), kind);
+        assert_eq!(fresh.launch.model.as_deref(), Some(model));
+        assert_eq!(fresh.launch.effort.as_deref(), Some("low"));
+        assert_eq!(fresh.clone().into_chain(), ["claude", kind]);
+
+        let record = crate::agents::LaunchRecord {
+            model: Some(model.into()),
+            effort: Some("low".into()),
+            ..Default::default()
+        };
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("claude"),
+                kind: &AgentKind::new_unchecked(kind),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &stored,
+            None,
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        assert_eq!(posture.launch.model.as_deref(), Some(model));
+        assert_eq!(posture.launch.effort.as_deref(), Some("low"));
+        assert_eq!(
+            posture.launch.system_prompt_file, fresh.system_prompt_file,
+            "{kind}"
+        );
+    }
+
+    // The subagents doorway reads the agents table's base, as the launch chain does.
+    let (launch, _) = route(ProfileScope::Subagents, "neon").unwrap();
+    assert_eq!(launch.subagent_profiles.0["claude"].agent, "antigravity");
+
+    // A definition that failed to load keeps its refusal, whatever the project writes.
+    for (model, kind) in [("sol", "codex"), ("neon", "antigravity")] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\nunknown-key: 1\n---\n",
+        )
+        .unwrap();
+        let refused = route(ProfileScope::Agents, model).map(|_| ()).unwrap_err();
+        assert!(
+            refused.contains("cannot run this definition")
+                && refused.contains(&format!("{kind}.md")),
+            "{refused}"
+        );
+    }
+}

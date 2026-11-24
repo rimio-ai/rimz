@@ -190,7 +190,12 @@ fn prepare(
     // The room pin keeps the store and effective config on the same project root.
     let workspace = checkout::anchor_caller_workspace(workspace, caller, context.root.as_deref())?;
     let caller_lane = super::context::caller_lane(&workspace.project_root, caller, harness_owned);
-    check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
+    check_supervised_subagent_allowed(
+        request,
+        caller,
+        &effective.profiles,
+        &effective.subagent_profiles,
+    )?;
     crate::harness::lanes::admit_launch_worktree_name(
         &workspace,
         &machine_config.agents.worktree,

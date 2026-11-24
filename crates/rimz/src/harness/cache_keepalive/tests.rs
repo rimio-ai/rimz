@@ -1875,3 +1875,233 @@ fn a_refused_model_stops_the_ping_at_the_producer_and_the_helper_until_it_clears
     .unwrap();
     assert!(due().is_some(), "a cleared refusal pings again");
 }
+
+#[test]
+fn seat_policy_resolves_keep_warm_idle_compact_and_smart_compact_under_recorded_agent() {
+    use crate::agents::LaunchRecord;
+    use crate::config::effective::ProfileScope;
+    use crate::store::message::AutoCompact;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join("subagents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/antigravity.md",
+            "---\ndescription: Antigravity base\nsmart-compact: 50k\nidle-compact: 50k\nkeep-warm: 1h\ntools: [Read]\n---\nAntigravity.",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base\nsmart-compact: 120k\nidle-compact: 120k\nkeep-warm: 2h\ntools: [Read]\n---\nCodex.",
+        ),
+        (
+            "agents/astra.md",
+            "---\ndescription: Astra\nagent: codex\nmodel: astra\nsmart-compact: 80k\nidle-compact: 90k\nkeep-warm: 3h\n---\nAstra.",
+        ),
+        (
+            "agents/reviewer.md",
+            "---\ndescription: Reviewer\nagent: antigravity\n---\nReviewer.",
+        ),
+        (
+            "agents/writer.md",
+            "---\ndescription: Writer\nagent: antigravity\nsmart-compact: 70k\nidle-compact: 70k\nkeep-warm: 4h\n---\nWriter.",
+        ),
+        (
+            "subagents/advisor.md",
+            "---\ndescription: Advisor\nagent: antigravity\n---\nAdvisor.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+    let machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    let teams: TeamsConfig = toml::from_str(
+        "[forge]\nkeep-warm = '5h'\nroles = [{role = 'lead', profile = 'reviewer'}]",
+    )
+    .unwrap();
+    let policy = SeatPolicy {
+        teams,
+        profiles: definitions.agent_profiles,
+        subagent_profiles: definitions.subagent_profiles,
+    };
+    let harness: HarnessConfig =
+        toml::from_str("keep_warm = '30m'\nidle_compact = '40k'\nsmart_compact = '30k'").unwrap();
+    let make = |kind: &str,
+                profile: Option<&str>,
+                agent_override: Option<&str>,
+                child: bool,
+                scope: Option<ProfileScope>,
+                team: Option<&str>| {
+        let mut agent = idle();
+        agent.kind = AgentKind::new_unchecked(kind);
+        agent.profile = profile.map(str::to_owned);
+        agent.profile_scope = scope;
+        if child {
+            agent.parent_agent_id = Some("parent".into());
+            agent.launch_depth = Some(1);
+        }
+        if let Some(team) = team {
+            agent.team = Some(team.to_owned());
+            agent.role = Some("lead".to_owned());
+        }
+        if let Some(base) = agent_override {
+            agent.record = Some(Box::new(LaunchRecord {
+                agent: Some(base.to_owned()),
+                ..Default::default()
+            }));
+        }
+        agent
+    };
+    let read = |agent: &AgentState| {
+        let configured = policy.configured_values(agent, &harness);
+        (
+            configured.keep_warm.map(|(max, _)| max.as_secs()),
+            configured.idle_compact,
+            configured.smart_compact,
+        )
+    };
+    let cases = [
+        (
+            "child advisor under astra",
+            make(
+                "codex",
+                Some("advisor"),
+                Some("astra"),
+                true,
+                Some(ProfileScope::Subagents),
+                None,
+            ),
+        ),
+        (
+            "direct --subagent-profile advisor under astra drops direct-only fields",
+            make(
+                "codex",
+                Some("advisor"),
+                Some("astra"),
+                false,
+                Some(ProfileScope::Subagents),
+                None,
+            ),
+        ),
+        (
+            "child advisor under bare codex uses codex base not antigravity",
+            make(
+                "codex",
+                Some("advisor"),
+                Some("codex"),
+                true,
+                Some(ProfileScope::Subagents),
+                None,
+            ),
+        ),
+        (
+            "direct reviewer under astra",
+            make("codex", Some("reviewer"), Some("astra"), false, None, None),
+        ),
+        (
+            "direct writer under astra keeps writer values",
+            make("codex", Some("writer"), Some("astra"), false, None, None),
+        ),
+        (
+            "bare kind under astra",
+            make("codex", None, Some("astra"), false, None, None),
+        ),
+        (
+            "team seat under astra keeps team keep-warm and inherits astra compacting",
+            make(
+                "codex",
+                Some("reviewer"),
+                Some("astra"),
+                false,
+                None,
+                Some("forge"),
+            ),
+        ),
+        (
+            "unresolved X on reviewer reads as no X under recorded kind",
+            make(
+                "codex",
+                Some("reviewer"),
+                Some("deleted"),
+                false,
+                None,
+                None,
+            ),
+        ),
+        (
+            "unresolved X on bare kind falls back to harness defaults",
+            make("codex", None, Some("deleted"), false, None, None),
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(label, agent)| (*label, read(agent)))
+        .collect();
+    let expected = vec![
+        (
+            "child advisor under astra",
+            (None, None, Some(AutoCompact::Tokens(80_000))),
+        ),
+        (
+            "direct --subagent-profile advisor under astra drops direct-only fields",
+            (Some(1800), Some(40_000), Some(AutoCompact::Tokens(80_000))),
+        ),
+        (
+            "child advisor under bare codex uses codex base not antigravity",
+            (None, None, Some(AutoCompact::Tokens(120_000))),
+        ),
+        (
+            "direct reviewer under astra",
+            (
+                Some(10_800),
+                Some(90_000),
+                Some(AutoCompact::Tokens(80_000)),
+            ),
+        ),
+        (
+            "direct writer under astra keeps writer values",
+            (
+                Some(14_400),
+                Some(70_000),
+                Some(AutoCompact::Tokens(70_000)),
+            ),
+        ),
+        (
+            "bare kind under astra",
+            (
+                Some(10_800),
+                Some(90_000),
+                Some(AutoCompact::Tokens(80_000)),
+            ),
+        ),
+        (
+            "team seat under astra keeps team keep-warm and inherits astra compacting",
+            (
+                Some(18_000),
+                Some(90_000),
+                Some(AutoCompact::Tokens(80_000)),
+            ),
+        ),
+        (
+            "unresolved X on reviewer reads as no X under recorded kind",
+            (
+                Some(7200),
+                Some(120_000),
+                Some(AutoCompact::Tokens(120_000)),
+            ),
+        ),
+        (
+            "unresolved X on bare kind falls back to harness defaults",
+            (Some(1800), Some(40_000), Some(AutoCompact::Tokens(30_000))),
+        ),
+    ];
+    assert_eq!(actual, expected);
+}

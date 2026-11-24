@@ -917,3 +917,132 @@ fn single_resume_resolves_agents_override_for_subagent_scope_and_refuses_cross_p
         )
     );
 }
+
+#[test]
+fn single_resume_same_kind_agent_override_on_tiered_profile_succeeds() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex house.\n",
+    )
+    .unwrap();
+    // Default `principal` tier carries only claude models, so an unpinned walk lands on claude.
+    std::fs::write(
+        root.path().join("agents/principal_worker.md"),
+        "---\ndescription: Principal worker\nagent: claude\ntier: principal\ntools: [Read]\n---\nPrincipal.\n",
+    )
+    .unwrap();
+    for (name, engine) in [
+        ("senior_worker", "agent: claude\ntier: senior"),
+        ("senior_codex", "agent: codex\ntier: senior"),
+        ("plain_worker", "agent: claude"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: W\n{engine}\ntools: [Read]\n---\nW.\n"),
+        )
+        .unwrap();
+    }
+    let machine = crate::config::MachineConfig::parse_text(
+        &root.path().join("config.toml"),
+        "[tiers]\nsenior = [\"opus\", \"astra\"]\n",
+        root.path(),
+    )
+    .unwrap();
+    let codex_session = AgentState {
+        name: Some("codex-worker".into()),
+        profile: Some("principal_worker".into()),
+        mode: Some(PermissionMode::Auto),
+        record: Some(Box::new(LaunchRecord {
+            model: Some("sol".into()),
+            ..Default::default()
+        })),
+        ..agent("codex", "codex-principal", "/repo", 0)
+    };
+    for (label, model_flag, expected_model) in [
+        ("--agent codex without --model", None, None),
+        ("--agent codex --model sol", Some("sol"), Some("sol")),
+    ] {
+        let (plan, _) = single(
+            &codex_session,
+            &machine.agents.profiles,
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    agent: Some("codex"),
+                    preset: LaunchPreset {
+                        model: model_flag.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(
+            plan.skipped.is_empty(),
+            "{label}: unexpected skip: {:?}",
+            plan.skipped
+        );
+        assert_eq!(plan.tabs.len(), 1, "{label}");
+        let req = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(req.kind.as_str(), "codex", "{label}");
+        assert_eq!(
+            req.identity.params.model.as_deref(),
+            expected_model,
+            "{label}"
+        );
+    }
+
+    // A tier with a model of the session's kind is still walked to it.
+    for (profile, agent) in [("senior_worker", "codex"), ("plain_worker", "senior_codex")] {
+        let session = AgentState {
+            profile: Some(profile.into()),
+            ..codex_session.clone()
+        };
+        let (plan, _) = single(
+            &session,
+            &machine.agents.profiles,
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    agent: Some(agent),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(plan.skipped.is_empty(), "{profile}: {:?}", plan.skipped);
+        let req = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(
+            req.identity.params.model.as_deref(),
+            Some("astra"),
+            "{profile} --agent {agent}"
+        );
+    }
+
+    // Another kind stays refused with the existing message.
+    let (rejected, _) = single(
+        &codex_session,
+        &machine.agents.profiles,
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                agent: Some("claude"),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert!(rejected.tabs.is_empty());
+    assert_eq!(
+        rejected.skipped[0].reason,
+        ResumeSkipReason::OverrideRejected(
+            "this session is codex, but --agent claude is claude; resume with a same-kind profile or launch fresh"
+                .into()
+        )
+    );
+}

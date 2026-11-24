@@ -962,12 +962,22 @@ struct CompactDefaults {
     subagent_profiles: ProfilesConfig,
 }
 
+fn has_seat_config(agent: &AgentState) -> bool {
+    agent.team.is_some()
+        || agent.profile.is_some()
+        || agent
+            .record
+            .as_ref()
+            .and_then(|record| record.agent.as_deref())
+            .is_some()
+}
+
 impl CompactDefaults {
     fn load(root: &Path, snapshot: &SidebarSnapshot, targets: &[ResolvedTarget]) -> Self {
         let named_seat = targets
             .iter()
             .filter_map(|target| target.agent.as_ref().or_else(|| target.bound(snapshot)))
-            .any(|agent| agent.team.is_some() || agent.profile.is_some());
+            .any(has_seat_config);
         if !named_seat {
             let mut defaults = Self::default();
             defaults.harness.smart_compact = HarnessConfig::load_smart_compact_lenient();

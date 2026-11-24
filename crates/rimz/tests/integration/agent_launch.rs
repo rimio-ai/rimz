@@ -6027,7 +6027,7 @@ fn explain_names_where_each_tuning_value_came_from() {
         effort_high
     );
 
-    // A TOML role's own values are credited to the role, and survive a re-base onto another
+    // A TOML role's own values are credited to the role, and survive `--agent` onto another
     // kind; a value the role leaves unwritten takes the new kind's base.
     let lead = tuning(&explain(&["crew.lead"]));
     let role = serde_json::json!("role lead");
@@ -6051,7 +6051,7 @@ fn explain_names_where_each_tuning_value_came_from() {
             serde_json::json!("kind base codex")
         )
     );
-    // A Markdown role's own fast outlives a re-base onto another kind as a TOML role's does.
+    // A Markdown role's own fast outlives `--agent` onto another kind as a TOML role's does.
     assert_eq!(
         tuning(&explain(&["squad.lead", "--agent", "codex"]))[1],
         (serde_json::json!(false), serde_json::json!("role lead"))
@@ -7383,6 +7383,329 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             false,
         ),
         "{stderr}\n{reminder}"
+    );
+}
+
+#[test]
+fn explain_reports_one_chain_for_subagent_flags_model_routing_and_recorded_handles() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let plugin = env.home_root.join(".gemini/config/plugins/rimz");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"rimz","author":"RimZ"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    for (namespace, name, front, body) in [
+        (
+            "agents",
+            "antigravity",
+            "description: Antigravity base\nmodel-reminder: true\ntools: [Read]",
+            "Antigravity house.",
+        ),
+        (
+            "agents",
+            "codex",
+            "description: Codex base\nmodel-reminder: true\ntools: [Read]",
+            "Codex house.",
+        ),
+        (
+            "agents",
+            "astra",
+            "description: Astra\nagent: codex\nmodel: astra\nmodel-reminder: false\nsubagents: [advisor]",
+            "Astra craft.",
+        ),
+        (
+            "agents",
+            "reviewer",
+            "description: Reviewer\nagent: antigravity",
+            "Reviewer craft.",
+        ),
+        (
+            "subagents",
+            "advisor",
+            "description: Advisor\nagent: antigravity\nmodel: neon\neffort: high",
+            "Advisor craft.",
+        ),
+        (
+            "subagents",
+            "finder",
+            "description: Finder\nagent: codex\nmodel: astra\neffort: low",
+            "Finder craft.",
+        ),
+    ] {
+        crate::common::write_definition(&env, namespace, name, front, body);
+    }
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("child-under-astra"),
+                launch_id: Some(AgentSessionId::from("launch_child_under_astra")),
+                agent_name: "child-astra".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("advisor".to_owned()),
+                    profile_scope: Some(rimz::config::effective::ProfileScope::Subagents),
+                    parent_agent_id: Some("parent".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
+                    launch_depth: Some(1),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    record: Some(Box::new(rimz::agents::LaunchRecord {
+                        agent: Some("astra".to_owned()),
+                        model: Some("astra".to_owned()),
+                        effort: Some("high".to_owned()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("direct-under-astra"),
+                launch_id: Some(AgentSessionId::from("launch_direct_under_astra")),
+                agent_name: "direct-astra".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("reviewer".to_owned()),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    record: Some(Box::new(rimz::agents::LaunchRecord {
+                        agent: Some("astra".to_owned()),
+                        model: Some("astra".to_owned()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+
+    let explain = |args: &[&str]| {
+        let mut cmd = env.rimz();
+        cmd.args(["agents", "explain"]);
+        cmd.args(args);
+        cmd.arg("--json");
+        let output = cmd.assert().success().get_output().clone();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (report, stderr)
+    };
+
+    let (sub_flag, sub_flag_err) = explain(&["advisor", "--subagent-profile", "--agent", "astra"]);
+    let (finder_model, _) = explain(&["finder", "--subagent-profile", "--model", "neon"]);
+    let (child_handle, child_err) = explain(&["@child-astra"]);
+    let (direct_handle, direct_err) = explain(&["@direct-astra"]);
+
+    let has_model_reminder = |report: &serde_json::Value| {
+        report["prompt"]["reminder"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("running on")
+    };
+    assert_eq!(
+        serde_json::json!({
+            "sub_flag_kind": sub_flag["kind"],
+            "sub_flag_chain": sub_flag["profile"]["chain"],
+            "sub_flag_subagents": sub_flag["grant"]["subagents"],
+            "sub_flag_model_reminder": has_model_reminder(&sub_flag),
+            "finder_kind": finder_model["kind"],
+            "finder_chain": finder_model["profile"]["chain"],
+            "child_degraded": child_err.contains("showing bare"),
+            "child_kind": child_handle["kind"],
+            "child_chain": child_handle["profile"]["chain"],
+            "direct_degraded": direct_err.contains("showing bare"),
+            "direct_kind": direct_handle["kind"],
+            "direct_chain": direct_handle["profile"]["chain"],
+            "direct_subagents": direct_handle["grant"]["subagents"],
+            "direct_model_reminder": has_model_reminder(&direct_handle),
+        }),
+        serde_json::json!({
+            "sub_flag_kind": "codex",
+            "sub_flag_chain": ["advisor", "astra", "codex"],
+            "sub_flag_subagents": null,
+            "sub_flag_model_reminder": false,
+            "finder_kind": "antigravity",
+            "finder_chain": ["finder", "antigravity"],
+            "child_degraded": false,
+            "child_kind": "codex",
+            "child_chain": ["advisor", "astra", "codex"],
+            "direct_degraded": false,
+            "direct_kind": "codex",
+            "direct_chain": ["reviewer", "astra", "codex"],
+            "direct_subagents": ["advisor"],
+            "direct_model_reminder": false,
+        }),
+        "sub_flag_err={sub_flag_err}\nchild_err={child_err}\ndirect_err={direct_err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn subagents_prepare_checks_only_the_launched_spec_and_follows_caller_recorded_agent() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    for (namespace, name, front, body) in [
+        (
+            "agents",
+            "antigravity",
+            "description: Antigravity base\ntools: [Read]",
+            "Antigravity.",
+        ),
+        (
+            "agents",
+            "codex",
+            "description: Codex base\ntools: [Read]",
+            "Codex.",
+        ),
+        (
+            "agents",
+            "astra",
+            "description: Astra\nagent: codex\nsubagents: [advisor]",
+            "Astra.",
+        ),
+        (
+            "agents",
+            "reviewer",
+            "description: Reviewer\nagent: antigravity",
+            "Reviewer.",
+        ),
+        (
+            "subagents",
+            "advisor",
+            "description: Advisor\nagent: antigravity",
+            "Advisor.",
+        ),
+        (
+            "subagents",
+            "other",
+            "description: Other\nagent: codex",
+            "Other.",
+        ),
+    ] {
+        crate::common::write_definition(&env, namespace, name, front, body);
+    }
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("caller-under-astra"),
+                launch_id: Some(AgentSessionId::from("launch_caller_under_astra")),
+                agent_name: "caller".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("reviewer".to_owned()),
+                    record: Some(Box::new(rimz::agents::LaunchRecord {
+                        agent: Some("astra".to_owned()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+
+    let caller_env = [
+        (rimz::harness::launch::ENV_AGENT_KIND, "codex"),
+        (
+            rimz::harness::launch::ENV_AGENT_ID,
+            "launch_caller_under_astra",
+        ),
+    ];
+
+    // `rimz subagents profiles --json` follows the caller's recorded `--agent astra` list.
+    let mut profiles_cmd = live_rimz(&env);
+    profiles_cmd.args(["subagents", "profiles", "--json"]);
+    for (k, v) in caller_env {
+        profiles_cmd.env(k, v);
+    }
+    let profiles_out = profiles_cmd.assert().success().get_output().stdout.clone();
+    let listed: serde_json::Value = serde_json::from_slice(&profiles_out).unwrap();
+    let names: Vec<_> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["advisor"], "listed={listed}");
+
+    // Through `supervised::prepare`: L listed (`advisor`) and X unlisted (`astra`) passes the list check.
+    let mut allowed_cmd = live_rimz(&env);
+    allowed_cmd.args(["subagents", "advisor", "--agent", "astra", "Check."]);
+    for (k, v) in caller_env {
+        allowed_cmd.env(k, v);
+    }
+    let allowed_out = allowed_cmd.output().unwrap();
+    let allowed_stderr = String::from_utf8_lossy(&allowed_out.stderr);
+    assert!(
+        !allowed_stderr.contains("may only launch subagent profiles"),
+        "listed spec with unlisted --agent must not be refused by allowlist: {allowed_stderr}"
+    );
+
+    // Through `supervised::prepare`: L unlisted (`other`) is refused even with listed `--agent advisor`.
+    let mut refused_cmd = live_rimz(&env);
+    refused_cmd.args(["subagents", "other", "--agent", "advisor", "Check."]);
+    for (k, v) in caller_env {
+        refused_cmd.env(k, v);
+    }
+    let refused_out = refused_cmd.output().unwrap();
+    let refused_stderr = String::from_utf8_lossy(&refused_out.stderr);
+    assert!(
+        !refused_out.status.success()
+            && refused_stderr.contains("may only launch subagent profiles [advisor]"),
+        "unlisted spec must be refused by allowlist: status={} stderr={refused_stderr}",
+        refused_out.status
     );
 }
 
@@ -12048,4 +12371,124 @@ fn unreachable_rimz_reference_warns_on_stderr_and_card_and_the_agent_starts() {
             .is_some_and(|text| text.contains("rimz(wait)"))),
         "{report}"
     );
+}
+
+#[test]
+fn explain_preserves_override_lines_tuning_sources_and_toml_chains_across_routing() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n\
+         [tiers]\nintern = ['luna', 'haiku']\njunior = ['sonnet']\n\
+         senior = ['opus', 'sol']\nprincipal = ['fable']\n",
+    )
+    .unwrap();
+    for (tree, name, fm, body) in [
+        (
+            "agents",
+            "claude",
+            "description: Claude base\neffort: medium",
+            "Claude house.",
+        ),
+        (
+            "agents",
+            "codex",
+            "description: Codex base\neffort: medium\nfast: off",
+            "Codex house.",
+        ),
+        (
+            "agents",
+            "mdp",
+            "description: Mdp\nagent: codex\nmodel: sol\neffort: low\nfast: on\n\
+             budget: 7\ntools: [Bash, Read]",
+            "Mdp craft.",
+        ),
+        (
+            "agents",
+            "lead",
+            "description: Lead\nagent: claude\nmodel: opus\ntools: [Read]",
+            "Lead craft.",
+        ),
+    ] {
+        crate::common::write_definition(&env, tree, name, fm, body);
+    }
+    env.write_config(
+        &env.project_root,
+        "[profiles.tl]\nagent = 'claude'\neffort = 'high'\n\
+         [profiles.tk]\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
+         [subagents.profiles.tsub]\nagent = 'claude'\neffort = 'high'\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+
+    let explain = |args: &[&str]| -> serde_json::Value {
+        let output = env
+            .rimz()
+            .args(["agents", "explain"])
+            .args(args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+
+    // Kind-base L under Markdown X with `--tier` keeps X's effort, fast, budget, prompt, and chain.
+    let bare_tier = explain(&["claude", "--agent", "mdp", "--tier", "senior"]);
+    assert_eq!(bare_tier["kind"], "codex", "{bare_tier}");
+    assert_eq!(bare_tier["model"], "sol", "{bare_tier}");
+    assert_eq!(bare_tier["effort"], "low", "{bare_tier}");
+    assert_eq!(bare_tier["effort_source"], "profile mdp", "{bare_tier}");
+    assert_eq!(bare_tier["fast"], true, "{bare_tier}");
+    assert_eq!(bare_tier["fast_source"], "profile mdp", "{bare_tier}");
+    assert_eq!(bare_tier["budget"], "$7.00", "{bare_tier}");
+    assert_eq!(
+        bare_tier["profile"]["chain"],
+        serde_json::json!(["claude", "mdp", "codex"]),
+        "{bare_tier}"
+    );
+    assert!(
+        bare_tier["prompt"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|src| src["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("agents/mdp.md"))),
+        "{bare_tier}"
+    );
+
+    // Markdown L under Markdown X with `--tier` or `--model` attributes tuning sources to X.
+    for args in [
+        &["lead", "--agent", "mdp", "--tier", "senior"][..],
+        &["lead", "--agent", "mdp", "--model", "astra"][..],
+    ] {
+        let report = explain(args);
+        assert_eq!(report["effort"], "low", "{args:?}: {report}");
+        assert_eq!(report["effort_source"], "profile mdp", "{args:?}: {report}");
+        assert_eq!(report["fast"], true, "{args:?}: {report}");
+        assert_eq!(report["fast_source"], "profile mdp", "{args:?}: {report}");
+    }
+
+    // Project TOML profiles stay working across overrides and subagent scope.
+    let tl = explain(&["tl", "--agent", "mdp"]);
+    assert_eq!(tl["kind"], "codex", "{tl}");
+    assert_eq!(tl["model"], "sol", "{tl}");
+    assert_eq!(tl["effort"], "high", "{tl}");
+    assert_eq!(tl["effort_source"], "profile tl", "{tl}");
+
+    let tk = explain(&["lead", "--agent", "tk"]);
+    assert_eq!(tk["kind"], "codex", "{tk}");
+    assert_eq!(tk["effort"], "low", "{tk}");
+    assert_eq!(tk["effort_source"], "profile tk", "{tk}");
+    assert_eq!(tk["fast"], false, "{tk}");
+    assert_eq!(tk["fast_source"], "profile tk", "{tk}");
+
+    let tsub = explain(&["tsub", "--subagent-profile", "--agent", "mdp"]);
+    assert_eq!(tsub["kind"], "codex", "{tsub}");
+    assert_eq!(tsub["model"], "sol", "{tsub}");
+    assert_eq!(tsub["effort"], "high", "{tsub}");
 }
