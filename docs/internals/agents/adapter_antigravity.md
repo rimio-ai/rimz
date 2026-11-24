@@ -304,6 +304,7 @@ One print-mode run, `agy -p /usage --output-format json`, answers both account p
 
 - `SSH_CONNECTION`, and one newline on stdin. A logged-out `agy -p` otherwise waits 60 s for a sign-in and opens a browser. The SSH variable selects agy's URL-and-code flow, and the newline answers its code prompt, so the run exits within a second.
 - the login env's `HOME`, when it carries one.
+- a session of its own, so the child has no controlling terminal. Run from a terminal in the caller's session, a logged-out agy reads its code prompt from that terminal, not from stdin, and waits out the deadline. The default login's child calls `setsid` before it execs (`usage.rs::command`), and a named account's bubblewrap runs with `--new-session`.
 - for a named account, a bubblewrap mount of its directory over agy's own (`usage.rs::mounted_command`). A login found while the directory holds no credential file is another account's (`Read::ForeignLogin`): it reads as unavailable, and a launch refuses it (`AccountCapability::foreign_login`). With no credential file, a launch proceeds only on a definite `Read::LoggedOut`: a read that failed refuses too, since it cannot rule out the keyring login.
 - a 10 s deadline (`DEADLINE`), after which the process group is killed and reaped. An offline run took 7.3 s on 1.5.12, a logged-in one at most 2.8 s.
 

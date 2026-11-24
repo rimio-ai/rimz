@@ -34,7 +34,7 @@ struct Cli {
 
 ## Stdout and tracing
 
-Stdout is the protocol surface. The workspace `Cargo.toml` holds the lint wall once: `[workspace.lints.clippy]` denies `print_stdout` and `print_stderr` in every crate, and `[workspace.lints.rust]` denies `unsafe_code`. Both binary crate roots restate the stdout rule as `#![deny(clippy::print_stdout)]`. Two unsafe sites are admitted, each under `#[expect(unsafe_code, reason = "...")]`: the exported jemalloc configuration in `crates/rimz/src/main.rs`, and the counting allocator in `crates/rimz/benches/fleet.rs`, which only the fleet bench links and which gives the scale gate its deterministic allocation counts. A new unsafe site is a design decision.
+Stdout is the protocol surface. The workspace `Cargo.toml` holds the lint wall once: `[workspace.lints.clippy]` denies `print_stdout` and `print_stderr` in every crate, and `[workspace.lints.rust]` denies `unsafe_code`. Both binary crate roots restate the stdout rule as `#![deny(clippy::print_stdout)]`. Three unsafe sites are admitted, each under `#[expect(unsafe_code, reason = "...")]`: the exported jemalloc configuration in `crates/rimz/src/main.rs`, the counting allocator in `crates/rimz/benches/fleet.rs`, which only the fleet bench links and which gives the scale gate its deterministic allocation counts, and the `setsid` before exec in `crates/rimz/src/agents/adapters/antigravity/usage.rs::command`, which keeps Antigravity's usage read off the caller's terminal. A new unsafe site is a design decision.
 
 A `println!` site is legal only under `#[expect(clippy::print_stdout, reason = "...")]`, and only when its stdout is one of:
 
