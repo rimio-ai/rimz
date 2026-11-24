@@ -16,8 +16,7 @@ use crate::pane::{PaneRef, RuntimeOwner};
 use super::background_script::BackgroundScript;
 use super::background_shell::BackgroundShell;
 use super::context::{
-    AgentContext, AgentTokenUsage, AgentTurnError, SignIn, TurnErrorClass, TurnSettle,
-    TurnSettleOutcome,
+    AgentContext, AgentTokenUsage, AgentTurnError, SignIn, TurnErrorClass, TurnSettleOutcome,
 };
 use super::lifecycle::{
     self, AskKind, LifecycleSignal, LifecycleState, PingEdge, PriorTurnIds, Transition,
@@ -738,31 +737,6 @@ pub fn settled_outcome(
     admitted.then_some(settle.outcome)
 }
 
-/// The settle a provider's report that it rests writes for its hook-folded
-/// `row`, when the hooks still hold a turn open that ended without one (agy's
-/// Escape). An interrupt the row already admits keeps its own time, so a
-/// re-emitted rest never restamps it. A turn parked on background work, a row the
-/// hooks already rested, or a row whose activity is as new as the report gets
-/// none: a rest after a normal turn end, or one a later hook already superseded,
-/// must not read as an interrupt, which would withdraw an owed compaction
-/// continue (`AgentState::soft_compact_in_flight`).
-pub(crate) fn provider_rest_settle(
-    row: Option<&AgentState>,
-    observed_at: Timestamp,
-) -> Option<TurnSettle> {
-    let row = row?;
-    let context = row.context.as_ref();
-    if settled_outcome(row.status, context, row.last_activity)
-        == Some(TurnSettleOutcome::Interrupted)
-    {
-        return context?.settle;
-    }
-    let open = matches!(row.status, AgentStatus::Running | AgentStatus::Waiting)
-        && row.phase != TurnPhase::Parked
-        && observed_at > row.last_activity;
-    open.then(|| TurnSettle::new(observed_at, TurnSettleOutcome::Interrupted))
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitingResolution {
     NotWaiting,
@@ -1161,7 +1135,7 @@ pub struct SoftCompactMark {
     /// registration, a user-authored turn start, any non-keepalive turn start after a compaction
     /// later than the enqueue (`AgentState::compacted_at`), or an automatic compaction that
     /// ends inside the open turn. Another continue's terminal event leaves it. An
-    /// interrupt only a provider's turn settle reports (Claude's or Antigravity's Esc)
+    /// interrupt only a provider's turn settle reports (Claude's Esc)
     /// withdraws it at read time, in `AgentState::soft_compact_in_flight`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continue_owed: Option<OwedContinue>,
@@ -2643,6 +2617,17 @@ impl AgentState {
             | WaitingResolution::Interrupted
             | WaitingResolution::Held => (self.status, self.phase),
         }
+    }
+
+    /// Whether a provider's report at `reported_at` that it rests ends a turn the hooks still hold
+    /// open on this hook-folded row (agy's Escape): running and not parked on background work, or
+    /// waiting, with no activity as new as the report. A rest after a normal turn end, or one a
+    /// later hook superseded, must not read as an interrupt, which clears an owed compaction
+    /// continue.
+    pub fn rest_interrupts_turn(&self, reported_at: Timestamp) -> bool {
+        matches!(self.status, AgentStatus::Running | AgentStatus::Waiting)
+            && self.phase != TurnPhase::Parked
+            && reported_at > self.last_activity
     }
 
     /// Whether this live card is still owed the continue queued behind its compaction command:

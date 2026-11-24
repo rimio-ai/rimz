@@ -119,7 +119,7 @@ pub use folder_trust::{
     folder_trust_rows, grant_folder_trust,
 };
 pub use headless::HeadlessVerdict;
-pub use hook_types::{HookOutput, HookReply, HookRouting};
+pub use hook_types::{HookOutput, HookReply, HookRouting, PROVIDER_REST_EVENT};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
 use lifecycle::LifecycleState;
 pub(crate) use lifecycle::step;

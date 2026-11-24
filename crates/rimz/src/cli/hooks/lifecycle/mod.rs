@@ -27,7 +27,8 @@ use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
 use observe::{
-    record_derived_lifecycle_observation, record_lifecycle_observation, release_resolved_keyed_ask,
+    record_derived_lifecycle_observation, record_lifecycle_observation, record_provider_rest,
+    release_resolved_keyed_ask,
 };
 use reactors::ReactorCtx;
 use transcript::*;
@@ -110,14 +111,18 @@ pub(super) fn handle_lifecycle_frame(
                 ingress_owner,
                 globals,
             )?;
-            let recorded = record_lifecycle_observation(
-                workspace,
-                store,
-                agent,
-                decoded,
-                ingress_owner,
-                globals,
-            )?;
+            let recorded = if decoded.reports_provider_rest() {
+                record_provider_rest(workspace, store, agent, decoded, ingress_owner, globals)?
+            } else {
+                record_lifecycle_observation(
+                    workspace,
+                    store,
+                    agent,
+                    decoded,
+                    ingress_owner,
+                    globals,
+                )?
+            };
             let derived = if let Some(recorded) = recorded.as_ref().filter(|recorded| {
                 recorded.receipt.side_conversation.is_none()
                     && !recorded.receipt.stale
@@ -139,6 +144,10 @@ pub(super) fn handle_lifecycle_frame(
             Ok((released, recorded, derived))
         })?
     };
+    // A rest report that records no interrupt is no activity: it refreshes and reacts to nothing.
+    if decoded.reports_provider_rest() && recorded.is_none() {
+        return Ok(decoded.reply().clone());
+    }
     if let Some(recorded) = recorded.as_ref()
         && recorded.observation.is_state_snapshot()
     {

@@ -137,6 +137,45 @@ pub(super) fn release_resolved_keyed_ask(
     .map(Some)
 }
 
+/// Record the interrupt a provider's report that it rests stands for
+/// (`HookOutput::reports_provider_rest`), decided here in log order: only a turn
+/// the hook-folded row still holds open at the report's instant
+/// (`AgentState::rest_interrupts_turn`) ends, as another provider's interrupt
+/// hook ends it. The audit scope leaves out the transcript overlay, which can
+/// open a turn before its hook. Any other row records nothing.
+pub(super) fn record_provider_rest(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    decoded: &HookOutput,
+    ingress_owner: HookIngressOwner,
+    globals: &GlobalFlags,
+) -> Result<Option<RecordedLifecycle>> {
+    let Some(agent_id) = decoded.event_agent_id() else {
+        return Ok(None);
+    };
+    let row =
+        store.agent_with_context(&agent.spec().kind_id(), agent_id, rimz::RuntimeScope::Audit)?;
+    if !row
+        .is_some_and(|row| row.rest_interrupts_turn(rimz::harness::hook_drain::frame_timestamp()))
+    {
+        return Ok(None);
+    }
+    record_derived_lifecycle_observation(
+        workspace,
+        store,
+        agent,
+        decoded.event_name(),
+        AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+        ),
+        ingress_owner,
+        globals,
+    )
+    .map(Some)
+}
+
 fn context_window_is_unset(
     store: &Store,
     kind: &str,

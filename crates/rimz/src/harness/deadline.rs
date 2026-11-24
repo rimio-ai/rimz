@@ -326,6 +326,13 @@ mod tests {
         let mut print = run.clone();
         print.subagent = false;
         assert_eq!(interrupt_evidence(&print, &agents), None);
+        let mut other_kind = run.clone();
+        other_kind.kind = AgentKind::new_unchecked("codex");
+        assert_eq!(
+            interrupt_evidence(&other_kind, &agents),
+            None,
+            "the card must be the run's own kind"
+        );
 
         let mut active = child.clone();
         active.last_activity = marker;
@@ -337,35 +344,6 @@ mod tests {
         let mut other = child;
         other.agent_id = "other".into();
         assert_eq!(interrupt_evidence(&run, &[other]), None);
-    }
-
-    #[test]
-    fn an_escaped_antigravity_child_opens_the_interrupt_hold() {
-        // Antigravity stores this settle from its statusline idle, so its
-        // supervised children reach the hold the same way a hook provider does.
-        let marker: Timestamp = "2026-01-01T00:10:00Z".parse().unwrap();
-        let mut child =
-            AgentState::stub("antigravity", "child", crate::agents::AgentStatus::Running);
-        child.last_activity = marker - Duration::from_secs(5);
-        let mut context = crate::agents::AgentContext::new("antigravity", marker);
-        context.settle = Some(crate::agents::context::TurnSettle {
-            at: marker,
-            outcome: crate::agents::context::TurnSettleOutcome::Interrupted,
-        });
-        child.context = Some(context);
-        let mut run = held(marker);
-        run.kind = AgentKind::new_unchecked("antigravity");
-        run.interrupted_at = None;
-        run.agent_id = Some(child.agent_id.clone());
-        assert_eq!(interrupt_evidence(&run, &[child.clone()]), Some(marker));
-
-        let mut claude = run.clone();
-        claude.kind = AgentKind::new_unchecked("claude");
-        assert_eq!(
-            interrupt_evidence(&claude, &[child]),
-            None,
-            "the card must be the run's own kind"
-        );
     }
 
     #[test]

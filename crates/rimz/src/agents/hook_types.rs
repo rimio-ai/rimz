@@ -87,6 +87,13 @@ pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
     "RIMZ_USER_SHELL",
 ];
 
+/// The event name of the frame the statusline feed appends to hook ingress when an adapter
+/// reports its agent at rest (`ContextObservation::provider_at_rest`). No provider's hook
+/// carries it: the adapter of that provider decodes it into
+/// [`HookOutput::reports_provider_rest`], and an adapter or a binary that does not know it reads
+/// an unknown event.
+pub const PROVIDER_REST_EVENT: &str = "RimzProviderRest";
+
 /// Provider-neutral result of decoding one native hook payload.
 #[derive(Debug, PartialEq)]
 pub struct HookOutput {
@@ -118,6 +125,7 @@ enum CanonicalHookFact {
     FinalOutput(String),
     Error(AgentTurnError),
     Context(Box<ContextObservation>),
+    ProviderRest,
     Progress,
     SessionEnded,
 }
@@ -295,6 +303,14 @@ impl HookOutput {
         })
     }
 
+    /// Whether this frame is the provider's report that its agent rests ([`PROVIDER_REST_EVENT`]).
+    pub fn reports_provider_rest(&self) -> bool {
+        self.event
+            .facts
+            .iter()
+            .any(|fact| matches!(fact, CanonicalHookFact::ProviderRest))
+    }
+
     pub fn turn_error(&self) -> Option<&AgentTurnError> {
         self.event.facts.iter().find_map(|fact| match fact {
             CanonicalHookFact::Error(error) => Some(error),
@@ -413,6 +429,13 @@ impl HookOutput {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Context(_)),
             context.map(|context| CanonicalHookFact::Context(Box::new(context))),
+        );
+    }
+
+    pub(super) fn set_provider_rest(&mut self) {
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::ProviderRest),
+            Some(CanonicalHookFact::ProviderRest),
         );
     }
 

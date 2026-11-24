@@ -37,7 +37,7 @@ use super::definition::{
     HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_hook};
+use super::hook_types::{HookEventSpec, PROVIDER_REST_EVENT, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
@@ -559,6 +559,9 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             HookRouting::session(fields.agent_id.map(Into::into))
                 .with_worktree(fields.worktree_path),
         );
+        if event_name == PROVIDER_REST_EVENT {
+            decoded.set_provider_rest();
+        }
         if let Some(observation) = fields.lifecycle.as_ref()
             && matches!(observation.signal, LifecycleSignal::TurnEnded { .. })
         {

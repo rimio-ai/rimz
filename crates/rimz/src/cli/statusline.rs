@@ -6,10 +6,10 @@
 //!
 //! Context persistence opens an existing room's Store handle for runtime paths,
 //! then uses short sidecar locks and atomic writes. A wrapped command adds one
-//! child. A payload whose adapter reports the agent at rest also asks a hook
-//! drainer to apply the pending hooks, for up to 500 ms, and reads the event log.
-//! No payload drains inline or takes the workspace lock, and no other payload
-//! opens the event log.
+//! child. A payload whose adapter reports the agent at rest also appends a rest
+//! report to hook ingress and nudges a drainer, which decides it in log order
+//! with the hooks. No payload waits on a drainer, drains inline, takes the
+//! workspace lock, or opens the event log.
 //! Main-session prices load only when the adapter needs token pricing.
 //!
 //! Stdio discipline: stdout is reserved for the wrapped command's output (what
@@ -186,11 +186,9 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
 }
 
 /// Parse the payload, normalize it via the agent adapter, and write the sidecar.
-/// Opens an existing Store handle for runtime paths. Only an observation the
-/// adapter reports at rest (`ContextObservation::provider_at_rest`) asks a drainer to
-/// apply the pending hooks and reads the row from the event log, to store the settle
-/// `rimz::harness::hook_drain::provider_rest_settle` decides; a drain no drainer
-/// confirms in time, or a failed read, stores the context without one.
+/// Opens an existing Store handle for runtime paths. An observation the adapter
+/// reports at rest (`ContextObservation::provider_at_rest`) also appends its rest
+/// report (`persist_observation`).
 fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
     let agent = definition_by_kind(source)?;
@@ -200,16 +198,16 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = store_for_root(&workspace.project_root)?;
-    persist_observation(
-        &store,
-        agent,
-        &payload,
-        observation,
-        &rimz::harness::hook_drain::capture_env(),
-    )
+    let mut env = rimz::harness::hook_drain::capture_env();
+    env.extend(rimz::workspace::pin_env(
+        &store.paths().workspace_id,
+        &workspace.project_root,
+    ));
+    persist_observation(&store, agent, &payload, observation, &env)
 }
 
-/// Write one observation to its sidecar, with the settle a rested turn gets.
+/// Write one observation to its sidecar, then append the rest report of one at rest.
+/// A report that cannot be appended or nudged warns: the context stays written.
 pub(super) fn persist_observation(
     store: &rimz::Store,
     agent: &AgentDefinition,
@@ -220,19 +218,6 @@ pub(super) fn persist_observation(
     let runtime = store.runtime_paths();
     let prices = || pricing::cached_book(&runtime.shared_pricing_table_path());
     attach_context_cost(agent, payload, &prices, &mut observation.context);
-    if observation.provider_at_rest {
-        observation.context.settle = rimz::harness::hook_drain::provider_rest_settle(
-            store,
-            agent.spec().kind,
-            &observation.agent_id,
-            observation.context.observed_at,
-            env,
-        )
-        .unwrap_or_else(|error| {
-            warn!(%error, "statusline: reading the rested turn failed; storing no settle");
-            None
-        });
-    }
     rimz::store::agent_context::write(
         runtime,
         agent.spec().kind,
@@ -241,11 +226,64 @@ pub(super) fn persist_observation(
         agent.context_owner_start(),
     )
     .context("writing agent-context sidecar")?;
+    if observation.provider_at_rest
+        && let Err(error) =
+            append_rest_report(store, agent, payload, observation.context.observed_at, env)
+    {
+        warn!(%error, "statusline: the rest report was not appended");
+    }
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
     let _ = rimz::wakeup::wake_store_delta(runtime, None, None);
     Ok(())
+}
+
+/// Append the provider's report that it rests, observed at `observed_at`, to hook ingress as a
+/// `rimz::agents::PROVIDER_REST_EVENT` frame stamped with that instant, so the drainer decides it
+/// in log order against the instant the provider reported. The frame carries the provider's own
+/// payload, which its adapter decodes. Inside a scoped sandbox view it reaches the host drainer
+/// before appending, as a hook does; with no host drainer the report is dropped, since it never
+/// applies inline. It never waits on a drainer, drains inline, or takes the workspace lock.
+fn append_rest_report(
+    store: &rimz::Store,
+    agent: &AgentDefinition,
+    payload: &Value,
+    observed_at: jiff::Timestamp,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    use rimz::config::Isolation;
+    use rimz::harness::hook_drain;
+    let host_drainer = if Isolation::ambient(env).is_some_and(Isolation::is_scoped) {
+        anyhow::ensure!(
+            env.contains_key(Isolation::SCOPED_HOST_PATHS_ENV),
+            "this sandbox view carries no host paths to reach the host drainer"
+        );
+        Some(hook_drain::Connection::connect(store).context("reaching the host drainer")?)
+    } else {
+        None
+    };
+    let frame = rimz::store::ingress::HookIngress {
+        boot_id: rimz::proc::boot_id(),
+        schema_version: "1".to_owned(),
+        event_id: rimz::EventId::new(),
+        ts: observed_at,
+        source: agent.spec().kind_id(),
+        event: Some(rimz::agents::PROVIDER_REST_EVENT.to_owned()),
+        payload: payload.to_string(),
+        cwd: std::env::current_dir().context("reading the working directory")?,
+        hook_pid: std::process::id(),
+        env: env.clone(),
+    };
+    let through = {
+        let lock = rimz::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)?;
+        rimz::store::ingress::append(store.paths(), &frame, &lock)?
+    };
+    match host_drainer {
+        Some(connection) => connection.nudge(through),
+        None => hook_drain::nudge(store, through),
+    }
+    .context("nudging the hook drainer")
 }
 
 /// The observed child context with the transcript cursor's cost, usage, and

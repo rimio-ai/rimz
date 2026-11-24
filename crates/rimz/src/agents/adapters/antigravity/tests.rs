@@ -1713,6 +1713,27 @@ fn statusline_reports_rest_only_when_idle_with_no_background_work() {
     }
 }
 
+#[test]
+fn a_rest_frame_decodes_to_a_rest_report_routed_to_its_conversation() {
+    let payload = json!({"conversation_id": SESSION_ID, "agent_state": "idle", "quota": {}});
+    let rest = AntigravityAdapter
+        .decode_hook(crate::agents::PROVIDER_REST_EVENT, &payload)
+        .unwrap();
+    assert!(rest.reports_provider_rest());
+    assert!(
+        rest.lifecycle().is_none(),
+        "the hook transaction decides the signal"
+    );
+    assert_eq!(
+        rest.event_agent_id()
+            .map(crate::ids::AgentSessionId::as_str),
+        Some(SESSION_ID)
+    );
+    assert_eq!(rest.reply(), &crate::agents::HookReply::Silent);
+    let stop = AntigravityAdapter.decode_hook("Stop", &payload).unwrap();
+    assert!(!stop.reports_provider_rest());
+}
+
 fn statusline_fixture(source: &str) -> statusline::StatuslinePayload {
     serde_json::from_str(source).unwrap()
 }
