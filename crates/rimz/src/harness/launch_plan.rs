@@ -73,8 +73,8 @@ pub struct LaunchPlan {
     /// Every skill withheld from the model: the hidden ones, and `rimz-subagents` on a
     /// launch that gets no subagent surface.
     pub withheld_skills: Vec<&'static str>,
-    /// Each RimZ capability the launch has, by name, with how the launch reminder says it
-    /// reaches it.
+    /// Each RimZ capability the launch has, by name, with its short reach
+    /// (`resolve_reach`).
     pub rimz_reach: Vec<(String, String)>,
     pub warnings: Vec<LaunchPlanWarning>,
     temp_owner: Option<String>,

@@ -1767,7 +1767,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             description: None,
         },
     ]);
-    let reminder = crate::harness::subagent_policy::reminder(&catalog, "Skill(rimz-subagents)");
+    let reminder = crate::harness::subagent_policy::reminder(&catalog, "skill(rimz-subagents)");
 
     for kind in ["claude", "codex"] {
         let invocation = request(
@@ -1926,7 +1926,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         },
     ]);
     let catalog_reminder =
-        crate::harness::subagent_policy::reminder(&catalog, "Skill(rimz-subagents)");
+        crate::harness::subagent_policy::reminder(&catalog, "skill(rimz-subagents)");
     let team = team();
 
     for kind in ["claude", "codex"] {

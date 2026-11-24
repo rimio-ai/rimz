@@ -6396,7 +6396,7 @@ fn explain_shows_the_grant_of_the_launch() {
             .collect();
         actual.push((name, report["grant"].clone(), section));
     }
-    let lsp = "the `lsp` tool of the `rimz` MCP server";
+    let lsp = "mcp(lsp)";
     assert_eq!(
         actual,
         [
@@ -6579,15 +6579,13 @@ fn explain_prints_the_plan_without_side_effects() {
     assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
     assert!(!reminder.contains("effort"));
     assert!(reminder.contains(
-        "Launch them through the `subagent` tool of the `rimz` MCP server, subagents available"
+        "Launch them through mcp(subagent). `subagent(x)` in any text means the profile `x` in \
+         this list:"
     ));
+    assert!(!reminder.contains("### RimZ capabilities"));
     assert!(!reminder.contains("### Skills"));
-    // The capabilities lead quotes the notation; no capability is reached through a skill.
-    assert!(
-        !reminder
-            .replace("`Skill(rimz-x)`", "")
-            .contains("Skill(rimz-")
-    );
+    assert!(!reminder.contains("skill(rimz-"));
+    assert!(!reminder.contains("Skill(rimz-"));
     assert!(reminder.ends_with("\n</system_reminder>"));
     assert!(
         provider_argv
