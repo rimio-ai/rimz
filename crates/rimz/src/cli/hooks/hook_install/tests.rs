@@ -169,7 +169,7 @@ fn codex_rules_consent_and_dry_run_show_creation_and_removal() {
 }
 
 #[test]
-fn antigravity_consent_names_the_saved_mcp_grant_and_its_removal() {
+fn antigravity_consent_names_leftover_mcp_rule_removal() {
     let settings = |rule: bool| {
         if rule {
             "{\"permissions\": {\"allow\": [\"command(ls)\", \"mcp(rimz_tools/*)\"]}}\n"
@@ -177,20 +177,19 @@ fn antigravity_consent_names_the_saved_mcp_grant_and_its_removal() {
             "{\"permissions\": {\"allow\": [\"command(ls)\"]}}\n"
         }
     };
-    let granted = "Antigravity also gets a saved permission rule: RimZ's MCP tools run without a prompt in every agy session of the account, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`.";
-    let removed = "Removing Antigravity's saved `mcp(rimz_tools/*)` rule ends prompt-free RimZ MCP tools in every agy session of the account, including outside RimZ (`[agents] allow-routine-rimz = false`).";
-    for (original, candidate, line) in [
-        (None, true, Some(granted)),
-        (Some(false), true, Some(granted)),
-        (Some(true), false, Some(removed)),
-        (Some(true), true, None),
-        (Some(false), false, None),
+    let bom_with_rule = format!("\u{feff}{}", settings(true));
+    let removed = "Removing Antigravity's saved `mcp(rimz_tools/*)` rule ends prompt-free RimZ MCP tools for an `agy` started by hand inside a RimZ agent's shell; RimZ launches carry the rule themselves while `[agents] allow-routine-rimz` is on.";
+    for (label, original, expects_removed) in [
+        ("fresh", None, false),
+        ("without-rule", Some(settings(false)), false),
+        ("bom-with-rule", Some(bom_with_rule.as_str()), true),
+        ("with-rule", Some(settings(true)), true),
     ] {
         let mut agy = preview("antigravity", Some("{}\n"), "{}\n");
         agy.files.push(HookInstallFilePreview {
             path: "/h/.gemini/antigravity-cli/settings.json".into(),
-            original: original.map(|rule| settings(rule).into()),
-            candidate: settings(candidate).into(),
+            original: original.map(str::to_owned),
+            candidate: settings(false).into(),
             existed: original.is_some(),
         });
         let previews = [agy];
@@ -199,13 +198,15 @@ fn antigravity_consent_names_the_saved_mcp_grant_and_its_removal() {
             write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal, None)
         });
         for rendered in [&consent, &notice] {
-            for text in [granted, removed] {
-                assert_eq!(
-                    rendered.contains(text),
-                    line == Some(text),
-                    "{original:?} -> {candidate}: {rendered}"
-                );
-            }
+            assert!(
+                !rendered.contains("also gets a saved permission rule"),
+                "{label}: {rendered}"
+            );
+            assert_eq!(
+                rendered.contains(removed),
+                expects_removed,
+                "{label}: {rendered}"
+            );
         }
     }
 }

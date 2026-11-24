@@ -916,7 +916,7 @@ reason = "Launch compilation hands the adapter the server, the profile's mcps li
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::McpServer"
-reason = "Launch planning builds the server's command, arguments, grant, and spawn env names for either adapter."
+reason = "Launch planning builds the server's command, arguments, grant, and spawn env names for each adapter."
 
 [[verdict]]
 kind = "item"

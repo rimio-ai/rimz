@@ -10,11 +10,12 @@
 //! `settings.json` and drops unknown `statusLine` keys, so the statusline is
 //! owned by its command and the displaced original lives in a RimZ-home record.
 //! Enablement lives in agy's `config.json`, which RimZ reads and never writes.
-//! The plugin also ships RimZ's MCP server (`mcp_config.json`), which agy names
-//! `rimz_tools`; with `allow-routine-rimz` on, install saves the rule that lets its
-//! tools run unasked in `settings.json`'s `permissions.allow`, and with it off, or on
-//! uninstall, removes that rule alone. A missing rule only makes agy ask, so it
-//! leaves the hooks installed and is not an outdated file.
+//! The plugin also ships RimZ's MCP server (`mcp_config.json`), which agy names `rimz_tools`.
+//! RimZ passes its allow rule per launch in `--settings` while `allow-routine-rimz` is on, never
+//! saving permission rules in `settings.json`. Earlier releases saved `mcp(rimz_tools/*)` in
+//! `settings.json`'s `permissions.allow`, which install and uninstall strip while keeping the
+//! user's other rules and leaving a wrong-shaped `permissions` container alone; `outdated_files`
+//! reports `settings.json` while that leftover rule is still present.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -118,17 +119,17 @@ impl ManagedIntegration for AntigravityManagedIntegration {
     fn install(
         &self,
         login_env: &BTreeMap<String, String>,
-        options: crate::agents::HookInstallOptions,
+        _options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallReport> {
-        install(&self.paths(login_env)?, options.allow_routine_rimz)
+        install(&self.paths(login_env)?)
     }
 
     fn preview(
         &self,
         login_env: &BTreeMap<String, String>,
-        options: crate::agents::HookInstallOptions,
+        _options: crate::agents::HookInstallOptions,
     ) -> Result<HookInstallPreview> {
-        preview(&self.paths(login_env)?, options.allow_routine_rimz)
+        preview(&self.paths(login_env)?)
     }
 
     fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
@@ -453,7 +454,7 @@ fn outdated_files(paths: &Paths) -> Vec<PathBuf> {
     if holds_owned_hook(&paths.hooks) {
         files.push(paths.hooks.clone());
     }
-    if STATUS_LINE.outdated_at(&paths.settings) {
+    if STATUS_LINE.outdated_at(&paths.settings) || holds_saved_mcp_rule(&paths.settings) {
         files.push(paths.settings.clone());
     }
     files
@@ -461,10 +462,10 @@ fn outdated_files(paths: &Paths) -> Vec<PathBuf> {
 
 /// The plugin is published last: a failed record or settings pair leaves any
 /// legacy global handlers as the one hook set, never beside the plugin.
-fn install(paths: &Paths, allow: bool) -> Result<HookInstallReport> {
+fn install(paths: &Paths) -> Result<HookInstallReport> {
     let plugin = paths.plugin();
     check_plugin(&plugin)?;
-    let settings = Settings::plan(paths, allow)?;
+    let settings = Settings::plan(paths)?;
     let global = stripped_global(&paths.hooks)?;
     let hooks_original = global
         .is_some()
@@ -512,10 +513,10 @@ fn install(paths: &Paths, allow: bool) -> Result<HookInstallReport> {
     })
 }
 
-fn preview(paths: &Paths, allow: bool) -> Result<HookInstallPreview> {
+fn preview(paths: &Paths) -> Result<HookInstallPreview> {
     let plugin = paths.plugin();
     check_plugin(&plugin)?;
-    let settings = Settings::plan(paths, allow)?;
+    let settings = Settings::plan(paths)?;
     let mut files = Vec::new();
     for (name, candidate) in plugin_files() {
         let file = plugin.join(name);
@@ -582,7 +583,7 @@ fn uninstall(paths: &Paths, account_only: bool) -> Result<HookUninstallReport> {
         let mut root = settings_json::read_json_object(AGENT, &paths.settings)?;
         let before = root.clone();
         STATUS_LINE.strip(&mut root, &paths.state)?;
-        set_allow_rule(&mut root, false);
+        strip_allow_rule(&mut root);
         if root != before {
             settings_json::write_json(AGENT, &paths.settings, &root)?;
             files.push((paths.settings.clone(), true));
@@ -617,8 +618,7 @@ struct Settings {
 }
 
 impl Settings {
-    /// `allow` holds the saved rule that lets the plugin server's tools run unasked.
-    fn plan(paths: &Paths, allow: bool) -> Result<Self> {
+    fn plan(paths: &Paths) -> Result<Self> {
         let path = &paths.settings;
         let existing = settings_json::read_json_object(AGENT, path)?;
         let (mut candidate, displaced) = STATUS_LINE.install_candidate(path)?;
@@ -627,7 +627,7 @@ impl Settings {
         {
             statusline.insert(STACK_WITH_DEFAULT.to_owned(), Value::Bool(true));
         }
-        set_allow_rule(&mut candidate, allow);
+        strip_allow_rule(&mut candidate);
         let write = (candidate != existing)
             .then(|| settings_json::render_json(AGENT, &candidate))
             .transpose()?;
@@ -640,24 +640,24 @@ impl Settings {
     }
 }
 
-/// Adds or removes the saved `permissions.allow` rule for the plugin server's tools, keeping
-/// every other rule and dropping a container only that rule held. A `permissions` or
-/// `allow` value that is not a container is the user's and stays as it is.
-fn set_allow_rule(root: &mut Map<String, Value>, allow: bool) {
-    let rule = Value::from(format!("mcp({}/*)", super::MCP_SERVER_NAME));
-    if allow {
-        let permissions = root
-            .entry("permissions")
-            .or_insert_with(|| Value::Object(Map::new()));
-        if let Some(Value::Array(rules)) = permissions
-            .as_object_mut()
-            .map(|permissions| permissions.entry("allow").or_insert_with(|| json!([])))
-            && !rules.contains(&rule)
-        {
-            rules.push(rule);
-        }
-        return;
-    }
+/// Whether `settings.json` still holds the saved `permissions.allow` rule earlier installs wrote.
+fn holds_saved_mcp_rule(path: &Path) -> bool {
+    let Ok(root) = settings_json::read_json_object(AGENT, path) else {
+        return false;
+    };
+    let rule = Value::from(super::mcp_allow_rule());
+    root.get("permissions")
+        .and_then(Value::as_object)
+        .and_then(|permissions| permissions.get("allow"))
+        .and_then(Value::as_array)
+        .is_some_and(|rules| rules.contains(&rule))
+}
+
+/// Removes the leftover saved `permissions.allow` rule for the plugin server's tools, keeping
+/// every other rule and dropping a container only that rule held. A `permissions` or `allow`
+/// value that is not a container is the user's and stays as it is.
+fn strip_allow_rule(root: &mut Map<String, Value>) {
+    let rule = Value::from(super::mcp_allow_rule());
     let Some(Value::Object(permissions)) = root.get_mut("permissions") else {
         return;
     };

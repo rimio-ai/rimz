@@ -819,10 +819,35 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         )
     }
 
+    fn allow_routine_rimz_args(
+        &self,
+        paths: (&Path, &Path),
+        _skill_roots: (Option<&Path>, Option<&crate::agents::skills::SkillChain>),
+        _dirs: &[PathBuf; 2],
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        permissions::allow_routine_rimz(paths, extra_args, artifact)
+    }
+
     /// The list rides the agent file (`agent_file`) and the server the rimz plugin's
-    /// `mcp_config.json` (`install`), never argv, so `mcp_server_args` keeps its default.
+    /// `mcp_config.json` (`install`), while `mcp_server_args` merges the per-launch allow rule
+    /// into `--settings` when the launch serves RimZ's tools with `allow-routine-rimz` on.
     fn takes_mcp_servers(&self) -> bool {
         true
+    }
+
+    fn mcp_server_args(
+        &self,
+        launch: &crate::agents::capabilities::McpLaunch<'_>,
+        paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+        if launch.server.as_ref().is_some_and(|server| server.grant) {
+            permissions::allow_mcp_server(paths, extra_args, artifact)?;
+        }
+        Ok(Vec::new())
     }
 
     fn serves_mcp_from_launch_env(&self) -> bool {
@@ -988,6 +1013,11 @@ impl crate::agents::capabilities::SpendingCapability for AntigravityAdapter {
         }
         session::transcript_for_session_under(&home, session_id)
     }
+}
+
+/// The `permissions.allow` rule for every tool of the plugin's server.
+fn mcp_allow_rule() -> String {
+    format!("mcp({MCP_SERVER_NAME}/*)")
 }
 
 /// The effort levels agy appends to a model slug (`gemini-4-neon-high`).

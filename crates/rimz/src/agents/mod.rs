@@ -229,6 +229,11 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz notes list",
 ];
 
+#[cfg(test)]
+pub(crate) fn routine_rimz_prefixes() -> &'static [&'static str] {
+    ROUTINE_RIMZ_PREFIXES
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {
     #[error("unknown agent integration `{0}`")]
