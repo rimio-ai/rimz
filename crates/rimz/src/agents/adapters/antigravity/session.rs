@@ -1116,6 +1116,16 @@ fn fold(lines: &str) -> FoldedSession {
         {
             continue;
         }
+        let user_prompt = if role == TranscriptRole::User {
+            let prompt = normalize_user_content(record.content.as_deref());
+            // A bare `/compact` is a command to agy, not a turn start.
+            if prompt.as_deref() == Some(super::COMPACT_COMMAND) {
+                continue;
+            }
+            prompt
+        } else {
+            None
+        };
         let Ok(at) = record.created_at.parse::<Timestamp>() else {
             continue;
         };
@@ -1135,7 +1145,7 @@ fn fold(lines: &str) -> FoldedSession {
                 folded.waiting_since = None;
                 folded.status = AgentStatus::Running;
                 folded.phase = TurnPhase::Reasoning;
-                folded.latest_prompt = normalize_user_content(record.content.as_deref());
+                folded.latest_prompt = user_prompt;
             }
             TranscriptRole::Assistant => {
                 if let Some(question) = native_question(&record) {

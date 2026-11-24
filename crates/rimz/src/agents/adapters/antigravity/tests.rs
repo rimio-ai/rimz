@@ -3829,6 +3829,94 @@ fn background_shell_reports_handle_edges_guards_and_queued_post_tool_use() {
 }
 
 #[test]
+fn bare_compact_user_row_leaves_transcript_fold_state_and_activity_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let fold_lines = |lines: &[String]| {
+        write_transcript_named(
+            dir.path(),
+            SESSION_ID,
+            "transcript_full.jsonl",
+            &lines.join("\n"),
+        );
+        session::discover_under(dir.path(), workspace).remove(0)
+    };
+    let checkpoint = record(5, "SYSTEM", "CHECKPOINT", "DONE", AT_12, "summary").to_string();
+
+    // At rest: bare /compact (wrapped or unwrapped) + checkpoint leaves status, prompt, and
+    // activity identical.
+    let rested = vec![
+        user_record(0, AT_09, "start"),
+        planner_record(1, AT_10, None),
+    ];
+    let rested_obs = fold_lines(&rested);
+    let rested_state = local_state(&rested_obs);
+    assert_eq!(
+        (rested_state.status, rested_state.phase),
+        (AgentStatus::Success, TurnPhase::Idle)
+    );
+    for (label, compact_content) in [
+        ("wrapped", "<USER_REQUEST>\n/compact\n</USER_REQUEST>"),
+        ("unwrapped", "/compact"),
+    ] {
+        let mut with_compact = rested.clone();
+        with_compact.push(user_record(2, AT_12, compact_content));
+        with_compact.push(checkpoint.clone());
+        let after = fold_lines(&with_compact);
+        assert_eq!(
+            local_state(&after),
+            rested_state,
+            "{label} /compact at rest must keep status, phase, and latest prompt"
+        );
+        assert_eq!(
+            after.last_activity, rested_obs.last_activity,
+            "{label} /compact at rest must not advance last_activity"
+        );
+    }
+
+    // Parked turn (live capture): lines 0..4 vs lines 0..6 (with /compact + CHECKPOINT) keep
+    // status, phase, latest prompt, and last_activity unchanged instead of flipping to Reasoning.
+    let captured: Vec<String> = include_str!("tests/fixtures/compaction/parked-transcript.jsonl")
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect();
+    let before_compact = fold_lines(&captured[..4]);
+    let after_compact = fold_lines(&captured[..6]);
+    assert_eq!(
+        (
+            local_state(&before_compact).status,
+            local_state(&before_compact).phase
+        ),
+        (AgentStatus::Running, TurnPhase::Parked)
+    );
+    assert_eq!(
+        local_state(&after_compact),
+        local_state(&before_compact),
+        "bare /compact on a parked turn must keep Parked state and latest prompt"
+    );
+    assert_eq!(
+        after_compact.last_activity, before_compact.last_activity,
+        "bare /compact on a parked turn must not advance last_activity"
+    );
+
+    // `/compact <message>` is still an ordinary user turn start.
+    let mut with_instruction = rested;
+    with_instruction.push(user_record(2, AT_12, "/compact focus on tests"));
+    let instructed = fold_lines(&with_instruction);
+    assert_eq!(
+        (
+            local_state(&instructed).status,
+            local_state(&instructed).phase
+        ),
+        (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+    assert_eq!(
+        local_state(&instructed).latest_prompt.as_deref(),
+        Some("/compact focus on tests")
+    );
+}
+
+#[test]
 fn transcript_questions_project_and_clear_native_waits() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = Path::new("/workspace/project");
