@@ -91,24 +91,45 @@ pub enum PromptComposeErr {
     Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
-/// Compose one complete replacement prompt and decide the artifact to write.
-///
-/// Profile validation has already settled support and the prompt fields. A read
-/// here can still fail if a file disappears between that check and the launch;
-/// that race is a launch failure, never a silent fallback.
-pub(super) fn plan_system_prompt(
+/// Read and compose the system prompt sources for `kind`, validating adapter
+/// support and base presence without materializing an artifact yet.
+pub(super) fn read_system_prompt(
     kind: &AgentKind,
     sources: &SystemPromptSources,
+) -> Result<Option<String>, PromptComposeErr> {
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let adapter = crate::agents::find_definition(kind.as_str())
+        .ok_or_else(|| PromptComposeErr::UnknownAdapter { kind: kind.clone() })?;
+    let agent = adapter.spec().kind;
+    adapter
+        .spec()
+        .launch
+        .preset_arg_matcher(PresetField::SystemPromptFile)
+        .ok_or(PromptComposeErr::Unsupported { agent })?;
+    read_composed(sources, agent).map(Some)
+}
+
+/// Materialize an already-composed (and optionally rewritten) system prompt and
+/// decide whether it needs an artifact file. When `rewritten` is true, even a
+/// lone-file base on a path kind gets an artifact so the provider reads the
+/// rewritten text rather than the author's file.
+pub(super) fn materialize_system_prompt(
+    kind: &AgentKind,
+    sources: &SystemPromptSources,
+    composed: Option<String>,
+    rewritten: bool,
     runtime: &RuntimePaths,
 ) -> Result<SystemPromptPlan, PromptComposeErr> {
-    if sources.is_empty() {
+    let Some(composed) = composed else {
         return Ok(SystemPromptPlan {
             sources: sources.clone(),
             composed: None,
             artifact: None,
             materialized: MaterializedSystemPrompt::default(),
         });
-    }
+    };
     let adapter = crate::agents::find_definition(kind.as_str())
         .ok_or_else(|| PromptComposeErr::UnknownAdapter { kind: kind.clone() })?;
     let agent = adapter.spec().kind;
@@ -117,8 +138,6 @@ pub(super) fn plan_system_prompt(
         .launch
         .preset_arg_matcher(PresetField::SystemPromptFile)
         .ok_or(PromptComposeErr::Unsupported { agent })?;
-
-    let composed = read_composed(sources, agent)?;
     // The provider's agent file carries the text; compile plans it once the reminder exists.
     if matches!(matcher, PresetArgMatcher::AgentFile(_)) {
         return Ok(SystemPromptPlan {
@@ -129,6 +148,7 @@ pub(super) fn plan_system_prompt(
         });
     }
     let artifact = (sources.composes()
+        || rewritten
         || matches!(matcher, PresetArgMatcher::EnvConfigMember { .. })
         || sources
             .system_prompt_file
@@ -149,6 +169,21 @@ pub(super) fn plan_system_prompt(
         artifact,
         materialized,
     })
+}
+
+/// Compose one complete replacement prompt and decide the artifact to write.
+///
+/// Profile validation has already settled support and the prompt fields. A read
+/// here can still fail if a file disappears between that check and the launch;
+/// that race is a launch failure, never a silent fallback.
+#[cfg(test)]
+pub(super) fn plan_system_prompt(
+    kind: &AgentKind,
+    sources: &SystemPromptSources,
+    runtime: &RuntimePaths,
+) -> Result<SystemPromptPlan, PromptComposeErr> {
+    let composed = read_system_prompt(kind, sources)?;
+    materialize_system_prompt(kind, sources, composed, false, runtime)
 }
 
 pub(super) fn apply_system_prompt(plan: &SystemPromptPlan) -> Result<(), PromptComposeErr> {

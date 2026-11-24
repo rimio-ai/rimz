@@ -1298,3 +1298,223 @@ fn a_grant_leaves_a_prompt_reference_outside_it_unreachable() {
         ]
     );
 }
+
+#[test]
+fn prompt_rewrite_resolves_capabilities_and_skill_shorthand_by_reach() {
+    let room = Room::new();
+    let skills_root = Path::new(&room.ambient["CLAUDE_CONFIG_DIR"]).join("skills");
+    for name in ["rimz-lsp", "rimz-wait", "rimz-reflect"] {
+        let dir = skills_root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: test\n---\nBody.\n").unwrap();
+    }
+    let body = "Tools: rimz(lsp), rimz(subagents), rimz(agents), rimz(teams), rimz(loop), \
+                rimz(control), rimz(reflect), rimz(nope). Author: skill(rimz-lsp), \
+                skill(rimz-notes), skill(other), mcp(custom), Skill(rimz-lsp), \
+                Agent(explorer), subagent(explorer).";
+    let mut request = launch("claude", None, &[]);
+    request.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: room.project.path().join("prompt.md"),
+        text: body.to_owned(),
+    });
+
+    let served = room.compile(&switches(true, true), &request);
+    assert_eq!(
+        served.prompt.composed.as_deref(),
+        Some(
+            "Tools: mcp(lsp), mcp(subagent), mcp(agent), mcp(team), mcp(schedule), \
+             mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt), \
+             skill(rimz-reflect), rimz(nope). Author: mcp(lsp), mcp(notes), skill(other), \
+             mcp(custom), Skill(rimz-lsp), Agent(explorer), subagent(explorer)."
+        )
+    );
+    let unreachable = |plan: &LaunchPlan| -> Vec<String> {
+        plan.warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                LaunchPlanWarning::UnreachableCapability(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(unreachable(&served), ["nope"]);
+
+    let skills_only = room.compile(&switches(true, false), &request);
+    assert_eq!(
+        skills_only.prompt.composed.as_deref(),
+        Some(
+            "Tools: skill(rimz-lsp), rimz(subagents), rimz(agents), rimz(teams), rimz(loop), \
+             rimz(control), skill(rimz-reflect), rimz(nope). Author: skill(rimz-lsp), \
+             skill(rimz-notes), skill(other), mcp(custom), Skill(rimz-lsp), Agent(explorer), \
+             subagent(explorer)."
+        )
+    );
+    assert_eq!(
+        unreachable(&skills_only),
+        [
+            "agents",
+            "control",
+            "loop",
+            "nope",
+            "notes",
+            "subagents",
+            "teams"
+        ]
+    );
+}
+
+#[test]
+fn prompt_rewrite_reaches_every_prompt_channel_and_keeps_unmodified_author_files() {
+    let room = Room::new();
+    let home = Path::new(&room.ambient["HOME"]);
+    let skill_dir = home.join(".rimz/skills/rimz-lsp");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: rimz-lsp\n---\nBody.\n",
+    )
+    .unwrap();
+
+    // Lone-file base on a path kind: rewritten text gets an artifact; untouched text keeps the
+    // author's own file path.
+    let rewritten_file = room.project.path().join("rewritten.md");
+    std::fs::write(&rewritten_file, "Use rimz(lsp) here.\n").unwrap();
+    let mut claude = launch("claude", None, &[]);
+    claude.system_prompt_file = Some(rewritten_file.clone().into());
+    let plan = room.compile(&switches(true, true), &claude);
+    let artifact = plan
+        .prompt
+        .artifact
+        .as_ref()
+        .expect("rewritten lone file plans an artifact");
+    assert_ne!(artifact, &rewritten_file);
+    assert_eq!(
+        flag_values(&plan.process().provider_argv, "--system-prompt-file"),
+        [artifact.to_string_lossy().as_ref()]
+    );
+    prompt_compose::apply_system_prompt(&plan.prompt).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(artifact).unwrap(),
+        "Use mcp(lsp) here.\n"
+    );
+
+    let plain_file = room.project.path().join("plain.md");
+    std::fs::write(&plain_file, "No shorthand here.\n").unwrap();
+    claude.system_prompt_file = Some(plain_file.clone().into());
+    let plain_plan = room.compile(&switches(true, true), &claude);
+    assert_eq!(plain_plan.prompt.artifact, None);
+    assert_eq!(
+        flag_values(&plain_plan.process().provider_argv, "--system-prompt-file"),
+        [plain_file.to_string_lossy().as_ref()]
+    );
+
+    let skill_file = room.project.path().join("skill-ref.md");
+    std::fs::write(&skill_file, "Use skill(rimz-lsp) here.\n").unwrap();
+    claude.system_prompt_file = Some(skill_file.clone().into());
+    let unchanged_skill = room.compile(&switches(true, false), &claude);
+    assert_eq!(unchanged_skill.prompt.artifact, None);
+    assert_eq!(
+        unchanged_skill.prompt.composed.as_deref(),
+        Some("Use skill(rimz-lsp) here.\n")
+    );
+    assert!(
+        !unchanged_skill
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, LaunchPlanWarning::UnreachableCapability(_)))
+    );
+
+    let unreachable_skill_file = room.project.path().join("unreachable-skill-ref.md");
+    std::fs::write(&unreachable_skill_file, "Use skill(rimz-notes) here.\n").unwrap();
+    claude.system_prompt_file = Some(unreachable_skill_file.clone().into());
+    let unreachable_skill = room.compile(&switches(true, false), &claude);
+    assert_eq!(unreachable_skill.prompt.artifact, None);
+    assert_eq!(
+        unreachable_skill.prompt.composed.as_deref(),
+        Some("Use skill(rimz-notes) here.\n")
+    );
+    assert!(
+        unreachable_skill
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, LaunchPlanWarning::UnreachableCapability(name) if name == "notes"))
+    );
+
+    // TextFlag kind (Pi): argv carries the rewritten text.
+    let mut pi = launch("pi", None, &[]);
+    pi.system_prompt_file = Some(rewritten_file.clone().into());
+    let pi_plan = room.compile(&switches(true, false), &pi);
+    assert_eq!(
+        flag_values(&pi_plan.process().provider_argv, "--system-prompt"),
+        ["Use skill(rimz-lsp) here.\n"]
+    );
+
+    // AgentFile kind (Antigravity): the generated agent file carries the rewritten text.
+    let mut agy = launch("antigravity", None, &[]);
+    agy.system_prompt_file = Some(rewritten_file.clone().into());
+    let agy_plan = room.compile(&switches(true, true), &agy);
+    let agent_file = agy_plan.agent_file.as_ref().expect("agent file");
+    let contents = String::from_utf8_lossy(&agent_file.bytes);
+    assert!(contents.contains("Use mcp(lsp) here."), "{contents}");
+    assert!(!contents.contains("rimz(lsp)"), "{contents}");
+
+    // EnvConfigMember kind (OpenCode): artifact carries the rewritten text.
+    let mut opencode = launch("opencode", None, &[]);
+    opencode.system_prompt_file = Some(rewritten_file.into());
+    let opencode_plan = room.compile(&switches(true, false), &opencode);
+    assert_eq!(
+        opencode_plan.prompt.composed.as_deref(),
+        Some("Use skill(rimz-lsp) here.\n")
+    );
+    assert!(opencode_plan.prompt.artifact.is_some());
+}
+
+#[test]
+fn system_prompt_digest_tracks_the_rewritten_text_across_reaches_and_replays() {
+    let room = Room::new();
+    let skills_root = Path::new(&room.ambient["CLAUDE_CONFIG_DIR"]).join("skills");
+    let dir = skills_root.join("rimz-lsp");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), "---\nname: rimz-lsp\n---\nBody.\n").unwrap();
+
+    let prompt_file = room.project.path().join("digest.md");
+    std::fs::write(&prompt_file, "Query with rimz(lsp).\n").unwrap();
+    let mut req = launch("claude", None, &[]);
+    req.system_prompt_file = Some(prompt_file.clone().into());
+
+    let tool_a = room.compile(&switches(true, true), &req);
+    let tool_b = room.compile(&switches(true, true), &req);
+    let skill = room.compile(&switches(true, false), &req);
+    assert_eq!(tool_a.system_prompt_digest, tool_b.system_prompt_digest);
+    assert_ne!(tool_a.system_prompt_digest, skill.system_prompt_digest);
+
+    for action in [
+        ExecAction::Resume {
+            session_id: "sess-1".into(),
+            extra_args: Vec::new(),
+        },
+        ExecAction::Fork {
+            session_id: "sess-1".into(),
+            extra_args: Vec::new(),
+        },
+    ] {
+        let mut replay = request("claude", action);
+        replay.system_prompt_file = Some(prompt_file.clone().into());
+        let plan = room.compile(&switches(true, true), &replay);
+        assert_eq!(
+            plan.prompt.composed.as_deref(),
+            Some("Query with mcp(lsp).\n")
+        );
+        assert_eq!(plan.system_prompt_digest, tool_a.system_prompt_digest);
+    }
+
+    let plain_file = room.project.path().join("plain-digest.md");
+    std::fs::write(&plain_file, "Plain text.\n").unwrap();
+    req.system_prompt_file = Some(plain_file.into());
+    assert_eq!(
+        room.compile(&switches(true, true), &req)
+            .system_prompt_digest,
+        room.compile(&switches(true, false), &req)
+            .system_prompt_digest
+    );
+}

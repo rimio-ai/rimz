@@ -6177,7 +6177,8 @@ allowed-dependencies = [
 # Composed prompts can be planned without materializing their artifacts.
 # Prompt sources carry the team layer that `agents explain` lists.
 # Prompt pieces are config's PromptSource, a file or a definition's text.
-surface-budget = 14
+# read_system_prompt and materialize_system_prompt split prompt reading from artifact materialization so launch_plan::compile can rewrite after capability reach is known (+1 net).
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/harness/workflow"
