@@ -2704,79 +2704,39 @@ fn session_row_moves_a_provisional_key_only_to_its_one_unended_adopter() {
 }
 
 #[test]
-fn a_provider_rest_settles_only_a_turn_the_hooks_hold_open() {
-    let observed_at = Timestamp::from_second(1_050).unwrap();
-    let interrupted = |at| {
-        Some(TurnSettle::new(
-            Timestamp::from_second(at).unwrap(),
-            TurnSettleOutcome::Interrupted,
-        ))
-    };
+fn a_provider_rest_interrupts_only_a_turn_the_hooks_hold_open() {
+    let reported_at = Timestamp::from_second(1_050).unwrap();
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     parked.phase = TurnPhase::Parked;
     let mut settled = test_agent(AgentStatus::Running, 1_000);
     settled.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
-    let mut stale = test_agent(AgentStatus::Running, 1_000);
-    stale.context = Some(context_settle(Some(990), TurnSettleOutcome::Interrupted));
-    let mut asking = test_agent(AgentStatus::Running, 1_000);
-    asking.context = Some(context_settle(Some(1_010), TurnSettleOutcome::NativeWait));
-    for (label, row, expected) in [
-        (
-            "an admitted interrupt keeps its time",
-            Some(settled),
-            interrupted(1_010),
-        ),
-        (
-            "running",
-            Some(test_agent(AgentStatus::Running, 1_000)),
-            interrupted(1_050),
-        ),
-        ("a superseded interrupt", Some(stale), interrupted(1_050)),
-        ("a native prompt", Some(asking), interrupted(1_050)),
-        (
-            "waiting",
-            Some(test_agent(AgentStatus::Waiting, 1_000)),
-            interrupted(1_050),
-        ),
-        ("parked", Some(parked), None),
+    let cases = [
+        ("running", test_agent(AgentStatus::Running, 1_000)),
+        ("a settled interrupt on a running row", settled),
+        ("waiting", test_agent(AgentStatus::Waiting, 1_000)),
+        ("parked", parked),
         (
             "activity as new as the rest",
-            Some(test_agent(AgentStatus::Running, 1_050)),
-            None,
+            test_agent(AgentStatus::Running, 1_050),
         ),
-        ("idle", Some(test_agent(AgentStatus::Idle, 1_000)), None),
-        (
-            "success",
-            Some(test_agent(AgentStatus::Success, 1_000)),
-            None,
-        ),
-        ("failed", Some(test_agent(AgentStatus::Failed, 1_000)), None),
-        ("no row", None, None),
-    ] {
-        assert_eq!(
-            super::provider_rest_settle(row.as_ref(), observed_at),
-            expected,
-            "{label}"
-        );
-    }
-}
-
-#[test]
-fn a_rest_after_a_turn_end_leaves_an_owed_continue_owed() {
-    let queued_at = Timestamp::from_second(1_000).unwrap();
-    let mut row = test_agent(AgentStatus::Success, 1_010);
-    row.soft_compact = Some(SoftCompactMark {
-        compactions: Some(0),
-        continue_owed: Some(OwedContinue {
-            message_id: crate::ids::MessageId::new(),
-            queued_at,
-        }),
-    });
-    row.context = Some(AgentContext {
-        settle: super::provider_rest_settle(Some(&row), Timestamp::from_second(1_020).unwrap()),
-        ..AgentContext::new("antigravity", Timestamp::from_second(1_020).unwrap())
-    });
-    assert!(row.soft_compact_in_flight());
+        ("idle", test_agent(AgentStatus::Idle, 1_000)),
+        ("success", test_agent(AgentStatus::Success, 1_000)),
+        ("failed", test_agent(AgentStatus::Failed, 1_000)),
+    ];
+    let interrupts = cases.map(|(label, row)| (label, row.rest_interrupts_turn(reported_at)));
+    assert_eq!(
+        interrupts,
+        [
+            ("running", true),
+            ("a settled interrupt on a running row", true),
+            ("waiting", true),
+            ("parked", false),
+            ("activity as new as the rest", false),
+            ("idle", false),
+            ("success", false),
+            ("failed", false),
+        ]
+    );
 }
 
 #[test]

@@ -463,6 +463,8 @@ upward-dependencies = ["address"]
 # skills::rimz_skills gives the launch plan and `rimz agents validate` one on-disk inventory of
 # the rimz-* skills (+1).
 # ContextObservation::provider_at_rest tells the statusline feed the provider reports itself at rest (+1).
+# PROVIDER_REST_EVENT, HookOutput::reports_provider_rest and AgentState::rest_interrupts_turn let the
+# statusline feed append a rest report that the hook transaction decides in log order (+3).
 # Background scripts, their report, and the shown threshold are folded by store and drawn by the renderer (+3).
 # applied_tools gives explain the tools a kind's argv applies; launch_callable is the one
 # grant-aware skill rule both skill enforcers apply (+2).
@@ -470,7 +472,7 @@ upward-dependencies = ["address"]
 # account_history_shareable, foreign_login, and decode_hook_in for the frame's login (+4).
 # MessageKeys and agents::message_keys give delivery and the budget park each agent's declared
 # key sequences, read by kind (+4).
-surface-budget = 1345
+surface-budget = 1348
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2544,7 +2546,6 @@ path = "crates/rimz/src/harness"
 # build (+1).
 # plan::check_subagent_profile_spec is the one --subagent-profile refusal for launch, explain, and loop add (+1).
 # +1: workflow::directory_name, the one run-name rule the CLI's show and validate share.
-# hook_drain::provider_rest_settle asks a drainer and reads the row for the statusline feed (+1).
 # ExecRequest::cannot_delegate tells explain that a child or judge launch has no subagents (+1).
 # hook_drain::login_env gives lifecycle code the login of the frame being applied (+1).
 # `check_start_input` is the one reading of a run's start input, for the command and the tool (+1).

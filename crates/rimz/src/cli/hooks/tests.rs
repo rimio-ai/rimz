@@ -1676,23 +1676,126 @@ fn feed_antigravity(
     .unwrap();
 }
 
-fn feed_antigravity_statusline(store: &rimz::Store, agent_id: &str, fields: serde_json::Value) {
-    feed_antigravity_statusline_in(store, agent_id, fields, &std::collections::BTreeMap::new());
+fn feed_antigravity_statusline(
+    store: &rimz::Store,
+    agent_id: &str,
+    fields: serde_json::Value,
+) -> Vec<rimz::store::ingress::HookIngress> {
+    feed_antigravity_statusline_in(store, agent_id, fields, &std::collections::BTreeMap::new())
 }
 
+/// Feed one statusline payload, then apply the hook frames it appended in log order, as the
+/// drainer does, and return them.
 fn feed_antigravity_statusline_in(
     store: &rimz::Store,
     agent_id: &str,
     fields: serde_json::Value,
     env: &std::collections::BTreeMap<String, String>,
-) {
-    let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
-    let mut payload = fields;
-    payload["conversation_id"] = serde_json::json!(agent_id);
-    let observation = agent.observe_context("antigravity", &payload).unwrap();
+) -> Vec<rimz::store::ingress::HookIngress> {
+    let (payload, observation) = observe_antigravity_statusline(agent_id, fields);
     // The hook and the statusline stamp their own clocks; keep them apart.
     std::thread::sleep(std::time::Duration::from_millis(2));
-    crate::cli::statusline::persist_observation(store, agent, &payload, observation, env).unwrap();
+    let from = ingress_len(store);
+    persist_antigravity_statusline(store, &payload, observation, env);
+    apply_antigravity_frames_from(store, from)
+}
+
+fn observe_antigravity_statusline(
+    agent_id: &str,
+    fields: serde_json::Value,
+) -> (serde_json::Value, rimz::agents::context::ContextObservation) {
+    let mut payload = fields;
+    payload["conversation_id"] = serde_json::json!(agent_id);
+    let observation = rimz::agents::definition_by_kind("antigravity")
+        .unwrap()
+        .observe_context("antigravity", &payload)
+        .unwrap();
+    (payload, observation)
+}
+
+fn persist_antigravity_statusline(
+    store: &rimz::Store,
+    payload: &serde_json::Value,
+    observation: rimz::agents::context::ContextObservation,
+    env: &std::collections::BTreeMap<String, String>,
+) {
+    let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
+    crate::cli::statusline::persist_observation(store, agent, payload, observation, env).unwrap();
+}
+
+fn ingress_len(store: &rimz::Store) -> u64 {
+    std::fs::metadata(&store.paths().hook_ingress_log).map_or(0, |metadata| metadata.len())
+}
+
+fn apply_antigravity_frames_from(
+    store: &rimz::Store,
+    from: u64,
+) -> Vec<rimz::store::ingress::HookIngress> {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    if ingress_len(store) == from {
+        return Vec::new();
+    }
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let (frames, _) = rimz::store::ingress::read_from_offset(store.paths(), from).unwrap();
+    let frames: Vec<_> = frames.into_iter().map(|(frame, _)| frame).collect();
+    for frame in &frames {
+        let payload: serde_json::Value = serde_json::from_str(&frame.payload).unwrap();
+        let event = frame.event.as_deref().unwrap();
+        with_frame_env(frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap()
+        });
+    }
+    frames
+}
+
+/// The lifecycle signals the log holds for `agent_id`, in log order.
+fn antigravity_signals(store: &rimz::Store, agent_id: &str) -> Vec<LifecycleSignal> {
+    store
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|envelope| match envelope.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload
+                    .observation
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == agent_id) =>
+            {
+                Some(payload.observation.signal)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn queue_antigravity_continue(store: &rimz::Store, agent_id: &str) {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender, SoftCompactStep};
+    let mut message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &antigravity_row(store, agent_id),
+        "continue".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System);
+    message.soft_compact = Some(SoftCompactStep::Continue);
+    store.queue_message(&message, "main").unwrap();
+}
+
+fn antigravity_continue_owed(store: &rimz::Store, agent_id: &str) -> bool {
+    antigravity_row(store, agent_id)
+        .soft_compact
+        .is_some_and(|mark| mark.continue_owed.is_some())
 }
 
 fn antigravity_row(store: &rimz::Store, agent_id: &str) -> rimz::agents::AgentState {
@@ -2361,45 +2464,330 @@ fn grok_child_session_hooks_resolve_children_under_the_spawning_parent() {
 }
 
 #[test]
-fn an_antigravity_idle_settles_only_a_turn_its_hooks_hold_open() {
+fn an_antigravity_rest_report_interrupts_only_a_turn_its_hooks_hold_open() {
     let (_dir, store) = hooks_test_store();
     let idle = || serde_json::json!({"agent_state": "idle"});
+    let interrupted = LifecycleSignal::TurnInterrupted { turn_id: None };
 
     start_antigravity_turn(&store, "escaped");
+    let frames = feed_antigravity_statusline(&store, "escaped", idle());
+    assert_eq!(frames.len(), 1);
     assert_eq!(
-        antigravity_row(&store, "escaped").effective_status(jiff::Timestamp::now()),
-        rimz::agents::AgentStatus::Running
+        antigravity_signals(&store, "escaped").last(),
+        Some(&interrupted),
+        "an Escape records the interrupt"
     );
-    feed_antigravity_statusline(&store, "escaped", idle());
-    let first = stored_settle(&store, "escaped").expect("an Escape settles the turn");
-    assert_eq!(first.outcome, rimz::agents::TurnSettleOutcome::Interrupted);
-    assert_eq!(
-        antigravity_row(&store, "escaped").effective_status(jiff::Timestamp::now()),
-        rimz::agents::AgentStatus::Idle
-    );
-    feed_antigravity_statusline(
-        &store,
-        "escaped",
-        serde_json::json!({"agent_state": "idle", "quota": {}}),
-    );
+    let escaped = antigravity_row(&store, "escaped");
+    assert_eq!(escaped.status, rimz::agents::AgentStatus::Idle);
     assert_eq!(
         stored_settle(&store, "escaped"),
-        Some(first),
-        "a re-emitted idle keeps the first settle's time"
+        None,
+        "no settle is written"
+    );
+    let recorded = antigravity_signals(&store, "escaped").len();
+    assert_eq!(
+        feed_antigravity_statusline(&store, "escaped", idle()).len(),
+        1
+    );
+    assert_eq!(
+        antigravity_signals(&store, "escaped").len(),
+        recorded,
+        "a re-emitted idle on a rested row records nothing"
+    );
+    assert_eq!(
+        antigravity_row(&store, "escaped").last_activity,
+        escaped.last_activity
+    );
+}
+
+#[test]
+fn an_antigravity_rest_after_a_turn_end_changes_nothing_and_leaves_an_owed_continue_owed() {
+    let (_dir, store) = hooks_test_store();
+    start_antigravity_turn(&store, "finished");
+    queue_antigravity_continue(&store, "finished");
+    stop_antigravity_turn(&store, "finished", true);
+    assert!(antigravity_continue_owed(&store, "finished"));
+    let (payload, observation) =
+        observe_antigravity_statusline("finished", serde_json::json!({"agent_state": "idle"}));
+    let from = ingress_len(&store);
+    persist_antigravity_statusline(
+        &store,
+        &payload,
+        observation,
+        &std::collections::BTreeMap::new(),
+    );
+    let before = antigravity_row(&store, "finished");
+    let signals = antigravity_signals(&store, "finished");
+    let sidecar =
+        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "finished");
+
+    assert_eq!(apply_antigravity_frames_from(&store, from).len(), 1);
+    let after = antigravity_row(&store, "finished");
+    assert_eq!(antigravity_signals(&store, "finished"), signals);
+    assert_eq!(
+        (after.status, after.last_activity, after.context.clone()),
+        (before.status, before.last_activity, before.context.clone())
+    );
+    assert_eq!(after.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "finished"),
+        sidecar
+    );
+    assert!(antigravity_continue_owed(&store, "finished"));
+}
+
+#[test]
+fn an_antigravity_rest_report_rests_a_waiting_row_and_closes_its_ask() {
+    let (_dir, store) = hooks_test_store();
+    start_antigravity_turn(&store, "asking");
+    let workspace = hooks_test_workspace(Some("main"));
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("asking")),
+        LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind: rimz::agents::AskKind::Permission,
+            ask_id: Some(rimz::ids::AskId::new()),
+            detail: None,
+            native_key: None,
+        },
+    );
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event_name: "Ask",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let waiting = antigravity_row(&store, "asking");
+    assert_eq!(waiting.status, rimz::agents::AgentStatus::Waiting);
+    assert!(waiting.open_ask.is_some());
+
+    feed_antigravity_statusline(&store, "asking", serde_json::json!({"agent_state": "idle"}));
+    let rested = antigravity_row(&store, "asking");
+    assert_eq!(
+        (rested.status, rested.open_ask.is_some()),
+        (rimz::agents::AgentStatus::Idle, false)
+    );
+}
+
+#[test]
+fn an_antigravity_rest_report_leaves_a_parked_or_newer_turn_alone() {
+    let (_dir, store) = hooks_test_store();
+    let idle = || serde_json::json!({"agent_state": "idle"});
+    let interrupts = |agent_id: &str| {
+        antigravity_signals(&store, agent_id)
+            .iter()
+            .filter(|signal| matches!(signal, LifecycleSignal::TurnInterrupted { .. }))
+            .count()
+    };
+
+    start_antigravity_turn(&store, "parked");
+    stop_antigravity_turn(&store, "parked", false);
+    assert_eq!(
+        feed_antigravity_statusline(&store, "parked", idle()).len(),
+        1
+    );
+    assert_eq!(interrupts("parked"), 0, "a turn parked on background work");
+
+    // agy reads idle before a new turn's first hook; the report lands after that hook.
+    start_antigravity_turn(&store, "newer");
+    stop_antigravity_turn(&store, "newer", true);
+    let (payload, observation) = observe_antigravity_statusline("newer", idle());
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    start_antigravity_turn(&store, "newer");
+    let from = ingress_len(&store);
+    persist_antigravity_statusline(
+        &store,
+        &payload,
+        observation,
+        &std::collections::BTreeMap::new(),
+    );
+    assert_eq!(apply_antigravity_frames_from(&store, from).len(), 1);
+    assert_eq!(
+        interrupts("newer"),
+        0,
+        "a report observed before the new turn"
+    );
+    assert_eq!(
+        antigravity_row(&store, "newer").status,
+        rimz::agents::AgentStatus::Running
+    );
+}
+
+#[test]
+fn an_antigravity_escape_after_a_self_compaction_cancels_its_continue_for_good() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    start_antigravity_turn(&store, "compacted");
+    queue_antigravity_continue(&store, "compacted");
+    assert!(antigravity_continue_owed(&store, "compacted"));
+
+    feed_antigravity_statusline(
+        &store,
+        "compacted",
+        serde_json::json!({"agent_state": "idle"}),
+    );
+    let mut owed = vec![antigravity_continue_owed(&store, "compacted")];
+    feed_antigravity_statusline(
+        &store,
+        "compacted",
+        serde_json::json!({"agent_state": "working"}),
+    );
+    owed.push(antigravity_continue_owed(&store, "compacted"));
+    let mut compact = antigravity_payload("compacted");
+    compact["lastUserInput"] = serde_json::json!("/compact");
+    compact["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, adapter, "PreInvocation", compact.clone());
+    owed.push(antigravity_continue_owed(&store, "compacted"));
+    compact["fullyIdle"] = serde_json::json!(true);
+    feed_antigravity(&store, adapter, "Stop", compact);
+    assert!(
+        antigravity_signals(&store, "compacted")
+            .iter()
+            .any(|signal| matches!(signal, LifecycleSignal::CompactionEnded { .. }))
+    );
+    owed.push(antigravity_continue_owed(&store, "compacted"));
+    assert_eq!(
+        owed, [false; 4],
+        "escape, working, compacting, compaction ended"
+    );
+}
+
+#[test]
+fn an_antigravity_rest_report_opens_the_interrupt_hold_of_a_supervised_child() {
+    let (_dir, store) = hooks_test_store();
+    let mut run = rimz::store::run::RunRecord::new(
+        store.paths().workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("antigravity"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    run.agent_id = Some("child".into());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    start_antigravity_turn(&store, "child");
+
+    let env =
+        std::collections::BTreeMap::from([("RIMZ_RUN_ID".to_owned(), run.run_id.to_string())]);
+    let frames = feed_antigravity_statusline_in(
+        &store,
+        "child",
+        serde_json::json!({"agent_state": "idle"}),
+        &env,
+    );
+    assert_eq!(frames.len(), 1);
+    let held = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(
+        (held.status, held.interrupted_at),
+        (rimz::store::run::RunStatus::Running, Some(frames[0].ts))
+    );
+}
+
+#[test]
+fn an_antigravity_statusline_appends_one_rest_frame_only_when_it_reports_rest() {
+    let (_dir, store) = hooks_test_store();
+    start_antigravity_turn(&store, "working");
+    let rows = rimz::testkit::rollup_rows_materialized();
+    let feed = |fields| {
+        let (payload, observation) = observe_antigravity_statusline("working", fields);
+        let observed_at = observation.context.observed_at;
+        let from = ingress_len(&store);
+        persist_antigravity_statusline(
+            &store,
+            &payload,
+            observation,
+            &std::collections::BTreeMap::new(),
+        );
+        let (frames, _) = rimz::store::ingress::read_from_offset(store.paths(), from).unwrap();
+        (
+            frames
+                .into_iter()
+                .map(|(frame, _)| frame)
+                .collect::<Vec<_>>(),
+            observed_at,
+        )
+    };
+    let (working, _) = feed(serde_json::json!({"agent_state": "working"}));
+    let (background, _) = feed(serde_json::json!({"agent_state": "idle", "task_count": 1}));
+    let (rest, observed_at) = feed(serde_json::json!({"agent_state": "idle"}));
+    assert_eq!([working.len(), background.len()], [0, 0]);
+    assert_eq!(
+        rest.iter()
+            .map(|frame| (frame.source.as_str(), frame.event.as_deref(), frame.ts))
+            .collect::<Vec<_>>(),
+        [(
+            "antigravity",
+            Some(rimz::agents::PROVIDER_REST_EVENT),
+            observed_at
+        )]
+    );
+    assert_eq!(stored_settle(&store, "working"), None);
+    assert_eq!(
+        rimz::testkit::rollup_rows_materialized(),
+        rows,
+        "the statusline reads no row"
     );
 
-    start_antigravity_turn(&store, "finished");
-    stop_antigravity_turn(&store, "finished", true);
-    feed_antigravity_statusline(&store, "finished", idle());
-    assert_eq!(
-        stored_settle(&store, "finished"),
-        None,
-        "the idle after a folded Stop writes no settle, so no owed continue is withdrawn"
+    // A failed append still stores the context.
+    let (_dir, store) = hooks_test_store();
+    std::fs::create_dir_all(&store.paths().hook_ingress_log).unwrap();
+    let (payload, observation) =
+        observe_antigravity_statusline("unlogged", serde_json::json!({"agent_state": "idle"}));
+    persist_antigravity_statusline(
+        &store,
+        &payload,
+        observation,
+        &std::collections::BTreeMap::new(),
     );
-    assert_eq!(
-        antigravity_row(&store, "finished").effective_status(jiff::Timestamp::now()),
-        rimz::agents::AgentStatus::Success
+    assert!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "unlogged")
+            .is_some()
     );
+}
+
+#[test]
+fn a_scoped_antigravity_rest_report_with_no_host_drainer_is_dropped() {
+    for host_paths in [false, true] {
+        let (_dir, store) = hooks_test_store();
+        start_antigravity_turn(&store, "scoped");
+        let env = std::collections::BTreeMap::from([if host_paths {
+            (
+                rimz::config::Isolation::SCOPED_HOST_PATHS_ENV.to_owned(),
+                "[]".to_owned(),
+            )
+        } else {
+            (rimz::config::Isolation::ENV.to_owned(), "scoped".to_owned())
+        }]);
+        let frames = feed_antigravity_statusline_in(
+            &store,
+            "scoped",
+            serde_json::json!({"agent_state": "idle"}),
+            &env,
+        );
+        assert_eq!(
+            (
+                frames.len(),
+                store.paths().hook_drain_cursor.exists(),
+                store.runtime_paths().hook_drainer_spawn_lock().exists(),
+            ),
+            (0, false, false),
+            "host paths: {host_paths}: nothing appended, drained, or spawned"
+        );
+        assert!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "scoped")
+                .is_some(),
+            "host paths: {host_paths}"
+        );
+        assert_eq!(
+            antigravity_row(&store, "scoped").status,
+            rimz::agents::AgentStatus::Running,
+            "host paths: {host_paths}"
+        );
+    }
 }
 
 #[test]
@@ -2427,114 +2815,6 @@ fn an_antigravity_parked_turn_reads_success_whichever_of_stop_and_idle_lands_fir
             "stop first: {stop_first}"
         );
     }
-}
-
-#[test]
-fn an_antigravity_idle_whose_drain_fails_stores_its_context_without_a_settle() {
-    let (_dir, store) = hooks_test_store();
-    start_antigravity_turn(&store, "undrained");
-    let ingress = &store.paths().hook_ingress_log;
-    std::fs::create_dir_all(ingress.parent().unwrap()).unwrap();
-    std::fs::write(ingress, b"{}\n").unwrap();
-    let runtime = store.runtime_paths();
-    runtime.ensure_dirs().unwrap();
-    // Held spawn and lifetime locks leave the drain neither a drainer to ask nor a
-    // turn to drain inline, so it runs out its wait.
-    let _spawn = rimz::disk::lock::WorkspaceLock::try_acquire(&runtime.hook_drainer_spawn_lock())
-        .unwrap()
-        .unwrap();
-    let _lifetime = rimz::disk::lock::WorkspaceLock::try_acquire(&runtime.hook_drainer_lock())
-        .unwrap()
-        .unwrap();
-
-    feed_antigravity_statusline(
-        &store,
-        "undrained",
-        serde_json::json!({"agent_state": "idle"}),
-    );
-    assert_eq!(stored_settle(&store, "undrained"), None);
-}
-
-#[test]
-fn an_antigravity_idle_with_no_drainer_answering_asks_only_within_its_bound() {
-    for scoped in [false, true] {
-        let (_dir, store) = hooks_test_store();
-        start_antigravity_turn(&store, "unanswered");
-        let ingress = &store.paths().hook_ingress_log;
-        std::fs::create_dir_all(ingress.parent().unwrap()).unwrap();
-        std::fs::write(ingress, b"{}\n").unwrap();
-        let runtime = store.runtime_paths();
-        runtime.ensure_dirs().unwrap();
-        let mut env = std::collections::BTreeMap::new();
-        // A host feed may spawn a drainer; the held spawn lock makes that spawn start nothing.
-        let _spawn = (!scoped).then(|| {
-            rimz::disk::lock::WorkspaceLock::try_acquire(&runtime.hook_drainer_spawn_lock())
-                .unwrap()
-                .unwrap()
-        });
-        if scoped {
-            env.insert(
-                rimz::config::Isolation::SCOPED_HOST_PATHS_ENV.to_owned(),
-                "[]".to_owned(),
-            );
-        }
-
-        let started = std::time::Instant::now();
-        feed_antigravity_statusline_in(
-            &store,
-            "unanswered",
-            serde_json::json!({"agent_state": "idle"}),
-            &env,
-        );
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
-            "scoped: {scoped}: the ask outran its bound: {:?}",
-            started.elapsed()
-        );
-        assert_eq!(
-            stored_settle(&store, "unanswered"),
-            None,
-            "scoped: {scoped}"
-        );
-        assert!(
-            !store.paths().hook_drain_cursor.exists(),
-            "scoped: {scoped}: the feed drained inline"
-        );
-        if scoped {
-            assert!(
-                !runtime.hook_drainer_spawn_lock().exists(),
-                "a scoped feed spawns no drainer"
-            );
-        }
-    }
-}
-
-#[test]
-fn an_antigravity_statusline_reads_the_row_only_when_it_reports_rest() {
-    let (_dir, store) = hooks_test_store();
-    start_antigravity_turn(&store, "working");
-    let before = rimz::testkit::rollup_rows_materialized();
-    feed_antigravity_statusline(
-        &store,
-        "working",
-        serde_json::json!({"agent_state": "working"}),
-    );
-    feed_antigravity_statusline(
-        &store,
-        "working",
-        serde_json::json!({"agent_state": "idle", "task_count": 1}),
-    );
-    assert_eq!(rimz::testkit::rollup_rows_materialized(), before);
-    assert!(
-        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "working")
-            .is_some()
-    );
-    feed_antigravity_statusline(
-        &store,
-        "working",
-        serde_json::json!({"agent_state": "idle"}),
-    );
-    assert!(rimz::testkit::rollup_rows_materialized() > before);
 }
 
 #[test]
