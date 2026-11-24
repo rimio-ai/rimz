@@ -28,5 +28,5 @@ Local contract for `crates/rimz/src/message/`: delivery of durable text into a r
 - Message content never enters the event log. Terminal text under `audit/messages/` is audit.
 - `fire.rs` runs on the sidebar host's cache-refresh tick, so keep it as light as that path demands.
 - This module resolves targets through the top-level `address` module and never parses addresses itself.
-- A change to the lines a delivery pastes (a header, its line count, the paste order) finds the live-test stand-ins that read a fixed number of lines (`rg -n 'read -r' crates/rimz/tests/integration/journey crates/rimz/tests/integration/backend`) and fixes each one.
+- A change to the lines a delivery pastes (a header, its line count, the paste order) or to the keys it presses finds the live-test stand-ins (`rg -n 'read -r|sleeping_agent_shim' crates/rimz/tests/integration/journey crates/rimz/tests/integration/backend`) and fixes each one: a cooked tty takes Ctrl+S as XOFF, and a `read -r` waits for a newline a non-Enter submit never sends.
 - CLI handlers own flag parsing, rendering, and exit codes. Dispatch conditions, delivery causality, and turn-completion reading live here.
