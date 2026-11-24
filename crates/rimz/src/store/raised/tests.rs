@@ -253,3 +253,20 @@ fn stale_outside_raise_is_refused_and_invalid_records_read_empty() {
     .unwrap();
     assert!(read(&paths).human_turns.is_empty());
 }
+
+#[test]
+fn prepare_raise_without_text_refuses_a_parked_agent_as_not_resting() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    let now = Timestamp::from_second(100).unwrap();
+    let mut agent = AgentState::stub("claude", "parked", AgentStatus::Running);
+    agent.phase = crate::agents::TurnPhase::Parked;
+    agent.registered_at = Some(Timestamp::from_second(10).unwrap());
+    agent.last_prompt_at = Some(Timestamp::from_second(20).unwrap());
+    agent.last_activity = Timestamp::from_second(50).unwrap();
+    let result = prepare_raise(&paths, &agent, false, None, Vec::new(), None, now);
+    assert!(
+        matches!(result, Err(RaisedErr::NotResting)),
+        "expected NotResting for a parked agent, got {result:?}"
+    );
+}

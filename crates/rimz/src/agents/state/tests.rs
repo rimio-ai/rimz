@@ -1488,6 +1488,158 @@ fn rowless_status_keeps_non_pausing_errors_above_operational_parks() {
 }
 
 #[test]
+fn rowless_card_keeps_parked_phase_beside_success_sleeping_and_running() {
+    let now = Timestamp::from_second(2_000).unwrap();
+    let parked_child = || {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.phase = TurnPhase::Parked;
+        agent
+    };
+
+    let bare = parked_child();
+
+    let mut sleeping = parked_child();
+    sleeping.pending_waits.push(PendingWait {
+        class: PendingWaitClass::Sleeping,
+        name: "timer".to_owned(),
+        trigger: PendingWaitTrigger::Timer {
+            due: Timestamp::from_second(2_600).unwrap(),
+            delay: None,
+        },
+        armed_at: Some(Timestamp::from_second(1_010).unwrap()),
+    });
+
+    let mut working = parked_child();
+    working.pending_waits.push(PendingWait {
+        class: PendingWaitClass::Working,
+        name: "build".to_owned(),
+        trigger: PendingWaitTrigger::Command {
+            command: "cargo test".to_owned(),
+        },
+        armed_at: Some(Timestamp::from_second(1_010).unwrap()),
+    });
+
+    let demotion = ParkDemotion::default();
+    let actual: Vec<_> = [("bare", bare), ("sleeping", sleeping), ("working", working)]
+        .into_iter()
+        .map(|(case, agent)| {
+            let (status, phase, label) = agent.rowless_card(&demotion, now);
+            (case, status, phase, label)
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("bare", AgentStatus::Success, TurnPhase::Parked, None),
+            ("sleeping", AgentStatus::Sleeping, TurnPhase::Parked, None),
+            ("working", AgentStatus::Running, TurnPhase::Parked, None),
+        ]
+    );
+}
+
+#[test]
+fn rowless_card_drops_parked_phase_on_errors_refusals_left_model_and_interrupts() {
+    use crate::agents::ProviderCapacity;
+    let now = Timestamp::from_second(2_000).unwrap();
+    let parked_child = || {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.phase = TurnPhase::Parked;
+        agent
+    };
+
+    let mut fatal = parked_child();
+    fatal.context = Some(context_error(TurnErrorClass::Failed, 1_010));
+
+    let mut paused = parked_child();
+    paused.context = Some(context_error(TurnErrorClass::PausedRateLimit, 1_010));
+
+    let spent_demotion = ParkDemotion::new(
+        &BTreeMap::new(),
+        BTreeSet::from([(paused.kind.clone(), paused.agent_id.clone())]),
+        now,
+    );
+
+    let mut budget = parked_child();
+    budget.budget_park = Some(BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 6.0,
+        window: BudgetWindow::Day,
+        at: budget.last_activity,
+        scope: BudgetScope::Fleet,
+        account_kind: None,
+        resets_at: None,
+        reset_window: None,
+    });
+
+    let mut left_model = parked_child();
+    left_model.model = Some("claude-sonnet-4-6".to_owned());
+    let mut left_context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
+    left_context.turn_error.as_mut().unwrap().model = Some("claude-opus-4-6".to_owned());
+    left_model.context = Some(left_context);
+    let left_capacity = ProviderCapacity::default().with_refusal(
+        "claude-opus-4-6",
+        Timestamp::from_second(1_020).unwrap(),
+        "opus limit",
+    );
+    let left_demotion = ParkDemotion::new(
+        &BTreeMap::from([(left_model.login_key(), left_capacity)]),
+        BTreeSet::new(),
+        now,
+    );
+
+    let mut refused = parked_child();
+    refused.model = Some("claude-opus-4-6".to_owned());
+    let refused_capacity = ProviderCapacity::default().with_refusal(
+        "claude-opus-4-6",
+        Timestamp::from_second(1_020).unwrap(),
+        "model refused",
+    );
+    let refused_demotion = ParkDemotion::new(
+        &BTreeMap::from([(refused.login_key(), refused_capacity)]),
+        BTreeSet::new(),
+        now,
+    );
+
+    let mut interrupted = parked_child();
+    interrupted.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
+
+    let mut native_wait = parked_child();
+    native_wait.context = Some(context_settle(Some(1_010), TurnSettleOutcome::NativeWait));
+
+    let default = ParkDemotion::default();
+    let cases = [
+        ("fatal", &fatal, &default),
+        ("paused", &paused, &default),
+        ("spent_paused", &paused, &spent_demotion),
+        ("budget", &budget, &default),
+        ("left_model", &left_model, &left_demotion),
+        ("refused", &refused, &refused_demotion),
+        ("interrupted", &interrupted, &default),
+        ("native_wait", &native_wait, &default),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(name, agent, demotion)| {
+            let (status, phase, _) = agent.rowless_card(demotion, now);
+            (name, status, phase)
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("fatal", AgentStatus::Failed, TurnPhase::Idle),
+            ("paused", AgentStatus::Paused, TurnPhase::Idle),
+            ("spent_paused", AgentStatus::Failed, TurnPhase::Idle),
+            ("budget", AgentStatus::Paused, TurnPhase::Idle),
+            ("left_model", AgentStatus::Idle, TurnPhase::Idle),
+            ("refused", AgentStatus::Failed, TurnPhase::Idle),
+            ("interrupted", AgentStatus::Idle, TurnPhase::Idle),
+            ("native_wait", AgentStatus::Waiting, TurnPhase::Idle),
+        ]
+    );
+}
+
+#[test]
 fn rowless_status_prioritizes_native_input_over_provider_parks() {
     let now = Timestamp::from_second(2_000).unwrap();
     for outcome in [

@@ -370,7 +370,7 @@ A model the provider refuses on an account (a standing record in `model_refusals
 
 Each rung leaves the rollup's lifecycle status untouched. Claude transcript-death can leave the rollup `running` while Codex's `Stop` over a rollout error records it `failed`, and the projection displays either as `paused` when the error class pauses.
 
-On a sidebar row, a projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. A row whose source agent rests at `idle` or `success` drops a non-`parked` phase whatever it displays, so a `running` shown by a child rung or by the rest lift keeps no phase. [`AgentState::rowless_status`](../../../crates/rimz/src/agents/state.rs) keeps a phase only on a `running` result, so a rowless `success` over `parked` reads the `idle` phase. The compaction head pulses over any displayed status.
+On a sidebar row and through [`AgentState::rowless_status`](../../../crates/rimz/src/agents/state.rs) alike, a projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. A row or rowless agent that rests at `idle` or `success` drops a non-`parked` phase whatever it displays, so a `running` shown by a child rung or by the rest lift keeps no phase. The compaction head pulses over any displayed status.
 
 ### Sleeping
 

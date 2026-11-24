@@ -324,10 +324,16 @@ fn finished_clock_stamps_a_clean_end_parked_on_background_work() {
     assert_eq!(
         (
             projected.status,
+            projected.phase,
             projected.finished_at,
             projected.elapsed_secs
         ),
-        (AgentStatus::Success, Some(turn_end), Some(1))
+        (
+            AgentStatus::Success,
+            TurnPhase::Parked,
+            Some(turn_end),
+            Some(1)
+        )
     );
 
     let mut actual = Vec::new();
@@ -339,14 +345,20 @@ fn finished_clock_stamps_a_clean_end_parked_on_background_work() {
         let mut events = parked.clone();
         events.push(lifecycle(3, event_name, signal));
         let row = reduce_agent_states(&events).remove(0);
-        actual.push((event_name, row.status, row.finished_at));
+        let projected = sub_agent_from_state(&row, row.last_activity, false, 1_800);
+        actual.push((event_name, row.status, projected.phase, row.finished_at));
     }
     assert_eq!(
         actual,
         [
-            ("SessionEnd", AgentStatus::Failed, Some(turn_end)),
-            ("ReapedDead", AgentStatus::Idle, None),
-            ("Prompt", AgentStatus::Running, None),
+            (
+                "SessionEnd",
+                AgentStatus::Failed,
+                TurnPhase::Idle,
+                Some(turn_end)
+            ),
+            ("ReapedDead", AgentStatus::Idle, TurnPhase::Idle, None),
+            ("Prompt", AgentStatus::Running, TurnPhase::Reasoning, None),
         ]
     );
 }
