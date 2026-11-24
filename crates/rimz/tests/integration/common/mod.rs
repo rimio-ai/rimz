@@ -59,8 +59,6 @@ pub use shim::{
 pub use skip::{AF_UNIX_SANDBOXED, skip};
 pub use zellij::ZellijNamespace;
 
-pub(crate) const ENV_PROBE_TIMEOUT_MS_ENV: &str = "RIMZ_TEST_ENV_PROBE_TIMEOUT_MS";
-
 /// The private memory a resident `rimz` process (a parked or command wrapper, an idle MCP
 /// server) may hold outside huge pages and its relocated image; docs/internals/performance.md
 /// records the measurements behind it.

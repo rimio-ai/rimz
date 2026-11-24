@@ -5679,7 +5679,7 @@ fn sandboxed_run_timeout_stops_provider() {
     let shim_dir = write_env_dump_shim(&env, "codex");
     std::fs::write(
         shim_dir.join("codex"),
-        "#!/bin/sh\nprintf '%s' \"$$\" > /tmp/provider-pid\nexec /usr/bin/sleep 60\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\nprintf '%s' \"$$\" > /tmp/provider-pid\nexec /usr/bin/sleep 60\n",
     )
     .unwrap();
     let mut request = ExecRequest::bare_launch(run.kind.clone(), Vec::new());
@@ -5781,8 +5781,8 @@ impl ViewWriter {
         run.keep = true;
         rimz::harness::run::create(store.paths(), &run).unwrap();
         let shim_dir = write_env_dump_shim(&env, "codex");
-        // The wrapper probes `--version` on the host, outside the view, and a
-        // writer that inherits the shim's stdio would hang the wrapper.
+        // The session step probes `--version` inside the view before the provider, and a
+        // writer that inherits the shim's stdio would hold that probe's pipes.
         std::fs::write(
             shim_dir.join("codex"),
             "#!/bin/sh\n\

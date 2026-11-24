@@ -349,11 +349,6 @@ fn launch_and_supervise(
         ) {
             return Err(error.into());
         }
-        if adapter.min_version().is_some()
-            && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
-        {
-            rimz::agents::version::check_launch_version_floor(adapter, &path)?;
-        }
     }
     if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,
@@ -1162,9 +1157,9 @@ fn exit_hint(
         }
     };
     if status.code() == Some(rimz::agents::capabilities::SESSION_STEP_REFUSED) {
-        // Only a resume's model switch is refused with its conversation intact.
+        // A refused resume leaves its conversation intact.
         let rerun = if resumable {
-            format!("resume with `{}` and a corrected model", resume())
+            format!("fix it, then resume with `{}`", resume())
         } else {
             format!("relaunch with `{relaunch}`")
         };

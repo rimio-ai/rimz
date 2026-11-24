@@ -1560,11 +1560,6 @@ fn check_cell(
     if let Some(error) = adapter.launch_blocker(cwd, &launch_env, &process.provider_argv) {
         return Err(error.into());
     }
-    if adapter.min_version().is_some()
-        && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
-    {
-        crate::agents::version::check_launch_version_floor(adapter, &path)?;
-    }
     if checked_folder_trust.insert((login.key(), cwd.to_path_buf()))
         && let Some(notice) = trust::preflight(
             cell.kind.as_str(),

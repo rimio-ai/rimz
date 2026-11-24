@@ -84,28 +84,30 @@ fn only_the_run_bearing_recipe_leaves_a_checkout_after_hook_refusal() {
 }
 
 #[test]
-fn path_probe_is_strict_for_runs_and_skipped_for_layouts_without_a_version_floor() {
+fn launching_starts_no_agent_shell_outside_the_pane() {
     let mut observed = Vec::new();
     for supervised in [false, true] {
         let env = Env::new();
-        env.install_agent_hooks("claude");
-        crate::common::trust_claude_project(&env, &env.project_root);
+        // Codex has a version floor, so neither path skips a program check.
+        env.install_agent_hooks("codex");
+        trust_codex_preflight_hooks(&env);
+        trust_codex_project(&env, &env.project_root);
         let _ = launch_command(&env);
         let shell = env.home_root.join("shell-bin/rimz-test-sh");
         let body = std::fs::read_to_string(&shell).unwrap().replacen(
             "#!/bin/sh\n",
-            "#!/bin/sh\ncase \"$*\" in *__RIMZ_ENV_PROBE_START__*) printf 'probe\\n' >> \"$RIMZ_TEST_PATH_PROBES\" ;; esac\n",
+            "#!/bin/sh\nprintf 'start\\n' >> \"$RIMZ_TEST_SHELL_STARTS\"\n",
             1,
         );
         std::fs::write(&shell, body).unwrap();
-        let log = env.home_root.join("path-probes");
-        let agent_bin = write_failing_agent_shim(&env, "claude", 1);
+        let log = env.home_root.join("shell-starts");
+        let agent_bin = write_failing_agent_shim(&env, "codex", 1);
         let workspace = env.resolve_workspace(&env.project_root);
         let mut args = vec![
             "--mux",
             "zellij",
             "agents",
-            "claude",
+            "codex",
             "fix it",
             "--new-tab",
             "--isolation",
@@ -119,7 +121,7 @@ fn path_probe_is_strict_for_runs_and_skipped_for_layouts_without_a_version_floor
             .args(args)
             .env("SHELL", &shell)
             .env("PATH", path_with_front(&agent_bin))
-            .env("RIMZ_TEST_PATH_PROBES", &log)
+            .env("RIMZ_TEST_SHELL_STARTS", &log)
             .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
             .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("launch.log"))
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
@@ -143,7 +145,9 @@ fn path_probe_is_strict_for_runs_and_skipped_for_layouts_without_a_version_floor
                 .count(),
         );
     }
-    assert_eq!(observed, [0, 1]);
+    // The fake multiplexer runs no pane, so every start counted here is one the launching
+    // process made itself.
+    assert_eq!(observed, [0, 0]);
 }
 
 #[test]

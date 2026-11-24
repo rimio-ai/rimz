@@ -443,3 +443,104 @@ fn killing_the_step_closes_the_helpers_stdin_lease() {
     );
     assert!(!env.home_root.join("final-argv").exists());
 }
+
+fn provider_shim(dir: &Path, program: &str, version: &str) -> PathBuf {
+    crate::common::write_path_shim(
+        dir,
+        program,
+        &format!(
+            "if [ \"${{1:-}}\" = --version ]; then {version}; fi\nprintf '%s\\000' \"$@\" > \"$CHECK_LOG/final-argv\"\n"
+        ),
+    )
+}
+
+#[test]
+fn hidden_step_execs_the_program_it_resolves_on_its_own_path_or_refuses() {
+    let missing = "rimz-test-no-such-provider";
+    for (label, version, refuses) in [
+        ("missing", "echo 2.2.0; exit 0", true),
+        ("old", "echo 1.9.0; exit 0", true),
+        ("unreadable", "exit 1", false),
+        ("path", "echo 2.2.0; exit 0", false),
+    ] {
+        let env = Env::new();
+        let dir = env.home_root.join("provider-bin");
+        let shim = provider_shim(&dir, "opencode", version);
+        let (program, path) = match label {
+            "missing" => (missing.to_owned(), path_with_front(&dir)),
+            "path" => (
+                shim.display().to_string(),
+                std::env::var_os("PATH").unwrap(),
+            ),
+            _ => ("opencode".to_owned(), path_with_front(&dir)),
+        };
+        let output = env
+            .rimz()
+            .args(["agents", "session-step", "opencode", "--"])
+            .args([program.as_str(), "--standalone"])
+            .env("CHECK_LOG", &env.home_root)
+            .env("PATH", path)
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !refuses {
+            assert!(output.status.success(), "{label}: {stderr}");
+            assert_eq!(final_args(&env.home_root), ["--standalone"], "{label}");
+            continue;
+        }
+        let reason = if label == "missing" {
+            format!("cannot find `{missing}` on PATH")
+        } else {
+            format!(
+                "opencode 1.9.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
+                shim.display()
+            )
+        };
+        assert_eq!(output.status.code(), Some(78), "{label}: {stderr}");
+        assert_eq!(stderr.trim_end(), format!("rimz: {reason}"), "{label}");
+        assert!(!env.home_root.join("final-argv").exists(), "{label}");
+    }
+}
+
+#[test]
+fn hidden_step_adds_the_changed_prompt_switch_by_the_resolved_claude_version() {
+    for (version, changed, expected) in [
+        ("2.1.257", true, true),
+        ("2.1.256", true, false),
+        ("unknown", true, false),
+        ("2.1.296", false, false),
+    ] {
+        let env = Env::new();
+        let dir = env.home_root.join("provider-bin");
+        provider_shim(
+            &dir,
+            "claude",
+            &format!("echo '{version} (Claude Code)'; exit 0"),
+        );
+        let mut command = env.rimz();
+        command.args(["agents", "session-step", "claude"]);
+        if changed {
+            command.arg("--changed-system-prompt");
+        }
+        let output = command
+            .args(["--", "claude", "--resume", "ses"])
+            .env("CHECK_LOG", &env.home_root)
+            .env("PATH", path_with_front(&dir))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{version}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut args = vec!["--resume", "ses"];
+        if expected {
+            args.extend(["--system-prompt-snapshot", "off"]);
+        }
+        assert_eq!(
+            final_args(&env.home_root),
+            args,
+            "{version} changed={changed}"
+        );
+    }
+}

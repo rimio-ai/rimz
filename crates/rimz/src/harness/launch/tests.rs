@@ -1648,7 +1648,7 @@ fn a_launch_carries_only_its_own_team_and_role() {
                 "-c",
                 "printf '%s/%s' \"${RIMZ_TEAM-unset}\" \"${RIMZ_AGENT_ROLE-unset}\"",
             ]));
-            let output = Command::new(&command[0])
+            let output = std::process::Command::new(&command[0])
                 .args(&command[1..])
                 .envs(&inherited)
                 .envs(&process.env)
@@ -3777,8 +3777,12 @@ fn provider_account_stage_validates_and_reenters_once() {
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");
     };
-    assert_eq!(ordinary.argv, expected.argv);
-    assert_ne!(ordinary.argv, ordinary.provider_argv);
+    let stepped = ["/bin/rimz", "agents", "session-step", "codex", "--"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(expected.provider_argv.iter().cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(ordinary.argv, expected.login_shell_argv(&stepped));
 
     let mut finalized_request = request(
         "qwen",
@@ -4041,89 +4045,6 @@ fn invalid_env_key_reports_the_first_unrepresentable_key() {
     assert_eq!(invalid_env_key(&env(&[("", "one")])), Some(""));
     assert_eq!(invalid_env_key(&env(&[("-BAD", "one")])), Some("-BAD"));
     assert_eq!(invalid_env_key(&env(&[("GOOD_KEY", "one")])), None);
-}
-
-#[test]
-fn program_lookup_uses_path_from_shell_startup() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
-    let agent = bin_dir.join(unique_probe_program());
-    std::fs::write(&agent, "#!/bin/sh\nexit 0\n").expect("write agent");
-    chmod_executable(&agent);
-
-    let shell = dir.path().join("bash");
-    std::fs::write(
-        &shell,
-        format!(
-            "#!/bin/sh\n\
-                 export PATH='{}':\"$PATH\"\n\
-                 while [ \"$#\" -gt 0 ]; do\n\
-                   case \"$1\" in\n\
-                     -c)\n\
-                       shift\n\
-                       script=$1\n\
-                       shift\n\
-                       exec /bin/sh -c \"$script\" \"$@\"\n\
-                       ;;\n\
-                     *) shift ;;\n\
-                   esac\n\
-                 done\n\
-                 exit 127\n",
-            bin_dir.display()
-        ),
-    )
-    .expect("write shell");
-    chmod_executable(&shell);
-
-    assert_eq!(
-        resolve_program_with(
-            Some(&shell),
-            true,
-            &BTreeMap::new(),
-            agent.file_name().unwrap().to_str().unwrap()
-        )
-        .expect("lookup"),
-        Some(agent)
-    );
-}
-
-#[test]
-fn program_lookup_rejects_invalid_launch_env_keys() {
-    let err = resolve_program_with(
-        Some(Path::new("/bin/sh")),
-        true,
-        &env(&[("BAD=KEY", "one")]),
-        "codex",
-    )
-    .expect_err("invalid key");
-
-    assert!(err.to_string().contains("BAD=KEY"));
-}
-
-#[test]
-fn probe_timeout_names_the_shell_that_ran() {
-    let err = ProgramLookupErr::ProbeTimeout {
-        program: "/bin/zsh".to_owned(),
-        timeout: ENV_PROBE_TIMEOUT,
-    };
-
-    assert_eq!(
-        err.to_string(),
-        "launch environment probe `/bin/zsh` timed out after 5s"
-    );
-}
-
-fn unique_probe_program() -> String {
-    format!("rimz-agent-probe-{}", std::process::id())
-}
-
-fn chmod_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = std::fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms).expect("chmod");
 }
 
 #[test]
@@ -4448,43 +4369,6 @@ fn agent_shell_env_beats_a_trusted_project_shell() {
     assert_eq!(composed["SHELL"], bash.display().to_string());
     assert_eq!(composed[ENV_CLAUDE_CODE_SHELL], bash.display().to_string());
     assert_eq!(composed[crate::proc::USER_SHELL_ENV], "/bin/zsh");
-}
-
-#[test]
-fn program_lookup_runs_under_the_configured_agent_shell() {
-    let project = tempfile::tempdir().expect("project");
-    let bin_dir = project.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
-    let agent = bin_dir.join(format!("{}-agent-shell", unique_probe_program()));
-    std::fs::write(&agent, "#!/bin/sh\nexit 0\n").expect("write agent");
-    chmod_executable(&agent);
-    let shell = project.path().join("bash");
-    std::fs::write(
-        &shell,
-        format!(
-            "#!/bin/sh\n\
-             export PATH='{}':\"$PATH\"\n\
-             while [ \"$#\" -gt 0 ]; do\n\
-               case \"$1\" in\n\
-                 -c) shift; script=$1; shift; exec /bin/sh -c \"$script\" \"$@\" ;;\n\
-                 *) shift ;;\n\
-               esac\n\
-             done\n\
-             exit 127\n",
-            bin_dir.display()
-        ),
-    )
-    .expect("write shell");
-    chmod_executable(&shell);
-
-    let mut process =
-        compile_under_agent_shell(project.path(), Some(shell)).expect("compiled process");
-    process.provider_program = agent.file_name().unwrap().to_str().unwrap().to_owned();
-
-    assert_eq!(
-        process.resolve_program_after_shell_rc().expect("lookup"),
-        Some(agent)
-    );
 }
 
 #[test]

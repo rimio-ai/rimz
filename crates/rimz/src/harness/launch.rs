@@ -1,12 +1,8 @@
 //! Provider-process compilation, exec-wrapper argv, and login-shell launch policy.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,12 +17,6 @@ const ENV_BIN: &str = "/usr/bin/env";
 const POSIX_LOGIN_SHELL_SCRIPT: &str = r#"exec /usr/bin/env "$@""#;
 const FISH_LOGIN_SHELL_SCRIPT: &str = "exec /usr/bin/env $argv";
 const POSIX_ARG0: &str = "rimz-agent-launch";
-const ENV_PROBE_SH: &str = "/bin/sh";
-const ENV_PROBE_START: &str = "__RIMZ_ENV_PROBE_START__";
-const ENV_PROBE_END: &str = "__RIMZ_ENV_PROBE_END__";
-const ENV_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const ENV_PROBE_POLL: Duration = Duration::from_millis(25);
-static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// Launch reminders for an adapter whose RimZ extension injects them
@@ -266,42 +256,6 @@ fn agent_shell_env(shell: &Path, user_shell: Option<&Path>) -> BTreeMap<String, 
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ProgramLookupErr {
-    #[error(
-        "launch env key `{0}` is invalid; environment variable names must be non-empty, cannot contain `=`, and cannot start with `-`"
-    )]
-    InvalidEnvKey(String),
-    #[error("launch environment probe produced an empty command")]
-    EmptyProbeCommand,
-    #[error("running launch environment probe `{program}`: {source}")]
-    ProbeSpawn {
-        program: String,
-        #[source]
-        source: io::Error,
-    },
-    #[error("waiting for launch environment probe `{program}`: {source}")]
-    ProbeWait {
-        program: String,
-        #[source]
-        source: io::Error,
-    },
-    #[error("launch environment probe `{program}` timed out after {timeout:?}")]
-    ProbeTimeout { program: String, timeout: Duration },
-    #[error("cannot access launch environment probe output {path}: {source}")]
-    ProbeIo {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("launch environment probe exited with {0}")]
-    ProbeStatus(ExitStatus),
-    #[error("launch environment probe wrote non-UTF-8 output: {0}")]
-    ProbeUtf8(#[from] std::string::FromUtf8Error),
-    #[error("launch environment probe output did not contain its PATH markers")]
-    ProbeOutput,
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
     #[error(transparent)]
     Directory(#[from] crate::agents::LaunchDirRefusal),
@@ -387,7 +341,7 @@ pub struct CompiledAgentProcess {
     pub(super) settings_artifact: Option<crate::agents::skills::LaunchSettingsArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
-    /// Provider executable used by PATH preflight.
+    /// Provider executable, as the launch names it before the step resolves it.
     pub provider_program: String,
     /// Final shell-wrapped command.
     pub argv: Vec<String>,
@@ -397,7 +351,7 @@ pub struct CompiledAgentProcess {
     pub reminder: String,
     /// Environment keys removed before execution and again after shell startup.
     pub unset: BTreeSet<String>,
-    /// The one shell every wrapper and the PATH probe of this launch run under.
+    /// The one shell every wrapper of this launch runs under.
     shell: Option<PathBuf>,
     wrapping: ProcessWrapping,
     session_step_argv: Vec<String>,
@@ -451,15 +405,15 @@ impl CompiledAgentProcess {
         )
     }
 
-    /// Resolve the provider program in the PATH this launch will see after
-    /// its shell's startup files and RimZ's launch env are applied.
-    pub fn resolve_program_after_shell_rc(&self) -> Result<Option<PathBuf>, ProgramLookupErr> {
-        resolve_program_with(
-            self.shell.as_deref(),
-            Path::new(ENV_BIN).is_file(),
-            &self.env,
-            &self.provider_program,
-        )
+    /// Ask this launch's step to add the adapter's changed-system-prompt arguments, which
+    /// depend on the provider version only the step can read.
+    pub(super) fn flag_changed_system_prompt(&mut self) {
+        let Some(separator) = self.session_step_argv.pop() else {
+            return;
+        };
+        self.session_step_argv
+            .extend(["--changed-system-prompt".to_owned(), separator]);
+        self.rebuild_argv();
     }
 }
 
@@ -1882,7 +1836,7 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
         extra_env,
         reminders,
     )?;
-    process.session_step_argv = model_session_step_argv(request, rimz_bin);
+    process.session_step_argv = session_step_argv(request, rimz_bin);
     process.rebuild_argv();
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
@@ -1906,13 +1860,30 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
     finalize_agent_process_stage(process, request, managed_launch.as_ref(), rimz_bin, runtime)
 }
 
-fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String> {
+/// The in-pane step between the launch shell and the provider, which resolves the program
+/// on the pane's PATH and execs it. A pending provider account has none: its stage re-enters
+/// `rimz agents exec`, and the finalized stage that follows carries the step.
+fn session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String> {
     if matches!(
         request.provider_account,
         ProviderAccountState::Pending { .. }
     ) {
         return Vec::new();
     }
+    let mut argv = vec![
+        rimz_bin.display().to_string(),
+        "agents".into(),
+        "session-step".into(),
+        request.kind.to_string(),
+    ];
+    argv.extend(model_step_args(request));
+    argv.push("--".into());
+    argv
+}
+
+/// The model the step prepares, for an adapter with a model session step: a launch's model,
+/// or a resume's explicit model override.
+fn model_step_args(request: &ExecRequest) -> Vec<String> {
     if !crate::agents::spec_by_kind(request.kind.as_str())
         .is_some_and(|spec| spec.launch.model_session_step)
     {
@@ -1934,14 +1905,7 @@ fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String
         }
         _ => return Vec::new(),
     };
-    let mut argv = vec![
-        rimz_bin.display().to_string(),
-        "agents".into(),
-        "session-step".into(),
-        request.kind.to_string(),
-        "--model".into(),
-        model.to_owned(),
-    ];
+    let mut argv = vec!["--model".into(), model.to_owned()];
     if let Some(effort) = request
         .identity
         .params
@@ -1954,7 +1918,6 @@ fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String
     if let Some(session) = session {
         argv.extend(["--session".into(), session.clone()]);
     }
-    argv.push("--".into());
     argv
 }
 
@@ -2451,173 +2414,6 @@ fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
     env.keys()
         .find(|key| !valid_env_key(key))
         .map(String::as_str)
-}
-
-fn resolve_program_with(
-    shell: Option<&Path>,
-    env_bin_available: bool,
-    env: &BTreeMap<String, String>,
-    program: &str,
-) -> Result<Option<PathBuf>, ProgramLookupErr> {
-    let Some(path) = final_launch_path_with(shell, env_bin_available, env)? else {
-        return Ok(None);
-    };
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    Ok(which::which_in(program, Some(path), cwd).ok())
-}
-
-fn final_launch_path_with(
-    shell: Option<&Path>,
-    env_bin_available: bool,
-    env: &BTreeMap<String, String>,
-) -> Result<Option<String>, ProgramLookupErr> {
-    if let Some(key) = invalid_env_key(env) {
-        return Err(ProgramLookupErr::InvalidEnvKey(key.to_owned()));
-    }
-    if !env_bin_available {
-        return Ok(direct_launch_path(env));
-    }
-    let argv = login_shell_argv_with(
-        shell,
-        env_bin_available,
-        env,
-        &BTreeSet::new(),
-        &env_probe_argv(),
-    );
-    let (program, rest) = argv
-        .split_first()
-        .ok_or(ProgramLookupErr::EmptyProbeCommand)?;
-    let (status, stdout) = run_probe_command(program, rest, env)?;
-    if !status.success() {
-        return Err(ProgramLookupErr::ProbeStatus(status));
-    }
-    let stdout = String::from_utf8(stdout)?;
-    parse_probe_path(&stdout)
-}
-
-fn run_probe_command(
-    program: &str,
-    rest: &[String],
-    env: &BTreeMap<String, String>,
-) -> Result<(ExitStatus, Vec<u8>), ProgramLookupErr> {
-    let stdout_path = env_probe_stdout_path();
-    let stdout_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&stdout_path)
-        .map_err(|source| ProgramLookupErr::ProbeIo {
-            path: stdout_path.clone(),
-            source,
-        })?;
-    let spawn = Command::new(program)
-        .args(rest)
-        .envs(env)
-        .stdout(stdout_file)
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    let mut child = match spawn {
-        Ok(child) => child,
-        Err(source) => {
-            remove_probe_stdout(&stdout_path);
-            return Err(ProgramLookupErr::ProbeSpawn {
-                program: program.to_owned(),
-                source,
-            });
-        }
-    };
-    let timeout = env_probe_timeout();
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child
-            .try_wait()
-            .map_err(|source| ProgramLookupErr::ProbeWait {
-                program: program.to_owned(),
-                source,
-            })? {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                remove_probe_stdout(&stdout_path);
-                return Err(ProgramLookupErr::ProbeTimeout {
-                    program: program.to_owned(),
-                    timeout,
-                });
-            }
-            None => std::thread::sleep(ENV_PROBE_POLL),
-        }
-    };
-    let stdout = match std::fs::read(&stdout_path) {
-        Ok(stdout) => stdout,
-        Err(source) => {
-            remove_probe_stdout(&stdout_path);
-            return Err(ProgramLookupErr::ProbeIo {
-                path: stdout_path.clone(),
-                source,
-            });
-        }
-    };
-    remove_probe_stdout(&stdout_path);
-    Ok((status, stdout))
-}
-
-fn env_probe_timeout() -> Duration {
-    #[cfg(any(test, feature = "testkit"))]
-    if let Some(ms) = std::env::var("RIMZ_TEST_ENV_PROBE_TIMEOUT_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-    {
-        return Duration::from_millis(ms);
-    }
-    ENV_PROBE_TIMEOUT
-}
-
-fn env_probe_stdout_path() -> PathBuf {
-    let counter = ENV_PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("rimz-env-probe-{}-{counter}", std::process::id()))
-}
-
-fn remove_probe_stdout(path: &Path) {
-    let _ = std::fs::remove_file(path);
-}
-
-fn direct_launch_path(env: &BTreeMap<String, String>) -> Option<String> {
-    env.get("PATH")
-        .cloned()
-        .or_else(|| std::env::var("PATH").ok())
-}
-
-fn env_probe_argv() -> Vec<String> {
-    vec![
-        ENV_PROBE_SH.to_owned(),
-        "-c".to_owned(),
-        format!("printf '%s\\n' {ENV_PROBE_START}; {ENV_BIN}; printf '%s\\n' {ENV_PROBE_END}"),
-    ]
-}
-
-fn parse_probe_path(output: &str) -> Result<Option<String>, ProgramLookupErr> {
-    let mut saw_start = false;
-    let mut path = None;
-    for line in output.lines() {
-        if line == ENV_PROBE_START {
-            saw_start = true;
-            continue;
-        }
-        if line == ENV_PROBE_END {
-            return saw_start
-                .then_some(path)
-                .ok_or(ProgramLookupErr::ProbeOutput);
-        }
-        if !saw_start {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=')
-            && key == "PATH"
-        {
-            path = Some(value.to_owned());
-        }
-    }
-    Err(ProgramLookupErr::ProbeOutput)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

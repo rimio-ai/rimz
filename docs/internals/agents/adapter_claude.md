@@ -190,9 +190,9 @@ Invalid JSON, a non-object settings value, or a wrongly typed key a step extends
 
 RimZ puts its merged launch reminder (team context, model identity, and delegation guidance) in `--append-system-prompt`. The flag is not a typed preset, so a user who wants provider-specific append text puts it in raw profile `args`.
 
-On resume or fork, RimZ compares the configured system-prompt fingerprint with the fresh launch's baseline. The fingerprint is a lowercase SHA-256 over the composed replacement prompt and any native system-prompt text or file contents in profile args, never RimZ's per-launch reminder. An equal baseline keeps Claude's stored snapshot. A missing or different baseline adds `--system-prompt-snapshot off`, but only when the launch's executable reports version 2.1.257 or later.
+On resume or fork, RimZ compares the configured system-prompt fingerprint with the fresh launch's baseline. The fingerprint is a lowercase SHA-256 over the composed replacement prompt and any native system-prompt text or file contents in profile args, never RimZ's per-launch reminder. An equal baseline keeps Claude's stored snapshot. A missing or different baseline flags the launch's [session step](../harness/fleet.md#the-launch-plan), which adds `--system-prompt-snapshot off` only when the program it resolved reports version 2.1.257 or later.
 
-The version probe runs the program resolved through the configured shell startup and launch environment, never the `claude` on ambient `PATH`. An unresolved program, or an unknown or older version, adds nothing. Fresh launches never add the switch. Resume and fork never replace the baseline, so later resumes keep rebuilding while the fingerprint differs, and a fork's own later resumes have no baseline. Editing a prompt file at the same path changes the fingerprint.
+The step reads the version of the program it resolved on the pane's `PATH`, after the launch shell's startup files, never the `claude` on the launching process's `PATH`. An unknown or older version adds nothing. Fresh launches never add the switch. Resume and fork never replace the baseline, so later resumes keep rebuilding while the fingerprint differs, and a fork's own later resumes have no baseline. Editing a prompt file at the same path changes the fingerprint.
 
 ### Native LSP denial
 

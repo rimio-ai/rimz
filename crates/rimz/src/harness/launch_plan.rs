@@ -1182,14 +1182,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         request.action,
         launch::ExecAction::Resume { .. } | launch::ExecAction::Fork { .. }
     ) && inputs.recorded_system_prompt_digest != Some(system_prompt_digest.as_str())
-        && let Ok(Some(program)) = process.resolve_program_after_shell_rc()
     {
-        let args = adapter.changed_system_prompt_args(&program);
-        if !args.is_empty() {
-            request.action.extra_args_mut().extend(args.iter().cloned());
-            process.provider_argv.extend(args);
-            process.rebuild_argv();
-        }
+        process.flag_changed_system_prompt();
     }
     let process = &*process;
     let mut env = login_env;

@@ -1,43 +1,65 @@
-//! Process edge for an adapter's pre-exec session preparation.
+//! Process edge for the in-pane step every launch runs between its shell and its provider:
+//! find the provider program on the pane's own PATH, hold it to the version floor, add the
+//! arguments that depend on its version, prepare the model session, and exec it.
 
 use rimz::agents::capabilities::{SESSION_STEP_REFUSED, SessionStepOutput, SessionStepRequest};
 use rimz::ids::{AgentKind, AgentSessionId};
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, clap::Args)]
 pub(super) struct Args {
     kind: String,
     #[arg(long, allow_hyphen_values = true)]
-    model: String,
+    model: Option<String>,
     #[arg(long, allow_hyphen_values = true)]
     effort: Option<String>,
     #[arg(long)]
     session: Option<String>,
+    /// The launch resumes or forks a session whose configured system prompt changed.
+    #[arg(long)]
+    changed_system_prompt: bool,
     #[arg(last = true, required = true)]
     provider_argv: Vec<String>,
 }
 
 pub(super) fn run(args: Args) -> anyhow::Result<()> {
-    let prepare = || -> Result<SessionStepOutput, String> {
+    let prepare = || -> Result<(PathBuf, SessionStepOutput), String> {
         let adapter =
             rimz::agents::definition_by_kind(&args.kind).map_err(|err| err.to_string())?;
         let cwd = std::env::current_dir().map_err(|err| err.to_string())?;
+        let program = &args.provider_argv[0];
+        let path = which::which(program).map_err(|_| format!("cannot find `{program}` on PATH"))?;
+        rimz::agents::version::check_launch_version_floor(adapter, &path)
+            .map_err(|err| err.to_string())?;
+        let mut provider_argv = args.provider_argv.clone();
+        if args.changed_system_prompt {
+            provider_argv.extend(adapter.changed_system_prompt_args(&path));
+        }
+        let Some(model) = &args.model else {
+            let output = SessionStepOutput {
+                argv: provider_argv,
+                notices: Vec::new(),
+            };
+            return Ok((path, output));
+        };
         let session = args.session.as_deref().map(AgentSessionId::from);
-        adapter
+        let output = adapter
             .session_step(&SessionStepRequest {
                 session: session.as_ref(),
-                model: &args.model,
+                model,
                 effort: args.effort.as_deref(),
-                provider_argv: &args.provider_argv,
+                provider_argv: &provider_argv,
                 cwd: &cwd,
                 env: &rimz::agents::ambient_env(),
             })
             .ok_or_else(|| format!("agent `{}` does not support session preparation", args.kind))?
-            .map_err(|refusal| refusal.to_string())
+            .map_err(|refusal| refusal.to_string())?;
+        Ok((path, output))
     };
-    let output = match prepare() {
-        Ok(output) => output,
+    let (path, output) = match prepare() {
+        Ok(prepared) => prepared,
         Err(reason) => return refuse(reason),
     };
     let Some((program, argv)) = output.argv.split_first() else {
@@ -61,12 +83,13 @@ pub(super) fn run(args: Args) -> anyhow::Result<()> {
     {
         tracing::debug!(%error, "could not record session-step launch notices");
     }
-    let mut command = Command::new(program);
+    // Exec the path the floor checked, under the argv[0] the launch wrote.
+    let mut command = Command::new(&path);
     command.args(argv);
     #[cfg(unix)]
     let error = {
         use std::os::unix::process::CommandExt;
-        command.exec()
+        command.arg0(program).exec()
     };
     #[cfg(not(unix))]
     let error = std::io::Error::new(

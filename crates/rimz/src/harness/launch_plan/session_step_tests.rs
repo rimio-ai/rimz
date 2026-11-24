@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn session_steps_follow_launch_and_explicit_resume_models_only() {
+fn every_stage_steps_and_only_launch_and_explicit_resume_models_are_prepared() {
     let root = tempfile::tempdir().unwrap();
     for (label, kind, action, model, override_model, prompt, expected) in [
         (
@@ -83,8 +83,14 @@ fn session_steps_follow_launch_and_explicit_resume_models_only() {
         let step = process
             .argv
             .windows(3)
-            .position(|args| args == ["agents", "session-step", "opencode"]);
-        assert_eq!(step.is_some(), expected, "{label}: {:?}", process.argv);
+            .position(|args| args == ["agents", "session-step", kind]);
+        assert!(step.is_some(), "{label}: {:?}", process.argv);
+        assert_eq!(
+            process.argv[step.unwrap() + 3] == "--model",
+            expected,
+            "{label}: {:?}",
+            process.argv
+        );
         assert_eq!(process.provider_program, kind);
         assert_eq!(process.provider_argv[0], kind);
         let (validation, _) = launch::compile_managed_agent_process(
@@ -100,12 +106,17 @@ fn session_steps_follow_launch_and_explicit_resume_models_only() {
             continue;
         }
         assert_eq!(validation.provider_argv, process.provider_argv);
+        // No digest is recorded, so every resume reads as a changed system prompt.
+        let changed = (action == "resume").then_some("--changed-system-prompt");
         if !expected {
-            assert_eq!(
-                process.argv,
-                process.login_shell_argv(&validation.provider_argv),
-                "{label}"
-            );
+            let stepped = ["/bin/rimz", "agents", "session-step", kind]
+                .into_iter()
+                .chain(changed)
+                .chain(["--"])
+                .map(str::to_owned)
+                .chain(validation.provider_argv.iter().cloned())
+                .collect::<Vec<_>>();
+            assert_eq!(process.argv, process.login_shell_argv(&stepped), "{label}");
             continue;
         }
         let mut expected = vec![
@@ -121,6 +132,7 @@ fn session_steps_follow_launch_and_explicit_resume_models_only() {
         if action == "resume" {
             expected.extend(["--session", "session"]);
         }
+        expected.extend(changed);
         expected.push("--");
         let mut expected = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
         expected.extend(process.provider_argv.iter().cloned());
@@ -182,10 +194,9 @@ fn plain_opencode_resume_clears_the_model_but_keeps_its_launch_record() {
                 .as_deref(),
             Some("provider/model")
         );
-        assert_eq!(
-            plan.process().argv.iter().any(|arg| arg == "session-step"),
-            explicit
-        );
+        let argv = &plan.process().argv;
+        let step = argv.iter().position(|arg| arg == "session-step").unwrap();
+        assert_eq!(argv[step + 2] == "--model", explicit, "{argv:?}");
     }
 }
 
