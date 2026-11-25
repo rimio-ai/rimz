@@ -214,6 +214,7 @@ fn bare_compact_hooks_bracket_a_manual_compaction() {
     let closed = |failed| LifecycleSignal::CompactionEnded {
         auto: Some(false),
         failed,
+        echo: false,
     };
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
         errored,
@@ -573,6 +574,7 @@ fn stop_termination_reasons_fail_only_on_errors_and_limits() {
                 LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed,
+                    echo: false,
                 }
             } else {
                 ended(failed, !fully_idle && !failed)
@@ -596,6 +598,7 @@ fn stop_termination_reasons_fail_only_on_errors_and_limits() {
             .then_some(LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed,
+                echo: false,
             });
         assert_eq!(
             hook_observation(&AntigravityAdapter, "Stop", &compact_no_idle)
@@ -5113,6 +5116,7 @@ fn parked_turn_compaction_capture_decodes_every_hook_by_its_opener_and_stop_reas
             Some(LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             }),
             None,
             None,
@@ -5315,6 +5319,7 @@ fn steered_altm_compact_capture_decodes_without_panicking() {
             Some(LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             }),
             Some(LifecycleSignal::TurnStarted { turn_id: None }),
             None,

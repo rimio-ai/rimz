@@ -57,6 +57,7 @@ fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
         |observation| {
             observation.origin = Some(crate::agents::SessionOrigin::Forked);
@@ -188,9 +189,39 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
     );
     assert_eq!(after_stop[0].status, AgentStatus::Success);
     assert_eq!(
-        after_stop[0].compaction_count, 1,
-        "the display head can expire, but the next signal still closes and counts the bracket"
+        after_stop[0].compaction_count, 0,
+        "a native kind lowers the head on a non-end signal without counting a compaction"
     );
+
+    let derived = reduce_agent_states(&[
+        lifecycle_at(
+            &ws,
+            "droid",
+            "UserPromptSubmit",
+            "sess-derived",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+        lifecycle_at(
+            &ws,
+            "droid",
+            "PreCompact",
+            "sess-derived",
+            LifecycleSignal::Compacting,
+        ),
+        lifecycle_at(
+            &ws,
+            "droid",
+            "Stop",
+            "sess-derived",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ),
+    ]);
+    assert!(derived[0].compacting_since.is_none());
+    assert_eq!(derived[0].compaction_count, 1);
 }
 
 #[test]
@@ -219,6 +250,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             },
         ),
     ])
@@ -248,6 +280,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         ),
     ])
@@ -288,6 +321,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         ),
     ])

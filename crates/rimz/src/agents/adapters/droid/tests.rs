@@ -208,6 +208,7 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         }
     );
     assert!(
@@ -750,6 +751,7 @@ fn compaction_close_routes_to_the_compacted_session() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         }
     );
     let compacting = LifecycleState {

@@ -336,6 +336,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             },
         ),
         (
@@ -343,6 +344,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         ),
         (
@@ -350,6 +352,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
         ),
         (
@@ -357,6 +360,7 @@ fn compaction_events_map_trigger_to_lifecycle_signals() {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
         ),
     ] {
@@ -691,6 +695,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: true,
             },
             None,
         ),
@@ -1098,6 +1103,7 @@ fn root_registration_stamps_birth_account_key_only_on_registration() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
     );
     enrich_root_registration(&mut compact, &compact_hook, || {

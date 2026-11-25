@@ -46,7 +46,7 @@ The spec-mode exit approval uses the same tool confirmation and the same `permis
 
 `PreCompact` opens the [compaction bracket](./model.md#the-compaction-bracket) for every compaction, and how it closes depends on the command:
 
-- `/compress` compacts in place. The session id stays, and Droid fires no closing hook. [`agents/lifecycle.rs::step`](../../../crates/rimz/src/agents/lifecycle.rs) lifts the compacting head on the next lifecycle signal, and `AgentState::is_compacting` expires it after `COMPACTING_WINDOW_SECS` (90 s). Until then the card reads compacting and `message/deliver.rs` holds the agent's queued messages.
+- `/compress` compacts in place. The session id stays, and Droid fires no closing hook. Because Droid declares `compaction_ended` `Derived`, the next lifecycle signal lifts the compacting head in [`agents/lifecycle.rs::step`](../../../crates/rimz/src/agents/lifecycle.rs) and completes the compaction (counting and retiring usage), and `AgentState::is_compacting` expires the head after `COMPACTING_WINDOW_SECS` (90 s). Until then the card reads compacting and `message/deliver.rs` holds the agent's queued messages.
 - `/handoff` starts a successor session, which fires `SessionStart` with `source: compact` and a `previous_session_id`. `DroidSessionStart::compacted_session_id` returns that id, and the close routes to it. The observation carries no `transcript_path`, so the compacted row keeps its own transcript. The successor registers on its next prompt or tool signal. A `compact` payload without `previous_session_id` closes the bracket on the reported `session_id`.
 
 ### Hook replies

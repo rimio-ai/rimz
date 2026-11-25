@@ -290,7 +290,9 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
     }
     for auto in [None, Some(false), Some(true)] {
         for failed in [false, true] {
-            signals.push(LifecycleSignal::CompactionEnded { auto, failed });
+            for echo in [false, true] {
+                signals.push(LifecycleSignal::CompactionEnded { auto, failed, echo });
+            }
         }
     }
     for errored in [false, true] {

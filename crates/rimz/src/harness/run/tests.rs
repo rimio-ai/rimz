@@ -338,6 +338,7 @@ fn session_exit_fails_a_registered_session_that_was_not_at_rest() {
                     LifecycleSignal::CompactionEnded {
                         auto: Some(false),
                         failed: false,
+                        echo: false,
                     },
                 ],
             ),
@@ -349,6 +350,7 @@ fn session_exit_fails_a_registered_session_that_was_not_at_rest() {
                 vec![LifecycleSignal::CompactionEnded {
                     auto: None,
                     failed: false,
+                    echo: false,
                 }],
             ),
         ),
@@ -1748,6 +1750,7 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation_once_compactio
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
             failed: false,
+            echo: false,
         },
     );
     store
@@ -2018,6 +2021,7 @@ fn out_of_turn_signals_leave_the_run_parked() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
     ] {
         let unchanged = fold_turn(&paths, &record.run_id, signal, None, false);

@@ -493,10 +493,12 @@ fn delivery_checkpoint_recognizes_turn_boundaries() {
     assert!(checkpoint.contains(&LifecycleSignal::CompactionEnded {
         auto: None,
         failed: false,
+        echo: false,
     }));
     assert!(checkpoint.contains(&LifecycleSignal::CompactionEnded {
         auto: Some(false),
         failed: true,
+        echo: false,
     }));
     assert!(!checkpoint.contains(&LifecycleSignal::SubagentStopped { errored: false }));
 }

@@ -230,6 +230,7 @@ impl CanonicalEvent {
                 LifecycleSignal::CompactionEnded {
                     auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
                     failed: false,
+                    echo: false,
                 },
                 true,
             ),

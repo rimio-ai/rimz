@@ -70,6 +70,7 @@ fn terminal_disposition_table_pins_every_signal() {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
             None,
         ),
@@ -666,18 +667,22 @@ fn keyed_wait_closes_at_each_turn_boundary() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
             failed: false,
+            echo: false,
         },
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: true,
+            echo: false,
         },
         LifecycleSignal::Ended,
     ];
@@ -1020,6 +1025,7 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
             LifecycleSignal::CompactionEnded {
                 auto,
                 failed: false,
+                echo: false,
             },
             expected,
         );
@@ -1032,6 +1038,7 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
             failed: false,
+            echo: false,
         },
         state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
@@ -1046,6 +1053,7 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
         reasoning,
     );
@@ -1064,6 +1072,7 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
         state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
@@ -1114,6 +1123,7 @@ fn compaction_clears_a_waiting_row_and_preserves_every_other_status() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
         state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
@@ -1166,6 +1176,7 @@ fn failed_compaction_closes_the_bracket_without_recording_success() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: true,
+                echo: false,
             },
             expected,
         );
@@ -1179,6 +1190,7 @@ fn failed_compaction_closes_the_bracket_without_recording_success() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: true,
+            echo: false,
         },
         state(AgentStatus::Running, TurnPhase::Reasoning, false),
     );
@@ -1270,6 +1282,7 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             },
             "compaction_ended",
         ),
@@ -1320,12 +1333,14 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         },
     );
     assert_eq!(
         serde_json::to_value(LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         })
         .unwrap(),
         serde_json::json!({ "signal": "compaction_ended" })
@@ -1334,9 +1349,24 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         serde_json::to_value(LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: true,
+            echo: false,
         })
         .unwrap(),
         serde_json::json!({ "signal": "compaction_ended", "auto": false, "failed": true })
+    );
+    let echo = LifecycleSignal::CompactionEnded {
+        auto: None,
+        failed: false,
+        echo: true,
+    };
+    let echo_json = serde_json::to_value(&echo).unwrap();
+    assert_eq!(
+        echo_json,
+        serde_json::json!({ "signal": "compaction_ended", "echo": true })
+    );
+    assert_eq!(
+        serde_json::from_value::<LifecycleSignal>(echo_json).unwrap(),
+        echo
     );
 }
 
@@ -1350,7 +1380,11 @@ fn flag_bearing_signals_keep_their_wire_bytes() {
             turn_id: turn_id.map(ToOwned::to_owned),
         }
     };
-    let compaction = |auto, failed| LifecycleSignal::CompactionEnded { auto, failed };
+    let compaction = |auto, failed| LifecycleSignal::CompactionEnded {
+        auto,
+        failed,
+        echo: false,
+    };
     let goldens = [
         (
             turn_end(false, false),
@@ -1525,7 +1559,11 @@ fn compaction_status_table_covers_every_trigger_outcome_and_prior() {
         Some(Paused),
     ];
     let preserved = [Idle, Idle, Running, Running, Success, Failed, Paused];
-    let compaction = |auto, failed| LifecycleSignal::CompactionEnded { auto, failed };
+    let compaction = |auto, failed| LifecycleSignal::CompactionEnded {
+        auto,
+        failed,
+        echo: false,
+    };
     let table = [
         (LifecycleSignal::Compacting, preserved),
         (compaction(None, false), preserved),
@@ -1606,6 +1644,7 @@ fn manual_compaction_keeps_parked_row_running_and_rests_other_running_phases() {
     let manual_ok = LifecycleSignal::CompactionEnded {
         auto: Some(false),
         failed: false,
+        echo: false,
     };
     let parked_open = state(AgentStatus::Running, TurnPhase::Parked, true);
     let parked_closed = assert_next(
@@ -1660,6 +1699,7 @@ fn manual_compaction_keeps_parked_row_running_and_rests_other_running_phases() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             },
         ),
         (
@@ -1667,6 +1707,7 @@ fn manual_compaction_keeps_parked_row_running_and_rests_other_running_phases() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: true,
+                echo: false,
             },
         ),
     ] {

@@ -3968,7 +3968,10 @@ fn claude_compaction_bracket_closers_clear_head() {
         }
         let parsed = env.snapshot_json();
         let agent = &parsed["agents"][0];
-        assert_eq!(agent["compaction_count"], 1);
+        assert!(
+            agent.get("compaction_count").is_none_or(Value::is_null),
+            "neither an echo nor a tool report counts a compaction on a native kind: {agent:?}"
+        );
         assert!(
             agent.get("compacting_since").is_none_or(Value::is_null),
             "compacting head should be cleared: {agent:?}"
@@ -3976,6 +3979,16 @@ fn claude_compaction_bracket_closers_clear_head() {
         if expect_running {
             assert_eq!(agent["status"], "running");
             assert_eq!(agent["phase"], "reasoning");
+            run_claude_lifecycle(
+                &env,
+                json!({
+                    "hook_event_name": "PostCompact",
+                    "session_id": session_id,
+                    "trigger": "auto",
+                }),
+            );
+            let completed = env.snapshot_json();
+            assert_eq!(completed["agents"][0]["compaction_count"], 1);
         }
     }
 }

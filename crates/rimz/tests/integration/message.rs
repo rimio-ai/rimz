@@ -15116,6 +15116,7 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
                 LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed: false,
+                    echo: false,
                 },
             );
             store
@@ -16901,6 +16902,7 @@ fn codex_compact_first_rebinds_queued_prompts_to_the_compaction_continuation() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     );
     observation.compacted_from = Some(agent.agent_id.clone());

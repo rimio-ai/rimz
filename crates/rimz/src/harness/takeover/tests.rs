@@ -219,7 +219,7 @@ fn assert_closed_codex_turn_takeover(compacting: bool) {
     assert!(fresh.transition.unwrap().opened_turn);
     let row = store.snapshot().unwrap().agents[0].clone();
     assert!(row.compacting_since.is_none());
-    assert_eq!(row.compaction_count, u32::from(compacting));
+    assert_eq!(row.compaction_count, 0);
     assert_eq!(
         decide_row(row),
         Err(vec![("child".into(), OpenTurn::Working)])

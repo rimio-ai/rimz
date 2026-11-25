@@ -168,6 +168,7 @@ fn child_turn_hooks_follow_main_step_boundaries() {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
         ),
     ] {

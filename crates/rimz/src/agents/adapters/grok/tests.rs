@@ -593,6 +593,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         }
     );
 }

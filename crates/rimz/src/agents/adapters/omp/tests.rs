@@ -159,7 +159,8 @@ fn compaction_and_tool_classification_are_omp_specific() {
         signal("session_compact", json!({})),
         Some(LifecycleSignal::CompactionEnded {
             auto: None,
-            failed: false
+            failed: false,
+            echo: false,
         })
     );
     for payload in [
@@ -171,7 +172,8 @@ fn compaction_and_tool_classification_are_omp_specific() {
             signal("auto_compaction_end", payload),
             Some(LifecycleSignal::CompactionEnded {
                 auto: Some(true),
-                failed: true
+                failed: true,
+                echo: false,
             })
         );
     }

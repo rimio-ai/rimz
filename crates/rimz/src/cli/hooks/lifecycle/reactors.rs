@@ -146,6 +146,7 @@ mod tests {
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
             LifecycleSignal::Ended,
             LifecycleSignal::Lost,

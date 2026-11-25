@@ -550,6 +550,7 @@ fn reminder_stays_suppressed_on_withheld_lagging_sidecar_through_first_prompt_th
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     );
     // First prompt clears `compacted_awaiting_prompt`, leaving only the retired-reading guard.

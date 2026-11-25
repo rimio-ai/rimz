@@ -212,6 +212,22 @@ fn malformed_payloads_are_tolerated_without_inventing_identity() {
 
 #[test]
 fn compaction_duplicates_preserve_the_result_and_failure_has_no_hook() {
+    assert_eq!(
+        signal("SessionStart", json!({"source":"compact"})),
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+            echo: true,
+        }
+    );
+    assert_eq!(
+        signal("PostCompact", json!({"trigger":"auto"})),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+            echo: false,
+        }
+    );
     for trigger in ["auto", "manual"] {
         let running = LifecycleState {
             status: AgentStatus::Running,

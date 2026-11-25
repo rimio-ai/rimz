@@ -38,6 +38,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: true,
             }),
         ),
         (
@@ -71,6 +72,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             }),
         ),
         (
@@ -79,6 +81,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             }),
         ),
         (
@@ -87,6 +90,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             }),
         ),
         (
@@ -95,6 +99,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             }),
         ),
         (

@@ -512,6 +512,7 @@ fn compact_delivery_ack_after_a_prompt_does_not_rearm_the_rollup() {
     append_lifecycle(LifecycleSignal::CompactionEnded {
         auto: Some(false),
         failed: false,
+        echo: false,
     });
     append_lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
     assert!(
@@ -1721,6 +1722,7 @@ fn stale_sent_message_waits_for_deferral_after_compaction_closes() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     );
     q.append_event(&EventEnvelope::agent_lifecycle(
@@ -1985,6 +1987,7 @@ fn stale_sent_message_requeues_once_compaction_bracket_closes() {
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         ),
     ] {

@@ -95,7 +95,7 @@ RimZ installs no `PreToolUse` hook, on purpose. Qoder 1.1.72 reads non-JSON text
 
 | Native event | RimZ signal |
 | --- | --- |
-| `SessionStart` | registers, through the shared `crates/rimz/src/agents/hook_types.rs::SessionSource::session_start_signal`. Source `compact` closes a compaction instead. Sources `startup`, `clear`, and `new` mark the session `Fresh`, and `resume` does not |
+| `SessionStart` | registers, through the shared `crates/rimz/src/agents/hook_types.rs::SessionSource::session_start_compaction_echo`. Source `compact` emits a compaction echo (`CompactionEnded { auto: None, echo: true }`) instead. Sources `startup`, `clear`, and `new` mark the session `Fresh`, and `resume` does not |
 | `UserPromptSubmit` | turn started, with the sanitized prompt as the card's prompt and task |
 | `Stop` | turn ended, clean. `last_assistant_message` is the supervised run's final output |
 | `StopFailure` | turn ended, errored. `error` decides the class: `rate_limit` is `paused_rate_limit`, `server_error` and `overloaded` are `paused_overloaded`, and any other value classifies by the label taken from `last_assistant_message`. `error_type` is never read |
@@ -120,7 +120,7 @@ No turn id ties a `QueryEnd` to its prompt. A late or mismatched abort therefore
 
 ### Compaction
 
-Qoder reports one compaction's end twice: `PostCompact`, then `SessionStart` with source `compact`. The first closes the bracket, and the second finds it closed, which the shared state machine ignores ([the compaction bracket](./model.md#the-compaction-bracket)). Compaction hooks carry no child identity.
+Qoder reports one compaction's end twice: `PostCompact` and `SessionStart` with source `compact`. `SessionStart` carries `echo: true`, so only `PostCompact` counts and retires ([the compaction bracket](./model.md#the-compaction-bracket)). Compaction hooks carry no child identity.
 
 ### Subagents
 
