@@ -199,7 +199,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 
 ## Changing an existing adapter
 
-What a change to a shipped adapter also runs, pins, and checks. The [module contract](../../crates/rimz/src/agents/AGENTS.md#before-a-change) routes each kind of change here.
+What a change to a shipped adapter also runs, pins, and checks. The [module contract](../../crates/rimz/src/agents/AGENTS.md#before-a-change) and the `adapters/` and `spending/` contracts below it route each kind of change here.
 
 A new file in an adapter directory gets a row in its adapter page's `## Files` table when the page has one.
 
