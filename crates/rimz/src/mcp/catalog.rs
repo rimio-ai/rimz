@@ -1047,6 +1047,8 @@ pub enum ScheduleTarget {
 }
 
 // Wire schema for `schedule`; `parse_schedule` turns it into a validated `ScheduleArgs`.
+// `tool` and `arguments` carry the launch tool's own call, which `parse_schedule` hands to that
+// tool's parser: a field of the carried tool is never copied into this struct.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ScheduleInput {
