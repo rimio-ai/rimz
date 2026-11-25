@@ -184,7 +184,7 @@ pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord, kind: Option<s
     if let Some((fire, binding, _)) = launch {
         record.task_id = Some(fire.task());
         record.fire = Some(fire);
-        settle_dead_fire(root, &binding, &record);
+        settle_dead_fire(root, &binding, &record, super::fires::settle);
         return;
     }
     append_for_root(root, &record);
@@ -648,7 +648,7 @@ fn settle_fire(
     mark: &super::task_record::FireMark,
 ) -> anyhow::Result<bool> {
     Ok(dead_fire_row(state, fire, &binding.name, mark)?
-        .is_some_and(|record| settle_dead_fire(root, binding, &record)))
+        .is_some_and(|record| settle_dead_fire(root, binding, &record, super::fires::settle_open)))
 }
 
 /// Whether a ready mark waits for the settle pass in the room at `root`, read without a write.
@@ -684,6 +684,8 @@ type OpenFire = (
 /// room at `root`.
 fn open_fires(root: &Path) -> anyhow::Result<Vec<OpenFire>> {
     let mut fires = open_marks(root)?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_LOOP_SETTLE_AFTER_MARKS");
     fires.retain(|(_, _, mark)| !mark.launching());
     Ok(fires)
 }
@@ -767,12 +769,13 @@ fn dead_fire_row(
     }))
 }
 
-/// Settle a dead fire's outcome on its task record, then append its row, once per fire id: a
-/// concurrent pass that settled it first appends nothing.
+/// Settle a dead fire's outcome on its task record through `settle`, then append its row, once
+/// per fire id: a concurrent pass that settled it first appends nothing.
 fn settle_dead_fire(
     root: &Path,
     binding: &super::task_record::Binding,
     record: &LoopRunRecord,
+    settle: fn(super::fires::Outcome<'_>) -> super::fires::Result<Option<super::fires::Settled>>,
 ) -> bool {
     let Some(fire) = &record.fire else {
         return false;
@@ -781,7 +784,7 @@ fn settle_dead_fire(
     let task = catalog
         .for_run(&record.task)
         .filter(|task| task.key(&record.task) == binding.key());
-    let settled = super::fires::settle(super::fires::Outcome {
+    let settled = settle(super::fires::Outcome {
         fire,
         result: record.result,
         signal: strikes::classify(record),

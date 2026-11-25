@@ -186,6 +186,16 @@ pub(super) fn settle(outcome: Outcome<'_>) -> Result<Option<Settled>> {
     })
 }
 
+/// [`settle`] for an outcome judged from a mark read earlier without the lock: `None` when the
+/// fire's mark is gone or closed since, as a fire that withdrew it reports its own outcome.
+pub(super) fn settle_open(outcome: Outcome<'_>) -> Result<Option<Settled>> {
+    task_record_store::mutate(|records| {
+        let record = records.get_mut(&outcome.fire.task())?;
+        mark_of(record, outcome.fire).filter(|mark| mark.result.is_none())?;
+        Some(settle_record(record, outcome))
+    })
+}
+
 fn settle_record(record: &mut TaskRecord, outcome: Outcome<'_>) -> Settled {
     if let Some(mark) = mark_of(record, outcome.fire) {
         mark.result.get_or_insert(outcome.result);

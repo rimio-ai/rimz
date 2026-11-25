@@ -32,6 +32,8 @@ impl Fire<'_> {
         let trigger = self.effect_prompt(String::new());
         let created_tree = self.prepare_row_tree()?;
         let (fire, displaced) = self.open_fire()?;
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_LOOP_AFTER_OPEN_FIRE");
         if created_tree {
             self.stamp_row_tree(&fire);
         }
