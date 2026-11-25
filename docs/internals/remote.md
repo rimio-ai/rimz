@@ -182,7 +182,7 @@ supervise_remote
 
 ### Proving the transport
 
-The background master proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. RimZ launches `SshAttachPlan::master` (`ssh -M -N -o BatchMode=yes`, stderr piped) on the control socket `<runtime home>/rimz/link/link-<pid>.sock` (`link::validated_control_path`, which refuses a path over the socket length limit). It then runs `ssh -S <socket> -O check` every 200ms with a 500ms timeout. On the initial connection, a `Path` target next runs `test -d` over the same socket (`SshAttachPlan::path_preflight`). Exit `1` is the one conclusive missing-path result: the connect fails with exit `67` and the path fix before the panel hands off. Any other exit, or a preflight that cannot start, defers to the normal attach, whose snippet guard checks again. The visible `ssh -t` reuses the socket.
+The background master proves transport and authentication before anything paints, so the panel never shows an all-healthy frame it cannot back. RimZ launches `SshAttachPlan::master` (`ssh -M -N -o BatchMode=yes`, stderr piped) on the control socket `<runtime home>/rimz/link/link-<pid>.sock` (`link::validated_control_path`, which refuses a path over the socket length limit). It then runs `ssh -S <socket> -O check` every 200ms with a 500ms timeout (`ReconnectPolicy::control_check_timeout`). On the initial connection, a `Path` target next runs `test -d` over the same socket (`SshAttachPlan::path_preflight`). Exit `1` is the one conclusive missing-path result: the connect fails with exit `67` and the path fix before the panel hands off. Any other exit, or a preflight that cannot start, defers to the normal attach, whose snippet guard checks again. The visible `ssh -t` reuses the socket.
 
 `MasterState` in `cli/remote/supervisor.rs` has three variants, and each tick yields one outcome:
 
@@ -260,7 +260,7 @@ Input passes through `InputScanner` (`remote/paste.rs`), which holds an escape s
 | any other status | anything else | `Fatal`: an immediate remote room or authentication failure. |
 | signal death | any | `Fatal`: something killed `ssh` deliberately. |
 
-`MasterGuard::is_alive` requires a running child and a successful `ssh -O check` within `CONTROL_MASTER_CHECK_TIMEOUT`, and any check failure means not alive. The mux listener can close before its process exits during transport shutdown, so a process-only poll could mistake a real drop for `~.`.
+`MasterGuard::is_alive` requires a running child and a successful `ssh -O check` within `ReconnectPolicy::control_check_timeout` (500ms by default), and any check failure means not alive. The mux listener can close before its process exits during transport shutdown, so a process-only poll could mistake a real drop for `~.`.
 
 A signal-killed remote `rimz` or a remote command exiting `255` can produce the same status over a live master. These also end the connect. The room survives, and the user can run `rimz remote connect` again.
 
@@ -323,6 +323,7 @@ These workers drive presentation and pacing and never decide truth. The backgrou
 | `backoff_cap` | `30s` | Ceiling for both ladders. |
 | `master_connect_timeout` | `5s` | Per-attempt TCP connect and SSH banner budget. |
 | `master_deadline` | `30s` | Total lifetime of one background master attempt. |
+| `control_check_timeout` | `500ms` | Timeout for each `ssh -O check` ControlMaster liveness probe. |
 
 ## The connection panel
 
@@ -532,6 +533,7 @@ The table lists the module's test overrides. Every other duration is fixed, so a
 | `RIMZ_REMOTE_CLIPBOARD_BIN` | The [clipboard reader](#the-clipboard-reader) a Ctrl+V runs, in place of macOS's `osascript`; elsewhere the only reader. Not testkit-only: it is the off-Mac way to give Ctrl+V a clipboard. |
 | `RIMZ_REMOTE_GATETIME_MS` | Establishment threshold. |
 | `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS` | Background master connect and total deadlines. |
+| `RIMZ_REMOTE_CONTROL_CHECK_MS` | Timeout for each `ssh -O check` ControlMaster liveness probe (default 500ms). |
 | `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS` | Retry pacing. |
 | `RIMZ_REMOTE_GRACE_MS`, `RIMZ_REMOTE_MIN_DISPLAY_MS` | Panel grace and minimum display. |
 | `RIMZ_REMOTE_PROBE_MS`, `RIMZ_REMOTE_PROBE_TIMEOUT_MS`, `RIMZ_REMOTE_BLACKOUT_MS` | Probe cadence, timeout, and blackout threshold. `RIMZ_REMOTE_PROBE_MS=0` disables probing. |

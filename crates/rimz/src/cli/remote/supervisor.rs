@@ -35,7 +35,6 @@ use super::relay::{OutputRelay, RelayOutput};
 use super::upload_client::UploadRoute;
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
-const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 const PROBE_STREAM_BLACKOUT_FAILURES: u32 = 3;
 const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -286,6 +285,7 @@ pub(super) fn supervise_remote(
             ProbeHandle::start_preestablished(
                 target.clone(),
                 supervisor.control_path.clone(),
+                supervisor.policy.control_check_timeout,
                 events_tx,
                 port_sync.clone(),
             )
@@ -293,6 +293,7 @@ pub(super) fn supervise_remote(
             ProbeHandle::start(
                 target.clone(),
                 supervisor.control_path.clone(),
+                supervisor.policy.control_check_timeout,
                 events_tx,
                 port_sync.clone(),
             )
@@ -338,7 +339,7 @@ pub(super) fn supervise_remote(
         let attach_evidence = supervisor
             .master
             .as_mut()
-            .map(|master| master.is_alive(&target))
+            .map(|master| master.is_alive(&target, supervisor.policy.control_check_timeout))
             .transpose()?
             .map(|control_alive| (control_alive, outcome.lived_past_gatetime));
         if outcome.established {
@@ -813,7 +814,7 @@ fn wait_for_master(
             started.elapsed(),
             plan,
             control_path,
-            policy.master_deadline,
+            policy,
             &mut outage.panel,
         )? {
             MasterTick::Pending(state) => master = state,
@@ -1264,7 +1265,7 @@ impl MasterState {
         wait_elapsed: Duration,
         plan: &SshAttachPlan,
         control_path: &Path,
-        deadline: Duration,
+        policy: &rimz::remote::ReconnectPolicy,
         panel: &mut RecoveryPanel,
     ) -> Result<MasterTick> {
         match self {
@@ -1282,7 +1283,7 @@ impl MasterState {
                 }
                 if now >= next_control_check {
                     if control_check_spec(plan.target(), control_path)
-                        .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+                        .run_with_timeout(policy.control_check_timeout)
                         .is_ok()
                     {
                         panel.note_master_ready();
@@ -1297,12 +1298,12 @@ impl MasterState {
                     }
                     next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
                 }
-                if now.saturating_duration_since(started) >= deadline {
+                if now.saturating_duration_since(started) >= policy.master_deadline {
                     drop(attempt);
                     return Ok(MasterTick::Failed(
                         Some(format!(
                             "SSH connect timed out after {}s",
-                            deadline.as_secs()
+                            policy.master_deadline.as_secs()
                         )),
                         false,
                     ));
@@ -1437,7 +1438,7 @@ impl MasterGuard {
     /// A live connection has a running master that still answers `ssh -O check`.
     /// Its listener can close before the process exits during transport shutdown;
     /// a failed or timed-out check therefore means it is not alive.
-    fn is_alive(&mut self, target: &RemoteTarget) -> Result<bool> {
+    fn is_alive(&mut self, target: &RemoteTarget, check_timeout: Duration) -> Result<bool> {
         let running = self
             .child
             .as_mut()
@@ -1447,7 +1448,7 @@ impl MasterGuard {
             .is_none();
         Ok(running
             && control_check_spec(target, &self.control_path)
-                .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+                .run_with_timeout(check_timeout)
                 .is_ok())
     }
 
@@ -1667,10 +1668,17 @@ struct ProbeHandle {
     remove_control_path: bool,
 }
 
+struct ProbeControl {
+    target: RemoteTarget,
+    control_path: PathBuf,
+    check_timeout: Duration,
+}
+
 impl ProbeHandle {
     fn start(
         target: RemoteTarget,
         control_path: PathBuf,
+        check_timeout: Duration,
         events: mpsc::Sender<LinkEvent>,
         port_sync: Arc<Mutex<ForwardPublisher>>,
     ) -> Self {
@@ -1682,16 +1690,37 @@ impl ProbeHandle {
             );
             return Self::disabled();
         }
-        spawn_probe_loop(target, control_path, events, port_sync, false, true)
+        spawn_probe_loop(
+            ProbeControl {
+                target,
+                control_path,
+                check_timeout,
+            },
+            events,
+            port_sync,
+            false,
+            true,
+        )
     }
 
     fn start_preestablished(
         target: RemoteTarget,
         control_path: PathBuf,
+        check_timeout: Duration,
         events: mpsc::Sender<LinkEvent>,
         port_sync: Arc<Mutex<ForwardPublisher>>,
     ) -> Self {
-        spawn_probe_loop(target, control_path, events, port_sync, true, false)
+        spawn_probe_loop(
+            ProbeControl {
+                target,
+                control_path,
+                check_timeout,
+            },
+            events,
+            port_sync,
+            true,
+            false,
+        )
     }
 
     fn disabled() -> Self {
@@ -1734,13 +1763,13 @@ impl Drop for ProbeHandle {
 }
 
 fn spawn_probe_loop(
-    target: RemoteTarget,
-    control_path: PathBuf,
+    control: ProbeControl,
     events: mpsc::Sender<LinkEvent>,
     port_sync: Arc<Mutex<ForwardPublisher>>,
     control_confirmed: bool,
     remove_control_path: bool,
 ) -> ProbeHandle {
+    let control_path = control.control_path.clone();
     let Some(interval) = probe_interval_from_env() else {
         return ProbeHandle {
             stop: Arc::new(AtomicBool::new(true)),
@@ -1751,11 +1780,9 @@ fn spawn_probe_loop(
     };
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
-    let thread_path = control_path.clone();
     let join = std::thread::spawn(move || {
         probe_loop(
-            target,
-            thread_path,
+            control,
             interval,
             events,
             thread_stop,
@@ -1771,10 +1798,15 @@ fn spawn_probe_loop(
     }
 }
 
-fn wait_for_control_master(target: &RemoteTarget, control_path: &Path, stop: &AtomicBool) -> bool {
+fn wait_for_control_master(
+    target: &RemoteTarget,
+    control_path: &Path,
+    check_timeout: Duration,
+    stop: &AtomicBool,
+) -> bool {
     while !stop.load(Ordering::Relaxed) {
         if control_check_spec(target, control_path)
-            .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+            .run_with_timeout(check_timeout)
             .is_ok()
         {
             return true;
@@ -1785,20 +1817,26 @@ fn wait_for_control_master(target: &RemoteTarget, control_path: &Path, stop: &At
 }
 
 fn probe_loop(
-    target: RemoteTarget,
-    control_path: PathBuf,
+    control: ProbeControl,
     interval: Duration,
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
     port_sync: Arc<Mutex<ForwardPublisher>>,
     mut control_confirmed: bool,
 ) {
+    let ProbeControl {
+        target,
+        control_path,
+        check_timeout,
+    } = control;
     let mut monitor =
         LinkMonitor::with_timeout(probe_timeout_from_env(), blackout_after_from_env());
     let mut failures = 0u32;
     let mut reopened = false;
     while !stop.load(Ordering::Relaxed) {
-        if !control_confirmed && !wait_for_control_master(&target, &control_path, &stop) {
+        if !control_confirmed
+            && !wait_for_control_master(&target, &control_path, check_timeout, &stop)
+        {
             return;
         }
         control_confirmed = false;

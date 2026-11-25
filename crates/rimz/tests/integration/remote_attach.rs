@@ -22,10 +22,10 @@ use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
 use portable_pty::{CommandBuilder, PtyPair};
 
 use crate::common::ssh_trace::{
-    Answers, FakeTerminal, is_control_check_invocation, is_main_invocation, is_master_invocation,
-    is_path_preflight_invocation, is_probe_invocation, main_invocation_count,
-    master_invocation_count, remote_connect_pty, remote_connect_pty_command, shim_invocations,
-    ssh_shim,
+    Answers, FakeTerminal, SSH_TRACE_CONTROL_CHECK_MS, is_control_check_invocation,
+    is_main_invocation, is_master_invocation, is_path_preflight_invocation, is_probe_invocation,
+    main_invocation_count, master_invocation_count, remote_connect_pty, remote_connect_pty_command,
+    shim_invocations, ssh_shim,
 };
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
@@ -306,6 +306,7 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
         .env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0")
+        .env("RIMZ_REMOTE_CONTROL_CHECK_MS", SSH_TRACE_CONTROL_CHECK_MS)
         .env("TERM", "xterm-256color");
     cmd
 }
@@ -324,6 +325,7 @@ fn remote_path_connect_command(env: &Env, log: &Path) -> Command {
     .env("RIMZ_REMOTE_PROBE_MS", "0")
     .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
     .env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0")
+    .env("RIMZ_REMOTE_CONTROL_CHECK_MS", SSH_TRACE_CONTROL_CHECK_MS)
     .env("TERM", "xterm-256color");
     cmd
 }
@@ -2483,6 +2485,7 @@ fn probe_stream_waits_for_control_master_before_starting() {
         .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "20")
         .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
+        .env("RIMZ_REMOTE_CONTROL_CHECK_MS", SSH_TRACE_CONTROL_CHECK_MS)
         .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect --attach");

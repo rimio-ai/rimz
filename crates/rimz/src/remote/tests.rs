@@ -870,6 +870,35 @@ fn verdict_and_backoff_classify_reconnects() {
 }
 
 #[test]
+fn reconnect_policy_control_check_timeout_defaults_and_honors_env_override() {
+    assert_eq!(
+        ReconnectPolicy::default().control_check_timeout,
+        Duration::from_millis(500)
+    );
+    assert_eq!(
+        ReconnectPolicy::from_env_with(|_| None).control_check_timeout,
+        Duration::from_millis(500)
+    );
+    assert_eq!(
+        ReconnectPolicy::from_env_with(|key| {
+            (key == "RIMZ_REMOTE_CONTROL_CHECK_MS").then(|| "7500".to_owned())
+        })
+        .control_check_timeout,
+        Duration::from_millis(7500)
+    );
+    for malformed in ["", "not-a-number", "-1"] {
+        assert_eq!(
+            ReconnectPolicy::from_env_with(|key| {
+                (key == "RIMZ_REMOTE_CONTROL_CHECK_MS").then(|| malformed.to_owned())
+            })
+            .control_check_timeout,
+            Duration::from_millis(500),
+            "malformed value {malformed:?} keeps the default"
+        );
+    }
+}
+
+#[test]
 fn reachable_retry_delay_stays_flat_then_doubles_each_minute() {
     let policy = ReconnectPolicy::default();
 
