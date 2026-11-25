@@ -15,7 +15,7 @@ rimz workflow restart <run> --continue          # the same, resuming the agent's
 rimz workflow cancel <run>                      # end it and stop its live check, command, or agents
 ```
 
-Every command here but `list`, `show`, and `wait` is the user's call (what the user decides: every resume, extend grant, restart, and cancel). `resume --at` refuses a step that has spent its visits and prints the `extend` command that grants one.
+Every command here except `list`, `show`, and `wait` needs the user's approval. `resume --at` refuses a step that has spent its visits and prints the `extend` command that grants one.
 
 - Inside a step or one of its subagents, leave out `<run>`: `show` and `--history` find that run.
 - To change what a step does from its next launch on, in this run alone, append to its sign, the `sign` path `show` prints while the run is at that step. Each later agent or message launch of that step reads it; to reach the attempt already running, message its agent.
