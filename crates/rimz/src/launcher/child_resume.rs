@@ -2,7 +2,9 @@
 //! ended, is relaunched on its session and the message parks for it. `rimz message` and the
 //! MCP `message` tool both reach it on an address that names no live agent.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -44,6 +46,71 @@ pub enum ResumeChildOutcome {
     DeliveryFailed(anyhow::Error),
     /// The child failed on a provider limit that has not refilled yet: nothing was queued.
     LimitRefusal(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReopenChildOutcome {
+    Reopened,
+    AlreadyBound,
+}
+
+/// Reopen an ended launched child into its live parent's subagent zone without
+/// queuing a message. Parent mode, isolation, and pane come from durable records
+/// rather than the calling process; trust preflights run attended for a human
+/// caller and unattended when an agent calls.
+pub fn reopen_child(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    child: &AgentState,
+    caller_is_agent: bool,
+    interaction: &mut impl Interaction,
+) -> Result<ReopenChildOutcome> {
+    let name = child.name.as_deref().unwrap_or(child.agent_id.as_str());
+    let machine = crate::config::MachineConfig::load_lenient();
+    let ambient = crate::agents::ambient_env();
+    reopen_resolved(
+        workspace,
+        store,
+        child,
+        caller_is_agent,
+        machine,
+        &ambient,
+        None,
+        crate::launcher::placement::zone::SUBAGENT_REOPEN_BIND_TIMEOUT,
+        interaction,
+    )
+    .map_err(|error| anyhow::anyhow!("cannot reopen @{name}: {error:#}"))
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test seam injects machine, env, backend, and timeout"
+)]
+fn reopen_child_with(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    child: &AgentState,
+    caller_is_agent: bool,
+    machine: crate::config::MachineConfig,
+    ambient: &BTreeMap<String, String>,
+    backend: &dyn crate::mux::MuxBackend,
+    bind_timeout: Duration,
+    interaction: &mut impl Interaction,
+) -> Result<ReopenChildOutcome> {
+    let name = child.name.as_deref().unwrap_or(child.agent_id.as_str());
+    reopen_resolved(
+        workspace,
+        store,
+        child,
+        caller_is_agent,
+        std::sync::Arc::new(machine),
+        ambient,
+        Some(backend),
+        bind_timeout,
+        interaction,
+    )
+    .map_err(|error| anyhow::anyhow!("cannot reopen @{name}: {error:#}"))
 }
 
 pub fn resume_child(
@@ -170,14 +237,38 @@ fn child_posture(
     )
 }
 
-fn resume_resolved(
+struct PreparedChildResume {
+    cwd: PathBuf,
+    posture: ResumePosture,
+    capped_isolation: Option<crate::config::Isolation>,
+    logins: crate::agents::RoomAccounts,
+    catalog: crate::agents::LoginCatalog,
+    action: ExecAction,
+    login: Option<crate::ids::LoginName>,
+    run: RunRecord,
+    request: ExecRequest,
+    launch_id: crate::ids::AgentSessionId,
+    parent_pane_id: crate::ids::PaneId,
+    parent_workspace: ResolvedWorkspace,
+    room: crate::room::RoomContext,
+    env: BTreeMap<String, String>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared preflight contract for message resume and promptless reopen"
+)]
+fn prepare_child_resume(
     workspace: &ResolvedWorkspace,
     store: &Store,
     child: &AgentState,
-    caller: &AgentState,
-    mut dispatch_request: DispatchRequest,
+    parent: &AgentState,
+    parent_isolation: Option<crate::config::Isolation>,
+    unattended: Option<Unattended>,
+    machine: std::sync::Arc<crate::config::MachineConfig>,
+    ambient: &BTreeMap<String, String>,
     interaction: &mut impl Interaction,
-) -> Result<ResumeChildOutcome> {
+) -> Result<PreparedChildResume> {
     let cwd = child
         .worktree_path
         .as_deref()
@@ -188,7 +279,6 @@ fn resume_resolved(
     } else if !cwd.is_dir() {
         bail!("its worktree {} is gone", cwd.display());
     }
-    let machine = crate::config::MachineConfig::load_lenient();
     let launch = crate::config::effective::load(&machine, &workspace.project_root)?;
     launch.block_set_failure()?;
     let posture = child_posture(child, &launch);
@@ -197,13 +287,13 @@ fn resume_resolved(
     }
     crate::harness::plan::check_child_permission_mode(
         &child.kind,
-        caller.mode,
+        parent.mode,
         posture.launch.mode,
     )?;
     let adapter = crate::agents::find_definition(child.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", child.kind))?;
     let capped = crate::harness::plan::cap_child_isolation(
-        crate::config::Isolation::ambient(&crate::agents::ambient_env()),
+        parent_isolation,
         child.isolation,
         posture.launch.isolation_default,
         machine.agents.isolation,
@@ -233,7 +323,7 @@ fn resume_resolved(
     let logins = crate::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),
-        &crate::config::MachineConfig::load_lenient(),
+        &machine,
     )?;
     let catalog = crate::agents::machine_login_catalog();
     let (action, login, fresh_reason) = relaunch_action(child, &logins, &catalog, &cwd)?;
@@ -243,25 +333,11 @@ fn resume_resolved(
     let provider_login =
         crate::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
     if let Some(notice) = super::trust::preflight_hooks(
-        provider_login.health(&crate::agents::ambient_env()),
-        || Some(Unattended::Subagent),
+        provider_login.health(ambient),
+        || unattended,
         || crate::config::definitions::hook_trust_fix(&child.kind, child.profile.as_deref(), None),
         &mut Default::default(),
     )? {
-        interaction.notice(Notice::Trust(&notice))?;
-    }
-    if child.checkout.is_some()
-        && let Some(notice) = super::trust::preflight(
-            child.kind.as_str(),
-            &cwd,
-            adapter.folder_trust(
-                &cwd,
-                None,
-                &provider_login.env(&crate::agents::ambient_env()),
-            ),
-            Some(Unattended::Subagent),
-        )?
-    {
         interaction.notice(Notice::Trust(&notice))?;
     }
     let repo_root = if child.checkout.is_none() {
@@ -269,23 +345,43 @@ fn resume_resolved(
     } else {
         None
     };
-    match crate::agents::preflight_launch_dir(
-        adapter,
+    if let Some(unattended) = unattended {
+        if child.checkout.is_some()
+            && let Some(notice) = super::trust::preflight(
+                child.kind.as_str(),
+                &cwd,
+                adapter.folder_trust(&cwd, None, &provider_login.env(ambient)),
+                Some(unattended),
+            )?
+        {
+            interaction.notice(Notice::Trust(&notice))?;
+        }
+        match crate::agents::preflight_launch_dir(
+            adapter,
+            &cwd,
+            repo_root.as_deref(),
+            &provider_login.env(ambient),
+            crate::agents::LaunchDirMode::Supervised,
+        ) {
+            Ok(()) => {}
+            Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => bail!(
+                "supervised resume refused: {error}; the child cannot move, so launch a new child with `--cwd <DIR>`"
+            ),
+            Err(error) => return Err(error).context("supervised resume refused"),
+        }
+    } else if let Some(notice) = super::trust::preflight(
+        child.kind.as_str(),
         &cwd,
-        repo_root.as_deref(),
-        &provider_login.env(&crate::agents::ambient_env()),
-        crate::agents::LaunchDirMode::Supervised,
-    ) {
-        Ok(()) => {}
-        Err(error @ crate::agents::LaunchDirRefusal::Home { .. }) => bail!(
-            "supervised resume refused: {error}; the child cannot move, so launch a new child with `--cwd <DIR>`"
-        ),
-        Err(error) => return Err(error).context("supervised resume refused"),
+        adapter.folder_trust(&cwd, repo_root.as_deref(), &provider_login.env(ambient)),
+        None,
+    )? {
+        interaction.notice(Notice::Trust(&notice))?;
     }
     let runs = crate::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
-        .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let mut request = resume_request(child, run, &posture, action.clone(), login.clone(), None);
+        .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?
+        .clone();
+    let mut request = resume_request(child, &run, &posture, action.clone(), login.clone(), None);
     request.identity.params.isolation = capped.isolation;
     if !isolation.is_scoped() {
         crate::harness::launch::preflight_agent_process(
@@ -297,12 +393,12 @@ fn resume_resolved(
     }
     let launch_id = child
         .launch_id
-        .as_ref()
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("no launch identity recorded"))?;
-    let parent_pane = caller
-        .pane
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("parent has no bound pane"))?;
+    let parent_pane = parent.pane.as_ref().ok_or_else(|| {
+        let parent_name = parent.name.as_deref().unwrap_or(parent.agent_id.as_str());
+        anyhow::anyhow!("parent @{parent_name} has no bound pane")
+    })?;
     let mut parent_workspace = workspace.clone();
     if !parent_pane.session_name.is_empty() {
         parent_workspace
@@ -320,21 +416,201 @@ fn resume_resolved(
         child.lane_path().map(Path::new).unwrap_or(&cwd),
         &request,
     );
-    let _guard = crate::launcher::placement::lock_subagent_zone(store)?;
-    let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
-    if crate::launcher::placement::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
-        || current
-            .agents
+    Ok(PreparedChildResume {
+        cwd,
+        posture,
+        capped_isolation: capped.isolation,
+        logins,
+        catalog,
+        action,
+        login,
+        run,
+        request,
+        launch_id,
+        parent_pane_id: parent_pane.pane_id.clone(),
+        parent_workspace,
+        room,
+        env,
+    })
+}
+
+fn child_already_bound(
+    agents: &[AgentState],
+    child: &AgentState,
+    launch_id: &crate::ids::AgentSessionId,
+) -> bool {
+    crate::launcher::placement::launch_has_bound_pane(agents, &child.kind, launch_id)
+        || agents
             .iter()
             .any(|agent| agent.ended_at.is_none() && child.card_ref().matches(agent.card_ref()))
+}
+
+fn child_pane_cmd(
+    store: &Store,
+    request: &ExecRequest,
+    agents: &[AgentState],
+) -> Result<crate::mux::PaneCmd> {
+    Ok(crate::mux::PaneCmd {
+        argv: crate::harness::launch::exec_argv(
+            &crate::proc::rimz_exe(),
+            store.runtime_paths(),
+            request,
+        )?,
+        name: Some(crate::agents::pane_title::title(
+            crate::agents::pane_title::Seat::from_launch(
+                &request.kind,
+                request.identity.name.as_deref(),
+                &request.identity.params,
+            ),
+            agents,
+        )),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared implementation for production reopen and backend-injected unit tests"
+)]
+fn reopen_resolved(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    child: &AgentState,
+    caller_is_agent: bool,
+    machine: std::sync::Arc<crate::config::MachineConfig>,
+    ambient: &BTreeMap<String, String>,
+    backend_override: Option<&dyn crate::mux::MuxBackend>,
+    bind_timeout: Duration,
+    interaction: &mut impl Interaction,
+) -> Result<ReopenChildOutcome> {
+    let audit = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    let Some(parent) = crate::address::launched_parent(&audit.agents, child) else {
+        bail!("parent session is gone");
+    };
+    let parent_name = parent.name.as_deref().unwrap_or(parent.agent_id.as_str());
+    if parent.ended_at.is_some() {
+        bail!("parent @{parent_name} has ended");
+    }
+    if parent.pane.is_none() {
+        bail!("parent @{parent_name} has no bound pane");
+    }
+    let parent_isolation = Some(parent.runs_in(machine.agents.isolation));
+    let unattended = caller_is_agent.then_some(Unattended::Subagent);
+    let prepared = prepare_child_resume(
+        workspace,
+        store,
+        child,
+        parent,
+        parent_isolation,
+        unattended,
+        machine,
+        ambient,
+        interaction,
+    )?;
+    let _guard = crate::launcher::placement::lock_subagent_zone(store)?;
+    let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    if child_already_bound(&current.agents, child, &prepared.launch_id) {
+        return Ok(ReopenChildOutcome::AlreadyBound);
+    }
+    let pane = child_pane_cmd(store, &prepared.request, &current.agents)?;
+    let sidebar = prepared.room.sidebar_options(&prepared.cwd);
+    let backend = backend_override.unwrap_or_else(|| prepared.room.backend());
+    let live_panes = crate::launcher::placement::zone::list_subagent_zone_panes(
+        backend,
+        store,
+        &prepared.parent_workspace,
+    )
+    .with_context(|| format!("checking parent @{parent_name}'s pane"))?;
+    if !live_panes
+        .panes
+        .iter()
+        .any(|live| live.pane_id == prepared.parent_pane_id)
     {
+        bail!("parent @{parent_name} has no live pane");
+    }
+    let open_started = std::time::Instant::now();
+    match crate::launcher::placement::split_into_subagent_zone(
+        backend,
+        store,
+        &prepared.parent_workspace,
+        &prepared.cwd,
+        prepared.env,
+        sidebar,
+        &pane,
+        prepared
+            .request
+            .identity
+            .params
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::pin_name)
+            .as_ref()
+            .map(crate::ids::LaneName::as_str),
+        Some(prepared.parent_pane_id),
+        Some((&parent.kind, parent.launch_key())),
+        &prepared.run.run_id,
+    ) {
+        crate::launcher::placement::SubagentZoneOpen::Opened => {}
+        crate::launcher::placement::SubagentZoneOpen::Failed(error) => return Err(error.into()),
+    }
+    let open = open_started.elapsed();
+    let bound = crate::launcher::placement::zone::wait_for_subagent_pane_bind_for(
+        store,
+        &prepared.parent_workspace,
+        crate::launcher::placement::PaneBindWait {
+            run_id: &prepared.run.run_id,
+            launch_id: &prepared.launch_id,
+            kind: &child.kind,
+            caller: crate::diag::record::SubagentPaneBindCaller::Resume,
+            open,
+        },
+        bind_timeout,
+    );
+    if !bound {
+        bail!(
+            "reopened pane did not bind within {}s",
+            bind_timeout.as_secs().max(1)
+        );
+    }
+    Ok(ReopenChildOutcome::Reopened)
+}
+
+fn resume_resolved(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    child: &AgentState,
+    caller: &AgentState,
+    mut dispatch_request: DispatchRequest,
+    interaction: &mut impl Interaction,
+) -> Result<ResumeChildOutcome> {
+    let machine = crate::config::MachineConfig::load_lenient();
+    let ambient = crate::agents::ambient_env();
+    let prepared = prepare_child_resume(
+        workspace,
+        store,
+        child,
+        caller,
+        crate::config::Isolation::ambient(&ambient),
+        Some(Unattended::Subagent),
+        machine,
+        &ambient,
+        interaction,
+    )?;
+    let _guard = crate::launcher::placement::lock_subagent_zone(store)?;
+    let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    if child_already_bound(&current.agents, child, &prepared.launch_id) {
         return Ok(ResumeChildOutcome::AlreadyBound);
     }
-    if let Some(refusal) = limit_refusal(store, child, run, &logins, &catalog) {
+    if let Some(refusal) = limit_refusal(
+        store,
+        child,
+        &prepared.run,
+        &prepared.logins,
+        &prepared.catalog,
+    ) {
         return Ok(ResumeChildOutcome::LimitRefusal(refusal));
     }
     dispatch_request.resuming_recipient = Some(child.clone());
-    let result = match dispatch::dispatch(&parent_workspace, store, dispatch_request) {
+    let result = match dispatch::dispatch(&prepared.parent_workspace, store, dispatch_request) {
         Ok(result) => result,
         Err(DispatchErr::RecipientBecameLive) => return Ok(ResumeChildOutcome::AlreadyBound),
         Err(error) => return Ok(ResumeChildOutcome::DispatchFailed(error)),
@@ -355,36 +631,22 @@ fn resume_resolved(
     let opened = (|| -> Result<()> {
         let mut request = resume_request(
             child,
-            run,
-            &posture,
-            action,
-            login,
+            &prepared.run,
+            &prepared.posture,
+            prepared.action,
+            prepared.login,
             Some(message_id.clone()),
         );
-        request.identity.params.isolation = capped.isolation;
-        let pane = crate::mux::PaneCmd {
-            argv: crate::harness::launch::exec_argv(
-                &crate::proc::rimz_exe(),
-                store.runtime_paths(),
-                &request,
-            )?,
-            name: Some(crate::agents::pane_title::title(
-                crate::agents::pane_title::Seat::from_launch(
-                    &request.kind,
-                    request.identity.name.as_deref(),
-                    &request.identity.params,
-                ),
-                &current.agents,
-            )),
-        };
-        let sidebar = room.sidebar_options(&cwd);
+        request.identity.params.isolation = prepared.capped_isolation;
+        let pane = child_pane_cmd(store, &request, &current.agents)?;
+        let sidebar = prepared.room.sidebar_options(&prepared.cwd);
         let open_started = std::time::Instant::now();
         match crate::launcher::placement::split_into_subagent_zone(
-            room.backend(),
+            prepared.room.backend(),
             store,
-            &parent_workspace,
-            &cwd,
-            env,
+            &prepared.parent_workspace,
+            &prepared.cwd,
+            prepared.env,
             sidebar,
             &pane,
             request
@@ -395,8 +657,9 @@ fn resume_resolved(
                 .and_then(crate::ids::Lane::pin_name)
                 .as_ref()
                 .map(crate::ids::LaneName::as_str),
-            Some(parent_pane.pane_id.clone()),
-            &run.run_id,
+            Some(prepared.parent_pane_id),
+            Some((&caller.kind, caller.launch_key())),
+            &prepared.run.run_id,
         ) {
             crate::launcher::placement::SubagentZoneOpen::Opened => {}
             crate::launcher::placement::SubagentZoneOpen::Failed(error) => return Err(error.into()),
@@ -404,10 +667,10 @@ fn resume_resolved(
         let open = open_started.elapsed();
         crate::launcher::placement::wait_for_subagent_pane_bind(
             store,
-            &parent_workspace,
+            &prepared.parent_workspace,
             crate::launcher::placement::PaneBindWait {
-                run_id: &run.run_id,
-                launch_id,
+                run_id: &prepared.run.run_id,
+                launch_id: &prepared.launch_id,
                 kind: &child.kind,
                 caller: crate::diag::record::SubagentPaneBindCaller::Resume,
                 open,
@@ -420,7 +683,7 @@ fn resume_resolved(
             message_id,
             crate::store::writer::DeliveryFailureDisposition::Terminal,
             &format!("{error:#}"),
-            &parent_workspace.session_name,
+            &prepared.parent_workspace.session_name,
         )?;
         return Ok(ResumeChildOutcome::DeliveryFailed(error));
     }

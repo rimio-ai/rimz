@@ -1899,21 +1899,197 @@ mod agent_ref {
     }
 
     #[test]
-    fn children_are_refused_with_subagents() {
-        for depth in [None, Some(1)] {
-            let fixture = Fixture::new(
-                LaunchParams {
-                    launch_depth: depth,
-                    ..Default::default()
-                },
-                false,
-                Some("parent-session"),
-            );
-            let output = fixture.output("@bright-otter");
+    fn children_refuse_without_pointing_at_rimz_subagents() {
+        // Provider-native child (launch_depth == None) is refused by @handle and bare id.
+        let native = Fixture::new(
+            LaunchParams {
+                launch_depth: None,
+                ..Default::default()
+            },
+            false,
+            Some("parent-session"),
+        );
+        for reference in ["@bright-otter", SESSION] {
+            let output = native.output(reference);
             assert_eq!(output.status.code(), Some(1));
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(stderr.contains("rimz subagents"), "{stderr}");
+            assert_eq!(
+                stderr.lines().find_map(|line| line.strip_prefix("error: ")),
+                Some("@bright-otter is a provider-native subagent and cannot be reopened"),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("rimz subagents"), "{stderr}");
         }
+        native.assert_no_placement();
+
+        // Launched child whose parent is missing is refused without pointing at rimz subagents.
+        let orphan = Fixture::new(
+            LaunchParams {
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+            false,
+            Some("parent-session"),
+        );
+        for reference in ["@bright-otter", SESSION] {
+            let output = orphan.output(reference);
+            assert_eq!(output.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                stderr.lines().find_map(|line| line.strip_prefix("error: ")),
+                Some("cannot reopen @bright-otter: parent session is gone"),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("rimz subagents"), "{stderr}");
+        }
+        orphan.assert_no_placement();
+
+        // `rimz agents <kind> --resume=<child>` still refuses children via validate_recorded_resume.
+        let provider_refusal = orphan
+            .command_args(&["claude", &format!("--resume={SESSION}")])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(provider_refusal.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&provider_refusal.stderr);
+        assert_eq!(
+            stderr.lines().find_map(|line| line.strip_prefix("error: ")),
+            Some(
+                "@bright-otter is a child session; reopen it with `rimz agents resume @bright-otter`"
+            ),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("rimz subagents"), "{stderr}");
+    }
+
+    #[test]
+    fn launched_child_resume_refuses_posture_flags() {
+        let fixture = Fixture::new(
+            LaunchParams {
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+            false,
+            Some("parent-session"),
+        );
+        let output = fixture
+            .command_args(&["resume", "@bright-otter", "--model", "opus"])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("error: "))
+            .unwrap_or("");
+        assert!(
+            first.contains("posture") && first.contains("@bright-otter"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("rimz subagents"), "{stderr}");
+        fixture.assert_no_placement();
+    }
+
+    #[test]
+    fn live_launched_child_is_focused_or_skipped_under_bg_and_agent_caller() {
+        // Use a live non-ancestor process as the child's runtime owner so a plain human
+        // invocation is not classified as an agent caller via process ancestry.
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let dummy = ChildGuard(
+            Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn sleep"),
+        );
+        let dummy_pid = dummy.0.id();
+        let fixture = Fixture::new(
+            LaunchParams {
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+            false,
+            Some("parent-session"),
+        );
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let mut live_obs =
+            AgentLifecycleObservation::new(Some(SESSION.into()), LifecycleSignal::Registered);
+        live_obs.launch_id = Some("saved-launch".into());
+        live_obs.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            SESSION,
+            dummy_pid,
+            rimz::proc::process_start_token(dummy_pid),
+        ));
+        fixture
+            .env
+            .store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &fixture.kind,
+                "rimz.agent-resumed",
+                &live_obs,
+            ))
+            .unwrap();
+
+        // Human call focuses the live child pane instead of refusing or opening a second pane.
+        let focused = fixture.output("@bright-otter");
+        assert!(
+            focused.status.success(),
+            "{}",
+            String::from_utf8_lossy(&focused.stderr)
+        );
+        assert!(
+            fixture
+                .trace()
+                .contains("action\tfocus-pane-id\tterminal_2"),
+            "{}",
+            fixture.trace()
+        );
+        assert!(!fixture.trace().contains("action\tnew-tab"));
+        assert!(!fixture.trace().contains("action\tnew-pane"));
+
+        // --bg takes no focus.
+        std::fs::write(&fixture.trace, "").unwrap();
+        let bg = fixture
+            .command_args(&["resume", "@bright-otter", "--bg"])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            bg.status.success(),
+            "{}",
+            String::from_utf8_lossy(&bg.stderr)
+        );
+        assert!(
+            !fixture.trace().contains("focus-pane-id"),
+            "--bg must take no focus: {}",
+            fixture.trace()
+        );
+
+        // Agent caller takes no focus.
+        std::fs::write(&fixture.trace, "").unwrap();
+        let agent_call = fixture
+            .command("@bright-otter")
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_LAUNCH_ID", "saved-launch")
+            .env("RIMZ_PANE_ID", "zellij:terminal_2")
+            .bounded_output()
+            .unwrap();
+        assert!(
+            agent_call.status.success(),
+            "{}",
+            String::from_utf8_lossy(&agent_call.stderr)
+        );
+        assert!(
+            !fixture.trace().contains("focus-pane-id"),
+            "agent caller must take no focus: {}",
+            fixture.trace()
+        );
     }
 
     #[test]

@@ -3087,7 +3087,8 @@ path = "crates/rimz/src/launcher"
 # from the CLI, so `rimz message` and the MCP `message` tool resume alike (+6).
 # LayoutRoom::enter, launch_layout and require_named_worktree are the one layout launch the CLI
 # and the MCP launch tools share (+4).
-surface-budget = 213
+# child_resume::reopen_child and ReopenChildOutcome reopen an ended launched child without a message (+2).
+surface-budget = 215
 
 [[verdict]]
 kind = "item"

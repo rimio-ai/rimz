@@ -20,6 +20,7 @@ use crate::mux::{
 use crate::pane::PaneRef;
 
 const SUBAGENT_PANE_BIND_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const SUBAGENT_REOPEN_BIND_TIMEOUT: Duration = Duration::from_secs(10);
 const SUBAGENT_PANE_BIND_POLL: Duration = Duration::from_millis(25);
 
 pub struct PaneBindWait<'a> {
@@ -279,7 +280,7 @@ pub fn lock_subagent_zone(
     )
 }
 
-/// Open a supervised child in the caller's durable subagent zone, falling
+/// Open a supervised child in the parent's durable subagent zone, falling
 /// back to a companion tab when mux placement is unavailable.
 #[expect(
     clippy::too_many_arguments,
@@ -295,6 +296,7 @@ pub fn split_into_subagent_zone(
     pane: &PaneCmd,
     channel: Option<&str>,
     after: Option<PaneId>,
+    parent: Option<(&AgentKind, &AgentSessionId)>,
     run_id: &crate::RunId,
 ) -> SubagentZoneOpen {
     let title = channel.map_or_else(|| "subagents".to_owned(), channel_companion_title);
@@ -345,10 +347,16 @@ pub fn split_into_subagent_zone(
         store.runtime_paths(),
         &mut projection.agents,
     );
-    let caller = match crate::harness::ancestry::resolve_calling_agent(&projection.agents) {
-        Ok(caller) => caller,
-        Err(err) => {
-            lookup_failed(SubagentZoneLookup::Caller, format!("{err:#}"));
+    let caller = match parent
+        .and_then(|(kind, id)| crate::address::launch_row(&projection.agents, kind, id))
+    {
+        Some(caller) => caller,
+        None => {
+            let reason = match parent {
+                Some((kind, id)) => format!("parent {kind}:{id} not found in audit projection"),
+                None => "no parent identity supplied for subagent zone".to_owned(),
+            };
+            lookup_failed(SubagentZoneLookup::Caller, reason);
             return open_companion(title, after);
         }
     };
@@ -451,7 +459,7 @@ fn ambiguous_pane_open(error: &crate::mux::MuxErr) -> bool {
     )
 }
 
-fn list_subagent_zone_panes(
+pub(in crate::launcher) fn list_subagent_zone_panes(
     backend: &dyn crate::mux::MuxBackend,
     store: &crate::Store,
     workspace: &crate::ResolvedWorkspace,
@@ -473,6 +481,15 @@ pub fn wait_for_subagent_pane_bind(
     workspace: &crate::ResolvedWorkspace,
     wait: PaneBindWait<'_>,
 ) -> bool {
+    wait_for_subagent_pane_bind_for(store, workspace, wait, SUBAGENT_PANE_BIND_TIMEOUT)
+}
+
+pub(crate) fn wait_for_subagent_pane_bind_for(
+    store: &crate::Store,
+    workspace: &crate::ResolvedWorkspace,
+    wait: PaneBindWait<'_>,
+    timeout: Duration,
+) -> bool {
     let sink = crate::diag::DiagSink::under(
         store.paths().root.clone(),
         workspace.workspace_id.clone(),
@@ -487,13 +504,13 @@ pub fn wait_for_subagent_pane_bind(
                 .map(|projection| projection.agents)
                 .map_err(|err| err.to_string())
         },
-        SUBAGENT_PANE_BIND_TIMEOUT,
+        timeout,
         SUBAGENT_PANE_BIND_POLL,
     );
     if !bound {
         tracing::debug!(
             agent = %wait.launch_id,
-            timeout_ms = SUBAGENT_PANE_BIND_TIMEOUT.as_millis(),
+            timeout_ms = timeout.as_millis(),
             "subagent pane bind was not visible before the launch returned",
         );
     }
