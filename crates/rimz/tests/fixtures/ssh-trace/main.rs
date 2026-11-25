@@ -49,6 +49,7 @@
 //! control marker until the named file exists, then exits from the master
 //! exit plan. It overrides `$RIMZ_TEST_SSH_MASTER_EXIT_MS`; without either,
 //! an established master parks forever.
+//! `$RIMZ_TEST_CONTROL_CHECK_DELAY_MS` delays each `ssh -O check` answer.
 //! `$RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN` scripts remote `test -d` probes.
 //! `$RIMZ_TEST_SSH_WEB_PREP_PLAN` scripts web-prep exits, overriding `$RIMZ_TEST_SSH_WEB_PREP_STATUS`.
 //! `$RIMZ_TEST_SSH_TUNNEL_PLAN` scripts web tunnel/control-forward exits;
@@ -683,6 +684,9 @@ fn is_path_preflight(argv: &[String]) -> bool {
 }
 
 fn exit_control_check(argv: &[String]) -> ! {
+    if let Some(delay) = env_millis("RIMZ_TEST_CONTROL_CHECK_DELAY_MS") {
+        std::thread::sleep(delay);
+    }
     let ready = control_master_marker(argv)
         .map(|path| path.exists())
         .unwrap_or(true);

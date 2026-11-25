@@ -191,7 +191,7 @@ The background master proves transport and authentication before anything paints
 | `Idle` | enter `Connecting` | An attempt is due (immediately on the initial connection, then when the pacer allows) and the control directory prepares cleanly. |
 | `Connecting` | connected | `-O check` succeeds and the panel's minimum display has elapsed. |
 | `Connecting` | enter `Ready` | `-O check` succeeds while the panel still owes display time. |
-| `Connecting` | failed | The child exits, or `master_deadline` (30 seconds) passes. |
+| `Connecting` | failed | The child exits (checked before `-O check` and again before the deadline kill), or `master_deadline` (30 seconds) passes while the child is still running. |
 | `Ready` | connected | The panel's release time arrives. |
 | `Ready` | failed | The child exits. |
 
