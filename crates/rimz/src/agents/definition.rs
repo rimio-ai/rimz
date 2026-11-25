@@ -1259,7 +1259,7 @@ impl AgentDefinition {
                 };
                 ("hookSpecificOutput".to_owned(), output)
             }
-            Some(HookContextReply::TopLevel { key }) if decoded.event_name() == "postToolUse" => {
+            Some(HookContextReply::TopLevel { event, key }) if decoded.event_name() == event => {
                 (key.to_owned(), Value::from(text))
             }
             _ => return false,
@@ -1801,8 +1801,21 @@ pub enum HookContextReply {
     /// `PostToolUse` nests the text under `hookSpecificOutput.additionalContext`,
     /// echoing `hookEventName` when the agent requires it.
     HookSpecificOutput { event_name: bool },
-    /// `postToolUse` carries the text at the top level under `key`.
-    TopLevel { key: &'static str },
+    /// The post-tool `event` carries the text at the top level under `key`.
+    TopLevel {
+        event: &'static str,
+        key: &'static str,
+    },
+}
+
+impl HookContextReply {
+    /// The post-tool event whose reply carries the context.
+    pub fn event(self) -> &'static str {
+        match self {
+            Self::HookSpecificOutput { .. } => "PostToolUse",
+            Self::TopLevel { event, .. } => event,
+        }
+    }
 }
 
 /// Operational policy that cannot be derived from integration coverage.

@@ -495,7 +495,8 @@ upward-dependencies = [
 # parked turn on a provider rest report across the adapter/CLI hook seam (+2).
 # AutoCompactEnforcer, auto_compact_enforcer, and their facade re-exports derive whether the
 # provider or RimZ enforces a kind's `auto-compact` ceiling (+4).
-surface-budget = 1372
+# HookContextReply::event names the post-tool event the hook feed claims a deadline rung on (+1).
+surface-budget = 1373
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -10955,7 +10956,7 @@ reason = "The bundle every adapter implements and AgentDefinition holds as a tra
 [[verdict]]
 kind = "item"
 key = "agents::definition::HookContextReply"
-reason = "Floored pub by the public Capabilities::hook_context field the binary reads (cli/hooks/lifecycle/mod.rs and harness/deadline.rs::host_stop call .is_some()); the binary never names the type, so it is not re-exported from agents (pass 32a)."
+reason = "Floored pub by the public Capabilities::hook_context field the binary reads (harness/deadline.rs::host_stop_delay calls .is_some(), and cli/hooks.rs::attach_deadline_context gates on HookContextReply::event); the binary never names the type, so it is not re-exported from agents (pass 32a)."
 
 [[verdict]]
 kind = "item"

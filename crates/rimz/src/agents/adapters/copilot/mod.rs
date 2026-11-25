@@ -76,6 +76,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: Some(HookContextReply::TopLevel {
+            event: "postToolUse",
             key: "additionalContext",
         }),
         prompt_context: false,

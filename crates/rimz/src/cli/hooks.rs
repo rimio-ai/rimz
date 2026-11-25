@@ -1097,11 +1097,9 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
                 if inline != rimz::agents::HookReply::Silent {
                     reply = inline;
                 }
-                if matches!(event_name.as_str(), "PostToolUse" | "postToolUse") {
-                    let rung = attach_deadline_context(&store, agent, &event_name, &payload);
-                    if rung != rimz::agents::HookReply::Silent {
-                        reply = rung;
-                    }
+                let rung = attach_deadline_context(&store, agent, &event_name, &payload);
+                if rung != rimz::agents::HookReply::Silent {
+                    reply = rung;
                 }
                 return emit_reply(&reply);
             }
@@ -1130,11 +1128,9 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         }
         return emit_reply(&reply);
     }
-    if matches!(event_name.as_str(), "PostToolUse" | "postToolUse") {
-        let rung = attach_deadline_context(&store, agent, &event_name, &payload);
-        if rung != rimz::agents::HookReply::Silent {
-            reply = rung;
-        }
+    let rung = attach_deadline_context(&store, agent, &event_name, &payload);
+    if rung != rimz::agents::HookReply::Silent {
+        reply = rung;
     }
     if let Some(connection) = sandbox_connection {
         if let Err(error) = connection.nudge(through) {
@@ -1157,7 +1153,11 @@ fn attach_deadline_context(
     event: &str,
     payload: &Value,
 ) -> rimz::agents::HookReply {
-    if agent.spec().capabilities.hook_context.is_none()
+    if agent
+        .spec()
+        .capabilities
+        .hook_context
+        .is_none_or(|reply| reply.event() != event)
         || payload
             .get("agent_id")
             .and_then(Value::as_str)
