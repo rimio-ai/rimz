@@ -1,4 +1,5 @@
 //! Git and linked pack sources, durable installation records, and namespace claims.
+//! The definition, skill, and workflow readers own item scanning.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
