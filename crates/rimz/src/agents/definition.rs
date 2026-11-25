@@ -1800,6 +1800,9 @@ pub enum HookContextReply {
 }
 
 /// Operational policy that cannot be derived from integration coverage.
+///
+/// A new field also takes a row in the capabilities table of `docs/internals/agents/adapter.md`
+/// and a place in the derived spec table of `docs/internals/agents/plugin.md`.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// The reply shape when the agent accepts additive model context in a
