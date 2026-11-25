@@ -671,6 +671,8 @@ impl Store {
             .all(|claim| live.iter().any(|message| holds(claim, message))))
     }
 
+    /// The newest 500 history rows. Whether one message is on record is asked of
+    /// [`message::read_status`], which reads the queue and every retained history bucket.
     pub fn list_message_history(&self) -> Result<Vec<MessageRecord>> {
         Ok(message::list_history(
             &self.inner.paths.message_history_dir,
