@@ -982,6 +982,11 @@ reason = "MachineConfig carries one definitions load's trait claims to the proje
 
 [[verdict]]
 kind = "item"
+key = "config::definitions::LoadContexts"
+reason = "MachineConfig retains both namespace load contexts from one definitions load so project rows and later bare-name sources build without rereading disk."
+
+[[verdict]]
+kind = "item"
 key = "config::definitions::hook_trust_fix"
 reason = "CLI launch refusals and rebirth share one user-run fix, resolving team seats to a standalone base profile or kind."
 
@@ -1264,7 +1269,8 @@ upward-dependencies = [
 # resolve_seat_setting resolves after-launch profile settings in launch chain order (+1).
 # AutoCompactWindow and AutoCompactDefault carry `[harness] auto_compact`'s tri-state machine
 # setting and per-enforcer default through definitions, launch resolution, and CLI config (+2).
-surface-budget = 315
+# LoadContexts retains both namespace load contexts on MachineConfig for disk-free project builds (+1).
+surface-budget = 316
 
 [[verdict]]
 kind = "item"

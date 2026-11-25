@@ -7889,3 +7889,25 @@ fn shadowed_qualified_foreign_parent_failure_is_reported_once() {
         loaded.errors
     );
 }
+
+#[test]
+fn machine_config_retains_load_contexts_with_kind_bases_only() {
+    assert!(
+        crate::config::MachineConfig::default()
+            .definition_contexts
+            .is_none()
+    );
+
+    let root = fixture();
+    let cfg_path = root.path().join("config.toml");
+    let first = crate::config::MachineConfig::parse_text(&cfg_path, "", root.path()).unwrap();
+    let second = crate::config::MachineConfig::parse_text(&cfg_path, "", root.path()).unwrap();
+    assert_eq!(first, second);
+    let contexts = first
+        .definition_contexts
+        .as_ref()
+        .expect("machine load retains definition load contexts");
+    assert!(contexts.agents.shared.bases.contains_key("claude"));
+    assert!(contexts.agents.subagents.is_some());
+    assert!(contexts.subagents.subagents.is_none());
+}

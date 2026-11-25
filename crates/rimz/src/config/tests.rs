@@ -418,9 +418,10 @@ fn missing_or_empty_file_is_default_off() {
     let dir = tempdir().expect("tempdir");
     for path in [dir.path().join("absent.toml"), write(&dir, "")] {
         let config = load_no_fragments(&path).expect("load");
-        // The trait claims keep the home they were loaded from.
+        // The trait claims and load contexts keep the home they were loaded from.
         let unhomed = MachineConfig {
             consensus_pieces: Default::default(),
+            definition_contexts: None,
             ..config.clone()
         };
         assert_eq!(unhomed, MachineConfig::default());
