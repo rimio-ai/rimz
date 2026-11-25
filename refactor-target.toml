@@ -8751,7 +8751,7 @@ reason = "The shared launch chokepoint asks the provider whether its effective d
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::InstallationCapability"
-reason = "Installation defaults no adapter overrides stay trait defaults: the trait default is the single home for 'this agent does not do that' (agents/AGENTS.md), and AgentDefinition forwards by Deref (pass 18a)."
+reason = "Installation defaults no adapter overrides stay trait defaults: the trait default is the single home for 'this agent does not do that' (docs/internals/agents/adapter.md), and AgentDefinition forwards by Deref (pass 18a)."
 
 [[verdict]]
 kind = "item"

@@ -1,13 +1,13 @@
 # Agent adapters
 
-Local contract for `crates/rimz/src/agents/`, the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
+Local contract for `crates/rimz/src/agents/`, the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md). [adapters/](./adapters/AGENTS.md) and [spending/](./spending/AGENTS.md) extend this one.
 
 Behaviour lives in `docs/internals/agents/`: [adapter.md](../../../../docs/internals/agents/adapter.md) for this layer, [model.md](../../../../docs/internals/agents/model.md) for the agent model it feeds, and one `adapter_<kind>.md` per kind. Upstream protocol references are `docs/externals/agent-adapter/<kind>-reference.md`, and [agent-adapters.md](../../../../docs/contributing/agent-adapters.md) is the playbook for a new built-in.
 
 ## The boundary
 
 - **Invariant.** An adapter is the single place an agent protocol is normalized, the model id, display name, and effort separated included ([model.md](../../../../docs/internals/agents/model.md#rich-context)). Provider modules stay private below [`adapters/`](./adapters/mod.rs): code outside `agents` resolves an `AgentDefinition` and calls neutral services, and `cargo xtask invariants` rejects a provider module path or a concrete adapter type named there.
-- An adapter implements every capability trait, with an empty `impl` where the agent has no behaviour. The trait default is the single home for "this agent does not do that", and a shared decision keeps one home in the neutral service that owns it: an adapter supplies inputs, and neither it nor a dispatch layer restates either.
+- A shared decision keeps one home in the neutral service that owns it: an adapter supplies inputs, and neither the adapter nor a dispatch layer restates the decision.
 - Adapters return provider-neutral intent, emit only the normalized outputs generic flows consume, and make no durable write. A provider-only capability stays in its provider module until a second generic consumer proves an adapter seam.
 - Nothing under `agents` imports `store`, and (**invariant**) no production code here imports the sidebar: workspace inputs flow in through `agents::spending`.
 - **Invariant.** A provider home is an account. Every host-side read of a provider home resolves from the login env map its caller passes through the adapter's `config_home`, and for a mounted-login provider in shared mode, credential readers and mount planning resolve the account's login directory from that same login env map through the adapter's own credential resolution. The gate rejects a process-env read of any provider home or login-home key outside tests, and a whole-process-env snapshot anywhere in this tree but [`login.rs`](./login.rs).
@@ -23,9 +23,6 @@ Before a change of one of these kinds, read the section named beside it and do w
 - A provider's launch argv or `--settings` JSON, an adapter's permission arguments, `process_names` or `bin_names`, `ROUTINE_RIMZ_PREFIXES`, or a new `rimz` verb an agent runs from its own pane in a flow RimZ drives: [Launch surface and routine verbs](../../../../docs/contributing/agent-adapters.md#launch-surface-and-routine-verbs).
 - A hook's decoder, reply, catalog, install, or installed timeout: [Step 5 — Implement the hook wire and install](../../../../docs/contributing/agent-adapters.md#step-5--implement-the-hook-wire-and-install).
 - A refresh that writes the context sidecar on another hook or passes an unchanged-stat gate, an input or a store or sidecar read added on the hook path, what `local_conversation_present` answers, an `Ignored` edge in `lifecycle::step`, a turn settle stored from a new source, or an adapter's `ContextCapability::context_cost`: [Context refresh and the hook path](../../../../docs/contributing/agent-adapters.md#context-refresh-and-the-hook-path).
-- A declared coverage or lifecycle-hook verdict, a preset, an install version gate or hook set, or a conformance failure: [Coverage and conformance](../../../../docs/contributing/agent-adapters.md#coverage-and-conformance).
-- A spending session key split, a rule that identifies a transcript by file name, a spend parser that counts a new source, or the order of price lookup candidates: [Spend and pricing](../../../../docs/contributing/agent-adapters.md#spend-and-pricing).
-- The room spend slice (`aggregate_scoped_rollups` in [`spending/aggregate.rs`](./spending/aggregate.rs) and what it calls) or the spending walker's memo build (`SpendingWalker::ensure_memo`): [Timing comparisons](../../../../docs/contributing/running-gates.md#timing-comparisons).
+- A rule that identifies a transcript by file name, or the order of price lookup candidates: [Spend and pricing](../../../../docs/contributing/agent-adapters.md#spend-and-pricing).
 - A reading of a login's plan, metering, account id, or version, or a surface that shows one: [The account record](../../../../docs/internals/agents/providers.md#the-account-record).
-- A new write to a provider cache or a spending publication, each of which has one writer: [The shared caches](../../../../docs/internals/agents/providers.md#the-shared-caches) and [What reads the totals](../../../../docs/internals/agents/spending.md#what-reads-the-totals).
-- A new file in an adapter directory: [Changing an existing adapter](../../../../docs/contributing/agent-adapters.md#changing-an-existing-adapter).
+- A new write to a provider cache, each of which has one writer: [The shared caches](../../../../docs/internals/agents/providers.md#the-shared-caches).
