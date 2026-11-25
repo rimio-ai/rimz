@@ -302,6 +302,13 @@ impl Store {
                     let mode = crate::store::message::transition_mode(intent.observation);
                     if !stale
                         && observation.retired_context_tokens.is_none()
+                        && !matches!(
+                            intent.observation.signal,
+                            LifecycleSignal::CompactionEnded {
+                                auto: Some(true),
+                                ..
+                            }
+                        )
                         && crate::agents::spec_by_kind(intent.agent_kind.as_str())
                             .is_some_and(|spec| spec.capabilities.context_lags_compaction)
                         && transition.is_some_and(|transition| {

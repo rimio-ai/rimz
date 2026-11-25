@@ -1000,7 +1000,11 @@ fn successful_end_without_an_open_bracket_retires_the_usage() {
         // The `PreCompact` that opens the bracket was lost.
         let agent = reduce_agent_states(&[
             lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
-            lifecycle_reading("PostCompact", compaction_ended(Some(false)), closing),
+            lifecycle_reading(
+                "PostCompact",
+                compaction_ended(Some(false)),
+                closing.clone(),
+            ),
         ])
         .remove(0);
 
@@ -1009,6 +1013,90 @@ fn successful_end_without_an_open_bracket_retires_the_usage() {
         assert_eq!(agent.retired_context_tokens, Some(85_000), "{label}");
         assert_eq!(agent.compaction_count, 1, "{label}");
     }
+}
+
+#[test]
+fn in_turn_automatic_close_clears_unprompted_latch_but_parked_keeps_it() {
+    use crate::store::event::EventEnvelope;
+    use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+
+    let sent_command = |source: &str, secs: i64| {
+        let state = crate::agents::AgentState::stub(source, "sess-1", AgentStatus::Running);
+        let mut command = MessageRecord::new(
+            workspace(),
+            &state,
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_body(MessageBody::Command);
+        command.status = MessageStatus::Sent;
+        let mut envelope = EventEnvelope::message_event(
+            &command,
+            "session",
+            crate::store::event::MessageEventMethod::Sent,
+            None,
+        );
+        envelope.timestamp = Timestamp::from_second(secs).unwrap();
+        envelope
+    };
+
+    // Open Running turn: command Sent sets the unprompted latch, and an unbracketed
+    // automatic close clears it and counts the compaction once.
+    let mut open_events = vec![
+        lifecycle_at("antigravity", 1, "PreInvocation", signal("turn_started")),
+        sent_command("antigravity", 2),
+        lifecycle_at(
+            "antigravity",
+            3,
+            "PostInvocation",
+            compaction_ended(Some(true)),
+        ),
+    ];
+    let after_open = reduce_agent_states(&open_events).remove(0);
+    assert_eq!(after_open.status, AgentStatus::Running);
+    assert_ne!(after_open.phase, TurnPhase::Parked);
+    assert_eq!(after_open.compaction_count, 1);
+    assert_eq!(after_open.compacted_awaiting_prompt, None);
+
+    open_events.push(lifecycle_at(
+        "antigravity",
+        4,
+        "SessionStart",
+        compaction_ended(None),
+    ));
+    let after_echo = reduce_agent_states(&open_events).remove(0);
+    assert_eq!(after_echo.compaction_count, 1);
+    assert_eq!(after_echo.compacted_awaiting_prompt, None);
+
+    // Parked row: the automatic close keeps the row parked and does not clear the latch.
+    let parked_events = vec![
+        lifecycle_at("antigravity", 1, "PreInvocation", signal("turn_started")),
+        lifecycle_at(
+            "antigravity",
+            2,
+            "Stop",
+            serde_json::json!({
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": true
+            }),
+        ),
+        sent_command("antigravity", 3),
+        lifecycle_at(
+            "antigravity",
+            4,
+            "PostInvocation",
+            compaction_ended(Some(true)),
+        ),
+    ];
+    let after_parked = reduce_agent_states(&parked_events).remove(0);
+    assert_eq!(after_parked.status, AgentStatus::Running);
+    assert_eq!(after_parked.phase, TurnPhase::Parked);
+    assert_eq!(after_parked.compaction_count, 1);
+    assert!(
+        after_parked.compacted_awaiting_prompt.is_some(),
+        "an automatic close on a parked row keeps the unprompted latch"
+    );
 }
 
 #[test]

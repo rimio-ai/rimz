@@ -228,6 +228,13 @@ fn owed_continue_clears_on_interrupt_clear_or_user_prompt_and_a_clear_rearms_the
             &cleared,
         ),
         (
+            "unbracketed automatic compaction inside the open turn",
+            vec![
+                json!({"agent_id": "sess-1", "signal": {"signal": "compaction_ended", "auto": true}}),
+            ],
+            &cleared,
+        ),
+        (
             "state snapshot",
             vec![
                 json!({"agent_id": "sess-1", "signal": {"signal": "turn_started"}, "state_snapshot": true}),

@@ -53,7 +53,12 @@ pub(super) fn confirm_sent_message_for_lifecycle(
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty()),
         },
-        LifecycleSignal::Compacting => rimz::store::writer::DeliveryAck::Compaction,
+        LifecycleSignal::Compacting
+        | LifecycleSignal::CompactionEnded {
+            auto: Some(_),
+            failed: false,
+            echo: false,
+        } => rimz::store::writer::DeliveryAck::Compaction,
         _ => return Vec::new(),
     };
     confirm_sent_message_with_ack(store, agent, recorded, workspace, ack)

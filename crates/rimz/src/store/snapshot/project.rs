@@ -1663,10 +1663,11 @@ fn fold_lifecycle(
     match &signal {
         // An unfailed manual close, or an unfailed close landing at rest that
         // carries a known trigger, closes an open bracket (echo included), or
-        // completes a compaction, compacted a context no prompt has used since;
-        // a non-manual close that resumed a turn is mid-request. A failed close
-        // or an unbracketed triggerless echo or linked continuation leaves the
-        // marker as it was so a continuation can inherit its predecessor's.
+        // completes a compaction, compacted a context no prompt has used since.
+        // An unfailed non-echo automatic close landing in an open non-parked
+        // turn continues work and clears the marker. A failed close, or an
+        // unbracketed triggerless echo or linked continuation (which inherits
+        // its predecessor's marker instead), leaves the marker as it was.
         lifecycle::LifecycleSignal::CompactionEnded {
             auto,
             failed: false,
@@ -1676,6 +1677,15 @@ fn fold_lifecycle(
                 && (auto.is_some() || compaction_closed || completed_compaction)) =>
         {
             state.compacted_awaiting_prompt = Some(timestamp);
+        }
+        lifecycle::LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+            echo: false,
+        } if matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
+            && next.phase != lifecycle::TurnPhase::Parked =>
+        {
+            state.compacted_awaiting_prompt = None;
         }
         lifecycle::LifecycleSignal::TurnStarted { .. } => state.compacted_awaiting_prompt = None,
         _ => {}

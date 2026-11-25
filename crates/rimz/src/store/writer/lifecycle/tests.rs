@@ -2298,6 +2298,37 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
         );
     }
 
+    // 5b. An automatic close (`auto: Some(true)`) fires after the planner has already updated the
+    // sidecar to the fresh post-compaction reading, so it does not stamp or withhold that reading.
+    {
+        let (_dir, store) = test_store();
+        write_sidecar(&store, "antigravity", "sess-1", Some(10_539));
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        append(
+            &store,
+            "antigravity",
+            "sess-1",
+            "PostInvocation",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(true),
+                failed: false,
+                echo: false,
+            },
+        );
+        assert_eq!(last_params(&store).get("retired_context_tokens"), None);
+        let snap = store.snapshot_cached().unwrap();
+        let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
+        assert_eq!(row.retired_context_tokens, None);
+        assert_eq!(row.context_used_tokens(), Some(10_539));
+        assert_eq!(row.occupied_context_tokens(), Some(10_539));
+    }
+
     // 6. Non-declaring kinds never stamp the field and omit it from serialized bytes.
     for kind in ["claude", "kimi", "copilot"] {
         let (_dir, store) = test_store();
