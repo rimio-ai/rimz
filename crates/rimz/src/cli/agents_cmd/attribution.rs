@@ -357,10 +357,10 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
     if !report.models.is_empty() {
         writeln!(w, "\n**Models**\n")?;
         for stat in &report.models {
-            let name = stat.model.as_deref().map_or_else(
-                || "unknown".to_owned(),
-                |model| markdown_code(&rimz::agents::model_display::display_model(model)),
-            );
+            let name = stat
+                .model
+                .as_deref()
+                .map_or_else(|| "unknown".to_owned(), markdown_code);
             writeln!(w, "- {name} — {}", markdown_escape(&model_row_label(stat)))?;
         }
     }
@@ -409,10 +409,7 @@ fn since_label(since: jiff::Timestamp) -> String {
 }
 
 fn model_label(member: &AttributionMember) -> String {
-    let model = member.model.as_deref().map(|model| {
-        rimz::agents::model_display::display_model_for_kind(model, Some(member.kind.as_str()))
-    });
-    match (model.as_deref(), member.effort.as_deref()) {
+    match (member.model.as_deref(), member.effort.as_deref()) {
         (Some(model), Some(effort)) => format!("{model}@{effort}"),
         (Some(model), None) => model.to_owned(),
         (None, Some(effort)) => format!("@{effort}"),
@@ -497,11 +494,8 @@ fn messages_label(member: &AttributionMember) -> Option<String> {
     })
 }
 
-fn model_name(stat: &ModelStat) -> String {
-    stat.model.as_deref().map_or_else(
-        || "unknown".to_owned(),
-        rimz::agents::model_display::display_model,
-    )
+fn model_name(stat: &ModelStat) -> &str {
+    stat.model.as_deref().unwrap_or("unknown")
 }
 
 fn model_row_label(stat: &ModelStat) -> String {
