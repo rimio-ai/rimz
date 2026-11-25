@@ -16860,37 +16860,23 @@ fn agents_compact_queues_for_a_running_agent() {
             named(&env, "sess-queued-compact", "@claude")
         )) && receipt
             .trim_end()
-            .ends_with("is running; delivers at its next turn boundary, then continues it"),
+            .ends_with("is running; delivers at its next turn boundary, with no continue after"),
         "{receipt}"
     );
     let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages.len(), 1, "{messages:?}");
     let command = &messages[0];
     assert_eq!(command.status, MessageStatus::Queued);
     assert_eq!(command.body, MessageBody::Command);
     assert_eq!(command.gate, DeliveryGate::Done);
-    let continuation = &messages[1];
-    assert_eq!(continuation.status, MessageStatus::Queued);
-    assert_eq!(continuation.text, "continue");
-    assert_eq!(
-        continuation.follows_command.as_ref(),
-        Some(&command.message_id)
-    );
-    let mut listed = list_message_ids(
+    let listed = list_message_ids(
         &env,
         &[
             "message", "list", "--all", "--system", "--status", "queued", "--json",
         ],
         None,
     );
-    listed.sort();
-    assert_eq!(
-        listed,
-        vec![
-            command.message_id.to_string(),
-            continuation.message_id.to_string()
-        ]
-    );
+    assert_eq!(listed, vec![command.message_id.to_string()]);
     let joined = run_success(
         traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
         "repeat queued compact",
@@ -16898,12 +16884,12 @@ fn agents_compact_queues_for_a_running_agent() {
     assert_eq!(
         String::from_utf8_lossy(&joined.stdout).trim_end(),
         format!(
-            "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it",
+            "compaction {} is already queued for {}; delivers at its next turn boundary, with no continue after",
             command.message_id,
             named(&env, "sess-queued-compact", "@claude")
         )
     );
-    assert_eq!(env.store().list_messages().expect("messages").len(), 2);
+    assert_eq!(env.store().list_messages().expect("messages").len(), 1);
     assert!(
         trace_lines(&trace)
             .iter()

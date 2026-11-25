@@ -2132,6 +2132,84 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
 }
 
+#[test]
+fn self_compact_owes_a_continue_by_default_and_honors_no_continue() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::message::{MessageBody, SoftCompactStep};
+
+    for no_continue in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        crate::common::wait::register_calling_agent(&env);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let mut obs = AgentLifecycleObservation::new(
+            Some("provider-session".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        obs.pane_id = Some("zellij:terminal_1".parse().unwrap());
+        env.store()
+            .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id,
+                &workspace.session_name,
+                "claude",
+                "UserPromptSubmit",
+                &obs,
+            ))
+            .unwrap();
+        let pane = rimz::pane::PaneRef {
+            pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_1"),
+            session_name: workspace.session_name.clone(),
+            view_id: Some("tab_1".to_owned()),
+            view_kind: Some(rimz::ids::ViewKind::Tab),
+            view_name: Some("project".to_owned()),
+            title: None,
+            is_floating: false,
+            command: Some("claude".to_owned()),
+            foreground_cmdline: None,
+            spawn_command: None,
+            cwd: Some(env.project_root.display().to_string()),
+            pane_pid: None,
+            pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
+            resumed_session_id: None,
+            elevated_agent: None,
+            first_seen_at_ms: None,
+        };
+        let panes = env.write_pane_fixture(std::slice::from_ref(&pane));
+        let mut command = crate::common::wait::agent_wait(&env);
+        command
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["mcp", "serve"]);
+        let mut server = McpServer::spawn(command);
+        server.initialize();
+        let args = if no_continue {
+            json!({"no_continue": true})
+        } else {
+            json!({})
+        };
+        let (receipt, is_error) = server.answer(1, "self_compact", args);
+        assert!(!is_error, "no_continue={no_continue}: {receipt}");
+        assert_eq!(receipt["status"], json!("queued"), "{receipt}");
+        assert_eq!(receipt["continues"], json!(!no_continue), "{receipt}");
+        let messages = env.store().list_messages().unwrap();
+        let expected_len = if no_continue { 1 } else { 2 };
+        assert_eq!(
+            messages.len(),
+            expected_len,
+            "no_continue={no_continue}: {messages:?}"
+        );
+        assert!(messages.iter().any(|m| m.body == MessageBody::Command));
+        assert_eq!(
+            messages
+                .iter()
+                .any(|m| m.soft_compact == Some(SoftCompactStep::Continue)),
+            !no_continue
+        );
+    }
+}
+
 #[cfg(unix)]
 fn serve_for_molt(env: &Env, trace: &std::path::Path) -> McpServer {
     use crate::common::{path_with_front, write_env_dump_shim, write_fake_login_shell};
