@@ -2510,7 +2510,7 @@ fn a_live_plan_is_stamped_when_its_source_read_it_not_at_a_later_refresh() {
         plan: Some("plus".to_owned()),
         ..Default::default()
     });
-    sidecar.apply_context_refresh("codex", "s", app_server, None);
+    sidecar.apply_context_refresh("codex", "s", app_server, None, false);
     // A usage read stores Pro at t2.
     write_accounts_cache(
         &runtime.shared_accounts_path(),

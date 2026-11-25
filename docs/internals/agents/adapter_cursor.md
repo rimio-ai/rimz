@@ -167,7 +167,7 @@ The command statusline is the rich-context source (`ContextCapability::observe_c
 
 Model display follows these rules. Cursor's `default` model sentinel normalizes to `auto` (`statusline::normalize_model`), so a stock session reads `Auto`. For an explicit selection, `normalize_model_metadata` strips an exact `param_summary` suffix from the display name: a leading context magnitude (`272K`) is dropped, a recognized effort word becomes the effort, and qualifiers such as `Fast` and `Thinking` stay on the model name. A display name that does not end with the summary stays intact, and `max_mode` with no effort word reads as effort `max`. The window gauge uses the live `context_window_size`, never the summary's nominal magnitude.
 
-Each statusline refresh also re-reads the transcript's terminal row (`transcript::statusline_turn_markers`) and restamps the settle and turn-error markers, because the whole-context write would otherwise drop them.
+Each statusline refresh also re-reads the transcript's terminal row (`transcript::statusline_turn_markers`) so a readable tail restamps the settle marker, and one complete to its last record observes `turn_error` (`turn_error_observed: true`). An unreadable tail, or one with a torn suffix, leaves `turn_error_observed: false` so any stored `turn_error` marker survives the whole-context write.
 
 ### Hook fallbacks
 

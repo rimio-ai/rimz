@@ -583,6 +583,7 @@ fn reminder_stays_suppressed_on_withheld_lagging_sidecar_through_first_prompt_th
             session.as_str(),
             &ctx,
             None,
+            false,
         )
         .unwrap();
     };

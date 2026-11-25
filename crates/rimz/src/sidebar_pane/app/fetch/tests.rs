@@ -1275,6 +1275,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
         }))
         .unwrap(),
         None,
+        false,
     )
     .unwrap();
     let mut cycles =
@@ -1312,7 +1313,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
             "event" => crate::store::event_log::append(&fixture.state.events_log, &crate::testkit::fleet::registered_lifecycle(&fixture.workspace_id, 2)).unwrap(),
             "context" => crate::store::agent_context::write(&fixture.runtime, "claude", "agent-0", &serde_json::from_value(serde_json::json!({
                 "source": "claude", "model_id": "claude-sonnet-4-6", "observed_at": jiff::Timestamp::now()
-            })).unwrap(), None).unwrap(),
+            })).unwrap(), None, false).unwrap(),
             "anchor" => crate::mux::focus_anchor::store(&fixture.runtime, &crate::mux::focus_anchor::FocusAnchor {
                 nonce: crate::ids::FocusNonce::new(),
                 session_name: crate::testkit::fleet::SESSION_NAME.to_owned(),

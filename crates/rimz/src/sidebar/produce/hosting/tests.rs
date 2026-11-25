@@ -356,7 +356,7 @@ fn two_live_holders_are_ordered_by_their_rest_certificates_as_the_resolver_order
         }),
         ..crate::agents::AgentContext::new("claude", error_at)
     };
-    crate::store::agent_context::write(&fixture.runtime, "claude", "sess-a", &rested, None)
+    crate::store::agent_context::write(&fixture.runtime, "claude", "sess-a", &rested, None, false)
         .expect("context sidecar");
     let read = fixture.read(vec![first, second], listed(&["terminal_1", "terminal_2"]));
     let answer = read.agent_hosting(&AgentKind::new_unchecked("claude"), &"launch_agent".into());

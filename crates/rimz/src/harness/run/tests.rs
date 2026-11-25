@@ -739,6 +739,7 @@ fn session_exit_sums_every_binding_and_falls_back_to_transcript_cost() {
                     id,
                     &context,
                     None,
+                    false,
                 )
                 .unwrap();
             }
@@ -2641,6 +2642,7 @@ fn assert_spend_before_workflow_wake(end: SpendWake) {
         "priced-session",
         &context,
         None,
+        false,
     )
     .unwrap();
     let costs = Arc::new(Mutex::new(Vec::new()));
@@ -4727,8 +4729,15 @@ fn an_expired_hold_settles_canceled_once_with_spend_and_a_wake() {
         total_cost_usd: Some(0.5),
         ..Default::default()
     });
-    crate::store::agent_context::write(store.runtime_paths(), "claude", "child", &context, None)
-        .unwrap();
+    crate::store::agent_context::write(
+        store.runtime_paths(),
+        "claude",
+        "child",
+        &context,
+        None,
+        false,
+    )
+    .unwrap();
     let settled = expire_interrupt(&store, &record.run_id, Some("partial".to_owned()))
         .unwrap()
         .expect("an expired hold settles");
@@ -4830,6 +4839,7 @@ fn priced_store(sidecar: Option<f64>) -> (tempfile::TempDir, Store, RunRecord) {
             "child",
             &context,
             None,
+            false,
         )
         .unwrap();
     }

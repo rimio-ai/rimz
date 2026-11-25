@@ -224,6 +224,7 @@ pub(super) fn persist_observation(
         observation.agent_id.as_str(),
         &observation.context,
         agent.context_owner_start(),
+        observation.turn_error_observed,
     )
     .context("writing agent-context sidecar")?;
     if observation.provider_at_rest

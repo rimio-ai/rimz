@@ -60,16 +60,26 @@ impl sidecar::SidecarRecord for AgentContextRecord {
 /// Atomic temp+rename (no fsync — disposable sidecar) via
 /// [`atomic::write_temp_then_rename_cache`]. `owner_started_at` is the
 /// verified owner process's start, the floor for a sidecar's first windows.
+/// `turn_error_observed` records whether the producer read its turn-error
+/// source (`true` lets `context.turn_error == None` clear a stored marker;
+/// `false` keeps any stored marker when `context.turn_error` is `None`).
 pub fn write(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
     context: &AgentContext,
     owner_started_at: Option<Timestamp>,
+    turn_error_observed: bool,
 ) -> Result<(), atomic::AtomicErr> {
     let observed_at = context.observed_at;
     update_record(runtime, kind, agent_id, observed_at, |record, _| {
-        record.apply_context_refresh(kind, agent_id, context.clone(), owner_started_at)
+        record.apply_context_refresh(
+            kind,
+            agent_id,
+            context.clone(),
+            owner_started_at,
+            turn_error_observed,
+        )
     })
     .map(|_| ())
 }

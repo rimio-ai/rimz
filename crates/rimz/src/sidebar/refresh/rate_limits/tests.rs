@@ -1699,8 +1699,10 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
             context.rate_limits = Some(AgentRateLimits {
                 windows: vec![window],
             });
-            crate::store::agent_context::write(&runtime, "claude", "session", &context, None)
-                .unwrap();
+            crate::store::agent_context::write(
+                &runtime, "claude", "session", &context, None, false,
+            )
+            .unwrap();
             crate::store::agent_context::read_one(&runtime, "claude", "session")
                 .unwrap()
                 .context
@@ -1844,6 +1846,7 @@ fn post_clear_statusline_replay_cannot_displace_the_oauth_anchor() {
                 "post-clear-session",
                 &context,
                 Some(owner),
+                false,
             )
             .unwrap();
             let stored =

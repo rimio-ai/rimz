@@ -609,6 +609,7 @@ fn certificate_dead_replacement_bypasses_roster_and_replays_durably() {
         "interrupted",
         &context,
         None,
+        false,
     )
     .expect("write interruption certificate");
 
@@ -681,6 +682,7 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
         "overloaded",
         &context,
         None,
+        false,
     )
     .expect("write overload certificate");
 
@@ -771,8 +773,15 @@ fn stale_provider_certificate_does_not_reap_the_owner() {
         }),
         ..AgentContext::new("codex", now - Duration::from_secs(3))
     };
-    crate::store::agent_context::write(store.runtime_paths(), "codex", "stale", &context, None)
-        .expect("write stale certificate");
+    crate::store::agent_context::write(
+        store.runtime_paths(),
+        "codex",
+        "stale",
+        &context,
+        None,
+        false,
+    )
+    .expect("write stale certificate");
 
     assert_eq!(store.reap_dead_sessions().expect("keep active owner"), 0);
 }

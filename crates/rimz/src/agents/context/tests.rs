@@ -27,7 +27,7 @@ fn model_context_limits_key_follows_local_refreshes_and_survives_rich_writers() 
         Timestamp::UNIX_EPOCH,
     );
     let local = record.model_context_limits_key.clone();
-    record.apply_context_refresh("codex", "agent", AgentContext::default(), None);
+    record.apply_context_refresh("codex", "agent", AgentContext::default(), None, false);
     let rich = record.model_context_limits_key.clone();
     record.merge_observed("codex", AgentContext::default(), Timestamp::UNIX_EPOCH);
     assert_eq!(
@@ -72,7 +72,7 @@ fn model_context_limits_survive_context_writers_and_legacy_records() {
     }
     .apply(&mut record.context, definition);
     assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
-    record.apply_context_refresh("codex", "agent", AgentContext::default(), None);
+    record.apply_context_refresh("codex", "agent", AgentContext::default(), None, false);
     assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
     record.merge_observed("codex", AgentContext::default(), Timestamp::UNIX_EPOCH);
     assert_eq!(record.context.model_context_limits.as_ref(), Some(&limits));
@@ -100,7 +100,13 @@ fn cache_write_survives_each_context_writer() {
     }
     .apply(&mut record.context, definition);
     let local = record.context.last_cache_write;
-    record.apply_context_refresh("claude", "agent", AgentContext::new("claude", now), None);
+    record.apply_context_refresh(
+        "claude",
+        "agent",
+        AgentContext::new("claude", now),
+        None,
+        false,
+    );
     let statusline = record.context.last_cache_write;
     record.merge_observed(
         "pi",
@@ -1003,9 +1009,15 @@ fn a_turn_error_marker_keeps_the_model_it_landed_on_across_every_writer() {
     };
     let mut record = record::AgentContextRecord::new("claude", "agent", AgentContext::default());
 
-    record.apply_context_refresh("claude", "agent", push("claude-fable-5-2", 100), None);
+    record.apply_context_refresh(
+        "claude",
+        "agent",
+        push("claude-fable-5-2", 100),
+        None,
+        false,
+    );
     assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-2"));
-    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 100), None);
+    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 100), None, false);
     assert_eq!(
         stamp(&record).as_deref(),
         Some("claude-fable-5-2"),
@@ -1024,7 +1036,7 @@ fn a_turn_error_marker_keeps_the_model_it_landed_on_across_every_writer() {
     .apply(&mut record.context, definition);
     assert_eq!(stamp(&record).as_deref(), Some("claude-fable-5-2"));
 
-    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 200), None);
+    record.apply_context_refresh("claude", "agent", push("claude-opus-5-5", 200), None, false);
     assert_eq!(
         stamp(&record).as_deref(),
         Some("claude-opus-5-5"),

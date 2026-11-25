@@ -1011,6 +1011,7 @@ fn sender_context_room(two_members: bool) -> (tempfile::TempDir, Store) {
             row.agent_id.as_str(),
             &rimz::agents::AgentContext::new(row.kind.as_str(), jiff::Timestamp::now()),
             None,
+            false,
         )
         .unwrap();
     }
@@ -1040,6 +1041,7 @@ fn certify_sender_rest(store: &Store) -> rimz::ids::AgentSessionId {
         winner.agent_id.as_str(),
         &context,
         None,
+        false,
     )
     .unwrap();
     let full = store.snapshot_cached().unwrap();
@@ -1672,6 +1674,7 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
             ..AgentContext::new("codex", now)
         },
         None,
+        false,
     )
     .unwrap();
     let receiver = rimz::testkit::agent_state("claude", "sess-1", recent_at());

@@ -707,3 +707,44 @@ fn transcript_tail_splits_a_cache_heavy_turn() {
     // The components still reconcile against the total the gauge scales.
     assert_eq!(obs.usage.total_tokens, Some(2 + 226_584 + 7_853 + 491));
 }
+
+#[test]
+fn observe_context_sets_turn_error_observed_only_when_transcript_is_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("clean.jsonl");
+    std::fs::write(
+        &clean,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n",
+    )
+    .unwrap();
+
+    let readable = ClaudeAdapter
+        .observe_context(
+            "claude",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": clean.to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+    assert!(
+        readable.turn_error_observed,
+        "a readable Claude transcript tail marks the turn-error observation authoritative"
+    );
+    assert!(readable.context.turn_error.is_none());
+
+    let unreadable = ClaudeAdapter
+        .observe_context(
+            "claude",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": dir.path().join("missing.jsonl").to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+    assert!(
+        !unreadable.turn_error_observed,
+        "an unreadable Claude transcript tail must keep any stored turn-error marker"
+    );
+    assert!(unreadable.context.turn_error.is_none());
+}

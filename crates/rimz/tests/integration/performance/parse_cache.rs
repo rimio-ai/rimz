@@ -149,6 +149,7 @@ fn warm_fold_and_enforcement_over_200_agents_parse_nothing() {
             agent.agent_id.as_str(),
             &rimz::agents::AgentContext::new("test", jiff::Timestamp::now()),
             None,
+            false,
         )
         .unwrap();
     }
@@ -321,6 +322,7 @@ fn refresher_keeps_held_fold_context_cached() {
         held.agent_id.as_str(),
         &context,
         None,
+        false,
     )
     .unwrap();
     rimz::store::hibernate::record(

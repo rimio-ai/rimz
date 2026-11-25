@@ -23,6 +23,7 @@ fn held_sidecars_keep_values_without_stats_until_the_boundary_or_thaw() {
             id,
             &crate::agents::AgentContext::new("claude", at),
             None,
+            false,
         )
         .unwrap();
         crate::store::subagent_context::update(

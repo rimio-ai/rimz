@@ -67,6 +67,10 @@ pub struct ContextObservation {
     /// subagents, and emptying listed background shells when newer than the
     /// row's last activity.
     pub provider_at_rest: bool,
+    /// This observation read its provider's turn-error source (for example, a
+    /// readable transcript tail), so `context.turn_error == None` clears a
+    /// stored marker instead of keeping it.
+    pub turn_error_observed: bool,
 }
 
 impl ContextObservation {
@@ -76,6 +80,7 @@ impl ContextObservation {
             agent_id,
             context,
             provider_at_rest: false,
+            turn_error_observed: false,
         })
     }
 }
@@ -1689,12 +1694,15 @@ pub struct AgentTurnError {
 }
 
 impl AgentTurnError {
-    /// Stamp an incoming marker with its model: the stored marker's stamp when
-    /// it is the same marker or an older one of the same class (`at` no later
-    /// than `prior`'s), else `model_id`, the context's model id at this write.
+    /// Stamp an incoming marker with its model: keep the stored marker's stamp
+    /// when it is the same marker or an older one of the same class (`at` no
+    /// later than `prior`'s) and already carries a model, else `model_id`, the
+    /// context's model id at this write.
     pub(crate) fn stamp_model(&mut self, prior: Option<&Self>, model_id: Option<&str>) {
         self.model = match prior {
-            Some(prior) if prior.at >= self.at && prior.class == self.class => prior.model.clone(),
+            Some(prior) if prior.at >= self.at && prior.class == self.class => {
+                prior.model.clone().or_else(|| model_id.map(str::to_owned))
+            }
             _ => model_id.map(str::to_owned),
         };
     }
