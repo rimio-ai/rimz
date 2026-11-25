@@ -194,6 +194,7 @@ These rules hold for any change that stamps, compares, or waits on a time. The r
 - A state a polling consumer reads stays published for at least one of that consumer's read intervals (its backstop tick plus one pass); a design that withdraws such a state names that interval beside the rule that withdraws it.
 - A state that changes with time alone reaches a reader sleeping on a stored retry time only if that time is computed from the change's instant.
 - A change that moves a record's deadline lists every consumer that enforces it (`rimz lsp refs` on the field, plus any caller that keeps its own clock from a `--timeout` flag) and every input the new value is computed from: a message unpark once rearmed a run's `deadline_at` while the foreground waiter still timed the run out by its own clock.
+- Work placed between a decision and the action it gates makes the decision stale, so read it again after the work.
 - A cached answer reused while a key is unchanged keys its reuse on every input the answer reads, configuration included.
 
 ## Atomic writes

@@ -29,9 +29,9 @@ Every bullet here is an invariant, and a change to one is a product decision. [D
 
 The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority.
 
-- **Fail-fast at the point of use.** The room always opens: a configuration problem warns at entry, the room runs as if that setting were absent, and the room's record keeps the warning for the sidebar and `rimz doctor`. A configured capability that cannot work fails with the fix at the command that uses it, and that command never reads a broken setting as absent where that would change the account it runs on. Best-effort is for latency and enrichment, never for a precondition the user switched on. The settled cases sit in the subsystem contracts as `Fail-fast, settled` bullets.
+- **Fail-fast at the point of use.** The room always opens: a configuration problem warns at entry, and the room runs as if that setting were absent. A configured capability that cannot work fails with the fix at the command that uses it, and that command never reads a broken setting as absent where that would change the account it runs on. Best-effort is for latency and enrichment, never for a precondition the user switched on.
 - `unwrap`, `expect`, and panics belong in tests, build scripts, and provably impossible states, with a comment naming why the state is impossible.
-- Wrap source comments by hand to the width of the code around them, at most 100 columns: no gate catches a long one, and a harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
+- Wrap source comments by hand to the width of the code around them, at most 100 columns: a harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
@@ -43,9 +43,9 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 These hold for a change anywhere in the tree, and no gate catches a skipped one.
 
 - **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule.
-- **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates makes the decision stale, so read it again after the work ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
+- **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
 - **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, clap help text, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
-- **Run the tests that name what you changed.** A test outside the modules you edited can pin the old behaviour: grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
+- **Run the tests that name what you changed.** Grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed, and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
 
 ## Testing
 
@@ -57,7 +57,7 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 - From a room shell, run tests only through `cargo xtask test` or `cargo xtask stress`, never a bare `cargo test`, `cargo nextest run`, or a test binary: those resolve the shell's `RIMZ_HOME`/`HOME`/`XDG_*`.
 - Run no stress batch, mass repeat, or parallel copies of a test unless the user asks or allows it: the host is shared.
 - Stage new files with `git add -N` before `cargo xtask invariants` or a gate: the check reads tracked files only.
-- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), run a gate or test from a Codex shell, name one test or pick its profile, add a `pub` item or a cross-module call, touch platform-gated code, or compare timings. Read [Writing a test](./docs/contributing/rust-conventions.md#writing-a-test) before you write or delete a test. Read [flakes.md](./docs/contributing/flakes.md) before you run the live tier, report a failure you leave unfixed, or debug a flake. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
+- Read the matching section of [running-gates.md](./docs/contributing/running-gates.md) before you [rebase](./docs/contributing/running-gates.md#rebasing), run a gate or test from a Codex shell, name one test, or pick a test's profile. Read [Writing a test](./docs/contributing/rust-conventions.md#writing-a-test) before you write or delete a test. Read [flakes.md](./docs/contributing/flakes.md) before you run the live tier, report a failure you leave unfixed, or debug a flake. Read [probes.md](./docs/contributing/probes.md) before you build a mux, git, sshd, or provider probe by hand, isolate a home, or run a branch binary against real state.
 
 ## Code map
 
