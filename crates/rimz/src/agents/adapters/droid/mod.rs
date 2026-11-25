@@ -121,6 +121,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(super::CompactCommand {
             command: "/compress",
             instruction: super::CompactInstruction::Trailing,
+            steer_checked: false,
         }),
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Unsupported,

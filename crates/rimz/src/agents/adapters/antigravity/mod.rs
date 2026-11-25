@@ -259,7 +259,8 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: None,
         compact_command: Some(super::CompactCommand {
             command: COMPACT_COMMAND,
-            instruction: super::CompactInstruction::Unsupported,
+            instruction: super::CompactInstruction::NextPrompt,
+            steer_checked: true,
         }),
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Unsupported,

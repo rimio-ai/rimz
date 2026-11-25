@@ -310,6 +310,53 @@ fn every_other_agent_takes_the_default_message_keys() {
 }
 
 #[test]
+fn builtin_compact_command_instruction_and_steer_checked_facts_are_pinned() {
+    use super::CompactInstruction;
+
+    let actual: Vec<_> = BUILTINS
+        .iter()
+        .map(|adapter| {
+            let spec = adapter.spec();
+            let compact = spec
+                .launch
+                .compact_command
+                .map(|c| (c.instruction, c.steer_checked));
+            (spec.kind, compact)
+        })
+        .collect();
+    let expected = vec![
+        ("claude", Some((CompactInstruction::Trailing, false))),
+        ("codex", Some((CompactInstruction::Unsupported, false))),
+        ("amp", None),
+        ("copilot", Some((CompactInstruction::Unsupported, false))),
+        ("kimi", Some((CompactInstruction::Unsupported, false))),
+        ("pi", Some((CompactInstruction::Unsupported, false))),
+        ("opencode", Some((CompactInstruction::Unsupported, false))),
+        ("antigravity", Some((CompactInstruction::NextPrompt, true))),
+        ("cursor", Some((CompactInstruction::Unsupported, false))),
+        ("droid", Some((CompactInstruction::Trailing, false))),
+        ("kiro", Some((CompactInstruction::Unsupported, false))),
+        ("qwen", Some((CompactInstruction::Unsupported, false))),
+        ("grok", Some((CompactInstruction::Trailing, false))),
+        ("hermes", Some((CompactInstruction::Trailing, false))),
+        ("qoder", Some((CompactInstruction::Trailing, false))),
+        ("omp", Some((CompactInstruction::Trailing, false))),
+        ("muse", Some((CompactInstruction::Unsupported, false))),
+        ("minimax", Some((CompactInstruction::Trailing, false))),
+    ];
+    assert_eq!(actual, expected);
+    // NextPrompt keeps compaction guidance unsupported: compact_command renders bare.
+    let agy = super::find_definition("antigravity").expect("antigravity builtin");
+    assert_eq!(
+        agy.spec()
+            .launch
+            .compact_command("focus on tests")
+            .as_deref(),
+        Some("/compact")
+    );
+}
+
+#[test]
 fn builtin_host_skill_switches_are_declared() {
     for adapter in BUILTINS {
         let spec = adapter.spec();

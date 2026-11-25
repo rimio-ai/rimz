@@ -4611,3 +4611,205 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
         );
     }
 }
+
+#[test]
+fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
+    use crate::config::AutoCompactDefault;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("agents")).unwrap();
+    for (rel, content) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base\n---\nClaude.",
+        ),
+        (
+            "agents/antigravity.md",
+            "---\ndescription: Agy base\n---\nAgy.",
+        ),
+        ("agents/pi.md", "---\ndescription: Pi base\n---\nPi."),
+        (
+            "agents/md_claude.md",
+            "---\ndescription: Claude worker\nagent: claude\ntools: [Bash]\n---\nWork.",
+        ),
+        (
+            "agents/md_agy.md",
+            "---\ndescription: Agy worker\nagent: antigravity\ntools: [Bash]\n---\nWork.",
+        ),
+        (
+            "agents/md_pi.md",
+            "---\ndescription: Pi worker\nagent: pi\ntools: [Bash]\n---\nWork.",
+        ),
+    ] {
+        std::fs::write(root.path().join(rel), content).unwrap();
+    }
+
+    let cases = [
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_claude",
+            None,
+            Some("272000"),
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_agy",
+            None,
+            Some("372000"),
+        ),
+        (Some(AutoCompactDefault::BuiltIn), "md_pi", None, None),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_claude",
+            Some("antigravity"),
+            Some("372000"),
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_agy",
+            Some("claude"),
+            Some("272000"),
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_pi",
+            Some("antigravity"),
+            Some("372000"),
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_agy",
+            Some("pi"),
+            None,
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "toml_claude",
+            Some("antigravity"),
+            Some("372000"),
+        ),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "toml_agy",
+            Some("claude"),
+            Some("272000"),
+        ),
+        (
+            Some(AutoCompactDefault::Tokens(300_000)),
+            "md_claude",
+            None,
+            Some("300000"),
+        ),
+        (
+            Some(AutoCompactDefault::Tokens(300_000)),
+            "md_agy",
+            None,
+            Some("300000"),
+        ),
+        (
+            Some(AutoCompactDefault::Tokens(300_000)),
+            "md_pi",
+            None,
+            None,
+        ),
+        (None, "md_claude", None, None),
+        (None, "md_agy", None, None),
+        // Kind bases and bare launches get no machine default on any kind.
+        (Some(AutoCompactDefault::BuiltIn), "claude", None, None),
+        (Some(AutoCompactDefault::BuiltIn), "antigravity", None, None),
+    ];
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (default, target, agent_override, want) in cases {
+        let loaded = crate::config::definitions::load(
+            root.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            default,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let mut profiles = loaded.agent_profiles;
+        profiles.0.insert(
+            "toml_claude".into(),
+            Profile {
+                auto_compact_default: default,
+                ..profile("claude")
+            },
+        );
+        profiles.0.insert(
+            "toml_agy".into(),
+            Profile {
+                auto_compact_default: default,
+                ..profile("antigravity")
+            },
+        );
+        let base = resolve_agent_override(agent_override, &profiles, None).unwrap();
+        let cell = profile_cell_with_base_override(target, &profiles, base.as_ref(), None).unwrap();
+        actual.push((
+            default,
+            target,
+            agent_override,
+            cell.auto_compact,
+            cell.tuning.auto_compact,
+        ));
+        expected.push((
+            default,
+            target,
+            agent_override,
+            want.map(str::to_owned),
+            want.map(|_| TuningSource::MachineDefault),
+        ));
+    }
+    assert_eq!(actual, expected);
+
+    // Bare launch gets no machine default; a kind base's own auto-compact still applies.
+    assert_eq!(
+        resolve_spec_with_agent_override(
+            Some("antigravity"),
+            &ProfilesConfig::default(),
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+            None,
+        )
+        .unwrap()
+        .agent_cells()
+        .next()
+        .unwrap()
+        .auto_compact,
+        None
+    );
+    std::fs::write(
+        root.path().join("agents/antigravity.md"),
+        "---\ndescription: Agy base\nauto-compact: 250k\n---\nAgy.",
+    )
+    .unwrap();
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(AutoCompactDefault::BuiltIn),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let base_cell = profile_cell("antigravity", &loaded.agent_profiles).unwrap();
+    assert_eq!(base_cell.auto_compact.as_deref(), Some("250000"));
+    assert_eq!(
+        base_cell.tuning.auto_compact,
+        Some(TuningSource::KindBase(AgentKind::new_unchecked(
+            "antigravity"
+        )))
+    );
+    let worker_cell = profile_cell("md_agy", &loaded.agent_profiles).unwrap();
+    assert_eq!(worker_cell.auto_compact.as_deref(), Some("250000"));
+    assert_eq!(
+        worker_cell.tuning.auto_compact,
+        Some(TuningSource::KindBase(AgentKind::new_unchecked(
+            "antigravity"
+        )))
+    );
+}

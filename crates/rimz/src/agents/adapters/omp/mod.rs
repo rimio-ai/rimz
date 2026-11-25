@@ -517,6 +517,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(CompactCommand {
             command: "/compact",
             instruction: CompactInstruction::Trailing,
+            steer_checked: false,
         }),
         presets: definition::PresetMatchers {
             code_mode: definition::CodeModeSwitch::Unsupported,

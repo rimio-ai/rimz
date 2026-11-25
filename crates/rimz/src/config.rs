@@ -108,8 +108,8 @@ pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub(crate) use harness::IdleCompactParseError;
 pub use harness::{
-    CompactSeat, ConfiguredLifetime, DayCap, HarnessConfig, IdleCompact, KeepWarm, KeepWarmFields,
-    KeepWarmPolicy, LifetimeSource,
+    AutoCompactDefault, AutoCompactWindow, CompactSeat, ConfiguredLifetime, DayCap, HarnessConfig,
+    IdleCompact, KeepWarm, KeepWarmFields, KeepWarmPolicy, LifetimeSource,
 };
 pub(crate) use logo::{parse_logo_svg, read_logo_file};
 pub(crate) use loop_::WaitMeta;
@@ -940,7 +940,7 @@ impl MachineConfig {
             &self.agents.commands,
             config_path,
             &self.tiers,
-            self.harness.auto_compact,
+            self.harness.auto_compact_default(),
         );
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;

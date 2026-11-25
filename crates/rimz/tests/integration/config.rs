@@ -1595,9 +1595,14 @@ fn remote_control_claude_config_set_keeps_an_explicit_refusal() {
 #[test]
 fn config_set_compaction_defaults_accept_off_and_native_windows() {
     let env = Env::new();
+    env.rimz()
+        .args(["config", "get", "harness.auto_compact"])
+        .assert()
+        .failure()
+        .stderr(contains("is unset"));
     for (key, values) in [
         ("harness.smart_compact", vec!["off"]),
-        ("harness.auto_compact", vec!["off", "272k"]),
+        ("harness.auto_compact", vec!["off", "272k", "372k"]),
     ] {
         for raw in values {
             let set = env

@@ -168,7 +168,7 @@ pub fn compact_agent(
         );
     }
     if instruction.is_some()
-        && compact.instruction == crate::agents::definition::CompactInstruction::Unsupported
+        && compact.instruction != crate::agents::definition::CompactInstruction::Trailing
     {
         bail!(
             "{} does not accept a compaction instruction; it receives `{}` bare — rerun without the instruction",
@@ -603,6 +603,32 @@ mod tests {
         assert_eq!(
             actual,
             cases.map(|(_, _, _, expected)| expected.map(|stamp| serde_json::json!(stamp)))
+        );
+    }
+
+    #[test]
+    fn compact_agent_refuses_instruction_on_next_prompt_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (workspace, store) = room(dir.path());
+        let mut agent = AgentState::stub("antigravity", "agy-1", AgentStatus::Idle);
+        agent.pane = Some(crate::pane::PaneRef::from_id(PaneId::from_parts(
+            crate::ids::MuxName::Zellij,
+            "terminal_4",
+        )));
+        let err = compact_agent(
+            &workspace,
+            &store,
+            &agent,
+            "@agy",
+            Some("summarize carefully"),
+            false,
+            MessageSender::Human,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("antigravity does not accept a compaction instruction"),
+            "unexpected error: {err:#}"
         );
     }
 }

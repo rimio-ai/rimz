@@ -503,6 +503,7 @@ fn compact_command_renders_supported_instructions_on_one_line() {
         compact_command: Some(CompactCommand {
             command: "/compact",
             instruction: CompactInstruction::Trailing,
+            steer_checked: false,
         }),
         ..LaunchSpec::EMPTY
     };
@@ -521,6 +522,7 @@ fn compact_command_renders_supported_instructions_on_one_line() {
         compact_command: Some(CompactCommand {
             command: "/compact",
             instruction: CompactInstruction::Unsupported,
+            steer_checked: false,
         }),
         ..LaunchSpec::EMPTY
     };

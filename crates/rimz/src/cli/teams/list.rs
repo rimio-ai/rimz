@@ -284,7 +284,7 @@ pub(super) fn load_catalog(
         &machine.agents.commands,
         &rimz::config::MachineConfig::config_path(),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     )
     .sources;
     Ok(build_catalog(

@@ -187,7 +187,7 @@ fn team_source_survives_an_unrelated_broken_definition() {
         &rimz::config::CommandsConfig::default(),
         &root.path().join("config.toml"),
         &rimz::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(rimz::config::AutoCompactDefault::BuiltIn),
     );
     assert!(
         loaded

@@ -132,6 +132,53 @@ fn native_compaction_separates_the_trigger_from_model_capacity() {
 }
 
 #[test]
+fn auto_compact_enforcer_pins_every_builtin() {
+    let actual: Vec<_> = BUILTINS
+        .iter()
+        .map(|adapter| (adapter.spec().kind, auto_compact_enforcer(adapter)))
+        .collect();
+    let expected: Vec<_> = BUILTINS
+        .iter()
+        .map(|adapter| {
+            let kind = adapter.spec().kind;
+            let enforcer = match kind {
+                "claude" | "codex" => Some(AutoCompactEnforcer::Native),
+                "antigravity" => Some(AutoCompactEnforcer::Rimz),
+                _ => None,
+            };
+            (kind, enforcer)
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn native_compaction_reports_rimz_enforced_ceiling_under_window() {
+    assert_eq!(
+        native_compaction("antigravity", Some(372_000), 1_000_000, None, None),
+        Some(NativeCompaction {
+            point: 372_000,
+            capacity: 1_000_000,
+            raw_window: 1_000_000,
+            lowered: None,
+        })
+    );
+    for (configured, window) in [
+        (None, 1_000_000),
+        (Some(0), 1_000_000),
+        (Some(1_000_000), 1_000_000),
+        (Some(1_200_000), 1_000_000),
+        (Some(372_000), 0),
+    ] {
+        assert_eq!(
+            native_compaction("antigravity", configured, window, None, None),
+            None,
+            "configured={configured:?}, window={window}"
+        );
+    }
+}
+
+#[test]
 fn native_compaction_preserves_claude_and_unsupported_kinds() {
     assert_eq!(
         native_compaction("claude", Some(372_000), 1_000_000, Some(400_000), None),

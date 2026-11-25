@@ -789,6 +789,8 @@ pub struct SessionCommand {
 pub struct CompactCommand {
     pub command: &'static str,
     pub instruction: CompactInstruction,
+    /// Whether steering this command into a running turn was verified live.
+    pub steer_checked: bool,
 }
 
 /// Whether a compact command accepts free text that steers its summary.
@@ -798,6 +800,9 @@ pub enum CompactInstruction {
     Unsupported,
     /// Free text after the command steers the summary.
     Trailing,
+    /// Free text after the command becomes the agent's next prompt after compaction;
+    /// compaction guidance stays unsupported, so the command is rendered bare.
+    NextPrompt,
 }
 
 impl SessionCommand {

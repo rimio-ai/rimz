@@ -458,7 +458,7 @@ struct SharedLoadState {
     failed_bases: BTreeMap<String, DefinitionErr>,
     skills: Arc<SkillCatalog>,
     tiers: super::tiers::TierConfig,
-    native_auto_compact: Option<u64>,
+    auto_compact_default: Option<super::AutoCompactDefault>,
 }
 
 /// The subagent-namespace names and diagnostics needed to validate a direct definition's
@@ -598,7 +598,7 @@ pub fn load(
     commands: &CommandsConfig,
     config_path: &Path,
     tiers: &super::tiers::TierConfig,
-    native_auto_compact: Option<u64>,
+    auto_compact_default: Option<super::AutoCompactDefault>,
 ) -> LoadedDefinitions {
     load_resolved(
         agents_home,
@@ -606,7 +606,7 @@ pub fn load(
         commands,
         config_path,
         tiers,
-        native_auto_compact,
+        auto_compact_default,
         &crate::packs::resolve(agents_home),
     )
 }
@@ -617,7 +617,7 @@ fn load_resolved(
     commands: &CommandsConfig,
     config_path: &Path,
     tiers: &super::tiers::TierConfig,
-    native_auto_compact: Option<u64>,
+    auto_compact_default: Option<super::AutoCompactDefault>,
     packs: &ResolvedPacks,
 ) -> LoadedDefinitions {
     let catalog = Arc::new(SkillCatalog::new(skills, agents_home, packs));
@@ -847,7 +847,7 @@ fn load_resolved(
                             failed_bases: BTreeMap::new(),
                             skills: Arc::clone(&catalog),
                             tiers: tiers.clone(),
-                            native_auto_compact,
+                            auto_compact_default,
                         }),
                         subagents: None,
                     });
@@ -943,7 +943,7 @@ fn load_resolved(
                 failed_bases: failed_bases.clone(),
                 skills: Arc::clone(&catalog),
                 tiers: tiers.clone(),
-                native_auto_compact,
+                auto_compact_default,
             }),
             subagents: None,
         });
@@ -1049,7 +1049,7 @@ fn load_resolved(
         failed_bases,
         skills: Arc::clone(&catalog),
         tiers: tiers.clone(),
-        native_auto_compact,
+        auto_compact_default,
     });
     let subagents_ctx = Arc::new(LoadContext {
         shared: Arc::clone(&shared),

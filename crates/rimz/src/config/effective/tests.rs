@@ -367,7 +367,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -873,7 +873,7 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         &machine.agents.commands,
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -1061,7 +1061,7 @@ fn pi_model_routing_does_not_require_the_models_native_family_render() {
         &CommandsConfig::default(),
         &config.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -1116,7 +1116,7 @@ fn fast_suffix_routes_the_base_definition() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -1168,7 +1168,7 @@ fn team_cli_models_route_each_markdown_role() {
         &machine.agents.commands,
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -1607,30 +1607,54 @@ fn load_project_tasks(
 
 #[test]
 fn trusted_repo_profiles_inherit_native_compaction_defaults() {
+    use crate::config::{AutoCompactDefault, AutoCompactWindow};
+
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
     write_project_config(
         &project,
-        "[profiles.worker]\nagent = 'codex'\n[profiles.parent]\nagent = 'codex'\nauto-compact = '200k'\n[profiles.child]\nagent = 'parent'\n[profiles.pi]\nagent = 'pi'\n[profiles.claude]\nagent = 'claude'\nauto-compact = '200k'\n[profiles.planner]\nagent = 'claude'\n[subagents.profiles.worker]\nagent = 'codex'\n[subagents.profiles.codex]\nagent = 'codex'",
+        "[profiles.worker]\nagent = 'codex'\n[profiles.agy]\nagent = 'antigravity'\n[profiles.parent]\nagent = 'codex'\nauto-compact = '200k'\n[profiles.child]\nagent = 'parent'\n[profiles.pi]\nagent = 'pi'\n[profiles.claude]\nagent = 'claude'\nauto-compact = '200k'\n[profiles.planner]\nagent = 'claude'\n[subagents.profiles.worker]\nagent = 'codex'\n[subagents.profiles.codex]\nagent = 'codex'",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
-    for window in [Some(272_000), None] {
+    for (setting, expected_default, expected_codex, expected_agy) in [
+        (
+            None,
+            Some(AutoCompactDefault::BuiltIn),
+            Some(272_000),
+            Some(372_000),
+        ),
+        (
+            Some(AutoCompactWindow::Tokens(300_000)),
+            Some(AutoCompactDefault::Tokens(300_000)),
+            Some(300_000),
+            Some(300_000),
+        ),
+        (Some(AutoCompactWindow::Off), None, None, None),
+    ] {
         let mut machine = MachineConfig::default();
-        machine.harness.auto_compact = window;
+        machine.harness.auto_compact = setting;
         let effective = load_with_roots(&machine, project.path(), config.path()).unwrap();
         for profiles in [&effective.profiles, &effective.subagent_profiles] {
+            let worker = agents_spec::resolve_profile("worker", profiles).unwrap();
+            assert_eq!(worker.auto_compact_default, expected_default);
             assert_eq!(
-                agents_spec::resolve_profile("worker", profiles)
-                    .unwrap()
-                    .auto_compact_default,
-                window.map(|n| n.to_string())
+                worker
+                    .auto_compact_default
+                    .and_then(|d| d.resolve_for_kind(&worker.kind)),
+                expected_codex
             );
         }
+        let agy = agents_spec::resolve_profile("agy", &effective.profiles).unwrap();
+        assert_eq!(
+            agy.auto_compact_default
+                .and_then(|d| d.resolve_for_kind(&agy.kind)),
+            expected_agy
+        );
         assert_eq!(
             agents_spec::resolve_profile("codex", &effective.subagent_profiles)
                 .unwrap()
                 .auto_compact_default,
-            window.map(|n| n.to_string())
+            expected_default
         );
         for name in ["parent", "child", "claude", "planner"] {
             assert_eq!(
@@ -2624,7 +2648,7 @@ fn tier_routes_read_an_alias_launch_word_as_its_kind() {
         &machine.agents.commands,
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;

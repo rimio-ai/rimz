@@ -184,7 +184,21 @@ pub fn native_compaction(
     if window == 0 {
         return None;
     }
-    find_definition(kind)?.native_compaction(configured, window, capacity, limits)
+    let definition = find_definition(kind)?;
+    if let Some(native) = definition.native_compaction(configured, window, capacity, limits) {
+        return Some(native);
+    }
+    if auto_compact_enforcer(definition) == Some(AutoCompactEnforcer::Rimz) {
+        return configured
+            .filter(|point| *point > 0 && *point < window)
+            .map(|point| NativeCompaction {
+                point,
+                capacity: window,
+                raw_window: window,
+                lowered: None,
+            });
+    }
+    None
 }
 
 /// The compaction command for `agent`, carrying the harness brief for its
@@ -222,6 +236,33 @@ impl std::fmt::Display for SoftCompactSkip {
             Self::NoTurnStartHook => "no turn-start hook",
         })
     }
+}
+
+/// Who enforces an `auto-compact` context ceiling on an agent kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoCompactEnforcer {
+    /// The provider CLI enforces the ceiling through its native window switch.
+    Native,
+    /// RimZ watches occupied context and steers a folded compaction with continuation.
+    Rimz,
+}
+
+/// Derive who enforces an `auto-compact` ceiling on `definition`, or `None` when
+/// neither the provider nor RimZ can enforce one.
+pub fn auto_compact_enforcer(definition: &AgentDefinition) -> Option<AutoCompactEnforcer> {
+    let launch = definition.spec().launch;
+    if launch.presets.auto_compact.is_some() {
+        return Some(AutoCompactEnforcer::Native);
+    }
+    let compact = launch.compact_command?;
+    if compact.instruction == super::CompactInstruction::NextPrompt
+        && compact.steer_checked
+        && soft_compact_skip(definition).is_none()
+        && launch.message_keys.implemented
+    {
+        return Some(AutoCompactEnforcer::Rimz);
+    }
+    None
 }
 
 /// Derive reminder participation from the adapter's declared command and coverage.
