@@ -188,6 +188,8 @@ Pressing `Esc` interrupts an active turn, fires no lifecycle hook, and moves any
 
 1.5.17 capture: an `Alt+M` read together with the `Enter` before it is lost and the message stays queued; the same `Alt+M` pressed later sends it.
 
+1.5.17 capture (2026-11-25, Queue mode, messages sent with `Alt+M`): a message sent while `agy` summarizes a folded `/compact <message>` inside a turn, from 1 s in to 0.2 s before the `CHECKPOINT`, or 0.7 s after it, waits until the compaction's invocation is over. The rows run `/compact <message>` at that invocation's `initialNumSteps`, `CHECKPOINT`, `PLANNER_RESPONSE`, its tool result, then the waiting message at the next invocation's `initialNumSteps`; two such messages landed there together. A message sent while a bare `/compact` summarizes (which closes with a `TERMINAL_CUSTOM_HOOK` `Stop`) opens an `invocationNum: 0` invocation with its row at `initialNumSteps`, right after the `CHECKPOINT`. A message sent behind `/compact <message>` while the running step still holds both is taken in with it by one invocation, which writes both user rows and no `CHECKPOINT`: that `/compact` reaches the model as text and nothing is compacted.
+
 ## Command hooks
 
 The [hooks](https://antigravity.google/docs/hooks/) page and the 1.5.14 embedded hook doc define six events: `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, and `Stop`. Each handler receives one camelCase (protojson) JSON object on stdin and returns one JSON object on stdout. Handlers run synchronously and block the loop.
