@@ -257,6 +257,10 @@ impl Store {
     /// Build a fresh snapshot in memory (no disk write). Lock-free and
     /// O(delta): the rollup resumes from the thread's held fold or the
     /// persisted fold base.
+    ///
+    /// `focused_pane` and pane enrichment stay empty, since the sidebar fuses
+    /// them in. A decision that needs focus reads the published sidebar snapshot
+    /// or the mux focus anchor.
     pub fn snapshot(&self) -> Result<SidebarSnapshot> {
         if self.hook_transaction.is_some() {
             return Ok(snapshot::build_from_rollup(
