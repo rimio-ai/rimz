@@ -3492,8 +3492,12 @@ fn provider_sandbox_hook_uses_host_paths_without_a_scoped_mount_pin() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
-    let mut drainer = drain_command(&env).spawn().unwrap();
-    let lease = drainer_connection(&store, Some(&mut drainer));
+    // A stand-in drainer: the hook's nudge connects and spawns none, and nothing truncates the
+    // frame before the read below.
+    let _lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+    let _socket =
+        std::os::unix::net::UnixListener::bind(store.runtime_paths().hook_drainer_socket_path())
+            .unwrap();
     let mut command = env.hook_command("claude");
     let transcript = env.home_root.join("native-transcript.jsonl");
     std::fs::write(&transcript, "").unwrap();
@@ -3506,9 +3510,6 @@ fn provider_sandbox_hook_uses_host_paths_without_a_scoped_mount_pin() {
     assert_eq!(frames.len(), 1, "provider hooks use normal host ingress");
     let payload: serde_json::Value = serde_json::from_str(&frames[0].0.payload).unwrap();
     assert_eq!(payload["transcript_path"], transcript.display().to_string());
-    drop(lease);
-    drainer.kill().unwrap();
-    drainer.wait().unwrap();
 }
 
 #[test]
