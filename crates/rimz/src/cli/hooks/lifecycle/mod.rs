@@ -374,8 +374,26 @@ pub(super) fn handle_lifecycle_frame(
                 run_id.as_ref(),
             );
         }
+        let compaction_prompt = !replaced
+            && matches!(
+                recorded.observation.signal,
+                LifecycleSignal::CompactionEnded {
+                    failed: false,
+                    echo: false,
+                    ..
+                }
+            )
+            && recorded.observation.prompt.is_some();
         let (in_flight, delivered) = if replaced {
             (Vec::new(), Vec::new())
+        } else if compaction_prompt {
+            // Confirm and record any continuation prompt carried on the close before the
+            // compaction ack withdraws queued records with broken premises.
+            record_prompt_taken_in(workspace, store, agent, recorded);
+            (
+                Vec::new(),
+                confirm_sent_message_for_lifecycle(store, agent, recorded, workspace),
+            )
         } else {
             (
                 in_flight_messages_for_lifecycle(store, agent, recorded),
@@ -385,11 +403,15 @@ pub(super) fn handle_lifecycle_frame(
         if run_id.is_none() && !replaced {
             run_id = session_run_id(store, agent, recorded.observation.agent_id.as_ref());
         }
-        let sections = rimz::store::message::classify_submitted_prompt(
-            recorded.observation.prompt.as_deref().unwrap_or_default(),
-            &delivered.iter().collect::<Vec<_>>(),
-            &in_flight.iter().collect::<Vec<_>>(),
-        );
+        let sections = if compaction_prompt {
+            Vec::new()
+        } else {
+            rimz::store::message::classify_submitted_prompt(
+                recorded.observation.prompt.as_deref().unwrap_or_default(),
+                &delivered.iter().collect::<Vec<_>>(),
+                &in_flight.iter().collect::<Vec<_>>(),
+            )
+        };
         let opened_by_human = rimz::store::message::human_opened_turn(
             &recorded.observation,
             payload,
@@ -424,6 +446,7 @@ pub(super) fn handle_lifecycle_frame(
                     questions,
                     sections: &sections,
                     run_id: run_id.as_ref(),
+                    mid_turn: false,
                 },
             )
         {
@@ -950,6 +973,7 @@ fn record_prompt_taken_in(
             questions: &[],
             sections: &sections,
             run_id: run_id.as_ref(),
+            mid_turn: true,
         },
     ) {
         warn!(

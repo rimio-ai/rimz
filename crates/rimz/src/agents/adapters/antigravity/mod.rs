@@ -1205,10 +1205,25 @@ fn observation_with_prompt_reader(
         (Some(read), Some(path)) => prompt_reader(Path::new(path), agent_id.as_str(), read),
         _ => PromptEvidence::Unread,
     };
-    let snapshot = matches!(prompt_read, Some(PromptRead::TakenInFrom(_)));
+    let mut snapshot = matches!(prompt_read, Some(PromptRead::TakenInFrom(_)));
     let (signal, prompt) = match evidence {
         PromptEvidence::Prompt(prompt) => (signal, Some(prompt)),
         PromptEvidence::Compact => (LifecycleSignal::Compacting, None),
+        // A steered `/compact` (or `/compact <message>`) compacts inside an open turn without
+        // firing a compact `PreInvocation` or `Stop`: its `PostInvocation` carries the
+        // `CHECKPOINT` close as a full lifecycle edge (not a state snapshot) plus any
+        // continuation prompt carried on the same `/compact <message>` line.
+        PromptEvidence::CompactionEnded { prompt } => {
+            snapshot = false;
+            (
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(true),
+                    failed: false,
+                    echo: false,
+                },
+                prompt,
+            )
+        }
         PromptEvidence::Unread if !snapshot => {
             let signal = if matches!(prompt_read, Some(PromptRead::OpenedBelow(_))) && runs_compact
             {

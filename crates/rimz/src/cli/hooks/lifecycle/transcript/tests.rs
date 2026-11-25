@@ -158,6 +158,7 @@ fn record_conversation(
             questions: input.questions,
             sections: &sections,
             run_id: input.run_id,
+            mid_turn: false,
         },
     )
 }
@@ -1354,6 +1355,7 @@ fn agent_message_does_not_answer_open_ask() {
             questions: &[],
             sections: &sections,
             run_id: None,
+            mid_turn: false,
         },
     )
     .unwrap();
@@ -1592,6 +1594,7 @@ fn replay_finishes_a_partially_recorded_prompt_batch() {
                         questions: &[],
                         sections: &sections,
                         run_id: None,
+                        mid_turn: false,
                     },
                 )
             },
@@ -1724,6 +1727,7 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
             questions: &[],
             sections: &sections,
             run_id: None,
+            mid_turn: false,
         },
     )
     .unwrap();
@@ -1989,6 +1993,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
                 questions: &[],
                 sections: &sections,
                 run_id: None,
+                mid_turn: false,
             },
         )
         .unwrap();

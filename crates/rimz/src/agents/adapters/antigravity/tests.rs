@@ -2994,7 +2994,7 @@ fn visible_transcript_contract_exposes_only_normalized_messages() {
             .into_iter()
             .map(|message| message.text)
             .collect::<Vec<_>>(),
-        ["/compact keep the notes"]
+        ["keep the notes"]
     );
     assert!(
         AntigravityAdapter
@@ -3106,6 +3106,27 @@ fn final_assistant_survives_bare_compact_but_clears_on_compact_with_message() {
         session::last_assistant_message(&path).as_deref(),
         Some("SLEPT")
     );
+
+    // Mid-turn `/compact <message>` + `CHECKPOINT` followed by the turn's parked reply
+    // keeps that reply in both `last_assistant_message` and `messages` (used on rest ends).
+    let steered_bg = include_str!("tests/fixtures/compaction/steered-bg-continue-transcript.jsonl");
+    let through_parked: String = steered_bg
+        .lines()
+        .take(22)
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&path, &through_parked).unwrap();
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("DONE_FG")
+    );
+    let rest_reply = session::messages(&through_parked)
+        .into_iter()
+        .rev()
+        .take_while(|message| message.role != TranscriptRole::User)
+        .find(|message| message.role == TranscriptRole::Assistant)
+        .map(|message| message.text);
+    assert_eq!(rest_reply.as_deref(), Some("DONE_FG"));
 }
 
 #[test]
@@ -4170,7 +4191,7 @@ fn bare_compact_user_row_leaves_transcript_fold_state_and_activity_unchanged() {
         "bare /compact on a parked turn must not advance last_activity"
     );
 
-    // `/compact <message>` is still an ordinary user turn start.
+    // `/compact <message>` opens a user turn with the `/compact ` prefix stripped.
     let mut with_instruction = rested;
     with_instruction.push(user_record(2, AT_12, "/compact focus on tests"));
     let instructed = fold_lines(&with_instruction);
@@ -4183,7 +4204,7 @@ fn bare_compact_user_row_leaves_transcript_fold_state_and_activity_unchanged() {
     );
     assert_eq!(
         local_state(&instructed).latest_prompt.as_deref(),
-        Some("/compact focus on tests")
+        Some("focus on tests")
     );
 }
 
@@ -4914,9 +4935,10 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
                 ("initialNumSteps", json!(initial_steps)),
             ],
         );
-        observe_lifecycle_with_prompt_reader("PostInvocation", &payload, |path, id, from| {
-            session::prompt_taken_in_under(dir.path(), path, id, from?)
+        decode_lifecycle_fields("PostInvocation", &payload, |path, id, read| {
+            session::read_prompt_under(dir.path(), path, id, read)
         })
+        .lifecycle
     };
     assert!(
         post(&lines, 0, 1).is_none(),
@@ -5032,11 +5054,11 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
             ("lastUserInput", json!("/compact")),
         ],
     );
-    let reported =
-        observe_lifecycle_with_prompt_reader("PostInvocation", &compact_steer, |p, id, from| {
-            session::prompt_taken_in_under(dir.path(), p, id, from?)
-        })
-        .expect("a steer into a post-compaction continuation is reported");
+    let reported = decode_lifecycle_fields("PostInvocation", &compact_steer, |p, id, read| {
+        session::read_prompt_under(dir.path(), p, id, read)
+    })
+    .lifecycle
+    .expect("a steer into a post-compaction continuation is reported");
     assert_eq!(reported.prompt.as_deref(), Some("Also include STEERAFTER."));
     assert!(reported.is_state_snapshot());
     let after_steer = with(
@@ -5044,9 +5066,10 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
         [("invocationNum", json!(2)), ("initialNumSteps", json!(9))],
     );
     assert!(
-        observe_lifecycle_with_prompt_reader("PostInvocation", &after_steer, |p, id, from| {
-            session::prompt_taken_in_under(dir.path(), p, id, from?)
+        decode_lifecycle_fields("PostInvocation", &after_steer, |p, id, read| {
+            session::read_prompt_under(dir.path(), p, id, read)
         })
+        .lifecycle
         .is_none(),
         "a later invocation begins past the steered prompt"
     );
@@ -5055,11 +5078,12 @@ fn post_invocation_reports_each_prompt_taken_in_mid_turn_once() {
         [("invocationNum", json!(0)), ("initialNumSteps", json!(4))],
     );
     assert!(
-        observe_lifecycle_with_prompt_reader("PostInvocation", &pre_checkpoint, |p, id, from| {
-            session::prompt_taken_in_under(dir.path(), p, id, from?)
+        decode_lifecycle_fields("PostInvocation", &pre_checkpoint, |p, id, read| {
+            session::read_prompt_under(dir.path(), p, id, read)
         })
+        .lifecycle
         .is_none(),
-        "a read starting before a CHECKPOINT stops at the checkpoint and drops /compact"
+        "a read starting at a bare /compact row stops before its CHECKPOINT"
     );
     let unreadable = with(
         &hook_payload(),
@@ -5558,6 +5582,210 @@ fn steered_altm_compact_capture_decodes_without_panicking() {
             }),
         ]
     );
+}
+
+#[test]
+fn steered_compact_continue_captures_decode_to_in_turn_close_with_stripped_prompt() {
+    let cases = [
+        (
+            "case-b",
+            include_str!("tests/fixtures/compaction/steered-continue-transcript.jsonl"),
+            include_str!("tests/fixtures/compaction/steered-continue-payloads.jsonl"),
+        ),
+        (
+            "case-d2",
+            include_str!("tests/fixtures/compaction/steered-rimz-continue-transcript.jsonl"),
+            include_str!("tests/fixtures/compaction/steered-rimz-continue-payloads.jsonl"),
+        ),
+        (
+            "case-c2-with-system-message",
+            include_str!("tests/fixtures/compaction/steered-bg-continue-transcript.jsonl"),
+            include_str!("tests/fixtures/compaction/steered-bg-continue-payloads.jsonl"),
+        ),
+    ];
+    for (label, transcript, raw_payloads) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let payloads: Vec<Value> = raw_payloads.lines().map(json_value).collect();
+        let env = BTreeMap::from([(
+            "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+            dir.path().to_string_lossy().into_owned(),
+        )]);
+        let mut closes = Vec::new();
+        for row in &payloads {
+            let native = row["event"].as_str().unwrap();
+            let payload = &row["payload"];
+            let event = catalog_event_for_capture(native, payload);
+            let id = payload["conversationId"].as_str().unwrap();
+            let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", transcript);
+            let payload = with(payload, [("transcriptPath", json!(path))]);
+            let output = AntigravityAdapter
+                .decode_hook_in(event, &payload, &env)
+                .unwrap();
+            if let Some(obs) = output.lifecycle()
+                && matches!(obs.signal, LifecycleSignal::CompactionEnded { .. })
+            {
+                closes.push((
+                    obs.signal.clone(),
+                    obs.prompt.as_deref().map(str::to_owned),
+                    obs.is_state_snapshot(),
+                ));
+            }
+        }
+        assert_eq!(
+            closes,
+            vec![(
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(true),
+                    failed: false,
+                    echo: false,
+                },
+                Some("continue".to_owned()),
+                false,
+            )],
+            "{label}"
+        );
+        let user_texts: Vec<_> = session::messages(transcript)
+            .into_iter()
+            .filter(|msg| msg.role == TranscriptRole::User)
+            .map(|msg| msg.text)
+            .collect();
+        assert!(
+            user_texts.iter().any(|text| text == "continue"),
+            "{label}: history should strip /compact prefix: {user_texts:?}"
+        );
+        assert!(
+            user_texts.iter().all(|text| !text.starts_with("/compact")),
+            "{label}: history must not keep /compact prefix: {user_texts:?}"
+        );
+    }
+}
+
+#[test]
+fn turn_end_compact_continue_capture_decodes_to_turn_started_then_close_then_turn_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = include_str!("tests/fixtures/compaction/turnend-continue-transcript.jsonl");
+    let payloads: Vec<Value> =
+        include_str!("tests/fixtures/compaction/turnend-continue-payloads.jsonl")
+            .lines()
+            .map(json_value)
+            .collect();
+    let env = BTreeMap::from([(
+        "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let tail_events: Vec<_> = payloads[payloads.len() - 3..]
+        .iter()
+        .map(|row| {
+            let native = row["event"].as_str().unwrap();
+            let payload = &row["payload"];
+            let event = catalog_event_for_capture(native, payload);
+            let id = payload["conversationId"].as_str().unwrap();
+            let path = write_transcript_named(dir.path(), id, "transcript_full.jsonl", transcript);
+            let payload = with(payload, [("transcriptPath", json!(path))]);
+            let output = AntigravityAdapter
+                .decode_hook_in(event, &payload, &env)
+                .unwrap();
+            output.lifecycle().map(|obs| {
+                (
+                    obs.signal.clone(),
+                    obs.prompt.as_deref().map(str::to_owned),
+                    obs.is_state_snapshot(),
+                )
+            })
+        })
+        .collect();
+    assert_eq!(
+        tail_events,
+        vec![
+            Some((
+                LifecycleSignal::TurnStarted { turn_id: None },
+                Some("continue".to_owned()),
+                false,
+            )),
+            Some((
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(true),
+                    failed: false,
+                    echo: false,
+                },
+                None,
+                false,
+            )),
+            Some((
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+                None,
+                false,
+            )),
+        ]
+    );
+}
+
+#[test]
+fn post_invocation_checkpoint_falls_back_to_whole_file_past_large_tool_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let big_output = "x".repeat(80 * 1024);
+    let transcript = [
+        json!({
+            "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "status": "DONE", "created_at": "2026-11-24T22:10:00Z",
+            "content": "<USER_REQUEST>\nstart\n</USER_REQUEST>"
+        }),
+        json!({
+            "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "status": "DONE", "created_at": "2026-11-24T22:10:14Z",
+            "content": "<USER_REQUEST>\n/compact continue\n</USER_REQUEST>"
+        }),
+        json!({
+            "step_index": 2, "source": "SYSTEM", "type": "CHECKPOINT",
+            "status": "DONE", "created_at": "2026-11-24T22:10:19Z",
+            "content": "# Resuming from a compaction"
+        }),
+        json!({
+            "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE",
+            "status": "DONE", "created_at": "2026-11-24T22:10:27Z",
+            "content": ""
+        }),
+        json!({
+            "step_index": 4, "source": "MODEL", "type": "GENERIC",
+            "status": "DONE", "created_at": "2026-11-24T22:10:29Z",
+            "content": big_output
+        }),
+    ]
+    .into_iter()
+    .map(|row| row.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &transcript);
+    let env = BTreeMap::from([(
+        "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let payload = json!({
+        "conversationId": SESSION_ID,
+        "workspacePaths": ["/workspace/project"],
+        "transcriptPath": path,
+        "invocationNum": 1,
+        "initialNumSteps": 1,
+        "lastUserInput": "/compact continue"
+    });
+    let output = AntigravityAdapter
+        .decode_hook_in("PostInvocation", &payload, &env)
+        .unwrap();
+    let obs = output.lifecycle().expect("close observation");
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+            echo: false,
+        }
+    );
+    assert_eq!(obs.prompt.as_deref(), Some("continue"));
+    assert!(!obs.is_state_snapshot());
 }
 #[cfg(unix)]
 #[test]

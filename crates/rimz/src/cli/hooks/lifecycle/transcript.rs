@@ -194,6 +194,7 @@ pub(super) struct ConversationInput<'a> {
     pub(super) questions: &'a [rimz::transcript::AskQuestion],
     pub(super) sections: &'a [rimz::store::message::PromptSection<'a>],
     pub(super) run_id: Option<&'a rimz::RunId>,
+    pub(super) mid_turn: bool,
 }
 
 pub(super) fn record_conversation(
@@ -208,6 +209,7 @@ pub(super) fn record_conversation(
         questions,
         sections,
         run_id,
+        mid_turn,
     } = input;
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() && observation.ask_queue.is_none() {
@@ -352,9 +354,14 @@ pub(super) fn record_conversation(
         true
     };
     let mut entry = match &observation.signal {
-        LifecycleSignal::TurnStarted { .. } => {
+        LifecycleSignal::TurnStarted { .. }
+        | LifecycleSignal::CompactionEnded { failed: false, .. }
+            if matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
+                || !sections.is_empty() =>
+        {
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
+            let mut has_non_harness = false;
             let mut open_ask_id = (recorded.receipt.waiting_cleared && !sections.is_empty())
                 .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
                 .flatten()
@@ -422,11 +429,15 @@ pub(super) fn record_conversation(
                 let (kind, from) = origin.entry_kind_and_from();
                 let mut entry = entry_base(kind, section.text.clone());
                 entry.from = from;
+                let non_harness = !entry.is_harness();
+                has_non_harness |= non_harness;
                 if let Some(message) = section.record {
                     entry.message_id = Some(message.message_id.clone());
                     entry.enqueued_at = Some(message.enqueued_at);
                     entry.reply_to = message.in_reply_to.clone();
-                    matched_ids.push(message.message_id.clone());
+                    if !mid_turn || non_harness {
+                        matched_ids.push(message.message_id.clone());
+                    }
                 }
                 // Only direct human input answers an open ask. The entry's
                 // origin is what says so, after the run record has had its
@@ -452,7 +463,9 @@ pub(super) fn record_conversation(
                 };
                 entries.push((entry, fallback_prompt, sender));
             }
-            replace_turn_opened_by(store, agent, &agent_id, matched_ids);
+            if !mid_turn || has_non_harness {
+                replace_turn_opened_by(store, agent, &agent_id, matched_ids);
+            }
             for (entry, fallback_prompt, sender) in entries {
                 if already_recorded(&entry) {
                     continue;

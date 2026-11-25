@@ -493,6 +493,38 @@ pub(crate) fn chat_view_with_hidden(
     )
 }
 
+#[cfg(test)]
+pub(crate) fn render_text_view_in_paths(
+    workspace: &rimz::ResolvedWorkspace,
+    paths: &rimz::StatePaths,
+    target: Option<&str>,
+    last: Option<usize>,
+    flat: bool,
+    hidden: Hidden,
+) -> Result<String> {
+    let view = chat_view_with_mode(
+        workspace,
+        paths,
+        target,
+        None,
+        last,
+        false,
+        ViewMode {
+            hidden,
+            flat,
+            since: jiff::Timestamp::UNIX_EPOCH,
+        },
+    )?;
+    let mut out = Vec::new();
+    render_lines_to(
+        &mut out,
+        &view,
+        &jiff::tz::TimeZone::UTC,
+        crate::cli::render::prose::Prose::Raw,
+    )?;
+    Ok(String::from_utf8(out).expect("rendered transcript is UTF-8"))
+}
+
 fn chat_view_with_mode(
     workspace: &rimz::ResolvedWorkspace,
     paths: &rimz::StatePaths,
