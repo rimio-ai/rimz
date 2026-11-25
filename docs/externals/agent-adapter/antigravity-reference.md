@@ -186,6 +186,8 @@ Pressing `Esc` interrupts an active turn, fires no lifecycle hook, and moves any
 
 1.5.15 capture (2026-11-23, Queue mode, `--mode auto`, the transcript copied inside each `invocationNum: 0` `PreInvocation`): where the row that opens an execution lands against that opener's `initialNumSteps`. A fresh prompt (bound 1) and a message typed with `Enter` during a running turn and drained when it ended (bound 5) each wrote their `USER_EXPLICIT` / `USER_INPUT` row at the step just below the bound, already on disk when the hook ran; the drained opener carried the drained text as `lastUserInput`. A background command's result after a steer (bound 8) and a native subagent's result waking its parent (bound 4) wrote no user row: the step just below the bound was the `PLANNER_RESPONSE` that ended the previous execution, on disk at the hook, and the `SYSTEM` / `SYSTEM_MESSAGE` carrying the result landed at the bound itself, not yet on disk. Both continuations carried the older prompt as `lastUserInput`, the steer in the background case. A native child's first opener carried bound 0 and an empty `lastUserInput`, and its transcript file did not exist yet.
 
+1.5.17 capture: an `Alt+M` read together with the `Enter` before it is lost and the message stays queued; the same `Alt+M` pressed later sends it.
+
 ## Command hooks
 
 The [hooks](https://antigravity.google/docs/hooks/) page and the 1.5.14 embedded hook doc define six events: `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, and `Stop`. Each handler receives one camelCase (protojson) JSON object on stdin and returns one JSON object on stdout. Handlers run synchronously and block the loop.
