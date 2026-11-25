@@ -1212,3 +1212,86 @@ fn a_molted_agents_holder_card_reaches_its_old_kind_records() {
     );
     assert!(gone(&archived.message_id));
 }
+
+#[test]
+fn claim_steer_batch_claims_command_with_tail_past_intervening_prompt_on_next_prompt_kind() {
+    let now = Timestamp::now();
+    for (kind, expect_pair) in [("antigravity", true), ("claude", false)] {
+        let q = Queue::new();
+        let make = |n: u64, body: MessageBody| {
+            let mut record = q.record(n).with_body(body);
+            record.kind = AgentKind::new_unchecked(kind);
+            record
+        };
+        let ahead = make(1, MessageBody::Prompt);
+        let command = make(2, MessageBody::Command).with_sender(MessageSender::System);
+        let intervening = make(3, MessageBody::Prompt);
+        let mut tail = make(4, MessageBody::Prompt).with_sender(MessageSender::System);
+        tail.soft_compact = Some(SoftCompactStep::Continue);
+        tail.follows_command = Some(command.message_id.clone());
+        for record in [&ahead, &command, &intervening, &tail] {
+            q.queue_message(record, "session").unwrap();
+        }
+
+        let claimed = q
+            .claim_steer_batch(&command.message_id, now, false)
+            .unwrap()
+            .expect("command claimed for steer");
+        if expect_pair {
+            let ids: Vec<_> = claimed.iter().map(|record| &record.message_id).collect();
+            assert_eq!(ids, vec![&command.message_id, &tail.message_id], "{kind}");
+            assert!(
+                claimed.iter().all(|record| record.batch_id.is_none()),
+                "folded command/tail claims keep batch_id None so each acknowledges separately"
+            );
+        } else {
+            assert_eq!(claimed.len(), 1, "{kind}");
+            assert_eq!(claimed[0].message_id, command.message_id);
+        }
+    }
+}
+
+#[test]
+fn claim_steer_batch_spends_stored_force_on_head_and_paired_tail_only_when_requested() {
+    let now = Timestamp::now();
+    for spend_force in [true, false] {
+        let q = Queue::new();
+        let make = |n: u64, body: MessageBody| {
+            let mut record = q.record(n).with_body(body).with_force(true);
+            record.kind = AgentKind::new_unchecked("antigravity");
+            record
+        };
+        let command = make(1, MessageBody::Command).with_sender(MessageSender::System);
+        let mut tail = make(2, MessageBody::Prompt).with_sender(MessageSender::System);
+        tail.soft_compact = Some(SoftCompactStep::Continue);
+        tail.follows_command = Some(command.message_id.clone());
+        let unrelated = make(3, MessageBody::Prompt);
+        for record in [&command, &tail, &unrelated] {
+            q.queue_message(record, "session").unwrap();
+        }
+
+        let claimed = q
+            .claim_steer_batch(&command.message_id, now, spend_force)
+            .unwrap()
+            .expect("paired steer batch claimed");
+        assert_eq!(claimed.len(), 2, "spend_force={spend_force}");
+        assert!(
+            claimed.iter().all(|record| record.force),
+            "returned copies keep force for this attempt (spend_force={spend_force})"
+        );
+        assert_eq!(
+            q.by_id(&command.message_id).force,
+            !spend_force,
+            "stored head force (spend_force={spend_force})"
+        );
+        assert_eq!(
+            q.by_id(&tail.message_id).force,
+            !spend_force,
+            "stored paired tail force (spend_force={spend_force})"
+        );
+        assert!(
+            q.by_id(&unrelated.message_id).force,
+            "unrelated queued record keeps its force"
+        );
+    }
+}

@@ -1567,7 +1567,32 @@ pub(crate) fn delivery_batch_indices(
     }
 
     let mut selected = vec![head_index];
-    if !head.batchable() || head.gate == DeliveryGate::Resume {
+    if head.gate == DeliveryGate::Resume {
+        return Some(selected);
+    }
+    if head.body == MessageBody::Command {
+        if next_prompt_compact_kind(&head.kind)
+            && let Some((index, candidate)) =
+                live.iter()
+                    .enumerate()
+                    .skip(head_index + 1)
+                    .find(|(_, message)| {
+                        message.status.is_open()
+                            && message.same_card(head.card_ref())
+                            && same_delivery_lane(head.gate, message.gate)
+                            && message.is_deliverable(now)
+                    })
+            && is_command_continue_tail(head, candidate)
+            && claim_expired(candidate.last_attempt_at, now)
+            && candidate.typing_hold.is_none_or(|hold| hold.until <= now)
+            && candidate.force == head.force
+            && gate_open(candidate.gate, status)
+        {
+            selected.push(index);
+        }
+        return Some(selected);
+    }
+    if !head.batchable() {
         return Some(selected);
     }
     for (index, candidate) in live
@@ -1590,6 +1615,53 @@ pub(crate) fn delivery_batch_indices(
         selected.push(index);
     }
     Some(selected)
+}
+
+/// Select the record(s) to claim for an explicit steer of `target_id`. For a compaction command
+/// on a `CompactInstruction::NextPrompt` kind, also claims its queued continue tail even past an
+/// intervening boundary record so the steer folds onto one line.
+pub(in crate::store) fn steer_batch_indices(
+    live: &[MessageRecord],
+    target_id: &MessageId,
+    now: Timestamp,
+) -> Option<Vec<usize>> {
+    let head_index = live.iter().position(|message| {
+        message.message_id == *target_id && message.status == MessageStatus::Queued
+    })?;
+    let head = &live[head_index];
+    if !claim_expired(head.last_attempt_at, now) {
+        return None;
+    }
+    let mut selected = vec![head_index];
+    if head.body == MessageBody::Command
+        && next_prompt_compact_kind(&head.kind)
+        && let Some((index, _)) = live.iter().enumerate().find(|(index, candidate)| {
+            *index != head_index
+                && candidate.status == MessageStatus::Queued
+                && candidate.same_card(head.card_ref())
+                && is_command_continue_tail(head, candidate)
+                && claim_expired(candidate.last_attempt_at, now)
+                && candidate.typing_hold.is_none_or(|hold| hold.until <= now)
+        })
+    {
+        selected.push(index);
+    }
+    Some(selected)
+}
+
+pub(crate) fn next_prompt_compact_kind(kind: &AgentKind) -> bool {
+    crate::agents::spec_by_kind(kind.as_str())
+        .and_then(|spec| spec.launch.compact_command)
+        .is_some_and(|compact| {
+            compact.instruction == crate::agents::definition::CompactInstruction::NextPrompt
+        })
+}
+
+fn is_command_continue_tail(head: &MessageRecord, candidate: &MessageRecord) -> bool {
+    head.body == MessageBody::Command
+        && candidate.body == MessageBody::Prompt
+        && candidate.soft_compact == Some(SoftCompactStep::Continue)
+        && candidate.follows_command.as_ref() == Some(&head.message_id)
 }
 
 fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {

@@ -418,7 +418,11 @@ fn write_live(
         interrupt,
     };
     if head.body == MessageBody::Command {
-        debug_assert_eq!(batch.len(), 1);
+        debug_assert!(
+            batch.len() == 1
+                || (batch.len() == 2
+                    && batch[1].follows_command.as_ref() == Some(&head.message_id))
+        );
         let receiver = checked(&fresh);
         write_text(
             workspace,
@@ -788,6 +792,21 @@ fn decide_now(
         }
         batch = survivors;
     }
+    if batch.len() > 1 && batch[0].body == MessageBody::Command {
+        let live_kind = fresh
+            .as_ref()
+            .or(bound)
+            .map_or(&batch[0].kind, |row| &row.kind);
+        if !crate::store::message::next_prompt_compact_kind(live_kind) {
+            store.release_message_claims(
+                &batch[1..],
+                "deferred: receiver kind does not fold a compaction continue",
+                compacted,
+                &workspace.session_name,
+            )?;
+            batch.truncate(1);
+        }
+    }
     let head = &batch[0];
     let Some(agent) = fresh.as_ref().or(bound) else {
         return Ok(Decided::Write { row: fresh, batch });
@@ -879,7 +898,8 @@ fn withdraw_broken(
             .find(|(id, _)| *id == message.message_id)
             .map(|(_, reason)| reason.clone())
     })?;
-    let batch_id = (held.len() > 1).then(|| held[0].message_id.clone());
+    let batch_id =
+        (held.len() > 1 && held[0].body == MessageBody::Prompt).then(|| held[0].message_id.clone());
     for message in &mut held {
         message.batch_id = batch_id.clone();
     }
@@ -901,23 +921,37 @@ fn write_text(
         .first()
         .expect("write_text requires at least one message");
     let mut typed = None;
+    let mut folded_tail = None;
     let mut slash_led = false;
     match head.body {
         MessageBody::Command => {
-            debug_assert_eq!(batch.len(), 1);
+            debug_assert!(
+                batch.len() == 1
+                    || (batch.len() == 2
+                        && batch[1].follows_command.as_ref() == Some(&head.message_id))
+            );
             let kind = receiver.map_or(&head.kind, |row| &row.kind);
             let declared = crate::agents::spec_by_kind(kind.as_str())
                 .and_then(|spec| spec.launch.compact_command)
                 .map(|compact| compact.command);
-            let text = compaction_for_receiver(head, receiver).unwrap_or_else(|| head.text.clone());
+            let cmd_text =
+                compaction_for_receiver(head, receiver).unwrap_or_else(|| head.text.clone());
+            let line = if let Some(tail) = batch.get(1) {
+                let folded = tail.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                let full = format!("{cmd_text} {folded}");
+                folded_tail = Some(folded);
+                full
+            } else {
+                cmd_text.clone()
+            };
             type_command_with(
-                &text,
+                &line,
                 declared,
                 send,
                 |segment| writer.type_text(segment),
                 sleep,
             )?;
-            typed = Some(text);
+            typed = Some(cmd_text);
         }
         MessageBody::Prompt => {
             debug_assert!(
@@ -935,10 +969,15 @@ fn write_text(
     // submitted message is always preceded by its durable record and audit event.
     let stamped = batch
         .iter()
-        .cloned()
-        .map(|mut message| {
+        .enumerate()
+        .map(|(index, message)| {
+            let mut message = message.clone();
             message.sent_epoch = receiver.map(|row| row.epoch);
-            if let Some(text) = &typed {
+            if index == 0 {
+                if let Some(text) = &typed {
+                    message.text.clone_from(text);
+                }
+            } else if let Some(text) = &folded_tail {
                 message.text.clone_from(text);
             }
             message
@@ -964,16 +1003,23 @@ fn write_text(
     // paste-burst state to flush before submitting.
     send.pause_raw_typing(head.body);
     let keys = receiver_keys(head, receiver);
+    let folded = folded_tail.as_deref().is_some_and(|text| !text.is_empty());
+    let steer_keys = if receiver.is_some_and(AgentState::is_awaiting_input) {
+        super::prompt_chord(keys).unwrap_or(keys.send_now)
+    } else {
+        keys.send_now
+    };
     writer.press_keys(match (head.body, send.kind) {
+        (MessageBody::Command, DeliveryKind::Steer)
+            if folded && receiver.is_some_and(AgentState::holds_open_turn) =>
+        {
+            steer_keys
+        }
         (MessageBody::Command, _) => keys.command,
         (MessageBody::Prompt, DeliveryKind::Boundary) if slash_led => keys.command,
         (MessageBody::Prompt, DeliveryKind::Boundary) => keys.queue,
-        (MessageBody::Prompt, DeliveryKind::Steer)
-            if receiver.is_some_and(AgentState::is_awaiting_input) =>
-        {
-            super::prompt_chord(keys).unwrap_or(keys.send_now)
-        }
-        (MessageBody::Prompt, DeliveryKind::Steer | DeliveryKind::Interrupt) => keys.send_now,
+        (MessageBody::Prompt, DeliveryKind::Steer) => steer_keys,
+        (MessageBody::Prompt, DeliveryKind::Interrupt) => keys.send_now,
     })?;
     Ok(())
 }

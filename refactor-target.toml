@@ -4809,7 +4809,8 @@ path = "crates/rimz/src/store"
 # message::RetiredEnter keeps the retired "enter": true key that binaries through 0.4.3
 # require on queue rows and message events (+1).
 # message::opens_slash_command is the one slash-led test batching and the submit keys share (+1).
-surface-budget = 697
+# message::next_prompt_compact_kind shares the NextPrompt compaction-command check between batching and send decisions, and Store::claim_steer_batch replaces claim_message_spending_force (+1).
+surface-budget = 698
 
 [[verdict]]
 kind = "item"

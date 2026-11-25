@@ -18,6 +18,9 @@ impl Fixture {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks(kind);
+        let program = rimz::agents::spec_by_kind(kind)
+            .and_then(|spec| spec.launch.program)
+            .unwrap_or(kind);
         let bin = env.project_root.join("bin");
         crate::common::write_path_shim(
             &bin,
@@ -28,7 +31,7 @@ printf '%s\n' "$*" >> "$RIMZ_TEST_TYPING_TRACE"
 case "$1" in
   -V) printf 'tmux 3.8\n' ;;
   list-clients) cat "$RIMZ_TEST_TYPING_CLIENTS" ;;
-  list-panes) printf '%s,@1,%%3,{kind}\n' "$RIMZ_TEST_TYPING_SESSION" ;;
+  list-panes) printf '%s,@1,%%3,{program}\n' "$RIMZ_TEST_TYPING_SESSION" ;;
   load-buffer) dd of=/dev/null status=none ;;
 esac"#
             ),
@@ -62,7 +65,7 @@ esac"#
             event.timestamp = anchor;
             env.store().append_event(&event).unwrap();
         }
-        let mut pane = agent_pane(&env, kind);
+        let mut pane = agent_pane(&env, program);
         pane.pane_id = pane_id;
         pane.session_name = env.resolve_workspace(&env.project_root).session_name;
         let panes = env.write_pane_fixture(std::slice::from_ref(&pane));
@@ -1484,4 +1487,62 @@ fn a_held_deadline_stop_replays_once_while_its_run_holds_the_stop() {
             .count();
         assert_eq!(pastes, 1, "{kind}");
     }
+}
+
+#[test]
+fn steered_command_with_tail_typing_hold_omits_steer_replay_on_tail() {
+    let fixture = Fixture::for_kind("antigravity", true);
+    let store = fixture.env.store();
+    let row = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == "typing-session")
+        .cloned()
+        .unwrap();
+    let command = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &row,
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_body(MessageBody::Command)
+    .with_sender(MessageSender::System);
+    let mut tail = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &row,
+        "keep going".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System);
+    tail.soft_compact = Some(rimz::store::message::SoftCompactStep::Continue);
+    tail.follows_command = Some(command.message_id.clone());
+    let tail = store
+        .queue_message_with_tail(&command, &tail, "rimz-test")
+        .unwrap();
+
+    run_success(
+        fixture
+            .command()
+            .args(["message", "steer", command.message_id.as_str()]),
+        "steer held by typing",
+    );
+    let held_cmd = message_by_id(&fixture.env, &command.message_id);
+    let held_tail = message_by_id(&fixture.env, &tail.message_id);
+    assert_eq!(held_cmd.status, MessageStatus::Queued);
+    assert_eq!(held_tail.status, MessageStatus::Queued);
+    assert_eq!(
+        held_cmd.typing_hold.and_then(|hold| hold.replay),
+        Some(rimz::store::message::TypingHoldReplay::Steer),
+        "command keeps steer replay across the typing hold"
+    );
+    assert!(
+        held_tail.typing_hold.is_some(),
+        "tail is claimed and held beside the steered command: {held_tail:?}"
+    );
+    assert_eq!(
+        held_tail.typing_hold.and_then(|hold| hold.replay),
+        None,
+        "tail never gets a steer replay of its own: {held_tail:?}"
+    );
 }
