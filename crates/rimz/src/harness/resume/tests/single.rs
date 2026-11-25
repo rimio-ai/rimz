@@ -326,6 +326,58 @@ fn recorded_tier_override_takes_the_kind_base_effort_a_fresh_tier_launch_takes()
 }
 
 #[test]
+fn recorded_tier_override_takes_the_project_toml_base_effort_a_fresh_launch_takes() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, text) in [
+        (
+            "claude",
+            "---\ndescription: Base\neffort: high\n---\nHouse.\n",
+        ),
+        (
+            "planner",
+            "---\ndescription: Planner\nagent: claude\ntier: senior\ntools: [Bash]\n---\nPlan.\n",
+        ),
+    ] {
+        std::fs::write(root.path().join(format!("agents/{name}.md")), text).unwrap();
+    }
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.claude]\nagent = \"claude\"\neffort = \"low\"\n\
+         system-prompt-file = \"base.md\"\n",
+    )
+    .unwrap();
+    std::fs::write(project.path().join("base.md"), "House.\n").unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), root.path()).unwrap();
+    let fresh = crate::harness::spec::resolve_profile("planner", &launch.profiles).unwrap();
+    assert_eq!(fresh.launch.effort.as_deref(), Some("low"));
+
+    let mut saved = saved();
+    saved.tier = Some(tier_stamp("opus"));
+    let tiers = crate::config::tiers::TierConfig::default();
+    let (plan, _) = single(
+        &saved,
+        &launch.profiles,
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("low"));
+}
+
+#[test]
 fn isolation_only_changes_the_isolation_even_without_a_record() {
     for recorded in [true, false] {
         let mut saved = saved();
