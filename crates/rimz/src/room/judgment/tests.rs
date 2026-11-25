@@ -195,6 +195,25 @@ fn failed_account_never_prepares_remote_control() {
 }
 
 #[test]
+fn judgment_warns_about_invalid_subagents_linger() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.subagents.linger = "30s".to_owned();
+    let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+    let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+    assert!(
+        judgment
+            .skipped
+            .iter()
+            .any(|entry| entry.setting == "agents.subagents.linger"
+                && entry.message.contains("at least 1m")),
+        "{:?}",
+        judgment.skipped
+    );
+}
+
+#[test]
 fn judgment_warns_about_out_of_range_tmux_options() {
     let root = tempfile::tempdir().unwrap();
     let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();

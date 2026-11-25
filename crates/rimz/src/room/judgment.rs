@@ -124,6 +124,9 @@ pub(super) fn judge(
             ),
         );
     }
+    if let Err(error) = machine.agents.subagents.linger() {
+        warn("agents.subagents.linger".into(), error.to_string());
+    }
     if let Err(error) = machine.agents.hibernate.schedule() {
         warn("agents.hibernate".into(), error.to_string());
     } else if let Some(message) = hibernate_notice(

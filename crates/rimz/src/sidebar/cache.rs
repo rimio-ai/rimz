@@ -15,7 +15,9 @@ use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::ids::MuxName;
 use crate::mux::PRESENCE_STAMP_FRESH;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar::timing::{EVENT_PANE_TTL, HIBERNATED_CHECK_TTL, SNAPSHOT_CACHE_TTL};
+use crate::sidebar::timing::{
+    EVENT_PANE_TTL, FOCUS_HOLD_TTL, HIBERNATED_CHECK_TTL, SNAPSHOT_CACHE_TTL,
+};
 use crate::utils::time::unix_now_ms;
 
 /// Held keys check immediately, then on their own cadence; unheld keys forget the stamp.
@@ -71,6 +73,31 @@ fn normalize_observed_stamp(frame: &mut PaneFrame) {
     if frame.observed_at_ms == 0 {
         frame.observed_at_ms = frame.produced_at_ms;
     }
+}
+
+/// Whether `pane` holds fresh focus in `session`, from a published pane frame within
+/// `FOCUS_HOLD_TTL` or a fresh focus anchor for the same session. Missing, unreadable,
+/// or stale records hold nothing.
+pub fn fresh_pane_focused(
+    runtime: &RuntimePaths,
+    session: &str,
+    pane: &crate::ids::PaneId,
+    now_ms: u64,
+) -> bool {
+    let frame_focused = read_snapshot_cache(&runtime.pane_frame_path(), session)
+        .filter(|frame| snapshot_cache_is_fresh(frame, now_ms, None, FOCUS_HOLD_TTL))
+        .is_some_and(|frame| {
+            frame.focused_pane.as_ref() == Some(pane) || frame.viewed_panes.contains(pane)
+        });
+    frame_focused
+        || crate::mux::focus_anchor::load(runtime).is_some_and(|anchor| {
+            anchor.session_name == session
+                && &anchor.pane_id == pane
+                && crate::mux::focus_anchor::is_fresh(
+                    anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms),
+                    now_ms,
+                )
+        })
 }
 
 /// Whether the host may reuse a retained frame: publication age at most `ttl`, with `observed_at_ms` at or after the freshness floor. Lifecycle and resize floors bypass even [`EVENT_PANE_TTL`]; saturating age treats a future clock stamp as age zero.

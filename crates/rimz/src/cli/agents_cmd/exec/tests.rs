@@ -337,6 +337,12 @@ fn only_terminal_subagent_resumes_await_reopening() {
     );
     record.status = RunStatus::Completed;
     record.follow_ups = 7;
+    assert_eq!(
+        resumed_run_follow_ups(&request, &record),
+        None,
+        "promptless reopen takes no reopen hold (R5)"
+    );
+    request.follow_up_message = Some(rimz::ids::MessageId::new());
     assert_eq!(resumed_run_follow_ups(&request, &record), Some(7));
     request.subagent = false;
     assert_eq!(resumed_run_follow_ups(&request, &record), None);

@@ -598,13 +598,14 @@ fn run_loop(
             RunMonitor::new(
                 request.exit_on_run_completion,
                 if request.subagent {
-                    StopPolicy::ParentReceived
+                    StopPolicy::SubagentIdle
                 } else {
                     StopPolicy::RunTerminal
                 },
                 awaiting_reopen,
                 Instant::now(),
             )
+            .with_bound_at(state.spawned_at)
             .with_follow_up_message(request.follow_up_message.clone()),
             parent_watchdog.take(),
             &mut drainer_lease,
@@ -918,7 +919,7 @@ fn startup_evidence(
 #[derive(Clone, Copy)]
 enum StopPolicy {
     RunTerminal,
-    ParentReceived,
+    SubagentIdle,
 }
 
 struct RunPaths {
@@ -965,6 +966,8 @@ struct RunMonitor {
     self_cleanup: bool,
     stop_policy: StopPolicy,
     awaiting_reopen: Option<u32>,
+    untaken_follow_up: Option<u32>,
+    bound_at: Option<jiff::Timestamp>,
     next_park_check: Instant,
     follow_up_message: Option<rimz::ids::MessageId>,
     follow_up_held: Option<bool>,
@@ -977,7 +980,6 @@ struct RunMonitor {
     receipt_dirty: bool,
     receipt_ready: bool,
     last_receipt_check: Option<Instant>,
-    waiting_for_receipt: bool,
     run_was_ready: bool,
 }
 
@@ -993,6 +995,11 @@ impl Drop for RunMonitor {
 }
 
 impl RunMonitor {
+    fn with_bound_at(mut self, bound_at: jiff::Timestamp) -> Self {
+        self.bound_at = Some(bound_at);
+        self
+    }
+
     fn with_follow_up_message(mut self, message_id: Option<rimz::ids::MessageId>) -> Self {
         self.follow_up_message = message_id;
         self
@@ -1008,6 +1015,8 @@ impl RunMonitor {
             self_cleanup,
             stop_policy,
             awaiting_reopen,
+            untaken_follow_up: None,
+            bound_at: None,
             next_park_check: now,
             follow_up_message: None,
             follow_up_held: None,
@@ -1020,7 +1029,6 @@ impl RunMonitor {
             receipt_dirty: true,
             receipt_ready: false,
             last_receipt_check: None,
-            waiting_for_receipt: false,
             run_was_ready: false,
         }
     }
@@ -1029,11 +1037,8 @@ impl RunMonitor {
         &mut self,
         context: &RunPaths,
         now: Instant,
-        parent_changed: bool,
         mut spawn: impl FnMut(Duty) -> Result<DutyChild>,
     ) -> bool {
-        self.receipt_dirty |= parent_changed;
-        self.waiting_for_receipt = false;
         let mut record = match rimz::harness::run::load(&context.paths, &context.run_id) {
             Ok(record) => record,
             Err(error) => {
@@ -1087,6 +1092,23 @@ impl RunMonitor {
                 }
             };
             self.awaiting_reopen = None;
+            if self.follow_up_message.is_some()
+                && record.follow_ups <= ordinal
+                && record.status.is_terminal()
+            {
+                self.untaken_follow_up = Some(ordinal);
+            }
+        }
+        if self
+            .untaken_follow_up
+            .is_some_and(|ordinal| record.follow_ups > ordinal || !record.status.is_terminal())
+        {
+            self.untaken_follow_up = None;
+            if let Some(child) = self.receipt.take() {
+                child.reap();
+            }
+            self.receipt_ready = false;
+            self.receipt_dirty = true;
         }
         if !record.status.is_terminal() {
             if let Some(child) = self.receipt.take() {
@@ -1101,7 +1123,6 @@ impl RunMonitor {
         if record.report_to == rimz::store::run::ReportTo::Nobody {
             return ready;
         }
-        self.waiting_for_receipt = true;
         self.receipt_dirty |= ready && !self.run_was_ready;
         self.run_was_ready = ready;
         let queue_changed = self.refresh_queue_stamp(&context.paths);
@@ -1124,6 +1145,8 @@ impl RunMonitor {
             match spawn(Duty::Receipt {
                 run_id: context.run_id.clone(),
                 report,
+                bound_at: self.bound_at,
+                skip_linger: self.untaken_follow_up.is_some(),
             }) {
                 Ok(child) => {
                     self.receipt = Some(child);
@@ -1143,7 +1166,7 @@ impl RunMonitor {
 
     fn follow_up_holds(&mut self, paths: &rimz::StatePaths) -> bool {
         let Some(message_id) = self.follow_up_message.clone() else {
-            return true;
+            return false;
         };
         let queue_changed = self.refresh_queue_stamp(paths);
         self.receipt_dirty |= queue_changed;
@@ -1254,9 +1277,6 @@ fn supervise_child(
         let now = Instant::now();
         match child.try_wait() {
             Ok(Some(status)) => {
-                if let Some(watch) = &parent_watchdog {
-                    watch.set_receipt_waiting(false);
-                }
                 return Ok(ExecOutcome {
                     status,
                     abrupt: run_completed
@@ -1306,10 +1326,7 @@ fn supervise_child(
                 } else {
                     PARK_STRAND_POLL
                 };
-            let parent_changed = parent_watchdog
-                .as_ref()
-                .is_some_and(|watch| watch.take_parent_changed());
-            let completed = monitor_state.poll(monitor, now, parent_changed, |request| {
+            let completed = monitor_state.poll(monitor, now, |request| {
                 duty::command(
                     monitor.paths.workspace_id.clone(),
                     session_name.to_owned(),
@@ -1319,9 +1336,6 @@ fn supervise_child(
                 .map(DutyChild::Process)
                 .context("spawning supervise duty")
             });
-            if let Some(watch) = &parent_watchdog {
-                watch.set_receipt_waiting(monitor_state.waiting_for_receipt && !completed);
-            }
             if completed {
                 run_completed = true;
                 child.signal_term();

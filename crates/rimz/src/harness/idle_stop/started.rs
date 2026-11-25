@@ -18,7 +18,7 @@ use super::super::schedule::pending::SessionWaits;
 use super::super::schedule::{
     TaskAction, TaskTiming, TaskTimingState, attention, fire, task_record,
 };
-use super::{Hold, board_done, closing_with, debt, open_message, open_run, resting, rests};
+use super::{Hold, board_done, child_holds, closing_with, open_message, open_run, rests};
 use crate::Store;
 use crate::address::AddressContext;
 use crate::agents::{AgentState, AgentStatus, LaunchedBy, PendingWaitTrigger, TurnPhase};
@@ -479,7 +479,7 @@ impl<'a> List<'a> {
         }
         let mut closing = Vec::new();
         for child in closing_with(self.rows(), agent) {
-            if resting(child, now).is_err() || debt(store, &messages, &runs, child)?.is_some() {
+            if child_holds(store, &messages, &runs, child, now)? {
                 self.push_agent(Group::Holding, child, true);
             } else {
                 closing.push(child);

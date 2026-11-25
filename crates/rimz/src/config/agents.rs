@@ -348,6 +348,8 @@ pub struct SubagentsConfig {
     pub warn: Vec<String>,
     /// Reporting time after the deadline before the kill; `0s` kills at it.
     pub grace: String,
+    /// Idle grace after a finished subagent's report is queued before its pane closes; at least `1m`.
+    pub linger: String,
 }
 
 impl Default for SubagentsConfig {
@@ -356,8 +358,49 @@ impl Default for SubagentsConfig {
             timeout: "30m".to_owned(),
             warn: vec!["10m".to_owned(), "5m".to_owned()],
             grace: "5m".to_owned(),
+            linger: "10m".to_owned(),
         }
     }
+}
+
+impl SubagentsConfig {
+    /// Default idle grace before a finished subagent's pane closes.
+    pub const DEFAULT_LINGER: Duration = Duration::from_secs(10 * 60);
+
+    /// Idle grace before a finished subagent's pane closes; at least `1m`.
+    pub fn linger(&self) -> Result<Duration, SubagentLingerErr> {
+        Self::parse_linger(&self.linger)
+    }
+
+    /// Configured linger, or [`Self::DEFAULT_LINGER`] when invalid.
+    pub fn linger_or_default(&self) -> Duration {
+        self.linger().unwrap_or(Self::DEFAULT_LINGER)
+    }
+
+    /// Parse `[agents.subagents] linger`: compact duration, at least `1m`.
+    pub fn parse_linger(raw: &str) -> Result<Duration, SubagentLingerErr> {
+        const MIN: Duration = Duration::from_secs(60);
+        let refuse = |reason: String| SubagentLingerErr {
+            value: raw.to_owned(),
+            reason,
+        };
+        let duration = crate::utils::time::parse_compact_duration(raw)
+            .map_err(|err| refuse(err.to_string()))?;
+        if duration < MIN {
+            return Err(refuse("must be at least 1m".to_owned()));
+        }
+        Ok(duration)
+    }
+}
+
+/// `agents.subagents.linger` holds no idle grace a subagent wrapper can use.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "invalid agents.subagents.linger `{value}`: {reason}; use a duration of at least 1m, such as 10m"
+)]
+pub struct SubagentLingerErr {
+    value: String,
+    reason: String,
 }
 
 /// Top-level `[subagents]` profile configuration for child launch and reentry.

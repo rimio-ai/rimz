@@ -26,7 +26,6 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PANE_GONE_STRIKES: u8 = 3;
 const RECONFIRM_DELAY: Duration = Duration::from_millis(500);
-const RECEIPT_POLL: Duration = Duration::from_secs(1);
 #[cfg(any(test, feature = "testkit"))]
 const TEST_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
@@ -137,10 +136,7 @@ pub struct ParentWatchdog {
     tail: LaunchTail,
     paths: StatePaths,
     confirm: Box<ConfirmParent>,
-    changed: Arc<AtomicBool>,
-    receipt_waiting: Arc<AtomicBool>,
     next_probe: Instant,
-    next_tail: Instant,
     tail_uncertain: bool,
     /// A member ended in the tail beside a member still live since the last
     /// probe. Which of them holds the agent is the agent-ended check's to
@@ -151,11 +147,9 @@ pub struct ParentWatchdog {
     last_observed_at_ms: Option<u64>,
 }
 
-/// Parent-death and receipt-trigger signals, with an on-demand probe barrier.
+/// Parent-death signal, with an on-demand probe barrier.
 pub struct ParentWatch {
     ended: Arc<AtomicBool>,
-    changed: Arc<AtomicBool>,
-    receipt_waiting: Arc<AtomicBool>,
     probe_requests: mpsc::SyncSender<mpsc::Sender<()>>,
     worker: thread::Thread,
 }
@@ -175,18 +169,8 @@ impl ParentWatch {
         let _ = completed.recv();
     }
 
-    /// Wake the tail reader while a terminal child awaits its parent's receipt.
-    pub fn set_receipt_waiting(&self, waiting: bool) {
-        if self.receipt_waiting.swap(waiting, Ordering::AcqRel) != waiting {
-            self.worker.unpark();
-        }
-    }
-
     pub fn parent_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
-    }
-    pub fn take_parent_changed(&self) -> bool {
-        self.changed.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -209,10 +193,7 @@ impl ParentWatchdog {
             paths,
             seed,
             confirm: Box::new(confirm),
-            changed: Arc::new(AtomicBool::new(false)),
-            receipt_waiting: Arc::new(AtomicBool::new(false)),
             next_probe,
-            next_tail: next_probe,
             tail_uncertain,
             member_over: false,
             strikes: 0,
@@ -223,24 +204,13 @@ impl ParentWatchdog {
     pub fn start(mut self) -> ParentWatch {
         let ended = Arc::new(AtomicBool::new(false));
         let signal = ended.clone();
-        let changed = self.changed.clone();
-        let receipt_waiting = self.receipt_waiting.clone();
         let (probe_requests, probes) = mpsc::sync_channel::<mpsc::Sender<()>>(1);
         let worker = thread::spawn(move || {
-            let mut was_waiting = false;
             loop {
                 let probe = probes.try_recv().ok();
                 let now = Instant::now();
-                let waiting = self.receipt_waiting.load(Ordering::Acquire);
-                if waiting && !was_waiting {
-                    self.next_tail = now;
-                } else if !waiting {
-                    self.next_tail = self.next_probe;
-                }
-                was_waiting = waiting;
                 if probe.is_some() {
                     self.next_probe = now;
-                    self.next_tail = now;
                 }
                 if self.probe_if_due(now) {
                     signal.store(true, Ordering::Release);
@@ -259,38 +229,31 @@ impl ParentWatchdog {
                     let _ = done.send(());
                     continue;
                 }
-                let deadline = self.next_probe.min(self.next_tail);
-                thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
+                thread::park_timeout(self.next_probe.saturating_duration_since(Instant::now()));
             }
         });
         ParentWatch {
             ended,
-            changed,
-            receipt_waiting,
             probe_requests,
             worker: worker.thread().clone(),
         }
     }
 
     fn probe_if_due(&mut self, now: Instant) -> bool {
-        if now < self.next_tail && now < self.next_probe {
+        if now < self.next_probe {
             return false;
         }
+        self.next_probe = now + probe_interval();
         #[cfg(feature = "testkit")]
         if std::env::var(TEST_WATCH_ENV).ok().as_deref() == Some("disabled") {
-            self.next_probe = now + probe_interval();
-            self.next_tail = self.next_probe;
             return false;
         }
         let seed = &mut self.seed;
-        let changed = &self.changed;
         let member_over = &mut self.member_over;
         match self.tail.poll(|event| {
             let over = |seed: &WatchdogSeed| seed.members.values().filter(|ended| **ended).count();
             let before = over(seed);
-            if observe_frame(seed, event) {
-                changed.store(true, Ordering::Release);
-            }
+            observe_frame(seed, event);
             let after = over(seed);
             *member_over |= after > before && after < seed.members.len();
         }) {
@@ -305,15 +268,6 @@ impl ParentWatchdog {
                 self.tail_uncertain = true;
             }
         }
-        self.next_tail = if self.receipt_waiting.load(Ordering::Acquire) {
-            now + RECEIPT_POLL
-        } else {
-            now + probe_interval()
-        };
-        if now < self.next_probe {
-            return false;
-        }
-        self.next_probe = now + probe_interval();
         let probe = if self.seed.parent_ended()
             || self.tail_uncertain
             || std::mem::take(&mut self.member_over)
@@ -378,7 +332,7 @@ impl ParentWatchdog {
 /// A frame names the parent when its launch id is the parent's, whatever its
 /// kind (a cross-kind molt keeps the launch), or when the parent's kind
 /// reports a session id the watch knows; session ids are kind-scoped.
-fn observe_frame(seed: &mut WatchdogSeed, event: EventEnvelope) -> bool {
+fn observe_frame(seed: &mut WatchdogSeed, event: EventEnvelope) {
     let parent_kind = event.source == seed.parent_kind.as_str();
     let parent_launch = |launch_id: Option<&AgentSessionId>| {
         launch_id.is_some_and(|id| seed.parent_refs.contains(id))
@@ -410,14 +364,12 @@ fn observe_frame(seed: &mut WatchdogSeed, event: EventEnvelope) -> bool {
                 .as_ref()
                 .and_then(|id| seed.members.get_mut(id))
             else {
-                return false;
+                return;
             };
             *ended = matches!(payload.observation.signal, LifecycleSignal::Ended);
-            return true;
         }
         _ => {}
     }
-    false
 }
 
 fn pane_probe(seed: &WatchdogSeed, workspace_id: &WorkspaceId) -> ParentProbe {

@@ -19,9 +19,17 @@ pub(super) enum Duty {
     Strand {
         run_id: rimz::RunId,
     },
+    /// Settles an owed fleet report when `report` is true and answers whether
+    /// the child's pane is ready to close. `skip_linger` omits only the idle
+    /// grace wait (used when a message-driven resume's follow-up settled
+    /// without opening a turn) while keeping every other close condition.
     Receipt {
         run_id: rimz::RunId,
         report: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bound_at: Option<jiff::Timestamp>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        skip_linger: bool,
     },
     ParentProbe {
         child_kind: AgentKind,
@@ -136,7 +144,17 @@ pub(in crate::cli::agents_cmd) fn run(request: SuperviseDutyRequest) -> Result<(
             }
             true
         }
-        Duty::Receipt { run_id, report } => run_receipt_once(&context(run_id), report)?,
+        Duty::Receipt {
+            run_id,
+            report,
+            bound_at,
+            skip_linger,
+        } => run_receipt_once(
+            &context(run_id),
+            report,
+            bound_at.unwrap_or(jiff::Timestamp::UNIX_EPOCH),
+            skip_linger,
+        )?,
         Duty::CardEvidence {
             kind,
             launch_id,
@@ -181,7 +199,28 @@ fn run_strand_once(
     Ok(false)
 }
 
-fn run_receipt_once(context: &RunExecContext, report: bool) -> Result<bool> {
+fn run_receipt_once(
+    context: &RunExecContext,
+    report: bool,
+    bound_at: jiff::Timestamp,
+    skip_linger: bool,
+) -> Result<bool> {
+    let linger = (!skip_linger).then(|| {
+        crate::cli::machine_config()
+            .agents
+            .subagents
+            .linger_or_default()
+    });
+    run_receipt_once_with(context, report, bound_at, linger, jiff::Timestamp::now)
+}
+
+fn run_receipt_once_with(
+    context: &RunExecContext,
+    report: bool,
+    bound_at: jiff::Timestamp,
+    linger: Option<Duration>,
+    now: impl FnOnce() -> jiff::Timestamp,
+) -> Result<bool> {
     let record = rimz::harness::run::load(context.store.paths(), &context.run_id)?;
     if !record.status.is_terminal() {
         return Ok(false);
@@ -194,7 +233,7 @@ fn run_receipt_once(context: &RunExecContext, report: bool) -> Result<bool> {
         )?;
     }
     let record = rimz::harness::run::load(context.store.paths(), &context.run_id)?;
-    Ok(context.parent_received_and_rested(&record)?)
+    Ok(context.idle_close_ready_with_clock(&record, bound_at, linger, now)?)
 }
 
 /// The strand settle exits a park that is owed nothing; a settled fleet

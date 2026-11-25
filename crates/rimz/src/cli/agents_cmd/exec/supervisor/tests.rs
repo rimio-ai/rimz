@@ -177,7 +177,7 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     let mut monitor = RunMonitor::new(true, StopPolicy::RunTerminal, None, now);
     let mut spawn = |_| panic!("terminal cleanup needs no helper");
     assert!(
-        monitor.poll(&context, now, false, &mut spawn),
+        monitor.poll(&context, now, &mut spawn),
         "background run has no waiter"
     );
     let waiter = rimz::harness::run_wake::RunWaiter::bind(
@@ -190,20 +190,20 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     )
     .unwrap();
     assert!(
-        !monitor.poll(&context, now, false, &mut spawn),
+        !monitor.poll(&context, now, &mut spawn),
         "live waiter owns verification and evidence capture"
     );
     record.status = rimz::store::run::RunStatus::Running;
     rimz::harness::run::create(&context.paths, &record).unwrap();
     drop(waiter);
     assert!(
-        !monitor.poll(&context, now, false, &mut spawn),
+        !monitor.poll(&context, now, &mut spawn),
         "rearmed run remains active even without a waiter"
     );
     record.status = rimz::store::run::RunStatus::Completed;
     rimz::harness::run::create(&context.paths, &record).unwrap();
     assert!(
-        monitor.poll(&context, now, false, &mut spawn),
+        monitor.poll(&context, now, &mut spawn),
         "terminal run is reclaimed once waiter leaves"
     );
 }
@@ -311,7 +311,7 @@ fn a_released_workflow_agent_survives_its_next_turn_end() {
             .unwrap()
             .status;
         assert_eq!(
-            monitor.poll(&context, now, false, &mut spawn),
+            monitor.poll(&context, now, &mut spawn),
             !released,
             "released {released}: the wrapper cleans up only an unreleased run ({status:?})"
         );
@@ -790,14 +790,12 @@ mod monitor {
             }
             let now = Instant::now();
             let mut monitor =
-                RunMonitor::new(true, StopPolicy::ParentReceived, Some(run.follow_ups), now)
+                RunMonitor::new(true, StopPolicy::SubagentIdle, Some(run.follow_ups), now)
                     .with_follow_up_message(Some(message.message_id));
             let releases = status
                 .is_none_or(|status| status.is_terminal() && status != MessageStatus::Delivered);
             assert_eq!(
-                monitor.poll(&context, now, false, |_| panic!(
-                    "joined run needs no helper"
-                )),
+                monitor.poll(&context, now, |_| panic!("joined run needs no helper")),
                 releases,
                 "follow-up={status:?}"
             );
@@ -821,22 +819,22 @@ mod monitor {
         store.queue_message(&message, "room").unwrap();
         let now = Instant::now();
         let mut monitor =
-            RunMonitor::new(true, StopPolicy::ParentReceived, Some(run.follow_ups), now)
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(run.follow_ups), now)
                 .with_follow_up_message(Some(message.message_id.clone()));
         let no_helper = |_| panic!("joined run needs no helper");
-        assert!(!monitor.poll(&context, now, false, no_helper));
+        assert!(!monitor.poll(&context, now, no_helper));
         let queue_path = context.paths.message_queue_file();
         std::fs::remove_file(&queue_path).unwrap();
         std::fs::create_dir(&queue_path).unwrap();
-        assert!(!monitor.poll(&context, now, false, no_helper));
-        assert!(!monitor.poll(&context, now, false, no_helper));
+        assert!(!monitor.poll(&context, now, no_helper));
+        assert!(!monitor.poll(&context, now, no_helper));
         std::fs::remove_dir(&queue_path).unwrap();
         store.queue_message(&message, "room").unwrap();
         store
             .cancel_message(&message.message_id, "room", "failed follow up")
             .unwrap();
         assert!(
-            monitor.poll(&context, now, false, no_helper),
+            monitor.poll(&context, now, no_helper),
             "a readable terminal record must release the hold after the queue changes"
         );
     }
@@ -882,13 +880,13 @@ mod monitor {
             children.borrow_mut().push(status.clone());
             Ok(DutyChild::Fake(status))
         };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
+        assert!(!monitor.poll(&context, now, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             1,
             "the park launches a strand duty"
         );
-        assert!(!monitor.poll(&context, now + PARK_STRAND_POLL, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + PARK_STRAND_POLL, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             1,
@@ -896,11 +894,10 @@ mod monitor {
         );
         *statuses.borrow()[0].borrow_mut() = Some(1);
         let failed = now + PARK_STRAND_POLL;
-        monitor.poll(&context, failed, false, &mut spawn);
+        monitor.poll(&context, failed, &mut spawn);
         monitor.poll(
             &context,
             failed + PARK_STRAND_POLL - RUN_MONITOR_POLL,
-            false,
             &mut spawn,
         );
         assert_eq!(
@@ -908,14 +905,13 @@ mod monitor {
             1,
             "record ticks do not accelerate retry"
         );
-        monitor.poll(&context, failed + PARK_STRAND_POLL, false, &mut spawn);
+        monitor.poll(&context, failed + PARK_STRAND_POLL, &mut spawn);
         assert_eq!(statuses.borrow().len(), 2);
         record.parked_at = None;
         rimz::harness::run::create(&context.paths, &record).unwrap();
         monitor.poll(
             &context,
             failed + PARK_STRAND_POLL + RUN_MONITOR_POLL,
-            false,
             &mut spawn,
         );
         assert!(
@@ -923,7 +919,7 @@ mod monitor {
             "leaving the park lets its resident helper finish"
         );
         *statuses.borrow()[1].borrow_mut() = Some(0);
-        monitor.poll(&context, failed + 2 * PARK_STRAND_POLL, false, &mut spawn);
+        monitor.poll(&context, failed + 2 * PARK_STRAND_POLL, &mut spawn);
         assert!(monitor.strand.is_none(), "the finished helper is reaped");
         assert_eq!(
             calls,
@@ -937,10 +933,10 @@ mod monitor {
     }
 
     #[test]
-    fn receipt_is_triggered_and_spaced_and_a_new_parent_event_invalidates_success() {
+    fn receipt_is_triggered_and_spaced_and_a_queue_change_invalidates_success() {
         let (_dir, context, _record) = fixture(rimz::store::run::RunStatus::Completed);
         let now = Instant::now();
-        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
+        let mut monitor = RunMonitor::new(true, StopPolicy::SubagentIdle, None, now);
         let mut calls = Vec::new();
         let statuses = Rc::new(RefCell::new(Vec::new()));
         let children = statuses.clone();
@@ -950,63 +946,62 @@ mod monitor {
             children.borrow_mut().push(status.clone());
             Ok(DutyChild::Fake(status))
         };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
+        std::fs::create_dir_all(&context.paths.messages_dir).unwrap();
+        let change_queue = |queue: &str| {
+            std::fs::write(context.paths.messages_dir.join("messages.jsonl"), queue).unwrap();
+        };
+        assert!(!monitor.poll(&context, now, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             1,
             "completion launches a receipt duty"
         );
         *statuses.borrow()[0].borrow_mut() = Some(3);
-        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, false, &mut spawn));
-        assert!(!monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, true, &mut spawn));
+        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, &mut spawn));
+        change_queue("a");
+        assert!(!monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             1,
             "a trigger respects the one-second floor"
         );
-        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, &mut spawn));
         assert_eq!(statuses.borrow().len(), 2);
         *statuses.borrow()[1].borrow_mut() = Some(0);
+        change_queue("ab");
         assert!(
             !monitor.poll(
                 &context,
                 now + PARENT_RECEIPT_POLL + RUN_MONITOR_POLL,
-                true,
                 &mut spawn
             ),
-            "a newer parent event invalidates the receipt before cleanup"
+            "a newer queue change invalidates the receipt before cleanup"
         );
-        assert!(!monitor.poll(&context, now + 2 * PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + 2 * PARENT_RECEIPT_POLL, &mut spawn));
         *statuses.borrow()[2].borrow_mut() = Some(0);
         assert!(monitor.poll(
             &context,
             now + 2 * PARENT_RECEIPT_POLL + RUN_MONITOR_POLL,
-            false,
             &mut spawn
         ));
-        assert!(monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert!(monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             3,
             "quiet receipts do not poll every second"
         );
-        std::fs::create_dir_all(&context.paths.messages_dir).unwrap();
-        std::fs::write(
-            context.paths.messages_dir.join("messages.jsonl"),
-            "queue changed",
-        )
-        .unwrap();
-        assert!(!monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, false, &mut spawn));
+        change_queue("abc");
+        assert!(!monitor.poll(&context, now + 3 * PARENT_RECEIPT_POLL, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             4,
             "a queue stamp change starts a fresh check"
         );
         *statuses.borrow()[3].borrow_mut() = Some(3);
-        assert!(!monitor.poll(&context, now + 4 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        monitor.poll(&context, now + Duration::from_secs(62), false, &mut spawn);
+        assert!(!monitor.poll(&context, now + 4 * PARENT_RECEIPT_POLL, &mut spawn));
+        monitor.poll(&context, now + Duration::from_secs(62), &mut spawn);
         assert_eq!(statuses.borrow().len(), 4);
-        monitor.poll(&context, now + Duration::from_secs(63), false, &mut spawn);
+        monitor.poll(&context, now + Duration::from_secs(63), &mut spawn);
         assert_eq!(
             statuses.borrow().len(),
             5,
@@ -1017,64 +1012,33 @@ mod monitor {
             vec![
                 Duty::Receipt {
                     run_id: context.run_id.clone(),
-                    report: true
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
-                    report: false
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn parent_frame_survives_a_failed_run_record_read() {
-        let (_dir, context, _record) = fixture(rimz::store::run::RunStatus::Completed);
-        let missing = RunPaths {
-            run_id: rimz::ids::RunId::new(),
-            paths: context.paths.clone(),
-            runtime: context.runtime.clone(),
-        };
-        let now = Instant::now();
-        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
-        let calls = RefCell::new(Vec::new());
-        let mut spawn = |duty| {
-            calls.borrow_mut().push(duty);
-            Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
-        };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
-        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, false, &mut spawn));
-        assert_eq!(calls.borrow().len(), 1);
-        assert!(!monitor.poll(&missing, now + RUN_MONITOR_POLL, true, &mut spawn));
-        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, false, &mut spawn));
-        assert_eq!(
-            calls.borrow().len(),
-            2,
-            "the parent frame must survive the failed read and request one receipt"
-        );
-        assert!(!monitor.poll(&context, now + 2 * PARENT_RECEIPT_POLL, false, &mut spawn));
-        assert_eq!(
-            *calls.borrow(),
-            vec![
-                Duty::Receipt {
-                    run_id: context.run_id.clone(),
                     report: true,
+                    bound_at: None,
+                    skip_linger: false,
                 },
                 Duty::Receipt {
                     run_id: context.run_id.clone(),
                     report: false,
+                    bound_at: None,
+                    skip_linger: false,
+                },
+                Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: false,
+                    bound_at: None,
+                    skip_linger: false,
+                },
+                Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: false,
+                    bound_at: None,
+                    skip_linger: false,
+                },
+                Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: false,
+                    bound_at: None,
+                    skip_linger: false,
                 },
             ]
         );
@@ -1093,22 +1057,22 @@ mod monitor {
         )
         .unwrap();
         let now = Instant::now();
-        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
+        let mut monitor = RunMonitor::new(true, StopPolicy::SubagentIdle, None, now);
         let statuses = Rc::new(RefCell::new(Vec::new()));
         let mut spawn = |_| {
             let status = Rc::new(RefCell::new(None));
             statuses.borrow_mut().push(status.clone());
             Ok(DutyChild::Fake(status))
         };
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
+        assert!(!monitor.poll(&context, now, &mut spawn));
         *statuses.borrow()[0].borrow_mut() = Some(0);
-        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, &mut spawn));
         drop(waiter);
         assert!(
-            !monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, false, &mut spawn),
+            !monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, &mut spawn),
             "a pre-departure yes cannot close the pane"
         );
-        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, &mut spawn));
         assert_eq!(
             statuses.borrow().len(),
             2,
@@ -1118,13 +1082,12 @@ mod monitor {
         assert!(monitor.poll(
             &context,
             now + PARENT_RECEIPT_POLL + RUN_MONITOR_POLL,
-            false,
             &mut spawn
         ));
     }
 
     #[test]
-    fn parent_frame_reaches_receipt_consumer_within_one_poll() {
+    fn a_parent_frame_starts_no_duty_for_a_rested_lingering_child() {
         use rimz::harness::parent_watch::{ParentWatchdog, ProbeConfirm, WatchdogSeed};
         let (_dir, context, _record) = fixture(rimz::store::run::RunStatus::Completed);
         let seed = WatchdogSeed {
@@ -1141,35 +1104,20 @@ mod monitor {
                 offset: 0,
             },
         };
-        // Hold the initial confirmation before its park so receipt mode must
-        // supply an unpark permit, even when the worker starts late.
-        let mut ended_seed = seed.clone();
-        ended_seed.members.insert("parent".into(), true);
-        let (entered, entry) = mpsc::channel();
-        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let resume = release.clone();
-        let watch = ParentWatchdog::from_seed(ended_seed, context.paths.clone(), move |_, _| {
-            entered.send(()).unwrap();
-            resume.wait();
-            ProbeConfirm::Alive(Box::new(seed.clone()))
+        let live = seed.clone();
+        let watch = ParentWatchdog::from_seed(seed, context.paths.clone(), move |_, _| {
+            ProbeConfirm::Alive(Box::new(live.clone()))
         })
         .start();
-        entry.recv_timeout(Duration::from_secs(30)).unwrap();
         let now = Instant::now();
-        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
+        let mut monitor = RunMonitor::new(true, StopPolicy::SubagentIdle, None, now);
         let calls = std::cell::Cell::new(0);
         let mut spawn = |_| {
             calls.set(calls.get() + 1);
             Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
         };
-        assert!(!monitor.poll(&context, now, watch.take_parent_changed(), &mut spawn));
-        watch.set_receipt_waiting(true);
-        assert!(!monitor.poll(
-            &context,
-            now + RUN_MONITOR_POLL,
-            watch.take_parent_changed(),
-            &mut spawn
-        ));
+        assert!(!monitor.poll(&context, now, &mut spawn));
+        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, &mut spawn));
         rimz::store::event_log::append(
             &context.paths.events_log,
             &rimz::store::event::EventEnvelope::agent_lifecycle(
@@ -1188,34 +1136,26 @@ mod monitor {
             ),
         )
         .unwrap();
-        // Leave ample scheduling slack, but stay below both 60-second fallbacks.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        release.wait();
-        loop {
-            let parent_changed = watch.take_parent_changed();
-            assert!(!monitor.poll(
-                &context,
-                now + PARENT_RECEIPT_POLL,
-                parent_changed,
-                &mut spawn,
-            ));
-            if parent_changed {
-                assert_eq!(calls.get(), 2, "the signal's poll must spawn one receipt");
-                break;
-            }
-            assert_eq!(
-                calls.get(),
-                1,
-                "no receipt may spawn before the parent signal"
-            );
-            assert!(
-                Instant::now() < deadline,
-                "the watchdog must deliver the parent frame before either fallback"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        watch.set_receipt_waiting(false);
-        assert_eq!(calls.get(), 2);
+        watch.probe_now();
+        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, &mut spawn));
+        assert_eq!(calls.get(), 1, "a parent frame is no receipt trigger");
+        assert!(!watch.parent_ended());
+    }
+
+    #[test]
+    fn promptless_reopen_never_holds_forever() {
+        let (_dir, context, mut record) = fixture(rimz::store::run::RunStatus::Completed);
+        record.report_to = rimz::store::run::ReportTo::Nobody;
+        rimz::harness::run::create(&context.paths, &record).unwrap();
+        let now = Instant::now();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(record.follow_ups), now);
+        let mut spawn = |_| panic!("detached cleanup needs no helper");
+        assert!(
+            monitor.poll(&context, now, &mut spawn),
+            "a wrapper without a follow-up message must release the reopen hold immediately (R5)"
+        );
+        assert_eq!(monitor.awaiting_reopen, None);
     }
 
     #[test]
@@ -1223,18 +1163,248 @@ mod monitor {
         let (_dir, context, mut record) = fixture(rimz::store::run::RunStatus::Completed);
         record.report_to = rimz::store::run::ReportTo::Nobody;
         rimz::harness::run::create(&context.paths, &record).unwrap();
-        let now = Instant::now();
-        let mut monitor = RunMonitor::new(
-            true,
-            StopPolicy::ParentReceived,
-            Some(record.follow_ups),
-            now,
+        let store = rimz::Store::open(context.paths.clone(), context.runtime.clone()).unwrap();
+        let child = rimz::testkit::agent_state("codex", "child", jiff::Timestamp::now());
+        let message = rimz::store::message::MessageRecord::new(
+            context.paths.workspace_id.clone(),
+            &child,
+            "follow up".into(),
+            rimz::store::message::DeliveryGate::Done,
         );
+        store.queue_message(&message, "room").unwrap();
+        let now = Instant::now();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(record.follow_ups), now)
+                .with_follow_up_message(Some(message.message_id));
         let mut spawn = |_| panic!("detached cleanup needs no helper");
-        assert!(!monitor.poll(&context, now, false, &mut spawn));
+        assert!(!monitor.poll(&context, now, &mut spawn));
         record.follow_ups += 1;
         rimz::harness::run::create(&context.paths, &record).unwrap();
-        assert!(monitor.poll(&context, now, false, &mut spawn));
+        assert!(monitor.poll(&context, now, &mut spawn));
         assert_eq!(monitor.awaiting_reopen, None);
+    }
+
+    #[test]
+    fn untaken_follow_up_skips_linger_until_a_turn_opens() {
+        use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+        use rimz::store::run::RunStatus;
+
+        let (_dir, context, mut run) = fixture(RunStatus::Completed);
+        let store = rimz::Store::open(context.paths.clone(), context.runtime.clone()).unwrap();
+        let child = rimz::testkit::agent_state("codex", "child", jiff::Timestamp::now());
+        let mut message = MessageRecord::new(
+            context.paths.workspace_id.clone(),
+            &child,
+            "follow up".into(),
+            DeliveryGate::Done,
+        );
+        message.status = MessageStatus::Queued;
+        store.queue_message(&message, "room").unwrap();
+
+        let now = Instant::now();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(run.follow_ups), now)
+                .with_follow_up_message(Some(message.message_id.clone()));
+        let calls = RefCell::new(Vec::new());
+        let statuses = Rc::new(RefCell::new(Vec::new()));
+        let children = statuses.clone();
+        let mut spawn = |duty| {
+            calls.borrow_mut().push(duty);
+            let status = Rc::new(RefCell::new(None));
+            children.borrow_mut().push(status.clone());
+            Ok(DutyChild::Fake(status))
+        };
+
+        assert!(!monitor.poll(&context, now, &mut spawn));
+        assert!(
+            calls.borrow().is_empty(),
+            "queued follow-up holds before receipt"
+        );
+
+        store
+            .cancel_message(&message.message_id, "room", "expired")
+            .unwrap();
+        let after_expire = now + RUN_MONITOR_POLL;
+        assert!(!monitor.poll(&context, after_expire, &mut spawn));
+        assert_eq!(
+            *calls.borrow(),
+            vec![Duty::Receipt {
+                run_id: context.run_id.clone(),
+                report: true,
+                bound_at: None,
+                skip_linger: true,
+            }],
+            "untaken follow-up settlement must ask receipt to skip linger"
+        );
+
+        // Receipt holds (e.g. pane focused), then a turn opens and finishes.
+        *statuses.borrow()[0].borrow_mut() = Some(3);
+        let turn_open = after_expire + RUN_MONITOR_POLL;
+        assert!(!monitor.poll(&context, turn_open, &mut spawn));
+        run.status = RunStatus::Running;
+        run.follow_ups += 1;
+        run.updated_at = jiff::Timestamp::now();
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        assert!(!monitor.poll(&context, turn_open + RUN_MONITOR_POLL, &mut spawn));
+
+        run.status = RunStatus::Completed;
+        run.updated_at = run
+            .updated_at
+            .checked_add(jiff::SignedDuration::from_secs(1))
+            .unwrap();
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        assert!(!monitor.poll(&context, after_expire + PARENT_RECEIPT_POLL, &mut spawn));
+        assert_eq!(
+            calls.borrow().last(),
+            Some(&Duty::Receipt {
+                run_id: context.run_id.clone(),
+                report: true,
+                bound_at: None,
+                skip_linger: false,
+            }),
+            "a turn opened afterward must end the linger exemption"
+        );
+
+        // Same-poll reopen-and-finish while an untaken skip-linger receipt is in flight:
+        // the in-flight skip-linger receipt must not close the pane, and the next receipt
+        // must linger normally.
+        let (_dir2, context2, mut run2) = fixture(RunStatus::Completed);
+        let mut monitor2 =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(run2.follow_ups), now)
+                .with_follow_up_message(Some(rimz::ids::MessageId::new()));
+        let calls2 = RefCell::new(Vec::new());
+        let in_flight = Rc::new(RefCell::new(None));
+        let in_flight_handle = in_flight.clone();
+        let mut spawn2 = |duty| {
+            calls2.borrow_mut().push(duty);
+            Ok(DutyChild::Fake(in_flight_handle.clone()))
+        };
+        assert!(!monitor2.poll(&context2, now, &mut spawn2));
+        assert_eq!(
+            *calls2.borrow(),
+            vec![Duty::Receipt {
+                run_id: context2.run_id.clone(),
+                report: true,
+                bound_at: None,
+                skip_linger: true,
+            }]
+        );
+        // Turn opened and finished between polls while receipt returned 0.
+        *in_flight.borrow_mut() = Some(0);
+        run2.follow_ups += 1;
+        rimz::harness::run::create(&context2.paths, &run2).unwrap();
+        assert!(
+            !monitor2.poll(&context2, now + RUN_MONITOR_POLL, &mut spawn2),
+            "in-flight skip-linger receipt cannot close after a turn opened"
+        );
+        assert!(!monitor2.poll(&context2, now + PARENT_RECEIPT_POLL, &mut spawn2));
+        assert_eq!(
+            calls2.borrow().last(),
+            Some(&Duty::Receipt {
+                run_id: context2.run_id.clone(),
+                report: false,
+                bound_at: None,
+                skip_linger: false,
+            })
+        );
+    }
+
+    #[test]
+    fn taken_follow_up_and_promptless_reopen_keep_linger() {
+        use rimz::store::message::{DeliveryGate, MessageRecord};
+        use rimz::store::run::RunStatus;
+
+        let now = Instant::now();
+
+        // 1. Taken follow-up that opens a turn and later finishes keeps linger.
+        let (_dir, context, mut run) = fixture(RunStatus::Completed);
+        let store = rimz::Store::open(context.paths.clone(), context.runtime.clone()).unwrap();
+        let child = rimz::testkit::agent_state("codex", "child", jiff::Timestamp::now());
+        let message = MessageRecord::new(
+            context.paths.workspace_id.clone(),
+            &child,
+            "follow up".into(),
+            DeliveryGate::Done,
+        );
+        store.queue_message(&message, "room").unwrap();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(run.follow_ups), now)
+                .with_follow_up_message(Some(message.message_id));
+        let calls = RefCell::new(Vec::new());
+        let mut spawn = |duty| {
+            calls.borrow_mut().push(duty);
+            Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
+        };
+        assert!(!monitor.poll(&context, now, &mut spawn));
+        assert!(calls.borrow().is_empty());
+        run.follow_ups += 1;
+        run.status = RunStatus::Running;
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, &mut spawn));
+        assert!(calls.borrow().is_empty());
+        run.status = RunStatus::Completed;
+        run.updated_at = run
+            .updated_at
+            .checked_add(jiff::SignedDuration::from_secs(1))
+            .unwrap();
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        assert!(!monitor.poll(&context, now + 2 * RUN_MONITOR_POLL, &mut spawn));
+        assert_eq!(
+            *calls.borrow(),
+            vec![Duty::Receipt {
+                run_id: context.run_id.clone(),
+                report: true,
+                bound_at: None,
+                skip_linger: false,
+            }],
+            "taken follow-up must still linger"
+        );
+
+        // 2. Taken follow-up that opened and completed before the hold was polled keeps linger.
+        let (_dir, context, mut run) = fixture(RunStatus::Completed);
+        let initial_ordinal = run.follow_ups;
+        run.follow_ups += 1;
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::SubagentIdle, Some(initial_ordinal), now)
+                .with_follow_up_message(Some(rimz::ids::MessageId::new()));
+        let mut calls = Vec::new();
+        let mut spawn = |duty| {
+            calls.push(duty);
+            Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
+        };
+        assert!(!monitor.poll(&context, now, &mut spawn));
+        assert_eq!(
+            calls,
+            vec![Duty::Receipt {
+                run_id: context.run_id.clone(),
+                report: true,
+                bound_at: None,
+                skip_linger: false,
+            }],
+            "follow-up already taken before poll must still linger"
+        );
+
+        // 3. Promptless reopen (no follow-up message) and ordinary finished child keep linger.
+        for awaiting in [None, Some(0)] {
+            let (_dir, context, _run) = fixture(RunStatus::Completed);
+            let mut monitor = RunMonitor::new(true, StopPolicy::SubagentIdle, awaiting, now);
+            let mut calls = Vec::new();
+            let mut spawn = |duty| {
+                calls.push(duty);
+                Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
+            };
+            assert!(!monitor.poll(&context, now, &mut spawn));
+            assert_eq!(
+                calls,
+                vec![Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: true,
+                    bound_at: None,
+                    skip_linger: false,
+                }],
+                "awaiting={awaiting:?} without a follow-up must still linger"
+            );
+        }
     }
 }

@@ -3342,6 +3342,84 @@ fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
     );
 }
 
+/// A launched child whose run is terminal reads as `done` in `tasks` while its pane lingers,
+/// and a child whose run is still active reads as `running` (R7).
+#[test]
+fn tasks_reads_a_lingering_terminal_subagent_as_done() {
+    use rimz::agents::LaunchParams;
+    use rimz::ids::{AgentKind, AgentSessionId};
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let claude = AgentKind::new_unchecked("claude");
+    let child_params = LaunchParams {
+        parent_agent_id: Some(AgentSessionId::from("launch-session")),
+        parent_agent_kind: Some(claude.clone()),
+        launch_depth: Some(1),
+        ..LaunchParams::default()
+    };
+    crate::common::wait::register_agent(
+        &env,
+        "lingering-session",
+        "launch-lingering",
+        "lingering-kid",
+        child_params.clone(),
+    );
+    crate::common::wait::register_agent(
+        &env,
+        "active-session",
+        "launch-active",
+        "active-kid",
+        child_params,
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let paths = env.store().paths().clone();
+    let mut done_run = RunRecord::new(
+        workspace.workspace_id.clone(),
+        claude.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "done work".into(),
+        env.project_root.clone(),
+    );
+    done_run.subagent = true;
+    done_run.launch_id = Some(AgentSessionId::from("launch-lingering"));
+    done_run.agent_id = Some(AgentSessionId::from("lingering-session"));
+    done_run.agent_name = Some("lingering-kid".into());
+    done_run.status = RunStatus::Completed;
+    done_run.joined_at = Some(jiff::Timestamp::now());
+    rimz::harness::run::create(&paths, &done_run).unwrap();
+
+    let mut active_run = RunRecord::new(
+        workspace.workspace_id,
+        claude,
+        rimz::agents::PermissionMode::Auto,
+        "active work".into(),
+        env.project_root.clone(),
+    );
+    active_run.subagent = true;
+    active_run.launch_id = Some(AgentSessionId::from("launch-active"));
+    active_run.agent_id = Some(AgentSessionId::from("active-session"));
+    active_run.agent_name = Some("active-kid".into());
+    active_run.status = RunStatus::Running;
+    rimz::harness::run::create(&paths, &active_run).unwrap();
+
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (listed, is_error) = server.answer(1, "tasks", json!({"kind": "subagent"}));
+    assert!(!is_error, "{listed}");
+    let rows = listed["tasks"].as_array().unwrap();
+    let status_of = |id: &str| {
+        rows.iter()
+            .find(|row| row["id"].as_str() == Some(id))
+            .and_then(|row| row["status"].as_str())
+            .unwrap_or_else(|| panic!("missing {id} in {listed}"))
+    };
+    assert_eq!(status_of("subagent:lingering-kid"), "done", "{listed}");
+    assert_eq!(status_of("subagent:active-kid"), "running", "{listed}");
+}
+
 /// A wait the caller armed for itself is its to stop; a subscription that wakes the caller but
 /// that its team armed is not, and stays booked.
 #[test]

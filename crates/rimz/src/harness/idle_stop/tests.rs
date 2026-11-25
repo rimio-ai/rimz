@@ -515,6 +515,53 @@ fn the_stop_waits_for_every_agent_it_would_close() {
 }
 
 #[test]
+fn a_lingering_failed_child_holds_only_through_debt() {
+    let (dir, store) = fixture();
+    let (parent, stop) = rested();
+    register(&store, "session-1", None);
+    register(&store, "child", Some(&parent));
+    let mut run = RunRecord::new(
+        store.paths().workspace_id.clone(),
+        parent.kind.clone(),
+        PermissionMode::Auto,
+        "work".to_owned(),
+        dir.path().to_owned(),
+    );
+    run.agent_id = Some("child".into());
+    run.status = RunStatus::Failed;
+    run.joined_at = Some(ts(1_100));
+    super::super::run::create(store.paths(), &run).expect("run");
+    let mut child = kept_child(&parent, "child");
+    child.status = AgentStatus::Failed;
+    assert_eq!(
+        decide(
+            &store,
+            &[parent.clone(), child.clone()],
+            &parent,
+            &stop,
+            ts(DUE)
+        )
+        .expect("decide"),
+        Verdict::Stop { idle_secs: 180 },
+        "a lingering Failed child with no debt must not return Hold::Tree (R8)"
+    );
+    let message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &child,
+        "retry".to_owned(),
+        DeliveryGate::Done,
+    );
+    store
+        .queue_message(&message, "idle-stop-test")
+        .expect("queue");
+    assert_eq!(
+        decide(&store, &[parent.clone(), child], &parent, &stop, ts(DUE)).expect("decide"),
+        Verdict::Hold(Hold::Tree),
+        "a lingering Failed child with an open message still holds through debt"
+    );
+}
+
+#[test]
 fn an_undelivered_message_holds_until_it_is_terminal() {
     for status in [
         MessageStatus::Queued,

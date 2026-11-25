@@ -8463,7 +8463,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 
 #[cfg(unix)]
 #[test]
-fn resume_exec_waits_for_turn_started_before_self_cleanup() {
+fn resume_exec_lingers_after_reopened_turn_completes() {
     resume_exec_cleanup_case(ResumeExecCleanupCase::Reopened);
 }
 
@@ -8758,6 +8758,7 @@ esac"#,
         rimz_capabilities: None,
     };
     resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    let duty_marker = env.home_root.join("supervise-duty.log");
     let mut wrapper_command = env.rimz();
     wrapper_command
         .args(exec_args(&env, &resume))
@@ -8771,7 +8772,8 @@ esac"#,
         .env("PATH", path_with_front(&shim_dir))
         .env("ZELLIJ_PANE_ID", "4")
         .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .env("RIMZ_TEST_SUPERVISE_DUTY_MARKER", &duty_marker);
     if queued_head.is_some() {
         wrapper_command
             .env("RIMZ_BIN", rimz_shim)
@@ -8904,6 +8906,12 @@ esac"#,
                 .unwrap();
         }
     }
+    let duty_count = || {
+        std::fs::read_to_string(&duty_marker)
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    };
+    let duties_before = duty_count();
     let ended = observe(
         "TurnEnded",
         LifecycleSignal::TurnEnded {
@@ -8929,17 +8937,74 @@ esac"#,
         "test parent received answer",
     )
     .unwrap();
-    if case == ResumeExecCleanupCase::QueuedOnExit {
-        let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
-            .unwrap()
-            .provider_pid
+    if matches!(
+        case,
+        ResumeExecCleanupCase::Reopened | ResumeExecCleanupCase::QueuedHeadTrigger
+    ) {
+        let (tx, reads) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(tx).unwrap();
+        watcher
+            .watch(&store.paths().runs_dir, notify::RecursiveMode::NonRecursive)
             .unwrap();
-        assert!(rimz::child_process::signal_process_term(provider_pid, None));
+        let mut last_duty_count = duties_before;
+        let mut duty_seen = false;
+        let mut post_duty_opens = 0;
+        let duty_running = |wrapper_pid: u32| {
+            rimz::proc::children(wrapper_pid).into_iter().any(|pid| {
+                rimz::proc::argv(pid).is_some_and(|argv| {
+                    argv.windows(2)
+                        .any(|pair| pair == ["agents", "supervise-duty"])
+                })
+            })
+        };
+        while !(duty_seen && !duty_running(wrapper.id()) && post_duty_opens >= 5) {
+            assert!(
+                wrapper.try_wait().unwrap().is_none(),
+                "wrapper must linger after completion and join rather than self-cleaning up early"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "receipt duty did not run after completion (duty_seen={duty_seen}, post_duty_opens={post_duty_opens})"
+            );
+            let current_duties = duty_count();
+            if current_duties > last_duty_count {
+                last_duty_count = current_duties;
+                duty_seen = true;
+                post_duty_opens = 0;
+            }
+            match reads.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => {
+                    let event = event.unwrap();
+                    if duty_seen
+                        && !duty_running(wrapper.id())
+                        && matches!(
+                            event.kind,
+                            notify::EventKind::Access(notify::event::AccessKind::Open(_))
+                        )
+                        && event.paths.contains(&run_file)
+                    {
+                        post_duty_opens += 1;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => panic!("run watcher disconnected: {error}"),
+            }
+        }
+        drop(watcher);
+        assert!(
+            wrapper.try_wait().unwrap().is_none(),
+            "wrapper must remain alive lingering after the receipt duty finished"
+        );
     }
+    let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
+        .unwrap()
+        .provider_pid
+        .unwrap();
+    assert!(rimz::child_process::signal_process_term(provider_pid, None));
     while wrapper.try_wait().unwrap().is_none() {
         assert!(
             Instant::now() < deadline,
-            "wrapper did not self-clean up after completion"
+            "wrapper did not exit after provider terminated"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -8968,7 +9033,7 @@ esac"#,
             "TurnEnded",
             "rimz.agent-ended"
         ],
-        "self-cleanup must wait for the resumed child's TurnStarted"
+        "resumed child must stay live through its reopened turn before ending"
     );
     if case != ResumeExecCleanupCase::QueuedOnExit {
         return;

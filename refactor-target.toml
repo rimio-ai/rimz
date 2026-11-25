@@ -2390,9 +2390,7 @@ path = "crates/rimz/src/harness"
 # WatchdogSeed carries the launch members and cursor across the exec boundary (+1).
 # ProbeConfirm carries authoritative one-shot death or successor answers (+1).
 # seed resolves the same parent launch for startup and confirmation (+1).
-# The parked monitor drains the parent-changed edge through ParentWatch::take_parent_changed (+1).
 # LaunchPlan exposes only the handoff path using its privately resolved temp owner (+1).
-# The supervisor wakes receipt-cadence tail drains through ParentWatch (+1).
 # ModelRefreshFailure carries actual catalog refresh failures to the exec wrapper (+1).
 # AgentCheckRecord carries headless verdicts and usage into loop CLI forensics (+1).
 # JudgeRecord, RunStage and its verdict accessor, and LoopRunRecord's stages/last_verdict project old and new loop history (+5).
@@ -2593,7 +2591,8 @@ path = "crates/rimz/src/harness"
 # `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and detached CLI helper (+2).
 # `run::fail_step_refusal` and `run::wake_workflow` split in-pane step refusal writes from host-side wakes (+2).
 # `soft_compact::{CeilingCompactRequest, ceiling_due, enforce_ceiling_agents}` share the RimZ-enforced auto-compact ceiling watch across sidebar refresh and CLI helper (+3).
-surface-budget = 1380
+# `idle_stop::rested_since` shares the rest clock with the subagent wrapper's idle-close duty (+1).
+surface-budget = 1379
 
 [[verdict]]
 kind = "item"
@@ -4317,7 +4316,8 @@ path = "crates/rimz/src/sidebar"
 # HostingRead::listed answers the Alt+x sidebar test from the listing the close acts on (+1).
 # HostingRead::pane_owner and PaneUnlisted give every card close its owner from its own read,
 # not the host's lagging fold (+2).
-surface-budget = 270
+# `cache::fresh_pane_focused` shares the fresh pane-frame and focus-anchor check with the subagent wrapper's idle-close duty (+1).
+surface-budget = 271
 
 [[verdict]]
 kind = "item"

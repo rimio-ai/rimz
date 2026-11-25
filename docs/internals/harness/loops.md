@@ -921,7 +921,7 @@ Idle stop closes an agent that has a pending `rimz agents stop --when-idle` requ
 
 1. The producer checks the rollup terms and the clock, then spawns `agents idle-stop` at most every 30 seconds per session.
 2. The helper runs `idle_stop::decide` again on fresh reads: owed wakes, queued messages, open runs, the seat's board, and pending same-kind ingress stamped after the request.
-3. The helper applies the rest and debt terms to every live launched descendant the stop cascades to (`closing_with`). The clock is the root's alone.
+3. The helper checks every live launched descendant the stop cascades to (`closing_with`) through `crates/rimz/src/harness/idle_stop.rs::child_holds`: a working, waiting, parked, compacting, or background-shell child, or one with debt, holds the stop, while a finished child (including a lingering `Failed` one) holds only through debt. The clock is the root's alone.
 4. The helper declines when the run the stop path would select for any of them is not terminal.
 5. The helper runs the decision once more before its final request read, and the ordinary stop path follows at once.
 

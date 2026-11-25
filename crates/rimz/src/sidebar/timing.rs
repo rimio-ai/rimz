@@ -95,6 +95,12 @@ pub(super) const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// (`min_pane_cache_ms`) overrides it without requiring a new plugin publication.
 pub(crate) const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
+/// Longest a published pane frame's focus holds a finished subagent's pane open.
+/// Twice [`EVENT_PANE_TTL`], since the host republishes only after a frame passes
+/// that age: a live host always has a frame within this bound, and a dead host's
+/// last frame stops holding.
+pub(super) const FOCUS_HOLD_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.as_secs() * 2);
+
 /// How often the producer re-samples client activity and modes while a client is
 /// attached, independent of the heavy pane cache TTL, so mode changes and input
 /// reach the frame within this bound on both backends.

@@ -110,7 +110,7 @@ pub(super) fn rests(agent: &AgentState, now: Timestamp) -> Result<(), Hold> {
 /// Rest runs from the latest of the request, the turn end, the provider
 /// marker that settled a turn no hook closed, and the session's last event:
 /// a failed compaction returns to rest without a new turn end.
-pub(super) fn rested_since(agent: &AgentState, not_before: Timestamp) -> Timestamp {
+pub fn rested_since(agent: &AgentState, not_before: Timestamp) -> Timestamp {
     let context = agent.context.as_ref();
     let marker = settled_outcome(agent.status, context, agent.last_activity)
         .and_then(|_| context?.settle)
@@ -136,6 +136,28 @@ pub fn closing_with<'a>(agents: &'a [AgentState], agent: &AgentState) -> Vec<&'a
         pending.extend(crate::address::launched_children(agents, child));
     }
     closing
+}
+
+/// Whether a live launched descendant closing with its parent holds the parent's booked stop.
+/// A finished child (including a lingering Failed one) holds only through debt; working,
+/// waiting, parked, compacting, or background-shell state still holds.
+pub(super) fn child_holds(
+    store: &Store,
+    messages: &[MessageRecord],
+    runs: &[RunRecord],
+    child: &AgentState,
+    now: Timestamp,
+) -> Result<bool, StoreErr> {
+    let rests_or_failed = match resting(child, now) {
+        Ok(()) => true,
+        Err(Hold::Busy) => {
+            child.effective_status(now) == AgentStatus::Failed
+                && child.phase != TurnPhase::Parked
+                && child.background_shells.is_empty()
+        }
+        Err(_) => false,
+    };
+    Ok(!rests_or_failed || debt(store, messages, runs, child)?.is_some())
 }
 
 /// What `agent` is still owed, beyond what its own rollup row shows.
@@ -200,7 +222,7 @@ pub fn decide(
         return Ok(Verdict::Hold(hold));
     }
     for child in closing_with(agents, agent) {
-        if resting(child, now).is_err() || debt(store, &messages, &runs, child)?.is_some() {
+        if child_holds(store, &messages, &runs, child, now)? {
             return Ok(Verdict::Hold(Hold::Tree));
         }
     }

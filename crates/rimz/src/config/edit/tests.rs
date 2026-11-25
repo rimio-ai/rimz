@@ -680,6 +680,9 @@ fn validates_config_key_read_and_write_surfaces() {
         "gc.tmp_grace",
         "gc.tmp_floor_percent",
         "gc.tmp_floor_min",
+        "agents.subagents.timeout",
+        "agents.subagents.grace",
+        "agents.subagents.linger",
     ] {
         validate_set_key(&test_files(), &parse_key(key).unwrap())
             .unwrap_or_else(|err| panic!("{key}: {err}"));
@@ -2816,6 +2819,59 @@ fn gc_older_than_is_a_validated_duration_string() {
     for bad in [-1, 101] {
         assert!(validate_set_value(&key, &Value::from(bad)).is_err());
     }
+}
+
+#[test]
+fn subagent_duration_keys_parse_bare_numbers_as_strings_and_validate() {
+    for name in [
+        "agents.subagents.timeout",
+        "agents.subagents.grace",
+        "agents.subagents.linger",
+    ] {
+        let key = parse_key(name).unwrap();
+        assert_eq!(
+            parse_set_value(&key, "10").as_str(),
+            Some("10"),
+            "{name} must keep bare numbers as strings"
+        );
+        let err = validate_set_value(&key, &parse_set_value(&key, "10"))
+            .expect_err(name)
+            .to_string();
+        assert!(err.contains(name), "{name}: {err}");
+        let err = validate_set_value(&key, &Value::from("soon"))
+            .expect_err(name)
+            .to_string();
+        assert!(err.contains(name), "{name}: {err}");
+    }
+    let linger_key = parse_key("agents.subagents.linger").unwrap();
+    for bad in ["0s", "59s"] {
+        let err = validate_set_value(&linger_key, &Value::from(bad))
+            .expect_err(bad)
+            .to_string();
+        assert!(err.contains("at least 1m"), "{bad}: {err}");
+    }
+    validate_set_value(&linger_key, &parse_set_value(&linger_key, "1m")).expect("1m floor");
+    validate_set_value(&linger_key, &parse_set_value(&linger_key, "15m")).expect("15m");
+    let grace_key = parse_key("agents.subagents.grace").unwrap();
+    validate_set_value(&grace_key, &parse_set_value(&grace_key, "0s")).expect("0s grace");
+    let timeout_key = parse_key("agents.subagents.timeout").unwrap();
+    validate_set_value(&timeout_key, &parse_set_value(&timeout_key, "45m")).expect("45m timeout");
+
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    editor.set("agents.subagents.linger", "5m").unwrap();
+    assert_eq!(
+        editor
+            .get(Some("agents.subagents.linger"))
+            .unwrap()
+            .as_str(),
+        Some("5m")
+    );
+    assert!(editor.set("agents.subagents.linger", "30s").is_err());
+    assert!(editor.set("agents.subagents.linger", "10").is_err());
 }
 
 #[test]

@@ -270,6 +270,7 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 # timeout = "30m"                      # tell supervised children to stop at this work deadline
 # warn = ["10m", "5m"]                 # warning offsets before the deadline; [] disables warnings
 # grace = "5m"                         # reporting time after the deadline; "0s" kills at it
+# linger = "10m"                       # idle grace after a finished child's report is queued before its pane closes; at least "1m"
 
 # [agents.hibernate]
 ## enabled = true                      # default on; skips where systemd, Linux controls or swap are unavailable
