@@ -168,11 +168,12 @@ esac"#
         std::fs::write(&self.clients, "human|%3|1|root||focused\n").unwrap();
     }
 
-    fn short_hold(&self) {
+    /// A hold no host load outlasts between the input and the send it holds: `expire` ends it.
+    fn long_hold(&self) {
         run_success(
             self.command()
-                .args(["config", "set", "harness.typing_hold", "2s"]),
-            "short hold",
+                .args(["config", "set", "harness.typing_hold", "2m"]),
+            "long hold",
         );
     }
 
@@ -200,23 +201,37 @@ esac"#
             .count()
     }
 
+    /// Ends `record`'s typing hold as its deadline passing would: the typing record holds no
+    /// input, the terminal shows none newer, and the stored hold of a record still open is due.
     fn expire(&self, record: &MessageRecord) {
-        let value = serde_json::to_value(record).unwrap();
-        let until: jiff::Timestamp =
-            serde_json::from_value(value["typing_hold"]["until"].clone()).unwrap();
-        let remaining = until
-            .duration_since(jiff::Timestamp::now())
-            .as_millis()
-            .max(0) as u64;
-        std::thread::sleep(Duration::from_millis(remaining + 20));
+        let mut typing = self.typing_record();
+        typing["panes"]["tmux:%3"]["input_ms"] = serde_json::Value::Null;
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &self.env.runtime_paths().lane_path("typing.json"),
+            &typing,
+        )
+        .unwrap();
         self.clear_input();
+        let store = self.env.store();
+        let Some(mut open) = store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .find(|open| open.message_id == record.message_id)
+        else {
+            return;
+        };
+        let now = jiff::Timestamp::now();
+        open.typing_hold.as_mut().expect("the record is held").until = now;
+        open.retry_after = Some(now);
+        store.queue_message(&open, "room").unwrap();
     }
 }
 
 #[test]
 fn boundary_hold_keeps_the_claim_budget_and_is_explained_without_mux_reads() {
     let fixture = Fixture::new(false);
-    fixture.short_hold();
+    fixture.long_hold();
     let output = run_success(
         fixture.command().args(["message", "@claude", "go"]),
         "held boundary",
@@ -351,7 +366,7 @@ fn held_live_sends_replay_as_themselves_while_the_receiver_is_running() {
         vec!["--interrupt"],
     ] {
         let fixture = Fixture::new(true);
-        fixture.short_hold();
+        fixture.long_hold();
         let output = run_success(
             fixture
                 .command()
@@ -395,7 +410,7 @@ fn held_live_sends_replay_as_themselves_while_the_receiver_is_running() {
 fn pushing_a_held_boundary_message_replays_it_in_the_requested_live_mode() {
     for (verb, force) in [("steer", true), ("interrupt", false)] {
         let fixture = Fixture::new(false);
-        fixture.short_hold();
+        fixture.long_hold();
         run_success(
             fixture.command().args(["message", "@claude", "go"]),
             "held boundary",
@@ -569,7 +584,7 @@ fn input_after_the_pacer_is_seen_before_any_paste_or_sent_record() {
 #[test]
 fn compact_first_prompt_hold_never_repeats_the_compact() {
     let fixture = Fixture::new(false);
-    fixture.short_hold();
+    fixture.long_hold();
     seed_context_fill(&fixture.env, "typing-session", 80);
     fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "typing-compact-write");
@@ -700,7 +715,7 @@ fn a_held_record_ahead_retries_while_a_polite_ping_misses_and_a_forced_one_deliv
     for ahead in ["compaction", "message"] {
         let fixture = Fixture::new(false);
         fixture.keepalive_config();
-        fixture.short_hold();
+        fixture.long_hold();
         run_success(
             &mut fixture.keepalive_command(&fixture.keepalive(false)),
             "held ping",
@@ -1113,7 +1128,7 @@ fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
 #[test]
 fn input_before_the_compact_command_keeps_the_prompts_compaction_intent() {
     let fixture = Fixture::new(false);
-    fixture.short_hold();
+    fixture.long_hold();
     seed_context_fill(&fixture.env, "typing-session", 80);
     fixture.clear_input();
     let before = DeliveryRendezvous::new(&fixture.env, "typing-before-compact");
@@ -1377,7 +1392,7 @@ fn terminal_record_failures_send_without_falling_back_to_the_client_clock() {
 /// hold queued, which replays as an interrupt.
 fn held_deadline_stop(kind: &str) -> (Fixture, rimz::store::run::RunRecord, MessageRecord) {
     let fixture = Fixture::for_kind(kind, true);
-    fixture.short_hold();
+    fixture.long_hold();
     let env = &fixture.env;
     let mut run = rimz::store::run::RunRecord::new(
         env.workspace_id.clone(),
