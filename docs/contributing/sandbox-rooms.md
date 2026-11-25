@@ -109,7 +109,7 @@ $ rz wait --check true
 error: arming a wait is only available to an agent RimZ can identify; run this command from an agent pane
 ```
 
-`--as <@handle>` copies that agent's session keys into the command's environment and sets `RIMZ_AGENT_PID` to the stub, so hooks it feeds are attributed to the agent. Use a qualified handle (`@coder#probe`) when the short form is ambiguous. `--as-ancestor <@handle>` is meant to run the command as a child of the stub with no agent keys, to exercise caller detection by process ancestry. It refuses with `agent pid <pid> has no serving seat`, because the stub creates its seat in its own temporary directory and `sandbox in` looks for it under `<root>/tmp`.
+`--as <@handle>` copies that agent's session keys into the command's environment and sets `RIMZ_AGENT_PID` to the stub, so hooks it feeds are attributed to the agent. Use a qualified handle (`@coder#probe`) when the short form is ambiguous. A feed under `--as` with a session id the agent does not own moves the agent onto that session, so time or probe a feed from a plain `sandbox in` shell instead. `--as-ancestor <@handle>` is meant to run the command as a child of the stub with no agent keys, to exercise caller detection by process ancestry. It refuses with `agent pid <pid> has no serving seat`, because the stub creates its seat in its own temporary directory and `sandbox in` looks for it under `<root>/tmp`.
 
 The stub never starts a provider session, so the agent stays provisional until you feed one:
 
