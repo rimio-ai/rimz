@@ -214,7 +214,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         message_keys: crate::agents::MessageKeys {
             send_now: &[
                 crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::Enter),
-                crate::pane::keys::KeyStep::now(crate::pane::keys::NamedKey::CtrlX),
+                crate::pane::keys::KeyStep::after_ms(1000, crate::pane::keys::NamedKey::CtrlX),
                 crate::pane::keys::KeyStep::after_ms(100, crate::pane::keys::NamedKey::CtrlS),
             ],
             queue: &[crate::pane::keys::KeyStep::now(

@@ -559,7 +559,7 @@ Every key a delivery presses comes from its receiver kind's declaration, `crates
 
 | Member | Pressed by |
 | --- | --- |
-| `send_now` | A steer's prompt, and an interrupt's prompt after its stop: it submits the text for the running turn, or opens a turn on a resting agent. Claude's and Antigravity's press Enter, their `queue` key, before the chord, so a chord that does nothing leaves the text queued behind the turn. What the chord does on a resting agent, and which message it sends when several are queued, is recorded for neither. |
+| `send_now` | A steer's prompt, and an interrupt's prompt after its stop: it submits the text for the running turn, or opens a turn on a resting agent. Claude's and Antigravity's press Enter, their `queue` key, before the chord, so a chord that does nothing leaves the text queued behind the turn, and pause 1 s before the chord so the agent can take in the Enter. What the chord does on a resting agent, and which message it sends when several are queued, is recorded for neither. |
 | `queue` | A boundary send's prompt: it submits behind a running turn, or opens a turn on a resting agent. |
 | `interrupt` | An interrupt, before its text ([the interrupt key](#the-interrupt-key)), and the budget parker. |
 | `command` | A typed command, and a boundary prompt whose paste opens with `/`. |
