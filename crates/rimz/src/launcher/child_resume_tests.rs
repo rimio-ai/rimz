@@ -412,3 +412,750 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
         "the login switched identity since the failure"
     );
 }
+
+struct ReopenFixture {
+    _dir: tempfile::TempDir,
+    home: PathBuf,
+    cwd: PathBuf,
+    workspace: ResolvedWorkspace,
+    store: Store,
+    parent_pane: crate::ids::PaneId,
+    child: AgentState,
+    run: RunRecord,
+}
+
+impl ReopenFixture {
+    fn new(
+        parent_mode: Option<crate::agents::PermissionMode>,
+        parent_isolation: Option<crate::config::Isolation>,
+    ) -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("reopen")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let ambient = BTreeMap::from([("HOME".to_owned(), home.display().to_string())]);
+        crate::agents::find_definition("claude")
+            .unwrap()
+            .managed_integration()
+            .unwrap()
+            .install(&ambient, Default::default())
+            .unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(&cwd);
+        let paths =
+            crate::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            crate::RuntimePaths::under(workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id: workspace_id.clone(),
+            project_root: cwd.clone(),
+            cwd_project_root: None,
+            root_class: crate::workspace::RootClass::Directory,
+            worktree_root: cwd.clone(),
+            worktree_branch: None,
+            session_name: "room".to_owned(),
+            mux_hint: Some(crate::ids::MuxName::Tmux),
+        };
+        let parent_kind = crate::ids::AgentKind::new_unchecked("claude");
+        let parent_id = crate::ids::AgentSessionId::from("parent-1");
+        let parent_pane = crate::ids::PaneId::parse("tmux:%1").unwrap();
+        let mut parent_obs = crate::agents::AgentLifecycleObservation::new(
+            Some(parent_id.clone()),
+            crate::agents::LifecycleSignal::Registered,
+        );
+        parent_obs.agent_name = Some("parent".to_owned());
+        parent_obs.worktree_path = Some(cwd.display().to_string());
+        parent_obs.launch.mode = parent_mode;
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                workspace_id.clone(),
+                "room",
+                parent_kind.as_str(),
+                "SessionStart",
+                &parent_obs,
+            ))
+            .unwrap();
+        store
+            .attach_agent_pane(
+                &parent_kind,
+                &parent_id,
+                Some(&parent_id),
+                &crate::ids::LoginName::default(),
+                "room",
+                &parent_pane,
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "parent",
+                    999_991,
+                    None,
+                ),
+                None,
+                parent_isolation,
+                Some(&parent_obs.launch),
+            )
+            .unwrap();
+
+        let child_kind = crate::ids::AgentKind::new_unchecked("claude");
+        let child_id = crate::ids::AgentSessionId::from("child-1");
+        let child_launch = crate::ids::AgentSessionId::from("launch-child-1");
+        let transcript = home.join(".claude/projects/test/child-1.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "{\"type\":\"user\"}\n").unwrap();
+
+        let mut child_obs = crate::agents::AgentLifecycleObservation::new(
+            Some(child_id.clone()),
+            crate::agents::LifecycleSignal::Registered,
+        );
+        child_obs.launch_id = Some(child_launch.clone());
+        child_obs.agent_name = Some("otter".to_owned());
+        child_obs.worktree_path = Some(cwd.display().to_string());
+        child_obs.transcript_path = Some(transcript.display().to_string());
+        child_obs.launch.parent_agent_id = Some(parent_id.clone());
+        child_obs.launch.parent_agent_kind = Some(parent_kind.clone());
+        child_obs.launch.launch_depth = Some(1);
+        child_obs.launch.mode = Some(crate::agents::PermissionMode::Auto);
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                workspace_id.clone(),
+                "room",
+                child_kind.as_str(),
+                "SessionStart",
+                &child_obs,
+            ))
+            .unwrap();
+        store
+            .attach_agent_pane(
+                &child_kind,
+                &child_id,
+                Some(&child_launch),
+                &crate::ids::LoginName::default(),
+                "room",
+                &crate::ids::PaneId::parse("tmux:%9").unwrap(),
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "otter",
+                    999_990,
+                    None,
+                ),
+                None,
+                None,
+                Some(&child_obs.launch),
+            )
+            .unwrap();
+        let mut child_end = crate::agents::AgentLifecycleObservation::new(
+            Some(child_id.clone()),
+            crate::agents::LifecycleSignal::Ended,
+        );
+        child_end.launch_id = Some(child_launch.clone());
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                workspace_id.clone(),
+                "room",
+                child_kind.as_str(),
+                "SessionEnd",
+                &child_end,
+            ))
+            .unwrap();
+
+        let mut run = RunRecord::new(
+            workspace_id,
+            child_kind,
+            crate::agents::PermissionMode::Auto,
+            "investigate".to_owned(),
+            cwd.clone(),
+        );
+        run.agent_id = Some(child_id.clone());
+        run.agent_name = Some("otter".to_owned());
+        run.status = crate::store::run::RunStatus::Completed;
+        run.completed_at = Some(Timestamp::now());
+        crate::harness::run::create(&paths, &run).unwrap();
+
+        let audit = store
+            .runtime_projection(crate::RuntimeScope::Audit)
+            .unwrap();
+        let child = audit
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == child_id)
+            .unwrap();
+        Self {
+            _dir: dir,
+            home,
+            cwd,
+            workspace,
+            store,
+            parent_pane,
+            child,
+            run,
+        }
+    }
+
+    fn ambient(&self) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::from([("HOME".to_owned(), self.home.display().to_string())])
+    }
+
+    fn live_parent_pane(&self) -> crate::pane::PaneRef {
+        let mut pane = crate::pane::PaneRef::from_id(self.parent_pane.clone());
+        pane.session_name = "room".to_owned();
+        pane.view_name = Some("work".to_owned());
+        pane
+    }
+
+    fn bind_child_in_store(&self) {
+        let launch_id = self.child.launch_id.as_ref().unwrap();
+        self.store
+            .attach_agent_pane(
+                &self.child.kind,
+                &self.child.agent_id,
+                Some(launch_id),
+                &crate::ids::LoginName::default(),
+                "room",
+                &crate::ids::PaneId::parse("tmux:%2").unwrap(),
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "otter",
+                    999_992,
+                    None,
+                ),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let mut resumed = crate::agents::AgentLifecycleObservation::new(
+            Some(self.child.agent_id.clone()),
+            crate::agents::LifecycleSignal::Registered,
+        );
+        resumed.launch_id = Some(launch_id.clone());
+        self.store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                self.workspace.workspace_id.clone(),
+                "room",
+                self.child.kind.as_str(),
+                "rimz.agent-resumed",
+                &resumed,
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn reopen_child_opens_in_parent_zone_without_queuing_message_and_keeps_run_and_lineage() {
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let store_clone = Store::open(
+        fixture.store.paths().clone(),
+        fixture.store.runtime_paths().clone(),
+    )
+    .unwrap();
+    let workspace_id = fixture.workspace.workspace_id.clone();
+    let child_kind = fixture.child.kind.clone();
+    let child_id = fixture.child.agent_id.clone();
+    let launch_id = fixture.child.launch_id.clone().unwrap();
+    let backend = crate::launcher::test_backend::Backend {
+        listed: Some(vec![fixture.live_parent_pane()]),
+        split_ok: true,
+        on_open: Some(Box::new(move || {
+            store_clone
+                .attach_agent_pane(
+                    &child_kind,
+                    &child_id,
+                    Some(&launch_id),
+                    &crate::ids::LoginName::default(),
+                    "room",
+                    &crate::ids::PaneId::parse("tmux:%2").unwrap(),
+                    crate::pane::RuntimeOwner::new(
+                        crate::pane::RuntimeOwnerKind::Agent,
+                        "otter",
+                        999_992,
+                        None,
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let mut resumed = crate::agents::AgentLifecycleObservation::new(
+                Some(child_id.clone()),
+                crate::agents::LifecycleSignal::Registered,
+            );
+            resumed.launch_id = Some(launch_id.clone());
+            store_clone
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    workspace_id.clone(),
+                    "room",
+                    child_kind.as_str(),
+                    "rimz.agent-resumed",
+                    &resumed,
+                ))
+                .unwrap();
+        })),
+        ..Default::default()
+    };
+
+    let outcome = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(200),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, ReopenChildOutcome::Reopened);
+    let splits = backend.splits.lock().unwrap();
+    assert_eq!(splits.len(), 1);
+    assert_eq!(
+        splits[0].target,
+        crate::mux::SplitTarget::SessionPane {
+            session_name: "room".to_owned(),
+            pane_id: fixture.parent_pane.clone(),
+        }
+    );
+    assert!(!splits[0].focus);
+    assert!(
+        fixture.store.list_messages().unwrap().is_empty(),
+        "reopen must not queue any message"
+    );
+    let run = crate::harness::run::load(fixture.store.paths(), &fixture.run.run_id).unwrap();
+    assert_eq!(run.status, crate::store::run::RunStatus::Completed);
+    assert_eq!(run.keep, fixture.run.keep);
+}
+
+#[test]
+fn reopen_child_caps_mode_and_isolation_from_parent_record_not_ambient_env() {
+    let mut fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Sandbox),
+    );
+    let backend = crate::launcher::test_backend::Backend {
+        listed: Some(vec![fixture.live_parent_pane()]),
+        split_ok: true,
+        ..Default::default()
+    };
+    fixture.child.mode = Some(crate::agents::PermissionMode::Yolo);
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("exceeds parent mode"),
+        "expected parent mode cap refusal, got: {err}"
+    );
+    assert!(backend.splits.lock().unwrap().is_empty());
+
+    fixture.child.mode = Some(crate::agents::PermissionMode::Auto);
+    fixture.child.isolation = Some(crate::config::Isolation::Host);
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("isolation") || err.contains("sandbox"),
+        "expected parent isolation cap refusal, got: {err}"
+    );
+    fixture.child.isolation = None;
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        true,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("supervised resume refused"),
+        "agent-called reopen must run unattended folder-trust preflight, got: {err}"
+    );
+    assert!(backend.splits.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reopen_child_refuses_when_parent_ended_or_has_no_pane() {
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let backend = crate::launcher::test_backend::Backend::default();
+    fixture
+        .store
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.workspace.workspace_id.clone(),
+            "room",
+            "claude",
+            "SessionEnd",
+            &crate::agents::AgentLifecycleObservation::new(
+                Some("parent-1".into()),
+                crate::agents::LifecycleSignal::Ended,
+            ),
+        ))
+        .unwrap();
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("parent @parent has ended"),
+        "expected ended parent refusal, got: {err}"
+    );
+    assert!(!err.contains("rimz subagents"), "{err}");
+
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let mut orphan = fixture.child.clone();
+    orphan.parent_agent_id = Some("missing-parent".into());
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &orphan,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("parent"),
+        "expected missing parent refusal, got: {err}"
+    );
+    assert!(!err.contains("rimz subagents"), "{err}");
+
+    // Live parent that was never bound to a pane (`parent.pane == None`).
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let mut unbound_obs = crate::agents::AgentLifecycleObservation::new(
+        Some("parent-unbound".into()),
+        crate::agents::LifecycleSignal::Registered,
+    );
+    unbound_obs.agent_name = Some("unbound-parent".to_owned());
+    unbound_obs.worktree_path = Some(fixture.cwd.display().to_string());
+    fixture
+        .store
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.workspace.workspace_id.clone(),
+            "room",
+            "claude",
+            "SessionStart",
+            &unbound_obs,
+        ))
+        .unwrap();
+    let mut unbound_child = fixture.child.clone();
+    unbound_child.parent_agent_id = Some("parent-unbound".into());
+    let backend = crate::launcher::test_backend::Backend {
+        listed: Some(Vec::new()),
+        split_ok: true,
+        ..Default::default()
+    };
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &unbound_child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("parent @unbound-parent has no") && err.contains("pane"),
+        "expected unbound parent refusal, got: {err}"
+    );
+    assert!(!err.contains("rimz subagents"), "{err}");
+    assert!(backend.splits.lock().unwrap().is_empty());
+    assert!(backend.tabs.lock().unwrap().is_empty());
+
+    // Live parent whose stored pane is no longer listed by the mux.
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let backend = crate::launcher::test_backend::Backend {
+        listed: Some(Vec::new()),
+        split_ok: true,
+        ..Default::default()
+    };
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(50),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("parent @parent has no") && err.contains("pane"),
+        "expected unlisted parent pane refusal, got: {err}"
+    );
+    assert!(!err.contains("rimz subagents"), "{err}");
+    assert!(
+        backend.splits.lock().unwrap().is_empty() && backend.tabs.lock().unwrap().is_empty(),
+        "must not open a pane or companion tab when the parent's pane is gone"
+    );
+}
+
+#[test]
+fn reopen_child_refuses_when_bind_does_not_land_within_ceiling() {
+    let fixture = ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    );
+    let backend = crate::launcher::test_backend::Backend {
+        listed: Some(vec![fixture.live_parent_pane()]),
+        split_ok: true,
+        ..Default::default()
+    };
+    let err = reopen_child_with(
+        &fixture.workspace,
+        &fixture.store,
+        &fixture.child,
+        false,
+        crate::config::MachineConfig::default(),
+        &fixture.ambient(),
+        &backend,
+        std::time::Duration::from_millis(20),
+        &mut crate::launcher::Unattended,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("did not bind"),
+        "expected bind ceiling refusal, got: {err}"
+    );
+    assert_eq!(backend.splits.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn concurrent_reopens_yield_one_pane_and_second_returns_already_bound() {
+    let fixture = std::sync::Arc::new(ReopenFixture::new(
+        Some(crate::agents::PermissionMode::Auto),
+        Some(crate::config::Isolation::Host),
+    ));
+    let f_hook = std::sync::Arc::clone(&fixture);
+    let backend = std::sync::Arc::new(crate::launcher::test_backend::Backend {
+        listed: Some(vec![fixture.live_parent_pane()]),
+        split_ok: true,
+        on_open: Some(Box::new(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            f_hook.bind_child_in_store();
+        })),
+        ..Default::default()
+    });
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let f = std::sync::Arc::clone(&fixture);
+        let b = std::sync::Arc::clone(&backend);
+        let bar = std::sync::Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            bar.wait();
+            reopen_child_with(
+                &f.workspace,
+                &f.store,
+                &f.child,
+                false,
+                crate::config::MachineConfig::default(),
+                &f.ambient(),
+                b.as_ref(),
+                std::time::Duration::from_millis(500),
+                &mut crate::launcher::Unattended,
+            )
+            .unwrap()
+        }));
+    }
+    let mut outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    outcomes.sort_by_key(|o| matches!(o, ReopenChildOutcome::AlreadyBound));
+    assert_eq!(
+        outcomes,
+        vec![
+            ReopenChildOutcome::Reopened,
+            ReopenChildOutcome::AlreadyBound
+        ]
+    );
+    assert_eq!(
+        backend.splits.lock().unwrap().len(),
+        1,
+        "two concurrent reopens must open only one pane"
+    );
+}
+
+#[test]
+fn reopen_child_succeeds_when_parent_is_hibernated_booked_to_stop_or_mid_turn() {
+    for case in ["hibernated", "booked", "running"] {
+        let fixture = ReopenFixture::new(
+            Some(crate::agents::PermissionMode::Auto),
+            Some(crate::config::Isolation::Host),
+        );
+        match case {
+            "hibernated" => {
+                crate::store::hibernate::record(
+                    fixture.store.paths(),
+                    crate::store::hibernate::Entry {
+                        kind: crate::ids::AgentKind::new_unchecked("claude"),
+                        agent_id: "parent-1".into(),
+                        pane_id: fixture.parent_pane.clone(),
+                        scope: fixture.cwd.clone(),
+                        provider_pid: 999_991,
+                        frozen_at: Timestamp::now(),
+                        reclaimed_bytes: 0,
+                        anon_at_freeze: 0,
+                        step: 1,
+                        wake_error: None,
+                    },
+                )
+                .unwrap();
+            }
+            "booked" => {
+                crate::store::idle_stop::arm(
+                    fixture.store.paths(),
+                    crate::store::idle_stop::IdleStopRequest {
+                        kind: crate::ids::AgentKind::new_unchecked("claude"),
+                        agent_id: "parent-1".into(),
+                        stop: crate::agents::IdleStop {
+                            after_secs: 600,
+                            requested_at: Timestamp::now(),
+                            requested_by: None,
+                        },
+                    },
+                )
+                .unwrap();
+            }
+            "running" => {
+                fixture
+                    .store
+                    .append_event(&crate::EventEnvelope::agent_lifecycle(
+                        fixture.workspace.workspace_id.clone(),
+                        "room",
+                        "claude",
+                        "UserPromptSubmit",
+                        &crate::agents::AgentLifecycleObservation::new(
+                            Some("parent-1".into()),
+                            crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+                        ),
+                    ))
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let store_clone = Store::open(
+            fixture.store.paths().clone(),
+            fixture.store.runtime_paths().clone(),
+        )
+        .unwrap();
+        let workspace_id = fixture.workspace.workspace_id.clone();
+        let child_kind = fixture.child.kind.clone();
+        let child_id = fixture.child.agent_id.clone();
+        let launch_id = fixture.child.launch_id.clone().unwrap();
+        let backend = crate::launcher::test_backend::Backend {
+            listed: Some(vec![fixture.live_parent_pane()]),
+            split_ok: true,
+            on_open: Some(Box::new(move || {
+                store_clone
+                    .attach_agent_pane(
+                        &child_kind,
+                        &child_id,
+                        Some(&launch_id),
+                        &crate::ids::LoginName::default(),
+                        "room",
+                        &crate::ids::PaneId::parse("tmux:%2").unwrap(),
+                        crate::pane::RuntimeOwner::new(
+                            crate::pane::RuntimeOwnerKind::Agent,
+                            "otter",
+                            999_992,
+                            None,
+                        ),
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                let mut resumed = crate::agents::AgentLifecycleObservation::new(
+                    Some(child_id.clone()),
+                    crate::agents::LifecycleSignal::Registered,
+                );
+                resumed.launch_id = Some(launch_id.clone());
+                store_clone
+                    .append_event(&crate::EventEnvelope::agent_lifecycle(
+                        workspace_id.clone(),
+                        "room",
+                        child_kind.as_str(),
+                        "rimz.agent-resumed",
+                        &resumed,
+                    ))
+                    .unwrap();
+            })),
+            ..Default::default()
+        };
+        let outcome = reopen_child_with(
+            &fixture.workspace,
+            &fixture.store,
+            &fixture.child,
+            false,
+            crate::config::MachineConfig::default(),
+            &fixture.ambient(),
+            &backend,
+            std::time::Duration::from_millis(200),
+            &mut crate::launcher::Unattended,
+        )
+        .unwrap_or_else(|err| panic!("parent case {case} must allow reopen: {err:#}"));
+        assert_eq!(outcome, ReopenChildOutcome::Reopened, "case {case}");
+    }
+}

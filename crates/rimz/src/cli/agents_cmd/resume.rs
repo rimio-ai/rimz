@@ -51,8 +51,11 @@ fn validate_recorded_resume(
             "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --continue`"
         );
     }
-    if agent.is_child_session() {
-        bail!("@{name} is a child session; use `rimz subagents` instead");
+    if agent.is_provider_subagent() {
+        bail!("@{name} is a provider-native subagent and cannot be reopened");
+    }
+    if agent.is_launched_child() {
+        bail!("@{name} is a child session; reopen it with `rimz agents resume @{name}`");
     }
     Ok(())
 }
@@ -158,7 +161,7 @@ pub(super) fn resume_agent(
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let snapshot = ctx.alive_snapshot()?;
-    let agent = match super::resolve_live_or_audit(
+    let (agent, is_live_in_snapshot) = match super::resolve_live_or_audit(
         store,
         workspace,
         ctx.runtime(),
@@ -166,7 +169,7 @@ pub(super) fn resume_agent(
         reference,
         &ctx.address_context(),
     ) {
-        Ok((agent, _)) => agent,
+        Ok(found) => found,
         Err(error) if crate::cli::resolution_missed(&error) => {
             // Provider-native children are deliberately not ordinary addresses.
             // Resolve them only to give this command's child refusal.
@@ -179,7 +182,7 @@ pub(super) fn resume_agent(
             let unscoped = crate::cli::CurrentChannel::Unscoped.address_context();
             if let Ok(child) = rimz::address::resolve_agent(reference, None, &unscoped, &children) {
                 bail!(
-                    "@{} is a provider subagent; use `rimz subagents` instead",
+                    "@{} is a provider-native subagent and cannot be reopened",
                     child.name.as_deref().unwrap_or(child.agent_id.as_str())
                 );
             }
@@ -187,6 +190,13 @@ pub(super) fn resume_agent(
         }
         Err(error) => return Err(error),
     };
+    if agent.is_provider_subagent() {
+        let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+        bail!("@{name} is a provider-native subagent and cannot be reopened");
+    }
+    if agent.is_launched_child() {
+        return resume_launched_child(&ctx, &snapshot, &agent, is_live_in_snapshot, bg, overrides);
+    }
     let former_workflow = super::workflow_pin(store, &agent)?.former()?;
     validate_recorded_resume(&agent, &agent.kind, None)?;
     let args = super::AgentLaunchArgs {
@@ -204,6 +214,65 @@ pub(super) fn resume_agent(
         globals,
         &ctx,
     )
+}
+
+fn resume_launched_child(
+    ctx: &crate::cli::ctx::Ctx,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    agent: &rimz::agents::AgentState,
+    is_live_in_snapshot: bool,
+    bg: bool,
+    overrides: super::SessionResumeOverrides,
+) -> Result<()> {
+    let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
+    if overrides != super::SessionResumeOverrides::default() {
+        bail!(
+            "cannot reopen @{name}: launch posture flags do not apply to child sessions; drop them and run `rimz agents resume @{name}`"
+        );
+    }
+    let caller = resolve_caller(&snapshot.agents);
+    let focus = LaunchFocus::resolve(bg, caller.as_ref());
+    let live_child = (is_live_in_snapshot && agent.ended_at.is_none() && agent.pane.is_some())
+        || matches!(
+            rimz::store::runtime::agent_liveness(agent),
+            rimz::store::runtime::AgentLiveness::Live { .. }
+        );
+    if live_child {
+        if focus.takes_focus() {
+            super::show::focus_resolved(ctx, agent)?;
+            writeln!(std::io::stdout().lock(), "focused {}:{name}", agent.kind)?;
+        } else {
+            writeln!(
+                std::io::stdout().lock(),
+                "{}:{name} is already live",
+                agent.kind
+            )?;
+        }
+        return Ok(());
+    }
+    let outcome = rimz::launcher::child_resume::reopen_child(
+        &ctx.workspace,
+        &ctx.store,
+        agent,
+        caller.is_some(),
+        &mut crate::cli::launch_interaction::CliInteraction,
+    )?;
+    if focus.takes_focus() {
+        super::show::focus_resolved(ctx, agent)?;
+    }
+    let receipt = match outcome {
+        rimz::launcher::child_resume::ReopenChildOutcome::Reopened => {
+            format!("reopened {}:{name} ({})", agent.kind, agent.agent_id)
+        }
+        rimz::launcher::child_resume::ReopenChildOutcome::AlreadyBound if focus.takes_focus() => {
+            format!("focused {}:{name}", agent.kind)
+        }
+        rimz::launcher::child_resume::ReopenChildOutcome::AlreadyBound => {
+            format!("{}:{name} is already live", agent.kind)
+        }
+    };
+    writeln!(std::io::stdout().lock(), "{receipt}")?;
+    Ok(())
 }
 
 fn resume_selected(
@@ -538,7 +607,11 @@ pub(super) fn resume_lane(
                     .err()
                     .unwrap_or_default();
             let lanes = super::list::known_lanes_suffix(&lanes);
-            if fresh || !session_id_shaped(&scope) {
+            let recorded_session = projection
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id.as_str() == scope);
+            if fresh || (!session_id_shaped(&scope) && !recorded_session) {
                 bail!(
                     "no lane '{scope}' in this workspace{lanes}; resume one closed session with `rimz agents resume @<handle>` or `@<session-id>`"
                 );
@@ -1042,16 +1115,25 @@ mod tests {
 
         agent.parent_agent_id = Some("parent".into());
         agent.launched_by = None;
-        for depth in [Some(1), None] {
-            agent.launch_depth = depth;
-            let error = validate_recorded_resume(&agent, &agent.kind, None)
-                .unwrap_err()
-                .to_string();
-            assert_eq!(
-                error,
-                "@peer is a child session; use `rimz subagents` instead"
-            );
-        }
+        agent.launch_depth = Some(1);
+        let error = validate_recorded_resume(&agent, &agent.kind, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "@peer is a child session; reopen it with `rimz agents resume @peer`"
+        );
+        assert!(!error.contains("rimz subagents"), "{error}");
+
+        agent.launch_depth = None;
+        let error = validate_recorded_resume(&agent, &agent.kind, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "@peer is a provider-native subagent and cannot be reopened"
+        );
+        assert!(!error.contains("rimz subagents"), "{error}");
     }
 
     #[test]

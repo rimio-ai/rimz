@@ -9,6 +9,7 @@ use std::time::Duration;
 pub(super) struct Backend {
     pub(super) tabs: Mutex<Vec<m::TabOptions>>,
     pub(super) listed: Option<Vec<PaneRef>>,
+    pub(super) split_ok: bool,
     pub(super) split_error: Mutex<Option<m::MuxErr>>,
     pub(super) splits: Mutex<Vec<m::SplitPaneOptions>>,
     pub(super) tab_error: Mutex<Option<m::MuxErr>>,
@@ -58,6 +59,12 @@ impl m::MuxBackend for Backend {
     }
     fn split_pane(&self, opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
         self.splits.lock().unwrap().push(opts);
+        if self.split_ok {
+            if let Some(on_open) = &self.on_open {
+                on_open();
+            }
+            return Ok(None);
+        }
         Err(self
             .split_error
             .lock()

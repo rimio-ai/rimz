@@ -300,7 +300,7 @@ fn exec_wrapper_in_place(
     anyhow::anyhow!("in-place launch is only supported on Unix")
 }
 
-mod zone;
+pub(super) mod zone;
 pub use zone::{
     PaneBindWait, SubagentZoneOpen, launch_has_bound_pane, lock_subagent_zone,
     split_into_subagent_zone, wait_for_subagent_pane_bind,
@@ -364,6 +364,16 @@ pub(super) fn execute_run(
         RunPlacement::SubagentZone => {
             zone_guard = Some(lock_subagent_zone(store).context("opening run pane")?);
             started = std::time::Instant::now();
+            let parent = identity.launch.parent_agent_id.as_ref().map(|id| {
+                (
+                    identity
+                        .launch
+                        .parent_agent_kind
+                        .as_ref()
+                        .unwrap_or(&identity.kind),
+                    id,
+                )
+            });
             match split_into_subagent_zone(
                 backend,
                 store,
@@ -376,6 +386,7 @@ pub(super) fn execute_run(
                     .as_ref()
                     .map(crate::ids::LaneName::as_str),
                 request.tab_anchor,
+                parent,
                 run_id,
             ) {
                 SubagentZoneOpen::Opened => {}

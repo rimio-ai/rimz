@@ -1201,6 +1201,28 @@ mod zone_backend {
     }
 
     pub(super) fn open(fixture: &RunFixture, backend: &Backend) -> super::zone::SubagentZoneOpen {
+        let parent = fixture
+            .store
+            .runtime_projection(crate::RuntimeScope::Audit)
+            .ok()
+            .and_then(|projection| {
+                projection.agents.into_iter().next().map(|agent| {
+                    let key = agent.launch_key().clone();
+                    (agent.kind, key)
+                })
+            });
+        open_with_parent(
+            fixture,
+            backend,
+            parent.as_ref().map(|(kind, id)| (kind, id)),
+        )
+    }
+
+    pub(super) fn open_with_parent(
+        fixture: &RunFixture,
+        backend: &Backend,
+        parent: Option<(&AgentKind, &AgentSessionId)>,
+    ) -> super::zone::SubagentZoneOpen {
         let cwd = fixture._dir.path();
         let workspace = crate::ResolvedWorkspace {
             workspace_id: fixture.workspace_id.clone(),
@@ -1245,9 +1267,87 @@ mod zone_backend {
             },
             Some("ch"),
             Some(PaneId::parse("tmux:%99").unwrap()),
+            parent,
             &fixture.run_id(),
         )
     }
+}
+
+#[test]
+fn split_into_subagent_zone_uses_explicit_parent_without_caller_env() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("explicit-parent-not-in-env");
+    let parent_pane_id = PaneId::parse("tmux:%42").unwrap();
+    fixture
+        .store
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.workspace_id.clone(),
+            "room",
+            kind.as_str(),
+            "SessionStart",
+            &crate::agents::AgentLifecycleObservation::new(
+                Some(parent_id.clone()),
+                crate::agents::LifecycleSignal::Registered,
+            ),
+        ))
+        .unwrap();
+    fixture
+        .store
+        .attach_agent_pane(
+            &kind,
+            &parent_id,
+            Some(&parent_id),
+            &crate::ids::LoginName::default(),
+            "room",
+            &parent_pane_id,
+            crate::pane::RuntimeOwner::new(
+                crate::pane::RuntimeOwnerKind::Agent,
+                "explicit-parent",
+                999_999,
+                None,
+            ),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let mut live_parent = PaneRef::from_id(parent_pane_id.clone());
+    live_parent.session_name = "room".to_owned();
+    live_parent.view_name = Some("work".to_owned());
+    let backend = zone_backend::Backend {
+        listed: Some(vec![live_parent]),
+        split_ok: true,
+        ..Default::default()
+    };
+
+    let result = zone_backend::open_with_parent(&fixture, &backend, Some((&kind, &parent_id)));
+
+    assert!(
+        matches!(result, zone::SubagentZoneOpen::Opened),
+        "{result:?}"
+    );
+    let splits = backend.splits.lock().unwrap();
+    assert_eq!(
+        splits.len(),
+        1,
+        "expected split into explicit parent's zone"
+    );
+    assert_eq!(
+        splits[0].target,
+        crate::mux::SplitTarget::SessionPane {
+            session_name: "room".to_owned(),
+            pane_id: parent_pane_id,
+        }
+    );
+    assert_eq!(
+        splits[0].placement,
+        crate::mux::SplitPlacement::Directional(crate::mux::SplitDirection::Right)
+    );
+    assert!(
+        backend.tabs.lock().unwrap().is_empty(),
+        "explicit parent must not fall back to a companion tab"
+    );
 }
 
 struct RunFixture {

@@ -387,7 +387,7 @@ A closed agent's session files stay where its CLI wrote them, so RimZ can reopen
 
 ### Resume one closed session
 
-`rimz agents resume @<ref>` reopens one retained solo root session by handle or session-id prefix:
+`rimz agents resume @<ref>` reopens one retained solo root session or ended launched subagent by handle or session-id prefix:
 
 ```sh
 rimz agents resume @bright-otter
@@ -395,9 +395,9 @@ rimz agents resume @a1b2c3d4 --bg
 rimz agents resume @bright-otter --isolation host --model sonnet
 ```
 
-A [bare session id](#resume-a-lane-by-place) also works after a lane miss.
+A [bare session id](#resume-a-lane-by-place) (any recorded session id or UUID-shaped prefix) also works after a lane miss.
 
-Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a child or provider subagent points to `rimz subagents`. `--fresh` and `--from-pr` take lane scopes only; `--worktree` is a flag spelling of `SCOPE`. None combines with an `@ref`.
+Resolution checks live agents first, then retained agents under the same channel context. After a scoped miss, a room-wide retained lookup is accepted only when exactly one agent matches, so a stopped agent's unique pet name still works from another lane. Otherwise the live miss and its correction remain the answer. An ambiguity in the requested scope refuses and names the candidates. A live solo session refuses with `rimz agents focus @<name>`; a team member points to `rimz agents <team>.<role> --continue`; a provider-native subagent refuses. A live launched child is focused instead of refused or opened twice (unless `--bg` is set or an agent calls). An ended launched child reopens into its live parent's subagent zone without queuing a message, taking its parent, permission cap, and isolation cap from durable records rather than the calling process, running trust preflights attended when a human calls, keeping its run, `keep` flag, and lineage, and waiting up to 10 seconds for durable bind before focusing (unless `--bg` or an agent calls); concurrent reopens of one child open one pane and the second focuses it. Reopening a child refuses if its parent has ended or has no bound pane, if any launch posture flag was given, if the pane does not bind within 10 seconds, or for the usual cannot-resume reasons; no limit refusal applies. `--fresh` and `--from-pr` take lane scopes only; `--worktree` is a flag spelling of `SCOPE`. None combines with an `@ref`.
 
 Peers launched by another agent are eligible: a child has a recorded parent, not merely a positive launch depth. Resume preserves the peer's recorded `launch_depth` and `launched_by`, so it does not reset the launch-chain budget. It does not reconnect the peer's `report_to` to its original launcher.
 
