@@ -19,6 +19,7 @@ mod runner;
 mod sandbox;
 mod sccache;
 mod screenshot;
+mod session;
 mod source_files;
 mod spinner;
 mod stress;
@@ -232,13 +233,32 @@ enum Action<'a> {
     Help(Option<&'a str>),
 }
 
+/// Test-running tasks that re-enter `xtask` in a session of their own so every
+/// test subprocess runs without a controlling terminal.
+const OWN_SESSION_TASKS: &[&str] = &["gate", "test", "stress", "coverage", "ci", "loop-tests"];
+
+fn should_reenter_own_session(in_session: bool, action: &Action<'_>) -> bool {
+    !in_session && matches!(action, Action::Run { task, .. } if OWN_SESSION_TASKS.contains(task))
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     if sandbox::run_reaper_mode(&args)? {
         return Ok(());
     }
     stress::run_hog_mode(&args);
-    match parse_args(&args)? {
+    let (in_session, task_args) = match session::parse_in_session(&args)? {
+        Some((outer_pid, rest)) => {
+            session::enter(outer_pid)?;
+            (true, rest)
+        }
+        None => (false, args.as_slice()),
+    };
+    match parse_args(task_args)? {
+        action @ Action::Run { .. } if should_reenter_own_session(in_session, &action) => {
+            let code = session::run_in_own_session(&args)?;
+            std::process::exit(code);
+        }
         Action::Run { task, args } => {
             let root = runner::workspace_root()?;
             deadline::arm(task)?;
@@ -421,6 +441,10 @@ fn print_xtask_help() {
     println!("Every task runs under a wall-clock budget (15m; 45m for full");
     println!("compile-and-suite passes). Set RIMZ_XTASK_TIMEOUT=45m or =off to");
     println!("change it for one run.");
+    println!();
+    println!("Test tasks (gate, test, stress, coverage, ci, loop-tests) run in a");
+    println!("session of their own with no controlling terminal; SIGINT, SIGTERM,");
+    println!("and SIGHUP are forwarded to the session's process group.");
     println!();
     println!("Tasks:");
     for task in TASKS {

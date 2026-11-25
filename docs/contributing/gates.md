@@ -64,7 +64,7 @@ Every task carries a budget armed at startup ([xtask/src/deadline.rs](../../xtas
 | None | `sandbox`, `screenshot` (the operator drives them) |
 | 15 minutes | Every other task, `gate` included |
 
-On overrun the running child gets `SIGTERM`, then `SIGKILL` five seconds later, and the task fails naming the command and its elapsed time. A captured step also prints the trimmed output it collected. `RIMZ_XTASK_TIMEOUT` sets the budget for one run: `45m`, `900s`, a bare `900` for seconds, or `off` to lift it. Use it when a cold tree needs a full compile inside the gate.
+On overrun the running child gets `SIGTERM`, then `SIGKILL` five seconds later, and the task fails naming the command and its elapsed time. A captured step also prints the trimmed output it collected. `RIMZ_XTASK_TIMEOUT` sets the budget for one run: `45m`, `900s`, a bare `900` for seconds, or `off` to lift it. Use it when a cold tree needs a full compile inside the gate. External `SIGINT`, `SIGTERM`, and `SIGHUP` sent to a test-running task forward to its isolated session's process group instead ([the test runner](./running-gates.md#the-test-runner)).
 
 One test is bounded by `slow-timeout` in [.config/nextest.toml](../../.config/nextest.toml), which warns every two minutes and terminates the test at six. A hung test then fails by name in the run summary. In the `gate` and `live` profiles it counts toward the three-failure stop like any other failure. The suite's slowest legitimate waits are the live spawn and lock deadlines, at 150 s and 120 s.
 
@@ -158,6 +158,8 @@ Each xtask invocation builds a sandbox for the suite before it starts a test pro
 - It pins `CARGO_HOME` and `RUSTUP_HOME` to their host values before it replaces HOME, or to the host HOME's `.cargo` and `.rustup` when they are unset, so cargo and rustup keep the host toolchain.
 
 A bare `cargo nextest run` skips this layer, and still inherits git's local variables.
+
+Test-running tasks also execute in a session of their own with no controlling terminal ([the test runner](./running-gates.md#the-test-runner)).
 
 Inside the sandbox every `common::Env` and live `ZellijNamespace` owns narrower per-test roots and an independent stdin-keepalive reaper. On orderly drop and on abrupt death of the test owner alike, the reaper stops the private mux endpoints, terminates the marker-carrying descendants, and removes the roots. That fixture layer also works under bare nextest, and the xtask layer is the invocation-wide backstop.
 

@@ -1283,8 +1283,8 @@ fn run_named_tests(
 }
 
 /// `--no-capture` only means anything when the test's own output reaches the
-/// operator, so a run that asks for it bypasses the spinner and inherits the
-/// terminal. Both spellings appear in the wild, and libtest's sits after `--`.
+/// operator, so a run that asks for it bypasses the spinner and inherits
+/// stdio. Both spellings appear in the wild, and libtest's sits after `--`.
 fn requests_no_capture(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), "--no-capture" | "--nocapture"))
