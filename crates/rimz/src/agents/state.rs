@@ -1652,18 +1652,17 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     /// How many times this session has condensed its context window — the count
-    /// of completed compaction brackets. Derived by the rollup from the state
-    /// machine's bracket-close fact, carried forward unchanged on every other
-    /// event, and rendered by the card as `↻ N` from the first completed
-    /// compaction. Also re-arms the smart-compaction reminder.
+    /// of completed compactions (`compaction_retires_usage`), carried forward
+    /// unchanged on every other event and rendered by the card as `↻ N` from
+    /// the first completed compaction. Also re-arms the smart-compaction
+    /// reminder.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
-    /// When this session last completed a compaction: a bracket close, or a successful end whose
-    /// open was lost, but not the same compaction reported again. A compaction continuation's
-    /// row is stamped by the end that opened it. Carried forward on every other event. A
-    /// compaction command queued before it is withdrawn untyped
-    /// (`MessageRecord::broken_row_premise`), and a turn start after it settles the continue
-    /// owed from before it (`SoftCompactMark::continue_owed`).
+    /// When this session last completed a compaction (`compaction_retires_usage`),
+    /// or was opened as a compaction continuation row. Carried forward on every
+    /// other event. A compaction command queued before it is withdrawn untyped
+    /// (`MessageRecord::broken_row_premise`), and a turn start after it settles
+    /// the continue owed from before it (`SoftCompactMark::continue_owed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_at: Option<Timestamp>,
     /// Serialized as `soft_compact_mark`: the unversioned carryover keeps rows an older
@@ -1703,9 +1702,9 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacted_unmeasured: bool,
     /// The next input must not be another compaction. Set by a sent compact
-    /// command, a successful manual compaction, or a successful close at rest
-    /// with a known trigger or open bracket; cleared only by `TurnStarted`.
-    /// Registration preserves it; delivery acknowledgements do not rearm it.
+    /// command or a completed `CompactionEnded` that is manual or lands at
+    /// rest; cleared only by `TurnStarted`. Registration preserves it; delivery
+    /// acknowledgements do not rearm it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_awaiting_prompt: Option<Timestamp>,
     pub last_seen: Timestamp,

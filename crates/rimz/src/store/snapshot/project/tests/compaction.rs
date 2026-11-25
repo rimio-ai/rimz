@@ -401,9 +401,14 @@ fn compaction_end_resumes_interrupted_turn_for_auto_or_unknown_edges() {
 
 #[test]
 fn next_lifecycle_signal_closes_missed_compaction_bracket() {
-    for (label, next) in [
+    for (label, next_derived, next_native) in [
         (
             "next tool signal",
+            lifecycle(
+                "droid",
+                "PostToolUse",
+                serde_json::json!({ "signal": "tool_used", "mutates": false, "edits": false }),
+            ),
             lifecycle(
                 "claude",
                 "PreToolUse",
@@ -412,6 +417,16 @@ fn next_lifecycle_signal_closes_missed_compaction_bracket() {
         ),
         (
             "expired display marker",
+            lifecycle_at(
+                "droid",
+                crate::agents::COMPACTING_WINDOW_SECS + 5,
+                "Stop",
+                serde_json::json!({
+                    "signal": "turn_ended",
+                    "errored": false,
+                    "parked_on_background": false
+                }),
+            ),
             lifecycle_at(
                 "claude",
                 crate::agents::COMPACTING_WINDOW_SECS + 5,
@@ -424,12 +439,24 @@ fn next_lifecycle_signal_closes_missed_compaction_bracket() {
             ),
         ),
     ] {
-        let prompt = lifecycle_at("claude", 0, "UserPromptSubmit", signal("turn_started"));
-        let compact = lifecycle_at("claude", 1, "PreCompact", signal("compacting"));
-        let agents = reduce_agent_states(&[prompt, compact, next]);
+        // Derived kinds have no completion signal, so the next signal closes and counts.
+        let derived = reduce_agent_states(&[
+            lifecycle_at("droid", 0, "UserPromptSubmit", signal("turn_started")),
+            lifecycle_at("droid", 1, "PreCompact", signal("compacting")),
+            next_derived,
+        ]);
+        assert_eq!(derived[0].compaction_count, 1, "derived {label}");
+        assert!(derived[0].compacting_since.is_none(), "derived {label}");
 
-        assert_eq!(agents[0].compaction_count, 1, "{label}");
-        assert!(agents[0].compacting_since.is_none(), "{label}");
+        // Native kinds lower the head on the next signal without counting or stamping.
+        let native = reduce_agent_states(&[
+            lifecycle_at("claude", 0, "UserPromptSubmit", signal("turn_started")),
+            lifecycle_at("claude", 1, "PreCompact", signal("compacting")),
+            next_native,
+        ]);
+        assert_eq!(native[0].compaction_count, 0, "native {label}");
+        assert_eq!(native[0].compacted_at, None, "native {label}");
+        assert!(native[0].compacting_since.is_none(), "native {label}");
     }
 }
 
@@ -554,7 +581,11 @@ fn codex_estimate_keeps_the_gap_until_a_model_call_reports_its_split() {
     assert!(agent.compacted_awaiting_prompt.is_none());
 
     let mut delayed_echo = events.clone();
-    delayed_echo.push(reading("SessionStart", compaction_ended(None), estimate));
+    delayed_echo.push(reading(
+        "SessionStart",
+        serde_json::json!({ "signal": "compaction_ended", "echo": true }),
+        estimate,
+    ));
     let mut agent = reduce_agent_states(&delayed_echo).remove(0);
     assert!(agent.compacted_unmeasured);
     assert_eq!(
@@ -705,16 +736,63 @@ fn a_keepalive_reply_is_a_real_reading_but_its_open_keeps_the_gap() {
 
 #[test]
 fn linked_continuation_without_a_prior_enters_the_gap() {
-    let events = [raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "SessionStart", "agent_id": "continuation",
-            "compacted_from": "predecessor", "signal": { "signal": "compaction_ended" },
-        }),
-    )];
-    let agent = reduce_agent_states(&events).remove(0);
-    assert!(agent.compacted_unmeasured);
-    assert_eq!(agent.compaction_count, 0);
+    for (label, sig) in [
+        (
+            "flagged echo",
+            serde_json::json!({ "signal": "compaction_ended", "echo": true }),
+        ),
+        (
+            "unflagged legacy",
+            serde_json::json!({ "signal": "compaction_ended" }),
+        ),
+    ] {
+        let opening = raw_lifecycle_at(
+            "codex",
+            1,
+            serde_json::json!({
+                "event_name": "SessionStart", "agent_id": "continuation",
+                "compacted_from": "predecessor",
+                "signal": sig,
+            }),
+        );
+        let agent = reduce_agent_states(std::slice::from_ref(&opening)).remove(0);
+        assert!(agent.compacted_unmeasured, "{label}");
+        assert_eq!(agent.compaction_count, 0, "{label}");
+        assert!(agent.compacted_at.is_some(), "{label}");
+        assert_eq!(agent.compacted_awaiting_prompt, None, "{label}");
+
+        // A later non-echo end immediately restating the creating compaction must not count.
+        let restated = raw_lifecycle_at(
+            "codex",
+            2,
+            serde_json::json!({
+                "event_name": "PostCompact", "agent_id": "continuation",
+                "signal": compaction_ended(Some(true)),
+            }),
+        );
+        let after_restate = reduce_agent_states(&[opening.clone(), restated.clone()]).remove(0);
+        assert_eq!(after_restate.compaction_count, 0, "{label} restated");
+
+        // A genuinely new compaction on the successor row counts.
+        let new_open = raw_lifecycle_at(
+            "codex",
+            3,
+            serde_json::json!({
+                "event_name": "PreCompact", "agent_id": "continuation",
+                "signal": signal("compacting"),
+            }),
+        );
+        let new_close = raw_lifecycle_at(
+            "codex",
+            4,
+            serde_json::json!({
+                "event_name": "PostCompact", "agent_id": "continuation",
+                "signal": compaction_ended(Some(true)),
+            }),
+        );
+        let after_new = reduce_agent_states(&[opening, restated, new_open, new_close]).remove(0);
+        assert_eq!(after_new.compaction_count, 1, "{label} new compaction");
+    }
 }
 
 #[test]
@@ -777,27 +855,49 @@ fn failed_compaction_keeps_the_usage_and_retires_nothing() {
 
 #[test]
 fn derived_close_shows_the_reading_its_closing_signal_carries() {
-    let agent = reduce_agent_states(&[
-        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
-        lifecycle("claude", "PreCompact", signal("compacting")),
-        lifecycle_reading(
-            "Stop",
-            turn_ended(),
-            serde_json::json!({ "total_tokens": 7_000 }),
-        ),
-    ])
-    .remove(0);
+    let reading_for =
+        |kind: &str, event_name: &str, sig: serde_json::Value, reading: serde_json::Value| {
+            let mut params = serde_json::json!({
+                "event_name": event_name,
+                "agent_id": "sess-1",
+                "signal": sig,
+            });
+            for (key, value) in reading.as_object().expect("reading object") {
+                params[key] = value.clone();
+            }
+            raw_lifecycle(kind, params)
+        };
+    for kind in ["droid", "cursor", "copilot", "unregistered-plugin"] {
+        let agent = reduce_agent_states(&[
+            reading_for(
+                kind,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                full_reading(),
+            ),
+            lifecycle(kind, "PreCompact", signal("compacting")),
+            reading_for(
+                kind,
+                "Stop",
+                turn_ended(),
+                serde_json::json!({ "total_tokens": 7_000 }),
+            ),
+        ])
+        .remove(0);
 
-    assert_eq!(agent.compaction_count, 1);
-    assert_eq!(agent.retired_context_tokens, Some(85_000));
-    assert_eq!(
-        agent.usage,
-        crate::agents::AgentUsageSummary {
-            context_pct: Some(3),
-            total_tokens: Some(7_000),
-            ..retired_usage()
-        }
-    );
+        assert_eq!(agent.compaction_count, 1, "{kind}");
+        assert!(agent.compacted_at.is_some(), "{kind}");
+        assert_eq!(agent.retired_context_tokens, Some(85_000), "{kind}");
+        assert_eq!(
+            agent.usage,
+            crate::agents::AgentUsageSummary {
+                context_pct: Some(3),
+                total_tokens: Some(7_000),
+                ..retired_usage()
+            },
+            "{kind}"
+        );
+    }
 }
 
 #[test]
@@ -907,8 +1007,7 @@ fn successful_end_without_an_open_bracket_retires_the_usage() {
         assert_eq!(agent.usage, expected, "{label}");
         assert!(agent.compacted_unmeasured, "{label}");
         assert_eq!(agent.retired_context_tokens, Some(85_000), "{label}");
-        // The count stays on the bracket: with no open, none closed.
-        assert_eq!(agent.compaction_count, 0, "{label}");
+        assert_eq!(agent.compaction_count, 1, "{label}");
     }
 }
 
@@ -923,11 +1022,12 @@ fn failed_end_without_an_open_bracket_retires_nothing() {
     assert!(!agent.compacted_unmeasured);
     assert_eq!(agent.usage.fresh_input_tokens, Some(5_000));
     assert_eq!(agent.retired_context_tokens, None);
+    assert_eq!(agent.compaction_count, 0);
 }
 
 #[test]
 fn end_after_an_early_close_keeps_the_retired_value_and_the_count() {
-    let agent = reduce_agent_states(&[
+    let before_end = [
         lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
         lifecycle("claude", "PreCompact", signal("compacting")),
         lifecycle_reading(
@@ -935,11 +1035,25 @@ fn end_after_an_early_close_keeps_the_retired_value_and_the_count() {
             serde_json::json!({ "signal": "tool_used", "mutates": false, "edits": false }),
             full_reading(),
         ),
-        lifecycle_reading("PostCompact", compaction_ended(Some(true)), full_reading()),
-    ])
-    .remove(0);
+    ];
+    let lowered = reduce_agent_states(&before_end).remove(0);
+    assert!(lowered.compacting_since.is_none());
+    assert_eq!(lowered.compaction_count, 0);
+    assert_eq!(lowered.compacted_at, None);
+    assert_eq!(lowered.retired_context_tokens, None);
+    assert!(!lowered.compacted_unmeasured);
+    assert_eq!(lowered.usage.fresh_input_tokens, Some(5_000));
+
+    let mut events = before_end.to_vec();
+    events.push(lifecycle_reading(
+        "PostCompact",
+        compaction_ended(Some(true)),
+        full_reading(),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
 
     assert_eq!(agent.compaction_count, 1);
+    assert!(agent.compacted_at.is_some());
     assert_eq!(agent.retired_context_tokens, Some(85_000));
     assert_eq!(agent.usage, retired_usage());
 }
@@ -1063,14 +1177,15 @@ fn stamped_retired_context_tokens_retires_sidecar_reading_and_hook_usage_still_w
         .remove(0);
         assert_eq!(unbracketed.retired_context_tokens, Some(26_700), "{source}");
 
-        // Derived close (bracket closed by TurnStarted).
-        let derived = reduce_agent_states(&[
+        // On Native kinds, a bracket lowered by a non-end signal retires nothing.
+        let lowered = reduce_agent_states(&[
             lifecycle(source, "PreInvocation", signal("turn_started")),
             lifecycle(source, "PreInvocation", signal("compacting")),
             stamped_event(source, "PreInvocation", signal("turn_started"), 26_700),
         ])
         .remove(0);
-        assert_eq!(derived.retired_context_tokens, Some(26_700), "{source}");
+        assert_eq!(lowered.retired_context_tokens, None, "{source}");
+        assert_eq!(lowered.compaction_count, 0, "{source}");
 
         // Second compaction after a new reading replaces the retired figure.
         let second = reduce_agent_states(&[
@@ -1107,4 +1222,362 @@ fn stamped_retired_context_tokens_retires_sidecar_reading_and_hook_usage_still_w
     ])
     .remove(0);
     assert_eq!(hook_wins.retired_context_tokens, Some(85_000));
+}
+
+#[test]
+fn native_non_end_signals_lower_head_without_counting_or_retiring() {
+    let non_ends = [
+        ("tool_used", "PostToolUse", tool_used()),
+        ("turn_ended", "Stop", turn_ended()),
+        (
+            "turn_interrupted",
+            "Interrupt",
+            serde_json::json!({ "signal": "turn_interrupted" }),
+        ),
+        ("turn_started", "UserPromptSubmit", signal("turn_started")),
+    ];
+    for (label, event_name, sig) in non_ends {
+        let mut params = serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "sess-1",
+            "signal": sig,
+        });
+        for (key, value) in full_reading().as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        let agent = reduce_agent_states(&[
+            lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+            lifecycle("claude", "PreCompact", signal("compacting")),
+            raw_lifecycle("claude", params),
+        ])
+        .remove(0);
+
+        assert!(agent.compacting_since.is_none(), "{label}");
+        assert_eq!(agent.compaction_count, 0, "{label}");
+        assert_eq!(agent.compacted_at, None, "{label}");
+        assert_eq!(agent.retired_context_tokens, None, "{label}");
+        assert!(!agent.compacted_unmeasured, "{label}");
+        assert_eq!(agent.usage.fresh_input_tokens, Some(5_000), "{label}");
+    }
+}
+
+#[test]
+fn native_compaction_counts_and_retires_once_across_echo_and_legacy_orders() {
+    let reading_at = |kind: &str,
+                      secs: i64,
+                      event_name: &str,
+                      sig: serde_json::Value,
+                      reading: serde_json::Value| {
+        let mut params = serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "sess-1",
+            "signal": sig,
+        });
+        for (key, value) in reading.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        raw_lifecycle_at(kind, secs, params)
+    };
+    let echo = || serde_json::json!({ "signal": "compaction_ended", "echo": true });
+    let fresh_after = || serde_json::json!({ "fresh_input_tokens": 6_000, "output_tokens": 40 });
+    let ts = |secs: i64| Timestamp::from_second(epoch().as_second() + secs).unwrap();
+
+    // 1. Claude real order: PreCompact, echo SessionStart, then PostCompact (at rest and mid-turn).
+    for (label, at_rest, auto) in [
+        ("manual at rest", true, Some(false)),
+        ("auto mid-turn", false, Some(true)),
+    ] {
+        let mut events = vec![reading_at(
+            "claude",
+            1,
+            "UserPromptSubmit",
+            signal("turn_started"),
+            full_reading(),
+        )];
+        if at_rest {
+            events.push(lifecycle_at("claude", 2, "Stop", turn_ended()));
+        }
+        events.push(lifecycle_at(
+            "claude",
+            3,
+            "PreCompact",
+            signal("compacting"),
+        ));
+        events.push(reading_at(
+            "claude",
+            4,
+            "SessionStart",
+            echo(),
+            full_reading(),
+        ));
+        let after_echo = reduce_agent_states(&events).remove(0);
+        assert!(after_echo.compacting_since.is_none(), "{label} after echo");
+        assert_eq!(after_echo.compaction_count, 0, "{label} after echo");
+        assert_eq!(after_echo.compacted_at, None, "{label} after echo");
+        assert_eq!(
+            after_echo.retired_context_tokens, None,
+            "{label} after echo"
+        );
+        assert_eq!(
+            after_echo.compacted_awaiting_prompt,
+            at_rest.then_some(ts(4)),
+            "{label} after echo"
+        );
+
+        events.push(reading_at(
+            "claude",
+            5,
+            "PostCompact",
+            compaction_ended(auto),
+            compacted_reading(),
+        ));
+        let after_post = reduce_agent_states(&events).remove(0);
+        assert_eq!(after_post.compaction_count, 1, "{label}");
+        assert_eq!(after_post.compacted_at, Some(ts(5)), "{label}");
+        assert_eq!(after_post.turn_ended_at, Some(ts(5)), "{label}");
+        assert_eq!(after_post.retired_context_tokens, Some(85_000), "{label}");
+        assert!(after_post.compacted_unmeasured, "{label}");
+        assert_eq!(after_post.usage.total_tokens, Some(5_717), "{label}");
+        assert_eq!(
+            after_post.compacted_awaiting_prompt,
+            at_rest.then_some(ts(5)),
+            "{label}"
+        );
+    }
+
+    // 2. Codex: PreCompact, PostCompact, then echo adjacent and with signals between.
+    {
+        let adjacent = reduce_agent_states(&[
+            reading_at(
+                "codex",
+                1,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                full_reading(),
+            ),
+            lifecycle_at("codex", 2, "PreCompact", signal("compacting")),
+            reading_at(
+                "codex",
+                3,
+                "PostCompact",
+                compaction_ended(Some(true)),
+                compacted_reading(),
+            ),
+            reading_at("codex", 4, "SessionStart", echo(), compacted_reading()),
+        ])
+        .remove(0);
+        assert_eq!(adjacent.compaction_count, 1);
+        assert_eq!(adjacent.compacted_at, Some(ts(3)));
+        assert_eq!(adjacent.retired_context_tokens, Some(85_000));
+        assert_eq!(adjacent.usage.total_tokens, Some(5_717));
+
+        let separated = reduce_agent_states(&[
+            reading_at(
+                "codex",
+                1,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                full_reading(),
+            ),
+            lifecycle_at("codex", 2, "PreCompact", signal("compacting")),
+            reading_at(
+                "codex",
+                3,
+                "PostCompact",
+                compaction_ended(Some(true)),
+                compacted_reading(),
+            ),
+            lifecycle_at("codex", 4, "Stop", turn_ended()),
+            reading_at(
+                "codex",
+                5,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                fresh_after(),
+            ),
+            reading_at("codex", 6, "SessionStart", echo(), fresh_after()),
+        ])
+        .remove(0);
+        assert_eq!(separated.compaction_count, 1);
+        assert_eq!(separated.compacted_at, Some(ts(3)));
+        assert_eq!(separated.retired_context_tokens, Some(85_000));
+        assert!(!separated.compacted_unmeasured);
+        assert_eq!(separated.usage.fresh_input_tokens, Some(6_000));
+        assert_eq!(separated.compacted_awaiting_prompt, None);
+    }
+
+    // 3. Reused summary (no PreCompact open): echo then PostCompact.
+    {
+        let reused = reduce_agent_states(&[
+            reading_at(
+                "claude",
+                1,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                full_reading(),
+            ),
+            reading_at("claude", 2, "SessionStart", echo(), full_reading()),
+            reading_at(
+                "claude",
+                3,
+                "PostCompact",
+                compaction_ended(Some(false)),
+                compacted_reading(),
+            ),
+        ])
+        .remove(0);
+        assert_eq!(reused.compaction_count, 1);
+        assert_eq!(reused.compacted_at, Some(ts(3)));
+        assert_eq!(reused.turn_ended_at, Some(ts(3)));
+        assert_eq!(reused.compacted_awaiting_prompt, Some(ts(3)));
+        assert_eq!(reused.retired_context_tokens, Some(85_000));
+        assert_eq!(reused.usage.total_tokens, Some(5_717));
+    }
+
+    // 4. Head lowered early by a tool report, then echo and PostCompact.
+    {
+        let early_lowered = reduce_agent_states(&[
+            reading_at(
+                "claude",
+                1,
+                "UserPromptSubmit",
+                signal("turn_started"),
+                full_reading(),
+            ),
+            lifecycle_at("claude", 2, "PreCompact", signal("compacting")),
+            reading_at("claude", 3, "PostToolUse", tool_used(), full_reading()),
+            reading_at("claude", 4, "SessionStart", echo(), full_reading()),
+            reading_at(
+                "claude",
+                5,
+                "PostCompact",
+                compaction_ended(Some(true)),
+                compacted_reading(),
+            ),
+        ])
+        .remove(0);
+        assert_eq!(early_lowered.compaction_count, 1);
+        assert_eq!(early_lowered.compacted_at, Some(ts(5)));
+        assert_eq!(early_lowered.retired_context_tokens, Some(85_000));
+        assert_eq!(early_lowered.usage.total_tokens, Some(5_717));
+    }
+
+    // 5. Legacy unflagged records (echo omitted / false) with adjacent ends in every order.
+    let legacy_cases = [
+        (
+            "legacy claude order (SessionStart then PostCompact)",
+            vec![
+                reading_at(
+                    "claude",
+                    1,
+                    "UserPromptSubmit",
+                    signal("turn_started"),
+                    full_reading(),
+                ),
+                lifecycle_at("claude", 2, "PreCompact", signal("compacting")),
+                reading_at(
+                    "claude",
+                    3,
+                    "SessionStart",
+                    compaction_ended(None),
+                    compacted_reading(),
+                ),
+                reading_at(
+                    "claude",
+                    4,
+                    "PostCompact",
+                    compaction_ended(Some(true)),
+                    compacted_reading(),
+                ),
+            ],
+        ),
+        (
+            "legacy codex order (PostCompact then SessionStart)",
+            vec![
+                reading_at(
+                    "codex",
+                    1,
+                    "UserPromptSubmit",
+                    signal("turn_started"),
+                    full_reading(),
+                ),
+                lifecycle_at("codex", 2, "PreCompact", signal("compacting")),
+                reading_at(
+                    "codex",
+                    3,
+                    "PostCompact",
+                    compaction_ended(Some(true)),
+                    compacted_reading(),
+                ),
+                reading_at(
+                    "codex",
+                    4,
+                    "SessionStart",
+                    compaction_ended(None),
+                    compacted_reading(),
+                ),
+            ],
+        ),
+        (
+            "legacy no open (SessionStart then PostCompact)",
+            vec![
+                reading_at(
+                    "claude",
+                    1,
+                    "UserPromptSubmit",
+                    signal("turn_started"),
+                    full_reading(),
+                ),
+                reading_at(
+                    "claude",
+                    2,
+                    "SessionStart",
+                    compaction_ended(None),
+                    compacted_reading(),
+                ),
+                reading_at(
+                    "claude",
+                    3,
+                    "PostCompact",
+                    compaction_ended(Some(false)),
+                    compacted_reading(),
+                ),
+            ],
+        ),
+        (
+            "legacy head lowered early then adjacent ends",
+            vec![
+                reading_at(
+                    "claude",
+                    1,
+                    "UserPromptSubmit",
+                    signal("turn_started"),
+                    full_reading(),
+                ),
+                lifecycle_at("claude", 2, "PreCompact", signal("compacting")),
+                reading_at("claude", 3, "PostToolUse", tool_used(), full_reading()),
+                reading_at(
+                    "claude",
+                    4,
+                    "SessionStart",
+                    compaction_ended(None),
+                    compacted_reading(),
+                ),
+                reading_at(
+                    "claude",
+                    5,
+                    "PostCompact",
+                    compaction_ended(Some(true)),
+                    compacted_reading(),
+                ),
+            ],
+        ),
+    ];
+    for (label, events) in legacy_cases {
+        let agent = reduce_agent_states(&events).remove(0);
+        assert_eq!(agent.compaction_count, 1, "{label}");
+        assert!(agent.compacted_at.is_some(), "{label}");
+        assert_eq!(agent.retired_context_tokens, Some(85_000), "{label}");
+        assert_eq!(agent.usage.total_tokens, Some(5_717), "{label}");
+    }
 }

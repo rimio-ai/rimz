@@ -1833,7 +1833,7 @@ fn map_claude_lifecycle_signal(
     // because the guard needs the *open ask* to be keyed.
     let tool_use_id = optional_payload_string(payload, &["tool_use_id"]);
     match hook {
-        ClaudeHook::SessionStart(start) => Some(start.source.session_start_signal()),
+        ClaudeHook::SessionStart(start) => Some(start.source.session_start_compaction_echo()),
         ClaudeHook::UserPromptSubmit(_) => Some(LifecycleSignal::TurnStarted { turn_id: None }),
         ClaudeHook::SubagentStart(_) => Some(LifecycleSignal::SubagentStarted),
         // The published SubagentStop payload has no outcome or exit-code
@@ -1891,6 +1891,7 @@ fn map_claude_lifecycle_signal(
         ClaudeHook::PostCompact(compact) => Some(LifecycleSignal::CompactionEnded {
             auto: compact.trigger.auto_flag(),
             failed: false,
+            echo: false,
         }),
         ClaudeHook::SessionEnd => Some(LifecycleSignal::Ended),
         ClaudeHook::Other => None,

@@ -30,7 +30,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 
 | Event | Matcher | Signal |
 | --- | --- | --- |
-| `SessionStart` | `startup\|resume\|clear\|compact` | `Registered`; source `compact` gives `CompactionEnded` with no trigger |
+| `SessionStart` | `startup\|resume\|clear\|compact` | `Registered`; source `compact` gives `CompactionEnded { auto: None, echo: true }` (echo: lowers an open head and seeds a continuation row without counting or retiring) |
 | `UserPromptSubmit` | none | `TurnStarted`; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` beside `hookEventName` |
 | `SubagentStart` | `.*` | `SubagentStarted` |
 | `SubagentStop` | `.*` | `SubagentStopped { errored }` |
@@ -44,7 +44,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | `PreCompact` | `.*` | `Compacting` |
 | `PostCompact` | `.*` | `CompactionEnded` with the auto or manual trigger |
 
-A root `Registered` or `TurnStarted`, and the compaction close from `SessionStart`, also carry the rollout lineage ([session registration](#session-registration-and-launch-quirks)).
+A root `Registered` or `TurnStarted`, and the compaction echo from `SessionStart`, also carry the rollout lineage ([session registration](#session-registration-and-launch-quirks)).
 
 Codex's `SessionEnd` hook stays unwired, because upstream also fires it when the app-server unloads an idle thread, which does not prove the pane died. The [reaper](./instances.md#session-death) stamps the end once pane liveness proves the process gone.
 

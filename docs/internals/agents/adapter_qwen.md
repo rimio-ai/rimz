@@ -37,7 +37,7 @@ The statusline is installed with the hooks ([Statusline](#statusline)).
 
 | Native event | RimZ signal |
 | --- | --- |
-| `SessionStart` | registers. Source `compact` closes a compaction, and `startup` and `clear` mark the session `Fresh` |
+| `SessionStart` | registers. Source `compact` emits a compaction echo (`CompactionEnded { auto: None, echo: true }`), and `startup` and `clear` mark the session `Fresh` |
 | `UserPromptSubmit` | turn started. The card prompt prefers `submitted_prompt` (the typed text) over the expanded `prompt`. A present but blank `prompt` is an internal continuation and starts no turn |
 | `PreToolUse` (matcher `ask_user_question\|exit_plan_mode`) | question or plan-approval wait, keyed by `tool_use_id` |
 | `PermissionRequest` | permission wait. The two gate tools classify as question and plan-approval waits |

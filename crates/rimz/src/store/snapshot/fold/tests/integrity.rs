@@ -300,6 +300,7 @@ fn sequence_event(
                 lifecycle::LifecycleSignal::CompactionEnded {
                     auto: Some(true),
                     failed: false,
+                    echo: false,
                 },
             ),
             16 => (
@@ -315,6 +316,7 @@ fn sequence_event(
                 lifecycle::LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed: false,
+                    echo: false,
                 },
             ),
             _ => ("SessionStart", lifecycle::LifecycleSignal::Registered),

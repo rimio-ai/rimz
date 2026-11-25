@@ -395,7 +395,7 @@ fn lifecycle(
     hook: &QoderHook,
 ) -> Option<AgentLifecycleObservation> {
     let signal = match event {
-        "SessionStart" => hook.source.session_start_signal(),
+        "SessionStart" => hook.source.session_start_compaction_echo(),
         "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: None },
         "Stop" | "StopFailure" => LifecycleSignal::TurnEnded {
             errored: event == "StopFailure",
@@ -429,6 +429,7 @@ fn lifecycle(
         "PostCompact" => LifecycleSignal::CompactionEnded {
             auto: hook.trigger.auto_flag(),
             failed: false,
+            echo: false,
         },
         "SessionEnd" => LifecycleSignal::Ended,
         _ => return None,

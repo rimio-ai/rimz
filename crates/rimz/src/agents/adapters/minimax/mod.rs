@@ -398,7 +398,7 @@ impl HookCapability for MiniMaxAdapter {
         let signal = match event_name {
             "SessionStart" => SessionSource::deserialize(&payload["source"])
                 .unwrap_or_default()
-                .session_start_signal(),
+                .session_start_compaction_echo(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id },
             "PreToolUse" | "PostToolUse" => LifecycleSignal::ToolUsed {
                 effect: match event_name {
@@ -429,6 +429,7 @@ impl HookCapability for MiniMaxAdapter {
                     .unwrap_or_default()
                     .auto_flag(),
                 failed: false,
+                echo: false,
             },
             "SessionEnd" => LifecycleSignal::Ended,
             _ => return Ok(decoded),

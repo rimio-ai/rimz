@@ -437,6 +437,7 @@ fn kimi_root_signal(
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
             auto: parsed.trigger.as_deref().map(|trigger| trigger == "auto"),
             failed: false,
+            echo: false,
         }),
         _ => None,
     }

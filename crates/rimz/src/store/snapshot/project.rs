@@ -1168,6 +1168,13 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
             &input.signal,
             lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
         );
+    let linked_continuation = !snapshot
+        && input.prior.is_none()
+        && input.observation.compacted_from.is_some()
+        && matches!(
+            input.signal,
+            lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
+        );
     let retires_usage = fold_lifecycle(
         &mut state,
         input.prior,
@@ -1177,6 +1184,10 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.observation.ask_queue.as_ref(),
         mode,
     );
+    if linked_continuation {
+        state.compacted_at = Some(input.event.timestamp);
+        state.compaction_retired = true;
+    }
     if ended_at.is_some()
         && crate::store::session_death::reaped_end_rests_at_idle(
             input.event_name,
@@ -1226,7 +1237,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     {
         clear_current_window(&mut observed_usage);
     }
-    state.compacted_unmeasured |= retires_usage;
+    state.compacted_unmeasured |= retires_usage || linked_continuation;
     if observed_usage
         .input_context_tokens()
         .is_some_and(|input| input > 0)
@@ -1513,37 +1524,70 @@ fn clear_owed_continue(state: &mut AgentState) {
     }
 }
 
-/// Whether folding `signal` with `transition` over `prior` retires prior context
-/// occupancy: a bracket that did not close as failed, or an unfailed
-/// `CompactionEnded` outside a bracket that is not echoing an already-retired
-/// compaction. Shared by the fold and the lifecycle writer's lagging-sidecar
-/// stamp so both agree on every close edge.
+/// Whether folding `signal` with `transition` over `prior` completes a
+/// compaction (incrementing `compaction_count`, stamping `compacted_at`, and
+/// retiring prior context occupancy).
+///
+/// A first event with no prior row (a linked continuation seeded by
+/// `compacted_from`) returns false: the predecessor already counted that
+/// compaction and the new row has no prior usage to retire.
+///
+/// For a kind whose `compaction_ended` annotation is `Native`, only an
+/// unfailed, non-echo `CompactionEnded` that does not follow an already-retired
+/// end (`compaction_retired`) completes a compaction, whether or not a bracket
+/// is open; any other signal after `Compacting` only lowers the head. Every
+/// other kind, a kind with no installed spec included, also completes an open
+/// bracket on any signal other than a failed or echo `CompactionEnded`.
+///
+/// Shared by the fold and the lifecycle writer's lagging-sidecar stamp so both
+/// agree on every close edge.
 pub(in crate::store) fn compaction_retires_usage(
+    kind: &str,
     prior: Option<&AgentState>,
     signal: &lifecycle::LifecycleSignal,
     mode: TransitionMode,
     transition: Transition,
 ) -> bool {
+    let Some(prior) = prior else {
+        return false;
+    };
     if transition.ping.is_some() || mode == TransitionMode::Snapshot {
         return false;
     }
-    let completed_compaction = transition.compaction_closed
-        && !matches!(
+    let is_compaction_ended = matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. });
+    if !transition.compaction_closed && !is_compaction_ended {
+        return false;
+    }
+    if !prior.compaction_retired
+        && matches!(
             signal,
-            lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
-        );
-    let already_retired = prior.is_some_and(|prior| prior.compaction_retired);
-    completed_compaction
-        || (!already_retired
-            && matches!(
-                signal,
-                lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
-            ))
+            lifecycle::LifecycleSignal::CompactionEnded {
+                failed: false,
+                echo: false,
+                ..
+            }
+        )
+    {
+        return true;
+    }
+    if !transition.compaction_closed {
+        return false;
+    }
+    let native = crate::agents::spec_by_kind(kind)
+        .is_some_and(|spec| spec.lifecycle_hooks.compaction_ended.is_native());
+    if native {
+        return false;
+    }
+    !matches!(
+        signal,
+        lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
+            | lifecycle::LifecycleSignal::CompactionEnded { echo: true, .. }
+    )
 }
 
-/// Returns whether this event retires the usage measured before a
-/// compaction: a completed bracket close, or a successful end whose open was
-/// lost. `compaction_count` stays on the bracket close alone.
+/// Returns whether this event completes a compaction (retiring prior usage,
+/// incrementing `compaction_count`, and stamping `compacted_at`), decided by
+/// [`compaction_retires_usage`].
 fn fold_lifecycle(
     state: &mut AgentState,
     prior: Option<&AgentState>,
@@ -1590,11 +1634,8 @@ fn fold_lifecycle(
         return false;
     }
     state.compacting_since = next.compacting.then_some(timestamp);
-    let completed_compaction = compaction_closed
-        && !matches!(
-            signal,
-            lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
-        );
+    let completed_compaction =
+        compaction_retires_usage(state.kind.as_str(), prior, &signal, mode, transition);
     state.compaction_count += u32::from(completed_compaction);
     // A registration (`/clear`) drops the whole mark, so the reminder re-arms;
     // an interrupt drops only the owed continue and leaves the epoch spent.
@@ -1604,17 +1645,19 @@ fn fold_lifecycle(
         _ => {}
     }
     match &signal {
-        // A close that lands at rest compacted a context no prompt has used
-        // since; an automatic one that resumed a turn is mid-request. A
-        // triggerless close outside a bracket is an echo (Claude's second
-        // close, Codex's `SessionStart` queued to the next turn) of a
-        // compaction already folded, so it leaves the marker as it was.
+        // An unfailed manual close, or an unfailed close landing at rest that
+        // carries a known trigger, closes an open bracket (echo included), or
+        // completes a compaction, compacted a context no prompt has used since;
+        // a non-manual close that resumed a turn is mid-request. A failed close
+        // or an unbracketed triggerless echo or linked continuation leaves the
+        // marker as it was so a continuation can inherit its predecessor's.
         lifecycle::LifecycleSignal::CompactionEnded {
             auto,
             failed: false,
+            ..
         } if *auto == Some(false)
             || (!matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
-                && (auto.is_some() || compaction_closed)) =>
+                && (auto.is_some() || compaction_closed || completed_compaction)) =>
         {
             state.compacted_awaiting_prompt = Some(timestamp);
         }
@@ -1638,18 +1681,17 @@ fn fold_lifecycle(
     // compaction from a rested state, which already opens a turn. The rest gate
     // is load-bearing: automatic compaction *mid-turn* resumes the same turn
     // (stays `running`), so its in-flight children stay listed.
-    // Matching the signal — not `compaction_closed` — still fires when the
-    // `PreCompact` bracket open was missed. A first-event `Registered` leaves
-    // `turn_started_at` unset because the session has never opened a turn; pane
-    // recovery reads that absence as first-turn-start eligibility. A reset
-    // before any turn has nothing to retire.
+    // Checking `completed_compaction` handles completions whose bracket was
+    // missed or already lowered while keeping echoes and duplicates inert. A
+    // first-event `Registered` leaves `turn_started_at` unset because the
+    // session has never opened a turn; pane recovery reads that absence as
+    // first-turn-start eligibility. A reset before any turn has nothing to
+    // retire.
     let resets_context = prior.is_some_and(|prior| prior.turn_started_at.is_some())
         && !matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
-        && matches!(
-            &signal,
-            lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
-                | lifecycle::LifecycleSignal::Registered
-        );
+        && (matches!(&signal, lifecycle::LifecycleSignal::Registered)
+            || (completed_compaction
+                && matches!(&signal, lifecycle::LifecycleSignal::CompactionEnded { .. })));
     if opened_turn || resets_context {
         state.turn_started_at = Some(timestamp);
     }
@@ -1660,13 +1702,14 @@ fn fold_lifecycle(
     } else if opened_turn {
         state.prior_turn = prior.and_then(AgentState::prior_turn_for_next);
     }
-    let closes_request = !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
+    let closes_request = (!matches!(kind, lifecycle::TransitionKind::Ignored { .. })
         && matches!(
             signal,
             lifecycle::LifecycleSignal::TurnEnded { .. }
                 | lifecycle::LifecycleSignal::TurnInterrupted { .. }
-                | lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
-        );
+        ))
+        || (completed_compaction
+            && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));
     state.turn_ended_at = if closes_request {
         Some(timestamp)
     } else {
@@ -1779,17 +1822,14 @@ fn fold_lifecycle(
         state.superseded_turn_id,
         state.closed_turn_id,
     ) = lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
-    // A successful end with no open bracket is a compaction whose open was
-    // lost, unless the usage was already retired and only compaction ends have
-    // arrived since: then it is the same compaction reported again (Claude
-    // sends `PostCompact` and a compact `SessionStart`), and what the row
-    // carries is the post-compaction figure.
+    // Keep `compaction_retired` set across consecutive `CompactionEnded`
+    // signals so unflagged legacy records (written before `echo` existed)
+    // still count and retire once per compaction in either logged order.
     let already_retired = prior.is_some_and(|prior| prior.compaction_retired);
-    let retires_usage = compaction_retires_usage(prior, &signal, mode, transition);
-    state.compaction_retired = retires_usage
+    state.compaction_retired = completed_compaction
         || (already_retired
             && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));
-    if retires_usage {
+    if completed_compaction {
         state.compacted_at = Some(timestamp);
         // An automatic compaction that ends inside the open turn leaves the agent working on by
         // itself: the continue owed from before it has nothing left to bring about.
@@ -1801,7 +1841,7 @@ fn fold_lifecycle(
             clear_owed_continue(state);
         }
     }
-    retires_usage
+    completed_compaction
 }
 
 /// A ping-only turn's edge: the agent reads exactly as `prior` left it, and

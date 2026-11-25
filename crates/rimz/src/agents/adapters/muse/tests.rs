@@ -66,6 +66,20 @@ fn native_events_keep_turn_identity_and_map_without_tool_fallbacks() {
             "{event}"
         );
     }
+    let compact = adapter
+        .decode_hook(
+            "SessionStart",
+            &json!({"session_id": "root", "source": "compact"}),
+        )
+        .unwrap();
+    assert_eq!(
+        compact.lifecycle().expect("compact start").signal,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+            echo: false,
+        }
+    );
     let unknown = adapter
         .decode_hook("Notification", &json!({"session_id": "root"}))
         .unwrap();

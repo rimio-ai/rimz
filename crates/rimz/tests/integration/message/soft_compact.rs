@@ -288,6 +288,7 @@ fn compaction_end() -> LifecycleSignal {
     LifecycleSignal::CompactionEnded {
         auto: None,
         failed: false,
+        echo: false,
     }
 }
 
@@ -324,6 +325,7 @@ fn reminder_once_per_epoch(kind: &str) {
     fixture.lifecycle(LifecycleSignal::CompactionEnded {
         auto: Some(true),
         failed: false,
+        echo: false,
     });
     fixture.context(20_000);
     fixture.end_turn();
@@ -816,6 +818,7 @@ fn a_queued_compaction_and_its_continue_are_withdrawn_once_the_agent_compacts_on
     fixture.lifecycle(LifecycleSignal::CompactionEnded {
         auto: Some(true),
         failed: false,
+        echo: false,
     });
     fixture.context(20_000);
     fixture.end_turn();
@@ -1009,6 +1012,7 @@ fn codex_continuation_receives_the_owed_continue_and_rearms_the_reminder() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     );
     observation.compacted_from = Some(fixture.request.agent_id.clone());
@@ -1163,4 +1167,89 @@ fn reminder_write_failure_cancels_the_miss_and_records_one_failed_assist() {
         attempts[0]["error"].as_str(),
         records[0].last_error.as_deref()
     );
+}
+
+fn record_mutating_tool(fixture: &Fixture) {
+    fixture.lifecycle(LifecycleSignal::ToolUsed {
+        effect: rimz::agents::ToolEffect::Mutating,
+        name: Some("Bash".into()),
+        native_key: None,
+        turn_id: None,
+    });
+}
+
+fn assert_reminder_with_background_precompact(precompact: bool) {
+    let fixture = Fixture::new("claude");
+    fixture.send(SoftCompactStep::WrapUp);
+    if precompact {
+        fixture.lifecycle(LifecycleSignal::Compacting);
+    }
+    record_mutating_tool(&fixture);
+    fixture.context(130_000);
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(fixture.reminders(), 1);
+    assert_eq!(fixture.agent().compaction_count, 0);
+}
+
+fn assert_queued_compaction_with_background_precompact(precompact: bool) {
+    let fixture = Fixture::new("claude");
+    fixture.compact(&[]);
+    let (command, continuation) = fixture.command_and_continue();
+    if precompact {
+        fixture.lifecycle(LifecycleSignal::Compacting);
+    }
+    record_mutating_tool(&fixture);
+    fixture.context(130_000);
+    assert!(
+        fixture
+            .agent()
+            .soft_compact
+            .is_some_and(|mark| mark.continue_owed.is_some()),
+        "owed continue must survive a false PreCompact and tool report"
+    );
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued
+    );
+    fixture.end_turn();
+    // A harness-delivered turn start before any real compaction must keep the
+    // owed continue intact (a false `compacted_at` would clear it).
+    fixture.lifecycle_with_prompt(
+        LifecycleSignal::TurnStarted { turn_id: None },
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nthe review is in",
+    );
+    assert!(
+        fixture
+            .agent()
+            .soft_compact
+            .is_some_and(|mark| mark.continue_owed.is_some()),
+        "owed continue must survive the next harness-delivered turn start"
+    );
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued
+    );
+    fixture.end_turn();
+    fixture.deliver(&command.message_id);
+    assert!(fixture.trace().iter().any(|line| is_compact_command(line)));
+}
+
+#[test]
+fn reminder_does_not_repeat_after_background_precompact() {
+    assert_reminder_with_background_precompact(true);
+}
+
+#[test]
+fn reminder_does_not_repeat_without_background_precompact() {
+    assert_reminder_with_background_precompact(false);
+}
+
+#[test]
+fn queued_compaction_and_owed_continue_survive_background_precompact() {
+    assert_queued_compaction_with_background_precompact(true);
+}
+
+#[test]
+fn queued_compaction_and_owed_continue_without_background_precompact() {
+    assert_queued_compaction_with_background_precompact(false);
 }

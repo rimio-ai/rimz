@@ -27,7 +27,7 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 
 | Native event | Channel | [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Notes |
 | --- | --- | --- | --- |
-| `SessionStart` | lifecycle | `Registered`, or `CompactionEnded { auto: None }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload |
+| `SessionStart` | lifecycle | `Registered`, or `CompactionEnded { auto: None, echo: true }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload; source `compact` lowers an open head without counting or retiring ([the compaction bracket](./model.md#the-compaction-bracket)) |
 | `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized text as `task` and `prompt` (below); a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` |
 | `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells), and clears the [background scripts](#background-scripts) when it lists no pending `code` task |
 | `StopFailure` | lifecycle | `TurnEnded { errored: true }` for non-pausing errors; otherwise none | writes `AgentContext.turn_error`, never a final assistant message ([turn endings](#turn-endings)) |

@@ -370,6 +370,7 @@ mod tests {
                 LifecycleSignal::CompactionEnded {
                     auto: None,
                     failed: false,
+                    echo: false,
                 },
                 Some(ActiveTimeOp::Progress),
             ),
@@ -377,6 +378,7 @@ mod tests {
                 LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed: true,
+                    echo: false,
                 },
                 Some(ActiveTimeOp::Stop),
             ),

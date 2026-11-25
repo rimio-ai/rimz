@@ -2257,7 +2257,7 @@ fn map_codex_lifecycle_signal(
         native_key: None,
     };
     Some(match hook {
-        CodexHook::SessionStart(start) => start.source.session_start_signal(),
+        CodexHook::SessionStart(start) => start.source.session_start_compaction_echo(),
         CodexHook::SubagentStart(_) => LifecycleSignal::SubagentStarted,
         CodexHook::UserPromptSubmit(_) => LifecycleSignal::TurnStarted { turn_id: None },
         CodexHook::SubagentStop(_) => LifecycleSignal::SubagentStopped { errored: errored() },
@@ -2287,6 +2287,7 @@ fn map_codex_lifecycle_signal(
         CodexHook::PostCompact(compact) => LifecycleSignal::CompactionEnded {
             auto: compact.trigger.auto_flag(),
             failed: false,
+            echo: false,
         },
         CodexHook::Interrupt => LifecycleSignal::TurnInterrupted {
             turn_id: optional_payload_string(payload, &["turn_id"]),

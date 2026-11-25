@@ -796,6 +796,7 @@ fn lifecycle_signal(
                 _ => None,
             },
             failed: false,
+            echo: false,
         },
         // A child's session end follows the turn report that already resolved
         // the child, and no child signal means "session closed".

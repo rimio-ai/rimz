@@ -218,12 +218,14 @@ mod tests {
             DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             })
         );
         assert!(
             DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: true,
+                echo: false,
             })
         );
         assert!(!DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnStarted { turn_id: None }));

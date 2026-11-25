@@ -718,6 +718,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                     .as_ref()
                     .and_then(payloads::PiCompactionReason::auto_flag),
                 failed: false,
+                echo: false,
             }),
             "session_compact_failed" => Some(LifecycleSignal::CompactionEnded {
                 auto: parsed
@@ -725,6 +726,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                     .as_ref()
                     .and_then(payloads::PiCompactionReason::auto_flag),
                 failed: true,
+                echo: false,
             }),
             "session_shutdown" => Some(LifecycleSignal::Ended),
             _ => None,

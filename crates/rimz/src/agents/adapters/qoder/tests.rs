@@ -97,7 +97,8 @@ fn new_session_is_fresh_resume_is_not_and_compact_closes() {
         hook_signal(&QoderAdapter, "SessionStart", &json!({"source":"compact"})),
         LifecycleSignal::CompactionEnded {
             auto: None,
-            failed: false
+            failed: false,
+            echo: true,
         }
     );
 }
@@ -316,24 +317,30 @@ fn post_compact_then_session_start_counts_one_bracket() {
         end,
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
-            failed: false
+            failed: false,
+            echo: false,
         }
     );
     let closed = step(Some(&compacting), None, PriorTurnIds::default(), &end);
     assert!(closed.compaction_closed);
-    let duplicate = step(
-        Some(&closed.next),
-        None,
-        PriorTurnIds::default(),
-        &hook_signal(&QoderAdapter, "SessionStart", &json!({"source":"compact"})),
+    let echo = hook_signal(&QoderAdapter, "SessionStart", &json!({"source":"compact"}));
+    assert_eq!(
+        echo,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+            echo: true,
+        }
     );
+    let duplicate = step(Some(&closed.next), None, PriorTurnIds::default(), &echo);
     assert!(!duplicate.compaction_closed);
     assert_eq!(duplicate.next, closed.next);
     assert_eq!(
         hook_signal(&QoderAdapter, "PostCompact", &json!({"trigger":"auto"})),
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
-            failed: false
+            failed: false,
+            echo: false,
         }
     );
 }

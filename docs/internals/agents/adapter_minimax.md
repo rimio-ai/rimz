@@ -72,7 +72,7 @@ The declared process names are `minimax-code` and the shared runtime name `node`
 
 | Native event | Lifecycle signal | Notes |
 | --- | --- | --- |
-| `SessionStart` | `Registered`, or `CompactionEnded` for source `compact` | Startup, resume, clear, and fork all register. `Registered` sets the card idle. |
+| `SessionStart` | `Registered`, or `CompactionEnded { auto: None, echo: true }` for source `compact` | Startup, resume, clear, and fork all register. `Registered` sets the card idle; source `compact` is a compaction echo. |
 | `UserPromptSubmit` | `TurnStarted` | Sets the sanitized prompt and the card's task. |
 | `PreToolUse` | `ToolUsed` | Activity only: no tool name, no mutate or edit count. |
 | `PostToolUse` | `ToolUsed` | Counts `tool_name`. `bash`, `write`, `edit`, and `task` mutate, and `write` and `edit` edit files. |
@@ -84,7 +84,7 @@ The declared process names are `minimax-code` and the shared runtime name `node`
 
 SessionStart can repeat inside one session, and that repeat is not harmless. Upstream reports a plugin activation as source `startup`, so an activation mid-turn re-registers the card, and `crates/rimz/src/agents/lifecycle.rs::map_status` resets it to idle, dropping a compaction or permission wait until the next signal. Whether a package rewrite's hot reload reactivates the plugin is unverified.
 
-A permission wait clears at the next tool or settle signal. Native questions and plan approvals have no verified hook, so they never mark the card waiting. Automatic compaction sends PostCompact, then SessionStart with source `compact`, and the lifecycle fold absorbs the duplicate end.
+A permission wait clears at the next tool or settle signal. Native questions and plan approvals have no verified hook, so they never mark the card waiting. Automatic compaction sends `PostCompact` and `SessionStart` with source `compact`; `SessionStart` carries `echo: true`, so only `PostCompact` counts and retires ([the compaction bracket](./model.md#the-compaction-bracket)).
 
 Beyond the table, every mapped event carries the payload's `model` onto the card, and mux-session death comes from the shared exec wrapper. `registers_lazily` is true, so a MiniMax session can be present without a stamped pane, and the sidebar binds it to its pane by cwd.
 

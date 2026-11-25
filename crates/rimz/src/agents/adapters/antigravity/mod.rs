@@ -1134,6 +1134,7 @@ fn decode_lifecycle_fields(
                 Some(LifecycleSignal::CompactionEnded {
                     auto: Some(false),
                     failed,
+                    echo: false,
                 })
             } else {
                 if stop.fully_idle == Some(true) {

@@ -3416,6 +3416,7 @@ mod refusal_fold {
         let closed = LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         };
         fold.append("sibling", closed, None, model);
         fold.pass(Timestamp::now() + 3 * second);

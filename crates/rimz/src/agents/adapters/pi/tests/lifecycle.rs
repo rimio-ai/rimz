@@ -166,6 +166,7 @@ fn compaction_end_reports_its_cause() {
             LifecycleSignal::CompactionEnded {
                 auto: expected,
                 failed: false,
+                echo: false,
             },
             "{reason:?}"
         );
@@ -190,6 +191,7 @@ fn compaction_failure_reports_its_cause() {
             LifecycleSignal::CompactionEnded {
                 auto: expected,
                 failed: true,
+                echo: false,
             },
             "{reason:?}"
         );

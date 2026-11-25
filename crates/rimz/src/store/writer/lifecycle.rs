@@ -306,6 +306,7 @@ impl Store {
                             .is_some_and(|spec| spec.capabilities.context_lags_compaction)
                         && transition.is_some_and(|transition| {
                             crate::store::snapshot::compaction_retires_usage(
+                                intent.agent_kind.as_str(),
                                 row,
                                 &intent.observation.signal,
                                 mode,

@@ -364,6 +364,7 @@ fn a_failed_compaction_restarts_the_clock() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: true,
+            echo: false,
         },
     ] {
         observe(&store, "session-1", None, signal);
@@ -410,6 +411,7 @@ fn manual_compaction_on_parked_row_keeps_idle_stop_held_busy() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     ] {
         observe(&store, "session-1", None, signal);

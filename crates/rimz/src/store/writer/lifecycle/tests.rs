@@ -2009,6 +2009,7 @@ fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
             failed: false,
+            echo: false,
         },
     );
     compacted.compacted_from = Some(AgentSessionId::from("s1"));
@@ -2114,6 +2115,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         );
         let params = last_params(&store);
@@ -2157,6 +2159,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         );
         assert_eq!(
@@ -2171,12 +2174,14 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             },
         );
         assert_eq!(last_params(&store).get("retired_context_tokens"), None);
     }
 
-    // 3. Derived close (bracket closed by a subsequent signal) stamps too.
+    // 3. On a native kind (Antigravity), a bracket lowered by a subsequent
+    // non-end signal (Escaped compaction) stamps and retires nothing.
     {
         let (_dir, store) = test_store();
         write_sidecar(&store, "antigravity", "sess-1", Some(26_700));
@@ -2201,14 +2206,14 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             "PreInvocation",
             LifecycleSignal::TurnStarted { turn_id: None },
         );
-        assert_eq!(
-            last_params(&store).get("retired_context_tokens"),
-            Some(&serde_json::json!(26_700))
-        );
+        assert_eq!(last_params(&store).get("retired_context_tokens"), None);
         let snap = store.snapshot_cached().unwrap();
         let row = find_agent(&snap.agents, "antigravity", &sess).expect("row");
-        assert_eq!(row.retired_context_tokens, Some(26_700));
-        assert_eq!(row.context_used_tokens(), None);
+        assert_eq!(row.retired_context_tokens, None);
+        assert_eq!(row.compaction_count, 0);
+        assert_eq!(row.compacted_at, None);
+        assert!(row.compacting_since.is_none());
+        assert_eq!(row.context_used_tokens(), Some(26_700));
     }
 
     // 4. Failed compaction stamps and retires nothing.
@@ -2237,6 +2242,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: true,
+                echo: false,
             },
         );
         assert_eq!(last_params(&store).get("retired_context_tokens"), None);
@@ -2282,6 +2288,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         );
         assert_eq!(
@@ -2317,6 +2324,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             LifecycleSignal::CompactionEnded {
                 auto: Some(false),
                 failed: false,
+                echo: false,
             },
         );
         let raw = store
@@ -2358,6 +2366,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
         let close_obs = observation(LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         });
         let at = jiff::Timestamp::now();
         let receipt = store

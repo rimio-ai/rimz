@@ -210,6 +210,12 @@ pub enum LifecycleSignal {
         auto: Option<bool>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         failed: bool,
+        /// Whether this signal restates a compaction another event completes
+        /// (such as `SessionStart` with `source = "compact"` on providers that
+        /// also emit `PostCompact`). An echo lowers an open head and seeds a
+        /// continuation row, and never counts or retires on its own.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        echo: bool,
     },
     /// The session ended (Claude `SessionEnd`/`offline`). The reducer stamps
     /// the durable row; `step` fails running or waiting rows and preserves
@@ -407,9 +413,9 @@ pub enum TransitionKind {
 pub struct Transition {
     pub next: LifecycleState,
     pub kind: TransitionKind,
-    /// Countable compaction-bracket close: the prior state was compacting and
-    /// this signal leaves it. Any non-`Compacting` signal closes an open
-    /// bracket; an unbracketed close signal closes nothing.
+    /// Compaction-head lowered: the prior state was compacting and this signal
+    /// leaves it. Provider-neutral; whether the event completes a compaction is
+    /// decided by `compaction_retires_usage` in the snapshot reducer.
     pub compaction_closed: bool,
     /// A waiting state was durably cleared without otherwise changing status.
     /// Blocking prompts normally resume through their own non-mutating
@@ -721,6 +727,7 @@ fn map_status(
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            ..
         } if prior == Running && prior_phase != TurnPhase::Parked => Idle,
         LifecycleSignal::Compacting | LifecycleSignal::CompactionEnded { .. } => prior,
         // A session ending mid-turn delivered nothing, matching

@@ -241,6 +241,7 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: true,
         },
     );
     observation.compacted_from = Some("predecessor".into());
@@ -432,7 +433,11 @@ fn successful_compaction_at_rest_sets_the_prompt_marker() {
                     "claude",
                     "SessionStart",
                     "sess-a",
-                    LifecycleSignal::CompactionEnded { auto, failed },
+                    LifecycleSignal::CompactionEnded {
+                        auto,
+                        failed,
+                        echo: false,
+                    },
                 );
                 event_log::append(&paths.events_log, &completed).unwrap();
                 let (_, agents, _) = catch_up_rollup(&paths).unwrap();
@@ -504,6 +509,7 @@ fn automatic_close_rests_at_rest_and_resumes_only_an_open_turn() {
     let close = CompactionEnded {
         auto: Some(true),
         failed: false,
+        echo: false,
     };
     let resting = [
         Registered,
@@ -541,6 +547,7 @@ fn deferred_triggerless_close_after_a_mid_turn_compaction_sets_no_marker() {
             CompactionEnded {
                 auto: Some(true),
                 failed: false,
+                echo: false,
             },
             TurnEnded {
                 errored: false,
@@ -550,6 +557,7 @@ fn deferred_triggerless_close_after_a_mid_turn_compaction_sets_no_marker() {
             CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: true,
             },
         ],
         None,
@@ -584,6 +592,7 @@ fn unbracketed_triggerless_close_leaves_marker_and_turn_boundaries() {
         lifecycle::LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: true,
         },
     );
     event_log::append(&paths.events_log, &completed).unwrap();
@@ -607,6 +616,7 @@ fn manual_compaction_successor_marker_survives_rotation_until_a_prompt() {
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
+            echo: false,
         },
     );
     observation.compacted_from = Some("predecessor".into());
@@ -689,6 +699,7 @@ fn linked_successor_carries_the_compact_marker_without_a_trigger_bit() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: true,
         },
     );
     observation.compacted_from = Some("predecessor".into());
@@ -724,4 +735,155 @@ fn linked_successor_carries_the_compact_marker_without_a_trigger_bit() {
         .find(|agent| agent.agent_id.as_str() == "successor")
         .unwrap();
     assert_eq!(successor.compacted_awaiting_prompt, None);
+}
+
+#[test]
+fn unflagged_linked_successor_inherits_predecessor_marker_without_counting() {
+    use lifecycle::LifecycleSignal;
+
+    for (label, predecessor_marker) in [
+        ("manual predecessor carries marker", Some(epoch())),
+        ("auto mid-turn predecessor has no marker", None),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let mut predecessor = agent("codex", "predecessor", AgentStatus::Idle, 0);
+        predecessor.compacted_awaiting_prompt = predecessor_marker;
+        write_carryover(
+            &paths.agents_carryover,
+            &EventCarryover {
+                agents: vec![predecessor],
+                agent_identity: Default::default(),
+                resume_outcomes: Vec::new(),
+            },
+        )
+        .unwrap();
+        let mut observation = crate::agents::AgentLifecycleObservation::new(
+            Some("successor".into()),
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+                echo: false,
+            },
+        );
+        observation.compacted_from = Some("predecessor".into());
+        let completed = EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "codex",
+            "SessionStart",
+            &observation,
+        );
+        event_log::append(&paths.events_log, &completed).unwrap();
+        let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+        let successor = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "successor")
+            .unwrap();
+        assert_eq!(successor.compaction_count, 0, "{label}");
+        assert_eq!(successor.compacted_at, Some(completed.timestamp), "{label}");
+        assert!(successor.compacted_unmeasured, "{label}");
+        assert_eq!(
+            successor.compacted_awaiting_prompt, predecessor_marker,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn echo_closing_an_open_bracket_at_rest_sets_prompt_marker_without_counting_or_retiring() {
+    use lifecycle::LifecycleSignal;
+
+    for (label, at_rest) in [("at rest", true), ("mid-turn", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "SessionStart",
+                "sess-a",
+                LifecycleSignal::Registered,
+            ),
+        )
+        .unwrap();
+        let mut turn_start = crate::agents::AgentLifecycleObservation::new(
+            Some("sess-a".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        turn_start.usage.fresh_input_tokens = Some(5_000);
+        turn_start.usage.cache_read_input_tokens = Some(80_000);
+        turn_start.usage.context_window = Some(200_000);
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::agent_lifecycle(
+                workspace.clone(),
+                "session",
+                "claude",
+                "UserPromptSubmit",
+                &turn_start,
+            ),
+        )
+        .unwrap();
+        if at_rest {
+            event_log::append(
+                &paths.events_log,
+                &lifecycle_at(
+                    &workspace,
+                    "claude",
+                    "Stop",
+                    "sess-a",
+                    LifecycleSignal::TurnEnded {
+                        errored: false,
+                        parked_on_background: false,
+                        turn_id: None,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+        event_log::append(
+            &paths.events_log,
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "PreCompact",
+                "sess-a",
+                LifecycleSignal::Compacting,
+            ),
+        )
+        .unwrap();
+        let echo = lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "sess-a",
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+                echo: true,
+            },
+        );
+        event_log::append(&paths.events_log, &echo).unwrap();
+        let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+        let row = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-a")
+            .unwrap();
+        assert!(row.compacting_since.is_none(), "{label}");
+        assert_eq!(row.compaction_count, 0, "{label}");
+        assert_eq!(row.compacted_at, None, "{label}");
+        assert_eq!(row.retired_context_tokens, None, "{label}");
+        assert!(!row.compacted_unmeasured, "{label}");
+        assert_eq!(
+            row.compacted_awaiting_prompt,
+            at_rest.then_some(echo.timestamp),
+            "{label}"
+        );
+    }
 }

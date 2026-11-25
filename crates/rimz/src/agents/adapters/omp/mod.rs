@@ -137,6 +137,7 @@ impl HookCapability for OmpAdapter {
             "session_compact" => Some(LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo: false,
             }),
             "auto_compaction_end"
                 if parsed.aborted == Some(true)
@@ -149,6 +150,7 @@ impl HookCapability for OmpAdapter {
                 Some(LifecycleSignal::CompactionEnded {
                     auto: Some(true),
                     failed: true,
+                    echo: false,
                 })
             }
             "session_shutdown" => Some(LifecycleSignal::Ended),

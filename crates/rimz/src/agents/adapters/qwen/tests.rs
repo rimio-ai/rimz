@@ -600,6 +600,19 @@ fn maps_lifecycle_context_background_and_subagents() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: true,
+        }
+    );
+    assert_eq!(
+        hook_signal(
+            &adapter,
+            "PostCompact",
+            &json!({"session_id":"s1","trigger":"auto"})
+        ),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+            echo: false,
         }
     );
 }

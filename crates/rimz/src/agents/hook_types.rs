@@ -745,11 +745,25 @@ pub(super) enum SessionSource {
 }
 
 impl SessionSource {
+    /// Map a `SessionStart` source to its lifecycle signal when `compact` is
+    /// the provider's only compaction-end signal (or never emitted).
     pub(super) fn session_start_signal(&self) -> LifecycleSignal {
+        self.session_start_signal_inner(false)
+    }
+
+    /// Map a `SessionStart` source when the provider also emits a dedicated
+    /// `PostCompact` completion hook: `compact` marks `echo: true` so it lowers
+    /// an open head and seeds a continuation row without counting or retiring.
+    pub(super) fn session_start_compaction_echo(&self) -> LifecycleSignal {
+        self.session_start_signal_inner(true)
+    }
+
+    fn session_start_signal_inner(&self, echo: bool) -> LifecycleSignal {
         match self {
             Self::Compact => LifecycleSignal::CompactionEnded {
                 auto: None,
                 failed: false,
+                echo,
             },
             _ => LifecycleSignal::Registered,
         }
@@ -863,22 +877,53 @@ mod tests {
     fn session_start_source_maps_to_one_lifecycle_rule() {
         let new: SessionSource = serde_json::from_str(r#""new""#).unwrap();
         assert_ne!(new, SessionSource::Unknown);
-        for (source, signal) in [
-            (new, LifecycleSignal::Registered),
-            (SessionSource::Startup, LifecycleSignal::Registered),
-            (SessionSource::Resume, LifecycleSignal::Registered),
-            (SessionSource::Clear, LifecycleSignal::Registered),
+        for (source, signal, echo_signal) in [
+            (
+                new,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
+            (
+                SessionSource::Startup,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
+            (
+                SessionSource::Resume,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
+            (
+                SessionSource::Clear,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
             (
                 SessionSource::Compact,
                 LifecycleSignal::CompactionEnded {
                     auto: None,
                     failed: false,
+                    echo: false,
+                },
+                LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                    echo: true,
                 },
             ),
-            (SessionSource::Fork, LifecycleSignal::Registered),
-            (SessionSource::Unknown, LifecycleSignal::Registered),
+            (
+                SessionSource::Fork,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
+            (
+                SessionSource::Unknown,
+                LifecycleSignal::Registered,
+                LifecycleSignal::Registered,
+            ),
         ] {
             assert_eq!(source.session_start_signal(), signal);
+            assert_eq!(source.session_start_compaction_echo(), echo_signal);
         }
     }
 

@@ -1249,6 +1249,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: false,
+            echo: false,
         }
     );
 
@@ -1262,6 +1263,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
         LifecycleSignal::CompactionEnded {
             auto: None,
             failed: true,
+            echo: false,
         }
     );
 
