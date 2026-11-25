@@ -1139,6 +1139,26 @@ impl Store {
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
+        self.claim_message(message_id, now, false)
+    }
+
+    /// Claims as [`Self::claim_message_for_steer`] and clears the stored record's force, so that
+    /// only this attempt has it. The returned copy keeps it.
+    #[must_use = "durability barrier; check the result"]
+    pub fn claim_message_spending_force(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+    ) -> Result<Option<MessageRecord>> {
+        self.claim_message(message_id, now, true)
+    }
+
+    fn claim_message(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+        spend_force: bool,
+    ) -> Result<Option<MessageRecord>> {
         self.commit_queue(|queue| {
             let Some(index) = queue.live().iter().position(|message| {
                 message.message_id == *message_id && message.status == MessageStatus::Queued
@@ -1152,6 +1172,7 @@ impl Store {
                 .claim_indices(std::slice::from_ref(&index), now)
                 .pop()
                 .expect("selected claim index returns one message");
+            queue.live[index].force &= !spend_force;
             Ok(Some(claimed))
         })
     }

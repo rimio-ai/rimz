@@ -322,6 +322,14 @@ fn provider_start_pending(agent: &AgentState, awaits_resume: bool, now: Timestam
         })
 }
 
+/// `send_now` without its leading `queue`, when a chord follows it: the keys of a forced steer
+/// onto an open prompt, which could take the `queue` key as its answer.
+fn prompt_chord(keys: crate::agents::MessageKeys) -> Option<&'static [crate::pane::keys::KeyStep]> {
+    keys.send_now
+        .strip_prefix(keys.queue)
+        .filter(|chord| !chord.is_empty())
+}
+
 fn gate_open_for_agent(
     gate: DeliveryGate,
     agent: &AgentState,

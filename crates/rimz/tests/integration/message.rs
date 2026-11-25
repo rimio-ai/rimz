@@ -872,6 +872,23 @@ fn steer_presses_send_now_and_a_boundary_send_presses_queue() {
     }
 }
 
+fn open_permission_prompt(env: &Env, kind: &str) {
+    append_lifecycle(
+        env,
+        kind,
+        "PermissionRequest",
+        "sess-interrupt",
+        LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        },
+        |_| {},
+    );
+}
+
 /// A forced steer onto an open prompt presses send-now without its leading Enter, which the
 /// prompt could take as its answer; keys that are Enter alone stay.
 #[test]
@@ -884,20 +901,7 @@ fn forced_steer_onto_an_open_prompt_presses_only_the_chord() {
         ("opencode", &["13"]),
     ] {
         let (env, panes) = interrupt_fixture(kind);
-        append_lifecycle(
-            &env,
-            kind,
-            "PermissionRequest",
-            "sess-interrupt",
-            LifecycleSignal::AwaitingInput {
-                extra_questions: 0,
-                kind: AskKind::Permission,
-                ask_id: None,
-                detail: None,
-                native_key: None,
-            },
-            |_| {},
-        );
+        open_permission_prompt(&env, kind);
         let trace = env.project_root.join("forced-steer.log");
         run_success(
             traced_rimz(&env, &trace)
@@ -912,6 +916,98 @@ fn forced_steer_onto_an_open_prompt_presses_only_the_chord() {
             keys,
             "{kind}: {lines:?}"
         );
+    }
+}
+
+/// The sweep's retry of a forced steer that pressed only the chord waits for the open prompt,
+/// then delivers once as a boundary send: whether the first write went unconfirmed or failed, and
+/// whether the steer was fresh or of a record queued with `--force`. A kind whose send-now is
+/// Enter alone retries past the prompt.
+#[test]
+fn a_forced_steer_retry_waits_for_the_open_prompt() {
+    for (kind, first, retry) in [
+        ("claude", "unconfirmed", None),
+        ("claude", "failed", None),
+        ("claude", "queued", None),
+        ("claude", "queued failed", None),
+        ("antigravity", "unconfirmed", None),
+        ("codex", "unconfirmed", Some("9")),
+        ("pi", "unconfirmed", Some("27\t91\t49\t51\t59\t51\t117")),
+        ("opencode", "unconfirmed", Some("13")),
+    ] {
+        let case = format!("{kind} {first}");
+        let (env, panes) = interrupt_fixture(kind);
+        let target = format!("@{kind}");
+        let steer = ["message", "--steer", "--force", &target, "--", "hold me"];
+        let rimz = |log: &str, args: &[&str]| {
+            let mut command = traced_rimz(&env, log);
+            command
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+                .args(args);
+            command
+        };
+        if first.starts_with("queued") {
+            let queued = run_success(
+                &mut rimz(
+                    "queue.log",
+                    &["message", "--force", &target, "--", "hold me"],
+                ),
+                &case,
+            );
+            let id = queued_id_from_stdout(&queued.stdout);
+            open_permission_prompt(&env, kind);
+            let mut command = rimz("first.log", &["message", "steer", &id]);
+            if first == "queued failed" {
+                command.env("RIMZ_TEST_ZELLIJ_MODE", "fail-write");
+            }
+            let steered = command.output().expect("steer");
+            assert_eq!(
+                steered.status.success(),
+                first == "queued",
+                "{case}: {steered:?}"
+            );
+        } else {
+            open_permission_prompt(&env, kind);
+            let mut command = rimz("first.log", &steer);
+            if first == "failed" {
+                command.env("RIMZ_TEST_ZELLIJ_MODE", "fail-write");
+            }
+            run_success(&mut command, &case);
+        }
+        for pass in ["sweep-0.log", "sweep-1.log"] {
+            run_success(&mut rimz(pass, &["message", "sweep"]), &case);
+            let lines = trace_lines(&env.project_root.join(pass));
+            match retry {
+                Some(key) => assert_eq!(keys_after_text(&lines, "hold me"), [key], "{case}"),
+                None => assert!(
+                    !lines.iter().any(|line| line.contains("\taction\twrite\t")),
+                    "{case}: {lines:?}"
+                ),
+            }
+        }
+        if retry.is_some() {
+            continue;
+        }
+        let held = &env.store().list_pending_messages().expect("pending")[0];
+        assert_eq!(held.status, MessageStatus::Queued, "{case}");
+        assert_eq!(
+            (held.attempts, held.unconfirmed_sends),
+            (1, u32::from(!first.ends_with("failed"))),
+            "{case}"
+        );
+
+        append_lifecycle(
+            &env,
+            kind,
+            "Stop",
+            "sess-interrupt",
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            |_| {},
+        );
+        run_success(&mut rimz("answered.log", &["message", "sweep"]), &case);
+        let lines = trace_lines(&env.project_root.join("answered.log"));
+        assert_eq!(keys_after_text(&lines, "hold me"), ["13"], "{case}");
     }
 }
 
@@ -8465,7 +8561,13 @@ fn assert_parent_follow_up_case(
             let follow_up = |text: &str| {
                 let mut command = traced_rimz(&env, &trace);
                 command
-                    .args(["--mux", "zellij", "message", &target, text])
+                    .args(["--mux", "zellij", "message"])
+                    .args(if case == ResumeFollowUpCase::InFlight {
+                        &["--steer", "--force"][..]
+                    } else {
+                        &[]
+                    })
+                    .args([target.as_str(), text])
                     .env("PATH", path_with_front(&shim))
                     .env(
                         "SHELL",
@@ -8519,6 +8621,10 @@ fn assert_parent_follow_up_case(
                     .map(|record| record.text.as_str())
                     .collect::<Vec<_>>(),
                 ["follow up", "second follow up"]
+            );
+            assert!(
+                !records[1].force,
+                "a forced steer that resumes the child waits for an open prompt"
             );
             if case == ResumeFollowUpCase::RegistrationWindow {
                 assert_eq!(

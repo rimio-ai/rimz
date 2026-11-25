@@ -449,6 +449,19 @@ fn attempt_delivery(
         DeliveryPolicy::Boundary => {
             store.claim_delivery_batch(&candidate.message.message_id, candidate.status, now)?
         }
+        // A retry is a boundary send, whose keys could answer a prompt the steer's chord spares.
+        DeliveryPolicy::Steer { .. }
+            if super::prompt_chord(crate::agents::message_keys(
+                candidate
+                    .bound
+                    .map_or(&candidate.message.kind, |row| &row.kind),
+            ))
+            .is_some() =>
+        {
+            store
+                .claim_message_spending_force(&candidate.message.message_id, now)?
+                .map(|message| vec![message])
+        }
         DeliveryPolicy::Steer { .. } | DeliveryPolicy::Interrupt { .. } => store
             .claim_message_for_steer(&candidate.message.message_id, now)?
             .map(|message| vec![message]),

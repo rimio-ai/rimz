@@ -241,7 +241,7 @@ pub enum SkippedPresetField {
 pub struct MessageKeys {
     /// Submits typed text for the running turn, or opens a turn on a resting agent. A steer, and
     /// an interrupt after its stop, press it; a forced steer onto an open prompt drops a leading
-    /// `queue` that a chord follows.
+    /// `queue` that a chord follows (`message::prompt_chord`).
     pub send_now: &'static [KeyStep],
     /// Submits typed text behind a running turn, or opens a turn on a resting agent. A boundary
     /// delivery presses it.
