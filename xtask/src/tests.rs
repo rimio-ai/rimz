@@ -266,3 +266,90 @@ fn stress_is_registered_as_a_task_that_takes_arguments() {
         .to_string();
     assert!(err.contains("stress requires a test name"), "{err}");
 }
+
+#[test]
+fn reenter_decision_covers_test_tasks_default_help_non_test_and_in_session() {
+    let valid_hidden = format!("{}=42", session::IN_SESSION_ARG);
+    let cases: &[(&[&str], bool)] = &[
+        // No arguments defaults to `ci`, which runs tests.
+        (&[], true),
+        // Every test-running task re-enters.
+        (&["gate"], true),
+        (&["gate", "--check"], true),
+        (&["test"], true),
+        (&["test", "auth"], true),
+        (&["stress", "foo"], true),
+        (&["coverage"], true),
+        (&["ci"], true),
+        (&["loop-tests"], true),
+        // Help requests never re-enter.
+        (&["-h"], false),
+        (&["--help"], false),
+        (&["help"], false),
+        (&["help", "test"], false),
+        (&["test", "--help"], false),
+        (&["gate", "-h"], false),
+        (&["ci", "--help"], false),
+        (&["stress", "--help"], false),
+        // Non-test tasks never re-enter.
+        (&["check"], false),
+        (&["lint"], false),
+        (&["doc"], false),
+        (&["build"], false),
+        (&["perf"], false),
+        (
+            &["test-archive", "--archive-file", "archive.tar.zst"],
+            false,
+        ),
+        (&["sandbox", "--", "true"], false),
+        (&["checks"], false),
+        (&["unknown-task"], false),
+        // Inside the session, never re-enter again; bare hidden arg with pid behaves as plain `ci`.
+        (&[valid_hidden.as_str()], false),
+        (&[valid_hidden.as_str(), "gate", "--check"], false),
+        (&[valid_hidden.as_str(), "test", "auth"], false),
+    ];
+
+    let results: Vec<(&[&str], bool, bool)> = cases
+        .iter()
+        .map(|&(argv, expected)| {
+            let owned = args(argv);
+            let parsed = session::parse_in_session(&owned).unwrap();
+            let (in_session, task_args) = match parsed {
+                Some((_, rest)) => (true, rest),
+                None => (false, owned.as_slice()),
+            };
+            let action = parse_args(task_args).unwrap();
+            let actual = should_reenter_own_session(in_session, &action);
+            (argv, actual, expected)
+        })
+        .collect();
+    let mismatches: Vec<_> = results
+        .into_iter()
+        .filter(|(_, actual, expected)| actual != expected)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "reenter decision mismatches (argv, actual, expected): {mismatches:?}"
+    );
+
+    // Hidden argument with outer pid and no task parses to the default `ci` task.
+    let bare_hidden = args(&[valid_hidden.as_str()]);
+    let (_, task_args) = session::parse_in_session(&bare_hidden)
+        .unwrap()
+        .expect("valid hidden arg must enter session mode");
+    assert_eq!(
+        parse_args(task_args).unwrap(),
+        Action::Run {
+            task: "ci",
+            args: &[],
+        }
+    );
+
+    // Hidden argument typed by hand without `=<pid>` must fail rather than run in caller's session.
+    let hand_typed = args(&[session::IN_SESSION_ARG]);
+    assert!(
+        session::parse_in_session(&hand_typed).is_err(),
+        "bare hidden argument without outer pid must fail"
+    );
+}

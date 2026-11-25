@@ -100,7 +100,7 @@ where
 }
 
 /// Run `program` on the operator's own stdio: nothing is captured, so the child
-/// writes straight to the terminal. Returns the exit status rather than failing
+/// writes straight to inherited stdio. Returns the exit status rather than failing
 /// on it, leaving the caller to classify what a non-zero code means.
 pub(crate) fn run_inherited<I, S>(
     root: &Path,
