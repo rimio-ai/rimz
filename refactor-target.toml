@@ -496,7 +496,9 @@ upward-dependencies = [
 # AutoCompactEnforcer, auto_compact_enforcer, and their facade re-exports derive whether the
 # provider or RimZ enforces a kind's `auto-compact` ceiling (+4).
 # HookContextReply::event names the post-tool event the hook feed claims a deadline rung on (+1).
-surface-budget = 1373
+# DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
+# notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
+surface-budget = 1381
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4813,7 +4815,8 @@ path = "crates/rimz/src/store"
 # require on queue rows and message events (+1).
 # message::opens_slash_command is the one slash-led test batching and the submit keys share (+1).
 # message::next_prompt_compact_kind shares the NextPrompt compaction-command check between batching and send decisions, and Store::claim_steer_batch replaces claim_message_spending_force (+1).
-surface-budget = 698
+# SidebarRow::delegated_wait exposes the ladder's waiting-subagent mark to sidebar and CLI readers (+1).
+surface-budget = 699
 
 [[verdict]]
 kind = "item"

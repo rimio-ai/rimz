@@ -881,6 +881,66 @@ fn paused_child_parks_parent_head_and_pet() {
 }
 
 #[test]
+fn waiting_child_shows_question_glyph_and_names_subagent_on_running_parent() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("Stale parent question?".to_owned()),
+        extra_questions: 0,
+        native_key: None,
+        since: fixed_now() - Duration::from_secs(120),
+    });
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Waiting,
+        None,
+        None,
+        Some("review"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.name = Some("scout".to_owned());
+    child.waiting_since = Some(fixed_now() - Duration::from_secs(5));
+    child.last_activity = fixed_now() - Duration::from_secs(5);
+    let snapshot = snapshot_with(vec![parent, child]);
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let pane_ui = UiState::default();
+    let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 28);
+    let mut parser = vt100::Parser::new(28.try_into().unwrap(), 54.try_into().unwrap(), 0);
+    parser.process(&bytes);
+    let screen = parser.screen().contents();
+    let parent_line = screen.lines().find(|line| line.contains("claude")).unwrap();
+    assert!(
+        parent_line.contains('?'),
+        "running parent with waiting child must lead with ?: {screen}"
+    );
+    assert!(
+        !parent_line.contains('⢿') && !parent_line.contains('⢄') && !parent_line.contains('⠁'),
+        "running parent with waiting child must not draw a spinner: {screen}"
+    );
+    assert!(
+        screen.contains("@scout"),
+        "line 2 must name the waiting subagent: {screen}"
+    );
+    assert!(
+        !screen.contains("Stale parent question?"),
+        "line 2 must show no stale question of the parent's own: {screen}"
+    );
+}
+
+#[test]
 fn paused_child_headline_stays_in_live_band() {
     let parent = agent(
         "parent",

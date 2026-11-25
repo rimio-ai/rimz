@@ -41,8 +41,9 @@ pub struct NeedsYou {
     pub since: jiff::Timestamp,
 }
 
-/// Project attention using the sidebar's waiting-child and native-failure lifts and rowless demotion.
-/// A launched child without a card of its own reads its nested `child` card, as its status does.
+/// Project attention using the sidebar's displayed status (including waiting-subagent
+/// projection), native-failure lift, and rowless demotion. A launched child without a
+/// card of its own reads its nested `child` card, as its status does.
 pub fn needs_you(
     agent: &crate::agents::AgentState,
     row: Option<&SidebarRow>,
@@ -74,6 +75,13 @@ pub fn needs_you(
             &fallback
         }
     };
+    if let Some(wait) = card.delegated_wait.as_ref() {
+        return Some(NeedsYou {
+            status,
+            reason: Some(wait.label()),
+            since: row.map_or(agent.last_activity, |row| row.last_activity),
+        });
+    }
     if card.status == AgentStatus::Waiting
         && let Some(since) = card.overlay_raised_at
     {

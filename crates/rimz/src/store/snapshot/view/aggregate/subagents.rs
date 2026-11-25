@@ -4,7 +4,10 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentSessionUsage, AgentState, AgentStatus, ParkDemotion};
+use crate::agents::{
+    AgentSessionUsage, AgentState, AgentStatus, DelegatedWait, DelegatedWaitStart, ParkDemotion,
+    TurnSettleOutcome,
+};
 use crate::ids::{Lane, PaneId};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 use crate::utils::time::format_duration_coarse;
@@ -13,6 +16,11 @@ use super::super::layout::cmp_start_asc;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 
 use super::{AgentKey, AgentProjectionIndex};
+
+pub(super) struct DelegatedChildren {
+    pub(super) parks: BTreeMap<AgentKey, (AgentStatus, String)>,
+    pub(super) waits: BTreeMap<AgentKey, DelegatedWait>,
+}
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; native children are paneless, while
@@ -24,8 +32,9 @@ pub(super) fn attach_sub_agents_indexed(
     now: Timestamp,
     demotion: &ParkDemotion,
     stalled_after_secs: u32,
-) -> BTreeMap<AgentKey, (AgentStatus, String)> {
+) -> DelegatedChildren {
     let mut delegated_parks = BTreeMap::new();
+    let mut delegated_waits = BTreeMap::new();
     let row_by_parent = rows
         .iter()
         .enumerate()
@@ -101,6 +110,29 @@ pub(super) fn attach_sub_agents_indexed(
                 demotion,
                 stalled_after_secs,
             );
+            if !prior_turn
+                && entry.status == AgentStatus::Waiting
+                && !delegated_waits.contains_key(parent_key)
+            {
+                let handle = entry.petname.clone().unwrap_or_else(|| entry.name.clone());
+                let detail = child
+                    .open_ask
+                    .as_ref()
+                    .and_then(|ask| ask.detail.as_deref())
+                    .and_then(crate::agents::single_line_description);
+                delegated_waits.insert(
+                    parent_key.clone(),
+                    DelegatedWait {
+                        child_id: entry.id.clone(),
+                        kind: entry.kind.clone(),
+                        handle,
+                        pane: entry.pane.clone(),
+                        start: delegated_wait_start(child),
+                        detail,
+                        own_turn_running: false,
+                    },
+                );
+            }
             if let Some((status, label)) = park
                 && delegated_parks.get(parent_key).is_none_or(|(current, _)| {
                     *current == AgentStatus::Paused && status == AgentStatus::Failed
@@ -118,7 +150,34 @@ pub(super) fn attach_sub_agents_indexed(
             cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
         });
     }
-    delegated_parks
+    DelegatedChildren {
+        parks: delegated_parks,
+        waits: delegated_waits,
+    }
+}
+
+fn delegated_wait_start(child: &AgentState) -> DelegatedWaitStart {
+    if let Some(until) = child.permission_review_until() {
+        return DelegatedWaitStart::Fixed(until);
+    }
+    if let Some(since) = child
+        .open_ask
+        .as_ref()
+        .map(|ask| ask.since)
+        .or(child.waiting_since)
+    {
+        return DelegatedWaitStart::Fixed(since);
+    }
+    if let Some(settle) = child.context.as_ref().and_then(|ctx| ctx.settle)
+        && matches!(
+            settle.outcome,
+            TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed
+        )
+        && settle.at > child.last_activity
+    {
+        return DelegatedWaitStart::Refreshed(settle.at);
+    }
+    DelegatedWaitStart::Unknown
 }
 
 fn launched_child_park(

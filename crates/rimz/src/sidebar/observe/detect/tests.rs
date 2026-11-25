@@ -516,7 +516,7 @@ fn provider_child_attention_matches_declared_status_count() {
             fast: false,
             stalled: false,
             compacting: false,
-            status: AgentStatus::Waiting,
+            status: AgentStatus::Failed,
             phase: TurnPhase::Idle,
             task: None,
             profile: None,
@@ -535,7 +535,7 @@ fn provider_child_attention_matches_declared_status_count() {
         });
     let mut group = worktree_group(path, vec![parent]);
     group.status_counts = vec![SidebarStatusCount {
-        status: AgentStatus::Waiting,
+        status: AgentStatus::Failed,
         count: 1,
     }];
     let mut snapshot =
@@ -551,7 +551,7 @@ fn provider_child_attention_matches_declared_status_count() {
         0,
     );
     assert_eq!(frame.rows[0].watched.status.as_deref(), Some("idle"));
-    assert_eq!(frame.rows[0].attention_status.as_deref(), Some("waiting"));
+    assert_eq!(frame.rows[0].attention_status.as_deref(), Some("failed"));
 
     assert_lacks_kind(
         &Observer::default().observe(frame),

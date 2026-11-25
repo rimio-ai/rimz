@@ -233,6 +233,9 @@ fn parked_agent_settles_immediately_and_keeps_phase() {
 fn displayed_status_precedence_ladder_holds() {
     for rung in displayed_status_rungs() {
         let mut agents = vec![rung.agent.in_pane("%1")];
+        if rung.with_waiting_child {
+            agents.push(child_state("root", "child-wait", AgentStatus::Waiting, 5));
+        }
         if rung.with_live_child {
             agents.push(child_state("root", "child-1", AgentStatus::Running, 5));
         }
@@ -254,32 +257,69 @@ fn displayed_status_precedence_ladder_holds() {
             "error-label rung: {}",
             rung.name
         );
+        assert_eq!(
+            row.delegated_wait().is_some(),
+            rung.expect_delegated_wait,
+            "delegated-wait rung: {}",
+            rung.name
+        );
     }
 }
 
 struct StatusRung {
     name: &'static str,
     agent: AgentState,
+    with_waiting_child: bool,
     with_live_child: bool,
     budget_windows: Vec<RateLimitWindow>,
     expect: AgentStatus,
     expect_error_label: bool,
+    expect_delegated_wait: bool,
 }
 
 fn displayed_status_rungs() -> Vec<StatusRung> {
     let stalled_secs = default_stall_secs() + 60;
     vec![
         StatusRung {
-            name: "waiting outranks paused marker + child exemption + stall",
+            name: "own waiting outranks waiting child + paused marker + child exemption + stall",
             agent: agent("claude", "root", AgentStatus::Waiting, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .limits(spent_windows())
                 .paused_turn_error(10, "You've hit your usage limit"),
+            with_waiting_child: true,
             with_live_child: true,
             budget_windows: spent_windows(),
             expect: AgentStatus::Waiting,
             expect_error_label: false,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "own failed marker outranks waiting child + child exemption + stall",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(stalled_secs)
+                .turn_error(10, "API Error: Bad Request"),
+            with_waiting_child: true,
+            with_live_child: true,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Failed,
+            expect_error_label: true,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "waiting child beats own paused marker + child exemption + stall",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(stalled_secs)
+                .limits(spent_windows())
+                .paused_turn_error(10, "You've hit your usage limit"),
+            with_waiting_child: true,
+            with_live_child: true,
+            budget_windows: spent_windows(),
+            expect: AgentStatus::Waiting,
+            expect_error_label: false,
+            expect_delegated_wait: true,
         },
         StatusRung {
             name: "paused marker beats child exemption + stall",
@@ -288,10 +328,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(stalled_secs)
                 .limits(spent_windows())
                 .paused_turn_error(10, "You've hit your usage limit"),
+            with_waiting_child: false,
             with_live_child: true,
             budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "overloaded marker parks without budget data",
@@ -299,10 +341,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .active_ago(60)
                 .overloaded_turn_error(10, "API Error: Overloaded"),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: Vec::new(),
             expect: AgentStatus::Paused,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "rate-limit marker fails after reset",
@@ -311,10 +355,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(stalled_secs)
                 .limits(vec![window(100, -60)])
                 .paused_turn_error(10, "You've hit your usage limit"),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: vec![unprojectable_spent_window(-60)],
             expect: AgentStatus::Failed,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "failed marker beats child exemption + stall",
@@ -322,10 +368,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
+            with_waiting_child: false,
             with_live_child: true,
             budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "failed marker beats stall",
@@ -333,10 +381,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "failed marker beats parked settle",
@@ -345,10 +395,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .parked()
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: true,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "live child beats parked settle",
@@ -356,10 +408,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .parked()
                 .active_ago(60),
+            with_waiting_child: false,
             with_live_child: true,
             budget_windows: Vec::new(),
             expect: AgentStatus::Running,
             expect_error_label: false,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "parked settle beats stalled spent fallback",
@@ -368,10 +422,12 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .parked()
                 .active_ago(stalled_secs)
                 .limits(spent_windows()),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: spent_windows(),
             expect: AgentStatus::Success,
             expect_error_label: false,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "stalled spent fallback pauses",
@@ -379,20 +435,24 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .limits(spent_windows()),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
             expect_error_label: false,
+            expect_delegated_wait: false,
         },
         StatusRung {
             name: "stall is the backstop",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs),
+            with_waiting_child: false,
             with_live_child: false,
             budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: false,
+            expect_delegated_wait: false,
         },
     ]
 }

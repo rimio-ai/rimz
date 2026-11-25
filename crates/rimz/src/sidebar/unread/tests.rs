@@ -524,3 +524,387 @@ fn the_room_signature_reads_nothing_unread_reconcile_writes() {
     assert_ne!(unread_before, unread_after);
     assert_eq!(sig(&snapshot), before);
 }
+
+#[test]
+fn delegated_wait_opens_reopens_dedupes_refreshes_hands_over_and_persists_after_stop() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+
+    let mut episodes = UnreadEpisodes::default();
+    let marks = ReadMarks::default();
+
+    let wait = |child_id: &str, start: DelegatedWaitStart| DelegatedWait {
+        child_id: child_id.to_owned(),
+        kind: AgentKind::new_unchecked("claude"),
+        handle: child_id.to_owned(),
+        pane: Some(PaneId::from_parts(MuxName::Tmux, "%2")),
+        start,
+        detail: None,
+        own_turn_running: false,
+    };
+
+    // 1. Parent already has an open episode from its own finished turn (Success at 100);
+    //    child starts waiting at 200 -> must reopen a new episode.
+    let mut s1 = snapshot(vec![row("parent", AgentStatus::Success, 100)]);
+    assert_eq!(episodes.reconcile(&mut s1, &marks, false).opened.len(), 1);
+
+    let mut s2 = snapshot(vec![row("parent", AgentStatus::Waiting, 200)]);
+    let row_mut = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut s2.worktree_groups)[0].rows,
+    )[0];
+    row_mut.as_agent_mut().unwrap().delegated_wait = Some(wait(
+        "c1",
+        DelegatedWaitStart::Fixed(jiff::Timestamp::from_millisecond(200).unwrap()),
+    ));
+    let out2 = episodes.reconcile(&mut s2, &marks, false);
+    assert_eq!(
+        out2.opened.len(),
+        1,
+        "must reopen over prior Success episode"
+    );
+
+    // 2. Same child, same wait -> opens nothing more.
+    let out2_repeat = episodes.reconcile(&mut s2, &marks, false);
+    assert!(out2_repeat.opened.is_empty());
+
+    // 3. Handover to second child c2 (even if c2 started waiting earlier at 150) opens a new
+    // episode.
+    let mut s3 = snapshot(vec![row("parent", AgentStatus::Waiting, 200)]);
+    s3.now = jiff::Timestamp::from_millisecond(250).unwrap();
+    let row_mut = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut s3.worktree_groups)[0].rows,
+    )[0];
+    row_mut.as_agent_mut().unwrap().delegated_wait = Some(wait(
+        "c2",
+        DelegatedWaitStart::Fixed(jiff::Timestamp::from_millisecond(150).unwrap()),
+    ));
+    let out3 = episodes.reconcile(&mut s3, &marks, false);
+    assert_eq!(
+        out3.opened.len(),
+        1,
+        "handover to second waiting child must open"
+    );
+
+    // 4. Last waiting child stops: parent returns to Running, unread episode stays until read.
+    let mut s4 = snapshot(vec![row("parent", AgentStatus::Running, 300)]);
+    let out4 = episodes.reconcile(&mut s4, &marks, false);
+    assert!(out4.opened.is_empty());
+    assert!(s4.worktree_groups[0].rows[0].unread);
+
+    // 5. Refreshed wait (Antigravity NativeWait advancing settle.at) opens once only.
+    let mut refreshed_episodes = UnreadEpisodes::default();
+    let mut r1 = snapshot(vec![row("p2", AgentStatus::Waiting, 100)]);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut r1.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .delegated_wait = Some(wait(
+        "agy",
+        DelegatedWaitStart::Refreshed(jiff::Timestamp::from_millisecond(200).unwrap()),
+    ));
+    assert_eq!(
+        refreshed_episodes
+            .reconcile(&mut r1, &marks, false)
+            .opened
+            .len(),
+        1
+    );
+    let mut r2 = snapshot(vec![row("p2", AgentStatus::Waiting, 100)]);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut r2.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .delegated_wait = Some(wait(
+        "agy",
+        DelegatedWaitStart::Refreshed(jiff::Timestamp::from_millisecond(300).unwrap()),
+    ));
+    assert!(
+        refreshed_episodes
+            .reconcile(&mut r2, &marks, false)
+            .opened
+            .is_empty(),
+        "refreshed wait for the same child must not reopen"
+    );
+
+    // 6. Unknown wait start opens an episode when none is open, and does not reopen on repeat.
+    let mut unknown_episodes = UnreadEpisodes::default();
+    let mut u1 = snapshot(vec![row("p3", AgentStatus::Waiting, 100)]);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut u1.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .delegated_wait = Some(wait("mystery", DelegatedWaitStart::Unknown));
+    assert_eq!(
+        unknown_episodes
+            .reconcile(&mut u1, &marks, false)
+            .opened
+            .len(),
+        1
+    );
+    assert!(
+        unknown_episodes
+            .reconcile(&mut u1, &marks, false)
+            .opened
+            .is_empty()
+    );
+}
+
+#[test]
+fn delegated_wait_masked_by_parent_own_wait_opens_after_parent_receipt_and_notifies_once() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    use crate::config::NotificationsPrefs;
+    use crate::sidebar::notify::NotificationState;
+    use crate::sidebar::read_marks::write_read_marks;
+
+    let (_dir, runtime) = runtime();
+    let mut episodes = UnreadEpisodes::default();
+    let child_pane = PaneId::from_parts(MuxName::Tmux, "%2");
+    let wait_start = jiff::Timestamp::from_millisecond(95_000).unwrap();
+    let focus_at = jiff::Timestamp::from_millisecond(100_000).unwrap();
+
+    let waiting_child = || -> crate::store::snapshot::SidebarSubAgent {
+        serde_json::from_value(serde_json::json!({
+            "id": "scout", "kind": "claude", "name": "scout", "status": "waiting",
+            "last_activity": wait_start, "pane": child_pane,
+        }))
+        .unwrap()
+    };
+
+    // 1. Parent waits on its own question at 100s while @scout already waits at 95s:
+    //    parent's own Waiting masks @scout's mark.
+    let mut masked = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+    masked.now = focus_at;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut masked.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(waiting_child());
+    let out_masked = episodes.reconcile(&mut masked, &ReadMarks::default(), false);
+    assert_eq!(out_masked.opened.len(), 1);
+
+    // 2. User focuses the parent's own pane at 100s, writing receipt R = 100s > S = 95s.
+    write_read_marks(&runtime, [String::from("lead")], focus_at.as_millisecond()).unwrap();
+    let marks = ReadMarks::load(&runtime);
+    let mut notify = NotificationState::default();
+    let prefs = NotificationsPrefs {
+        enabled: true,
+        coalesce_ms: 0,
+        ..NotificationsPrefs::default()
+    };
+
+    // 3. Parent returns to running, so @scout's delegated wait mark appears for the first time.
+    let mut unmasked = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+    unmasked.now = focus_at;
+    let lead_card = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut unmasked.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap();
+    lead_card.sub_agents.push(waiting_child());
+    lead_card.delegated_wait = Some(DelegatedWait {
+        child_id: "scout".to_owned(),
+        kind: AgentKind::new_unchecked("claude"),
+        handle: "scout".to_owned(),
+        pane: Some(child_pane),
+        start: DelegatedWaitStart::Fixed(wait_start),
+        detail: Some("Bash: echo hi".to_owned()),
+        own_turn_running: false,
+    });
+
+    let out_unmasked = episodes.reconcile(&mut unmasked, &marks, false);
+    assert_eq!(
+        out_unmasked.opened.len(),
+        1,
+        "a newly exposed delegated wait must open past an earlier parent read receipt"
+    );
+    assert!(unmasked.worktree_groups[0].rows[0].unread);
+    let emitted = notify.evaluate(&unmasked, &out_unmasked.opened, &prefs, 100_000);
+    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted[0].body, "@scout: Bash: echo hi");
+
+    // 4. Subsequent fold with the same mark opens nothing more.
+    let out_repeat = episodes.reconcile(&mut unmasked, &marks, false);
+    assert!(out_repeat.opened.is_empty());
+}
+
+#[test]
+fn delegated_wait_unknown_start_opens_past_existing_parent_receipt() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    use crate::sidebar::read_marks::write_read_marks;
+
+    let (_dir, runtime) = runtime();
+    write_read_marks(&runtime, [String::from("lead")], 200_000).unwrap();
+    let marks = ReadMarks::load(&runtime);
+    let mut episodes = UnreadEpisodes::default();
+
+    let mut snap = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+    snap.now = jiff::Timestamp::from_millisecond(200_000).unwrap();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .delegated_wait = Some(DelegatedWait {
+        child_id: "mystery".to_owned(),
+        kind: AgentKind::new_unchecked("claude"),
+        handle: "mystery".to_owned(),
+        pane: None,
+        start: DelegatedWaitStart::Unknown,
+        detail: None,
+        own_turn_running: false,
+    });
+
+    let out = episodes.reconcile(&mut snap, &marks, false);
+    assert_eq!(
+        out.opened.len(),
+        1,
+        "unknown-start delegated wait must not be swallowed by a prior parent receipt"
+    );
+    assert!(snap.worktree_groups[0].rows[0].unread);
+    assert!(
+        episodes
+            .reconcile(&mut snap, &marks, false)
+            .opened
+            .is_empty()
+    );
+}
+
+#[test]
+fn delegated_wait_mask_unmask_and_handover_back_do_not_reannounce() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    use crate::sidebar::read_marks::write_read_marks;
+
+    let child_entry =
+        |id: &str, status: &str, pane: &str| -> crate::store::snapshot::SidebarSubAgent {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "kind": "claude",
+                "name": id,
+                "status": status,
+                "last_activity": jiff::Timestamp::from_millisecond(100_000).unwrap(),
+                "pane": PaneId::from_parts(MuxName::Tmux, pane),
+            }))
+            .unwrap()
+        };
+    let wait = |id: &str, pane: &str, start_ms: i64| DelegatedWait {
+        child_id: id.to_owned(),
+        kind: AgentKind::new_unchecked("claude"),
+        handle: id.to_owned(),
+        pane: Some(PaneId::from_parts(MuxName::Tmux, pane)),
+        start: DelegatedWaitStart::Fixed(jiff::Timestamp::from_millisecond(start_ms).unwrap()),
+        detail: None,
+        own_turn_running: false,
+    };
+
+    // Case 1: already-announced child B masked by parent's own Waiting, then unmasked,
+    // must not re-announce.
+    {
+        let (_dir, runtime) = runtime();
+        let mut episodes = UnreadEpisodes::default();
+
+        let mut s1 = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+        s1.now = jiff::Timestamp::from_millisecond(100_000).unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut s1.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.push(child_entry("b", "waiting", "%2"));
+        card.delegated_wait = Some(wait("b", "%2", 100_000));
+        assert_eq!(
+            episodes
+                .reconcile(&mut s1, &ReadMarks::default(), false)
+                .opened
+                .len(),
+            1
+        );
+
+        write_read_marks(&runtime, [String::from("lead")], 120_000).unwrap();
+        let marks = ReadMarks::load(&runtime);
+
+        // Parent's own Waiting hides B's mark while B stays a current waiting child.
+        let mut s2 = snapshot(vec![row("lead", AgentStatus::Waiting, 130_000)]);
+        s2.now = jiff::Timestamp::from_millisecond(130_000).unwrap();
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut s2.worktree_groups)[0].rows)[0]
+            .as_agent_mut()
+            .unwrap()
+            .sub_agents
+            .push(child_entry("b", "waiting", "%2"));
+        assert_eq!(episodes.reconcile(&mut s2, &marks, false).opened.len(), 1);
+
+        write_read_marks(&runtime, [String::from("lead")], 140_000).unwrap();
+        let marks = ReadMarks::load(&runtime);
+
+        // Parent finishes its own question; B's same wait reappears.
+        let mut s3 = snapshot(vec![row("lead", AgentStatus::Waiting, 130_000)]);
+        s3.now = jiff::Timestamp::from_millisecond(150_000).unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut s3.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.push(child_entry("b", "waiting", "%2"));
+        card.delegated_wait = Some(wait("b", "%2", 100_000));
+        let out3 = episodes.reconcile(&mut s3, &marks, false);
+        assert!(
+            out3.opened.is_empty(),
+            "unmasking an already-announced delegated wait must not re-announce"
+        );
+        assert!(!s3.worktree_groups[0].rows[0].unread);
+    }
+
+    // Case 2: handover B -> A -> B while B stays waiting must not re-announce B.
+    {
+        let (_dir, runtime) = runtime();
+        let mut episodes = UnreadEpisodes::default();
+
+        let mut s1 = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+        s1.now = jiff::Timestamp::from_millisecond(100_000).unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut s1.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.push(child_entry("a", "running", "%3"));
+        card.sub_agents.push(child_entry("b", "waiting", "%2"));
+        card.delegated_wait = Some(wait("b", "%2", 100_000));
+        assert_eq!(
+            episodes
+                .reconcile(&mut s1, &ReadMarks::default(), false)
+                .opened
+                .len(),
+            1
+        );
+
+        write_read_marks(&runtime, [String::from("lead")], 120_000).unwrap();
+        let marks = ReadMarks::load(&runtime);
+
+        // Earlier-registered child A waits and takes the mark; B is still waiting.
+        let mut s2 = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+        s2.now = jiff::Timestamp::from_millisecond(130_000).unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut s2.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.push(child_entry("a", "waiting", "%3"));
+        card.sub_agents.push(child_entry("b", "waiting", "%2"));
+        card.delegated_wait = Some(wait("a", "%3", 130_000));
+        assert_eq!(episodes.reconcile(&mut s2, &marks, false).opened.len(), 1);
+
+        write_read_marks(&runtime, [String::from("lead")], 150_000).unwrap();
+        let marks = ReadMarks::load(&runtime);
+
+        // Child A finishes; mark hands back to B, whose wait never ended.
+        let mut s3 = snapshot(vec![row("lead", AgentStatus::Waiting, 100_000)]);
+        s3.now = jiff::Timestamp::from_millisecond(160_000).unwrap();
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut s3.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        card.sub_agents.push(child_entry("a", "running", "%3"));
+        card.sub_agents.push(child_entry("b", "waiting", "%2"));
+        card.delegated_wait = Some(wait("b", "%2", 100_000));
+        let out3 = episodes.reconcile(&mut s3, &marks, false);
+        assert!(
+            out3.opened.is_empty(),
+            "handover back to a child whose wait was already announced must not re-announce"
+        );
+        assert!(!s3.worktree_groups[0].rows[0].unread);
+    }
+}

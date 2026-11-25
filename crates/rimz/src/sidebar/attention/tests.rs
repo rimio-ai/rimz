@@ -791,7 +791,7 @@ fn displayed_child_attention_and_missing_birth_use_the_snapshot_clock() {
             name: "child".into(),
             petname: None,
             provider_native: true,
-            status: AgentStatus::Waiting,
+            status: AgentStatus::Failed,
             stalled: false,
             compacting: false,
             phase: crate::agents::TurnPhase::Idle,

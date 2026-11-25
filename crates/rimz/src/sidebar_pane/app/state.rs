@@ -228,13 +228,13 @@ pub(super) fn session_focus_baseline(
 
 pub(super) fn apply_manual_unread_guard(
     ui: &mut ViewState,
-    focused_row_id: Option<&str>,
+    focused_row_ids: &[String],
     focus_clear: &mut ReadClear,
 ) {
     let Some(guarded) = ui.unread_guard.clone() else {
         return;
     };
-    if focused_row_id == Some(guarded.as_str()) {
+    if focused_row_ids.contains(&guarded) {
         focus_clear.ids.retain(|id| id != &guarded);
         focus_clear.trace.retain(|change| change.row_id != guarded);
     } else {
@@ -242,11 +242,20 @@ pub(super) fn apply_manual_unread_guard(
     }
 }
 
-pub(super) fn row_id_of_pane(
+/// The rows marked read when `pane_id` is focused: every row whose answering
+/// pane (`SidebarRow::attention_pane`) is `pane_id`, so a waiting child's own
+/// row and the parent its wait turned to waiting are both read. While a
+/// delegated wait has its own pane, focusing the parent's own pane reads
+/// neither; a non-waiting child's pane reads no parent.
+pub(super) fn read_row_ids_of_pane(
     snapshot: &SidebarSnapshot,
     pane_id: &crate::ids::PaneId,
-) -> Option<String> {
-    row_of_pane(snapshot, pane_id).map(|row| row.id.clone())
+) -> Vec<String> {
+    snapshot
+        .rows()
+        .filter(|row| row.attention_pane() == Some(pane_id))
+        .map(|row| row.id.clone())
+        .collect()
 }
 
 pub(super) fn row_of_pane<'a>(
@@ -306,7 +315,11 @@ fn read_receipt_for_row_ref(
     let needs_look = row
         .status()
         .is_some_and(crate::agents::AgentStatus::needs_a_look);
-    if !row.unread && (!needs_look || unread::receipt_reaches(marks, &row.id, row.last_activity)) {
+    let stamp = row
+        .delegated_wait()
+        .and_then(crate::agents::DelegatedWait::stable_since)
+        .map_or(row.last_activity, |at| row.last_activity.max(at));
+    if !row.unread && (!needs_look || unread::receipt_reaches(marks, &row.id, stamp)) {
         return ReadClear::default();
     }
     let trace = row
@@ -320,24 +333,23 @@ fn read_receipt_for_row_ref(
     }
 }
 
-/// Read receipts for unread rows whose pane shares the renderer's own tab,
-/// excluding the focused row because the focus path already handled it.
+/// Read receipts for unread rows whose answering pane shares the renderer's own
+/// tab, excluding the focused rows because the focus path already handled them.
 pub(super) fn read_receipts_for_tab(
     snapshot: &SidebarSnapshot,
     working_pane_ids: &[crate::ids::PaneId],
-    focused_row_id: Option<&str>,
+    focused_row_ids: &[String],
     marks: &crate::sidebar::read_marks::ReadMarks,
     now: Timestamp,
 ) -> ReadClear {
     let mut clear = ReadClear::default();
     for row in snapshot.rows() {
-        if Some(row.id.as_str()) == focused_row_id {
+        if focused_row_ids.contains(&row.id) {
             continue;
         }
         let in_tab = row
-            .pane
-            .as_ref()
-            .is_some_and(|pane| working_pane_ids.contains(&pane.pane_id));
+            .attention_pane()
+            .is_some_and(|pane| working_pane_ids.contains(pane));
         if in_tab {
             clear.merge(read_receipt_for_row_ref(
                 row,

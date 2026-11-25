@@ -939,6 +939,455 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
 }
 
 #[test]
+fn focusing_waiting_child_answering_pane_writes_parent_read_receipt_for_any_episode() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    for (label, overlay_raised_at) in [
+        ("delegated_wait_episode", None),
+        ("prior_parent_episode", Some(fixed_time(1_699_999_990))),
+    ] {
+        let ws = workspace();
+        let (_dir, runtime) = runtime_for(&ws);
+        let instance = SidebarInstanceId::new();
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), instance);
+        let mut snapshot =
+            row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
+        let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
+        row.unread = true;
+        let card = row.as_agent_mut().unwrap();
+        card.overlay_raised_at = overlay_raised_at;
+        card.delegated_wait = Some(DelegatedWait {
+            child_id: "child".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "scout".to_owned(),
+            pane: Some(child.clone()),
+            start: DelegatedWaitStart::Fixed(fixed_time(1_700_000_000)),
+            detail: None,
+            own_turn_running: false,
+        });
+        card.sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "kind": "claude", "name": "scout", "status": "waiting",
+                "last_activity": snapshot.now, "pane": child,
+            }))
+            .unwrap(),
+        );
+        snapshot
+            .own_view
+            .as_mut()
+            .unwrap()
+            .working_pane_ids
+            .push(child.clone());
+        snapshot.focused_pane = Some(child.clone());
+        snapshot.viewed_panes = vec![child];
+        harness.apply(snapshot);
+        assert!(
+            runtime.read_marks_path().exists(),
+            "{label}: focusing the answering pane must write the parent's read receipt"
+        );
+        assert!(
+            !row_unread(harness.state.views.mirror()),
+            "{label}: focusing the answering pane must mark the parent read"
+        );
+    }
+}
+
+#[test]
+fn focused_parent_pane_keeps_delegated_wait_unread_and_emits_notification() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    use crate::config::NotificationsPrefs;
+    use crate::sidebar::notify::NotificationState;
+    use crate::sidebar::unread::UnreadEpisodes;
+
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    UnreadEpisodes::materialize(&runtime).unwrap();
+
+    let wait_at = fixed_time(1_700_000_000);
+    let mut base = row_snapshot_at(&ws, AgentStatus::Waiting, true, wait_at);
+    base.now = wait_at;
+    let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+    {
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut base.worktree_groups)[0].rows,
+        )[0];
+        let card = row.as_agent_mut().unwrap();
+        card.delegated_wait = Some(DelegatedWait {
+            child_id: "child".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "scout".to_owned(),
+            pane: Some(child.clone()),
+            start: DelegatedWaitStart::Fixed(wait_at),
+            detail: Some("Bash: git status".to_owned()),
+            own_turn_running: false,
+        });
+        card.sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "kind": "claude", "name": "scout", "status": "waiting",
+                "last_activity": wait_at, "pane": child,
+            }))
+            .unwrap(),
+        );
+    }
+
+    let prefs = NotificationsPrefs {
+        enabled: true,
+        coalesce_ms: 1_000,
+        ..NotificationsPrefs::default()
+    };
+    let mut notify = NotificationState::default();
+
+    let mut fold_one = base.clone();
+    let open = crate::sidebar::engine::reconcile_final_fold(&runtime, &mut fold_one);
+    assert_eq!(open.opened.len(), 1);
+    assert!(!open.opened[0].focused);
+    assert!(row_unread(&fold_one));
+    let now_ms = wait_at.as_millisecond() as u64;
+    assert!(
+        notify
+            .evaluate(&fold_one, &open.opened, &prefs, now_ms)
+            .is_empty(),
+        "coalesce window holds the notification before flushing"
+    );
+
+    // Parent tab's renderer folds the snapshot while focus stays on the parent's own pane.
+    let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+    harness.apply(fold_one);
+    assert!(
+        crate::sidebar::read_marks::ReadMarks::load(&runtime)
+            .cleared_at_ms("sess-1")
+            .is_none(),
+        "focusing the parent's own pane must not write a receipt while a launched child waits"
+    );
+    assert!(
+        row_unread(harness.state.views.mirror()),
+        "parent row must stay unread locally while its answering pane is unfocused"
+    );
+
+    let mut fold_two = base;
+    fold_two.now = fixed_time(1_700_000_001);
+    let settled = crate::sidebar::engine::reconcile_final_fold(&runtime, &mut fold_two);
+    assert!(
+        row_unread(&fold_two),
+        "host fold must keep the parent unread until its answering pane is visited"
+    );
+    let emitted = notify.evaluate(&fold_two, &settled.opened, &prefs, now_ms + 1_000);
+    assert_eq!(
+        emitted.len(),
+        1,
+        "notification must flush after the coalesce window while the parent's own pane is focused"
+    );
+    assert_eq!(emitted[0].body, "@scout: Bash: git status");
+}
+
+#[test]
+fn tab_dwell_keys_delegated_wait_receipt_on_answering_pane_only() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+
+    let ws = workspace();
+    let child = PaneId::from_parts(crate::MuxName::Tmux, "%9");
+    let wait_at = fixed_time(1_700_000_000);
+    let attach_delegated_wait = |snap: &mut SidebarSnapshot| {
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows,
+        )[0];
+        let card = row.as_agent_mut().unwrap();
+        card.status = AgentStatus::Waiting;
+        card.delegated_wait = Some(DelegatedWait {
+            child_id: "child".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "scout".to_owned(),
+            pane: Some(child.clone()),
+            start: DelegatedWaitStart::Fixed(wait_at),
+            detail: Some("Bash: git status".to_owned()),
+            own_turn_running: false,
+        });
+        card.sub_agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "kind": "claude", "name": "scout", "status": "waiting",
+                "last_activity": wait_at, "pane": child,
+            }))
+            .unwrap(),
+        );
+    };
+
+    // Dwelling on the parent's tab (focused on sibling `%2`) must not clear the
+    // parent row whose answering pane `%9` lives in another tab.
+    {
+        let (_dir, runtime) = runtime_for(&ws);
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+        let (mut background, _, second) =
+            two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%2"));
+        attach_delegated_wait(&mut background);
+        set_all_rows_unread(&mut background);
+        set_viewed(&mut background, false);
+        harness.apply(background);
+
+        let (mut viewed, _, _) = two_pane_snapshot(&ws, second);
+        attach_delegated_wait(&mut viewed);
+        set_all_rows_unread(&mut viewed);
+        harness.apply(viewed.clone());
+
+        force_tab_dwell_elapsed(&mut harness);
+        harness.apply(viewed);
+
+        assert!(
+            row_unread_by_id(harness.state.views.mirror(), "sess-1"),
+            "dwelling on the parent's tab must leave a pane-backed delegated wait unread"
+        );
+        assert!(!row_unread_by_id(harness.state.views.mirror(), "sess-2"));
+        let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
+        assert!(
+            marks.cleared_at_ms("sess-1").is_none(),
+            "parent's tab dwell must write no read receipt while the child answers elsewhere"
+        );
+        assert!(marks.cleared_at_ms("sess-2").is_some());
+    }
+
+    // Dwelling on the tab that hosts the answering pane `%9` (with sibling `%2`
+    // focused) writes the parent's read receipt and clears its unread mark.
+    {
+        let (_dir, runtime) = runtime_for(&ws);
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+        let (mut background, _, second) =
+            two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%2"));
+        attach_delegated_wait(&mut background);
+        background.own_view.as_mut().unwrap().working_pane_ids =
+            vec![second.clone(), child.clone()];
+        set_all_rows_unread(&mut background);
+        set_viewed(&mut background, false);
+        harness.apply(background);
+
+        let (mut viewed, _, _) = two_pane_snapshot(&ws, second.clone());
+        attach_delegated_wait(&mut viewed);
+        viewed.own_view.as_mut().unwrap().working_pane_ids = vec![second, child];
+        set_all_rows_unread(&mut viewed);
+        harness.apply(viewed.clone());
+
+        force_tab_dwell_elapsed(&mut harness);
+        harness.apply(viewed);
+
+        assert!(
+            !row_unread_by_id(harness.state.views.mirror(), "sess-1"),
+            "dwelling on the answering pane's tab must clear the parent's unread mark"
+        );
+        let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
+        assert!(marks.cleared_at_ms("sess-1").is_some());
+    }
+}
+
+#[test]
+fn provider_native_delegated_wait_reads_on_parent_pane_focus_and_tab_dwell() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+
+    let ws = workspace();
+    let wait_at = fixed_time(1_700_000_000);
+    let attach_native_wait = |snap: &mut SidebarSnapshot| {
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows,
+        )[0];
+        let card = row.as_agent_mut().unwrap();
+        card.status = AgentStatus::Waiting;
+        card.delegated_wait = Some(DelegatedWait {
+            child_id: "native-child".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "explorer".to_owned(),
+            pane: None,
+            start: DelegatedWaitStart::Fixed(wait_at),
+            detail: Some("Bash: ls".to_owned()),
+            own_turn_running: false,
+        });
+    };
+
+    // Focusing the parent's pane clears a provider-native delegated wait (whose answering pane is the parent's pane).
+    {
+        let (_dir, runtime) = runtime_for(&ws);
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+        let mut snap = row_snapshot_at(&ws, AgentStatus::Waiting, true, wait_at);
+        attach_native_wait(&mut snap);
+        set_all_rows_unread(&mut snap);
+        harness.apply(snap);
+        assert!(!row_unread(harness.state.views.mirror()));
+        assert!(
+            crate::sidebar::read_marks::ReadMarks::load(&runtime)
+                .cleared_at_ms("sess-1")
+                .is_some()
+        );
+    }
+
+    // Dwelling on the parent's tab clears a provider-native delegated wait too.
+    {
+        let (_dir, runtime) = runtime_for(&ws);
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+        let (mut background, _, second) =
+            two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%2"));
+        attach_native_wait(&mut background);
+        set_all_rows_unread(&mut background);
+        set_viewed(&mut background, false);
+        harness.apply(background);
+
+        let (mut viewed, _, _) = two_pane_snapshot(&ws, second);
+        attach_native_wait(&mut viewed);
+        set_all_rows_unread(&mut viewed);
+        harness.apply(viewed.clone());
+
+        force_tab_dwell_elapsed(&mut harness);
+        harness.apply(viewed);
+        assert!(!row_unread_by_id(harness.state.views.mirror(), "sess-1"));
+        assert!(
+            crate::sidebar::read_marks::ReadMarks::load(&runtime)
+                .cleared_at_ms("sess-1")
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn refreshed_delegated_wait_does_not_rewrite_read_marks_while_answering_pane_is_focused() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+    use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
+
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let last_activity = fixed_time(1_700_000_000);
+    let refreshed_at = fixed_time(1_700_000_050);
+    write_read_marks(
+        &runtime,
+        [String::from("sess-1")],
+        last_activity.as_millisecond(),
+    )
+    .unwrap();
+    let marks = ReadMarks::load(&runtime);
+
+    let mut snap = row_snapshot_at(&ws, AgentStatus::Waiting, true, last_activity);
+    let child = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows,
+    )[0];
+    row.unread = false;
+    row.as_agent_mut().unwrap().delegated_wait = Some(DelegatedWait {
+        child_id: "agy-child".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("antigravity"),
+        handle: "scout".to_owned(),
+        pane: Some(child),
+        start: DelegatedWaitStart::Refreshed(refreshed_at),
+        detail: None,
+        own_turn_running: false,
+    });
+
+    let clear = read_receipt_for_row(
+        &snap,
+        Some("sess-1"),
+        UnreadClearCause::Focus,
+        &marks,
+        refreshed_at,
+    );
+    assert!(
+        clear.ids.is_empty(),
+        "an advancing Refreshed wait must not rewrite read marks while already read: {clear:?}"
+    );
+}
+
+#[test]
+fn focusing_shared_answering_pane_marks_both_promoted_parent_and_waiting_grandchild_read() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
+
+    let ws = workspace();
+    let now = fixed_time(1_700_000_000);
+    let child_pane = PaneId::from_parts(crate::MuxName::Tmux, "%1");
+    let grandchild_pane = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+
+    let make_row = |id: &str, pane: &PaneId, delegated: bool| {
+        let mut card = AgentCard {
+            status: AgentStatus::Waiting,
+            phase: crate::agents::TurnPhase::Idle,
+            ..AgentCard::default()
+        };
+        if delegated {
+            card.delegated_wait = Some(DelegatedWait {
+                child_id: "grandchild".to_owned(),
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                handle: "grandchild".to_owned(),
+                pane: Some(grandchild_pane.clone()),
+                start: DelegatedWaitStart::Fixed(now),
+                detail: Some("Bash: echo hi".to_owned()),
+                own_turn_running: false,
+            });
+            card.sub_agents.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": "grandchild", "kind": "claude", "name": "grandchild",
+                    "status": "waiting", "last_activity": now, "pane": grandchild_pane,
+                }))
+                .unwrap(),
+            );
+        }
+        crate::store::snapshot::SidebarRow {
+            checkout: None,
+            id: id.to_owned(),
+            name: "claude".to_owned(),
+            pane: Some(crate::pane::PaneRef::from_id(pane.clone())),
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            channel: None,
+            lane: None,
+            unread: true,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            attention_at_ms: None,
+            last_activity: now,
+            card: RowCard::Agent(std::sync::Arc::new(card)),
+        }
+    };
+
+    for (order_label, listing_first) in [("listing_first", true), ("grandchild_first", false)] {
+        let (_dir, runtime) = runtime_for(&ws);
+        let mut harness = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+        let mut snap = row_snapshot_at(&ws, AgentStatus::Waiting, true, now);
+        let rows = if listing_first {
+            vec![
+                make_row("child", &child_pane, true),
+                make_row("grandchild", &grandchild_pane, false),
+            ]
+        } else {
+            vec![
+                make_row("grandchild", &grandchild_pane, false),
+                make_row("child", &child_pane, true),
+            ]
+        };
+        std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows = rows.into();
+        snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
+            sibling_count: 3,
+            working_pane_ids: vec![child_pane.clone(), grandchild_pane.clone()],
+            own_view_is_daemon: false,
+        });
+        snap.focused_pane = Some(grandchild_pane.clone());
+        snap.viewed_panes = vec![grandchild_pane.clone()];
+
+        harness.apply(snap);
+        assert!(
+            !row_unread_by_id(harness.state.views.mirror(), "child"),
+            "{order_label}: promoted listing row must be marked read when %2 is focused"
+        );
+        assert!(
+            !row_unread_by_id(harness.state.views.mirror(), "grandchild"),
+            "{order_label}: grandchild row must be marked read when %2 is focused"
+        );
+        let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
+        assert!(
+            marks.cleared_at_ms("child").is_some(),
+            "{order_label}: promoted listing row must receive a read receipt"
+        );
+        assert!(
+            marks.cleared_at_ms("grandchild").is_some(),
+            "{order_label}: grandchild row must receive a read receipt"
+        );
+    }
+}
+
+#[test]
 fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);

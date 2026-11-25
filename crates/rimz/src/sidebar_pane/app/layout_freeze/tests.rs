@@ -372,6 +372,16 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
         std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut next.worktree_groups)[0].rows);
     rows[1].attention_at_ms = Some(30);
     let parent = rows[1].as_agent_mut().unwrap();
+    parent.status = AgentStatus::Waiting;
+    parent.delegated_wait = Some(crate::agents::DelegatedWait {
+        child_id: "child".into(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        handle: "child".into(),
+        pane: None,
+        start: crate::agents::DelegatedWaitStart::Unknown,
+        detail: None,
+        own_turn_running: false,
+    });
     parent
         .sub_agents
         .push(crate::store::snapshot::SidebarSubAgent {

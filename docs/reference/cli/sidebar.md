@@ -62,7 +62,7 @@ rimz sidebar filter needs-you --toggle
 
 Without `--toggle`, the command sets the lens, and is a no-op when the lens is already on. With `--toggle`, it turns the lens off when it is on, and on otherwise. Turning it on when nothing matches is a no-op.
 
-The lens shows exactly the waiting and failed cards, including a parent lifted by a waiting child or by a provider-native child's failure. Paused cards and process rows are excluded. Unlike the make-up buckets, it selects individual cards rather than every teammate. The header reads `needs-you: N`.
+The lens shows exactly the waiting cards (including a parent whose current child waits) and failed cards (including a parent lifted by a provider-native child's failure). Paused cards and process rows are excluded. Unlike the make-up buckets, it selects individual cards rather than every teammate. The header reads `needs-you: N`.
 
 The lens is room-shared and intersects a committed search. It clears itself when its room-wide count reaches zero, and while a layout freeze holds matching rows it waits for the freeze to release them. `F` in the sidebar clears both the lens and the search.
 

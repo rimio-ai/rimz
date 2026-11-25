@@ -3500,7 +3500,7 @@ impl PaneState {
     fn sweep_tab_read_receipts(
         &mut self,
         v: &mut ViewBorrow<'_>,
-        focused_row_id: Option<&str>,
+        focused_row_ids: &[String],
         marks: &ReadMarks,
         now: Timestamp,
         clear: &mut ReadClear,
@@ -3508,7 +3508,7 @@ impl PaneState {
         self.prepare_tab_arrival(v);
         v.context.sweep_tab_read_receipts(
             v.state,
-            focused_row_id,
+            focused_row_ids,
             &ReadContext {
                 own_pane: &self.config.own_pane,
                 marks,

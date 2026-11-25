@@ -208,10 +208,24 @@ mod tests {
         for (status, native) in [(Waiting, false), (Failed, true), (Failed, false)] {
             let mut parent = group.rows[3].clone();
             parent.id = format!("parent-{status:?}-{native}");
-            parent.as_agent_mut().unwrap().sub_agents = vec![
+            let last_activity = parent.last_activity;
+            let card = parent.as_agent_mut().unwrap();
+            if status == Waiting {
+                card.status = Waiting;
+                card.delegated_wait = Some(crate::agents::DelegatedWait {
+                    child_id: "child".to_owned(),
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    handle: "child".to_owned(),
+                    pane: None,
+                    start: crate::agents::DelegatedWaitStart::Unknown,
+                    detail: None,
+                    own_turn_running: false,
+                });
+            }
+            card.sub_agents = vec![
                 serde_json::from_value(serde_json::json!({
                     "id": "child", "kind": "claude", "name": "child", "status": status,
-                    "last_activity": parent.last_activity, "provider_native": native,
+                    "last_activity": last_activity, "provider_native": native,
                 }))
                 .unwrap(),
             ];

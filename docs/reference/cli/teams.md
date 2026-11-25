@@ -149,7 +149,7 @@ A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a
 
 ### Cohort state
 
-A cohort uses the sidebar's shared unit verdict. Attention from any member takes precedence, including the sidebar's attention lift when a current child of either origin waits or a provider-native child fails. A staged board at `Done` gives `done`, including without an owner. Otherwise the owner's projected status decides the calm state; without a usable owner, the first matching member state wins:
+A cohort uses the sidebar's shared unit verdict. Attention from any member takes precedence, including a parent turned `waiting` by a current child of either origin and the sidebar's attention lift when a provider-native child fails. A staged board at `Done` gives `done`, including without an owner. Otherwise the owner's projected status decides the calm state; without a usable owner, the first matching member state wins:
 
 | State | When |
 | --- | --- |

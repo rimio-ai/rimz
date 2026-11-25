@@ -29,25 +29,28 @@ fn remember_roster(ui: &mut ViewState, pane_ui: &mut UiState, snapshot: &Sidebar
 
 #[test]
 fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
-    use crate::agents::AgentStatus;
-    for (native, child_pane, own_status, target_child) in [
+    use crate::agents::{AgentStatus, DelegatedWait, DelegatedWaitStart};
+    for (native, child_pane, delegated, own_status, target_child) in [
         (
             false,
             Some("zellij:terminal_child"),
-            AgentStatus::Idle,
+            true,
+            AgentStatus::Waiting,
             true,
         ),
-        (true, None, AgentStatus::Idle, false),
-        (false, None, AgentStatus::Idle, false),
+        (true, None, true, AgentStatus::Waiting, false),
+        (false, None, true, AgentStatus::Waiting, false),
         (
             false,
             Some("zellij:terminal_child"),
+            false,
             AgentStatus::Waiting,
             false,
         ),
         (
             false,
             Some("zellij:terminal_child"),
+            false,
             AgentStatus::Failed,
             false,
         ),
@@ -59,6 +62,15 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
         )[0];
         let card = row.as_agent_mut().unwrap();
         card.status = own_status;
+        card.delegated_wait = delegated.then(|| DelegatedWait {
+            child_id: "child".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "child".to_owned(),
+            pane: child_pane.map(|raw| raw.parse().unwrap()),
+            start: DelegatedWaitStart::Unknown,
+            detail: None,
+            own_turn_running: false,
+        });
         card.sub_agents = vec![
             serde_json::from_value(serde_json::json!({
                 "id": "child", "kind": "claude", "name": "child", "status": "waiting",
@@ -85,7 +97,7 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
                     &snapshot
                 ),
                 InputOutcome::focus(expected.clone()),
-                "native={native}, pane={child_pane:?}, own={own_status:?}"
+                "native={native}, pane={child_pane:?}, delegated={delegated}, own={own_status:?}"
             );
         }
     }
@@ -93,6 +105,7 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
 
 #[test]
 fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
+    use crate::agents::{DelegatedWait, DelegatedWaitStart};
     let mut snapshot = clickable_block_snapshot(&workspace());
     let now = snapshot.now;
     let rows = std::sync::Arc::make_mut(
@@ -103,8 +116,18 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     next.pane = Some(pane("terminal_11", "tab_0"));
     next.last_activity = now + std::time::Duration::from_secs(1);
     next.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    let child: PaneId = "zellij:terminal_first".parse().unwrap();
     let card = rows[0].as_agent_mut().unwrap();
-    card.status = crate::agents::AgentStatus::Idle;
+    card.status = crate::agents::AgentStatus::Waiting;
+    card.delegated_wait = Some(DelegatedWait {
+        child_id: "first".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        handle: "first".to_owned(),
+        pane: Some(child.clone()),
+        start: DelegatedWaitStart::Unknown,
+        detail: None,
+        own_turn_running: false,
+    });
     card.sub_agents = [
         ("old", true),
         ("paneless", false),
@@ -123,7 +146,6 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     .collect();
     rows[0].last_activity = now;
     rows.push(next);
-    let child: PaneId = "zellij:terminal_first".parse().unwrap();
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
     assert_eq!(

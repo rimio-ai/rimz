@@ -110,6 +110,47 @@ fn displayed_idle_origin_for_a_rowless_child_is_real_activity() {
     assert_eq!(agent_idle_since(&state, None), ago(1200));
 }
 
+#[test]
+fn delegated_wait_keeps_parent_own_idle_origin() {
+    use crate::store::snapshot::CacheClock;
+
+    for (own_status, expected) in [
+        (AgentStatus::Success, ago(1800)),
+        (AgentStatus::Running, ago(1200)),
+    ] {
+        let mut parent = agent("claude", "parent", own_status, 1200)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(1200);
+        parent.last_seen = ago(1);
+        let mut child = child_state("parent", "child", AgentStatus::Waiting, 10);
+        child.waiting_since = Some(ago(10));
+
+        let mut snapshot = room(vec![parent, child])
+            .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+        let parent_row = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )
+        .iter_mut()
+        .find(|row| row.id == "parent")
+        .expect("parent row");
+        assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+        assert!(parent_row.delegated_wait().is_some());
+        parent_row.as_agent_mut().unwrap().cache = Some(CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(ago(1800)),
+            warm_until: None,
+            rewarm_cost_usd: None,
+            recorded: false,
+        });
+        assert_eq!(
+            parent_row.idle_since(),
+            expected,
+            "own status {own_status:?} displayed Waiting by delegation must keep its own idle origin"
+        );
+    }
+}
+
 fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
     // The app-server daemon fires the hook with no mux pane env, so the
     // agent carries its worktree but never stamps a pane.

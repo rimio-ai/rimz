@@ -450,6 +450,200 @@ fn delegated_park_opens_one_unread_episode_and_parent_notification() {
 }
 
 #[test]
+fn delegated_wait_notifies_naming_subagent_and_honors_answering_pane_focus() {
+    use crate::sidebar::read_marks::ReadMarks;
+    use crate::sidebar::unread::UnreadEpisodes;
+
+    let t0 = Timestamp::from_second(1_000).unwrap();
+    let t1 = Timestamp::from_second(1_010).unwrap();
+    let t2 = Timestamp::from_second(1_015).unwrap();
+    let t3 = Timestamp::from_second(1_020).unwrap();
+
+    let mut parent = agent("parent", AgentStatus::Success, false);
+    parent.name = Some("parent".to_owned());
+    parent.name_explicit = true;
+    parent.last_activity = t0;
+    let parent_pane = parent.pane.clone().unwrap();
+
+    let mut scout = agent("scout", AgentStatus::Waiting, false);
+    scout.parent_agent_id = Some(parent.agent_id.clone());
+    scout.parent_agent_kind = Some(parent.kind.clone());
+    scout.launch_depth = Some(1);
+    scout.name = Some("scout".to_owned());
+    scout.registered_at = Some(t0);
+    scout.waiting_since = Some(t1);
+    scout.last_activity = t1;
+    let child_pane = scout.pane.clone().unwrap();
+
+    let mut ranger = agent("ranger", AgentStatus::Waiting, false);
+    ranger.parent_agent_id = Some(parent.agent_id.clone());
+    ranger.parent_agent_kind = Some(parent.kind.clone());
+    ranger.launch_depth = Some(1);
+    ranger.name = Some("ranger".to_owned());
+    ranger.registered_at = Some(t1);
+    ranger.waiting_since = Some(t1);
+    ranger.last_activity = t1;
+    let second_pane = ranger.pane.clone().unwrap();
+
+    let frame = |agents: Vec<AgentState>,
+                 panes: Vec<crate::pane::PaneRef>,
+                 viewed: Vec<PaneId>,
+                 now: Timestamp| {
+        let mut snapshot = SidebarSnapshot::build_with_agents(workspace(), agents, now)
+            .with_live_panes(panes, None);
+        snapshot.panes_produced_at_ms = Some(1);
+        snapshot.viewed_panes = viewed;
+        snapshot
+    };
+
+    let marks = ReadMarks::default();
+    let mut episodes = UnreadEpisodes::default();
+    let mut state = NotificationState::default();
+    let prefs = NotificationsPrefs {
+        suppress_focused: true,
+        debounce_ms: 30_000,
+        ..prefs()
+    };
+
+    // Parent already has an open unread episode from its own finished turn.
+    let mut initial = frame(
+        vec![parent.clone()],
+        vec![parent_pane.clone()],
+        Vec::new(),
+        t0,
+    );
+    let outcome = episodes.reconcile(&mut initial, &marks, false);
+    assert_eq!(outcome.opened.len(), 1);
+    assert!(
+        state
+            .evaluate(&initial, &outcome.opened, &prefs, 1_000)
+            .is_empty()
+    );
+
+    // Child starts waiting while the user is focused on the PARENT pane (not the child pane):
+    // must reopen the parent's episode and fire 1 notification naming @scout on the parent pane.
+    let mut with_scout = frame(
+        vec![parent.clone(), scout.clone(), ranger.clone()],
+        vec![parent_pane.clone(), child_pane.clone(), second_pane.clone()],
+        vec![parent_pane.pane_id.clone()],
+        t1,
+    );
+    let outcome = episodes.reconcile(&mut with_scout, &marks, false);
+    assert_eq!(outcome.opened.len(), 1);
+    assert!(!outcome.opened[0].focused);
+    assert_eq!(outcome.opened[0].pane_id, Some(parent_pane.pane_id.clone()));
+    let notes = state.evaluate(&with_scout, &outcome.opened, &prefs, 10_000);
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].notification_kind, NotificationKind::Waiting);
+    assert!(notes[0].title.ends_with("needs you"), "{}", notes[0].title);
+    assert!(notes[0].body.contains("@scout"), "{}", notes[0].body);
+    assert_eq!(notes[0].agents[0].handle, "parent");
+    assert_eq!(
+        notes[0].agents[0].pane_id,
+        Some(parent_pane.pane_id.clone())
+    );
+
+    // Repeat frame for same child/same wait: no second episode or notification.
+    let mut repeat = frame(
+        vec![parent.clone(), scout.clone(), ranger.clone()],
+        vec![parent_pane.clone(), child_pane.clone(), second_pane.clone()],
+        vec![parent_pane.pane_id.clone()],
+        t2,
+    );
+    let outcome = episodes.reconcile(&mut repeat, &marks, false);
+    assert!(outcome.opened.is_empty());
+
+    // First waiting child stops; second waiting child (@ranger) takes the mark within debounce:
+    // opens a new episode and fires a new notification naming @ranger.
+    scout.status = AgentStatus::Running;
+    scout.waiting_since = None;
+    scout.last_activity = t2;
+    let mut handover = frame(
+        vec![parent.clone(), scout.clone(), ranger.clone()],
+        vec![parent_pane.clone(), child_pane.clone(), second_pane.clone()],
+        vec![parent_pane.pane_id.clone()],
+        t2,
+    );
+    let outcome = episodes.reconcile(&mut handover, &marks, false);
+    assert_eq!(outcome.opened.len(), 1);
+    let notes = state.evaluate(&handover, &outcome.opened, &prefs, 15_000);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].body.contains("@ranger"), "{}", notes[0].body);
+
+    // Focus suppression when the answering child's pane IS focused.
+    let mut fresh_episodes = UnreadEpisodes::default();
+    let mut fresh_state = NotificationState::default();
+    let mut focused_child = frame(
+        vec![parent.clone(), ranger.clone()],
+        vec![parent_pane.clone(), second_pane.clone()],
+        vec![second_pane.pane_id.clone()],
+        t2,
+    );
+    let outcome = fresh_episodes.reconcile(&mut focused_child, &marks, false);
+    assert_eq!(outcome.opened.len(), 1);
+    assert!(outcome.opened[0].focused);
+    assert!(
+        fresh_state
+            .evaluate(&focused_child, &outcome.opened, &prefs, 15_000)
+            .is_empty(),
+        "focusing the waiting child's pane suppresses the notification"
+    );
+
+    // Refreshed Antigravity NativeWait (settle.at advances on every push): notifies once.
+    let mut native_wait_child = agent("agy", AgentStatus::Running, false);
+    native_wait_child.parent_agent_id = Some(parent.agent_id.clone());
+    native_wait_child.parent_agent_kind = Some(parent.kind.clone());
+    native_wait_child.launch_depth = Some(1);
+    native_wait_child.name = Some("agy".to_owned());
+    native_wait_child.pane = Some(child_pane.clone());
+    native_wait_child.registered_at = Some(t0);
+    native_wait_child.last_activity = t0;
+    let mut ctx = crate::agents::AgentContext::new("antigravity", t1);
+    ctx.settle = Some(crate::agents::TurnSettle::new(
+        t1,
+        crate::agents::TurnSettleOutcome::NativeWait,
+    ));
+    native_wait_child.context = Some(ctx);
+
+    let mut agy_episodes = UnreadEpisodes::default();
+    let mut agy_state = NotificationState::default();
+    let mut push1 = frame(
+        vec![parent.clone(), native_wait_child.clone()],
+        vec![parent_pane.clone(), child_pane.clone()],
+        Vec::new(),
+        t1,
+    );
+    let out1 = agy_episodes.reconcile(&mut push1, &marks, false);
+    assert_eq!(out1.opened.len(), 1);
+    let n1 = agy_state.evaluate(&push1, &out1.opened, &prefs, 10_000);
+    assert_eq!(n1.len(), 1);
+    assert!(n1[0].body.contains("@agy"), "{}", n1[0].body);
+
+    // Provider refreshes settle.at to t3 while same prompt stands: opens nothing more.
+    native_wait_child
+        .context
+        .as_mut()
+        .unwrap()
+        .settle
+        .as_mut()
+        .unwrap()
+        .at = t3;
+    let mut push2 = frame(
+        vec![parent, native_wait_child],
+        vec![parent_pane, child_pane],
+        Vec::new(),
+        t3,
+    );
+    let out2 = agy_episodes.reconcile(&mut push2, &marks, false);
+    assert!(out2.opened.is_empty());
+    assert!(
+        agy_state
+            .evaluate(&push2, &out2.opened, &prefs, 20_000)
+            .is_empty()
+    );
+}
+
+#[test]
 fn configured_unread_episode_triggers_fire() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {

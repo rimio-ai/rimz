@@ -78,6 +78,16 @@ fn stuck_stage_preserves_a_waiting_childs_attention_and_jump() {
         .unwrap()
         .as_agent_mut()
         .unwrap();
+    card.status = AgentStatus::Waiting;
+    card.delegated_wait = Some(crate::agents::DelegatedWait {
+        child_id: "asking-child".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        handle: "asking-child".to_owned(),
+        pane: Some(child_pane.clone()),
+        start: crate::agents::DelegatedWaitStart::Unknown,
+        detail: None,
+        own_turn_running: false,
+    });
     card.sub_agents.push(
         serde_json::from_value(serde_json::json!({
             "id": "asking-child", "kind": "claude", "name": "claude", "status": "waiting",
@@ -90,7 +100,7 @@ fn stuck_stage_preserves_a_waiting_childs_attention_and_jump() {
 
     let owner = row(&snapshot, "coder");
     assert_eq!(owner.attention_status(), Some(AgentStatus::Waiting));
-    assert_eq!(owner.status(), Some(AgentStatus::Idle));
+    assert_eq!(owner.status(), Some(AgentStatus::Waiting));
     assert_eq!(owner.turn_error_label(), None);
     assert_eq!(owner.attention_pane(), Some(&child_pane));
     let units = snapshot.worktree_groups[0].unit_statuses();
