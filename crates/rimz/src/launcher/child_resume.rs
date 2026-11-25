@@ -74,7 +74,8 @@ pub fn resume_child(
 }
 
 /// Refuses a message to a child whose current answer failed on a provider limit while the
-/// account a resume would run on still reads a refill ahead.
+/// account a resume would run on still reads a refill ahead. On another account only its usage
+/// cache's spent window refuses; on the child's own, see [`same_login_refill`].
 fn limit_refusal(
     store: &crate::store::Store,
     child: &AgentState,
@@ -82,19 +83,18 @@ fn limit_refusal(
     logins: &crate::agents::RoomAccounts,
     catalog: &crate::agents::LoginCatalog,
 ) -> Option<String> {
-    run.limit_failure.as_ref()?;
-    let key = match crate::harness::resume::resume_login(child, Some(logins), catalog) {
-        crate::harness::resume::ResumeLogin::Same => child.login_key(),
-        crate::harness::resume::ResumeLogin::Changed(key) => key,
-        crate::harness::resume::ResumeLogin::Unreadable => return None,
-    };
+    let failure = run.limit_failure.as_ref()?;
+    let runtime = store.runtime_paths();
     let now = jiff::Timestamp::now();
-    let refill = crate::harness::park_notice::refill_ahead(
-        store.runtime_paths(),
-        &key,
-        child.model.as_deref(),
-        now,
-    )?;
+    let refill = match crate::harness::resume::resume_login(child, Some(logins), catalog) {
+        crate::harness::resume::ResumeLogin::Same => {
+            same_login_refill(runtime, child, failure, run.completed_at, now)
+        }
+        crate::harness::resume::ResumeLogin::Changed(key) => {
+            crate::harness::park_notice::refill_ahead(runtime, &key, child.model.as_deref(), now)
+        }
+        crate::harness::resume::ResumeLogin::Unreadable => return None,
+    }?;
     let name = child
         .name
         .as_deref()
@@ -108,6 +108,45 @@ fn limit_refusal(
          then send it again.",
         crate::theme::fmt::refill_in(refill, now, &jiff::tz::TimeZone::system()),
     ))
+}
+
+/// The refill ahead on the child's own login for a limit failure settled at `failed_at`: a spent
+/// window reads until its reset; quota available in a usage read newer than the failure, or an
+/// identity switch on the login since it, reads none; otherwise the refill the failure recorded
+/// counts while it is ahead, since a provider stop that names its refill leaves no spent window
+/// behind. Any provider's recorded refill counts.
+fn same_login_refill(
+    runtime: &crate::RuntimePaths,
+    child: &AgentState,
+    failure: &crate::store::run::LimitFailure,
+    failed_at: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
+) -> Option<jiff::Timestamp> {
+    use crate::harness::park_notice::LimitReading;
+
+    let since = failed_at.unwrap_or(now);
+    match crate::harness::park_notice::limit_reading(runtime, child, now, since) {
+        LimitReading::Refill(refill) => Some(refill),
+        LimitReading::Refilled => None,
+        LimitReading::Unknown if identity_switched_since(runtime, &child.login_key(), since) => {
+            None
+        }
+        LimitReading::Unknown => failure.refill_at.filter(|at| *at > now),
+    }
+}
+
+/// Whether `key`'s login last switched identity or logged out after `since`.
+fn identity_switched_since(
+    runtime: &crate::RuntimePaths,
+    key: &crate::ids::LoginKey,
+    since: jiff::Timestamp,
+) -> bool {
+    crate::agents::account::read_accounts_cache(&runtime.shared_accounts_path())
+        .logins
+        .get(key)
+        .and_then(|record| record.stamps.floor_at_ms)
+        .and_then(|floor| i64::try_from(floor).ok())
+        .is_some_and(|floor| floor > since.as_millisecond())
 }
 
 fn child_posture(

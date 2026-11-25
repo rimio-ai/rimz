@@ -1072,6 +1072,7 @@ fn decode_lifecycle_fields(
 ) -> DecodedLifecycleFields {
     let mut prompt_read = None;
     let mut background_shells = None;
+    let mut limit_stop = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
@@ -1150,6 +1151,7 @@ fn decode_lifecycle_fields(
                     background_shells =
                         Some(BackgroundShellReport::Snapshot { shells: Vec::new() });
                 }
+                limit_stop = stop.limit_stop();
                 stop.fully_idle
                     .map(|fully_idle| LifecycleSignal::TurnEnded {
                         errored: failed,
@@ -1166,13 +1168,17 @@ fn decode_lifecycle_fields(
             (common, None)
         }
     };
-    observation_with_prompt_reader(
+    let mut fields = observation_with_prompt_reader(
         common,
         signal,
         prompt_read,
         background_shells,
         prompt_reader,
-    )
+    );
+    if let Some(observation) = fields.lifecycle.as_mut() {
+        observation.limit_stop = limit_stop;
+    }
+    fields
 }
 
 fn observation_with_prompt_reader(

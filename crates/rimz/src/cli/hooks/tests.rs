@@ -4740,3 +4740,91 @@ fn a_stream_reply_line_answers_only_its_own_frame() {
     assert_eq!(reply_line(br#"{"ingress":"b"}"#, "a"), Exchange::Garbled);
     assert_eq!(reply_line(b"not json", "a"), Exchange::Garbled);
 }
+
+#[test]
+fn an_antigravity_quota_stop_fails_its_run_with_the_limit_on_apply_and_replay() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    let payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/quota_stop.json"
+    ))
+    .unwrap();
+    let agent_id = payload["conversationId"].as_str().unwrap();
+    let stop_at: jiff::Timestamp = "2026-11-25T18:22:48.276839Z".parse().unwrap();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    for replay in [false, true] {
+        let (_dir, store) = hooks_test_store();
+        let workspace = hooks_test_workspace(Some("main"));
+        let run = create_antigravity_child_run(&store, agent_id);
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: stop_at,
+            source: adapter.spec().kind_id(),
+            event: Some("Stop".into()),
+            payload: payload.to_string(),
+            cwd: workspace.project_root.clone(),
+            hook_pid: std::process::id(),
+            env: std::collections::BTreeMap::from([(
+                rimz::harness::launch::ENV_RUN_ID.to_owned(),
+                run.run_id.to_string(),
+            )]),
+        };
+        let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+        let mut decoded = adapter
+            .decode_hook_in("Stop", &payload, &frame.env)
+            .unwrap();
+        if replay {
+            // The first attempt appended the lifecycle and died before the run fold.
+            scoped
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: &workspace.session_name,
+                    agent_kind: adapter.spec().kind_id(),
+                    event_name: "Stop",
+                    observation: decoded.lifecycle().unwrap(),
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+        let recovered = store.read_events().unwrap();
+        let attempt = if replay {
+            FrameAttempt::Replay
+        } else {
+            FrameAttempt::First
+        };
+        with_frame_env(&frame, attempt, || {
+            super::lifecycle::handle_lifecycle_frame(
+                &workspace,
+                &scoped,
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+                &recovered,
+            )
+        })
+        .unwrap();
+        let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        let refill_at = stop_at + std::time::Duration::from_secs(438_294);
+        let label = "Individual quota reached. Please upgrade your subscription to increase your \
+                     limits.";
+        assert_eq!(
+            (settled.status, settled.limit_failure, settled.failure_tail),
+            (
+                rimz::store::run::RunStatus::Failed,
+                Some(rimz::store::run::LimitFailure {
+                    cause: rimz::store::run::LimitFailureCause::RefillKnown,
+                    refill_at: Some(refill_at),
+                    label: Some(label.to_owned()),
+                }),
+                Some(format!(
+                    "stopped on a provider limit: \"{label}\"; it refills at {}",
+                    rimz::utils::time::format_local_timestamp(refill_at)
+                )),
+            ),
+            "replay={replay}"
+        );
+    }
+}

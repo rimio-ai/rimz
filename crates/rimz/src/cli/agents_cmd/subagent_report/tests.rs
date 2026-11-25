@@ -1147,6 +1147,58 @@ fn limit_failed(cause: rimz::store::run::LimitFailureCause, refill_at: Option<&s
 }
 
 #[test]
+fn an_antigravity_quota_stop_reaches_the_digest_row_with_its_limit_and_refill() {
+    let payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../agents/adapters/antigravity/tests/fixtures/quota_stop.json"
+    ))
+    .unwrap();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let observation = adapter
+        .decode_hook("Stop", &payload)
+        .unwrap()
+        .take_lifecycle()
+        .unwrap();
+    let (_dir, _workspace, store) = fixture();
+    let mut record = RunRecord::new(
+        store.paths().workspace_id.clone(),
+        AgentKind::new_unchecked("antigravity"),
+        PermissionMode::Auto,
+        "map it".to_owned(),
+        PathBuf::from("/tmp/subagent-report"),
+    );
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.agent_id = observation.agent_id.clone();
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let stop_at: Timestamp = "2026-11-25T18:22:48Z".parse().unwrap();
+    rimz::harness::run::settle_lifecycle(
+        &store.for_hook_ingress(rimz::EventId::new(), stop_at),
+        &record.run_id,
+        adapter,
+        &observation,
+        None,
+    )
+    .unwrap()
+    .expect("the quota stop settles the run");
+    let settled = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    let mut child = AgentState::stub("antigravity", "quota", AgentStatus::Failed);
+    child.name = Some("quota-child".to_owned());
+    let row = compose_answer_row(
+        &child,
+        &settled,
+        None,
+        None,
+        ResumeAccount::Same,
+        &plus_one_clock("2026-11-25T18:23:48Z"),
+    );
+    let reason = "stopped on a provider limit: \"Individual quota reached. Please upgrade your \
+                  subscription to increase your limits.\"; it refills in 121h (at 21:07 +01:00 on \
+                  2026-11-30). Message it after the refill to continue it";
+    assert!(row.starts_with("- @quota-child: failed in "), "{row}");
+    assert!(row.contains(reason), "{row}");
+}
+
+#[test]
 fn a_limit_failure_row_names_what_the_parent_can_do() {
     use rimz::store::run::LimitFailureCause as Cause;
     let child = child("still-silver", Some("review correctness"));

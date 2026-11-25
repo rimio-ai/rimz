@@ -279,10 +279,11 @@ pub struct LimitHold {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LimitFailure {
     pub cause: LimitFailureCause,
-    /// The refill read for the park; set for `BeyondHoldLimit` and `RefillKnown` only.
+    /// The refill read for the park, or the one a provider's stop report named, from the stop's
+    /// recorded time; set for `BeyondHoldLimit` and `RefillKnown` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refill_at: Option<Timestamp>,
-    /// The provider's message, when the limit marker carried one.
+    /// The provider's message, when the limit marker or the stop report carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }

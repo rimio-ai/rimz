@@ -1,0 +1,15 @@
+{
+  "artifactDirectoryPath": "/tmp/agyqcap1/home/.gemini/antigravity-cli/brain/0f3ce4b9-1b71-4cac-bfc5-70a71b709588",
+  "continuationActive": false,
+  "conversationId": "0f3ce4b9-1b71-4cac-bfc5-70a71b709588",
+  "cwd": "",
+  "error": "generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 121h44m54s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 121h44m54s.",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "hookEventName": "Stop",
+  "lastUserInput": "Reply with the single word PONG and nothing else.",
+  "modelName": "gemini-4-neon-high",
+  "terminationReason": "ERROR",
+  "transcriptPath": "/tmp/agyqcap1/home/.gemini/antigravity-cli/brain/0f3ce4b9-1b71-4cac-bfc5-70a71b709588/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": []
+}
