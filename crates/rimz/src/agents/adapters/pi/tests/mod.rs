@@ -104,6 +104,17 @@ fn neutral_decision_shape_is_pinned() {
 }
 
 #[test]
+fn deadline_context_reply_rides_the_post_tool_result() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("pi", "tool_result");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "context": "deadline context"
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
+
+#[test]
 fn named_login_scopes_spending_and_session_transcripts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

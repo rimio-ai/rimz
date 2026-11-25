@@ -27,6 +27,8 @@
 //! blocking tool as a native question and returns neutral so pi can open its
 //! UI. `ui_prompt_start` (Pi 0.84.4+) marks any other extension dialog opened
 //! inside a run as a generic question, and `ui_prompt_end` clears it by key.
+//! `tool_result`, also awaited, is fed only inside a `rimz` run, where its
+//! reply carries the deadline ladder's rung for the extension to steer in.
 //! Managed extension instances also identify child Pi sessions through
 //! RimZ-owned process-lineage markers and feed lifecycle rows keyed by the
 //! child's own session id, so its model, effort, context, and usage envelopes
@@ -52,8 +54,8 @@ use super::context::{
 };
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -99,7 +101,12 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("ask_user_question", AskKind::Question)],
     },
     capabilities: Capabilities {
-        hook_context: None,
+        // The extension steers the `tool_result` reply's `context` in as a
+        // custom message, seen before the next model call.
+        hook_context: Some(HookContextReply::TopLevel {
+            event: "tool_result",
+            key: "context",
+        }),
         prompt_context: false,
         // Pi itself runs tools unasked; the rpiv questionnaire extension owns
         // a native blocking question UI on the same awaited `tool_call` gate.
@@ -321,6 +328,7 @@ const PI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "message_update", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle( "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
     HookEventSpec::lifecycle( "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#).progress(),
+    HookEventSpec::lifecycle( "tool_result", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#),
     HookEventSpec::blocking( "ui_prompt_start", r#"{"session_id":"sess-1","ui_prompt_id":"ui_prompt:1","ui_prompt_kind":"confirm","ui_prompt_title":"Allow rm -rf build?","has_ui":true}"#, AskKind::Question),
     HookEventSpec::lifecycle( "ui_prompt_end", r#"{"session_id":"sess-1","ui_prompt_id":"ui_prompt:1"}"#).progress(),
     HookEventSpec::lifecycle( "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),

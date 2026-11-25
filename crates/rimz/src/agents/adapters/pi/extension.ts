@@ -5,12 +5,13 @@
 // Forwards pi's lifecycle events to `rimz hooks feed --source pi` as one JSON
 // payload on the child's stdin — fire-and-forget with fresh, fully-piped
 // stdio, so pi never blocks on RimZ and the child's output never reaches pi's
-// UI. The one exception is `tool_call`, pi's blocking pre-tool gate: its
-// handler awaits the child and reads the decision from stdout — `{"block":
-// true, "reason": …}` blocks the tool, anything else (including an absent or
-// broken rimz) lets it run. RimZ authors this wire; the event mapping it
-// feeds is docs/internals/agents/adapter_pi.md and the upstream surface is
-// docs/externals/agent-adapter/pi-reference.md.
+// UI. Two handlers await the child and read its stdout. `tool_call`, pi's
+// blocking pre-tool gate, reads the decision — `{"block": true, "reason": …}`
+// blocks the tool, anything else (including an absent or broken rimz) lets it
+// run. `tool_result`, inside a `rimz` run only, reads a deadline rung as
+// `{"context": …}` and steers it into the model's context. RimZ authors this
+// wire; the event mapping it feeds is docs/internals/agents/adapter_pi.md and
+// the upstream surface is docs/externals/agent-adapter/pi-reference.md.
 // Fast launches also request OpenAI priority serving through
 // `before_provider_request`, without spawning a hook child.
 import { spawn } from "node:child_process";
@@ -650,53 +651,75 @@ export default function rimz(pi) {
     latestProvider = undefined;
   });
 
+  // An awaited feed: resolves to the child's stdout parsed as JSON, or to
+  // undefined on empty or unparseable stdout, a spawn error, or a missing binary.
+  const ask = (event, ctx, fields) =>
+    new Promise((resolve) => {
+      const none = () => resolve(undefined);
+      try {
+        const child = spawnRimz("pipe");
+        let out = "";
+        // Decode as a stream, not per-chunk: a multi-byte character in the
+        // reply must never split across chunk boundaries.
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          out += chunk;
+        });
+        child.on("error", none);
+        child.on("close", () => {
+          try {
+            resolve(JSON.parse(out));
+          } catch {
+            none();
+          }
+        });
+        child.stdin.end(JSON.stringify(envelope(event, ctx, fields)));
+      } catch {
+        none();
+      }
+    });
+
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
   // neutral no-op immediately. The ask_user_question tool is classified as a
   // native question before the rpiv extension opens its UI; every other tool
   // stays neutral. Every non-deny outcome — empty stdout, a parse failure, a
   // spawn error, a missing binary — resolves to "let the tool run".
-  pi.on("tool_call", (ev, ctx) =>
-    new Promise((resolve) => {
-      if (ev?.toolName === "ask_user_question") openQuestionnaires.add(ev?.toolCallId);
-      const allow = () => resolve(undefined);
-      try {
-        const child = spawnRimz("pipe");
-        let out = "";
-        // Decode as a stream, not per-chunk: a multi-byte character in the
-        // deny reason must never split across chunk boundaries.
-        child.stdout.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => {
-          out += chunk;
-        });
-        child.on("error", allow);
-        child.on("close", () => {
-          try {
-            const decision = JSON.parse(out);
-            if (decision?.block === true) {
-              resolve({
-                block: true,
-                reason: typeof decision.reason === "string" ? decision.reason : undefined,
-              });
-              return;
-            }
-          } catch {
-            // Empty or non-JSON stdout is the neutral allow.
-          }
-          allow();
-        });
-        child.stdin.end(
-          JSON.stringify(
-            envelope("tool_call", ctx, {
-              tool_call_id: ev?.toolCallId,
-              tool_name: ev?.toolName,
-              tool_input: ev?.input,
-              has_ui: ctx?.hasUI === true,
-            }),
-          ),
-        );
-      } catch {
-        allow();
-      }
-    }),
-  );
+  pi.on("tool_call", async (ev, ctx) => {
+    if (ev?.toolName === "ask_user_question") openQuestionnaires.add(ev?.toolCallId);
+    const decision = await ask("tool_call", ctx, {
+      tool_call_id: ev?.toolCallId,
+      tool_name: ev?.toolName,
+      tool_input: ev?.input,
+      has_ui: ctx?.hasUI === true,
+    });
+    if (decision?.block !== true) return undefined;
+    return {
+      block: true,
+      reason: typeof decision.reason === "string" ? decision.reason : undefined,
+    };
+  });
+
+  // The deadline ladder's carrier, post-tool like other agents' PostToolUse.
+  // Only a `rimz` run child (RIMZ_RUN_ID set) awaits a feed here, so other
+  // sessions spawn nothing per tool. A reply's `context` is steered in as a
+  // custom message: Pi sends it to the model before its next call and renders
+  // it as extension text, never as the user. The tool result stays untouched.
+  pi.on("tool_result", async (ev, ctx) => {
+    if (!process.env.RIMZ_RUN_ID) return undefined;
+    const reply = await ask("tool_result", ctx, {
+      tool_call_id: ev?.toolCallId,
+      tool_name: ev?.toolName,
+    });
+    const context = text(reply?.context);
+    if (!context) return undefined;
+    try {
+      pi.sendMessage(
+        { customType: "rimz-deadline", content: context, display: true },
+        { deliverAs: "steer" },
+      );
+    } catch {
+      // A failed steer loses this rung; the host stop and the kill remain.
+    }
+    return undefined;
+  });
 }
