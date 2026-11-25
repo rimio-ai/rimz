@@ -26,6 +26,8 @@ const activations = new WeakMap<Context, Promise<Cleanup>>();
 const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
 const LAUNCH_AUTO_APPROVE = Symbol.for("rimz.launch-auto-approve");
 const DEFAULT_SESSION_TITLE = /^(?:New session|Child session) - /;
+// How long a model request waits for the deadline rung of its session's last tool feed.
+const RUNG_WAIT_MS = 1500;
 
 function claimLaunchReminders(): string | undefined {
   const claimed = globalThis as Record<symbol, string | undefined>;
@@ -90,6 +92,12 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const gauges = new Map<string, Gauge>();
   const steps = new Map<string, { sessionID: string; model: ModelRef }>();
   const forms = new Map<string, string[]>();
+  // A supervised run's deadline rungs: the feed claims one on a tool end, and the newest
+  // claimed rung rides every later model request of that turn.
+  const supervised = Boolean(process.env.RIMZ_RUN_ID);
+  const rungFeeds = new Map<string, Promise<void>>();
+  const rungs = new Map<string, string>();
+  const turnEnds = new Map<string, number>();
   let feeds = Promise.resolve();
   const replies = new Set<Promise<void>>();
   const registrations: Array<{ dispose(): Promise<void> }> = [];
@@ -113,21 +121,32 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   }
 
   // Ingress order is commit order, so each feed waits for the one before it: a reply
-  // must never commit ahead of its own ask.
-  function send(payload: Envelope): Promise<void> {
-    const done = feeds.then(() => new Promise<void>((finish) => {
+  // must never commit ahead of its own ask. Only a feed that asks for its reply reads stdout.
+  function send(payload: Envelope, reply = false): Promise<string> {
+    const done = feeds.then(() => new Promise<string>((finish) => {
       const child = spawn(rimz, ["hooks", "feed", "--source", "opencode"], {
         cwd: payload.cwd,
         env: { ...process.env, RIMZ_AGENT_PID: String(process.ppid) },
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", reply ? "pipe" : "ignore", "ignore"],
       });
-      child.on("error", () => finish());
-      child.on("close", () => finish());
+      let stdout = "";
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+      child.on("error", () => finish(""));
+      child.on("close", () => finish(stdout));
       child.stdin.on("error", () => {});
       child.stdin.end(JSON.stringify(payload) + "\n");
     }));
-    feeds = done.catch(() => {});
+    feeds = done.then(() => {}, () => {});
     return done;
+  }
+
+  function claimRung(sessionID: string, stdout: string): void {
+    try {
+      const text = JSON.parse(stdout).additional_context;
+      if (typeof text === "string" && text) rungs.set(sessionID, text);
+    } catch {
+      // A feed with no reply prints nothing.
+    }
   }
 
   function rememberTitle(sessionID: string, title: unknown): boolean {
@@ -199,6 +218,9 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     sessions.delete(sessionID);
     agents.delete(sessionID);
     gauges.delete(sessionID);
+    rungFeeds.delete(sessionID);
+    rungs.delete(sessionID);
+    turnEnds.delete(sessionID);
     for (const [id, step] of steps) if (step.sessionID === sessionID) steps.delete(id);
   }
 
@@ -214,7 +236,7 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     }
   }
 
-  function endRoot(sessionID: string, reason: string): Promise<void> {
+  function endRoot(sessionID: string, reason: string): Promise<string> {
     const payload = base("session_ended", sessionID, { reason });
     forget(sessionID);
     return send(payload);
@@ -308,6 +330,8 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
       const parent = children.get(sessionID);
       const failed = event.type === "session.execution.failed";
       if (!parent) roots.add(sessionID);
+      rungs.delete(sessionID);
+      turnEnds.set(sessionID, (turnEnds.get(sessionID) ?? 0) + 1);
       void send(base(parent ? "SubagentStop" : failed ? "session_error" : "session_idle", sessionID, {
         parent_session_id: parent, is_error: failed,
         error_class: data.error?.type, error_message: data.error?.message,
@@ -383,16 +407,29 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   registrations.push(await ctx.session.hook("context", async (input) => {
     await classifySession(input.sessionID);
     if (disposed) return;
-    if (reminders && roots.has(input.sessionID)) {
-      input.system.push({ type: "text", text: reminders });
+    if (!roots.has(input.sessionID)) return;
+    if (reminders) input.system.push({ type: "text", text: reminders });
+    const pending = rungFeeds.get(input.sessionID);
+    if (pending) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([pending, new Promise<void>((finish) => { timer = setTimeout(finish, RUNG_WAIT_MS); })]);
+      if (timer) clearTimeout(timer);
     }
+    const rung = rungs.get(input.sessionID);
+    if (rung && !disposed) input.system.push({ type: "text", text: rung });
   }));
   registrations.push(await ctx.tool.hook("execute.after", async (input) => {
     await classifySession(input.sessionID);
     if (disposed) return;
-    if (roots.has(input.sessionID)) {
-      void send(base("tool_after", input.sessionID, { tool_name: input.tool, is_error: input.status === "error" }));
-    }
+    if (!roots.has(input.sessionID)) return;
+    const sessionID = input.sessionID;
+    const feed = send(base("tool_after", sessionID, { tool_name: input.tool, is_error: input.status === "error" }), supervised);
+    if (!supervised) return;
+    // A rung that lands after its turn ended belongs to no request.
+    const turn = turnEnds.get(sessionID);
+    rungFeeds.set(sessionID, feed.then((stdout) => {
+      if (turnEnds.get(sessionID) === turn) claimRung(sessionID, stdout);
+    }));
   }));
   void (async () => {
     try {

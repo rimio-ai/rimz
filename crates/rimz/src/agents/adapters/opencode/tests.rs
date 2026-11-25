@@ -6,6 +6,17 @@ use crate::transcript::{AskOption, AskQuestion};
 use serde_json::json;
 
 #[test]
+fn deadline_context_reply_rides_the_plugin_tool_after_feed() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("opencode", "tool_after");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "additional_context": "deadline context"
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
+
+#[test]
 fn mini_frontend_takes_only_a_leading_subcommand_and_exact_permission_flags() {
     let cases = [
         (&["mini"][..], Some("mini"), &[][..], false),
@@ -1325,7 +1336,6 @@ fn plugin_source_pins_rimz_wire_contract() {
         assert!(source.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
         assert!(source.contains(&format!("RIMZ_AGENT_PID: String({pid})")));
         assert!(source.contains("RIMZ_BIN"));
-        assert!(source.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
         for hook in OPENCODE_HOOKS {
             if pid == "process.pid"
                 && (hook.event.starts_with("Subagent") || hook.event == "session_created")
@@ -1339,6 +1349,10 @@ fn plugin_source_pins_rimz_wire_contract() {
             );
         }
     }
+    // Only the server reads a feed's stdout, and only for the deadline rung of a tool end.
+    assert!(TUI_SOURCE.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
+    assert!(PLUGIN_SOURCE.contains("stdio: [\"pipe\", reply ? \"pipe\" : \"ignore\", \"ignore\"]"));
+    assert!(PLUGIN_SOURCE.contains(".additional_context"));
     for event in ["client_idle", "client_running"] {
         assert!(TUI_SOURCE.contains(event), "client source missing {event}");
         assert!(
