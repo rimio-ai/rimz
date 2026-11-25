@@ -457,10 +457,10 @@ Every message RimZ delivers presses keys from the receiving agent's declaration:
 
 | Agent | Send now | Queue | Interrupt | Command |
 | --- | --- | --- | --- | --- |
-| Claude Code | Enter, Ctrl+X, then Ctrl+S 100 ms later | Enter | Esc | Enter |
+| Claude Code | Enter, Ctrl+X 1 s later, then Ctrl+S 100 ms later | Enter | Esc | Enter |
 | Codex | Enter | Tab | Esc | Enter |
 | Pi | Enter | Alt+Enter | Esc | Enter |
-| Antigravity | Enter, then Alt+M | Enter | Esc | Enter |
+| Antigravity | Enter, then Alt+M 1 s later | Enter | Esc | Enter |
 | Every other agent and process plugins | Enter | Enter | Esc | Enter |
 
 Claude Code and Antigravity press Enter before their send-now chord, so a chord that does nothing leaves the text submitted behind the running turn rather than unsent in the composer. A `--steer --force` to an agent RimZ shows with an open prompt presses the chord without that Enter, which the prompt could take as its answer. The last row is not yet implemented: those keys were not checked against each agent. Antigravity's two keys hold because RimZ launches it with `queuedMessages` set to `"queue"` ([permission modes](../internals/agents/adapter_antigravity.md#permission-rules-sandbox-and-added-dirs)); an agy started by hand with `send-immediately` saved swaps them.
