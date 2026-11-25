@@ -171,6 +171,41 @@ fn concurrent_fires_admit_one_run() {
     );
 }
 
+/// A settle pass that read a refused fire's mark before the fire withdrew it writes nothing for
+/// that fire: its overlap is its one row, and no strike moves.
+#[test]
+fn a_settle_pass_leaves_a_fire_that_withdrew_its_mark_alone() {
+    let env = fixture("skip", None);
+    blocking_check(&env);
+    start_blocker(&env);
+    let opened = crate::common::DeliveryRendezvous::new(&env, "after-open");
+    let signal = json!({"name":"trunk.moved", "source":"git", "payload":{"repo":"r", "trunk":"main", "from":"a", "to":"b"}}).to_string();
+    let refused = env
+        .rimz()
+        .args(["loop", "run", "busy", "--signal-json", &signal])
+        .env("RIMZ_TEST_LOOP_AFTER_OPEN_FIRE", &opened.path)
+        .spawn()
+        .unwrap();
+    let mut release_fire = opened.arrive();
+    let read = crate::common::DeliveryRendezvous::new(&env, "marks-read");
+    let settle = env
+        .rimz()
+        .args(["loop", "settle"])
+        .env("RIMZ_TEST_LOOP_SETTLE_AFTER_MARKS", &read.path)
+        .spawn()
+        .unwrap();
+    let mut release_settle = read.arrive();
+    release_fire.write_all(&[1]).unwrap();
+    assert!(refused.wait_with_output().unwrap().status.success());
+    release_settle.write_all(&[1]).unwrap();
+    assert!(settle.wait_with_output().unwrap().status.success());
+    let rows = read_loop_run_records(&env);
+    assert_eq!(results(&rows), [LoopRunResult::Overlapped], "{rows:?}");
+    assert_eq!(read_loop_strikes(&env).get(&machine_task_key("busy")), None);
+    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+    wait_for_quiet(&env, 1);
+}
+
 #[test]
 fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
     let env = fixture("replace", None);

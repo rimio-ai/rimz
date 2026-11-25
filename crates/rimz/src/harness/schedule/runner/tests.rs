@@ -1334,6 +1334,26 @@ fn a_fire_settles_the_dead_mark_it_displaces() {
     assert_eq!(records.get(&fire.core.task_id).unwrap().strikes, 1);
 }
 
+/// A fire that withdrew its mark after a settle read it, as a failed launch spawn does, gets no
+/// row and no strike from that settle.
+#[test]
+fn a_settle_of_a_withdrawn_mark_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let fire = launch_fire(&root, &catalog, agent_entry(), LoopRunMode::Scheduled);
+    let (fire_id, displaced) = fire.core.open_fire().unwrap();
+    let read = dead_mark(fire_id.clone(), false);
+    fires::withdraw(&fire_id, displaced).unwrap();
+    let binding = fire.core.task.binding(&fire.core.name);
+    run_log::settle_displaced(&root, &binding, &read);
+    let rows = run_log::task_records(&logs_dir(), &fire.core.task_id, None);
+    assert!(rows.is_empty(), "{rows:?}");
+    let records = task_record::load().unwrap();
+    assert_eq!(records.get(&fire.core.task_id).unwrap().strikes, 0);
+}
+
 /// A fire opens its mark on the task id it cached at its start: a rename mid-fire mints no
 /// second id.
 #[test]
