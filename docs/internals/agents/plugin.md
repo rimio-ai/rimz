@@ -58,7 +58,7 @@ A plugin's spec must outlive the process like a built-in's `static` spec, becaus
 | `launch.prompt` | positional after `--` |
 | `launch.resume`, `fork`, `max_turn_flag`, `presets.auto_compact`, `presets.fast` | none. Resume argv comes from `resume_command` instead |
 | `launch.message_keys` | `MessageKeys::NOT_YET_IMPLEMENTED`: Enter to send now, to queue, and to submit a command, Escape to interrupt |
-| `launch.compact_command` | the manifest string, with `CompactInstruction::Unsupported` |
+| `launch.compact_command` | the manifest string, with `CompactInstruction::Unsupported` and `steer_checked: false` |
 | `default_model`, `default_context_window` | none |
 | `thread_key` | `[transcripts].thread-key`, default `PerFile` |
 
