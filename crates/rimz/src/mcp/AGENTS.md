@@ -10,5 +10,5 @@ Local contract for `crates/rimz/src/mcp/`: the protocol loop, the tool catalog a
 - **Reuse the carried tool.** A tool that carries another tool's call takes the tool's name and its arguments and reuses that tool's parser; it never copies the fields.
 - **No always-refused field.** A schema lists no field that every call is refused for.
 - **No cross-tool duplication.** A tool description does not restate what another tool's description says.
-- **Keep safety rules in the description.** Every safety or misfire rule stays in the tool description, never only in a guide.
+- **Keep safety rules in the description.** Every safety or misfire rule stays in the tool description, never only in a guide. Before a trim, list each sentence that tells the caller when to do or not do something, and find each one in the trimmed text.
 - **Measure before and after.** Run `rimz mcp tools` before and after a wording change.
