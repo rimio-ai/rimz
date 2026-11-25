@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::auto_continue::limit_marker_active;
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus, ProviderCapacity};
+use crate::agents::{AgentState, ProviderCapacity};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::{LimitFailure, LimitFailureCause, LimitHold, ReportTo, RunRecord};
 use crate::store::snapshot::find_agent;
@@ -161,7 +161,7 @@ pub struct UnnoticedPark<'a> {
 }
 
 /// The live child of an open subagent run reporting to its launcher, whose
-/// live turn died on a limit marker. `agents` must carry joined context.
+/// current turn stopped on a limit marker. `agents` must carry joined context.
 fn parked_child<'a>(
     run: &RunRecord,
     agents: &'a [AgentState],
@@ -171,10 +171,15 @@ fn parked_child<'a>(
         return None;
     }
     let child = find_agent(agents, run.kind.as_str(), run.agent_id.as_ref()?)?;
-    (child.ended_at.is_none()
-        && child.status == AgentStatus::Running
-        && limit_marker_active(child, now))
-    .then_some(child)
+    (child.ended_at.is_none() && limit_marker_active(child, now)).then_some(child)
+}
+
+/// Whether `activity` still names the same park as `hold_activity`: no later,
+/// and in the same second (the producer's transcript fold cuts to the whole
+/// second, and a hook applied on replay leaves the heartbeat before it). Any
+/// later subsecond or later second means the child acted since the park.
+fn same_park_activity(activity: Timestamp, hold_activity: Timestamp) -> bool {
+    activity <= hold_activity && activity.as_second() == hold_activity.as_second()
 }
 
 /// The park `run` is still to be classified for: a parked child with a live
@@ -227,7 +232,7 @@ pub fn park_action<'a>(
         && continuation != Continuation::On
         && now >= hold.until.max(hold.since + FAIL_WINDOW)
         && let Some(child) = parked_child(run, agents, now)
-        && child.last_activity == hold.activity
+        && same_park_activity(child.last_activity, hold.activity)
     {
         let (cause, refill_at) = match continuation {
             Continuation::Spent => (LimitFailureCause::ContinueFailed, None),
@@ -243,7 +248,10 @@ pub fn park_action<'a>(
     }
     let UnnoticedPark { child, .. } = unnoticed_park(run, agents, now)?;
     let activity = child.last_activity;
-    if let Some(hold) = run.limit_hold.filter(|hold| hold.activity == activity) {
+    if let Some(hold) = run
+        .limit_hold
+        .filter(|hold| same_park_activity(activity, hold.activity))
+    {
         return Some(ParkAction::Hold { child, hold });
     }
     let (_, marker) = child.displayed_turn_error(now)?;

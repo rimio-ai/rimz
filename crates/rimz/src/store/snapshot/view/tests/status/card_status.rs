@@ -547,3 +547,57 @@ fn promoted_launched_row_refusal_beats_waiting_child() {
         "a promoted launched row resting on a refused model must keep Failed and carry no delegated wait"
     );
 }
+
+#[test]
+fn promoted_raw_failed_launched_child_reads_paused_on_current_turn_limit_marker() {
+    use AgentStatus::{Failed, Paused};
+
+    let promoted = || {
+        let mut child = agent("antigravity", "child-1", Failed, 1_000)
+            .worktree("/repo/child")
+            .in_pane("%2")
+            .turn_started_ago(120)
+            .active_ago(5);
+        child.parent_agent_id = Some("parent-gone".into());
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child.launch_depth = Some(1);
+        child
+    };
+    let project = |child: AgentState| {
+        let snapshot = room(vec![child]).with_live_panes_and_provider_capacities(
+            vec![pane("%2", "agy", "/repo/child")],
+            None,
+            &BTreeMap::new(),
+        );
+        let row = row(&snapshot, "child-1");
+        (row.status(), row.turn_error_label().map(str::to_owned))
+    };
+
+    let paused = promoted().turn_error_class(
+        10,
+        "Individual quota reached",
+        TurnErrorClass::PausedRateLimit,
+    );
+    assert_eq!(
+        project(paused),
+        (Some(Paused), Some("Individual quota reached".to_owned())),
+        "a promoted raw-failed child with a current-turn limit marker reads paused"
+    );
+
+    let stale = promoted().turn_error_class(
+        200,
+        "Individual quota reached",
+        TurnErrorClass::PausedRateLimit,
+    );
+    assert_eq!(
+        project(stale),
+        (Some(Failed), None),
+        "a marker older than turn_started_at leaves the promoted row failed"
+    );
+
+    assert_eq!(
+        project(promoted()),
+        (Some(Failed), None),
+        "without a marker the promoted raw-failed row stays failed"
+    );
+}

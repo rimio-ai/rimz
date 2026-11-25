@@ -45,8 +45,8 @@ pub(super) fn project_display_status(
             .get(&key)
             .map(|(status, label)| (*status, label.as_str()));
         let delegated_wait = delegated_waits.get(&key);
-        // A launched child rendered as its own row has no root source; only the refusal step
-        // reads its own state, and every other rung keeps what it sees without one.
+        // A launched child rendered as its own row has no root source; only its turn start and
+        // the refusal step read its own state, and every other rung keeps what it sees without one.
         project_display(
             source_agent,
             source_agent.or_else(|| index.launched(&key)),

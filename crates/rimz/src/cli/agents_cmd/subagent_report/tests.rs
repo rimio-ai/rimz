@@ -1495,6 +1495,77 @@ fn a_held_child_neither_blocks_nor_joins_its_siblings_report() {
 }
 
 #[test]
+fn a_raw_failed_held_child_keeps_its_provider_label_in_the_digest() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["held", "done"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    start_turn(&store, "held");
+    // End the held child's turn errored so its raw status in the audit projection is `Failed`.
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "report-test",
+            agent_kind: AgentKind::new_unchecked("codex"),
+            event_name: "Stop",
+            observation: &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("held")),
+                LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let at = Timestamp::now() + std::time::Duration::from_secs(1);
+    let mut context = rimz::agents::AgentContext::new("codex", at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at,
+        label: Some("Individual quota reached".into()),
+    });
+    rimz::store::agent_context::write_record(
+        store.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new("codex", "held", context),
+    )
+    .unwrap();
+
+    let mut held = child_run(&workspace.workspace_id, "held", RunStatus::Running);
+    let now = Timestamp::now();
+    held.limit_hold = Some(rimz::store::run::LimitHold {
+        activity: now,
+        since: now,
+        until: now + std::time::Duration::from_secs(3 * 3600),
+    });
+    let done = child_run(&workspace.workspace_id, "done", RunStatus::Completed);
+    for record in [&held, &done] {
+        run::create(store.paths(), record).unwrap();
+    }
+    let ReportOutcome::Queued { message_id, .. } =
+        report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap()
+    else {
+        panic!("expected a fleet digest with the held child's line");
+    };
+    let digest = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .unwrap()
+        .text;
+    assert!(
+        digest.contains(
+            "- @held: paused on a provider limit: \"Individual quota reached\"; it refills in "
+        ),
+        "raw-failed held child must keep its provider label: {digest}"
+    );
+}
+
+#[test]
 fn a_fleet_with_only_held_children_reports_nothing() {
     let (_dir, workspace, store) = fixture();
     append_agent(&store, "parent", None);
