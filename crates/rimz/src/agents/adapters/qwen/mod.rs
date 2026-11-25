@@ -84,6 +84,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         permission_before_auto_review: false,
         transcript_tail_context: false,
         context_lags_compaction: false,
+        lifecycle_reports_fill: false,
         registers_lazily: false,
         reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::Unsupported,

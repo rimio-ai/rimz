@@ -126,6 +126,7 @@ fn refresh_loop(
                     fold.frame.as_deref(),
                     &state,
                     &runtime,
+                    &diag,
                     &mut refresh_state,
                 );
                 let steps = refresh_state.take_pass_spawns();

@@ -157,6 +157,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         permission_before_auto_review: false,
         transcript_tail_context: false,
         context_lags_compaction: false,
+        lifecycle_reports_fill: true,
         // Claude stamps a live pane on every session, so it opts out of the
         // lazy dead-stamp rebind. A genuinely paneless session can still be
         // recovered by cwd, and a pane with no session, such as the login

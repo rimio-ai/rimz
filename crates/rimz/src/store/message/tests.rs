@@ -3149,6 +3149,7 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
             message_id: soft.message_id.clone(),
             queued_at: at,
         }),
+        ..SoftCompactMark::default()
     });
     let mut soft_ended = soft_live.clone();
     soft_ended.ended_at = Some(later);
@@ -3156,6 +3157,7 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
     soft_reminded.soft_compact = Some(SoftCompactMark {
         compactions: Some(1),
         continue_owed: None,
+        ..SoftCompactMark::default()
     });
     let mut compact = plain.clone().with_body(MessageBody::Command);
     compact.enqueued_at = at;

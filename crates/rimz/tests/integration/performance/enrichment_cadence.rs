@@ -142,6 +142,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         Some(&frame),
         &state,
         &runtime,
+        &rimz::diag::DiagSink::disabled(),
         &mut refresh_state,
     )
     .expect("refresh producer caches");
@@ -190,6 +191,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         Some(&frame),
         &state,
         &runtime,
+        &rimz::diag::DiagSink::disabled(),
         &mut refresh_state,
     )
     .expect("second refresh");

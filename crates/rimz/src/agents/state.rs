@@ -1120,8 +1120,9 @@ impl<'a> AgentCardRef<'a> {
     }
 }
 
-/// What smart compaction holds on a card: the compaction epoch its reminder went out in, and
-/// the continue queued behind a compaction command that is still owed.
+/// What smart compaction holds on a card: the compaction epoch its reminder went out in, the
+/// lowest lifecycle fill observed in the fold since that reminder was sent, and the continue
+/// queued behind a compaction command that is still owed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoftCompactMark {
     /// The local compaction epoch the reminder was steered in, or `None` when none was steered
@@ -1130,6 +1131,16 @@ pub struct SoftCompactMark {
     /// clears only `continue_owed` and leaves the epoch spent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions: Option<u32>,
+    /// Lowest context-window token occupancy observed on a lifecycle event in the fold since the
+    /// latest reminder was sent (never from a sidecar; blank or retired readings lower nothing).
+    /// Reset when a reminder is sent or a continuation row inherits the mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_water_tokens: Option<u64>,
+    /// Lowest explicit `context_pct` observed on a lifecycle event in the fold since the latest
+    /// reminder was sent, for guarded kinds (Pi, OMP) that can report a percentage without a
+    /// token count. Reset alongside `low_water_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_water_pct: Option<u8>,
     /// The continue most recently enqueued behind a compaction command, while that record has
     /// not reached a terminal status and the fold has not cleared it: an interrupt, a
     /// registration, a user-authored turn start, any non-keepalive turn start after a compaction

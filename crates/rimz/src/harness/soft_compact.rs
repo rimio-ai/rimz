@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::AgentState;
+use crate::agents::state::SoftCompactMark;
 use crate::config::MachineConfig;
+use crate::diag::DiagSink;
+use crate::diag::record::DiagEvent;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::cache_keepalive::{RoomCapacities, SeatPolicy};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -27,6 +30,11 @@ struct FireRecord {
     compactions: u32,
 }
 
+#[derive(Serialize, Deserialize)]
+struct WithheldRecord {
+    compactions: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoftCompactRequest {
     pub workspace_id: WorkspaceId,
@@ -39,10 +47,33 @@ pub struct SoftCompactRequest {
     pub step: SoftCompactStep,
 }
 
+/// Whether the smart-compaction reminder is due for an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReminderVerdict {
+    /// Due now.
+    Due,
+    /// Not due for a normal reason (no threshold, below the line, same epoch,
+    /// resting, compacting, owed continue, blocked login, etc.).
+    NotDue,
+    /// Every other condition passed and `compaction_count` moved past the
+    /// spent mark, but this guarded kind has not shown a fold low-water fill
+    /// under the seat's line since the last reminder.
+    WithheldByGuard,
+}
+
+impl ReminderVerdict {
+    pub const fn is_due(self) -> bool {
+        matches!(self, Self::Due)
+    }
+}
+
 /// Whether the smart-compaction reminder is due for `agent`: an open turn above its line, once
 /// per compaction epoch, with a continue to follow a self-compaction (blank continue text
-/// withholds it) and no compaction open, unprompted since, or owed a continue. It is not due
-/// while the agent's login's usage holds a compaction back; `compaction_blocked` answers that, as
+/// withholds it) and no compaction open, unprompted since, or owed a continue. On a kind whose
+/// `Capabilities::lifecycle_reports_fill` is true, a repeat past a spent mark also requires a
+/// fold-observed low-water reading under the seat's line; when every other condition holds and
+/// that guard alone says no, returns [`ReminderVerdict::WithheldByGuard`]. It is not due while
+/// the agent's login's usage holds a compaction back; `compaction_blocked` answers that, as
 /// `RoomCapacities::compaction_blocked` in the host pass and as
 /// [`login_compaction_blocked`](crate::agents::ProviderCapacity::login_compaction_blocked) in
 /// the helper, only for a reminder otherwise due. A compaction command waiting in the queue
@@ -54,7 +85,7 @@ pub fn reminder_due(
     continue_text: &str,
     now: Timestamp,
     compaction_blocked: impl FnOnce() -> bool,
-) -> bool {
+) -> ReminderVerdict {
     if continue_text.trim().is_empty()
         || agent.ended_at.is_some()
         || agent.is_provider_subagent()
@@ -63,13 +94,16 @@ pub fn reminder_due(
             .live_agent_pane(&agent.kind, &agent.agent_id)
             .is_none()
     {
-        return false;
+        return ReminderVerdict::NotDue;
     }
     let Ok(definition) = crate::agents::definition_by_kind(agent.kind.as_str()) else {
-        return false;
+        return ReminderVerdict::NotDue;
+    };
+    let Some(threshold) = threshold else {
+        return ReminderVerdict::NotDue;
     };
     if crate::agents::soft_compact_skip(definition).is_some()
-        || !threshold.is_some_and(|threshold| threshold.triggered(agent))
+        || !threshold.triggered(agent)
         || !agent.holds_open_turn()
         || agent.is_compacting(now)
         || agent.compaction_unprompted(now)
@@ -79,9 +113,39 @@ pub fn reminder_due(
             .as_ref()
             .is_some_and(|mark| mark.compactions == Some(agent.compaction_count))
     {
-        return false;
+        return ReminderVerdict::NotDue;
     }
-    !compaction_blocked()
+    if compaction_blocked() {
+        return ReminderVerdict::NotDue;
+    }
+    if definition.spec().capabilities.lifecycle_reports_fill
+        && let Some(mark) = agent.soft_compact.as_ref()
+        && mark.compactions.is_some()
+        && !low_water_below_threshold(agent, mark, threshold)
+    {
+        return ReminderVerdict::WithheldByGuard;
+    }
+    ReminderVerdict::Due
+}
+
+fn low_water_below_threshold(
+    agent: &AgentState,
+    mark: &SoftCompactMark,
+    threshold: AutoCompact,
+) -> bool {
+    match threshold {
+        AutoCompact::Tokens(_) => mark
+            .low_water_tokens
+            .is_some_and(|tokens| !threshold.reached(tokens, agent.resolved_context_window())),
+        AutoCompact::Percent(pct) => {
+            let token_low = mark
+                .low_water_tokens
+                .zip(agent.resolved_context_window().filter(|window| *window > 0))
+                .is_some_and(|(tokens, window)| !threshold.reached(tokens, Some(window)));
+            let pct_low = mark.low_water_pct.is_some_and(|low| low < pct);
+            token_low || pct_low
+        }
+    }
 }
 
 pub fn spawn_soft_compact(runtime: &RuntimePaths, request: &SoftCompactRequest) -> bool {
@@ -106,6 +170,7 @@ pub(crate) fn compact_agents(
     capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
+    diag: &DiagSink,
 ) {
     compact_agents_with(
         snapshot,
@@ -113,30 +178,87 @@ pub(crate) fn compact_agents(
         capacities,
         config,
         policy,
+        diag,
         Timestamp::now,
         |request| spawn_soft_compact(runtime, request),
     );
 }
 
+fn record_withheld(
+    runtime: &RuntimePaths,
+    diag: &DiagSink,
+    agent: &AgentState,
+    threshold: AutoCompact,
+) {
+    if !diag.is_enabled() {
+        return;
+    }
+    let path = runtime.live_path("soft-compact").join(format!(
+        "{}-withheld.json",
+        crate::store::sidecar::digest(agent.kind.as_str(), agent.agent_id.as_str())
+    ));
+    let recorded = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<WithheldRecord>(&bytes).ok());
+    if recorded.is_some_and(|record| record.compactions == agent.compaction_count) {
+        return;
+    }
+    let mark = agent.soft_compact.as_ref();
+    diag.emit(DiagEvent::SoftCompactReminderWithheld {
+        agent_kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        agent_name: agent.name.clone(),
+        compaction_count: agent.compaction_count,
+        low_water_tokens: mark.and_then(|mark| mark.low_water_tokens),
+        low_water_pct: mark.and_then(|mark| mark.low_water_pct),
+        threshold: threshold.to_string(),
+    });
+    if let Err(error) = write_temp_then_rename_cache(
+        &path,
+        &WithheldRecord {
+            compactions: agent.compaction_count,
+        },
+    ) {
+        tracing::debug!(
+            tags.operation = "soft_compact.write_withheld_record",
+            %error,
+            "sidebar: failed to record withheld soft-compaction dedupe",
+        );
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tests inject clock and spawn hooks beside the host pass inputs"
+)]
 fn compact_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
+    diag: &DiagSink,
     mut now: impl FnMut() -> Timestamp,
     mut spawn: impl FnMut(&SoftCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
-        if !reminder_due(
+        let threshold = policy.smart_compact(agent, &config.harness);
+        match reminder_due(
             snapshot,
             agent,
-            policy.smart_compact(agent, &config.harness),
+            threshold,
             &config.resume.auto_continue_text,
             snapshot.now,
             || capacities.compaction_blocked(agent, snapshot.now),
         ) {
-            continue;
+            ReminderVerdict::NotDue => continue,
+            ReminderVerdict::WithheldByGuard => {
+                if let Some(threshold) = threshold {
+                    record_withheld(runtime, diag, agent, threshold);
+                }
+                continue;
+            }
+            ReminderVerdict::Due => {}
         }
         // One file per card, replaced on each epoch rather than accumulated.
         let path = runtime.live_path("soft-compact").join(format!(

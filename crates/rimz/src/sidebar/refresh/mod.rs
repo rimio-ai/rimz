@@ -247,6 +247,7 @@ pub(super) fn refresh_heavy_lanes(
     config: &MachineConfig,
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
     git_pass: git_stats::GitPass,
+    diag: &crate::diag::DiagSink,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
     let logins = crate::agents::RoomLoginSet::resolve(
@@ -380,7 +381,14 @@ pub(super) fn refresh_heavy_lanes(
         )
     });
     steps.step("soft_compact", || {
-        crate::harness::soft_compact::compact_agents(base, runtime, &capacities, config, &policy)
+        crate::harness::soft_compact::compact_agents(
+            base,
+            runtime,
+            &capacities,
+            config,
+            &policy,
+            diag,
+        )
     });
     steps.step("idle_stop", || {
         crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime)
@@ -694,6 +702,7 @@ mod tests {
             &config,
             crate::agents::spending::service::SpendingServiceStartup::OneShot,
             git_stats::GitPass::OneShot,
+            &crate::diag::DiagSink::disabled(),
             &mut refresh_state,
         );
         let cache = keep_warm::read_keep_warm_cache(&runtime.keep_warm_path());

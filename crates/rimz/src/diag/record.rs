@@ -639,6 +639,18 @@ pub enum DiagEvent {
         parent_agent_id: AgentSessionId,
         message_id: MessageId,
     },
+    SoftCompactReminderWithheld {
+        agent_kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        compaction_count: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        low_water_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        low_water_pct: Option<u8>,
+        threshold: String,
+    },
     SubagentOrphanRepairFailed {
         agent_kind: AgentKind,
         agent_id: AgentSessionId,
@@ -913,6 +925,7 @@ impl DiagEvent {
             | Self::MixedBuildWriters { .. }
             | Self::TopologyWriterChanged { .. }
             | Self::SubagentDigestBackstopped { .. }
+            | Self::SoftCompactReminderWithheld { .. }
             | Self::RecoverySeatRefilled { .. }
             | Self::RecoveryChildEnded { .. }
             | Self::PaneWinsizeRepaired { .. }
@@ -993,6 +1006,7 @@ impl DiagEvent {
             Self::SidebarOrphanReaped { .. } => "sidebar_orphan_reaped",
             Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
+            Self::SoftCompactReminderWithheld { .. } => "soft_compact_reminder_withheld",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::SubagentZoneLookupFailed { .. } => "subagent_zone_lookup_failed",
             Self::SubagentPaneBindTimeout { .. } => "subagent_pane_bind_timeout",
@@ -1279,6 +1293,15 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped {
                 parent_agent_id, ..
             } => format!("{}:{parent_agent_id}", self.kind_name()),
+            Self::SoftCompactReminderWithheld {
+                agent_kind,
+                agent_id,
+                compaction_count,
+                ..
+            } => format!(
+                "{}:{agent_kind}:{agent_id}:{compaction_count}",
+                self.kind_name()
+            ),
             Self::SubagentZoneLookupFailed { run_id, lookup, .. } => {
                 format!("{}:{run_id}:{lookup:?}", self.kind_name())
             }
@@ -1865,6 +1888,29 @@ impl DiagEvent {
             } => format!(
                 "queued subagent fleet digest {message_id} for parent {parent_agent_id} from durable run records"
             ),
+            Self::SoftCompactReminderWithheld {
+                agent_kind,
+                agent_id,
+                agent_name,
+                compaction_count,
+                low_water_tokens,
+                low_water_pct,
+                threshold,
+            } => {
+                let agent = agent_name
+                    .as_ref()
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| format!("{agent_kind}:{agent_id}"));
+                let low_water = match (low_water_tokens, low_water_pct) {
+                    (Some(tokens), Some(pct)) => format!("{tokens} tokens ({pct}%)"),
+                    (Some(tokens), None) => format!("{tokens} tokens"),
+                    (None, Some(pct)) => format!("{pct}%"),
+                    (None, None) => "none".to_owned(),
+                };
+                format!(
+                    "{agent}: smart-compaction reminder withheld at compaction #{compaction_count} (low-water {low_water}, line {threshold})"
+                )
+            }
             Self::SubagentOrphanRepairFailed {
                 agent_kind,
                 agent_id,

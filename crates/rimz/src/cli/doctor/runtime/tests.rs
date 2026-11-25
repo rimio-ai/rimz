@@ -1432,6 +1432,19 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             model::DoctorState::Contained,
             model::DoctorImpact::Info,
         ),
+        (
+            serde_json::json!({
+                "kind": "soft_compact_reminder_withheld",
+                "agent_kind": "claude",
+                "agent_id": "sess-1",
+                "agent_name": "scout",
+                "compaction_count": 1,
+                "low_water_tokens": 150_000,
+                "threshold": "100000 tokens"
+            }),
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
     ] {
         let event = serde_json::from_value::<DiagEvent>(wire);
         assert!(event.is_ok(), "hook diagnostic must decode: {event:?}");

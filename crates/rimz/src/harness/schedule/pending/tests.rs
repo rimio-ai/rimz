@@ -178,6 +178,7 @@ fn child_wait_chain_follows_an_owed_compaction_continue() {
                         message_id: crate::ids::MessageId::new(),
                         queued_at,
                     }),
+                    ..SoftCompactMark::default()
                 });
             },
         );

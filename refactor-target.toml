@@ -2580,7 +2580,8 @@ path = "crates/rimz/src/harness"
 # `TaskCatalog::skipped_machine_row` lets the schedule tool refuse a name whose booker is unknown (+1).
 # One-chain `--agent` override helpers (`AgentOverride`, `resolve_agent_override`, `check_agent_model_family`, `inline_layout_profile_targets`, `pick_in_launch_chain`) unify launch routing, spec resolution, and seat settings (+4).
 # `subagent_policy::allowed_specs` and `spec::explain_profile_chain` share one-chain explain and allowlist resolution with CLI explain (+2).
-surface-budget = 1373
+# `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and detached CLI helper (+2).
+surface-budget = 1375
 
 [[verdict]]
 kind = "item"
@@ -2660,7 +2661,12 @@ reason = "The producer passes card identity and the cycle step to its detached C
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::reminder_due"
-reason = "Producer and helper make the same live-row, context and reminder-epoch decision."
+reason = "Producer and helper make the same live-row, context, reminder-epoch, and fill-guard decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::ReminderVerdict"
+reason = "Producer and helper share one three-way reminder verdict (due, not due, or withheld by the fill guard)."
 
 [[verdict]]
 kind = "item"

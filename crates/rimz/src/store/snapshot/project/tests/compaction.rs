@@ -1581,3 +1581,222 @@ fn native_compaction_counts_and_retires_once_across_echo_and_legacy_orders() {
         assert_eq!(agent.usage.total_tokens, Some(5_717), "{label}");
     }
 }
+
+#[test]
+fn soft_compact_mark_tracks_lowest_fold_fill_since_reminder_and_ignores_retired_or_blank_readings()
+{
+    let reading_at = |source: &str,
+                      secs: i64,
+                      event_name: &str,
+                      sig: serde_json::Value,
+                      reading: serde_json::Value| {
+        let mut params = serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "sess-1",
+            "signal": sig,
+        });
+        for (key, value) in reading.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        let mut event = raw_lifecycle(source, params);
+        event.timestamp = Timestamp::from_second(secs).unwrap();
+        event
+    };
+    let wrap_up_sent = |source: &str, secs: i64| {
+        let mut event = EventEnvelope::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            "session",
+            source,
+            "message",
+            "message.sent",
+            serde_json::json!({
+                "message_id": crate::ids::MessageId::new(),
+                "kind": source,
+                "agent_id": "sess-1",
+                "gate": "any",
+                "status": "sent",
+                "body": "prompt",
+                "forced": false,
+                "text_len": 10,
+                "attempts": 1,
+                "soft_compact": "wrap_up",
+            }),
+        );
+        event.timestamp = Timestamp::from_second(secs).unwrap();
+        event
+    };
+    let token_reading = |tokens: u64| {
+        serde_json::json!({
+            "context_window": 200_000,
+            "total_tokens": tokens,
+            "fresh_input_tokens": tokens,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+        })
+    };
+
+    // Pre-reminder usage never creates a soft_compact mark.
+    let pre = reduce_agent_states(&[reading_at(
+        "claude",
+        1,
+        "UserPromptSubmit",
+        signal("turn_started"),
+        token_reading(150_000),
+    )])
+    .remove(0);
+    assert_eq!(pre.soft_compact, None);
+
+    // After reminder Sent, blank/retired events leave low_water as None
+    // (never inherited from pre-reminder usage).
+    let retired_only = reduce_agent_states(&[
+        reading_at(
+            "claude",
+            1,
+            "UserPromptSubmit",
+            signal("turn_started"),
+            token_reading(50_000),
+        ),
+        wrap_up_sent("claude", 2),
+        lifecycle_at("claude", 3, "PreCompact", signal("compacting")),
+        lifecycle_at("claude", 4, "PostCompact", compaction_ended(Some(true))),
+        // Stale re-report of retired 50k is cleared before updating low-water.
+        reading_at(
+            "claude",
+            5,
+            "PostToolUse",
+            tool_used(),
+            token_reading(50_000),
+        ),
+    ])
+    .remove(0);
+    let mark = retired_only
+        .soft_compact
+        .expect("mark stays after compaction");
+    assert_eq!(mark.compactions, Some(0));
+    assert_eq!(
+        mark.low_water_tokens, None,
+        "pre-reminder, blank, and retired readings lower nothing"
+    );
+    assert_eq!(mark.low_water_pct, None);
+
+    // Post-reminder readings keep their minimum, ignore blank events,
+    // and reset on the next reminder.
+    let mut seq = vec![
+        reading_at(
+            "claude",
+            1,
+            "UserPromptSubmit",
+            signal("turn_started"),
+            token_reading(150_000),
+        ),
+        wrap_up_sent("claude", 2),
+        reading_at(
+            "claude",
+            3,
+            "PostToolUse",
+            tool_used(),
+            token_reading(160_000),
+        ),
+        lifecycle_at("claude", 4, "PreCompact", signal("compacting")),
+        lifecycle_at("claude", 5, "PostCompact", compaction_ended(Some(true))),
+        reading_at(
+            "claude",
+            6,
+            "PostToolUse",
+            tool_used(),
+            token_reading(18_000),
+        ),
+        reading_at(
+            "claude",
+            7,
+            "PostToolUse",
+            tool_used(),
+            token_reading(130_000),
+        ),
+    ];
+    let lowered = reduce_agent_states(&seq).remove(0);
+    let mark = lowered.soft_compact.expect("mark carries low-water");
+    assert_eq!(mark.compactions, Some(0));
+    assert_eq!(mark.low_water_tokens, Some(18_000));
+    assert_eq!(mark.low_water_pct, None);
+
+    // Sending a second reminder resets low-water to None.
+    seq.push(wrap_up_sent("claude", 8));
+    let reset = reduce_agent_states(&seq).remove(0);
+    let mark = reset.soft_compact.expect("second reminder stamps mark");
+    assert_eq!(mark.compactions, Some(1));
+    assert_eq!(mark.low_water_tokens, None);
+    assert_eq!(mark.low_water_pct, None);
+
+    // Percent-only readings (Pi/OMP) track low_water_pct independently.
+    let pi_pct = reduce_agent_states(&[
+        reading_at(
+            "pi",
+            1,
+            "agent_start",
+            signal("turn_started"),
+            serde_json::json!({ "context_pct": 82 }),
+        ),
+        wrap_up_sent("pi", 2),
+        lifecycle_at("pi", 3, "session_compact", compaction_ended(Some(true))),
+        reading_at(
+            "pi",
+            4,
+            "tool_execution_end",
+            tool_used(),
+            serde_json::json!({ "context_pct": 12 }),
+        ),
+        reading_at(
+            "pi",
+            5,
+            "tool_execution_end",
+            tool_used(),
+            serde_json::json!({ "context_pct": 79 }),
+        ),
+    ])
+    .remove(0);
+    let mark = pi_pct.soft_compact.expect("pi mark");
+    assert_eq!(mark.low_water_tokens, None);
+    assert_eq!(mark.low_water_pct, Some(12));
+
+    // A linked continuation row resets compactions and both low-water fields.
+    let mut continuation = raw_lifecycle(
+        "codex",
+        serde_json::json!({
+            "event_name": "PostCompact",
+            "agent_id": "sess-2",
+            "compacted_from": "sess-1",
+            "signal": compaction_ended(Some(false)),
+        }),
+    );
+    continuation.timestamp = Timestamp::from_second(5).unwrap();
+    let rows = reduce_agent_states(&[
+        reading_at(
+            "codex",
+            1,
+            "UserPromptSubmit",
+            signal("turn_started"),
+            token_reading(150_000),
+        ),
+        wrap_up_sent("codex", 2),
+        reading_at(
+            "codex",
+            3,
+            "PostToolUse",
+            tool_used(),
+            token_reading(155_000),
+        ),
+        continuation,
+    ]);
+    let successor = rows
+        .iter()
+        .find(|row| row.agent_id == "sess-2")
+        .expect("continuation row");
+    let mark = successor
+        .soft_compact
+        .as_ref()
+        .expect("continuation inherits mark");
+    assert_eq!(mark.compactions, None);
+    assert_eq!(mark.low_water_tokens, None);
+    assert_eq!(mark.low_water_pct, None);
+}

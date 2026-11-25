@@ -195,6 +195,7 @@ fn warm_fold_and_enforcement_over_200_agents_parse_nothing() {
         Some(&frame),
         paths,
         runtime,
+        &rimz::diag::DiagSink::disabled(),
         &mut refresh,
     )
     .unwrap();
@@ -205,6 +206,7 @@ fn warm_fold_and_enforcement_over_200_agents_parse_nothing() {
         Some(&frame),
         paths,
         runtime,
+        &rimz::diag::DiagSink::disabled(),
         &mut refresh,
     )
     .unwrap();
@@ -363,6 +365,7 @@ fn refresher_keeps_held_fold_context_cached() {
             Some(&frame),
             paths,
             runtime,
+            &rimz::diag::DiagSink::disabled(),
             &mut refresh,
         )
         .unwrap();
