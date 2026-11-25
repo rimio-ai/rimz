@@ -2506,7 +2506,7 @@ fn failed_kind_base_refuses_bare_mini_runtime() {
 }
 
 #[test]
-fn failed_kind_bases_refuse_bare_cells_overrides_and_loop_resolution() {
+fn failed_kind_bases_refuse_bare_cells_and_overrides() {
     use crate::config::effective::ProfileScope;
 
     let root = tempfile::tempdir().unwrap();
