@@ -2097,6 +2097,50 @@ fn supervised_master_deadline_kills_and_repaces_a_hung_attempt() {
 }
 
 #[test]
+fn supervised_master_exit_during_deadline_check_reaches_interactive_fallback() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let ready = env.project_root.join("control-master-ready");
+    let ready_plan = env.project_root.join("ssh-master-ready.plan");
+    let exit_plan = env.project_root.join("ssh-master-exit.plan");
+    std::fs::write(&ready_plan, "0\n").expect("write ready plan");
+    std::fs::write(&exit_plan, "255\n").expect("write master exit plan");
+
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_MASTER_READY_PLAN", &ready_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &exit_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "150")
+        .env("RIMZ_TEST_CONTROL_CHECK_DELAY_MS", "3000")
+        .env(
+            "RIMZ_TEST_SSH_MASTER_STDERR",
+            "Permission denied (publickey).\n",
+        )
+        .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
+        .env("RIMZ_REMOTE_MASTER_TIMEOUT_MS", "50")
+        .bounded_output()
+        .expect("run supervised remote connect");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "an attempt that exits during the deadline check must reach interactive fallback\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("timed out"),
+        "an exited attempt must not be reported as a timeout\nstderr:\n{stderr}"
+    );
+    let invocations = shim_invocations(&log);
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|argv| is_master_invocation(argv))
+            .count(),
+        1,
+        "the first master's auth failure must fall back directly: {invocations:?}"
+    );
+}
+
+#[test]
 fn tun_route_skips_dead_tcp_checkpoint_and_keeps_ssh_retries_fast() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

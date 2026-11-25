@@ -1299,6 +1299,12 @@ impl MasterState {
                     next_control_check = now + CONTROL_MASTER_CHECK_INTERVAL;
                 }
                 if now.saturating_duration_since(started) >= policy.master_deadline {
+                    if let Some(status) = attempt.try_wait().context("polling SSH ControlMaster")? {
+                        return Ok(MasterTick::Failed(
+                            failed_master_summary(attempt, status),
+                            true,
+                        ));
+                    }
                     drop(attempt);
                     return Ok(MasterTick::Failed(
                         Some(format!(
