@@ -20,7 +20,7 @@ use super::launch::{LaunchFlow, LaunchSetup, Place, Step, launch_args, places};
 #[derive(Clone, Debug)]
 pub(super) struct Candidate {
     pub(super) id: String,
-    pub(super) pane: PaneId,
+    pub(super) pane: Option<PaneId>,
     pub(super) target: String,
     pub(super) agent: bool,
     pub(super) compact: bool,
@@ -112,7 +112,7 @@ impl<'a> Roster<'a> {
 
     /// The first form that names exactly this agent whatever lane the child runs in: a handle
     /// counts only with its `#lane`, since a bare one scopes to the reader's lane.
-    fn target(&self, agent: &AgentState, pane: &PaneId) -> String {
+    fn target(&self, agent: &AgentState, pane: Option<&PaneId>) -> String {
         let any_lane = AddressContext {
             channel: None,
             origin: ChannelOrigin::Explicit,
@@ -127,18 +127,29 @@ impl<'a> Roster<'a> {
                 resolve_many(self.snapshot, form, None, &any_lane)
                     .is_ok_and(|matches| matches.as_slice() == [agent])
             })
-            .unwrap_or_else(|| pane.to_string())
+            .unwrap_or_else(|| {
+                pane.map(ToString::to_string)
+                    .unwrap_or_else(|| agent.agent_id.to_string())
+            })
     }
 
     /// A row with no agent behind it (a process, a wired pane before its session binds) has only
     /// its pane to name it by.
-    fn identity(&self, agent: Option<&AgentState>, pane: &PaneId, fallback: &str) -> Identity {
+    fn identity(
+        &self,
+        agent: Option<&AgentState>,
+        pane: Option<&PaneId>,
+        fallback_id: &str,
+        fallback_label: &str,
+    ) -> Identity {
         let Some(agent) = agent else {
             return Identity {
-                target: pane.to_string(),
-                label: fallback.to_owned(),
+                target: pane
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| fallback_id.to_owned()),
+                label: fallback_label.to_owned(),
                 name: String::new(),
-                agent: false,
+                agent: pane.is_none(),
                 compact: false,
             };
         };
@@ -167,8 +178,10 @@ pub(super) fn candidates(snapshot: &SidebarSnapshot) -> Vec<Candidate> {
                 cards.push(row_card(&roster, group, row, &pane.pane_id));
             }
             for child in row.sub_agents() {
-                let Some(pane) = &child.pane else { continue };
-                cards.push(child_card(&roster, group, row, child, pane));
+                if child.pane.is_none() && (child.provider_native || !child.reopenable) {
+                    continue;
+                }
+                cards.push(child_card(&roster, group, row, child));
             }
         }
     }
@@ -207,10 +220,15 @@ fn row_card(
         name,
         agent,
         compact,
-    } = roster.identity(roster.agent(&row.id), pane, row.display_name());
+    } = roster.identity(
+        roster.agent(&row.id),
+        Some(pane),
+        &row.id,
+        row.display_name(),
+    );
     Candidate {
         id: row.id.clone(),
-        pane: pane.clone(),
+        pane: Some(pane.clone()),
         target,
         agent,
         compact,
@@ -237,7 +255,6 @@ fn child_card(
     group: &SidebarWorktreeGroup,
     row: &SidebarRow,
     child: &SidebarSubAgent,
-    pane: &PaneId,
 ) -> Candidate {
     let state = roster.agent(&child.id);
     let parent_lane = roster.agent(&row.id).and_then(rimz::address::lane_label);
@@ -269,10 +286,10 @@ fn child_card(
         name,
         agent,
         compact,
-    } = roster.identity(state, pane, &child.name);
+    } = roster.identity(state, child.pane.as_ref(), &child.id, &child.name);
     Candidate {
         id: child.id.clone(),
-        pane: pane.clone(),
+        pane: child.pane.clone(),
         target,
         agent,
         compact,
@@ -330,31 +347,54 @@ fn command(args: Vec<String>, effect: Effect) -> Entry {
 pub(super) fn command_entries(target: Option<&Candidate>, session: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
     if let Some(target) = target {
-        entries.push(command(
-            vec!["pane".into(), "focus".into(), target.target.clone()],
-            Effect::Act,
-        ));
-        if target.agent {
-            for verb in ["restart", "stop", "compact", "show", "logs"] {
-                if verb == "compact" && !target.compact {
-                    continue;
+        if target.pane.is_some() {
+            entries.push(command(
+                vec!["pane".into(), "focus".into(), target.target.clone()],
+                Effect::Act,
+            ));
+            if target.agent {
+                for verb in ["restart", "stop", "compact", "show", "logs"] {
+                    if verb == "compact" && !target.compact {
+                        continue;
+                    }
+                    let mut args = vec!["agents".into(), verb.into(), target.target.clone()];
+                    let effect = if matches!(verb, "show" | "logs") {
+                        Effect::Show
+                    } else {
+                        Effect::Act
+                    };
+                    if verb == "logs" {
+                        args.extend(["-n".into(), "40".into()]);
+                    }
+                    entries.push(command(args, effect));
                 }
-                let mut args = vec!["agents".into(), verb.into(), target.target.clone()];
-                let effect = if matches!(verb, "show" | "logs") {
-                    Effect::Show
-                } else {
-                    Effect::Act
-                };
-                if verb == "logs" {
-                    args.extend(["-n".into(), "40".into()]);
-                }
-                entries.push(command(args, effect));
+            }
+            entries.push(command(
+                vec!["pane".into(), "capture".into(), target.target.clone()],
+                Effect::Show,
+            ));
+        } else {
+            entries.push(command(
+                vec!["agents".into(), "resume".into(), target.id.clone()],
+                Effect::Act,
+            ));
+            if target.agent {
+                entries.push(command(
+                    vec!["agents".into(), "show".into(), target.target.clone()],
+                    Effect::Show,
+                ));
+                entries.push(command(
+                    vec![
+                        "agents".into(),
+                        "logs".into(),
+                        target.target.clone(),
+                        "-n".into(),
+                        "40".into(),
+                    ],
+                    Effect::Show,
+                ));
             }
         }
-        entries.push(command(
-            vec!["pane".into(), "capture".into(), target.target.clone()],
-            Effect::Show,
-        ));
     }
     for args in [
         vec!["agents", "list"],
@@ -424,9 +464,16 @@ fn card_entry(card: &Candidate) -> Entry {
             .collect::<Vec<_>>()
             .join("  "),
         kind: Some(card.kind.clone()),
-        action: Some(Action {
-            args: vec!["pane".into(), "focus".into(), card.target.clone()],
-            effect: Effect::Act,
+        action: Some(if card.pane.is_some() {
+            Action {
+                args: vec!["pane".into(), "focus".into(), card.target.clone()],
+                effect: Effect::Act,
+            }
+        } else {
+            Action {
+                args: vec!["agents".into(), "resume".into(), card.id.clone()],
+                effect: Effect::Act,
+            }
         }),
     }
 }
@@ -452,10 +499,12 @@ fn same_card(previous: &[Candidate], cards: &[Candidate], id: &str) -> Option<St
     if cards.iter().any(|card| card.id == id) {
         return None;
     }
-    let pane = &previous.iter().find(|card| card.id == id)?.pane;
+    let pane = previous.iter().find(|card| card.id == id)?.pane.as_ref()?;
     cards
         .iter()
-        .find(|card| card.pane == *pane && previous.iter().all(|old| old.id != card.id))
+        .find(|card| {
+            card.pane.as_ref() == Some(pane) && previous.iter().all(|old| old.id != card.id)
+        })
         .map(|card| card.id.clone())
 }
 
@@ -608,7 +657,7 @@ impl PaletteState {
         let opener = self.opener.as_ref()?;
         self.cards
             .iter()
-            .find(|card| card.pane == *opener)
+            .find(|card| card.pane.as_ref() == Some(opener))
             .and_then(|card| card.checkout.clone())
     }
 
@@ -772,9 +821,11 @@ impl PaletteState {
             .as_ref()
             .and_then(|id| self.cards.iter().find(|card| card.id == *id))
             .or_else(|| {
-                self.opener
-                    .as_ref()
-                    .and_then(|pane| self.cards.iter().find(|card| card.pane == *pane))
+                self.opener.as_ref().and_then(|pane| {
+                    self.cards
+                        .iter()
+                        .find(|card| card.pane.as_ref() == Some(pane))
+                })
             })
     }
 
@@ -782,7 +833,7 @@ impl PaletteState {
         let mut seen = HashSet::new();
         self.cards
             .iter()
-            .filter(|card| seen.insert(&card.group_key))
+            .filter(|card| card.pane.is_some() && seen.insert(&card.group_key))
             .map(|card| {
                 let mut entry = card_entry(card);
                 entry.id = format!("group:{}", card.group_key);

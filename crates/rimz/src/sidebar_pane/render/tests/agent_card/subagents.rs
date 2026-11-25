@@ -10,11 +10,12 @@ fn child_headlines_are_muted_exactly_when_the_entry_has_no_live_pane() {
     let pane: PaneId = "zellij:terminal_child".parse().unwrap();
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for (status, live, native, error) in [
-        (AgentStatus::Running, true, false, false),
-        (AgentStatus::Success, false, false, false),
-        (AgentStatus::Running, false, true, false),
-        (AgentStatus::Failed, false, false, true),
+    for (status, live, native, reopenable, error) in [
+        (AgentStatus::Running, true, false, true, false),
+        (AgentStatus::Success, false, false, true, false),
+        (AgentStatus::Running, false, true, false, false),
+        (AgentStatus::Failed, false, false, true, true),
+        (AgentStatus::Success, false, false, false, false),
     ] {
         let mut snapshot = fast_child_snapshot(status, false);
         let child = &mut fast_children_mut(&mut snapshot)[0];
@@ -22,6 +23,7 @@ fn child_headlines_are_muted_exactly_when_the_entry_has_no_live_pane() {
         child.name = "claude".to_owned();
         child.pane = live.then_some(pane.clone());
         child.provider_native = native;
+        child.reopenable = reopenable;
         child.description = Some("audit the trust hash".to_owned());
         child.turn_error_label = error.then(|| "limit reached".to_owned());
         let rolls = CostRolls::default();
@@ -48,28 +50,33 @@ fn child_headlines_are_muted_exactly_when_the_entry_has_no_live_pane() {
             .iter()
             .position(|line| line.to_string().contains("Haiku"))
             .unwrap();
-        let has_target = |line| {
-            matches!(
-                block.interactions.target_at(1, line as u16),
-                Some(HitTarget::SubAgentPane(_))
-            )
+        let target_kind = |line| match block.interactions.target_at(1, line as u16) {
+            Some(HitTarget::SubAgentPane(_)) => "pane",
+            Some(HitTarget::ReopenSubAgent(_)) => "reopen",
+            _ => "none",
         };
         actual.push((
             headline.style.fg,
             headline.style.add_modifier.contains(Modifier::ITALIC),
-            has_target(line_index),
-            has_target(metadata),
+            target_kind(line_index),
+            target_kind(metadata),
         ));
-        expected.push((
-            if live || error {
-                theme.body().fg
-            } else {
-                theme.muted().fg
-            },
-            error,
-            live,
-            live,
-        ));
+        let inert = !live && (native || !reopenable);
+        let expected_fg = if inert {
+            Some(theme.component(Component::SubagentInert))
+        } else if live || error {
+            theme.body().fg
+        } else {
+            theme.muted().fg
+        };
+        let expected_target = if live {
+            "pane"
+        } else if !inert {
+            "reopen"
+        } else {
+            "none"
+        };
+        expected.push((expected_fg, error, expected_target, expected_target));
     }
     assert_eq!(actual, expected);
 }
@@ -395,6 +402,7 @@ fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() 
             parent.context = Some(claude_context(fixed_now()));
             let mut child = agent("child", "claude", status, None, None, Some("Explore"));
             child.parent_agent_id = Some("parent".into());
+            child.launch_depth = Some(1);
             child.compaction_count = count;
             child.model = Some("Haiku".to_owned());
             let snapshot = snapshot_with(vec![parent, child]);
@@ -511,13 +519,21 @@ fn child_type_uses_its_own_provider_tone_and_keeps_the_model_muted() {
                 .flat_map(|line| &line.spans)
                 .collect::<Vec<_>>();
             let type_word = spans.iter().find(|span| span.content == name).unwrap();
-            assert_eq!(
-                type_word.style.fg,
-                theme.body_brand(theme.provider_brand_tone(kind)).fg,
-                "{kind}"
-            );
             let model_span = spans.iter().find(|span| span.content == model).unwrap();
-            assert_eq!(model_span.style.fg, theme.muted().fg);
+            if launched {
+                assert_eq!(
+                    type_word.style.fg,
+                    theme.body_brand(theme.provider_brand_tone(kind)).fg,
+                    "{kind}"
+                );
+                assert_eq!(model_span.style.fg, theme.muted().fg);
+            } else {
+                let inert_fg = Some(theme.component(Component::SubagentInert));
+                assert_eq!(type_word.style.fg, inert_fg, "{kind}");
+                assert!(type_word.style.add_modifier.contains(Modifier::DIM));
+                assert_eq!(model_span.style.fg, inert_fg, "{kind}");
+                assert!(model_span.style.add_modifier.contains(Modifier::DIM));
+            }
         }
     }
 }
@@ -715,6 +731,7 @@ fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
         Some("Explore"),
     );
     child.parent_agent_id = Some("root".into());
+    child.launch_depth = Some(1);
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(2 * 3_600));
     child.model = Some("Haiku".to_owned());
     for (status, quiet, ceiling, expected) in [
@@ -1579,7 +1596,9 @@ fn prior_turn_children_do_not_widen_the_entry_grid() {
         &theme,
         0,
     ));
-    assert_eq!(alone, beside);
+    assert_eq!(beside.len(), alone.len() + 1);
+    assert_eq!(&beside[..alone.len()], alone.as_slice());
+    assert!(beside.last().unwrap().contains("▸ 1 earlier"));
     assert!(alone.iter().any(|line| line.contains("Haiku 4.5")));
 }
 
@@ -1973,6 +1992,7 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
             Some("Explore"),
         );
         child.parent_agent_id = Some("claude-1".into());
+        child.launch_depth = Some(1);
         child
     });
     let mut snapshot = snapshot_with([vec![parent], children.to_vec()].concat());
@@ -2286,5 +2306,545 @@ fn parked_child_marker_covers_turn_error_focus_no_description_and_drop_widths() 
             (23, "✓ coder · a  ⋯ bg"),
         ]
         .map(|(width, line)| (width, line.to_owned()))
+    );
+}
+
+fn prior_child(
+    id: &str,
+    name: &str,
+    status: AgentStatus,
+    rested_at: Timestamp,
+    reopenable: bool,
+    provider_native: bool,
+) -> crate::store::snapshot::SidebarSubAgent {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "claude",
+        "name": name,
+        "status": status.as_str(),
+        "last_activity": rested_at,
+        "description": format!("task {id}"),
+        "model": "Haiku",
+        "prior_turn": true,
+        "reopenable": reopenable,
+        "rested_at": rested_at,
+        "provider_native": provider_native,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn prior_subagents_fold_closed_open_and_overflow_count_line() {
+    let mut snapshot = snapshot_with(vec![agent(
+        "parent",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        None,
+        Some("build feature"),
+    )]);
+    let base = snapshot.now;
+    let parent_turn = base;
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let row_id = row.id.clone();
+    let card = row.as_agent_mut().unwrap();
+    card.prompt = Some("build feature".to_owned());
+    card.user_turn_started_at = Some(parent_turn);
+    // 12 prior children with distinct rest instants out of order; newest 10 are p12..=p03.
+    card.sub_agents = (1..=12)
+        .map(|n| {
+            let secs = if n % 2 == 0 { n * 10 } else { n * 10 - 5 };
+            let rested = Timestamp::from_second(base.as_second() - 1_000 + secs).unwrap();
+            prior_child(
+                &format!("p{n:02}"),
+                &format!("worker-{n:02}"),
+                if n == 11 {
+                    AgentStatus::Failed
+                } else {
+                    AgentStatus::Success
+                },
+                rested,
+                true,
+                false,
+            )
+        })
+        .collect();
+
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    let closed = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    let closed_text: Vec<_> = closed.lines.iter().map(Line::to_string).collect();
+    let fold_line_idx = closed_text
+        .iter()
+        .position(|line| line.contains("▸ 12 earlier"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected closed fold line, got:\n{}",
+                closed_text.join("\n")
+            )
+        });
+    assert_eq!(
+        closed.interactions.target_at(4, fold_line_idx as u16),
+        Some(HitTarget::TogglePriorSubagents {
+            row: row_id.clone()
+        })
+    );
+    assert!(
+        !closed_text.iter().any(|line| line.contains("worker-12")),
+        "closed fold hides prior entries"
+    );
+
+    // Open fold: newest 10 by rested_at first, then "2 more earlier" static count line.
+    let open_map = std::collections::BTreeMap::from([(row_id.clone(), Some(parent_turn))]);
+    let mut ctx_open = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    ctx_open.prior_subagents_open = &open_map;
+    let opened = worktree_group_block(&ctx_open, &snapshot.worktree_groups[0], false, None);
+    let open_text: Vec<_> = opened.lines.iter().map(Line::to_string).collect();
+    assert!(
+        open_text.iter().any(|line| line.contains("▾ 12 earlier")),
+        "expected open fold header, got:\n{}",
+        open_text.join("\n")
+    );
+    let listed: Vec<usize> = (1..=12)
+        .filter_map(|n| {
+            open_text
+                .iter()
+                .position(|line| line.contains(&format!("worker-{n:02}")))
+                .map(|pos| (pos, n))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(
+        listed.len(),
+        10,
+        "fold lists newest 10 entries: {open_text:?}"
+    );
+    let p12 = open_text
+        .iter()
+        .position(|line| line.contains("worker-12"))
+        .unwrap();
+    let p11 = open_text
+        .iter()
+        .position(|line| line.contains("worker-11"))
+        .unwrap();
+    assert!(p12 < p11, "newest rest instant appears first");
+    assert!(
+        !open_text
+            .iter()
+            .any(|line| line.contains("worker-01") || line.contains("worker-02")),
+        "oldest two sit behind the overflow count line"
+    );
+    let more_idx = open_text
+        .iter()
+        .position(|line| line.contains("2 more earlier"))
+        .expect("overflow count line for remainder");
+    assert_eq!(
+        opened.interactions.target_at(4, more_idx as u16),
+        Some(HitTarget::Row(0)),
+        "overflow count line is static and falls through to the row"
+    );
+    let mut open_view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    open_view.toggles.prior_subagents_open = open_map.clone();
+    let overflow_screen = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &open_view,
+        &UiState::default(),
+        54,
+        40,
+    );
+    assert_snapshot("prior_subagents_fold_open_overflow", overflow_screen);
+
+    // 10 or fewer prior children omit the overflow count line and align their own
+    // metadata columns independently of the current turn's children.
+    let mut small = snapshot;
+    let small_card =
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut small.worktree_groups)[0].rows)
+            [0]
+        .as_agent_mut()
+        .unwrap();
+    small_card.sub_agents.truncate(3);
+    small_card.sub_agents[2].pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_live"));
+    small_card.sub_agents[0].reopenable = false;
+    small_card.sub_agents[0].provider_native = true;
+    let mut current_wide = prior_child(
+        "cur-wide",
+        "current",
+        AgentStatus::Running,
+        base,
+        true,
+        false,
+    );
+    current_wide.prior_turn = false;
+    current_wide.model = Some("claude-opus-4-8".to_owned());
+    current_wide.tokens = Some(crate::store::snapshot::SubAgentTokens::Total(1_234_000));
+    small_card.sub_agents.push(current_wide);
+    let mut ctx_small = test_row_ctx(&small, &theme, 54, 0, 0, &rolls);
+    ctx_small.prior_subagents_open = &open_map;
+    let small_opened = worktree_group_block(&ctx_small, &small.worktree_groups[0], false, None);
+    let small_text: Vec<_> = small_opened.lines.iter().map(Line::to_string).collect();
+    assert!(small_text.iter().any(|line| line.contains("▾ 3 earlier")));
+    assert!(
+        !small_text.iter().any(|line| line.contains("more earlier")),
+        "<= 10 prior children emit no overflow line:\n{}",
+        small_text.join("\n")
+    );
+    let inert_idx = small_text
+        .iter()
+        .position(|line| line.contains("task p01"))
+        .expect("inert prior entry");
+    assert_eq!(
+        small_opened.interactions.target_at(4, inert_idx as u16),
+        Some(HitTarget::Row(0)),
+        "inert prior entry falls through to the row"
+    );
+    let inert_span = small_opened.lines[inert_idx]
+        .spans
+        .iter()
+        .find(|span| span.content == "task p01")
+        .unwrap();
+    assert_eq!(
+        inert_span.style.fg,
+        Some(theme.component(Component::SubagentInert))
+    );
+    assert!(inert_span.style.add_modifier.contains(Modifier::DIM));
+    let fold_meta = small_text
+        .iter()
+        .find(|line| line.contains("Haiku"))
+        .expect("fold entry metadata line");
+    let fold_haiku_col = fold_meta.find("Haiku").unwrap();
+    let cur_meta = small_text
+        .iter()
+        .find(|line| line.contains("Opus 4.8"))
+        .expect("current entry metadata line");
+    let cur_opus_col = cur_meta.find("Opus 4.8").unwrap();
+    assert!(
+        fold_haiku_col < cur_opus_col,
+        "fold aligns its own metadata columns without inheriting current's token column: {fold_meta:?} vs {cur_meta:?}"
+    );
+    let small_screen =
+        snapshot_to_screen_with_alert_and_ui(&small, None, &open_view, &UiState::default(), 54, 28);
+    assert_snapshot("prior_subagents_fold_open_with_inert", small_screen);
+}
+
+#[test]
+fn card_with_only_prior_subagents_draws_nothing_unselected_and_fold_when_selected_held_or_expanded()
+{
+    let mut snapshot = snapshot_with(vec![
+        agent(
+            "parent",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            None,
+            Some("build feature"),
+        ),
+        agent(
+            "other",
+            "codex",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            None,
+            Some("other task"),
+        ),
+    ]);
+    let base = snapshot.now;
+    let row0 = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let row0_id = row0.id.clone();
+    let card0 = row0.as_agent_mut().unwrap();
+    card0.prompt = Some("build feature".to_owned());
+    card0.sub_agents = vec![prior_child(
+        "p1",
+        "coder",
+        AgentStatus::Success,
+        Timestamp::from_second(base.as_second() - 60).unwrap(),
+        true,
+        false,
+    )];
+
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+
+    // Auto unselected: draws nothing new (no fold line, no subagents header).
+    let ctx_unselected = test_row_ctx(&snapshot, &theme, 54, 1, 0, &rolls);
+    let unselected =
+        worktree_group_block(&ctx_unselected, &snapshot.worktree_groups[0], false, None);
+    let unselected_text: String = unselected
+        .lines
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !unselected_text.contains("earlier") && !unselected_text.contains("subagents"),
+        "unselected auto card draws nothing new:\n{unselected_text}"
+    );
+
+    // Compact unselected: draws nothing new.
+    let mut ctx_compact = test_row_ctx(&snapshot, &theme, 54, 1, 0, &rolls);
+    ctx_compact.card_density = crate::config::CardDensityMode::Compact;
+    let compact = worktree_group_block(&ctx_compact, &snapshot.worktree_groups[0], false, None);
+    let compact_text: String = compact
+        .lines
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !compact_text.contains("earlier"),
+        "unselected compact card draws nothing new:\n{compact_text}"
+    );
+
+    // Selected (Auto & Compact), Held (Auto), and Expanded (unselected): draw the fold line,
+    // and still draw no standing `⧉ subagents` header.
+    let held = std::collections::BTreeSet::from([row0_id]);
+    for (label, selected_idx, density, use_held) in [
+        (
+            "auto selected",
+            0,
+            crate::config::CardDensityMode::Auto,
+            false,
+        ),
+        (
+            "compact selected",
+            0,
+            crate::config::CardDensityMode::Compact,
+            false,
+        ),
+        ("auto held", 1, crate::config::CardDensityMode::Auto, true),
+        (
+            "expanded unselected",
+            1,
+            crate::config::CardDensityMode::Expanded,
+            false,
+        ),
+    ] {
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, selected_idx, 0, &rolls);
+        ctx.card_density = density;
+        if use_held {
+            ctx.held_expansions = &held;
+        }
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        let text: String = block
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("▸ 1 earlier"),
+            "{label}: expected fold line:\n{text}"
+        );
+        assert!(
+            !text.contains("subagents"),
+            "{label}: prior-only card has no standing subagents line:\n{text}"
+        );
+    }
+    let selected_screen = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        &UiState::default(),
+        54,
+        22,
+    );
+    assert_snapshot("prior_subagents_only_card_selected", selected_screen);
+}
+
+#[test]
+fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
+    let mut snapshot = snapshot_with(vec![agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        None,
+        Some("coordinate children"),
+    )]);
+    let base = snapshot.now;
+    let live_pane = PaneId::from_parts(MuxName::Zellij, "terminal_live");
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let card = row.as_agent_mut().unwrap();
+    let make = |id: &str, pane: Option<&PaneId>, reopenable: bool, native: bool| {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": "claude",
+            "name": id,
+            "status": "success",
+            "last_activity": base,
+            "pane": pane,
+            "description": format!("work {id}"),
+            "model": "Haiku",
+            "prior_turn": false,
+            "reopenable": reopenable,
+            "provider_native": native,
+        }))
+        .unwrap()
+    };
+    card.sub_agents = vec![
+        make("live-child", Some(&live_pane), true, false),
+        make("reopen-child", None, true, false),
+        make("noresume-child", None, false, false),
+        make("native-child", None, false, true),
+    ];
+
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    let line_of = |block: &RenderedBlock, needle: &str| {
+        block
+            .lines
+            .iter()
+            .position(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("missing line for {needle}"))
+    };
+    assert_eq!(
+        block
+            .interactions
+            .target_at(4, line_of(&block, "work live-child") as u16),
+        Some(HitTarget::SubAgentPane(live_pane.clone()))
+    );
+    assert_eq!(
+        block
+            .interactions
+            .target_at(4, line_of(&block, "work reopen-child") as u16),
+        Some(HitTarget::ReopenSubAgent("reopen-child".to_owned()))
+    );
+    // Inert entries have no target (fall through to Row(0)) and draw dimmed in SubagentInert.
+    let inert_fg = theme.component(Component::SubagentInert);
+    for needle in ["work noresume-child", "work native-child"] {
+        let idx = line_of(&block, needle);
+        assert_eq!(
+            block.interactions.target_at(4, idx as u16),
+            Some(HitTarget::Row(0)),
+            "{needle} must fall through to the parent row"
+        );
+        let span = block.lines[idx]
+            .spans
+            .iter()
+            .find(|span| span.content == needle)
+            .unwrap();
+        assert_eq!(span.style.fg, Some(inert_fg), "{needle} fg");
+        assert!(
+            span.style.add_modifier.contains(Modifier::DIM),
+            "{needle} must be dimmed"
+        );
+    }
+
+    // Cursor stops include live pane and reopenable child, skip both inert entries.
+    let view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        view.entry_stops(&snapshot, 0),
+        vec![
+            EntryCursor::SubAgent(live_pane),
+            EntryCursor::ReopenSubAgent("reopen-child".to_owned()),
+        ]
+    );
+
+    // In-flight reopening repaints reopen-child's lines in SubagentReopening without shifting lines.
+    let reopening = std::collections::HashMap::from([("reopen-child".to_owned(), 99_000)]);
+    let mut ctx_inflight = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    ctx_inflight.reopening = &reopening;
+    let inflight = worktree_group_block(&ctx_inflight, &snapshot.worktree_groups[0], false, None);
+    assert_eq!(
+        inflight
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>(),
+        block.lines.iter().map(Line::to_string).collect::<Vec<_>>(),
+        "in-flight mark moves no line"
+    );
+    let reopen_idx = line_of(&inflight, "work reopen-child");
+    let reopen_fg = theme.component(Component::SubagentReopening);
+    let span = inflight.lines[reopen_idx]
+        .spans
+        .iter()
+        .find(|span| span.content == "work reopen-child")
+        .unwrap();
+    assert_eq!(span.style.fg, Some(reopen_fg));
+}
+
+#[test]
+fn card_height_memo_keys_on_prior_subagents_fold_state() {
+    let mut snapshot = snapshot_with(vec![agent(
+        "parent",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        None,
+        Some("build feature"),
+    )]);
+    let base = snapshot.now;
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let row_id = row.id.clone();
+    let card = row.as_agent_mut().unwrap();
+    card.prompt = Some("build feature".to_owned());
+    card.user_turn_started_at = Some(base);
+    card.sub_agents = vec![prior_child(
+        "p1",
+        "coder",
+        AgentStatus::Success,
+        Timestamp::from_second(base.as_second() - 30).unwrap(),
+        true,
+        false,
+    )];
+
+    let theme = Theme::fixed(false);
+    let ui = UiState::default();
+    let mut heights = crate::sidebar_pane::render::heights::CardHeights::default();
+    let mut view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let closed = crate::sidebar_pane::render::compose::compose_lines_with_meter(
+        &snapshot,
+        None,
+        &view,
+        &ui,
+        &theme,
+        54,
+        24,
+        None,
+        Some(&mut heights),
+    );
+    view.toggles.prior_subagents_open.insert(row_id, Some(base));
+    let opened = crate::sidebar_pane::render::compose::compose_lines_with_meter(
+        &snapshot,
+        None,
+        &view,
+        &ui,
+        &theme,
+        54,
+        24,
+        None,
+        Some(&mut heights),
+    );
+    assert!(
+        opened.content_height > closed.content_height,
+        "opening the fold grows content height ({} vs {})",
+        opened.content_height,
+        closed.content_height
     );
 }

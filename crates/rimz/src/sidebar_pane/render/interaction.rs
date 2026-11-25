@@ -11,6 +11,12 @@ use crate::sidebar_pane::view::BodyFilter;
 pub(in crate::sidebar_pane) enum HitTarget {
     Row(usize),
     SubAgentPane(crate::ids::PaneId),
+    /// A paneless reopenable launched child; activating it runs `rimz agents resume <id>`.
+    ReopenSubAgent(String),
+    /// The fold line under a card's delegation entries for its prior-round children.
+    TogglePriorSubagents {
+        row: String,
+    },
     ProviderTab(crate::ids::LoginKey),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
@@ -208,6 +214,8 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::BodyFilter(_) => 1,
         HitTarget::UnreadBanner | HitTarget::FocusMarker => 2,
         HitTarget::SubAgentPane(_)
+        | HitTarget::ReopenSubAgent(_)
+        | HitTarget::TogglePriorSubagents { .. }
         | HitTarget::ToggleGroup(_)
         | HitTarget::ExpandGroup { .. }
         | HitTarget::ToggleInactive

@@ -1,0 +1,32 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 1
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌○ claude                                            ▐
+▌  build feature                                     ▐
+▌  ▢ ────────────────────────────────────  0.0%      ▐
+▌  ▤ 0                                               ▐
+▌  ⧉ subagents (1)                                   ▐
+▌    ⣾ current · task cur-wide                       ▐
+▌      ◇ 1M · Opus 4.8                               ▐
+▌    ▾ 3 earlier                                     ▐
+▌    ✓ worker-03 · task p03                          ▐
+▌      Haiku                                         ▐
+▌    ✓ worker-02 · task p02                          ▐
+▌      Haiku                                         ▐
+▌    ✓ worker-01 · task p01                          ▐
+▌      Haiku                                         ▐
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

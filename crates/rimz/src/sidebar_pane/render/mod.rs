@@ -290,8 +290,8 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     });
 }
 
-/// A pin lives while its row stays and the parent's user turn is the one it was
-/// taken in.
+/// Pins and prior-round folds live while their row stays and the parent's user
+/// turn is the one they were opened or pinned in.
 fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     let agent = |id: &str| {
         snapshot
@@ -304,6 +304,12 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     ui.toggles
         .delegation_overrides
         .retain(|id, pin| agent(id).is_some_and(|agent| agent.user_turn_started_at == pin.turn));
+    ui.toggles.prior_subagents_open.retain(|id, turn| {
+        agent(id).is_some_and(|agent| {
+            agent.user_turn_started_at == *turn
+                && agent.sub_agents.iter().any(|child| child.prior_turn)
+        })
+    });
     ui.validate_entry_cursor(snapshot);
 }
 
@@ -325,6 +331,7 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
             .any(|(row_index, row)| {
                 let expansion = sections::CardExpansion::resolve(
                     &ui.toggles.delegation_overrides,
+                    &ui.toggles.prior_subagents_open,
                     density,
                     row,
                     sections::row_selection_reach(
@@ -552,9 +559,9 @@ pub(in crate::sidebar_pane) fn animation_interval(
     }
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
-    // A closing mark lapses at its bound, so frames keep coming while one is set and the
-    // paint pass drops it on time.
-    if !view.closing.is_empty() {
+    // Closing and reopening marks lapse at their bounds, so frames keep coming
+    // while either is set and the paint pass drops them on time.
+    if !view.closing.is_empty() || !view.reopening.is_empty() {
         return Some(base);
     }
     let Some(theme) = ui.cached_theme(&snapshot.theme) else {

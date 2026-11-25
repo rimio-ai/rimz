@@ -1504,6 +1504,142 @@ fn a_closing_mark_lifts_on_its_clear_lapses_at_its_bound_and_leaves_with_its_row
 }
 
 #[test]
+fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound() {
+    let mut rig = Rig::new();
+    let mut snapshot = agent_snapshot(&rig.ws);
+    let base = snapshot.now;
+    let attach_child = |snap: &mut SidebarSnapshot, pane: Option<PaneId>| {
+        let row0 = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snap.worktree_groups)[0].rows,
+        )[0];
+        let card = row0.as_agent_mut().unwrap();
+        card.prompt = Some("coordinate".to_owned());
+        card.user_turn_started_at = Some(base);
+        card.sub_agents = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "child-42",
+                "kind": "claude",
+                "name": "coder",
+                "status": "success",
+                "last_activity": base,
+                "pane": pane,
+                "description": "audit store",
+                "prior_turn": false,
+                "reopenable": true,
+                "rested_at": base,
+            }))
+            .unwrap(),
+        ];
+    };
+    attach_child(&mut snapshot, None);
+    let parent_pane = snapshot
+        .rows()
+        .next()
+        .and_then(|row| row.pane.as_ref())
+        .map(|pane| pane.pane_id.clone());
+    snapshot.focused_pane = parent_pane;
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    rig.watch();
+    let _ = super::super::super::key_spawn::take_spawned();
+
+    let click_reopen = |rig: &mut Rig| {
+        rig.state.pane.dirty = true;
+        let now = rig.state.pane.clock.now();
+        rig.state.paint_now(&mut rig.terminal, now).unwrap();
+        rig.state.pane.click_guard = None;
+        let pos = rig
+            .state
+            .pane
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::ReopenSubAgent("child-42".to_owned()))
+            .expect("reopenable child hit target");
+        rig.state
+            .on_wakeup(
+                &mut rig.terminal,
+                Wakeup::MouseClick {
+                    column: pos.0,
+                    row: pos.1,
+                },
+            )
+            .unwrap();
+    };
+    let marked = |rig: &mut Rig| rig.view().ui().reopening.contains_key("child-42");
+
+    // First click spawns `agents resume child-42` and sets in-flight mark.
+    click_reopen(&mut rig);
+    assert!(marked(&mut rig), "reopening mark set on activation");
+    assert_eq!(
+        super::super::super::key_spawn::take_spawned(),
+        vec![vec![
+            "agents".to_owned(),
+            "resume".to_owned(),
+            "child-42".to_owned(),
+        ]]
+    );
+
+    // Second click while in flight spawns nothing.
+    click_reopen(&mut rig);
+    assert!(
+        super::super::super::key_spawn::take_spawned().is_empty(),
+        "second activation while in flight spawns nothing"
+    );
+
+    // Helper completion with error clears mark and sets pane notice.
+    rig.state
+        .on_wakeup(
+            &mut rig.terminal,
+            Wakeup::ReopenFinished {
+                id: "child-42".to_owned(),
+                notice: Some("cannot reopen @coder: parent has ended".to_owned()),
+            },
+        )
+        .unwrap();
+    assert!(!marked(&mut rig));
+    assert_eq!(
+        rig.view().ui().notice.as_deref(),
+        Some("cannot reopen @coder: parent has ended")
+    );
+
+    // Re-activating then gaining a live pane clears the mark on paint.
+    click_reopen(&mut rig);
+    assert!(marked(&mut rig));
+    let _ = super::super::super::key_spawn::take_spawned();
+    let mut bound = snapshot.clone();
+    attach_child(
+        &mut bound,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_reopened")),
+    );
+    rig.view().ctx().current = bound;
+    let now = rig.state.pane.clock.now();
+    rig.state.paint_now(&mut rig.terminal, now).unwrap();
+    assert!(!marked(&mut rig), "gaining a live pane clears the mark");
+
+    // Bound is longer than the CLI's 10 s bind ceiling (`SUBAGENT_REOPEN_BIND_TIMEOUT`)
+    // and lapses at REOPEN_MARK_BOUND_MS on the loop clock.
+    const { assert!(super::super::REOPEN_MARK_BOUND_MS > 10_000) };
+    let clock = LoopClock::play(Timestamp::from_second(1_700_000_000).unwrap());
+    let mut played = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    played.fold(snapshot, SnapshotSource::Produced);
+    played.watch();
+    click_reopen(&mut played);
+    assert!(marked(&mut played), "mark sets even on play clock");
+    assert!(
+        super::super::super::key_spawn::take_spawned().is_empty(),
+        "play clock runs no command"
+    );
+    let bound = Duration::from_millis(super::super::REOPEN_MARK_BOUND_MS);
+    clock.advance(bound - Duration::from_millis(1));
+    played.state.pane.next_frame = clock.now();
+    played.paint(true);
+    assert!(marked(&mut played), "mark holds until its bound");
+    clock.advance(Duration::from_millis(1));
+    played.state.pane.next_frame = clock.now();
+    played.paint(true);
+    assert!(!marked(&mut played), "mark lapses at its bound");
+}
+
+#[test]
 fn search_commit_writes_and_dispatches_the_lens() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();

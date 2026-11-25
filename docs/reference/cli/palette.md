@@ -32,7 +32,7 @@ The first character of the query selects the mode. `--mode` only seeds that quer
 
 | Query | Mode | Enter |
 | --- | --- | --- |
-| no prefix | Cards | Focus the selected pane. |
+| no prefix | Cards | Focus the selected pane, or reopen a paneless reopenable launched child with `rimz agents resume <session id>`. |
 | `>` | Commands | Run the selected command. |
 | `#` | Worktrees | Focus the group's first live card. |
 | `+` | New agent | Move to the next [launch step](#launch-an-agent), and on the last, launch. |
@@ -41,7 +41,7 @@ Type to filter and Backspace to erase. Up/Down and Ctrl-p/Ctrl-n move the select
 
 Matching is a case-insensitive subsequence: the query's letters must appear in order, and letters that sit earlier in the text or next to each other rank higher. Card search matches the handle (or program), pet name, provider kind, worktree, branch, PR number, and description, in that order, and a match in an earlier field ranks above any match in a later one. Equal matches keep the room snapshot's order. The other modes match the query against the whole row.
 
-A card's first line shows its handle or program, provider kind, and status. Its second line shows the pet name, description, worktree, branch, and `#PR` when known. The description is the agent's launch description, else its task, else its first prompt. A process shows its command and one of `idle`, `busy`, or `stuck`. A child running in another lane than its parent shows that lane's worktree with its PR number, or the lane name alone when the room lists no worktree for it, beside the child's own branch. Only rows with a live pane appear, including pane-backed children and ordinary processes. Closed cards remain available through [`rimz agents resume`](./agents.md#resume-agents), not this list.
+A card's first line shows its handle or program, provider kind, and status. Its second line shows the pet name, description, worktree, branch, and `#PR` when known. The description is the agent's launch description, else its task, else its first prompt. A process shows its command and one of `idle`, `busy`, or `stuck`. A child running in another lane than its parent shows that lane's worktree with its PR number, or the lane name alone when the room lists no worktree for it, beside the child's own branch. Cards mode lists every row with a live pane (including pane-backed children and ordinary processes) plus every paneless launched child whose provider supports resume; activating a paneless reopenable child runs `rimz agents resume <session id>`. Provider-native children, children whose provider has no resume, and ended root cards do not appear; ended root cards remain available through [`rimz agents resume`](./agents.md#resume-agents).
 
 The list refreshes about every two seconds and keeps the selected row while it remains present, including when a card moves to its session id as the agent registers. Worktrees mode lists one `#<worktree>` row per group that has a live card, including the root and external places. It does not change a shell's directory.
 
@@ -76,6 +76,8 @@ Commands mode names its target on a `target:` line above the list. Moving the se
 | --- | --- | --- |
 | Agent card | `pane focus`, `agents restart`, `agents stop`, `agents compact` | Act on the selected agent and close on success. `agents compact` appears only for kinds it can compact. |
 | Agent card | `agents show`, `agents logs -n 40`, `pane capture` | Show output. |
+| Paneless reopenable child | `agents resume` | Reopen the child in its parent's subagent zone and close on success. Verbs that need a live pane (`pane focus`, `pane capture`, `agents restart`, `agents stop`, `agents compact`) are not offered. |
+| Paneless reopenable child | `agents show`, `agents logs -n 40` | Show output. |
 | Process | `pane focus` | Focus it and close on success. |
 | Process | `pane capture` | Show output. |
 | Room | `agents list`, `asks`, `teams list`, `worktree list`, `doctor`, `stats` | Show output. |

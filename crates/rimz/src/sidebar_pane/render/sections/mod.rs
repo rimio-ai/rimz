@@ -102,33 +102,42 @@ pub(super) fn row_selection_reach(
 pub(super) struct CardExpansion {
     pub(super) reach: SelectionReach,
     pub(super) delegation: bool,
+    pub(super) prior_subagents_open: bool,
 }
 
 impl CardExpansion {
     pub(super) fn resolve(
         pins: &BTreeMap<String, DelegationPin>,
+        prior_open: &BTreeMap<String, Option<Timestamp>>,
         density: CardDensityMode,
         row: &SidebarRow,
         reach: SelectionReach,
         now: Timestamp,
     ) -> Self {
-        let Some(agent) = row
-            .as_agent()
-            .filter(|agent| agent_card::has_delegation(agent, now))
-        else {
+        let Some(agent) = row.as_agent() else {
             return Self {
                 reach,
                 delegation: false,
+                prior_subagents_open: false,
             };
         };
-        let delegation = pins
-            .get(&row.id)
-            .filter(|pin| pin.turn == agent.user_turn_started_at)
-            .map_or(
-                reach.opens_card() || density == CardDensityMode::Expanded,
-                |pin| pin.open,
-            );
-        Self { reach, delegation }
+        let delegation = if agent_card::has_delegation(agent, now) {
+            pins.get(&row.id)
+                .filter(|pin| pin.turn == agent.user_turn_started_at)
+                .map_or(
+                    reach.opens_card() || density == CardDensityMode::Expanded,
+                    |pin| pin.open,
+                )
+        } else {
+            false
+        };
+        let prior_subagents_open = agent.sub_agents.iter().any(|child| child.prior_turn)
+            && prior_open.get(&row.id) == Some(&agent.user_turn_started_at);
+        Self {
+            reach,
+            delegation,
+            prior_subagents_open,
+        }
     }
 }
 
@@ -138,6 +147,9 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) typing_until: &'a HashMap<crate::ids::PaneId, Timestamp>,
     /// The view's closing marks, by pane: a card whose pane is here paints muted.
     pub(in crate::sidebar_pane::render) closing: &'a HashMap<crate::ids::PaneId, u64>,
+    /// The view's reopening marks, by child session id: an entry here paints in its
+    /// in-flight tone until the helper reports, a pane lands, or the bound lapses.
+    pub(in crate::sidebar_pane::render) reopening: &'a HashMap<String, u64>,
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) tier: Tier,
     pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,
@@ -155,6 +167,8 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
     pub(in crate::sidebar_pane::render) delegation_overrides: &'a BTreeMap<String, DelegationPin>,
+    pub(in crate::sidebar_pane::render) prior_subagents_open:
+        &'a BTreeMap<String, Option<Timestamp>>,
 }
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the

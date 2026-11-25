@@ -68,6 +68,10 @@ impl From<Line<'static>> for CardLine {
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 18;
 
+/// Maximum prior-round subagents listed when the fold is open; any remainder
+/// renders as one static count line below them.
+const PRIOR_SUBAGENTS_LIMIT: usize = 10;
+
 fn card_cost_usd(row: &SidebarRow) -> Option<f64> {
     row.as_agent().and_then(AgentCard::cost_usd)
 }
@@ -160,34 +164,90 @@ pub(super) fn has_delegation(agent: &AgentCard, now: jiff::Timestamp) -> bool {
         || !agent.bookings.is_empty()
 }
 
+fn sub_agent_cursor(child: &SidebarSubAgent) -> Option<EntryCursor> {
+    if let Some(pane) = &child.pane {
+        Some(EntryCursor::SubAgent(pane.clone()))
+    } else if !child.provider_native && child.reopenable {
+        Some(EntryCursor::ReopenSubAgent(child.id.clone()))
+    } else {
+        None
+    }
+}
+
+fn sub_agent_target(child: &SidebarSubAgent) -> Option<HitTarget> {
+    if let Some(pane) = &child.pane {
+        Some(HitTarget::SubAgentPane(pane.clone()))
+    } else if !child.provider_native && child.reopenable {
+        Some(HitTarget::ReopenSubAgent(child.id.clone()))
+    } else {
+        None
+    }
+}
+
 pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
     row: &SidebarRow,
     expanded: CardExpansion,
     display: &crate::config::DisplayConfig,
     now: jiff::Timestamp,
 ) -> Vec<EntryCursor> {
-    let Some(agent) = row.as_agent().filter(|_| {
-        delegation_entries_drawn(
-            row,
-            display.card_density,
-            expanded,
-            display.stale_after_secs,
-            now,
-        )
-    }) else {
+    let Some(agent) = row.as_agent() else {
         return Vec::new();
     };
-    let entries = delegation_entries(agent);
-    let children = entries.shown.iter().filter_map(|child| child.pane.clone());
-    let awaited = agent
-        .awaited
-        .iter()
-        .filter_map(|awaited| awaited.pane.clone());
-    let booked = (entries.bookings.listed.iter())
-        .filter_map(|booking| bookings::booking_pane(booking).cloned());
-    (children.chain(awaited).chain(booked))
-        .map(EntryCursor::SubAgent)
-        .collect()
+    let status = row.status().unwrap_or(AgentStatus::Idle);
+    let stage = CardStage::resolve(
+        row,
+        display.card_density,
+        expanded,
+        display.stale_after_secs,
+        now,
+    );
+    let slots = template(
+        stage,
+        status,
+        display.card_density,
+        expanded,
+        bookings::open_plan(agent),
+    );
+    let mut stops = Vec::new();
+    if slots.contains(&CardSlot::DelegationEntries) {
+        let entries = delegation_entries(agent);
+        stops.extend(
+            entries
+                .shown
+                .iter()
+                .filter_map(|child| sub_agent_cursor(child)),
+        );
+        stops.extend(
+            agent
+                .awaited
+                .iter()
+                .filter_map(|awaited| awaited.pane.clone())
+                .map(EntryCursor::SubAgent),
+        );
+        stops.extend(
+            entries
+                .bookings
+                .listed
+                .iter()
+                .filter_map(|booking| bookings::booking_pane(booking).cloned())
+                .map(EntryCursor::SubAgent),
+        );
+    }
+    if slots.contains(&CardSlot::PriorSubagents) {
+        let prior = agent.prior_sub_agents_newest_first();
+        if !prior.is_empty() {
+            stops.push(EntryCursor::PriorSubagentsToggle);
+            if expanded.prior_subagents_open {
+                stops.extend(
+                    prior
+                        .iter()
+                        .take(PRIOR_SUBAGENTS_LIMIT)
+                        .filter_map(|child| sub_agent_cursor(child)),
+                );
+            }
+        }
+    }
+    stops
 }
 
 pub(super) fn row_lines(
@@ -368,16 +428,54 @@ pub(super) fn row_lines(
                         inner.push(count_line(ctx, format!("{older} more ended")));
                     }
                 }
+                CardSlot::PriorSubagents => {
+                    let prior = agent.prior_sub_agents_newest_first();
+                    if !prior.is_empty() {
+                        let focused = selected
+                            && matches!(ctx.entry_cursor, Some(EntryCursor::PriorSubagentsToggle));
+                        let chevron = ctx.theme.glyph(if expanded.prior_subagents_open {
+                            GlyphRole::WorktreeInactiveOpen
+                        } else {
+                            GlyphRole::WorktreeInactiveClosed
+                        });
+                        let mut spans = entry_indent(ctx.theme, focused);
+                        spans.push(Span::styled(
+                            format!("{chevron} {} earlier", prior.len()),
+                            ctx.theme
+                                .styled(Component::PriorSubagentsFold, Modifier::empty()),
+                        ));
+                        inner.push(CardLine {
+                            line: Line::from(spans),
+                            target: Some(HitTarget::TogglePriorSubagents {
+                                row: row.id.clone(),
+                            }),
+                        });
+                        if expanded.prior_subagents_open {
+                            let shown = &prior[..prior.len().min(PRIOR_SUBAGENTS_LIMIT)];
+                            // The open fold computes its own token/model column widths
+                            // independently of the current turn's children.
+                            inner.extend(sub_agent_entry_lines(ctx, shown, shown, selected));
+                            let more = prior.len().saturating_sub(PRIOR_SUBAGENTS_LIMIT);
+                            if more > 0 {
+                                inner.push(count_line(ctx, format!("{more} more earlier")));
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    // A card whose close began repaints its own lines in the closing tone, and a launched
-    // child's close only that child's entry, so the mark moves no line and no height.
+    // A card whose close began repaints its own lines in the closing tone, a launched
+    // child's close only that child's entry, and a reopening child only its own entry,
+    // so none of these marks moves any line or changes any height.
     let closing_card = row
         .pane
         .as_ref()
         .is_some_and(|pane| ctx.closing.contains_key(&pane.pane_id));
     let tone = ctx.theme.component(Component::CardClosing);
+    let reopening_style = ctx
+        .theme
+        .styled(Component::SubagentReopening, Modifier::empty());
     inner
         .into_iter()
         .map(|mut card| {
@@ -385,11 +483,24 @@ pub(super) fn row_lines(
                 &card.target,
                 Some(HitTarget::SubAgentPane(pane)) if ctx.closing.contains_key(pane)
             );
+            let reopening_entry = matches!(
+                &card.target,
+                Some(HitTarget::ReopenSubAgent(id)) if ctx.reopening.contains_key(id)
+            );
             if closing_card || closing_entry {
                 // A kitty placeholder's foreground is the id of its image, not a color.
                 for span in &mut card.line.spans {
                     if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
                         span.style.fg = Some(tone);
+                    }
+                }
+            } else if reopening_entry {
+                for span in &mut card.line.spans {
+                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
+                        span.style.fg = reopening_style.fg;
+                        if reopening_style.fg.is_none() {
+                            span.style = span.style.add_modifier(Modifier::DIM);
+                        }
                     }
                 }
             }
@@ -614,11 +725,12 @@ fn sub_agent_entry_lines(
         .max()
         .unwrap_or(0);
     for sub in rows {
+        let target = sub_agent_target(sub);
+        let inert = target.is_none();
         let focused = selected
-            && matches!(
-                ctx.entry_cursor,
-                Some(EntryCursor::SubAgent(pane)) if sub.pane.as_ref() == Some(pane)
-            );
+            && sub_agent_cursor(sub)
+                .as_ref()
+                .is_some_and(|stop| ctx.entry_cursor == Some(stop));
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict, and a compacting one
@@ -705,9 +817,20 @@ fn sub_agent_entry_lines(
                 detail: detail_line,
             },
         );
+        if inert {
+            let inert_style = theme.styled(Component::SubagentInert, Modifier::DIM);
+            for line in &mut entry_lines {
+                for span in &mut line.spans {
+                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
+                        span.style.fg = inert_style.fg;
+                        span.style = span.style.add_modifier(Modifier::DIM);
+                    }
+                }
+            }
+        }
         lines.extend(entry_lines.into_iter().map(|line| CardLine {
             line,
-            target: sub.pane.clone().map(HitTarget::SubAgentPane),
+            target: target.clone(),
         }));
     }
     lines

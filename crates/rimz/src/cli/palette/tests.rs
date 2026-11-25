@@ -122,7 +122,7 @@ fn cards() -> Vec<Candidate> {
         .into_iter()
         .map(|(id, name)| Candidate {
             id: pane(id).to_string(),
-            pane: pane(id),
+            pane: Some(pane(id)),
             target: format!("@{name}#feature"),
             agent: true,
             compact: true,
@@ -345,7 +345,10 @@ fn fuzzy_subsequence_weights_handle_before_description_and_keeps_ties() {
             .iter()
             .map(|e| e.id.as_str())
             .collect::<Vec<_>>(),
-        [source[1].pane.as_str(), source[0].pane.as_str()]
+        [
+            source[1].pane.as_ref().unwrap().as_str(),
+            source[0].pane.as_ref().unwrap().as_str()
+        ]
     );
     state.set_query("codex".to_owned());
     assert_eq!(
@@ -354,7 +357,10 @@ fn fuzzy_subsequence_weights_handle_before_description_and_keeps_ties() {
             .iter()
             .map(|e| e.id.as_str())
             .collect::<Vec<_>>(),
-        [source[0].pane.as_str(), source[1].pane.as_str()]
+        [
+            source[0].pane.as_ref().unwrap().as_str(),
+            source[1].pane.as_ref().unwrap().as_str()
+        ]
     );
 }
 
@@ -393,6 +399,77 @@ fn candidates_admit_processes_and_pane_children_but_not_paneless_rows() {
     assert_eq!(result[2].target, "tmux:%2");
     assert_selects(&snapshot, &result[0]);
     assert_selects(&snapshot, &result[1]);
+}
+
+#[test]
+fn paneless_reopenable_child_lists_with_resume_action_and_no_pane_verbs() {
+    let mut parent = row(1, Some("coder"));
+    let mut reopenable = child(3);
+    reopenable.pane = None;
+    reopenable.provider_native = false;
+    reopenable.reopenable = true;
+    reopenable.prior_turn = true;
+    reopenable.status = AgentStatus::Success;
+    reopenable.petname = Some("calm-fox".to_owned());
+
+    let mut non_resumable = child(4);
+    non_resumable.pane = None;
+    non_resumable.provider_native = false;
+    non_resumable.reopenable = false;
+
+    let mut native = child(5);
+    native.pane = None;
+    native.provider_native = true;
+    native.reopenable = false;
+
+    parent.as_agent_mut().unwrap().sub_agents = vec![reopenable, non_resumable, native];
+
+    let mut child_state = agent(3, Some("calm-fox"), Some("feature"));
+    child_state.pane = None;
+    child_state.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    child_state.parent_agent_id = Some("1".into());
+    child_state.launch_depth = Some(1);
+
+    let snapshot = snapshot(
+        vec![agent(1, Some("coder"), Some("feature")), child_state],
+        vec![parent],
+    );
+    let result = candidates(&snapshot);
+    assert_eq!(
+        result.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["1", "3"],
+        "only live parent and paneless reopenable child appear in palette"
+    );
+
+    let mut state = PaletteState::new(Mode::Cards, None, "room");
+    state.refresh(result.clone(), true);
+    state.set_query("calm".to_owned());
+    let entries = state.entries();
+    assert_eq!(entries.len(), 1);
+    let action = entries[0].action.as_ref().expect("reopen action");
+    assert_eq!(action.args, vec!["agents", "resume", "3"]);
+    assert!(matches!(action.effect, Effect::Act));
+
+    let verbs: Vec<String> = command_entries(Some(&result[1]), "room")
+        .into_iter()
+        .filter_map(|e| e.action.map(|a| a.command_line()))
+        .collect();
+    assert!(
+        verbs.iter().any(|v| v == "rimz agents resume 3"),
+        "expected reopen verb, got: {verbs:?}"
+    );
+    for forbidden in [
+        "pane focus",
+        "pane capture",
+        "agents restart",
+        "agents stop",
+        "agents compact",
+    ] {
+        assert!(
+            !verbs.iter().any(|v| v.contains(forbidden)),
+            "paneless reopenable child must not offer `{forbidden}`: {verbs:?}"
+        );
+    }
 }
 
 #[test]
@@ -584,7 +661,7 @@ fn commands_parse_through_real_clap_and_respect_target_class() {
     let agent = command_entries(Some(&source[0]), "room");
     let mut process_card = source[0].clone();
     process_card.agent = false;
-    process_card.target = process_card.pane.to_string();
+    process_card.target = process_card.pane.as_ref().unwrap().to_string();
     let process = command_entries(Some(&process_card), "room");
     let room = command_entries(None, "room");
     assert_eq!((agent.len(), process.len(), room.len()), (26, 21, 19));
@@ -775,7 +852,7 @@ fn selection_survives_refresh_by_identity_or_pane_and_falls_to_top() {
     state.refresh(replacement.clone(), true);
     assert_eq!(state.entries()[state.selected].id, "new-session");
     assert_eq!(state.target().unwrap().id, "new-session");
-    replacement[1].pane = pane(9);
+    replacement[1].pane = Some(pane(9));
     replacement[1].id = "elsewhere".to_owned();
     state.refresh(replacement, true);
     assert_eq!(state.selected, 0, "a card on another pane is another card");

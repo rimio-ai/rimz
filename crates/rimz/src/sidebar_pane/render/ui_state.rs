@@ -63,10 +63,12 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) room_modes: Vec<crate::pane::RoomMode>,
 }
 
-/// A jumpable delegation entry under the selected card.
+/// A focusable or actionable delegation stop under the selected card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum EntryCursor {
     SubAgent(PaneId),
+    ReopenSubAgent(String),
+    PriorSubagentsToggle,
 }
 
 /// Driver-clock milliseconds since the view context's animation start.
@@ -260,6 +262,10 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// drops a lapsed one and one whose row left. A mark restyles its card's lines and never
     /// changes a height.
     pub(in crate::sidebar_pane) closing: std::collections::HashMap<PaneId, u64>,
+    /// Paneless reopenable children whose `rimz agents resume` is in flight, each with
+    /// the loop-clock millisecond its mark lapses at. Restyles the entry without changing
+    /// any line count.
+    pub(in crate::sidebar_pane) reopening: std::collections::HashMap<String, u64>,
     /// The loop owns the dwell clock; render only consumes readiness.
     pub(in crate::sidebar_pane) focus_marker_ready: bool,
     /// The row id a manual mark-unread just reopened while it is the focused
@@ -398,6 +404,10 @@ pub(in crate::sidebar_pane) struct PresentationToggles {
     /// that turn moves or the row leaves the snapshot.
     /// Travels with the view, including a fork's initial state.
     pub(in crate::sidebar_pane) delegation_overrides: BTreeMap<String, DelegationPin>,
+    /// Agent cards whose prior-round subagents fold is open in this view (row id -> the
+    /// parent's `user_turn_started_at` when opened). Returns to closed when that turn moves
+    /// or the row leaves.
+    pub(in crate::sidebar_pane) prior_subagents_open: BTreeMap<String, Option<Timestamp>>,
 }
 
 /// A delegation section's open/closed choice and the parent's
@@ -672,6 +682,7 @@ impl ViewState {
             super::sections::row_selection_reach(roster, group, index, self.selected_index, &held);
         let expansion = super::sections::CardExpansion::resolve(
             &self.toggles.delegation_overrides,
+            &self.toggles.prior_subagents_open,
             snapshot.theme.display.card_density,
             row,
             reach,
@@ -882,7 +893,7 @@ mod tests {
             assert_eq!(view.layout_sequence, published, "{what}");
         };
         type Toggle = fn(&mut ViewState);
-        let toggles: [(&str, Toggle); 8] = [
+        let toggles: [(&str, Toggle); 9] = [
             ("expanded_groups", |view| {
                 view.toggles.expanded_groups.insert("group".into());
             }),
@@ -902,6 +913,9 @@ mod tests {
                         turn: None,
                     },
                 );
+            }),
+            ("prior_subagents_open", |view| {
+                view.toggles.prior_subagents_open.insert("row".into(), None);
             }),
             ("dashboard_tab", |view| {
                 view.toggles.dashboard_tab = Some(DashboardTab {

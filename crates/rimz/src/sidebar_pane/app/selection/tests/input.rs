@@ -3304,3 +3304,142 @@ fn a_later_row_reveal_replaces_a_dormant_one_even_with_none() {
         );
     }
 }
+
+#[test]
+fn prior_subagents_fold_click_and_keyboard_toggle_without_moving_focus() {
+    let mut snapshot = delegation_snapshot();
+    let base = snapshot.now;
+    let row0 = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let row0_id = row0.id.clone();
+    let card = row0.as_agent_mut().unwrap();
+    card.prompt = Some("build feature".to_owned());
+    card.user_turn_started_at = Some(base);
+    card.sub_agents = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "prior-1",
+            "kind": "claude",
+            "name": "coder",
+            "status": "success",
+            "last_activity": base,
+            "description": "earlier work",
+            "prior_turn": true,
+            "reopenable": true,
+            "rested_at": base,
+        }))
+        .unwrap(),
+    ];
+
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    let parent_pane = pane_of(&snapshot, 0);
+    reconcile_selection(&mut view, &snapshot, Some(parent_pane.clone()));
+    paint(&mut view, &mut ui, &snapshot, 24);
+
+    // Click fold line -> opens fold, keeps card selection, emits no Focus effect.
+    let fold_pos = ui
+        .interactions
+        .line_for_target(&HitTarget::TogglePriorSubagents {
+            row: row0_id.clone(),
+        })
+        .expect("fold hit target");
+    let open_outcome = handle_mouse_click(fold_pos.0, fold_pos.1, &mut view, &mut ui, &snapshot);
+    assert!(open_outcome.redraw);
+    assert!(
+        open_outcome.effects.is_empty(),
+        "toggling fold moves no focus: {:?}",
+        open_outcome.effects
+    );
+    assert_eq!(view.selected_index, Some(0));
+    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
+
+    paint(&mut view, &mut ui, &snapshot, 24);
+    // Step down twice: fold line -> prior-1.
+    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+    assert_eq!(view.entry_cursor, Some(EntryCursor::PriorSubagentsToggle));
+    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+    assert_eq!(
+        view.entry_cursor,
+        Some(EntryCursor::ReopenSubAgent("prior-1".to_owned()))
+    );
+
+    // Enter on reopenable entry emits InputEffect::ReopenSubAgent.
+    let enter_reopen = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
+    assert_eq!(
+        enter_reopen.effects,
+        vec![InputEffect::ReopenSubAgent("prior-1".to_owned())]
+    );
+
+    // Closing the fold while cursor rests on a fold entry lands cursor on the fold line.
+    let fold_pos = ui
+        .interactions
+        .line_for_target(&HitTarget::TogglePriorSubagents {
+            row: row0_id.clone(),
+        })
+        .expect("open fold hit target");
+    let close_outcome = handle_mouse_click(fold_pos.0, fold_pos.1, &mut view, &mut ui, &snapshot);
+    assert!(close_outcome.effects.is_empty());
+    assert!(!view.toggles.prior_subagents_open.contains_key(&row0_id));
+    assert_eq!(view.selected_index, Some(0));
+    assert_eq!(
+        view.entry_cursor,
+        Some(EntryCursor::PriorSubagentsToggle),
+        "closing fold while cursor rested on fold entry lands cursor on fold line"
+    );
+
+    // Enter on the fold line opens it again with no focus move.
+    let reopen_fold = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
+    assert!(reopen_fold.redraw);
+    assert!(reopen_fold.effects.is_empty());
+    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
+}
+
+#[test]
+fn prior_subagents_fold_closes_when_parent_turn_moves() {
+    let mut snapshot = delegation_snapshot();
+    let t0 = snapshot.now;
+    let t1 = jiff::Timestamp::from_second(t0.as_second() + 60).unwrap();
+    let row0 = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let row0_id = row0.id.clone();
+    let card = row0.as_agent_mut().unwrap();
+    card.prompt = Some("build feature".to_owned());
+    card.user_turn_started_at = Some(t0);
+    card.sub_agents = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "prior-1",
+            "kind": "claude",
+            "name": "coder",
+            "status": "success",
+            "last_activity": t0,
+            "prior_turn": true,
+            "reopenable": true,
+            "rested_at": t0,
+        }))
+        .unwrap(),
+    ];
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 40)).unwrap();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
+    view.toggles
+        .prior_subagents_open
+        .insert(row0_id.clone(), Some(t0));
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
+    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
+
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .user_turn_started_at = Some(t1);
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
+    assert!(
+        !view.toggles.prior_subagents_open.contains_key(&row0_id),
+        "advancing parent user_turn_started_at closes the fold"
+    );
+}

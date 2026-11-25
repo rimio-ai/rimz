@@ -78,6 +78,9 @@ pub(super) enum CardSlot {
     /// Unfinished and newest finished child entries, a count of the other
     /// finished children, and pending waits.
     DelegationEntries,
+    /// The fold line under delegation entries for prior-round subagents (and,
+    /// when open, the newest 10 by rest instant plus any overflow count line).
+    PriorSubagents,
     /// The booked line alone, on a shape without `Delegation` whose card holds an
     /// unfinished booked plan.
     Booked,
@@ -99,6 +102,7 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Tokens,
     CardSlot::Cache,
     CardSlot::Delegation,
+    CardSlot::PriorSubagents,
 ];
 const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Identity,
@@ -109,6 +113,7 @@ const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Cache,
     CardSlot::Delegation,
     CardSlot::DelegationEntries,
+    CardSlot::PriorSubagents,
 ];
 const ENGAGED_RESTING: &[CardSlot] = &[
     CardSlot::Identity,
@@ -151,7 +156,10 @@ pub(in crate::sidebar_pane::render) fn engaged_base_lines() -> usize {
         .filter(|slot| {
             !matches!(
                 slot,
-                CardSlot::Question | CardSlot::Cache | CardSlot::Delegation
+                CardSlot::Question
+                    | CardSlot::Cache
+                    | CardSlot::Delegation
+                    | CardSlot::PriorSubagents
             )
         })
         .count()
@@ -353,7 +361,12 @@ mod tests {
         }
         .to_vec();
         if !expansion.reach.opens_card() && density != CardDensityMode::Expanded {
-            slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
+            slots.retain(|slot| {
+                !matches!(
+                    slot,
+                    CardSlot::Tokens | CardSlot::Cache | CardSlot::PriorSubagents
+                )
+            });
         }
         slots
     }
@@ -364,7 +377,14 @@ mod tests {
     /// appends the booked line to the shapes that draw no delegation summary.
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
-        assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));
+        assert_eq!(
+            ENGAGED_EXPANDED
+                .iter()
+                .copied()
+                .filter(|slot| *slot != CardSlot::DelegationEntries)
+                .collect::<Vec<_>>(),
+            ENGAGED
+        );
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for stage in STAGES {
@@ -374,7 +394,11 @@ mod tests {
                         for (delegation, plan) in
                             [(false, false), (true, false), (false, true), (true, true)]
                         {
-                            let expansion = CardExpansion { reach, delegation };
+                            let expansion = CardExpansion {
+                                reach,
+                                delegation,
+                                prior_subagents_open: false,
+                            };
                             actual.push((
                                 (stage, status, density, expansion, plan),
                                 template(stage, status, density, expansion, plan).to_vec(),
@@ -408,12 +432,14 @@ mod tests {
                                 CardExpansion {
                                     reach,
                                     delegation: reach == SelectionReach::Selected,
+                                    prior_subagents_open: false,
                                 },
                                 plan,
                             );
                             assert!(!template.contains(&CardSlot::Tokens));
                             assert!(!template.contains(&CardSlot::Delegation));
                             assert!(!template.contains(&CardSlot::DelegationEntries));
+                            assert!(!template.contains(&CardSlot::PriorSubagents));
                             assert_eq!(template.contains(&CardSlot::Booked), plan);
                         }
                     }

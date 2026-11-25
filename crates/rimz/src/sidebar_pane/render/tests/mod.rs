@@ -623,6 +623,11 @@ pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
                 std::sync::LazyLock::new(Default::default);
             &NONE
         },
+        reopening: {
+            static NONE: std::sync::LazyLock<std::collections::HashMap<String, u64>> =
+                std::sync::LazyLock::new(Default::default);
+            &NONE
+        },
         width,
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,
@@ -640,6 +645,7 @@ pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         delegation_overrides: const { &std::collections::BTreeMap::new() },
+        prior_subagents_open: const { &std::collections::BTreeMap::new() },
     }
 }
 
