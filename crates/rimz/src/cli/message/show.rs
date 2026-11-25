@@ -317,6 +317,9 @@ fn premise_label(premise: &rimz::store::message::Premise, now: Timestamp) -> Str
         Premise::OverHandOffLimit { threshold } => {
             format!("still over the {threshold}-token hand-off limit, cache warm")
         }
+        Premise::OverCeiling { threshold } => {
+            format!("open turn still at or over the {threshold}-token auto-compact ceiling")
+        }
         Premise::Other(_) => "a premise a newer RimZ wrote".to_owned(),
     }
 }

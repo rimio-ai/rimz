@@ -2588,7 +2588,8 @@ path = "crates/rimz/src/harness"
 # `subagent_policy::allowed_specs` and `spec::explain_profile_chain` share one-chain explain and allowlist resolution with CLI explain (+2).
 # `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and detached CLI helper (+2).
 # `run::fail_step_refusal` and `run::wake_workflow` split in-pane step refusal writes from host-side wakes (+2).
-surface-budget = 1377
+# `soft_compact::{CeilingCompactRequest, ceiling_due, enforce_ceiling_agents}` share the RimZ-enforced auto-compact ceiling watch across sidebar refresh and CLI helper (+3).
+surface-budget = 1380
 
 [[verdict]]
 kind = "item"
@@ -3618,7 +3619,8 @@ upward-dependencies = [
 # InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
 # InterruptConfirmation::warning and interrupt_withheld_detail give the CLI receipts and the MCP
 # message tool one wording for an unconfirmed or withheld interrupt (+2).
-surface-budget = 92
+# `soft_compact::send_ceiling_compact` exposes the enforced ceiling steer to the CLI helper (+1).
+surface-budget = 93
 
 [[verdict]]
 kind = "item"

@@ -532,6 +532,10 @@ pub enum Premise {
     /// at rest (`message::premise::broken`); it holds while the receiver's turn is open. It
     /// leaves the record out of the command-validity window.
     OverHandOffLimit { threshold: u64 },
+    /// Holds while the receiver's row holds an open turn and its occupied context reads at or
+    /// over `threshold` tokens: a RimZ-enforced auto-compact ceiling steer, judged in
+    /// `MessageRecord::broken_row_premise`.
+    OverCeiling { threshold: u64 },
     /// A premise a newer binary wrote, kept verbatim through queue rewrites; it holds.
     #[serde(untagged)]
     Other(serde_json::Value),
@@ -1116,6 +1120,23 @@ impl MessageRecord {
             && row.is_none_or(|row| !self.is_owed_continue_of(row))
         {
             return Some("compaction continue cleared before delivery".to_owned());
+        }
+        if let Some(threshold) = self.premises.iter().find_map(|premise| match premise {
+            Premise::OverCeiling { threshold } => Some(*threshold),
+            _ => None,
+        }) {
+            let holds = row.is_some_and(|row| {
+                row.holds_open_turn()
+                    && row
+                        .occupied_context_tokens()
+                        .is_some_and(|tokens| tokens >= threshold)
+            });
+            if !holds {
+                return Some(
+                    "turn ended or context fell below the auto-compact ceiling before delivery"
+                        .to_owned(),
+                );
+            }
         }
         let row = row?;
         if self.body == MessageBody::Command

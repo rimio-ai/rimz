@@ -5,6 +5,7 @@ mod auto_continue;
 mod auto_redeem;
 mod budget_park;
 mod cache_keepalive;
+mod ceiling_compact;
 mod check;
 mod compact;
 mod exec;
@@ -985,6 +986,8 @@ enum AgentsSubcmd {
     IdleCompact(HelperRequestArgs<IdleCompactRequest>),
     #[command(hide = true)]
     SoftCompact(HelperRequestArgs<rimz::harness::soft_compact::SoftCompactRequest>),
+    #[command(hide = true)]
+    CeilingCompact(HelperRequestArgs<rimz::harness::soft_compact::CeilingCompactRequest>),
     /// Hidden helper the producer spawns to stop an agent whose
     /// `stop --when-idle` request is due.
     #[command(hide = true)]
@@ -1158,6 +1161,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
         Some(AgentsSubcmd::SoftCompact(args)) => return soft_compact::run(args.request),
+        Some(AgentsSubcmd::CeilingCompact(args)) => return ceiling_compact::run(args.request),
         Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
         Some(AgentsSubcmd::MoltClose(args)) => return molt::run_molt_close(args.request),
         Some(AgentsSubcmd::Hibernate(args)) => return hibernate::run(args.request),

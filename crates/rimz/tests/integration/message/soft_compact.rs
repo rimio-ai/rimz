@@ -1514,3 +1514,204 @@ fn next_prompt_kind_folds_command_and_continue_at_turn_end_and_on_steer() {
         );
     }
 }
+
+#[test]
+fn ceiling_compact_helper_enforces_or_withdraws_pair_and_records_assist() {
+    let stamp_ceiling = |fixture: &Fixture, ceiling: u64| {
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let owner = rimz::store::runtime::process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            fixture.request.agent_id.as_str(),
+            fixture.env.agent_owner_pid(),
+        );
+        fixture
+            .env
+            .store()
+            .append_event(&EventEnvelope::agent_attached(
+                workspace.workspace_id,
+                workspace.session_name,
+                &fixture.request.kind,
+                rimz::store::event::AgentAttachPayload {
+                    record: Some(rimz::agents::LaunchRecord {
+                        auto_compact: Some(ceiling),
+                        ..Default::default()
+                    }),
+                    tier: None,
+                    mode: None,
+                    agent_id: fixture.request.agent_id.clone(),
+                    isolation: None,
+                    effective_isolation: None,
+                    launch_id: None,
+                    epoch: Some(0),
+                    login: None,
+                    pane_id: fixture.request.pane_id.clone(),
+                    pane_pid: None,
+                    runtime_owner: owner,
+                },
+            ))
+            .unwrap();
+    };
+    let ceiling_cmd = |fixture: &Fixture| {
+        let request = rimz::harness::soft_compact::CeilingCompactRequest {
+            workspace_id: fixture.request.workspace_id.clone(),
+            kind: fixture.request.kind.clone(),
+            agent_id: fixture.request.agent_id.clone(),
+            pane_id: fixture.request.pane_id.clone(),
+            label: fixture.request.label.clone(),
+        };
+        let mut command = traced_rimz(&fixture.env, "soft-trace.log");
+        command
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args(rimz::child_process::agent_helper_argv(
+                "ceiling-compact",
+                &request,
+            ));
+        command
+    };
+
+    // 1. Due on fresh state: queues and steers folded line with send_now, records Sent on both,
+    //    attaches OverCeiling premise, and logs a delivered ceiling_compact assist under compacts.
+    {
+        let fixture = Fixture::new("antigravity");
+        stamp_ceiling(&fixture, 100_000);
+        run_success(&mut ceiling_cmd(&fixture), "ceiling compact helper");
+
+        let trace = fixture.trace();
+        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+        assert!(
+            trace
+                .iter()
+                .any(|line| line.ends_with(&format!("{write_prefix}/compact "))),
+            "expected command segment: {trace:?}"
+        );
+        let tail_at = trace
+            .iter()
+            .position(|line| line.ends_with(&format!("{write_prefix}keep going")))
+            .unwrap_or_else(|| panic!("expected folded continue segment: {trace:?}"));
+        assert_eq!(
+            keys_after(&trace, tail_at),
+            vec!["13".to_owned(), "27\t109".to_owned()],
+            "enforced ceiling steer presses send_now: {trace:?}"
+        );
+
+        let (command, continuation) = fixture.command_and_continue();
+        assert_eq!(command.status, MessageStatus::Sent);
+        assert_eq!(continuation.status, MessageStatus::Sent);
+        assert!(command.automated);
+        assert_eq!(
+            command.premises,
+            vec![rimz::store::message::Premise::OverCeiling { threshold: 100_000 }]
+        );
+
+        let stats = fixture.stats();
+        assert_eq!(stats["rollup"]["compacts"], 1, "{stats}");
+        let ceiling_events: Vec<_> = stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["assist"] == "ceiling_compact")
+            .collect();
+        assert_eq!(ceiling_events.len(), 1, "{stats}");
+        assert_eq!(ceiling_events[0]["delivered"], true);
+        assert_eq!(ceiling_events[0]["occupied_tokens"], 120_000);
+    }
+
+    // 2. Queued hand-off compaction command withholds enforcement (no new command, no assist).
+    {
+        let fixture = Fixture::new("antigravity");
+        stamp_ceiling(&fixture, 100_000);
+        let hand_off = MessageRecord::new(
+            fixture.env.workspace_id.clone(),
+            &fixture.agent(),
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_body(MessageBody::Command)
+        .with_automated(true)
+        .with_premises(vec![rimz::store::message::Premise::OverHandOffLimit {
+            threshold: 100_000,
+        }]);
+        fixture
+            .env
+            .store()
+            .queue_message(&hand_off, "soft-test")
+            .unwrap();
+
+        run_success(
+            &mut ceiling_cmd(&fixture),
+            "ceiling compact withheld by queued hand-off",
+        );
+        let records = fixture.records();
+        assert_eq!(records.len(), 1, "no new command queued: {records:?}");
+        assert_eq!(records[0].message_id, hand_off.message_id);
+        assert_eq!(records[0].status, MessageStatus::Queued);
+        assert!(fixture.trace().iter().all(|line| is_mux_read(line)));
+        assert_eq!(fixture.stats()["events"].as_array().unwrap().len(), 0);
+    }
+
+    // 3. Inside 10-minute cool-down: withholds enforcement (no command, no assist).
+    {
+        let fixture = Fixture::new("antigravity");
+        stamp_ceiling(&fixture, 100_000);
+        fixture.lifecycle(LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+            echo: false,
+        });
+        fixture.context(120_000);
+        run_success(
+            &mut ceiling_cmd(&fixture),
+            "ceiling compact withheld in cooldown",
+        );
+        assert!(fixture.records().is_empty());
+        assert!(fixture.trace().iter().all(|line| is_mux_read(line)));
+        assert_eq!(fixture.stats()["events"].as_array().unwrap().len(), 0);
+    }
+
+    // 4. Premise broken before typing (turn ended OR context dropped below ceiling): withdraws
+    //    both command and tail (neither left Queued), types nothing, and records a held assist.
+    for drop_context in [false, true] {
+        let fixture = Fixture::new("antigravity");
+        stamp_ceiling(&fixture, 100_000);
+        let before = DeliveryRendezvous::new(
+            &fixture.env,
+            if drop_context {
+                "ceiling-drop-ctx"
+            } else {
+                "ceiling-turn-end"
+            },
+        );
+        let child = ceiling_cmd(&fixture)
+            .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        if drop_context {
+            fixture.context(50_000);
+        } else {
+            fixture.end_turn();
+        }
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            fixture.trace().iter().all(|line| is_mux_read(line)),
+            "broken premise types nothing: {:?}",
+            fixture.trace()
+        );
+        assert!(
+            fixture.env.store().list_messages().unwrap().is_empty(),
+            "neither command nor tail stays queued"
+        );
+        let (command, continuation) = fixture.command_and_continue();
+        assert_eq!(command.status, MessageStatus::Canceled);
+        assert_eq!(continuation.status, MessageStatus::Canceled);
+        let stats = fixture.stats();
+        assert_eq!(stats["rollup"]["compacts"], 0);
+        assert_eq!(stats["rollup"]["held"]["compacts"], 1);
+    }
+}

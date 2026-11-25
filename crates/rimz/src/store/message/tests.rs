@@ -3318,3 +3318,105 @@ fn next_prompt_command_batches_immediate_continue_tail_and_respects_fifo_and_kin
         );
     }
 }
+
+#[test]
+fn over_ceiling_premise_holds_only_open_turn_at_or_above_threshold() {
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case", tag = "premise")]
+    enum OlderPremise {
+        Lifespan {
+            until: Timestamp,
+        },
+        #[serde(untagged)]
+        Other(serde_json::Value),
+    }
+
+    let now = Timestamp::from_second(10_000).unwrap();
+    let encoded = serde_json::to_value(Premise::OverCeiling { threshold: 100_000 }).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!({"premise": "over_ceiling", "threshold": 100_000})
+    );
+    let older: OlderPremise = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(matches!(older, OlderPremise::Other(_)), "{older:?}");
+    assert_eq!(serde_json::to_value(&older).unwrap(), encoded);
+
+    let record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_body(MessageBody::Command)
+        .with_automated(true)
+        .with_premises(vec![Premise::OverCeiling { threshold: 100_000 }]);
+
+    let make_row = |status: AgentStatus, phase: crate::agents::TurnPhase, tokens: Option<u64>| {
+        let mut row = agent("sess", None);
+        row.status = status;
+        row.phase = phase;
+        row.usage.total_tokens = tokens;
+        row
+    };
+
+    assert_eq!(
+        record.broken_row_premise(
+            Some(&make_row(
+                AgentStatus::Running,
+                crate::agents::TurnPhase::Reasoning,
+                Some(100_000)
+            )),
+            now
+        ),
+        None,
+        "holds at exact ceiling during an open turn"
+    );
+    assert_eq!(
+        record.broken_row_premise(
+            Some(&make_row(
+                AgentStatus::Running,
+                crate::agents::TurnPhase::Reasoning,
+                Some(150_000)
+            )),
+            now
+        ),
+        None,
+        "holds above ceiling during an open turn"
+    );
+    for (case, row) in [
+        (
+            "below ceiling",
+            Some(make_row(
+                AgentStatus::Running,
+                crate::agents::TurnPhase::Reasoning,
+                Some(99_999),
+            )),
+        ),
+        (
+            "unmeasured",
+            Some(make_row(
+                AgentStatus::Running,
+                crate::agents::TurnPhase::Reasoning,
+                None,
+            )),
+        ),
+        (
+            "resting turn",
+            Some(make_row(
+                AgentStatus::Success,
+                crate::agents::TurnPhase::Idle,
+                Some(150_000),
+            )),
+        ),
+        (
+            "parked turn",
+            Some(make_row(
+                AgentStatus::Running,
+                crate::agents::TurnPhase::Parked,
+                Some(150_000),
+            )),
+        ),
+        ("no row", None),
+    ] {
+        let reason = record.broken_row_premise(row.as_ref(), now);
+        assert!(
+            reason.is_some(),
+            "OverCeiling must break on `{case}`, got None"
+        );
+    }
+}

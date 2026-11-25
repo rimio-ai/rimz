@@ -278,6 +278,20 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    CeilingCompact {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        threshold: AutoCompact,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        message_id: String,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     CacheKeepalive {
         at: Timestamp,
         kind: AgentKind,
@@ -495,7 +509,9 @@ impl AssistStats {
                 }
                 AssistEvent::StallNotice { .. } => rollup.stall_notices += 1,
                 AssistEvent::StallNudge { .. } => rollup.stall_nudges += 1,
-                AssistEvent::Compact { .. } => rollup.compacts += 1,
+                AssistEvent::Compact { .. } | AssistEvent::CeilingCompact { .. } => {
+                    rollup.compacts += 1
+                }
                 AssistEvent::SoftCompact { .. } => rollup.soft_compacts += 1,
                 AssistEvent::CacheKeepalive { .. } => rollup.keepalives += 1,
                 AssistEvent::IdleStop { .. } => rollup.idle_stops += 1,
@@ -567,6 +583,7 @@ impl AssistEvent {
             | Self::CacheKeepalive { delivered, .. }
             | Self::IdleCompact { delivered, .. }
             | Self::SoftCompact { delivered, .. }
+            | Self::CeilingCompact { delivered, .. }
             | Self::FlipCompact { delivered, .. } => *delivered,
             Self::IdleStop { stopped, .. } => *stopped,
             Self::Hibernate {
@@ -636,9 +653,10 @@ impl AssistEvent {
             Self::Redeem { .. } => "redeems",
             Self::Continue { .. } => "resumes",
             Self::SoftCompact { .. } => "soft_compacts",
-            Self::Compact { .. } | Self::IdleCompact { .. } | Self::FlipCompact { .. } => {
-                "compacts"
-            }
+            Self::Compact { .. }
+            | Self::CeilingCompact { .. }
+            | Self::IdleCompact { .. }
+            | Self::FlipCompact { .. } => "compacts",
             Self::CacheKeepalive { .. } => "keepalives",
             Self::IdleStop { .. } => "idle_stops",
             Self::IdleStopWithdrawn { .. } => "idle_stop_withdrawals",
@@ -983,6 +1001,26 @@ impl AssistEvent {
                 delivered,
                 error,
             },
+            Assist::CeilingCompact {
+                kind,
+                agent_id,
+                label,
+                threshold,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            } => Self::CeilingCompact {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                threshold,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            },
             Assist::CacheKeepalive {
                 kind,
                 agent_id,
@@ -1212,6 +1250,7 @@ impl AssistEvent {
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::SoftCompact { at, .. }
+            | Self::CeilingCompact { at, .. }
             | Self::IdleCompact { at, .. }
             | Self::IdleStop { at, .. }
             | Self::IdleStopWithdrawn { at, .. }
@@ -1376,6 +1415,7 @@ enum RepeatKey<'a> {
     Keepalive(bool, bool),
     Continue(&'a str),
     Compact(AutoCompact),
+    CeilingCompact(AutoCompact),
     IdleCompact(Option<u64>),
     IdleStop(u64, Option<&'a str>),
     Flip(Option<&'a str>, &'a str, u64),
@@ -1403,6 +1443,7 @@ impl AssistEvent {
             Self::Continue { kind, agent_id, .. }
             | Self::Compact { kind, agent_id, .. }
             | Self::SoftCompact { kind, agent_id, .. }
+            | Self::CeilingCompact { kind, agent_id, .. }
             | Self::CacheKeepalive { kind, agent_id, .. }
             | Self::IdleCompact { kind, agent_id, .. }
             | Self::FlipCompact { kind, agent_id, .. }
@@ -1465,6 +1506,7 @@ impl AssistEvent {
             Self::Compact { threshold, .. } | Self::SoftCompact { threshold, .. } => {
                 RepeatKey::Compact(*threshold)
             }
+            Self::CeilingCompact { threshold, .. } => RepeatKey::CeilingCompact(*threshold),
             Self::IdleCompact {
                 idle_after_secs, ..
             } => RepeatKey::IdleCompact(*idle_after_secs),
@@ -2085,6 +2127,28 @@ fn row_benefit_line(
                 .unwrap_or_default();
             format!("{time} ⌁ {agent} {outcome}{error}")
         }
+        AssistEvent::CeilingCompact {
+            kind,
+            label,
+            occupied_tokens,
+            delivered,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            if *delivered {
+                let detail = occupied_tokens
+                    .map(|tokens| format!(" — {} ctx at ceiling", compact_token_count(tokens)))
+                    .unwrap_or_default();
+                format!("{time} ⌁ {agent} auto-compact{detail}")
+            } else {
+                let error = error
+                    .as_deref()
+                    .map(|error| format!(" ({})", first_line(error)))
+                    .unwrap_or_default();
+                format!("{time} ⌁ {agent} auto-compact held{error}")
+            }
+        }
         AssistEvent::CacheKeepalive {
             kind,
             label,
@@ -2472,6 +2536,12 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
             ..
         }
         | AssistEvent::SoftCompact {
+            agent_id,
+            message_id,
+            threshold,
+            ..
+        }
+        | AssistEvent::CeilingCompact {
             agent_id,
             message_id,
             threshold,

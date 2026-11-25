@@ -390,6 +390,9 @@ pub(super) fn refresh_heavy_lanes(
             diag,
         )
     });
+    steps.step("ceiling_compact", || {
+        crate::harness::soft_compact::enforce_ceiling_agents(base, runtime, &capacities, config)
+    });
     steps.step("idle_stop", || {
         crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime)
     });

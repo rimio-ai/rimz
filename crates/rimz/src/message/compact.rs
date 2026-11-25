@@ -350,7 +350,7 @@ pub fn send_compact(
 /// The continue for the compaction command `command_id` on `agent`'s card: a system prompt at
 /// the `Done` gate, which the fold marks owed (`SoftCompactMark::continue_owed`) once queued and
 /// delivery withdraws once that mark clears or the command ends unsent.
-fn continue_record(
+pub(super) fn continue_record(
     workspace: &ResolvedWorkspace,
     agent: &AgentState,
     command_id: &MessageId,

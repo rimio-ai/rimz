@@ -1546,3 +1546,104 @@ fn steered_command_with_tail_typing_hold_omits_steer_replay_on_tail() {
         "tail never gets a steer replay of its own: {held_tail:?}"
     );
 }
+
+#[test]
+fn ceiling_compact_typing_hold_withdraws_both_and_records_held_assist() {
+    let fixture = Fixture::for_kind("antigravity", true);
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let pane_id = PaneId::from_parts(MuxName::Tmux, "%3");
+    let owner = rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "typing-session",
+        fixture.env.agent_owner_pid(),
+    );
+    fixture
+        .env
+        .store()
+        .append_event(&EventEnvelope::agent_attached(
+            workspace.workspace_id.clone(),
+            workspace.session_name,
+            &AgentKind::new_unchecked("antigravity"),
+            rimz::store::event::AgentAttachPayload {
+                record: Some(rimz::agents::LaunchRecord {
+                    auto_compact: Some(100_000),
+                    ..Default::default()
+                }),
+                tier: None,
+                mode: None,
+                agent_id: "typing-session".into(),
+                isolation: None,
+                effective_isolation: None,
+                launch_id: None,
+                epoch: Some(0),
+                login: None,
+                pane_id: pane_id.clone(),
+                pane_pid: None,
+                runtime_owner: owner,
+            },
+        ))
+        .unwrap();
+    let mut context = rimz::agents::AgentContext::new("antigravity", jiff::Timestamp::now());
+    context.tokens = Some(rimz::agents::AgentTokenUsage {
+        context_window_size: Some(200_000),
+        current_usage: Some(rimz::agents::AgentCurrentUsage {
+            input_tokens: Some(120_000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let record = rimz::agents::context::record::AgentContextRecord::new(
+        "antigravity",
+        "typing-session",
+        context,
+    );
+    rimz::store::agent_context::write_record(&fixture.env.runtime_paths(), &record).unwrap();
+
+    let request = rimz::harness::soft_compact::CeilingCompactRequest {
+        workspace_id: workspace.workspace_id,
+        kind: AgentKind::new_unchecked("antigravity"),
+        agent_id: "typing-session".into(),
+        pane_id,
+        label: "@worker".into(),
+    };
+    run_success(
+        fixture
+            .command()
+            .args(rimz::child_process::agent_helper_argv(
+                "ceiling-compact",
+                &request,
+            )),
+        "ceiling compact held by typing",
+    );
+
+    assert!(
+        fixture.env.store().list_messages().unwrap().is_empty(),
+        "typing hold must cancel both command and tail rather than leave either queued"
+    );
+    let history = fixture.env.store().list_message_history().unwrap();
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert!(
+        history
+            .iter()
+            .all(|record| record.status == MessageStatus::Canceled),
+        "{history:?}"
+    );
+    let out = run_success(
+        fixture
+            .env
+            .rimz()
+            .args(["stats", "--assists", "--all", "--json"]),
+        "ceiling assist stats",
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(stats["rollup"]["compacts"], 0, "{stats}");
+    assert_eq!(stats["rollup"]["held"]["compacts"], 1, "{stats}");
+    let events: Vec<_> = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "ceiling_compact")
+        .collect();
+    assert_eq!(events.len(), 1, "{stats}");
+    assert_eq!(events[0]["delivered"], false);
+}
