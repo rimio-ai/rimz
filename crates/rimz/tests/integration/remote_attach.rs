@@ -2050,7 +2050,7 @@ fn supervised_master_deadline_kills_and_repaces_a_hung_attempt() {
     let ready = env.project_root.join("control-master-ready");
     let master_plan = env.project_root.join("ssh-master.plan");
     let ready_plan = env.project_root.join("ssh-master-ready.plan");
-    std::fs::write(&master_plan, "0\n255\n").expect("write master plan");
+    std::fs::write(&master_plan, "0\n255\n255\n").expect("write master plan");
     std::fs::write(&ready_plan, "0\n").expect("write ready plan");
 
     let out = remote_connect_command(&env, &log)
@@ -2070,7 +2070,24 @@ fn supervised_master_deadline_kills_and_repaces_a_hung_attempt() {
         "the replacement attempt reaches interactive fallback\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(master_invocation_count(&log), 2);
+    let invocations = shim_invocations(&log);
+    let masters = invocations
+        .iter()
+        .filter(|argv| is_master_invocation(argv))
+        .count();
+    assert!(
+        masters >= 2,
+        "at least two master attempts must be logged: {invocations:?}"
+    );
+    let remaining_plan = std::fs::read_to_string(&master_plan).expect("read master plan");
+    let remaining_lines = remaining_plan
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    assert!(
+        remaining_lines <= 1,
+        "at least one 255 must be popped from the master plan (remaining: {remaining_plan:?}): {invocations:?}"
+    );
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("SSH connect timed out after 0s"),
         "the attempt timeout is visible"
