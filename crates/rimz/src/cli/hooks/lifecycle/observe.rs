@@ -51,9 +51,13 @@ pub(super) fn record_lifecycle_observation(
     }
     attach_agent_owner(ingress_owner, &mut observation);
     attach_agent_pane(&mut observation);
-    if !observation.is_state_snapshot() {
-        correlate_subagent_observation(workspace, store, agent, &mut observation);
-    }
+    correlate_subagent_observation(
+        workspace,
+        store,
+        agent,
+        &mut observation,
+        decoded.opens_native_subagent(),
+    );
     record_mapped_lifecycle_observation(
         workspace,
         store,
@@ -191,6 +195,8 @@ pub(super) fn record_provider_rest(
         LifecycleSignal::AskResolved { native_key: None }
     };
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
+    observation.transcript_path.clone_from(&row.transcript_path);
+    observation.worktree_path.clone_from(&row.worktree_path);
     if clears_shells {
         observation.background_shells =
             Some(rimz::agents::BackgroundShellReport::Snapshot { shells: Vec::new() });
@@ -362,21 +368,21 @@ fn record_mapped_lifecycle_observation(
     })
 }
 
+/// Join a hook's session to its parent: a known provider-native child by its row, whatever the
+/// signal and state snapshots included, else a new one by its parent's transcript among the
+/// roots on its pane. A hook the adapter reports as a native subagent's opener
+/// (`HookOutput::opens_native_subagent`) that no transcript joins yet takes the one live root of
+/// its kind on its pane as parent when that root runs in the hook's workspace, and joins
+/// nothing when that root is absent, not unique, or elsewhere; the parent's reverse pass later
+/// fills its spawn metadata.
 fn correlate_subagent_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentDefinition,
     observation: &mut AgentLifecycleObservation,
+    opens_native_subagent: bool,
 ) {
     if observation.parent_agent_id.is_some() {
-        return;
-    }
-    if !matches!(
-        observation.signal,
-        LifecycleSignal::TurnStarted { .. }
-            | LifecycleSignal::TurnEnded { .. }
-            | LifecycleSignal::ToolUsed { .. }
-    ) {
         return;
     }
     let Some(child_id) = observation.agent_id.as_ref() else {
@@ -407,17 +413,21 @@ fn correlate_subagent_observation(
         .filter(|parent_id| parent_id != child_id)
     {
         observation.parent_agent_id = Some(parent_id);
-        normalize_correlated_subagent_signal(observation);
+        if !observation.is_state_snapshot() {
+            normalize_correlated_subagent_signal(observation);
+        }
         return;
     }
-    if !matches!(
-        observation.signal,
-        LifecycleSignal::TurnStarted { .. }
-            | LifecycleSignal::TurnEnded {
-                parked_on_background: false,
-                ..
-            }
-    ) {
+    if observation.is_state_snapshot()
+        || !matches!(
+            observation.signal,
+            LifecycleSignal::TurnStarted { .. }
+                | LifecycleSignal::TurnEnded {
+                    parked_on_background: false,
+                    ..
+                }
+        )
+    {
         return;
     }
     let (Some(pane_id), Some(child_workspace)) = (
@@ -439,14 +449,36 @@ fn correlate_subagent_observation(
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|state| std::cmp::Reverse(state.last_activity));
+    let parent_workspace = |candidate: &rimz::agents::AgentState| {
+        candidate
+            .worktree_path
+            .as_deref()
+            .map_or(workspace.worktree_root.clone(), std::path::PathBuf::from)
+    };
+    let pane_root = {
+        let mut live_roots = candidates.iter().filter(|state| {
+            state.parent_agent_id.is_none()
+                && state.ended_at.is_none()
+                && !state.agent_id.is_provisional()
+        });
+        match (live_roots.next(), live_roots.next()) {
+            (Some(root), None)
+                if opens_native_subagent
+                    && same_canonical_path(child_workspace, &parent_workspace(root)) =>
+            {
+                Some(root.agent_id.clone())
+            }
+            _ => None,
+        }
+    };
     if candidates.len() > MAX_SUBAGENT_PARENT_CANDIDATES {
         debug!(
             kind = agent.spec().kind,
             child_id = child_id.as_str(),
             candidates = candidates.len(),
-            "lifecycle: skipped subagent correlation because the pane-local parent set exceeded its bound",
+            "lifecycle: skipped the subagent transcript scan because the pane-local parent set exceeded its bound",
         );
-        return;
+        candidates.clear();
     }
 
     let login_env = rimz::harness::hook_drain::login_env();
@@ -455,13 +487,7 @@ fn correlate_subagent_observation(
             child_agent_id: child_id,
             child_workspace: Some(child_workspace),
             parent_agent_id: &candidate.agent_id,
-            parent_workspace: Some(
-                candidate
-                    .worktree_path
-                    .as_deref()
-                    .map(Path::new)
-                    .unwrap_or(&workspace.worktree_root),
-            ),
+            parent_workspace: Some(&parent_workspace(candidate)),
             parent_transcript_path: candidate.transcript_path.as_deref().map(Path::new),
             login_env: &login_env,
         })?;
@@ -478,6 +504,10 @@ fn correlate_subagent_observation(
         (root_parent != *child_id).then_some((root_parent, root_parent_kind, correlation))
     });
     let Some((parent_id, parent_kind, correlation)) = matched.next() else {
+        if let Some(parent_id) = pane_root {
+            observation.parent_agent_id = Some(parent_id);
+            normalize_correlated_subagent_signal(observation);
+        }
         return;
     };
     if matched.next().is_some() {
@@ -498,6 +528,15 @@ fn correlate_subagent_observation(
     observation.prompt = rimz::agents::SanitizedPrompt::new(correlation.prompt.as_deref());
     observation.launch.model = correlation.model;
     normalize_correlated_subagent_signal(observation);
+}
+
+/// Whether `a` and `b` name one directory; a path that does not resolve matches nothing, as
+/// the transcript join refuses it.
+fn same_canonical_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn normalize_correlated_subagent_signal(observation: &mut AgentLifecycleObservation) {

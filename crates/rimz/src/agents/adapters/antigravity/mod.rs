@@ -353,8 +353,8 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "PreInvocation opener for a bare /compact and Stop with TERMINAL_CUSTOM_HOOK",
     },
     subagents: ConcernCoverage::Partial {
-        via: "child hooks joined to ordered invoke_subagent parent transcript results",
-        gap: "the parent-result transcript shape is live-verified rather than a documented stable wire contract",
+        via: "child hooks and parent reverse pass joined to invoke_subagent transcript results and 1.5.x GENERIC acknowledgements",
+        gap: "the parent-transcript request and result shapes are live-verified rather than a documented stable wire contract",
     },
     launch_reminders: ConcernCoverage::Wired {
         via: "a fresh launch's agent file in RimZ's agy plugin, selected by --agent",
@@ -419,7 +419,7 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
     },
     subagents: CapabilityLevel::Partial {
         shows: "children nest under the parent card with name, task, and tokens",
-        limit: "they often land only once the parent turn ends",
+        limit: "a child's name and task wait for its parent's next hook or stop, and a child that opens beside a second conversation on its pane stays unlinked until then",
     },
 };
 
@@ -440,12 +440,12 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
     },
     subagent_started: HookCoverage::Derived {
-        via: "child PreInvocation joined to its parent's invoke_subagent transcript result",
-        gap: "the parent-result transcript shape is live-verified rather than documented",
+        via: "child PreInvocation and parent reverse pass joined to invoke_subagent transcript results or 1.5.x GENERIC acknowledgements",
+        gap: "the parent-transcript request and result shapes are live-verified rather than documented",
     },
     subagent_stopped: HookCoverage::Derived {
-        via: "child Stop joined to its parent's invoke_subagent transcript result",
-        gap: "the parent-result transcript shape is live-verified rather than documented",
+        via: "child unparked Stop, 1.1.2 INVOKE_SUBAGENT results, or unparked parent turn end while named in the parent transcript",
+        gap: "the parent-transcript request and result shapes are live-verified rather than documented",
     },
     compacting: HookCoverage::Native {
         event: "PreInvocation",
@@ -580,6 +580,12 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             && let Some(rest) = statusline.provider_rest()
         {
             decoded.set_provider_rest(rest);
+        }
+        if event_name == "PreInvocation"
+            && payloads::parse_invocation(payload)
+                .is_some_and(|invocation| invocation.opens_native_subagent())
+        {
+            decoded.set_native_subagent_opener();
         }
         if let Some(observation) = fields.lifecycle.as_mut()
             && matches!(observation.signal, LifecycleSignal::TurnEnded { .. })

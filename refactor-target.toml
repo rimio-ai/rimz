@@ -502,7 +502,9 @@ upward-dependencies = [
 # LaunchCapability::supports_resume answers reopenability in snapshot projection without binary I/O (+1).
 # AgentState::kept_verdict and KeptVerdict carry a reopened row's verdict from the fold to the
 # subagent projection (+2).
-surface-budget = 1385
+# HookOutput::opens_native_subagent lets the hook path parent a native child by its pane at its
+# first hook, a fact only the adapter can read from the payload (+1).
+surface-budget = 1386
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

@@ -146,6 +146,7 @@ enum CanonicalHookFact {
     Error(AgentTurnError),
     Context(Box<ContextObservation>),
     ProviderRest(ProviderRest),
+    NativeSubagentOpener,
     Progress,
     SessionEnded,
 }
@@ -342,6 +343,15 @@ impl HookOutput {
             .is_some_and(ProviderRest::ends_parked_turn)
     }
 
+    /// Whether the payload alone shows this hook opens a provider-native subagent's first turn,
+    /// though it names no parent: the hook path may then parent the child by its pane.
+    pub fn opens_native_subagent(&self) -> bool {
+        self.event
+            .facts
+            .iter()
+            .any(|fact| matches!(fact, CanonicalHookFact::NativeSubagentOpener))
+    }
+
     pub fn turn_error(&self) -> Option<&AgentTurnError> {
         self.event.facts.iter().find_map(|fact| match fact {
             CanonicalHookFact::Error(error) => Some(error),
@@ -467,6 +477,13 @@ impl HookOutput {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::ProviderRest(_)),
             Some(CanonicalHookFact::ProviderRest(rest)),
+        );
+    }
+
+    pub(super) fn set_native_subagent_opener(&mut self) {
+        self.replace_fact(
+            |fact| matches!(fact, CanonicalHookFact::NativeSubagentOpener),
+            Some(CanonicalHookFact::NativeSubagentOpener),
         );
     }
 

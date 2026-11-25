@@ -69,15 +69,20 @@ pub(super) struct CorrelatedSubagent {
 
 #[derive(Deserialize)]
 struct CorrelationRecord {
-    #[serde(rename = "step_index")]
-    _step_index: u64,
+    step_index: u64,
     source: String,
     #[serde(rename = "type")]
     record_type: String,
     status: String,
+    error: Option<String>,
     content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<Value>,
+}
+
+struct PendingSubagentCall {
+    step_index: u64,
+    specs: Vec<InvokeSubagentSpec>,
 }
 
 #[derive(Deserialize)]
@@ -86,9 +91,22 @@ struct InvokeSubagentCall {
 }
 
 #[derive(Deserialize)]
-struct InvokeSubagentArgs {
-    #[serde(rename = "Subagents")]
-    subagents: Vec<InvokeSubagentSpec>,
+#[serde(untagged)]
+enum InvokeSubagentArgs {
+    Batched {
+        #[serde(rename = "Subagents")]
+        subagents: Vec<InvokeSubagentSpec>,
+    },
+    Flat(InvokeSubagentSpec),
+}
+
+impl InvokeSubagentArgs {
+    fn into_specs(self) -> Vec<InvokeSubagentSpec> {
+        match self {
+            Self::Batched { subagents } => subagents,
+            Self::Flat(spec) => vec![spec],
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -117,6 +135,7 @@ struct ValidatedSubagent {
     spec: InvokeSubagentSpec,
     result: InvokeSubagentResult,
     expected_workspace: PathBuf,
+    finished: bool,
 }
 
 #[derive(Deserialize)]
@@ -834,6 +853,7 @@ fn spawned_subagents_in(
             prompt: sanitize_user_prompt(Some(&pair.spec.prompt)),
             model: None,
             usage: Default::default(),
+            finished: pair.finished,
         })
         .collect()
 }
@@ -850,7 +870,7 @@ fn validated_subagents_in(
     let tail = read_transcript_tail_with_status(parent_transcript)?;
     (!tail.torn_suffix).then_some(())?;
 
-    let mut pending = std::collections::VecDeque::<Vec<InvokeSubagentSpec>>::new();
+    let mut pending = std::collections::VecDeque::<PendingSubagentCall>::new();
     let mut seen_ids = std::collections::BTreeSet::<String>::new();
     let mut validated = Vec::new();
     for line in tail.text.lines().filter(|line| !line.trim().is_empty()) {
@@ -859,22 +879,52 @@ fn validated_subagents_in(
             && record.record_type == "PLANNER_RESPONSE"
             && record.status == "DONE"
         {
-            for call in record.tool_calls {
+            for (offset, call) in record.tool_calls.into_iter().enumerate() {
                 if call.get("name").and_then(Value::as_str) != Some("invoke_subagent") {
                     continue;
                 }
                 let call = serde_json::from_value::<InvokeSubagentCall>(call).ok()?;
-                validate_subagent_specs(&call.args.subagents)?;
-                pending.push_back(call.args.subagents);
+                let specs = call.args.into_specs();
+                validate_subagent_specs(&specs)?;
+                let step_index = record
+                    .step_index
+                    .checked_add(1)?
+                    .checked_add(offset as u64)?;
+                pending.push_back(PendingSubagentCall { step_index, specs });
             }
             continue;
         }
-        if record.source != "MODEL" || record.record_type != "INVOKE_SUBAGENT" {
+        if record.source != "MODEL" {
             continue;
         }
-        (record.status == "DONE").then_some(())?;
-        let specs = pending.pop_front()?;
-        let results = parse_invoke_subagent_results(record.content.as_deref()?, specs.len())?;
+        let (body, finished) = match record.record_type.as_str() {
+            "INVOKE_SUBAGENT" => {
+                (record.status == "DONE").then_some(())?;
+                (record.content.as_deref()?, true)
+            }
+            "GENERIC" => {
+                if let Some(body) = record
+                    .content
+                    .as_deref()
+                    .and_then(generic_subagent_ack_body)
+                {
+                    (record.status == "DONE").then_some(())?;
+                    (body, false)
+                } else {
+                    if is_generic_step_error(&record)
+                        && let Some(pos) = pending
+                            .iter()
+                            .position(|call| call.step_index == record.step_index)
+                    {
+                        pending.remove(pos);
+                    }
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+        let specs = pending.pop_front()?.specs;
+        let results = parse_invoke_subagent_results(body, specs.len())?;
         for (spec, result) in specs.into_iter().zip(results) {
             let result_id = result.conversation_id.trim();
             if !valid_conversation_id(result_id) {
@@ -912,6 +962,7 @@ fn validated_subagents_in(
                 spec,
                 result,
                 expected_workspace,
+                finished,
             });
         }
     }
@@ -1362,6 +1413,53 @@ fn validate_subagent_specs(specs: &[InvokeSubagentSpec]) -> Option<()> {
                     .is_none_or(|workspace| !workspace.trim().is_empty())
         })
         .then_some(())
+}
+
+fn strip_generic_timestamp_lines(mut content: &str) -> &str {
+    while let Some((line, after)) = content.split_once('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.starts_with("Created At: ") || line.starts_with("Completed At: ") {
+            content = after;
+            continue;
+        }
+        break;
+    }
+    content
+}
+
+/// The body after `Created the following subagent:` (or `subagents:`) on an agy 1.5.x
+/// `MODEL` / `GENERIC` subagent spawn acknowledgement. Anchoring directly after leading
+/// `Created At:` / `Completed At:` lines keeps ordinary command output that echoes the phrase
+/// from matching.
+fn generic_subagent_ack_body(content: &str) -> Option<&str> {
+    let rest = strip_generic_timestamp_lines(content);
+    let (line, after) = rest.split_once('\n')?;
+    matches!(
+        line.trim_end_matches('\r'),
+        "Created the following subagent:" | "Created the following subagents:"
+    )
+    .then_some(after)
+}
+
+/// Whether a `MODEL` / `GENERIC` record is an agy 1.5.x failed-step row:
+/// `status == "ERROR"`, a nonblank top-level `error` string, and `content`
+/// anchored directly after leading `Created At:` / `Completed At:` lines with
+/// `Encountered error in step execution: `.
+fn is_generic_step_error(record: &CorrelationRecord) -> bool {
+    record.status == "ERROR"
+        && record
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.trim().is_empty())
+        && record.content.as_deref().is_some_and(|content| {
+            let rest = strip_generic_timestamp_lines(content);
+            let first_line = rest
+                .split('\n')
+                .next()
+                .unwrap_or(rest)
+                .trim_end_matches('\r');
+            first_line.starts_with("Encountered error in step execution: ")
+        })
 }
 
 fn parse_invoke_subagent_results(

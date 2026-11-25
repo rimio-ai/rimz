@@ -1929,6 +1929,83 @@ fn a_rest_frame_decodes_to_a_rest_report_routed_to_its_conversation() {
 }
 
 #[test]
+fn only_a_native_childs_first_invocation_reports_a_subagent_opener() {
+    // Shapes from the 1.5.17 captures (live case-b, capture-timing): a child's first
+    // PreInvocation carries no steps and an empty lastUserInput; a top-level opener carries its
+    // prompt.
+    let invocation = |event: &str, invocation: u64, steps: Option<u64>, input: Option<&str>| {
+        let mut payload = json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": "/tmp/transcript_full.jsonl",
+            "invocationNum": invocation,
+        });
+        if let Some(steps) = steps {
+            payload["initialNumSteps"] = json!(steps);
+        }
+        if let Some(input) = input {
+            payload["lastUserInput"] = json!(input);
+        }
+        AntigravityAdapter
+            .decode_hook(event, &payload)
+            .unwrap()
+            .opens_native_subagent()
+    };
+    let cases = [
+        (
+            "child first opener",
+            invocation("PreInvocation", 0, Some(0), Some("")),
+        ),
+        (
+            "fresh launch opener",
+            invocation("PreInvocation", 0, Some(1), Some("Call invoke_subagent")),
+        ),
+        (
+            "follow-up turn opener",
+            invocation("PreInvocation", 0, Some(6), Some("continue")),
+        ),
+        (
+            "bare /compact opener",
+            invocation("PreInvocation", 0, Some(8), Some("/compact")),
+        ),
+        (
+            "child opener after a background task",
+            invocation("PreInvocation", 0, Some(4), Some("")),
+        ),
+        (
+            "child later invocation",
+            invocation("PreInvocation", 1, Some(0), Some("")),
+        ),
+        (
+            "child first PostInvocation",
+            invocation("PostInvocation", 0, Some(0), Some("")),
+        ),
+        (
+            "opener without lastUserInput",
+            invocation("PreInvocation", 0, Some(0), None),
+        ),
+        (
+            "opener without initialNumSteps",
+            invocation("PreInvocation", 0, None, Some("")),
+        ),
+    ];
+    assert_eq!(
+        cases,
+        [
+            ("child first opener", true),
+            ("fresh launch opener", false),
+            ("follow-up turn opener", false),
+            ("bare /compact opener", false),
+            ("child opener after a background task", false),
+            ("child later invocation", false),
+            ("child first PostInvocation", false),
+            ("opener without lastUserInput", false),
+            ("opener without initialNumSteps", false),
+        ]
+    );
+}
+
+#[test]
 fn statusline_reports_rest_scope_without_reading_transcript() {
     use crate::agents::hook_types::ProviderRest;
 
@@ -4462,6 +4539,7 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
                 child.agent_name.as_deref(),
                 child.role.as_deref(),
                 child.prompt.as_deref(),
+                child.finished,
             ))
             .collect::<Vec<_>>(),
         [
@@ -4470,12 +4548,14 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
                 Some("summary_agent"),
                 Some("Security Document Summarizer"),
                 Some(alpha_prompt.as_str()),
+                true,
             ),
             (
                 CHILD_BETA,
                 Some("research"),
                 Some("Codebase Researcher"),
                 Some(beta_prompt.as_str()),
+                true,
             ),
         ]
     );
@@ -4796,6 +4876,590 @@ fn subagent_correlation_does_not_scan_beyond_the_transcript_tail() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn flat_invoke_subagent_and_generic_ack_correlate_and_report_unfinished() {
+    const FLAT_CHILD: &str = "e3853508-d326-4994-8c58-ac0eaa585583";
+    const PROMPT: &str = "Run the shell command `sleep 60 && echo child-done` using `run_command` with `WaitMsBeforeAsync` set to `70000`. Wait for the command to complete (if it gets backgrounded, wait for the completion notification) and report the exact output back to me.";
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let parent = write_subagent_fixture(
+        dir.path(),
+        SESSION_ID,
+        include_str!("tests/fixtures/subagent_flat_one_child.jsonl"),
+    );
+    write_transcript_named(
+        dir.path(),
+        FLAT_CHILD,
+        "transcript.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+
+    let correlated = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        FLAT_CHILD,
+        &workspace,
+    )
+    .expect("flat 1.5.x invoke_subagent correlates");
+    assert_eq!(
+        (
+            correlated.type_name.as_str(),
+            correlated.role.as_str(),
+            correlated.prompt.as_str(),
+        ),
+        ("self", "Command Runner", PROMPT)
+    );
+
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), FLAT_CHILD);
+    assert_eq!(spawned[0].agent_name.as_deref(), Some("self"));
+    assert_eq!(spawned[0].role.as_deref(), Some("Command Runner"));
+    assert_eq!(spawned[0].prompt.as_deref(), Some(PROMPT));
+    assert!(
+        !spawned[0].finished,
+        "1.5.x GENERIC ack proves spawn only, not child completion"
+    );
+}
+
+#[test]
+fn two_flat_invoke_subagent_calls_pair_with_generic_acks_in_order() {
+    const CHILD_A: &str = "ed91d225-106a-48fd-9599-c37f768f36a6";
+    const CHILD_B: &str = "11ebd7f9-01bd-496e-a50b-f4d464bbbd38";
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let parent = write_subagent_fixture(
+        dir.path(),
+        SESSION_ID,
+        include_str!("tests/fixtures/subagent_flat_two_children.jsonl"),
+    );
+    for child in [CHILD_A, CHILD_B] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+
+    let a = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        CHILD_A,
+        &workspace,
+    )
+    .expect("first flat child correlates");
+    let b = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        CHILD_B,
+        &workspace,
+    )
+    .expect("second flat child correlates");
+    assert_eq!(a.role, "Subagent A Shell Runner");
+    assert_eq!(b.role, "Subagent B Shell Runner");
+
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(
+        spawned
+            .iter()
+            .map(|child| (
+                child.child_agent_id.as_str(),
+                child.agent_name.as_deref(),
+                child.role.as_deref(),
+                child.finished,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                CHILD_A,
+                Some("self"),
+                Some("Subagent A Shell Runner"),
+                false
+            ),
+            (
+                CHILD_B,
+                Some("self"),
+                Some("Subagent B Shell Runner"),
+                false
+            ),
+        ]
+    );
+}
+
+#[test]
+fn unrelated_generic_rows_neither_void_subagents_nor_count_acks_as_background_tasks() {
+    const FLAT_CHILD: &str = "e191dc2b-a952-4c18-84b8-6a7018a60b5b";
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let fixture = include_str!("tests/fixtures/subagent_flat_with_background_tool.jsonl");
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+    write_transcript_named(
+        dir.path(),
+        FLAT_CHILD,
+        "transcript.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+
+    let correlated = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        FLAT_CHILD,
+        &workspace,
+    )
+    .expect("unrelated GENERIC rows must not void flat subagent correlation");
+    assert_eq!(correlated.role, "Shell Command Runner");
+
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), FLAT_CHILD);
+    assert!(!spawned[0].finished);
+
+    // Echoed header text inside `Command output:` must not be mistaken for an ack row.
+    let spoofed = format!(
+        "{fixture}\n{}",
+        json!({
+            "step_index": 8,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "DONE",
+            "created_at": AT_12,
+            "content": format!(
+                "Created At: 2026-11-25T07:16:00-06:00\nCompleted At: 2026-11-25T07:16:00-06:00\nCommand exited with code 0.\n\nCommand output:\nCreated the following subagent:\n{{\"conversationId\":\"spoofed-child\",\"logAbsoluteUri\":\"__HOME_URI__/brain/{FLAT_CHILD}/.system_generated/logs/transcript.jsonl\",\"workspaceUris\":[\"__WORKSPACE_URI__\"]}}"
+            ),
+        })
+    );
+    let spoofed_parent = write_subagent_fixture(dir.path(), SESSION_ID, &spoofed);
+    let spawned =
+        session::spawned_subagents_under(dir.path(), &spoofed_parent, SESSION_ID, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), FLAT_CHILD);
+
+    // Subagent GENERIC acks are not counted as running background tasks.
+    let shells = session::running_background_shells_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        AT_12.parse().unwrap(),
+    )
+    .expect("background shells");
+    assert_eq!(shells.len(), 1);
+    assert_eq!(shells[0].id, "73a69aaa-de21-4e7c-a8e9-001a0bd06bb3/task-3");
+    assert_eq!(shells[0].command.as_deref(), Some("sleep 10"));
+}
+
+#[test]
+fn flat_invoke_subagent_rejects_pending_torn_mismatched_duplicate_unsafe_and_tail_overflow() {
+    const FLAT_CHILD: &str = "e3853508-d326-4994-8c58-ac0eaa585583";
+    const CHILD_A: &str = "ed91d225-106a-48fd-9599-c37f768f36a6";
+    const CHILD_B: &str = "11ebd7f9-01bd-496e-a50b-f4d464bbbd38";
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    for child in [FLAT_CHILD, CHILD_A, CHILD_B] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+
+    let one = include_str!("tests/fixtures/subagent_flat_one_child.jsonl");
+    let two = include_str!("tests/fixtures/subagent_flat_two_children.jsonl");
+    let baseline = write_subagent_fixture(dir.path(), SESSION_ID, one);
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &baseline,
+            SESSION_ID,
+            &workspace,
+            FLAT_CHILD,
+            &workspace,
+        )
+        .is_some(),
+        "unmodified baseline must correlate before mutations reject it"
+    );
+
+    let assert_rejected = |label: &str, fixture: &str, child_id: &str| {
+        let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+        assert!(
+            session::correlate_subagent_under(
+                dir.path(),
+                &parent,
+                SESSION_ID,
+                &workspace,
+                child_id,
+                &workspace,
+            )
+            .is_none(),
+            "{label}: correlate_subagent_under should reject"
+        );
+        assert!(
+            session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace)
+                .is_empty(),
+            "{label}: spawned_subagents_under should reject"
+        );
+    };
+
+    let rewrite_generic_ack = |fixture: &str, rewrite: &dyn Fn(&mut Value)| -> String {
+        let mut records = fixture
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let ack = records
+            .iter_mut()
+            .find(|record| {
+                record["type"] == "GENERIC"
+                    && record["content"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("Created the following subagent:"))
+            })
+            .expect("generic subagent ack");
+        rewrite(ack);
+        records
+            .into_iter()
+            .map(|record| record.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Pending flat call with no GENERIC ack yet.
+    let pending = one
+        .lines()
+        .filter(|line| !line.contains("Created the following subagent:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_rejected("pending flat call", &pending, FLAT_CHILD);
+
+    // Non-DONE GENERIC ack.
+    let running_ack = rewrite_generic_ack(one, &|ack| {
+        ack["status"] = json!("RUNNING");
+    });
+    assert_rejected("non-DONE ack", &running_ack, FLAT_CHILD);
+
+    // Extra ack with no pending call.
+    let extra_ack_line = one
+        .lines()
+        .find(|line| line.contains("Created the following subagent:"))
+        .unwrap();
+    assert_rejected("extra ack", &format!("{one}\n{extra_ack_line}"), FLAT_CHILD);
+
+    // Extra JSON object inside a single flat ack.
+    let extra_obj = rewrite_generic_ack(one, &|ack| {
+        let content = ack["content"].as_str().unwrap();
+        ack["content"] = json!(format!(
+            "{content}\n{{\"conversationId\":\"extra-child\",\"logAbsoluteUri\":\"file:///tmp/extra.jsonl\"}}"
+        ));
+    });
+    assert_rejected("extra JSON object in ack", &extra_obj, FLAT_CHILD);
+
+    // Malformed JSON object (missing logAbsoluteUri).
+    let malformed = rewrite_generic_ack(one, &|ack| {
+        let content = ack["content"].as_str().unwrap();
+        ack["content"] = json!(content.replacen("\"logAbsoluteUri\"", "\"missingLogUri\"", 1));
+    });
+    assert_rejected("malformed ack", &malformed, FLAT_CHILD);
+
+    // Duplicate child id across two flat acks.
+    let duplicate = two.replace(CHILD_B, CHILD_A);
+    assert_rejected("duplicate child id", &duplicate, CHILD_A);
+
+    // Unsafe / mismatched log URI and remote / relative workspace.
+    let escaped_log = one.replace(
+        &format!("brain/{FLAT_CHILD}/.system_generated/logs/transcript.jsonl"),
+        &format!("brain/{CHILD_A}/.system_generated/logs/transcript.jsonl"),
+    );
+    assert_rejected("escaped log URI", &escaped_log, FLAT_CHILD);
+
+    let remote_log = one.replacen("__HOME_URI__", "https://example.invalid", 1);
+    assert_rejected("non-file log URI", &remote_log, FLAT_CHILD);
+
+    let remote_ws = one.replace("__WORKSPACE_URI__", "https://example.invalid");
+    assert_rejected("remote workspace URI", &remote_ws, FLAT_CHILD);
+
+    let relative_ws = one.replacen(
+        "\"TypeName\":\"self\"",
+        "\"TypeName\":\"self\",\"Workspace\":\"relative/path\"",
+        1,
+    );
+    assert_rejected("relative workspace", &relative_ws, FLAT_CHILD);
+
+    // Torn trailing suffix.
+    let torn_parent = write_subagent_fixture(dir.path(), SESSION_ID, one);
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&torn_parent)
+            .unwrap();
+        write!(file, "\n{{\"step_index\":9").unwrap();
+    }
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &torn_parent,
+            SESSION_ID,
+            &workspace,
+            FLAT_CHILD,
+            &workspace,
+        )
+        .is_none()
+    );
+    assert!(
+        session::spawned_subagents_under(dir.path(), &torn_parent, SESSION_ID, &workspace)
+            .is_empty()
+    );
+
+    // >64 KiB tail overflow separating call from ack.
+    let mut overflow = one.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    overflow.insert(
+        2,
+        json!({
+            "step_index": 99,
+            "source": "SYSTEM",
+            "type": "CHECKPOINT",
+            "status": "DONE",
+            "created_at": AT_12,
+            "content": "x".repeat(70 * 1024),
+        })
+        .to_string(),
+    );
+    let overflow_parent = write_subagent_fixture(dir.path(), SESSION_ID, &overflow.join("\n"));
+    assert!(std::fs::metadata(&overflow_parent).unwrap().len() > 64 * 1024);
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &overflow_parent,
+            SESSION_ID,
+            &workspace,
+            FLAT_CHILD,
+            &workspace,
+        )
+        .is_none()
+    );
+    assert!(
+        session::spawned_subagents_under(dir.path(), &overflow_parent, SESSION_ID, &workspace)
+            .is_empty()
+    );
+}
+
+#[test]
+fn failed_flat_invoke_subagent_error_row_yields_no_child_and_allows_later_retry_to_pair() {
+    const RETRY_CHILD: &str = "15de371b-2484-4ab5-ac31-d9f1d4448544";
+    const SECOND_CHILD: &str = "11ebd7f9-01bd-496e-a50b-f4d464bbbd38";
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    for child in [RETRY_CHILD, SECOND_CHILD] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+
+    // Live case-a-retry capture: failed `TypeName: "self"` call (MODEL/GENERIC/ERROR),
+    // followed by a retried call that spawns cleanly.
+    let retry_fixture = include_str!("tests/fixtures/subagent_flat_retry_after_error.jsonl");
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, retry_fixture);
+    let correlated = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        RETRY_CHILD,
+        &workspace,
+    )
+    .expect("retried child after failed invoke_subagent must correlate");
+    assert_eq!(correlated.type_name, "rimz-control-e9002e0d677a");
+    assert_eq!(correlated.role, "worker");
+
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), RETRY_CHILD);
+    assert_eq!(
+        spawned[0].agent_name.as_deref(),
+        Some("rimz-control-e9002e0d677a")
+    );
+    assert_eq!(spawned[0].role.as_deref(), Some("worker"));
+    assert!(!spawned[0].finished);
+
+    // Two flat calls in one PLANNER_RESPONSE: first fails (step 2), second spawns (step 3).
+    let two = include_str!("tests/fixtures/subagent_flat_two_children.jsonl");
+    let mut two_records = two
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    two_records[2] = json!({
+        "step_index": 2,
+        "source": "MODEL",
+        "type": "GENERIC",
+        "status": "ERROR",
+        "error": "subagent \"self\" not found or not allowed to be invoked",
+        "created_at": AT_12,
+        "content": "Created At: 2026-11-25T10:01:52-06:00\nCompleted At: 2026-11-25T10:01:52-06:00\nEncountered error in step execution: subagent \"self\" not found or not allowed to be invoked",
+    });
+    let parallel_partial = two_records
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parallel_parent = write_subagent_fixture(dir.path(), SESSION_ID, &parallel_partial);
+    let parallel_spawned =
+        session::spawned_subagents_under(dir.path(), &parallel_parent, SESSION_ID, &workspace);
+    assert_eq!(parallel_spawned.len(), 1);
+    assert_eq!(parallel_spawned[0].child_agent_id.as_str(), SECOND_CHILD);
+    assert_eq!(
+        parallel_spawned[0].role.as_deref(),
+        Some("Subagent B Shell Runner")
+    );
+
+    // An unrelated failing tool (run_command ERROR at step 2) in the same PLANNER_RESPONSE
+    // must not consume a sibling invoke_subagent at step 3.
+    let sibling_tool_error = [
+        json!({
+            "step_index": 1,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": AT_10,
+            "tool_calls": [
+                {"name": "run_command", "args": {"CommandLine": "false"}},
+                {"name": "invoke_subagent", "args": {"Prompt": "run", "Role": "worker", "TypeName": "rimz-control-e9002e0d677a", "Workspace": "inherit"}}
+            ],
+        }),
+        json!({
+            "step_index": 2,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "ERROR",
+            "error": "command failed",
+            "created_at": AT_12,
+            "content": "Created At: 2026-11-25T10:01:52-06:00\nCompleted At: 2026-11-25T10:01:52-06:00\nEncountered error in step execution: command failed",
+        }),
+        json!({
+            "step_index": 3,
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "DONE",
+            "created_at": AT_12,
+            "content": format!(
+                "Created At: 2026-11-25T10:01:56-06:00\nCompleted At: 2026-11-25T10:01:56-06:00\nCreated the following subagent:\n{{\"conversationId\":\"{RETRY_CHILD}\",\"logAbsoluteUri\":\"__HOME_URI__/brain/{RETRY_CHILD}/.system_generated/logs/transcript.jsonl\",\"workspaceUris\":[\"__WORKSPACE_URI__\"]}}"
+            ),
+        }),
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    let sibling_parent = write_subagent_fixture(dir.path(), SESSION_ID, &sibling_tool_error);
+    let sibling_spawned =
+        session::spawned_subagents_under(dir.path(), &sibling_parent, SESSION_ID, &workspace);
+    assert_eq!(sibling_spawned.len(), 1);
+    assert_eq!(sibling_spawned[0].child_agent_id.as_str(), RETRY_CHILD);
+
+    // Negative controls: each must still void the record because the first invoke_subagent
+    // has no matching failure or acknowledgement row on disk.
+    let assert_rejected = |label: &str, fixture: &str| {
+        let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+        assert!(
+            session::correlate_subagent_under(
+                dir.path(),
+                &parent,
+                SESSION_ID,
+                &workspace,
+                RETRY_CHILD,
+                &workspace,
+            )
+            .is_none(),
+            "{label}: correlate_subagent_under should reject"
+        );
+        assert!(
+            session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace)
+                .is_empty(),
+            "{label}: spawned_subagents_under should reject"
+        );
+    };
+
+    // 1. Missing error row (call 1 truly pending on disk).
+    let missing_error = retry_fixture
+        .lines()
+        .filter(|line| !line.contains("\"status\":\"ERROR\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_rejected("missing answer row for first call", &missing_error);
+
+    // 2. Command output echoing the exact failure phrase in a DONE GENERIC row.
+    let echoed_in_command_output = retry_fixture
+        .lines()
+        .map(|line| {
+            let mut value = serde_json::from_str::<Value>(line).unwrap();
+            if value["step_index"] == 2 {
+                value = json!({
+                    "step_index": 2,
+                    "source": "MODEL",
+                    "type": "GENERIC",
+                    "status": "DONE",
+                    "created_at": AT_12,
+                    "content": "Created At: 2026-11-25T10:01:52-06:00\nCompleted At: 2026-11-25T10:01:52-06:00\nCommand exited with code 0.\n\nCommand output:\nEncountered error in step execution: subagent \"self\" not found or not allowed to be invoked",
+                });
+            }
+            value.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_rejected(
+        "DONE command output echoing error phrase",
+        &echoed_in_command_output,
+    );
+
+    // 3. Another tool's ERROR row at a different step_index while invoke_subagent is pending.
+    let wrong_step_error = retry_fixture
+        .lines()
+        .map(|line| {
+            let mut value = serde_json::from_str::<Value>(line).unwrap();
+            if value["step_index"] == 2 {
+                value["step_index"] = json!(9);
+            }
+            value.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_rejected("ERROR row at unrelated step_index", &wrong_step_error);
+
+    // 4. ERROR row missing the structured `error` field or unanchored content.
+    let missing_error_field = retry_fixture
+        .lines()
+        .map(|line| {
+            let mut value = serde_json::from_str::<Value>(line).unwrap();
+            if value["step_index"] == 2 {
+                value.as_object_mut().unwrap().remove("error");
+            }
+            value.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_rejected("ERROR row missing error field", &missing_error_field);
 }
 #[test]
 fn discovery_prefers_full_transcripts_and_cache_for_fresh_pairing_only() {

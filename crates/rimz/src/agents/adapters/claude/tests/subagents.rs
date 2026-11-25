@@ -104,6 +104,7 @@ fn interrupted_child_recovers_identity_and_usage() {
                 output_tokens: Some(8),
                 ..Default::default()
             },
+            finished: true,
         }]
     );
 }
