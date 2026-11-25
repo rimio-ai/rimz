@@ -566,8 +566,24 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_subagent_reopen_contract_is_version_117() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 117);
+fn snapshot_adopted_subagent_identity_contract_is_version_118() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 118);
+}
+
+#[test]
+fn pre_118_adopted_subagent_identity_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(117);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose adopted subagents kept their parent's launch identity, or whose stopped \
+         children kept their shells, must refold"
+    );
 }
 
 #[test]

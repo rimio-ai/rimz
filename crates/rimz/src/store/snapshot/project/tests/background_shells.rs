@@ -300,3 +300,146 @@ fn antigravity_shell_hooks_fold_across_parked_stop_kill_finish_and_idle_repair()
     assert_eq!(agents[0].status, AgentStatus::Success);
     assert!(agents[0].background_shells.is_empty());
 }
+
+#[test]
+fn subagent_stopped_clears_background_shells_and_scripts_so_closed_child_rests() {
+    // Replays live case-c: child parks on a background shell, is killed without
+    // firing its own unparked Stop, and parent's unparked RimzProviderRest closes
+    // it through SubagentReconciled (subagent_stopped, no background_shells field).
+    let parent_id = "96f57d1b-763b-41a9-9810-81de0eb36c58";
+    let child_id = "cd31b7f8-acde-4fb9-8034-3bcc0d7d9b7e";
+    let events = [
+        raw_lifecycle_at(
+            "antigravity",
+            0,
+            json!({
+                "event_name": "PreInvocation",
+                "agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "turn_started"},
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            1,
+            json!({
+                "event_name": "PreInvocation",
+                "agent_id": child_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "turn_started"},
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            2,
+            json!({
+                "event_name": "Stop",
+                "agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": true},
+                "background_shells": {"kind": "snapshot", "shells": []},
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            2,
+            json!({
+                "event_name": "SubagentAdopted",
+                "agent_id": child_id,
+                "agent_name": "rimz-control-e9002e0d677a",
+                "parent_agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "subagent_started"},
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            3,
+            json!({
+                "event_name": "Stop",
+                "agent_id": child_id,
+                "parent_agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": true},
+                "background_shells": {
+                    "kind": "snapshot",
+                    "shells": [{
+                        "id": format!("{child_id}/task-2"),
+                        "command": "sleep 90",
+                        "started_at": Timestamp::from_second(epoch().as_second() + 1).unwrap(),
+                    }],
+                },
+                "background_scripts": {
+                    "kind": "started",
+                    "script": {
+                        "id": "script-1",
+                        "description": "wait",
+                        "started_at": Timestamp::from_second(epoch().as_second() + 1).unwrap(),
+                    },
+                },
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            10,
+            json!({
+                "event_name": "RimzProviderRest",
+                "agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": false},
+            }),
+        ),
+        raw_lifecycle_at(
+            "antigravity",
+            10,
+            json!({
+                "event_name": "SubagentReconciled",
+                "agent_id": child_id,
+                "parent_agent_id": parent_id,
+                "pane_id": "tmux:%12",
+                "signal": {"signal": "subagent_stopped", "errored": false},
+            }),
+        ),
+    ];
+
+    // While parked, the child holds its background shell and script.
+    let mid = reduce_agent_states(&events[..5]);
+    let mid_child = mid.iter().find(|a| a.agent_id == child_id).unwrap();
+    assert_eq!(mid_child.status, AgentStatus::Running);
+    assert_eq!(mid_child.phase, TurnPhase::Parked);
+    assert_eq!(mid_child.background_shells.len(), 1);
+    assert_eq!(mid_child.background_scripts.len(), 1);
+
+    // After SubagentReconciled (subagent_stopped), the child holds neither shell
+    // nor script, and the projected view rests both child and parent at Success.
+    let final_agents = reduce_agent_states(&events);
+    let child = final_agents
+        .iter()
+        .find(|a| a.agent_id == child_id)
+        .unwrap();
+    assert_eq!(child.status, AgentStatus::Success);
+    assert_eq!(child.phase, TurnPhase::Idle);
+    assert!(
+        child.background_shells.is_empty(),
+        "SubagentStopped must clear background_shells: {:?}",
+        child.background_shells
+    );
+    assert!(
+        child.background_scripts.is_empty(),
+        "SubagentStopped must clear background_scripts: {:?}",
+        child.background_scripts
+    );
+
+    let snapshot = SidebarSnapshot::build_with_agents(
+        workspace(),
+        final_agents,
+        Timestamp::from_second(epoch().as_second() + 10).unwrap(),
+    )
+    .with_live_panes(vec![pane("%12", "agy", "/repo/main")], None);
+    let parent_row = row(&snapshot, parent_id);
+    assert_eq!(parent_row.status(), Some(AgentStatus::Success));
+    assert_eq!(parent_row.sub_agents().len(), 1);
+    assert_eq!(parent_row.sub_agents()[0].status, AgentStatus::Success);
+    assert_eq!(parent_row.sub_agents()[0].phase, TurnPhase::Idle);
+    assert!(!parent_row.sub_agents()[0].holds_parent_turn());
+}
