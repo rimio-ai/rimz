@@ -1,5 +1,5 @@
-//! Operator-triggered context compaction through the native command queue, with the continue
-//! a busy agent is owed afterward.
+//! Operator- or self-triggered context compaction through the native command queue, with the
+//! continue a busy agent's own request owes it afterward.
 
 use std::io::Write;
 
@@ -26,13 +26,19 @@ pub(super) fn compact_agent(
     )?;
     let handle = named_handle(agent, &addressable_agents(&snapshot), false);
     let caller = send::resolve_caller(&ctx.store)?;
+    let self_request = caller
+        .as_ref()
+        .and_then(|caller| {
+            rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller).ok()
+        })
+        .is_some_and(|caller| caller.launch_key() == agent.launch_key());
     let receipt = compact(
         &ctx.workspace,
         &ctx.store,
         agent,
         &handle,
         instruction.as_deref(),
-        no_continue,
+        self_request && !no_continue,
         send::sender_for(caller.as_ref(), ctx.channel(), false),
     )?;
     let message_id = receipt.message_id;

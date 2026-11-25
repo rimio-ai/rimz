@@ -55,9 +55,10 @@ pub struct ResumeConfig {
     /// Number of auto-continue attempts before leaving the row paused.
     pub auto_continue_max_retries: u32,
     /// Text for park recovery when `auto_continue` is on, and for the continue
-    /// `rimz agents compact` owes a busy agent regardless of that switch. Blank
-    /// text owes that compaction no continue and withholds the smart-compaction
-    /// reminder. Sent through the message queue as a paste plus Enter.
+    /// `rimz agents compact` owes a busy agent that asked for itself regardless
+    /// of that switch. Blank text owes that compaction no continue and withholds
+    /// the smart-compaction reminder. Sent through the message queue as a paste
+    /// plus Enter.
     pub auto_continue_text: String,
 }
 

@@ -927,7 +927,7 @@ enum AgentsSubcmd {
         /// Replace the configured compaction brief; an empty string sends the bare command.
         #[arg(allow_hyphen_values = true)]
         instruction: Option<String>,
-        /// Send no continue after compacting an agent mid-turn.
+        /// Send no continue after compacting yourself mid-turn.
         #[arg(long)]
         no_continue: bool,
     },

@@ -245,6 +245,8 @@ impl Fixture {
         let output = run_success(
             traced_rimz(&self.env, "soft-trace.log")
                 .env("RIMZ_TEST_PANE_LIST", &self.panes)
+                .env("RIMZ_AGENT_KIND", self.request.kind.as_str())
+                .env("RIMZ_AGENT_ID", self.request.agent_id.as_str())
                 .args(["agents", "compact", handle.as_str()])
                 .args(extra),
             "self compaction",
@@ -2236,4 +2238,237 @@ fn supervised_run_parked_on_continue_carries_on_through_a_waiting_message_turn()
         finished.last_message.as_deref(),
         Some("wrapping up for compact\n\n---\n\nfinished after waiting message")
     );
+}
+
+#[test]
+fn continue_is_owed_only_to_a_self_request_and_not_to_a_person_peer_or_unresolved_caller() {
+    let seed_busy = |name: &str, launch_id: &str| {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        run_success(
+            env.rimz().args([
+                "config",
+                "set",
+                "resume.auto_continue_text",
+                "  keep going  ",
+            ]),
+            "configure continue text",
+        );
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let mut pane = agent_pane(&env, "claude");
+        pane.session_name = session.clone();
+        let panes = env.write_pane_fixture(std::slice::from_ref(&pane));
+        let frame = rimz::sidebar::frame::assemble_frame(
+            vec![pane],
+            rimz::utils::time::unix_now_ms(),
+            session,
+        );
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &env.runtime_paths().pane_frame_path(),
+            &frame,
+        )
+        .unwrap();
+        let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+        crate::common::wait::register_agent(
+            &env,
+            "target-session",
+            launch_id,
+            name,
+            rimz::agents::LaunchParams::default(),
+        );
+        append_lifecycle(
+            &env,
+            "claude",
+            "soft-test",
+            "target-session",
+            LifecycleSignal::TurnStarted { turn_id: None },
+            |obs| {
+                obs.pane_id = Some(pane_id.clone());
+                obs.launch_id = Some(launch_id.into());
+                obs.agent_name = Some(name.to_owned());
+            },
+        );
+        // Register a distinct peer agent with its own launch id.
+        crate::common::wait::register_agent(
+            &env,
+            "peer-session",
+            "launch-peer",
+            "peer-agent",
+            rimz::agents::LaunchParams::default(),
+        );
+        append_lifecycle(
+            &env,
+            "claude",
+            "soft-test",
+            "peer-session",
+            LifecycleSignal::TurnStarted { turn_id: None },
+            |obs| {
+                obs.launch_id = Some("launch-peer".into());
+                obs.agent_name = Some("peer-agent".to_owned());
+            },
+        );
+        (env, panes)
+    };
+
+    let run_compact = |(env, panes): &(Env, PathBuf), envs: &[(&str, &str)], args: &[&str]| {
+        let mut cmd = traced_rimz(env, "soft-trace.log");
+        cmd.env("RIMZ_TEST_PANE_LIST", panes);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.args(["agents", "compact"]).args(args);
+        String::from_utf8_lossy(&run_success(&mut cmd, "agents compact").stdout).into_owned()
+    };
+
+    let records_of = |(env, _): &(Env, PathBuf)| {
+        let (mut live, history) = env.store().list_messages_and_history().unwrap();
+        live.extend(history);
+        live
+    };
+
+    let target_row = |(env, _): &(Env, PathBuf)| {
+        env.store()
+            .agent_with_context(
+                &AgentKind::new_unchecked("claude"),
+                &AgentSessionId::from("target-session"),
+                rimz::RuntimeScope::Runtime,
+            )
+            .unwrap()
+            .unwrap()
+    };
+
+    // 1. A person's request on a busy agent queues the command with no continue.
+    let fixture = seed_busy("target-agent", "launch-target");
+    let person_receipt = run_compact(&fixture, &[], &["@target-agent"]);
+    assert!(
+        person_receipt
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "person request must report no continue: {person_receipt}"
+    );
+    let records = records_of(&fixture);
+    assert_eq!(
+        records.len(),
+        1,
+        "person request must queue only the command: {records:?}"
+    );
+    assert_eq!(records[0].body, MessageBody::Command);
+    assert!(
+        !target_row(&fixture)
+            .soft_compact
+            .is_some_and(|mark| mark.continue_owed.is_some()),
+        "person request must owe no continue"
+    );
+
+    // 2. A peer's request queues no continue; `--no-continue` from a peer is accepted and
+    //    changes nothing; a caller with no row owes no continue; then the agent's own `@me`
+    //    request joins and adds the continue; then a peer joining after sees
+    //    `then continues it if nothing else is waiting`.
+    let fixture = seed_busy("target-agent", "launch-target");
+    let peer_env = [
+        ("RIMZ_AGENT_KIND", "claude"),
+        ("RIMZ_AGENT_ID", "launch-peer"),
+    ];
+    let peer_receipt = run_compact(&fixture, &peer_env, &["@target-agent"]);
+    assert!(
+        peer_receipt
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "peer request must report no continue: {peer_receipt}"
+    );
+    assert_eq!(records_of(&fixture).len(), 1);
+
+    let peer_no_continue = run_compact(&fixture, &peer_env, &["@target-agent", "--no-continue"]);
+    assert!(
+        peer_no_continue
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "peer --no-continue must join with no continue: {peer_no_continue}"
+    );
+    assert_eq!(records_of(&fixture).len(), 1);
+
+    let ghost_env = [
+        ("RIMZ_AGENT_KIND", "claude"),
+        ("RIMZ_AGENT_ID", "launch-ghost"),
+    ];
+    let ghost_join = run_compact(&fixture, &ghost_env, &["@target-agent"]);
+    assert!(
+        ghost_join
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "unresolved caller must owe no continue: {ghost_join}"
+    );
+    assert_eq!(records_of(&fixture).len(), 1);
+
+    // Self-request by `@me` joins the peer-queued command and adds the continue.
+    let self_env = [
+        ("RIMZ_AGENT_KIND", "claude"),
+        ("RIMZ_AGENT_ID", "launch-target"),
+    ];
+    let self_join = run_compact(&fixture, &self_env, &["@me"]);
+    assert!(
+        self_join.trim_end().ends_with(
+            "delivers at its next turn boundary, then continues it if nothing else is waiting"
+        ),
+        "self @me join must add the continue: {self_join}"
+    );
+    let records = records_of(&fixture);
+    assert_eq!(
+        records.len(),
+        2,
+        "self join must add one continue: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|r| r.soft_compact == Some(SoftCompactStep::Continue))
+    );
+    assert!(
+        target_row(&fixture)
+            .soft_compact
+            .is_some_and(|mark| mark.continue_owed.is_some())
+    );
+
+    // A peer joining after the agent's own request reports that a continue follows.
+    let peer_after_self = run_compact(&fixture, &peer_env, &["@target-agent"]);
+    assert!(
+        peer_after_self.trim_end().ends_with(
+            "delivers at its next turn boundary, then continues it if nothing else is waiting"
+        ),
+        "peer joining after self continue must report continues: {peer_after_self}"
+    );
+    assert_eq!(records_of(&fixture).len(), 2);
+
+    // 3. Unresolved caller starting fresh queues no continue.
+    let fixture = seed_busy("target-agent", "launch-target");
+    let ghost_fresh = run_compact(&fixture, &ghost_env, &["@target-agent"]);
+    assert!(
+        ghost_fresh
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "fresh unresolved caller must queue no continue: {ghost_fresh}"
+    );
+    assert_eq!(records_of(&fixture).len(), 1);
+
+    // 4. Self-request by own handle queues a continue; `--no-continue` skips it.
+    let fixture = seed_busy("target-agent", "launch-target");
+    let self_handle = run_compact(&fixture, &self_env, &["@target-agent"]);
+    assert!(
+        self_handle.trim_end().ends_with(
+            "delivers at its next turn boundary, then continues it if nothing else is waiting"
+        ),
+        "self request by own handle must queue a continue: {self_handle}"
+    );
+    assert_eq!(records_of(&fixture).len(), 2);
+
+    let fixture = seed_busy("target-agent", "launch-target");
+    let self_no_continue = run_compact(&fixture, &self_env, &["@me", "--no-continue"]);
+    assert!(
+        self_no_continue
+            .trim_end()
+            .ends_with("delivers at its next turn boundary, with no continue after"),
+        "self request with --no-continue must owe no continue: {self_no_continue}"
+    );
+    assert_eq!(records_of(&fixture).len(), 1);
 }

@@ -96,7 +96,7 @@ pub(super) fn compact(tools: &Tools, args: &SelfCompactArgs) -> Result<Answer, F
         agent,
         &handle,
         args.instruction.as_deref(),
-        args.no_continue,
+        !args.no_continue,
         sender_for(caller.as_ref(), channel.as_deref(), false),
     )?;
     Ok(Answer::data(&receipt))

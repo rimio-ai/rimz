@@ -196,7 +196,7 @@ rimz message --smart-compact 70% @claude "now write the migration guide"   # com
 
 Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the session's [`tune smart-compact` override](../reference/cli/agents.md#tune), then the recipient's role or profile-chain `smart-compact`, falling back to `[harness] smart_compact`, which defaults to `258k`. An explicit `off` stops inheritance. The flag overrides even a session override; queued messages keep the line selected at enqueue ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
 
-That same seat line also drives the [mid-turn smart-compaction reminder](./loops.md#smart-compaction): RimZ reminds a busy agent once to finish and rest if this turn ends its work, or else to compact itself with `rimz agents compact @me`, which compacts it at the turn's end and sends continue. A per-message flag changes only that delivery, not the mid-turn reminder. A steer or interrupt into a busy turn delivers your text without typing a compact command first.
+That same seat line also drives the [mid-turn smart-compaction reminder](./loops.md#smart-compaction): RimZ reminds a busy agent once to finish and rest if this turn ends its work, or else to compact itself with `rimz agents compact @me`, which compacts it first at the turn's end and sends continue if nothing else is waiting. A per-message flag changes only that delivery, not the mid-turn reminder. A steer or interrupt into a busy turn delivers your text without typing a compact command first.
 
 ## Send a file or piped input
 

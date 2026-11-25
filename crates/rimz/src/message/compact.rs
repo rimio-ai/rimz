@@ -1,5 +1,5 @@
 //! Standalone native compaction through the durable, boundary-only command queue, and the
-//! continue a compaction of a busy agent owes it afterward.
+//! continue a busy agent's own compaction request owes it afterward.
 
 use jiff::Timestamp;
 
@@ -136,15 +136,16 @@ impl From<CompactOutcome> for ReceiptOutcome {
 }
 
 /// Send `agent` its native compaction command, with `instruction` in place of the configured
-/// brief, from `sender`. A busy agent gets the configured continue after the compaction unless
-/// `no_continue`. `handle` names the agent in a delivery refusal.
+/// brief, from `sender`. When `owe_continue` is true and `agent` holds an open turn, the
+/// configured continue is queued behind the command (or added when joining a queued command that
+/// has none yet). `handle` names the agent in a delivery refusal.
 pub fn compact_agent(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentState,
     handle: &str,
     instruction: Option<&str>,
-    no_continue: bool,
+    owe_continue: bool,
     sender: MessageSender,
 ) -> anyhow::Result<CompactReceipt> {
     use anyhow::{Context, bail};
@@ -182,8 +183,9 @@ pub fn compact_agent(
         None => crate::agents::compact_command(agent, &config.harness),
     }
     .context("adapter has no native compaction command")?;
-    let continue_text = Some(config.resume.auto_continue_text.trim())
-        .filter(|text| !text.is_empty() && !no_continue)
+    let continue_text = owe_continue
+        .then(|| config.resume.auto_continue_text.trim())
+        .filter(|text| !text.is_empty())
         .map(str::to_owned);
     let refused =
         |err: CompactErr| anyhow::anyhow!("{handle}: {}", err.live_message(Timestamp::now()));
