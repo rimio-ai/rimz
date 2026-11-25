@@ -804,12 +804,8 @@ fn prepare_mode(
     pending: &[MessageRecord],
 ) -> Result<PreparedMode> {
     let resuming = request.resuming_recipient.is_some();
-    let kind = if resuming {
-        DeliveryKind::Boundary
-    } else {
-        request.mode.kind()
-    };
-    if kind == DeliveryKind::Interrupt {
+    let kind = request.mode.kind();
+    if kind == DeliveryKind::Interrupt && !resuming {
         for target in recipients {
             let label = target.label(resolution.snapshot);
             let agent = if target.pane.is_some() {
@@ -1037,6 +1033,14 @@ impl DispatchState<'_> {
                 Some(handle),
             )
             .with_in_reply_to(self.in_reply_to.to_vec());
+        // The steer itself is forced by its `LiveSend`. Its retry, or its delivery to a child it
+        // resumes, is a boundary send, whose keys could answer a prompt the steer's chord spares,
+        // so the record keeps no force.
+        if mode.kind == DeliveryKind::Steer
+            && super::prompt_chord(crate::agents::message_keys(&message.kind)).is_some()
+        {
+            message.force = false;
+        }
         if let Some(defaults) = self.compact_defaults {
             message.auto_compact = target
                 .agent

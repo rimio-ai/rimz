@@ -638,9 +638,9 @@ pub struct MessageRecord {
     #[serde(default)]
     pub enter: RetiredEnter,
     pub gate: DeliveryGate,
-    /// Deliver even when Waiting reserves the agent's next input. Mirrors
-    /// `message --steer --force`; without it Waiting defers delivery to a later
-    /// boundary.
+    /// Deliver even when Waiting reserves the agent's next input; without it Waiting defers
+    /// delivery to a later boundary. Mirrors `message --force`, and `--steer --force` for a kind
+    /// without a `message::prompt_chord`.
     #[serde(default)]
     pub force: bool,
     /// The pane this claim writes to: stamped at claim, then kept as history on `Sent` and on an
@@ -979,7 +979,7 @@ impl MessageRecord {
         self
     }
 
-    /// Deliver past Waiting at the boundary, mirroring `message --steer --force`.
+    /// Deliver past Waiting at the boundary, mirroring `message --force`.
     #[must_use]
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;

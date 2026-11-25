@@ -971,11 +971,7 @@ fn write_text(
         (MessageBody::Prompt, DeliveryKind::Steer)
             if receiver.is_some_and(AgentState::is_awaiting_input) =>
         {
-            // The prompt could take a leading queue key as its answer, so only the chord goes.
-            keys.send_now
-                .strip_prefix(keys.queue)
-                .filter(|chord| !chord.is_empty())
-                .unwrap_or(keys.send_now)
+            super::prompt_chord(keys).unwrap_or(keys.send_now)
         }
         (MessageBody::Prompt, DeliveryKind::Steer | DeliveryKind::Interrupt) => keys.send_now,
     })?;
