@@ -80,6 +80,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `remote/`: SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/`: diagnostic-only JSONL append surfaces.
 - `config/`: machine settings, profile and team definitions, `rimz config` editing, and the config templates.
+- `mcp/`: the `rimz mcp serve` server, its tool catalog, and its wording.
 
 **Top-level modules** in `crates/rimz/src/`:
 
@@ -90,4 +91,4 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `utils::{time, path, parallel, tokens, env}`, `fs_watch`, `theme`.
 - Daemon view: `daemon_view`, `daemon_content`, `reload`, `remote_control`.
 - `observability`, `agent_activity`, `lane`, `proc`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
-- `blocker` (start preconditions), `update` and `uninstall` (install lifecycle), `packs/` (pack sources), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` server), `mcp_tools` (its tool runner).
+- `blocker` (start preconditions), `update` and `uninstall` (install lifecycle), `packs/` (pack sources), `lsp/` (shared language servers), `mcp_tools` (the `rimz mcp serve` tool runner).
