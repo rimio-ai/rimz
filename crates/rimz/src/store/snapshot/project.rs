@@ -12,7 +12,7 @@ use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
 use crate::agents::state::{OwedContinue, SoftCompactMark, TransitionMode};
 use crate::agents::{AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin};
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus, KeptVerdict};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
@@ -1207,6 +1207,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.phase,
         input.event.timestamp,
     );
+    state.kept_verdict = kept_verdict(input.prior, state.status);
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
@@ -1457,6 +1458,21 @@ fn finish_clock(
     rests_on_verdict.then(|| prior.and_then(|prior| prior.finished_at).unwrap_or(at))
 }
 
+/// The verdict a row resting at `Idle` keeps: the one `prior` rests on, or the one a `prior`
+/// already at `Idle` keeps. A turn always leaves `Idle`, so one that opened since the verdict
+/// shows as a `prior` in another status, and drops it.
+fn kept_verdict(prior: Option<&AgentState>, status: AgentStatus) -> Option<KeptVerdict> {
+    let prior = prior.filter(|_| status == AgentStatus::Idle)?;
+    match prior.status {
+        AgentStatus::Idle => prior.kept_verdict,
+        AgentStatus::Success | AgentStatus::Failed => Some(KeptVerdict {
+            status: prior.status,
+            finished_at: prior.finished_at,
+        }),
+        _ => None,
+    }
+}
+
 fn assemble_launch_state(
     kind: &AgentKind,
     event: &EventEnvelope,
@@ -1519,6 +1535,7 @@ fn assemble_launch_state(
     }
     state.status = status;
     state.finished_at = finish_clock(prior, status, phase, event.timestamp);
+    state.kept_verdict = kept_verdict(prior, status);
     state.phase = phase;
     if status == AgentStatus::Running {
         state.prior_turn = prior.and_then(AgentState::prior_turn_for_next);

@@ -157,7 +157,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 /// A bump renames the one `*_contract_is_version_<N>` test in
 /// `assemble/tests.rs` rather than adding a second, and its reason goes in its
 /// own `pre_<x>_..._is_not_a_fresh_view` test.
-pub const SNAPSHOT_VERSION: u32 = 116;
+pub const SNAPSHOT_VERSION: u32 = 117;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

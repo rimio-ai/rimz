@@ -499,7 +499,10 @@ upward-dependencies = [
 # DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
 # notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
 # TurnLimitStop carries a provider stop report's limit from the adapter to the run fold (+1).
-surface-budget = 1382
+# LaunchCapability::supports_resume answers reopenability in snapshot projection without binary I/O (+1).
+# AgentState::kept_verdict and KeptVerdict carry a reopened row's verdict from the fold to the
+# subagent projection (+2).
+surface-budget = 1385
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

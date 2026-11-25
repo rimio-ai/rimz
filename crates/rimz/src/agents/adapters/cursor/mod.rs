@@ -558,6 +558,10 @@ impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
         parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
     }
 
+    fn supports_resume(&self) -> bool {
+        true
+    }
+
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         let bin = cursor_launch_binary(locate_binary(self.spec()));
         Some(vec![bin, "--resume".to_owned(), session_id.to_owned()])

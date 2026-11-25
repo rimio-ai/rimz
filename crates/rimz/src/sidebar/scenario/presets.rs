@@ -2459,6 +2459,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         stalled: false,
         compacting: false,
         prior_turn: false,
+        reopenable: false,
         status: spec.status,
         phase: spec.phase,
         task: spec.task.map(ToOwned::to_owned),
@@ -2473,6 +2474,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         cost_usd: spec.cost_usd,
         elapsed_secs: spec.elapsed_secs,
         started_at: Some(registered_at),
+        rested_at: None,
         last_activity,
         registered_at: Some(registered_at),
     }
@@ -2930,7 +2932,10 @@ pub(super) fn scenario_child(row: &SidebarRow, now: jiff::Timestamp) -> SidebarS
     child.pane = row.pane.as_ref().map(|pane| pane.pane_id.clone());
     child.petname = card.handle.clone();
     child.provider_native = false;
+    child.reopenable = crate::agents::find_definition(child.kind.as_str())
+        .is_some_and(|adapter| adapter.supports_resume());
     child.started_at = Some(started_at);
+    child.rested_at = Some(row.last_activity);
     child.last_activity = row.last_activity;
     child.registered_at = card.registered_at;
     child.compaction_count = card.compaction_count;

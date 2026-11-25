@@ -1388,51 +1388,989 @@ fn host_pane_reap_keeps_children_with_a_live_parent_launch_sibling() {
     }
 }
 
+fn fold_event(
+    secs: u64,
+    source: &str,
+    event_type: &str,
+    params: serde_json::Value,
+) -> crate::store::event::EventEnvelope {
+    let mut event = crate::store::event::EventEnvelope::new(
+        workspace(),
+        "session",
+        source,
+        "agent-hook",
+        event_type,
+        params,
+    );
+    event.timestamp = epoch() + std::time::Duration::from_secs(secs);
+    event
+}
+
+fn project_folded_parent(
+    events: &[crate::store::event::EventEnvelope],
+    now: jiff::Timestamp,
+) -> SidebarRow {
+    let states = reduce_agent_states(events);
+    let parent = states
+        .iter()
+        .find(|agent| agent.agent_id == "root")
+        .expect("parent state")
+        .clone();
+    let mut rows = vec![row_from_agent(&parent, now)];
+    attach_sub_agents(&mut rows, &states, now);
+    rows.remove(0)
+}
+
 #[test]
 fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
-    let mut parent = agent("claude", "root", AgentStatus::Running, 100);
-    parent.turn_started_at = Some(ago(10));
-    parent.user_turn_started_at = parent.turn_started_at;
-    let mut child = agent("codex", "child", AgentStatus::Running, 5).active_ago(60);
-    child.parent_agent_id = Some(parent.agent_id.clone());
-    child.parent_agent_kind = Some(parent.kind.clone());
-    child.launch_depth = Some(2);
+    let at = |secs: u64| epoch() + std::time::Duration::from_secs(secs);
+    let mut events = vec![
+        fold_event(
+            0,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "pane_id": "tmux:%parent",
+                "worktree_path": "/repo/main",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        fold_event(
+            10,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "prompt": "round 1",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        fold_event(
+            11,
+            "codex",
+            "agent.launched",
+            serde_json::json!({
+                "agent_id": "child",
+                "agent_name": "child",
+                "state": "bound",
+                "pane_id": "tmux:%child",
+                "worktree_path": "/repo/main",
+                "parent_agent_id": "root",
+                "parent_agent_kind": "claude",
+                "launch_depth": 2,
+                "prompt": "check the build",
+            }),
+        ),
+        fold_event(
+            12,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "child",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+    ];
 
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child.clone()], epoch());
-    assert_eq!(
-        rows[0].sub_agents().len(),
-        1,
-        "a newer parent turn does not supersede a pane-backed child"
+    // A prompted child that has only launched and registered has not opened its
+    // first turn yet; a parent prompt must treat it as working and keep it current.
+    events.push(fold_event(
+        15,
+        "claude",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "root",
+            "prompt": "round 2",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(15));
+    assert_eq!(row.sub_agents().len(), 1);
+    assert!(
+        !row.sub_agents()[0].prior_turn,
+        "a prompted child whose first turn never started must not fold at a parent prompt"
     );
-    assert!(!rows[0].sub_agents()[0].prior_turn);
 
-    child.ended_at = Some(ago(60));
-    child.status = AgentStatus::Success;
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child.clone()], epoch());
-    assert_eq!(rows[0].sub_agents().len(), 1);
-    assert!(rows[0].sub_agents()[0].prior_turn);
-    assert_eq!(rows[0].as_agent().unwrap().current_sub_agents().count(), 0);
+    // Once working, the child stays current across the parent's next prompt.
+    events.push(fold_event(
+        16,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "child",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    events.push(fold_event(
+        20,
+        "claude",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "root",
+            "prompt": "round 3",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(20));
+    assert_eq!(row.sub_agents().len(), 1);
+    assert!(!row.sub_agents()[0].prior_turn);
 
-    child.ended_at = Some(ago(5));
-    child.last_activity = ago(5);
+    // A live finished child stays current before the parent's next prompt, then
+    // folds at the parent's next headerless prompt even while its pane stays open.
+    events.push(fold_event(
+        25,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "child",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false,
+            },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(25));
+    assert!(!row.sub_agents()[0].prior_turn);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(25)));
+
+    events.push(fold_event(
+        30,
+        "claude",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "root",
+            "prompt": "round 4",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(30));
+    assert_eq!(row.sub_agents().len(), 1);
+    assert!(row.sub_agents()[0].prior_turn);
+    assert_eq!(row.as_agent().unwrap().current_sub_agents().count(), 0);
+
+    // Taking a new turn brings the folded child back to the current list, and
+    // finishing + ending in this round keeps it current.
+    events.push(fold_event(
+        35,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "child",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(35));
+    assert!(!row.sub_agents()[0].prior_turn);
+
+    events.push(fold_event(
+        40,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "child",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false,
+            },
+        }),
+    ));
+    events.push(fold_event(
+        45,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-ended",
+            "agent_id": "child",
+            "signal": { "signal": "ended" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(45));
+    assert!(!row.sub_agents()[0].prior_turn);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(40)));
+
+    // Without a parent user_turn_started_at, a launched child stays current (no ghost-TTL fold).
+    let no_turn_events = vec![
+        fold_event(
+            0,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "pane_id": "tmux:%parent",
+                "worktree_path": "/repo/main",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        fold_event(
+            10,
+            "codex",
+            "agent.launched",
+            serde_json::json!({
+                "agent_id": "child",
+                "agent_name": "child",
+                "state": "bound",
+                "pane_id": "tmux:%child",
+                "worktree_path": "/repo/main",
+                "parent_agent_id": "root",
+                "parent_agent_kind": "claude",
+                "launch_depth": 1,
+                "prompt": "check",
+            }),
+        ),
+        fold_event(
+            11,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "child",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        fold_event(
+            12,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "child",
+                "signal": {
+                    "signal": "turn_ended",
+                    "errored": false,
+                    "parked_on_background": false,
+                },
+            }),
+        ),
+        fold_event(
+            13,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-ended",
+                "agent_id": "child",
+                "signal": { "signal": "ended" },
+            }),
+        ),
+    ];
+    let row = project_folded_parent(&no_turn_events, at((GHOST_SESSION_TTL_SECS + 100) as u64));
+    assert_eq!(row.sub_agents().len(), 1);
+    assert!(!row.sub_agents()[0].prior_turn);
+}
+
+#[test]
+fn prior_launched_children_stay_listed_with_recorded_rest_status_and_reopenable_flag() {
+    let mut parent = agent("claude", "root", AgentStatus::Idle, 200);
+    parent.user_turn_started_at = Some(ago(10));
+
+    let make_launched = |kind: &str, id: &str, status: AgentStatus| {
+        let mut child = agent(kind, id, status, 120);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child.ended_at = Some(ago(50));
+        child
+    };
+
+    let stopped = make_launched("claude", "stopped", AgentStatus::Failed);
+    let mut reaped = make_launched("cursor", "reaped", AgentStatus::Idle);
+    // An attached wait on an ended prior child must not lift it to Running or Sleeping.
+    reaped.pending_waits.push(crate::agents::PendingWait {
+        name: "@sibling".into(),
+        trigger: crate::agents::PendingWaitTrigger::Subagent {
+            active_at: ago(60),
+            target: None,
+            deadline_at: None,
+            settled: None,
+        },
+        armed_at: Some(ago(60)),
+        class: crate::agents::PendingWaitClass::Working,
+    });
+    let unknown_kind = make_launched("no-such-provider", "unknown", AgentStatus::Success);
+    let native_idle = child_state("root", "native-idle", AgentStatus::Idle, 60);
+    let native_done = child_state("root", "native-done", AgentStatus::Success, 60);
+
     let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent, child.clone()], epoch());
-    assert_eq!(
-        rows[0].sub_agents().len(),
-        1,
-        "an ended child from the parent's current turn remains visible"
+    attach_sub_agents(
+        &mut rows,
+        &[
+            parent.clone(),
+            stopped,
+            reaped,
+            unknown_kind,
+            native_idle,
+            native_done,
+        ],
+        epoch(),
     );
-    assert!(!rows[0].sub_agents()[0].prior_turn);
+    let subs = rows[0].sub_agents();
+    let by_id = |id: &str| subs.iter().find(|entry| entry.id == id);
 
-    child.ended_at = Some(ago(GHOST_SESSION_TTL_SECS + 1));
-    child.last_activity = ago(GHOST_SESSION_TTL_SECS + 1);
-    let parent_without_turn = agent("claude", "root", AgentStatus::Running, 100);
-    let mut rows = vec![row_from_agent(&parent_without_turn, epoch())];
-    attach_sub_agents(&mut rows, &[parent_without_turn, child], epoch());
-    assert_eq!(rows[0].sub_agents().len(), 1);
+    let stopped = by_id("stopped").expect("stopped prior launched child kept");
+    assert!(stopped.prior_turn);
+    assert_eq!(stopped.status, AgentStatus::Failed);
+    assert!(stopped.reopenable);
+
+    let reaped = by_id("reaped").expect("reaped prior launched child kept");
+    assert!(reaped.prior_turn);
+    assert_eq!(reaped.status, AgentStatus::Idle);
+    assert!(reaped.reopenable, "cursor answers a resume command");
+
+    let unknown = by_id("unknown").expect("unknown-kind prior launched child kept");
+    assert!(unknown.prior_turn);
+    assert!(!unknown.reopenable);
+
+    assert!(
+        by_id("native-idle").is_none(),
+        "provider-native prior child not on Success|Failed stays dropped"
+    );
+    let native_done = by_id("native-done").expect("provider-native finished prior child kept");
+    assert!(native_done.prior_turn);
+    assert!(!native_done.reopenable);
+}
+
+#[test]
+fn idle_close_reopen_and_heartbeats_do_not_move_round_and_mid_turn_reap_uses_ended_at() {
+    let at = |secs: u64| epoch() + std::time::Duration::from_secs(secs);
+    // Every child here registered at 11, and its runtime ends where it rests.
+    let assert_runtime_ends_at_rest = |row: &SidebarRow| {
+        let child = &row.sub_agents()[0];
+        let rested = child.rested_at.expect("rest instant");
+        assert_eq!(
+            child.elapsed_secs,
+            Some(rested.duration_since(at(11)).as_secs()),
+            "{}",
+            child.id
+        );
+    };
+    let seed_parent_and_child = |child_id: &str| {
+        vec![
+            fold_event(
+                0,
+                "claude",
+                "agent.lifecycle",
+                serde_json::json!({
+                    "agent_id": "root",
+                    "pane_id": "tmux:%parent",
+                    "worktree_path": "/repo/main",
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+            fold_event(
+                10,
+                "claude",
+                "agent.lifecycle",
+                serde_json::json!({
+                    "agent_id": "root",
+                    "prompt": "round 1",
+                    "signal": { "signal": "turn_started" },
+                }),
+            ),
+            fold_event(
+                11,
+                "codex",
+                "agent.launched",
+                serde_json::json!({
+                    "agent_id": child_id,
+                    "agent_name": child_id,
+                    "state": "bound",
+                    "pane_id": "tmux:%child",
+                    "worktree_path": "/repo/main",
+                    "parent_agent_id": "root",
+                    "parent_agent_kind": "claude",
+                    "launch_depth": 1,
+                    "prompt": "investigate",
+                }),
+            ),
+            fold_event(
+                12,
+                "codex",
+                "agent.lifecycle",
+                serde_json::json!({
+                    "agent_id": child_id,
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+        ]
+    };
+
+    // Case A: completed child -> fold -> idle close -> promptless reopen ->
+    // heartbeat/snapshot -> idle close after reopen -> user prompt re-enters current.
+    let mut events = seed_parent_and_child("completed");
+    events.push(fold_event(
+        13,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "completed",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    events.push(fold_event(
+        20,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "completed",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false,
+            },
+        }),
+    ));
+    events.push(fold_event(
+        30,
+        "claude",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "root",
+            "prompt": "round 2",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(30));
+    assert!(row.sub_agents()[0].prior_turn);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)));
+    assert_runtime_ends_at_rest(&row);
+
+    // Idle close at t=40 leaves rest instant at finished_at=20.
+    events.push(fold_event(
+        40,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-ended",
+            "agent_id": "completed",
+            "signal": { "signal": "ended" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(40));
+    assert!(row.sub_agents()[0].prior_turn);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)));
+    assert_runtime_ends_at_rest(&row);
+
+    // Promptless reopen at t=50 restamps turn_started_at=50 and clears finished_at,
+    // but must keep the child in the fold at rested_at=20.
+    events.push(fold_event(
+        50,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-resumed",
+            "agent_id": "completed",
+            "pane_id": "tmux:%child-2",
+            "signal": { "signal": "registered" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(50));
+    assert!(
+        row.sub_agents()[0].prior_turn,
+        "promptless reopen of a folded finished child must stay in the fold"
+    );
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)));
+    assert_runtime_ends_at_rest(&row);
+
+    // A heartbeat / state-snapshot observation leaves the round and rest instant alone.
+    let mut states_with_hb = reduce_agent_states(&events);
+    for agent in &mut states_with_hb {
+        if agent.agent_id == "completed" {
+            agent.last_activity = at(55);
+            agent.last_seen = at(55);
+        }
+    }
+    let parent = states_with_hb
+        .iter()
+        .find(|agent| agent.agent_id == "root")
+        .unwrap()
+        .clone();
+    let mut rows = vec![row_from_agent(&parent, at(55))];
+    attach_sub_agents(&mut rows, &states_with_hb, at(55));
     assert!(rows[0].sub_agents()[0].prior_turn);
+    assert_eq!(rows[0].sub_agents()[0].rested_at, Some(at(20)));
+    assert_runtime_ends_at_rest(&rows[0]);
+
+    // Second idle close after reopen at t=60 still keeps the child folded at rested_at=20.
+    events.push(fold_event(
+        60,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-ended",
+            "agent_id": "completed",
+            "signal": { "signal": "ended" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(60));
+    assert!(
+        row.sub_agents()[0].prior_turn,
+        "idle close after promptless reopen must keep the child in the fold"
+    );
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)));
+    assert_runtime_ends_at_rest(&row);
+
+    // A prompt typed into the reopened child returns it to the current list, and
+    // it stays current when that turn rests.
+    events.push(fold_event(
+        70,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-resumed",
+            "agent_id": "completed",
+            "pane_id": "tmux:%child-3",
+            "signal": { "signal": "registered" },
+        }),
+    ));
+    events.push(fold_event(
+        75,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "completed",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(75));
+    assert!(!row.sub_agents()[0].prior_turn);
+    events.push(fold_event(
+        80,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "completed",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false,
+            },
+        }),
+    ));
+    let row = project_folded_parent(&events, at(80));
+    assert!(!row.sub_agents()[0].prior_turn);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(80)));
+    assert_runtime_ends_at_rest(&row);
+
+    // Case B (stopped mid-turn -> Failed) and Case C (reaped mid-turn -> Idle):
+    // both stay current when ended after the parent's latest prompt, fold on a
+    // later parent prompt, and stay folded across a promptless reopen and the
+    // idle close that follows it.
+    for (child_id, end_event_name, expected_status, reopened_rest) in [
+        ("stopped", "rimz.agent-ended", AgentStatus::Failed, 20),
+        ("reaped", "ReapedDead", AgentStatus::Idle, 13),
+    ] {
+        let mut events = seed_parent_and_child(child_id);
+        events.push(fold_event(
+            13,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": child_id,
+                "signal": { "signal": "turn_started" },
+            }),
+        ));
+        events.push(fold_event(
+            15,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "prompt": "round 2",
+                "signal": { "signal": "turn_started" },
+            }),
+        ));
+        events.push(fold_event(
+            20,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": end_event_name,
+                "agent_id": child_id,
+                "signal": { "signal": "ended" },
+            }),
+        ));
+        let row = project_folded_parent(&events, at(20));
+        assert!(
+            !row.sub_agents()[0].prior_turn,
+            "{child_id}: ended mid-turn after parent prompt stays current"
+        );
+        assert_eq!(row.sub_agents()[0].status, expected_status, "{child_id}");
+        assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)), "{child_id}");
+        assert_runtime_ends_at_rest(&row);
+
+        events.push(fold_event(
+            30,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "prompt": "round 3",
+                "signal": { "signal": "turn_started" },
+            }),
+        ));
+        let row = project_folded_parent(&events, at(30));
+        assert!(
+            row.sub_agents()[0].prior_turn,
+            "{child_id}: folds at next prompt"
+        );
+        assert_eq!(row.sub_agents()[0].status, expected_status, "{child_id}");
+        assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)), "{child_id}");
+        assert_runtime_ends_at_rest(&row);
+
+        events.push(fold_event(
+            50,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-resumed",
+                "agent_id": child_id,
+                "pane_id": "tmux:%child-reopened",
+                "signal": { "signal": "registered" },
+            }),
+        ));
+        let row = project_folded_parent(&events, at(50));
+        assert!(
+            row.sub_agents()[0].prior_turn,
+            "{child_id}: promptless reopen must stay in the fold"
+        );
+        assert_eq!(row.sub_agents()[0].status, expected_status, "{child_id}");
+        assert_eq!(
+            row.sub_agents()[0].rested_at,
+            Some(at(reopened_rest)),
+            "{child_id}"
+        );
+        assert_runtime_ends_at_rest(&row);
+
+        events.push(fold_event(
+            60,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-ended",
+                "agent_id": child_id,
+                "signal": { "signal": "ended" },
+            }),
+        ));
+        let row = project_folded_parent(&events, at(60));
+        assert!(
+            row.sub_agents()[0].prior_turn,
+            "{child_id}: idle close after promptless reopen must stay in the fold"
+        );
+        assert_eq!(
+            row.sub_agents()[0].rested_at,
+            Some(at(reopened_rest)),
+            "{child_id}"
+        );
+        assert_runtime_ends_at_rest(&row);
+    }
+
+    // Case D: a child in which no turn ever opened whose wrapper ended:
+    // - after registration (Idle, no finished_at, no last_prompt_at): falls
+    //   through to registered_at (not ended_at).
+    let mut idle_unstarted = seed_parent_and_child("never-ran-idle");
+    idle_unstarted.push(fold_event(
+        15,
+        "claude",
+        "agent.lifecycle",
+        serde_json::json!({
+            "agent_id": "root",
+            "prompt": "round 2",
+            "signal": { "signal": "turn_started" },
+        }),
+    ));
+    idle_unstarted.push(fold_event(
+        20,
+        "codex",
+        "agent.lifecycle",
+        serde_json::json!({
+            "event_name": "rimz.agent-ended",
+            "agent_id": "never-ran-idle",
+            "signal": { "signal": "ended" },
+        }),
+    ));
+    let row = project_folded_parent(&idle_unstarted, at(20));
+    assert_eq!(
+        row.sub_agents()[0].rested_at,
+        Some(at(11)),
+        "ended child with no prompt ever opened rests at registered_at, not ended_at"
+    );
+    assert!(row.sub_agents()[0].prior_turn);
+
+    // - before registration (ended while still Running on prompted launch):
+    //   ends Failed with finished_at at the end instant.
+    let failed_unstarted = vec![
+        fold_event(
+            0,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "pane_id": "tmux:%parent",
+                "worktree_path": "/repo/main",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        fold_event(
+            11,
+            "codex",
+            "agent.launched",
+            serde_json::json!({
+                "agent_id": "never-ran-failed",
+                "agent_name": "never-ran-failed",
+                "state": "bound",
+                "pane_id": "tmux:%child",
+                "worktree_path": "/repo/main",
+                "parent_agent_id": "root",
+                "parent_agent_kind": "claude",
+                "launch_depth": 1,
+                "prompt": "investigate",
+            }),
+        ),
+        fold_event(
+            15,
+            "claude",
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "prompt": "round 2",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        fold_event(
+            20,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-ended",
+                "agent_id": "never-ran-failed",
+                "signal": { "signal": "ended" },
+            }),
+        ),
+    ];
+    let row = project_folded_parent(&failed_unstarted, at(20));
+    assert_eq!(row.sub_agents()[0].status, AgentStatus::Failed);
+    assert_eq!(row.sub_agents()[0].rested_at, Some(at(20)));
+    assert!(!row.sub_agents()[0].prior_turn);
+}
+
+#[test]
+fn a_promptless_reopen_keeps_a_finished_childs_verdict_band_order_round_and_runtime() {
+    let at = |secs: u64| epoch() + std::time::Duration::from_secs(secs);
+    let root = |secs, params| fold_event(secs, "claude", "agent.lifecycle", params);
+    let child = |secs, event_name: &str, signal: serde_json::Value| {
+        fold_event(
+            secs,
+            "codex",
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": event_name,
+                "agent_id": "child",
+                "signal": signal,
+            }),
+        )
+    };
+    let signal = |name: &str| serde_json::json!({ "signal": name });
+    let turn_ended = |errored: bool| {
+        serde_json::json!({
+            "signal": "turn_ended",
+            "errored": errored,
+            "parked_on_background": false,
+        })
+    };
+    let registered = || child(12, "SessionStart", signal("registered"));
+    let turn_started = || child(13, "UserPromptSubmit", signal("turn_started"));
+    let ended = |secs| child(secs, "rimz.agent-ended", signal("ended"));
+    for (case, finish, status) in [
+        (
+            "finished",
+            vec![
+                registered(),
+                turn_started(),
+                child(20, "Stop", turn_ended(false)),
+                ended(22),
+            ],
+            AgentStatus::Success,
+        ),
+        (
+            "finished failed",
+            vec![
+                registered(),
+                turn_started(),
+                child(20, "StopFailure", turn_ended(true)),
+                ended(22),
+            ],
+            AgentStatus::Failed,
+        ),
+        (
+            "stopped or timed out mid-turn",
+            vec![registered(), turn_started(), ended(20)],
+            AgentStatus::Failed,
+        ),
+        (
+            "ended before its first turn",
+            vec![ended(20)],
+            AgentStatus::Failed,
+        ),
+    ] {
+        for folded in [false, true] {
+            let mut events = vec![
+                root(
+                    0,
+                    serde_json::json!({
+                        "agent_id": "root",
+                        "pane_id": "tmux:%parent",
+                        "worktree_path": "/repo/main",
+                        "signal": { "signal": "registered" },
+                    }),
+                ),
+                root(
+                    10,
+                    serde_json::json!({
+                        "agent_id": "root",
+                        "prompt": "round 1",
+                        "signal": { "signal": "turn_started" },
+                    }),
+                ),
+                fold_event(
+                    11,
+                    "codex",
+                    "agent.launched",
+                    serde_json::json!({
+                        "agent_id": "child",
+                        "agent_name": "child",
+                        "state": "bound",
+                        "pane_id": "tmux:%child",
+                        "worktree_path": "/repo/main",
+                        "parent_agent_id": "root",
+                        "parent_agent_kind": "claude",
+                        "launch_depth": 1,
+                        "prompt": "investigate",
+                    }),
+                ),
+            ];
+            events.extend(finish.iter().cloned());
+            if folded {
+                events.push(root(
+                    30,
+                    serde_json::json!({
+                        "agent_id": "root",
+                        "prompt": "round 2",
+                        "signal": { "signal": "turn_started" },
+                    }),
+                ));
+            }
+            let entry = |events: &[crate::store::event::EventEnvelope], now: u64| {
+                let row = project_folded_parent(events, at(now));
+                let entry = &row.sub_agents()[0];
+                (
+                    entry.status,
+                    entry.phase,
+                    entry.stalled,
+                    entry.prior_turn,
+                    entry.finished_at,
+                    entry.rested_at,
+                    entry.elapsed_secs,
+                )
+            };
+            let before = entry(&events, 35);
+            assert_eq!(
+                before,
+                (
+                    status,
+                    TurnPhase::Idle,
+                    false,
+                    folded,
+                    Some(at(20)),
+                    Some(at(20)),
+                    Some(9)
+                ),
+                "{case}, folded {folded}"
+            );
+            for (secs, event_name, rest) in [
+                (40, "rimz.agent-resumed", signal("registered")),
+                (41, "SessionStart", signal("registered")),
+                (42, "PreCompact", signal("compacting")),
+                (
+                    43,
+                    "PostCompact",
+                    serde_json::json!({
+                        "signal": "compaction_ended",
+                        "auto": false,
+                        "failed": false,
+                    }),
+                ),
+                (44, "Interrupt", signal("turn_interrupted")),
+                (50, "rimz.agent-ended", signal("ended")),
+                (60, "rimz.agent-resumed", signal("registered")),
+                (70, "rimz.agent-ended", signal("ended")),
+            ] {
+                events.push(child(secs, event_name, rest));
+                let mut expected = before;
+                // An entry that is compacting counts as working, so it is current until the close.
+                expected.3 &= event_name != "PreCompact";
+                assert_eq!(
+                    entry(&events, secs + 1),
+                    expected,
+                    "{case}, folded {folded}, {event_name} at {secs}"
+                );
+                let states = reduce_agent_states(&events);
+                let row = states
+                    .iter()
+                    .find(|agent| agent.agent_id == "child")
+                    .unwrap();
+                assert_eq!(
+                    (row.status, row.finished_at),
+                    (AgentStatus::Idle, None),
+                    "{case}: the reopened row itself"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_kept_verdict_stays_off_native_entries_live_attention_and_root_rows() {
+    let mut child = child_state("root", "child", AgentStatus::Idle, 60);
+    child.kept_verdict = Some(crate::agents::KeptVerdict {
+        status: AgentStatus::Failed,
+        finished_at: Some(ago(90)),
+    });
+    let shown = |child: &AgentState| {
+        let entry = sub_agent_from_state(child, epoch(), false, 1_800);
+        (entry.status, entry.finished_at, entry.stalled)
+    };
+    assert_eq!(shown(&child), (AgentStatus::Idle, None, false), "native");
+
+    child.launch_depth = Some(1);
+    assert_eq!(
+        shown(&child),
+        (AgentStatus::Failed, Some(ago(90)), false),
+        "launched"
+    );
+
+    let mut waiting = child.clone();
+    waiting.pending_waits.push(PendingWait {
+        name: "@sibling".into(),
+        trigger: PendingWaitTrigger::Subagent {
+            active_at: ago(30),
+            target: None,
+            deadline_at: None,
+            settled: None,
+        },
+        armed_at: Some(ago(30)),
+        class: crate::agents::PendingWaitClass::Sleeping,
+    });
+    assert_eq!(shown(&waiting), (AgentStatus::Sleeping, None, false));
+
+    let mut silent = child.clone();
+    silent.prompt = Some("investigate".to_owned());
+    silent.last_activity = ago(2_000);
+    assert_eq!(shown(&silent), (AgentStatus::Failed, None, true));
+
+    let mut root = agent("claude", "root", AgentStatus::Idle, 60);
+    root.kept_verdict = child.kept_verdict;
+    let row = row_from_agent(&root, epoch());
+    assert_eq!(row.status(), Some(AgentStatus::Idle));
 }
 
 /// A child names its lane only when its stored lane carries an explicit name: a named lane,

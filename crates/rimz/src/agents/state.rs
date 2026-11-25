@@ -1382,6 +1382,15 @@ impl<T: serde::de::DeserializeOwned + PartialEq> TuneOverride<T> {
     }
 }
 
+/// The `success` or `failed` an `idle` row last rested on, with the [`AgentState::finished_at`]
+/// it had there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptVerdict {
+    pub status: AgentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<Timestamp>,
+}
+
 /// One agent session's folded row. The store's lifecycle writers
 /// (`append_agent_lifecycle_with_threshold`, `append_adoption`) create rows, and
 /// the read side synthesizes rows for panes and sessions RimZ did not launch
@@ -1535,6 +1544,11 @@ pub struct AgentState {
     /// reads as success. Kept while the row rests on one; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<Timestamp>,
+    /// The verdict a row now at `idle` came to rest on, when no turn has opened since: a
+    /// registration over a finished session rests the row at `idle`, and what it finished on
+    /// would be lost. Kept while the row rests at `idle`, `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_verdict: Option<KeptVerdict>,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
     /// [`TurnPhase::Idle`] outside `Running` — the machine normalizes it, so
@@ -2292,6 +2306,7 @@ impl AgentState {
             resumed_at: None,
             status,
             finished_at: None,
+            kept_verdict: None,
             phase: match status {
                 AgentStatus::Running => TurnPhase::Reasoning,
                 _ => TurnPhase::Idle,
@@ -3187,7 +3202,11 @@ impl AgentState {
         }
     }
 
-    /// Silence seconds and cause at the stall window for an open child: silent mid-turn, or a prompted launched child resting before its first turn. Raw `Idle` and no end clock distinguish the latter from a settled interrupt or a finished request; the carried prompt excludes promptless launches. Effective status and displayed errors exclude sleep, pause, and errors.
+    /// Silence seconds and cause at the stall window for an open child: silent mid-turn, or a
+    /// prompted launched child resting before its first turn. Raw `Idle`, no `last_prompt_at`,
+    /// and no end clock distinguish the latter from a settled interrupt, a finished request, or a
+    /// reopened child that a prompt had reached; the carried prompt excludes promptless launches.
+    /// Effective status and displayed errors exclude sleep, pause, and errors.
     pub(crate) fn silent_child_for(
         &self,
         now: Timestamp,
@@ -3206,6 +3225,7 @@ impl AgentState {
                 if status == AgentStatus::Idle
                     && self.is_launched_child()
                     && self.prompt.is_some()
+                    && self.last_prompt_at.is_none()
                     && self.turn_ended_at.is_none() =>
             {
                 ChildStall::NeverStarted

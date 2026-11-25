@@ -45,6 +45,7 @@ fn child_entry(agent: &AgentState, prior_turn: bool) -> SidebarSubAgent {
         id: agent.agent_id.to_string(),
         kind: agent.kind.clone(),
         prior_turn,
+        reopenable: false,
         name: "coder".to_owned(),
         petname: None,
         provider_native: false,
@@ -65,6 +66,7 @@ fn child_entry(agent: &AgentState, prior_turn: bool) -> SidebarSubAgent {
         cost_usd: None,
         elapsed_secs: None,
         started_at: None,
+        rested_at: None,
         last_activity: now(),
         registered_at: None,
     }

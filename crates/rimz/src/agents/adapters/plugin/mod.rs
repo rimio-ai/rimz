@@ -264,6 +264,13 @@ impl crate::agents::capabilities::LaunchCapability for PluginAdapter {
         Some(argv)
     }
 
+    fn supports_resume(&self) -> bool {
+        self.manifest
+            .launch
+            .as_ref()
+            .is_some_and(|launch| launch.resume.is_some())
+    }
+
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         let resume = self.manifest.launch.as_ref()?.resume.as_ref()?;
         let mut argv = resume

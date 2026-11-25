@@ -282,6 +282,135 @@ fn finished_clock_uses_the_final_status_on_ends_launches_and_state_snapshots() {
 }
 
 #[test]
+fn a_kept_verdict_lasts_while_a_finished_row_rests_at_idle() {
+    use crate::agents::KeptVerdict;
+
+    let at = |secs: i64| epoch() + std::time::Duration::from_secs(secs as u64);
+    let kept = |status, secs| {
+        Some(KeptVerdict {
+            status,
+            finished_at: Some(at(secs)),
+        })
+    };
+    let lifecycle = |secs, event_name: &str, extra: serde_json::Value| {
+        let mut params = json!({"agent_id": "child", "event_name": event_name});
+        for (key, value) in extra.as_object().unwrap() {
+            params[key] = value.clone();
+        }
+        raw_lifecycle_at("claude", secs, params)
+    };
+    let registered = || json!({"signal": {"signal": "registered"}});
+    let started = || json!({"signal": {"signal": "turn_started"}, "prompt": "task"});
+    let turn_ended = |errored| json!({"signal": {"signal": "turn_ended", "errored": errored, "parked_on_background": false}});
+    let ended = || json!({"signal": {"signal": "ended"}});
+    let interrupted = || json!({"signal": {"signal": "turn_interrupted"}});
+    let keepalive = || {
+        json!({"signal": {"signal": "turn_started"},
+            "prompt": "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."})
+    };
+    let finished = || {
+        vec![
+            lifecycle(1, "SessionStart", registered()),
+            lifecycle(2, "UserPromptSubmit", started()),
+            lifecycle(3, "Stop", turn_ended(false)),
+        ]
+    };
+    let fold = |events: &[EventEnvelope]| {
+        let row = reduce_agent_states(events).remove(0);
+        (row.status, row.finished_at, row.kept_verdict)
+    };
+
+    // Every rest at Idle that follows the finish with no turn between keeps it.
+    let mut events = finished();
+    assert_eq!(fold(&events), (AgentStatus::Success, Some(at(3)), None));
+    for (secs, event_name, rest) in [
+        (10, "rimz.agent-resumed", registered()),
+        (11, "SessionStart", registered()),
+        (12, "UserPromptSubmit", keepalive()),
+        (13, "Stop", turn_ended(false)),
+        (
+            14,
+            "PreCompact",
+            json!({"signal": {"signal": "compacting"}}),
+        ),
+        (
+            15,
+            "PostCompact",
+            json!({"signal": {"signal": "compaction_ended", "auto": false, "failed": false}}),
+        ),
+        (16, "Interrupt", interrupted()),
+        (17, "ReapedDead", ended()),
+        (18, "SessionStart", registered()),
+    ] {
+        events.push(lifecycle(secs, event_name, rest));
+        assert_eq!(
+            fold(&events),
+            (AgentStatus::Idle, None, kept(AgentStatus::Success, 3)),
+            "{event_name} at {secs}"
+        );
+    }
+    let mut attached = attach_event("claude", "child", None, "tmux:%9", None, 4242);
+    attached.timestamp = at(19);
+    let mut payload = launch_payload("child", "worker");
+    payload.prompt = None;
+    let mut relaunched = launch_event("claude", payload);
+    relaunched.timestamp = at(20);
+    for event in [attached, relaunched] {
+        events.push(event);
+        assert_eq!(
+            fold(&events),
+            (AgentStatus::Idle, None, kept(AgentStatus::Success, 3))
+        );
+    }
+
+    // A turn that opens drops it, whatever that turn then rests on.
+    events.push(lifecycle(21, "UserPromptSubmit", started()));
+    assert_eq!(fold(&events), (AgentStatus::Running, None, None));
+    for (event_name, end, after) in [
+        ("Interrupt", interrupted(), (AgentStatus::Idle, None, None)),
+        ("ReapedDead", ended(), (AgentStatus::Idle, None, None)),
+        (
+            "rimz.agent-ended",
+            ended(),
+            (AgentStatus::Failed, Some(at(22)), None),
+        ),
+        (
+            "StopFailure",
+            turn_ended(true),
+            (AgentStatus::Failed, Some(at(22)), None),
+        ),
+    ] {
+        let mut events = events.clone();
+        events.push(lifecycle(22, event_name, end));
+        assert_eq!(fold(&events), after, "{event_name}");
+        events.push(lifecycle(23, "SessionStart", registered()));
+        let verdict = after.1.and(kept(after.0, 22));
+        assert_eq!(
+            fold(&events),
+            (AgentStatus::Idle, None, verdict),
+            "{event_name}, reopened"
+        );
+    }
+
+    // A row folded before the field existed keeps its verdict on its first reopen.
+    let mut prior = serde_json::to_value(reduce_agent_states(&finished()).remove(0)).unwrap();
+    assert!(
+        prior
+            .as_object_mut()
+            .unwrap()
+            .remove("kept_verdict")
+            .is_none()
+    );
+    let prior: AgentState = serde_json::from_value(prior).unwrap();
+    let rows = reduce_agent_states_seeded(
+        BTreeMap::from([((prior.kind.clone(), prior.agent_id.clone()), prior)]),
+        &[lifecycle(10, "rimz.agent-resumed", registered())],
+    );
+    let row = rows.values().next().unwrap();
+    assert_eq!(row.kept_verdict, kept(AgentStatus::Success, 3));
+}
+
+#[test]
 fn finished_clock_stamps_a_clean_end_parked_on_background_work() {
     let mut payload = launch_payload("child", "worker");
     payload.launch.parent_agent_id = Some("parent".into());
