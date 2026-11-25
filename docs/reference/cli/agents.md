@@ -952,7 +952,7 @@ Which agents count:
 - A child launched from a pane counts in its parent's lane, wherever its own pane ran, and drops out once its parent leaves the audit record.
 - An agent that never opened a turn and has no recorded activity, messages, tokens, or cost is omitted. The panel and JSON keep an agent that opened a turn with no statistics; `--md` omits it and recomputes totals.
 - An unreadable checkout or malformed worktree marker leaves its agents out and prints a warning on stderr naming the path.
-- Several sessions of one contributor (after compaction or `/clear`) fold into one member when they share a team role, launch cell, explicit name, or pane; `sessions` counts them.
+- Several sessions of one contributor (after compaction, `/clear`, a molt, or a restart) fold into one member when they share a launch, team role, launch cell, or explicit name; sessions with no launch id fold when they share a pane. `sessions` counts them.
 
 The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and the recorded model id with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted. A member whose counted own-session turns include fast mode adds the configured bolt and `fast` after the model, in bold amber color. Child turns never add the member mark, and the launch setting alone never adds a mark. Per-model rows stay unmarked.
 

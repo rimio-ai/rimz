@@ -47,15 +47,18 @@ Figures stay whole-identity, so an identity observed on several branches reports
 
 ## The seat fold
 
-One contributor can span several session records. Compaction continuations and `/clear` conversations mint fresh session ids while the contributor keeps its seat, so the fold keys each record by `SlotKey`: its channel, its provider kind, and the first stable slot it carries, in this order:
+One contributor can span several session records. Compaction continuations, `/clear` conversations, and swaps (a molt or a restart) mint fresh session ids while the contributor keeps its seat, so the fold keys each record by `SlotKey`: its channel, its provider kind, and the first stable slot it carries, in this order:
 
 1. Team and role (`Slot::Role`).
 2. Launch group and ordinal (`Slot::Cohort`).
 3. An explicit name (`Slot::Name`).
-4. The pane id (`Slot::Pane`).
-5. The session id (`Slot::Session`).
+4. The launch id (`Slot::Launch`).
+5. The pane id (`Slot::Pane`), for a record with no launch id.
+6. The session id (`Slot::Session`), for a record with neither.
 
-Records with equal kind and slot in different channels stay separate seats. Within a seat, records sort by `registered_at`, then `last_activity`. The newest record (latest `last_activity`, ties broken by `registered_at`) supplies the member's handle, role, name, kind, model, effort, launch ordinal, and team. The member's `registered_at` is the earliest across the seat's own sessions, and its `last_activity` is the latest.
+A record with a launch id takes the whole key of its launch's earliest admitted session, by epoch and then `registered_at` (`attribution::LaunchRoots`), so one launch is one seat even when a swap moved it to another pane or provider, or `/clear` dropped its explicit name. Several launches still fold when they carry one role, launch cell, or explicit name. Two launches that share only a recycled pane id stay separate. A swap of a session with no launch id takes that session's id as its launch id ([instances.md](./instances.md#agents-sessions-and-epochs)), so its sessions at epoch 1 and later take that session's key. A swap's reservation that has not bound its pane is no session of the launch and joins no seat. A rebound record (`prior_launch_ids`) counts under its current launch alone.
+
+Records of different launches with equal kind and slot in different channels stay separate seats. Within a seat, records sort by `registered_at`, then `last_activity`. The newest record (latest `last_activity`, ties broken by `registered_at`) supplies the member's handle, role, name, kind, model, effort, launch ordinal, and team. The member's `registered_at` is the earliest across the seat's own sessions, and its `last_activity` is the latest.
 
 A pane-backed child joins the seat of the parent that launched it (`attribution::fold_seats`), and the child's own continuations fold into one child slot inside that seat. The parent must be among the admitted roots that passed the branch filter. A child whose parent is not there, because the parent left the audit rollup or a filter excluded it, keeps its own slot under `Slot::Orphan`. Attribution drops an orphan slot, since it holds no parent identity, while `slot_groups` returns it to the other consumers as a group of its own.
 
@@ -75,7 +78,7 @@ Each figure keeps its source boundary.
 
 | Figure | Source |
 | --- | --- |
-| identity, `registered_at`, `last_activity`, presence, `sessions`, tool calls, compactions | the audit rollup records of the seat's own sessions. Presence is `live` when any of them has no `ended_at`, and `sessions` counts them. |
+| identity, `registered_at`, `last_activity`, presence, `sessions`, tool calls, compactions | the audit rollup records of the seat's own sessions. Presence is `live` when any of them is not over (`AgentState::session_over`), and `sessions` counts them. |
 | prompts from you, messages from teammates, asks and answered asks | RimZ's append-only conversation transcript (`transcript::read_all`), per session. Every `Message` entry recorded on a session counts as from a teammate. An ask is answered when an `Answer` entry carries its id. |
 | messages to teammates | the `from` handle on teammates' received `Message` entries, matched against each member's `petname::sender_handle` (role, name, kind) and channel, never the displayed list handle. A `#channel` suffix on `from` overrides the entry's own channel, and of the matching members the one registered last at or before the entry takes the credit, ties broken by [member order](#membership). Best-effort. |
 | tokens, cost, model rows | each session's spend transcripts, parsed once by its adapter and priced through the shared price book (`spending::slot_effort_breakdown`) |

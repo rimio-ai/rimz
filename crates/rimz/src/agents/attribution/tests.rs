@@ -1520,6 +1520,156 @@ fn roleless_cohorts_and_reused_panes_fold() {
 }
 
 #[test]
+fn sessions_of_one_launch_fold_into_one_seat() {
+    let pane = |id| {
+        Some(crate::pane::PaneRef::from_id(PaneId::from_parts(
+            crate::ids::MuxName::Tmux,
+            id,
+        )))
+    };
+    let session = |id, kind, epoch, pane| {
+        let mut session = agent(
+            Path::new("/repo/lane"),
+            id,
+            kind,
+            10 + 20 * i64::from(epoch),
+        );
+        session.launch_id = Some(AgentSessionId::from("launch"));
+        session.epoch = epoch;
+        session.pane = pane;
+        session.tool_calls.insert("exec".to_owned(), 1);
+        session
+    };
+    let moved = [
+        session("one", "claude", 0, pane("%1")),
+        session("two", "claude", 1, pane("%2")),
+    ];
+    let paneless = [
+        session("one", "claude", 0, None),
+        session("two", "claude", 1, pane("%2")),
+        session("three", "claude", 2, None),
+    ];
+    let other_provider = [
+        session("one", "claude", 0, None),
+        session("two", "codex", 1, None),
+    ];
+    let mut cleared_under_a_name = [
+        session("one", "claude", 0, pane("%1")),
+        session("two", "claude", 0, pane("%1")),
+    ];
+    cleared_under_a_name[0].name = Some("fix".to_owned());
+    cleared_under_a_name[0].name_explicit = true;
+    let mut role_on_another_provider = [
+        session("one", "claude", 0, pane("%1")),
+        session("two", "codex", 1, pane("%2")),
+    ];
+    for record in &mut role_on_another_provider {
+        record.team = Some("forge".to_owned());
+        record.role = Some("coder".to_owned());
+    }
+    // A hand-started agent has no launch id: its sessions fold by pane, and its first swap
+    // takes the replaced session's id as the launch id, on another provider included.
+    let mut hand_started = [
+        session("cleared", "claude", 0, pane("%1")),
+        session("launch", "claude", 0, pane("%1")),
+        session("two", "codex", 1, pane("%2")),
+    ];
+    hand_started[0].launch_id = None;
+    hand_started[1].launch_id = None;
+
+    for (case, records) in [
+        ("moved", moved.to_vec()),
+        ("paneless", paneless.to_vec()),
+        ("other provider", other_provider.to_vec()),
+        ("cleared under a name", cleared_under_a_name.to_vec()),
+        (
+            "role on another provider",
+            role_on_another_provider.to_vec(),
+        ),
+        ("hand started", hand_started.to_vec()),
+    ] {
+        for records in [
+            records.clone(),
+            records.iter().rev().cloned().collect::<Vec<_>>(),
+        ] {
+            let refs = records.iter().collect::<Vec<_>>();
+            let groups = slot_groups(&refs, &unbounded_lifetimes(records.iter()));
+            assert_eq!(groups.len(), 1, "{case}");
+            let report = build_for(&records);
+            assert_eq!(report.totals.agents, 1, "{case}");
+            let member = &report.groups[0].members[0];
+            assert_eq!(member.sessions as usize, records.len(), "{case}");
+            assert_eq!(member.tool_calls, records.len() as u64, "{case}");
+        }
+    }
+
+    // A swap that failed leaves its reservation unbound and stamps it no end.
+    let mut kept = session("one", "claude", 0, pane("%1"));
+    kept.ended_at = Some(at(20));
+    let mut reservation = session("launch_reservation", "codex", 1, None);
+    reservation.tool_calls.clear();
+    reservation.status = crate::agents::AgentStatus::Failed;
+    assert!(!reservation.stands());
+    let report = build_for(&[kept, reservation]);
+    let member = &report.groups[0].members[0];
+    assert_eq!(
+        (member.sessions, member.presence, member.kind.as_str()),
+        (1, Presence::Exited, "claude")
+    );
+
+    // A replacement that bound and then failed is a session of the launch, and is over.
+    let mut replaced = session("one", "claude", 0, pane("%1"));
+    replaced.ended_at = Some(at(20));
+    let mut failed = session("launch_failed", "claude", 1, pane("%2"));
+    failed.launch_bound = true;
+    failed.status = crate::agents::AgentStatus::Failed;
+    let report = build_for(&[replaced, failed]);
+    let member = &report.groups[0].members[0];
+    assert_eq!((member.sessions, member.presence), (2, Presence::Exited));
+
+    // A restart that resumes a session raises its one row past epoch 0. An unbound row that
+    // has the launch's id and no launch id of its own is not the session it came from.
+    let mut resumed = session("one", "claude", 1, None);
+    resumed.launch_id = Some(AgentSessionId::from("launch_resumed"));
+    resumed.team = Some("forge".to_owned());
+    resumed.role = Some("coder".to_owned());
+    let mut stray = session("launch_resumed", "claude", 0, None);
+    stray.launch_id = None;
+    stray.channel = None;
+    let refs = [&resumed, &stray];
+    let groups = slot_groups(&refs, &unbounded_lifetimes([&resumed, &stray]));
+    assert_eq!(groups.len(), 2);
+
+    let mut swapped_child = moved;
+    let mut parent = session("parent", "claude", 0, None);
+    parent.launch_id = None;
+    for child in &mut swapped_child {
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+    }
+    let [first, second] = swapped_child;
+    let report = build_for(&[parent, first, second]);
+    assert_eq!(report.groups[0].members[0].subagents[0].count, 1);
+}
+
+#[test]
+fn launches_sharing_a_recycled_pane_stay_distinct() {
+    let [first, second] = ["first", "second"].map(|id| {
+        let mut agent = agent(Path::new("/repo/lane"), id, "claude", 10);
+        agent.launch_id = Some(AgentSessionId::from(format!("launch-{id}")));
+        agent.pane = Some(crate::pane::PaneRef::from_id(PaneId::from_parts(
+            crate::ids::MuxName::Tmux,
+            "%1",
+        )));
+        agent.tool_calls.insert("exec".to_owned(), 1);
+        agent
+    });
+
+    assert_eq!(build_for(&[first, second]).totals.agents, 2);
+}
+
+#[test]
 fn exited_presence_wall_clock_and_teamless_order_are_honest() {
     let mut team = agent(Path::new("/repo/lane"), "team", "codex", 10);
     team.team = Some("forge".to_owned());
