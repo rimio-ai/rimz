@@ -43,6 +43,7 @@ pub(super) fn run(request: SoftCompactRequest) -> Result<()> {
             now,
             || ProviderCapacity::login_compaction_blocked(ctx.runtime(), agent, now),
         )
+        .is_due()
     {
         return Ok(());
     }

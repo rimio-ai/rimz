@@ -1824,6 +1824,11 @@ pub struct Capabilities {
     /// stamps that reading onto a usage-retiring close event for the fold to
     /// retire.
     pub context_lags_compaction: bool,
+    /// Lifecycle hook events report context fill during the turn, so the
+    /// smart-compaction reminder's repeat guard requires a fold-observed
+    /// low-water reading under the seat's line in addition to a moved
+    /// compaction count.
+    pub lifecycle_reports_fill: bool,
     /// Registers its session lazily and/or routes hooks through a daemon, so
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.

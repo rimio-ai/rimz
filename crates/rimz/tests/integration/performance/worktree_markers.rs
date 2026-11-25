@@ -149,7 +149,15 @@ fn refresh_in_child(root: &Path, count: usize) {
         let workspace = super::workspace_for_refresh(&mut cursor, &state, &runtime, &frame);
         let snapshot = rimz::sidebar::enrich::project_local(workspace.clone(), Some(&frame), None);
         assert_eq!(snapshot.project_root.as_deref(), Some(root));
-        refresh_producer_caches(workspace, Some(&frame), &state, &runtime, &mut refresh).unwrap();
+        refresh_producer_caches(
+            workspace,
+            Some(&frame),
+            &state,
+            &runtime,
+            &rimz::diag::DiagSink::disabled(),
+            &mut refresh,
+        )
+        .unwrap();
         reads.push(WORK_COUNTERS.marker_reads.load(Relaxed) - before);
         if pass == 0 {
             let trace = std::fs::read_to_string(&log).unwrap();

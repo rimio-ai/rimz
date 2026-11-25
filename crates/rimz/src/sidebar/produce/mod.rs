@@ -344,6 +344,7 @@ pub fn produce_snapshot_with_refresh(
                 config,
                 crate::agents::spending::service::SpendingServiceStartup::OneShot,
                 crate::sidebar::refresh::git_stats::GitPass::OneShot,
+                &crate::diag::DiagSink::disabled(),
                 &mut Default::default(),
             )
         },
@@ -447,6 +448,7 @@ pub fn refresh_producer_caches(
     frame: Option<&PaneFrame>,
     state: &StatePaths,
     runtime: &RuntimePaths,
+    diag: &crate::diag::DiagSink,
     refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
 ) -> Result<()> {
     let base = crate::sidebar::enrich::project_local(workspace, frame, None);
@@ -459,6 +461,7 @@ pub fn refresh_producer_caches(
         &config,
         crate::agents::spending::service::SpendingServiceStartup::HostEligible,
         crate::sidebar::refresh::git_stats::GitPass::Host,
+        diag,
         refresh_state,
     );
     Ok(())

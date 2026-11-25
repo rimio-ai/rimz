@@ -1241,6 +1241,49 @@ fn orphan_reap_events_keep_their_evidence_on_the_wire() {
         serde_json::from_value::<DiagEvent>(divergence_json).expect("decode divergence"),
         divergence
     );
+
+    let withheld_tokens = DiagEvent::SoftCompactReminderWithheld {
+        agent_kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess-1"),
+        agent_name: Some("scout".to_owned()),
+        compaction_count: 2,
+        low_water_tokens: Some(150_000),
+        low_water_pct: None,
+        threshold: "100000 tokens".to_owned(),
+    };
+    let withheld_json = serde_json::to_value(&withheld_tokens).expect("encode withheld");
+    assert_eq!(withheld_json["kind"], "soft_compact_reminder_withheld");
+    assert_eq!(withheld_tokens.severity(), DiagSeverity::Info);
+    assert!(withheld_json.get("low_water_pct").is_none());
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(withheld_json).expect("decode withheld"),
+        withheld_tokens
+    );
+    assert!(withheld_tokens.summary().contains("@scout"));
+    assert!(withheld_tokens.summary().contains("#2"));
+    assert!(withheld_tokens.summary().contains("150000 tokens"));
+    assert!(withheld_tokens.summary().contains("100000 tokens"));
+
+    let withheld_none = DiagEvent::SoftCompactReminderWithheld {
+        agent_kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("sess-2"),
+        agent_name: None,
+        compaction_count: 1,
+        low_water_tokens: None,
+        low_water_pct: None,
+        threshold: "70%".to_owned(),
+    };
+    let none_json = serde_json::to_value(&withheld_none).expect("encode withheld none");
+    assert!(none_json.get("agent_name").is_none());
+    assert!(none_json.get("low_water_tokens").is_none());
+    assert!(none_json.get("low_water_pct").is_none());
+    assert_eq!(
+        serde_json::from_value::<DiagEvent>(none_json).expect("decode withheld none"),
+        withheld_none
+    );
+    assert!(withheld_none.summary().contains("codex:sess-2"));
+    assert!(withheld_none.summary().contains("low-water none"));
+    assert_ne!(withheld_tokens.identity_key(), withheld_none.identity_key());
 }
 
 #[test]

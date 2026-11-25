@@ -56,6 +56,18 @@ fn due(agent: &AgentState) -> bool {
         ts(20),
         || false,
     )
+    .is_due()
+}
+
+fn verdict(agent: &AgentState, threshold: AutoCompact) -> ReminderVerdict {
+    reminder_due(
+        &snapshot(agent),
+        agent,
+        Some(threshold),
+        "continue",
+        ts(20),
+        || false,
+    )
 }
 
 #[test]
@@ -112,6 +124,7 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
                     message_id: crate::ids::MessageId::new(),
                     queued_at: ts(1),
                 }),
+                ..SoftCompactMark::default()
             });
             a
         }),
@@ -120,22 +133,28 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
     }
     let mut without_pane = snapshot(&candidate);
     std::sync::Arc::make_mut(&mut without_pane.agent_panes).clear();
-    assert!(!reminder_due(
-        &without_pane,
-        &candidate,
-        Some(AutoCompact::Tokens(100_000)),
-        "continue",
-        ts(20),
-        || false
-    ));
-    assert!(!reminder_due(
-        &snapshot(&candidate),
-        &candidate,
-        None,
-        "continue",
-        ts(20),
-        || false
-    ));
+    assert!(
+        !reminder_due(
+            &without_pane,
+            &candidate,
+            Some(AutoCompact::Tokens(100_000)),
+            "continue",
+            ts(20),
+            || false
+        )
+        .is_due()
+    );
+    assert!(
+        !reminder_due(
+            &snapshot(&candidate),
+            &candidate,
+            None,
+            "continue",
+            ts(20),
+            || false
+        )
+        .is_due()
+    );
     assert!(
         !reminder_due(
             &snapshot(&candidate),
@@ -144,7 +163,8 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
             " \n ",
             ts(20),
             || false
-        ),
+        )
+        .is_due(),
         "blank continue text withholds the reminder"
     );
     assert!(
@@ -155,7 +175,8 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
             "continue",
             ts(20),
             || true
-        ),
+        )
+        .is_due(),
         "a blocked login withholds the reminder"
     );
     let mut child = candidate;
@@ -169,13 +190,30 @@ fn reminder_rearms_only_in_a_new_compaction_epoch() {
     let mut candidate = agent();
     candidate.soft_compact = Some(SoftCompactMark {
         compactions: Some(0),
-        continue_owed: None,
+        ..SoftCompactMark::default()
     });
-    assert!(!due(&candidate));
+    assert_eq!(
+        verdict(&candidate, AutoCompact::Tokens(100_000)),
+        ReminderVerdict::NotDue
+    );
     candidate.compaction_count = 1;
-    assert!(due(&candidate), "a mid-turn compaction opens a new epoch");
+    assert_eq!(
+        verdict(&candidate, AutoCompact::Tokens(100_000)),
+        ReminderVerdict::WithheldByGuard,
+        "a guarded kind without a low-water reading under the line stays withheld"
+    );
+    candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(20_000);
+    assert_eq!(
+        verdict(&candidate, AutoCompact::Tokens(100_000)),
+        ReminderVerdict::Due,
+        "a mid-turn compaction with a low-water reading under the line opens a new epoch"
+    );
     candidate.usage.total_tokens = Some(20_000);
-    assert!(!due(&candidate), "the new epoch waits for its own line");
+    assert_eq!(
+        verdict(&candidate, AutoCompact::Tokens(100_000)),
+        ReminderVerdict::NotDue,
+        "the new epoch waits for its own line"
+    );
 }
 
 fn produce(
@@ -186,6 +224,26 @@ fn produce(
     policy: &SeatPolicy,
     spawned: bool,
 ) -> Vec<SoftCompactRequest> {
+    produce_with_diag(
+        snapshot,
+        runtime,
+        capacities,
+        config,
+        policy,
+        &DiagSink::disabled(),
+        spawned,
+    )
+}
+
+fn produce_with_diag(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
+    config: &MachineConfig,
+    policy: &SeatPolicy,
+    diag: &DiagSink,
+    spawned: bool,
+) -> Vec<SoftCompactRequest> {
     let mut requests = Vec::new();
     compact_agents_with(
         snapshot,
@@ -193,6 +251,7 @@ fn produce(
         capacities,
         config,
         policy,
+        diag,
         || snapshot.now,
         |request| {
             requests.push(request.clone());
@@ -291,6 +350,7 @@ fn producer_pacing_survives_passes_but_does_not_hold_a_new_epoch() {
     candidate.soft_compact = Some(SoftCompactMark {
         compactions: Some(1),
         continue_owed: None,
+        ..SoftCompactMark::default()
     });
     assert!(
         fire(&candidate, 200).is_empty(),
@@ -589,5 +649,307 @@ fn reminder_stays_suppressed_on_withheld_lagging_sidecar_through_first_prompt_th
     assert!(
         due(&crossed),
         "genuine crossing above threshold re-arms reminder"
+    );
+}
+
+#[test]
+fn guarded_kinds_match_lifecycle_reports_fill_declaration() {
+    let expected: std::collections::BTreeSet<&str> =
+        ["claude", "codex", "omp", "opencode", "pi"].into();
+    let actual: std::collections::BTreeSet<&str> = crate::agents::all_definitions()
+        .filter(|definition| definition.spec().capabilities.lifecycle_reports_fill)
+        .map(|definition| definition.spec().kind)
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn fill_guard_verdicts_cover_guarded_percent_token_unguarded_clear_and_continuation() {
+    for kind in ["claude", "codex", "pi", "omp", "opencode"] {
+        let mut candidate = agent();
+        candidate.kind = AgentKind::new_unchecked(kind);
+        candidate.usage.context_window = Some(200_000);
+        candidate.usage.total_tokens = Some(160_000);
+        candidate.usage.fresh_input_tokens = Some(160_000);
+        candidate.compaction_count = 1;
+        candidate.soft_compact = Some(SoftCompactMark {
+            compactions: Some(0),
+            ..SoftCompactMark::default()
+        });
+
+        // No low-water reading since reminder withholds for both token and percent lines.
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::WithheldByGuard,
+            "{kind}: blank low-water tokens"
+        );
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Percent(70)),
+            ReminderVerdict::WithheldByGuard,
+            "{kind}: blank low-water percent"
+        );
+
+        // At or over the line still withholds.
+        candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(100_000);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::WithheldByGuard,
+            "{kind}: at token line"
+        );
+        candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(140_000);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Percent(70)),
+            ReminderVerdict::WithheldByGuard,
+            "{kind}: at percent line"
+        );
+
+        // Strictly under the line re-arms.
+        candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(99_999);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::Due,
+            "{kind}: under token line"
+        );
+        candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(139_999);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Percent(70)),
+            ReminderVerdict::Due,
+            "{kind}: under percent line"
+        );
+
+        // Percent-only low-water reading (Pi/OMP with no token figure).
+        candidate.soft_compact.as_mut().unwrap().low_water_tokens = None;
+        candidate.soft_compact.as_mut().unwrap().low_water_pct = Some(70);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Percent(70)),
+            ReminderVerdict::WithheldByGuard,
+            "{kind}: at percent-only line"
+        );
+        candidate.soft_compact.as_mut().unwrap().low_water_pct = Some(69);
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Percent(70)),
+            ReminderVerdict::Due,
+            "{kind}: under percent-only line"
+        );
+
+        // Compaction-blocked login returns NotDue, not WithheldByGuard.
+        candidate.soft_compact.as_mut().unwrap().low_water_pct = None;
+        assert_eq!(
+            reminder_due(
+                &snapshot(&candidate),
+                &candidate,
+                Some(AutoCompact::Tokens(100_000)),
+                "continue",
+                ts(20),
+                || true,
+            ),
+            ReminderVerdict::NotDue,
+            "{kind}: blocked login is NotDue"
+        );
+
+        // Continuation row (compactions: None) and cleared mark (None) bypass the guard.
+        candidate.soft_compact = Some(SoftCompactMark::default());
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::Due,
+            "{kind}: continuation mark re-arms without low-water"
+        );
+        candidate.soft_compact = None;
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::Due,
+            "{kind}: cleared mark re-arms without low-water"
+        );
+    }
+
+    // Unguarded participating kinds re-arm on the count alone.
+    for kind in ["antigravity", "droid", "qwen"] {
+        let mut candidate = agent();
+        candidate.kind = AgentKind::new_unchecked(kind);
+        candidate.compaction_count = 1;
+        candidate.soft_compact = Some(SoftCompactMark {
+            compactions: Some(0),
+            ..SoftCompactMark::default()
+        });
+        assert_eq!(
+            verdict(&candidate, AutoCompact::Tokens(100_000)),
+            ReminderVerdict::Due,
+            "{kind}: unguarded kind re-arms on count alone"
+        );
+    }
+}
+
+#[test]
+fn host_pass_records_one_contained_diagnostic_per_agent_and_count_when_guard_withholds() {
+    use crate::diag::record::{DiagEnvelope, DiagEvent};
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), &dir.path().join("runtime")).unwrap();
+    let state_root = dir.path().join("state");
+    let diag = DiagSink::under(state_root, workspace, "rimz-test", None);
+    let mut config = MachineConfig::default();
+    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
+    let policy = SeatPolicy::default();
+
+    let mut candidate = agent();
+    candidate.name = Some("scout".to_owned());
+    candidate.compaction_count = 1;
+    candidate.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        low_water_tokens: Some(115_000),
+        ..SoftCompactMark::default()
+    });
+
+    // A disabled sink writes no dedupe cache, so the host's enabled sink still records once.
+    assert!(
+        produce_with_diag(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            &DiagSink::disabled(),
+            true,
+        )
+        .is_empty()
+    );
+
+    // Repeated passes (even past the 30s diag limiter window) emit only one record for count 1.
+    for seconds in [20, 40, 120] {
+        let mut snap = snapshot(&candidate);
+        snap.now = ts(seconds);
+        assert!(
+            produce_with_diag(
+                &snap,
+                &runtime,
+                &RoomCapacities::default(),
+                &config,
+                &policy,
+                &diag,
+                true,
+            )
+            .is_empty()
+        );
+    }
+
+    let read_records = || -> Vec<DiagEnvelope> {
+        let path = diag.log_path().unwrap();
+        std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    let records = read_records();
+    assert_eq!(
+        records.len(),
+        1,
+        "one record per agent and count: {records:?}"
+    );
+    assert_eq!(
+        records[0].event,
+        DiagEvent::SoftCompactReminderWithheld {
+            agent_kind: AgentKind::new_unchecked("claude"),
+            agent_id: candidate.agent_id.clone(),
+            agent_name: Some("scout".to_owned()),
+            compaction_count: 1,
+            low_water_tokens: Some(115_000),
+            low_water_pct: None,
+            threshold: "100000 tokens".to_owned(),
+        }
+    );
+
+    // Moving to compaction count 2 emits one more record for that count.
+    candidate.compaction_count = 2;
+    candidate.soft_compact.as_mut().unwrap().low_water_tokens = None;
+    let mut snap = snapshot(&candidate);
+    snap.now = ts(180);
+    assert!(
+        produce_with_diag(
+            &snap,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            &diag,
+            true,
+        )
+        .is_empty()
+    );
+    let records = read_records();
+    assert_eq!(records.len(), 2, "new count emits once more: {records:?}");
+    assert_eq!(
+        records[1].event,
+        DiagEvent::SoftCompactReminderWithheld {
+            agent_kind: AgentKind::new_unchecked("claude"),
+            agent_id: candidate.agent_id.clone(),
+            agent_name: Some("scout".to_owned()),
+            compaction_count: 2,
+            low_water_tokens: None,
+            low_water_pct: None,
+            threshold: "100000 tokens".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn guard_cache_or_diag_failures_leave_verdict_unchanged_without_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), &dir.path().join("runtime")).unwrap();
+    let state_root = dir.path().join("state");
+    let diag = DiagSink::under(state_root, workspace, "rimz-test", None);
+    let mut config = MachineConfig::default();
+    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
+    let policy = SeatPolicy::default();
+
+    let mut candidate = agent();
+    candidate.compaction_count = 1;
+    candidate.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        ..SoftCompactMark::default()
+    });
+
+    // 1. Corrupt withheld cache file: still withholds, spawns nothing, emits diag.
+    let cache_path = runtime.live_path("soft-compact").join(format!(
+        "{}-withheld.json",
+        crate::store::sidecar::digest(candidate.kind.as_str(), candidate.agent_id.as_str())
+    ));
+    std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+    std::fs::write(&cache_path, "not-valid-json").unwrap();
+    assert!(
+        produce_with_diag(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            &diag,
+            true,
+        )
+        .is_empty()
+    );
+    assert!(diag.log_path().unwrap().exists());
+
+    // 2. Unwritable cache path (directory at cache file path) and unwritable diag log path
+    //    (directory at the sink's log path): still withholds, spawns nothing, never panics.
+    std::fs::remove_file(&cache_path).unwrap();
+    std::fs::create_dir_all(&cache_path).unwrap();
+    let log_path = diag.log_path().unwrap();
+    std::fs::remove_file(&log_path).unwrap();
+    std::fs::create_dir_all(&log_path).unwrap();
+    assert!(
+        produce_with_diag(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            &diag,
+            true,
+        )
+        .is_empty()
     );
 }

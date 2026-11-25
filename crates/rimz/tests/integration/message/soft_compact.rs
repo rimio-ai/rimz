@@ -72,6 +72,24 @@ impl Fixture {
         );
     }
 
+    fn lifecycle_usage(&self, signal: LifecycleSignal, tokens: u64) {
+        append_lifecycle(
+            &self.env,
+            self.request.kind.as_str(),
+            "soft-test",
+            self.request.agent_id.as_str(),
+            signal,
+            |observation| {
+                observation.pane_id = Some(self.request.pane_id.clone());
+                observation.usage.context_window = Some(200_000);
+                observation.usage.total_tokens = Some(tokens);
+                observation.usage.fresh_input_tokens = Some(tokens);
+                observation.usage.cache_read_input_tokens = Some(0);
+                observation.usage.cache_write_input_tokens = Some(0);
+            },
+        );
+    }
+
     fn context(&self, tokens: u64) {
         let mut context =
             rimz::agents::AgentContext::new(self.request.kind.as_str(), jiff::Timestamp::now());
@@ -356,7 +374,7 @@ fn reminder_once_per_epoch(kind: &str) {
             .count(),
         1
     );
-    fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+    fixture.lifecycle_usage(LifecycleSignal::TurnStarted { turn_id: None }, 20_000);
     fixture.context(130_000);
     fixture.send(SoftCompactStep::WrapUp);
     assert_eq!(fixture.reminders(), 2, "a new epoch re-arms the reminder");
@@ -1252,4 +1270,83 @@ fn queued_compaction_and_owed_continue_survive_background_precompact() {
 #[test]
 fn queued_compaction_and_owed_continue_without_background_precompact() {
     assert_queued_compaction_with_background_precompact(false);
+}
+
+#[test]
+fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_clear_rearms_immediately()
+ {
+    let fixture = Fixture::new("claude");
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(fixture.reminders(), 1);
+
+    // Count moves to 1, sidecar drops then crosses 100k again, but no lifecycle event reports a
+    // low fill: the fill guard withholds the repeat reminder.
+    fixture.lifecycle(LifecycleSignal::Compacting);
+    fixture.lifecycle(LifecycleSignal::CompactionEnded {
+        auto: Some(true),
+        failed: false,
+        echo: false,
+    });
+    fixture.context(20_000);
+    fixture.context(130_000);
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        1,
+        "a moved count with no fold low-water reading must withhold"
+    );
+
+    // A lifecycle reading at or over the 100k line still withholds.
+    fixture.lifecycle_usage(
+        LifecycleSignal::ToolUsed {
+            effect: rimz::agents::ToolEffect::Observed,
+            name: Some("Read".to_owned()),
+            turn_id: None,
+            native_key: None,
+        },
+        100_000,
+    );
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        1,
+        "a low-water reading at the line must withhold"
+    );
+
+    // Once a lifecycle event reports a fill under 100k, the guard admits the repeat reminder.
+    fixture.lifecycle_usage(
+        LifecycleSignal::ToolUsed {
+            effect: rimz::agents::ToolEffect::Observed,
+            name: Some("Read".to_owned()),
+            turn_id: None,
+            native_key: None,
+        },
+        20_000,
+    );
+    fixture.lifecycle_usage(
+        LifecycleSignal::ToolUsed {
+            effect: rimz::agents::ToolEffect::Observed,
+            name: Some("Read".to_owned()),
+            turn_id: None,
+            native_key: None,
+        },
+        130_000,
+    );
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        2,
+        "a fold low-water reading under the line must re-arm the reminder"
+    );
+
+    // `/clear` drops the mark and re-arms immediately without needing a low-water reading.
+    fixture.lifecycle(LifecycleSignal::Registered);
+    fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+    fixture.context(130_000);
+    fixture.send(SoftCompactStep::WrapUp);
+    assert_eq!(
+        fixture.reminders(),
+        3,
+        "/clear drops the mark and re-arms without the fill guard"
+    );
 }

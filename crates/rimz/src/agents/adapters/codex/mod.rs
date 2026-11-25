@@ -206,6 +206,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         permission_before_auto_review: true,
         transcript_tail_context: true,
         context_lags_compaction: false,
+        lifecycle_reports_fill: true,
         // Codex has no background-task parking.
         // Codex fires no `SessionStart` on a plain CLI launch — it rides the
         // first `UserPromptSubmit`. Managed panes run embedded (--no-daemon);

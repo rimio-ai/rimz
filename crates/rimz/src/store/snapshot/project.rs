@@ -668,6 +668,8 @@ impl ReducerState {
                 })
                 .map(|mark| SoftCompactMark {
                     compactions: None,
+                    low_water_tokens: None,
+                    low_water_pct: None,
                     ..mark
                 });
         }
@@ -922,7 +924,10 @@ fn stamp_message(
     let enqueued = method == MessageEventMethod::Queued && payload.reason.is_none();
     match (payload.soft_compact, payload.status) {
         (Some(SoftCompactStep::WrapUp), MessageStatus::Sent) => {
-            agent.soft_compact.get_or_insert_default().compactions = Some(agent.compaction_count);
+            let mark = agent.soft_compact.get_or_insert_default();
+            mark.compactions = Some(agent.compaction_count);
+            mark.low_water_tokens = None;
+            mark.low_water_pct = None;
         }
         (Some(SoftCompactStep::Continue), MessageStatus::Queued) if enqueued => {
             agent.soft_compact.get_or_insert_default().continue_owed = Some(OwedContinue {
@@ -1236,6 +1241,17 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         && observed_usage.context_used_tokens() == state.retired_context_tokens
     {
         clear_current_window(&mut observed_usage);
+    }
+    if let Some(mark) = &mut state.soft_compact
+        && mark.compactions.is_some()
+    {
+        if let Some(tokens) = observed_usage.context_used_tokens() {
+            mark.low_water_tokens =
+                Some(mark.low_water_tokens.map_or(tokens, |low| low.min(tokens)));
+        }
+        if let Some(pct) = observed_usage.context_pct {
+            mark.low_water_pct = Some(mark.low_water_pct.map_or(pct, |low| low.min(pct)));
+        }
     }
     state.compacted_unmeasured |= retires_usage || linked_continuation;
     if observed_usage

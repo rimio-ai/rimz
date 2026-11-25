@@ -172,6 +172,7 @@ fn subagent_projection_marks_compaction_and_an_owed_compaction_continue() {
                 message_id: crate::ids::MessageId::new(),
                 queued_at: ago(5),
             }),
+            ..SoftCompactMark::default()
         });
         let label = format!("compacting={compacting} owed={owed:?}");
         let sub = sub_agent_from_state(&child, epoch(), false, 1_800);

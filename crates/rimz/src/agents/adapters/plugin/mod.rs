@@ -438,6 +438,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             permission_before_auto_review: false,
             transcript_tail_context: false,
             context_lags_compaction: false,
+            lifecycle_reports_fill: false,
             registers_lazily: manifest.capabilities.registers_lazily,
             reports_start_on_resume: manifest.capabilities.reports_start_on_resume,
             local_session_discovery: LocalSessionDiscovery::Unsupported,

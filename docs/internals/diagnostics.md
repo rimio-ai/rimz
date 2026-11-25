@@ -104,6 +104,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `workflow_retry`, `workflow_rerun` | `harness::workflow::engine::accounting::transition` | `workflow_rerun`: an evaluation re-run free because its hosting `advance` died, with `run`, `node`, and `seq`. `workflow_retry` has no writer: it stays so an older record of a failed check evaluation that earned its one retry, with `run`, `node`, `seq`, `outcome`, and `reason`, still reads ([workflow engine](./harness/workflow.md#accounting)) |
 | `workflow_runs_ended` | `cli::workflow::reconcile::report` | The runs whose homes one workflow pass, or one `workflow advance` or `workflow cancel` on a stranded id, moved after they were ended as failed or set aside because this RimZ cannot continue them: `runs`, their `causes` grouped with counts, and the `released` agents by name. Written only when the call moved such a run's home; identity by kind and first run. Info, doctor Contained |
 | `tool_loop_escalated` | `cli::hooks::lifecycle` | A named tool's consecutive identical argument signature reaching the configured attention threshold |
+| `soft_compact_reminder_withheld` | `harness::soft_compact` (from `sidebar::refresh`) | A repeat smart-compaction reminder withheld by the fill guard on an adapter declaring `Capabilities::lifecycle_reports_fill`: `agent_kind`, `agent_id`, optional `agent_name`, `compaction_count`, optional `low_water_tokens` and `low_water_pct` (both absent when no non-retired lifecycle reading arrived since the reminder), and `threshold`. Identity is `(agent_kind, agent_id, compaction_count)`; a disposable runtime cache file dedupes once per agent and count across host passes. Info, doctor Contained |
 
 ### Carry kinds
 
@@ -157,7 +158,7 @@ Severity follows the event, and for a few kinds the event's own fields. `DiagEve
 | `warn` | contained | `hook_ingress_truncated`, `hook_ingress_dropped`, `frame_rejected`, `pane_carry_forward`, `gate_hold`, `topology_write_rejected`, `live_roster_held` |
 | `warn` | expected | `tool_loop_escalated`. Also a `pane_count_drop` that removed one view completely, with no managed panes and no mass shrink, and a `frame_anomaly` for `clicked_row_displaced` with cause `no_room_clamp` |
 | `info` | investigate | `resolution_fallback`, `mixed_build_writers`, `supervisor_convergence` |
-| `info` | contained | `workflow_retry`, `workflow_rerun`, `workflow_runs_ended`, `newborn_quarantined`, `local_session_bind_rejected`, `subagent_digest_backstopped`, `hook_drainer_reconnected` |
+| `info` | contained | `workflow_retry`, `workflow_rerun`, `workflow_runs_ended`, `newborn_quarantined`, `local_session_bind_rejected`, `subagent_digest_backstopped`, `hook_drainer_reconnected`, `soft_compact_reminder_withheld` |
 | `info` | recovered | `frame_shrink_verified`, `pane_carry_refuted`, `gate_release`, `topology_writer_changed`, `recovery_seat_refilled`, `recovery_child_ended`, `pane_winsize_repaired`, `sidebar_view_repaired`, `scoped_bind_restored` |
 | `info` | expected | `group_migration`, `work_pane_boundary_moved`, `hidden_views_fitted`, `fetch_cycle_stats`, retained `fetch_reduction_stats`, `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` |
 | `warn` while active, `info` with `recovered_after_ms` | investigate, then recovered | `health_alert`, `link_alert`, `tick_budget_breach` |

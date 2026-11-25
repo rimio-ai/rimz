@@ -229,6 +229,7 @@ fn launched_child_owed_a_compaction_continue_holds_parent_turn() {
                 message_id: crate::ids::MessageId::new(),
                 queued_at: ago(5),
             }),
+            ..SoftCompactMark::default()
         });
         let snapshot = room_with_agent_panes(vec![parent, child]);
         let parent = row(&snapshot, "root");

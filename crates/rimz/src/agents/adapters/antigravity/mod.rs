@@ -211,6 +211,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         permission_before_auto_review: false,
         transcript_tail_context: true,
         context_lags_compaction: true,
+        lifecycle_reports_fill: false,
         registers_lazily: true,
         reports_start_on_resume: false,
         local_session_discovery: LocalSessionDiscovery::FullScan,

@@ -62,6 +62,7 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
             Some(&frame),
             &state,
             &runtime,
+            &rimz::diag::DiagSink::disabled(),
             &mut refresh_state,
         )
         .unwrap();
@@ -84,6 +85,7 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
             Some(&frame),
             &state,
             &runtime,
+            &rimz::diag::DiagSink::disabled(),
             &mut refresh_state,
         )
         .unwrap();

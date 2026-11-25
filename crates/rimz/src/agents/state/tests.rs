@@ -3029,6 +3029,7 @@ fn an_owed_continue_is_withdrawn_only_by_an_interrupt_settled_after_its_queue() 
             message_id: crate::ids::MessageId::new(),
             queued_at,
         }),
+        ..SoftCompactMark::default()
     });
     for (label, context, owed) in [
         ("no settle", None, true),
@@ -3080,10 +3081,22 @@ fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
         #[serde(default)]
         soft_compact: Option<TrunkMark>,
     }
+    #[derive(serde::Deserialize)]
+    struct PreLowWaterMark {
+        compactions: Option<u32>,
+        continue_owed: Option<OwedContinue>,
+    }
+    #[derive(serde::Deserialize)]
+    struct PreLowWaterRow {
+        #[serde(default, rename = "soft_compact_mark")]
+        soft_compact: Option<PreLowWaterMark>,
+    }
     let at = Timestamp::from_second(1_000).unwrap();
     let mut row = crate::testkit::agent_state("claude", "sess", at);
     row.soft_compact = Some(SoftCompactMark {
         compactions: Some(1),
+        low_water_tokens: Some(18_000),
+        low_water_pct: Some(9),
         continue_owed: Some(OwedContinue {
             message_id: crate::ids::MessageId::new(),
             queued_at: at,
@@ -3092,8 +3105,26 @@ fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
     let written = serde_json::to_value(&row).unwrap();
     let trunk: TrunkRow = serde_json::from_value(written.clone()).unwrap();
     assert!(trunk.soft_compact.is_none(), "{written}");
+    let pre_low_water: PreLowWaterRow = serde_json::from_value(written.clone()).unwrap();
+    let pre_mark = pre_low_water
+        .soft_compact
+        .expect("previous binary decodes soft_compact_mark ignoring new low-water fields");
+    assert_eq!(pre_mark.compactions, Some(1));
+    assert!(pre_mark.continue_owed.is_some());
     let decoded: AgentState = serde_json::from_value(written).unwrap();
     assert_eq!(decoded.soft_compact, row.soft_compact);
+
+    let mut legacy_mark_row =
+        serde_json::to_value(crate::testkit::agent_state("claude", "legacy-mark", at)).unwrap();
+    legacy_mark_row["soft_compact_mark"] = serde_json::json!({ "compactions": 2 });
+    let decoded_legacy: AgentState = serde_json::from_value(legacy_mark_row).unwrap();
+    assert_eq!(
+        decoded_legacy.soft_compact,
+        Some(SoftCompactMark {
+            compactions: Some(2),
+            ..SoftCompactMark::default()
+        })
+    );
 
     let mut trunk_row =
         serde_json::to_value(crate::testkit::agent_state("claude", "old", at)).unwrap();
