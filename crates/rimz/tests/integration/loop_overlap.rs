@@ -206,6 +206,48 @@ fn a_settle_pass_leaves_a_fire_that_withdrew_its_mark_alone() {
     wait_for_quiet(&env, 1);
 }
 
+/// Each fire of a command task whose checkout is gone is one failed fire: the next one finds no
+/// open mark to settle as a second, and `once-per-checkout` does not remember it.
+#[test]
+fn a_fire_whose_checkout_is_gone_strikes_once() {
+    let signal = json!({"name":"trunk.moved", "source":"git", "payload":{"repo":"r", "trunk":"main", "from":"a", "to":"b"}}).to_string();
+    let outcomes = [false, true].map(|once| {
+        let env = fixture("skip", None);
+        let gone = env.home_root.join("gone");
+        let path = env.rimz_home().join("loop.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            format!("{config}dir={gone:?}\nonce-per-checkout={once}\n"),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            env.rimz()
+                .args(["loop", "run", "busy", "--signal-json", &signal])
+                .output()
+                .unwrap();
+            loop_ok(&env, &["loop", "settle"]);
+        }
+        let errors: Vec<_> = read_loop_run_records(&env)
+            .into_iter()
+            .map(|row| (row.result, row.error.unwrap_or_default()))
+            .collect();
+        let strikes = read_loop_strikes(&env)
+            .get(&machine_task_key("busy"))
+            .copied();
+        (once, errors, strikes, gone)
+    });
+    let expected = outcomes.clone().map(|(once, _, _, gone)| {
+        let error = format!(
+            "task checkout {}: No such file or directory (os error 2)",
+            gone.display()
+        );
+        let row = (LoopRunResult::Errored, error);
+        (once, vec![row.clone(), row], Some(2), gone)
+    });
+    assert_eq!(outcomes, expected);
+}
+
 #[test]
 fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
     let env = fixture("replace", None);
