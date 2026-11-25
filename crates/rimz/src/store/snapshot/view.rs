@@ -150,6 +150,10 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 /// `latest.json` files read as stale instead of accreting one-off guards. A
 /// field added to any struct the snapshot carries is such a change.
 ///
+/// Bump too, together with `ROLLUP_CACHE_VERSION`, when a reducer folds one
+/// log to different row values: `latest.json` stays fresh until the log grows,
+/// so a view published before the change would keep showing the old rows.
+///
 /// A bump renames the one `*_contract_is_version_<N>` test in
 /// `assemble/tests.rs` rather than adding a second, and its reason goes in its
 /// own `pre_<x>_..._is_not_a_fresh_view` test.
