@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -45,7 +45,6 @@ fn has_python3() -> bool {
         .status()
     {
         Ok(status) => status.success(),
-        Err(err) if err.kind() == ErrorKind::NotFound => false,
         Err(_) => false,
     }
 }
