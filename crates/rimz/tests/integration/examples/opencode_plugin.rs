@@ -385,6 +385,48 @@ assert.deepEqual(regressions, [], regressions.join("\n"));
 
 #[test]
 #[cfg(unix)]
+fn plugin_carries_a_claimed_deadline_rung_into_each_later_request() {
+    let capability = std::process::Command::new("node")
+        .args([
+            "--experimental-strip-types",
+            "--input-type=module-typescript",
+            "--eval",
+            "const n: number = 1;",
+        ])
+        .output();
+    let Ok(capability) = capability else {
+        crate::common::skip("node not on PATH");
+        return;
+    };
+    if !capability.status.success() {
+        crate::common::skip("node cannot strip TypeScript syntax");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("index.ts");
+    let harness = dir.path().join("harness.mjs");
+    std::fs::write(
+        &plugin,
+        include_str!("../../../src/agents/adapters/opencode/index.ts"),
+    )
+    .unwrap();
+    std::fs::write(&harness, include_str!("opencode_deadline.mjs")).unwrap();
+    let output = std::process::Command::new("node")
+        .arg("--experimental-strip-types")
+        .arg(&harness)
+        .arg(&plugin)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "deadline harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn client_tracks_focus_and_background_asks_without_navigation_edges() {
     let capability = std::process::Command::new("node")
         .args([

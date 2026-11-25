@@ -6,8 +6,9 @@
 //! then shells out to
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
-//! `permission.asked` and `form.created` events, and the plugin never
-//! reads RimZ's stdout. Native reply bus events record
+//! `permission.asked` and `form.created` events. The plugin reads RimZ's stdout
+//! only for a supervised run's deadline rung on `tool_after`, which it adds
+//! to the system text of that turn's later model requests. Native reply bus events record
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
 //! A root `session_idle` after a plan-agent turn derives a native plan-approval
 //! wait that the next prompt clears after the user switches modes in the TUI.
@@ -41,8 +42,8 @@ use serde_json::json;
 use super::AskKind;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -82,7 +83,10 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        hook_context: None,
+        hook_context: Some(HookContextReply::TopLevel {
+            event: "tool_after",
+            key: "additional_context",
+        }),
         prompt_context: false,
         native_ask_ui: true,
         permission_before_auto_review: false,

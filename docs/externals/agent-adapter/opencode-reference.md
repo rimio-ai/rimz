@@ -71,12 +71,12 @@ Register hooks through a domain. Each hook call returns `Promise<Registration>`,
 | Registration | Current shape |
 | --- | --- |
 | `context.session.hook("prompt", callback)` | `sessionID`, `messageID`, mutable `prompt`, `metadata?`, `delivery` |
-| `context.session.hook("context", callback)` | `sessionID`, `agent`, `model`, mutable `system`, `messages`, `options`, `tools` |
+| `context.session.hook("context", callback)` | `sessionID`, `agent`, `model`, mutable `system`, `messages`, `options`, `tools`. Awaited before each primary request, a post-tool continuation included, over a freshly built transcript; nothing pushed persists to the next request ([`core/src/session/model-request.ts`, 2.4.1](https://github.com/anomalyco/opencode/blob/v2.4.1/packages/core/src/session/model-request.ts), `baseTranscript` and `layer`) |
 | `context.session.hook("compaction", callback)` | the context shape plus optional `result` to replace model compaction |
 | `context.session.hook("title" / "generate", callback)` | auxiliary session requests. Title can supply a `result` |
 | `context.session.hook("model.request" / "http.request" / "http.response", callback)` | session/model identity and `kind: "primary" \| "compaction" \| "title" \| "generate"`. The HTTP hooks expose the actual `Request` or `Response` |
 | `context.session.hook("retry", callback)` | error, attempt, and mutable retry decision |
-| `context.tool.hook("execute.before" / "execute.after", callback)` | tool, session, agent, message and call identity. Mutable input before execution, completed result or error afterward |
+| `context.tool.hook("execute.before" / "execute.after", callback)` | tool, session, agent, message and call identity. Mutable input before execution, completed result or error afterward. A replaced `result.content` is what the timeline stores, truncated after the hook ([`core/src/tool.ts`, 2.4.1](https://github.com/anomalyco/opencode/blob/v2.4.1/packages/core/src/tool.ts), [`session/runner/step.ts`](https://github.com/anomalyco/opencode/blob/v2.4.1/packages/core/src/session/runner/step.ts), `toolOutput.truncate`) |
 | `context.permission.hook("evaluate", callback)` | action, resources, source, and mutable permission effect/message |
 | `context.shell.hook("create.before", callback)` | mutable command, working directory, timeout, shell, and environment |
 | `context.event.subscribe(...)` | the native async-iterable event subscription API |
