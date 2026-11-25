@@ -8950,20 +8950,65 @@ fn assert_parent_follow_up_case(
         second.text = "second follow up".into();
         second.register_by = None;
         store.queue_message(&second, "rimz-test").unwrap();
+        let mut tracked_ids = vec![message.message_id.clone(), second.message_id.clone()];
+        if case == ResumeFollowUpCase::SilentResumeDiesOnPaste {
+            // Wait past the timed provider-start window, then queue a compaction command: it
+            // outranks the follow-up and must still wait for the resumed provider's start.
+            std::thread::sleep(SILENT_RESUME_WINDOW + Duration::from_millis(200));
+            run_success(
+                traced_rimz(&env, &trace)
+                    .env("RIMZ_TEST_PANE_LIST", &panes)
+                    .env(
+                        "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                        SILENT_RESUME_WINDOW.as_millis().to_string(),
+                    )
+                    .args(["agents", "compact", &format!("@{child_name}")]),
+                "compact silent resume past timed window",
+            );
+            let (live, history) = store.list_messages_and_history().unwrap();
+            tracked_ids.push(
+                live.into_iter()
+                    .chain(history)
+                    .find(|record| record.body == MessageBody::Command)
+                    .expect("compaction command record")
+                    .message_id,
+            );
+        }
         assert_silent_resume_outcome(
             &env,
             &trace,
             &panes,
-            [&message.message_id, &second.message_id],
+            &tracked_ids,
             &child_name,
             case,
             wrapper,
         );
         return;
     }
+    let mut starts_late_command_id = None;
     if case == ResumeFollowUpCase::StartsLate {
-        // Sweep past two delivery windows from the resume while the provider stays silent.
-        let until = Instant::now() + SILENT_RESUME_WINDOW * 2 + Duration::from_millis(500);
+        // Wait past one delivery window while the provider stays silent, queue a compaction
+        // command, and sweep past a second delivery window: neither may be typed before start.
+        std::thread::sleep(SILENT_RESUME_WINDOW + Duration::from_millis(200));
+        run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env(
+                    "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                    SILENT_RESUME_WINDOW.as_millis().to_string(),
+                )
+                .args(["agents", "compact", &format!("@{child_name}")]),
+            "compact late-starting resume past timed window",
+        );
+        let (live, history) = store.list_messages_and_history().unwrap();
+        starts_late_command_id = Some(
+            live.into_iter()
+                .chain(history)
+                .find(|record| record.body == MessageBody::Command)
+                .expect("compaction command record")
+                .message_id,
+        );
+        let until = Instant::now() + SILENT_RESUME_WINDOW + Duration::from_millis(500);
         while Instant::now() < until {
             let _ = traced_rimz(&env, &trace)
                 .env("RIMZ_TEST_PANE_LIST", &panes)
@@ -8982,11 +9027,57 @@ fn assert_parent_follow_up_case(
             .collect::<Vec<_>>();
         assert!(
             typed.is_empty(),
-            "a follow-up must wait for the resumed provider's own session start: {typed:?}"
+            "a follow-up and compaction command must wait for the resumed provider's own session start: {typed:?}"
         );
     }
     let registered = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"SessionStart", "session_id":"child", "source":"resume", "cwd":cwd}).to_string(), &hook_env);
     assert!(registered.status.success());
+    if let Some(command_id) = starts_late_command_id {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let record = store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .find(|record| record.message_id == command_id)
+                .unwrap();
+            if record.status == MessageStatus::Sent
+                && trace_lines(&trace).iter().any(|line| is_enter_key(line))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "detached registration delivery did not send compaction command: {record:?}; show={:?}",
+                traced_rimz(&env, &trace)
+                    .env("RIMZ_TEST_PANE_LIST", &panes)
+                    .args(["message", "show", command_id.as_str()])
+                    .output()
+                    .unwrap(),
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            trace_lines(&trace)
+                .iter()
+                .any(|line| line.contains(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t"))),
+            "compaction command must be written once the resumed provider reports"
+        );
+        let pre = env.run_installed_hook_in_pane(
+            "claude",
+            &json!({"hook_event_name": "PreCompact", "session_id": "child", "cwd": cwd})
+                .to_string(),
+            &hook_env,
+        );
+        assert!(pre.status.success());
+        std::fs::write(&trace, "").unwrap();
+        let post = env.run_installed_hook_in_pane(
+            "claude",
+            &json!({"hook_event_name": "PostCompact", "session_id": "child", "trigger": "manual", "cwd": cwd}).to_string(),
+            &hook_env,
+        );
+        assert!(post.status.success());
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let record = store
@@ -9081,7 +9172,7 @@ fn assert_silent_resume_outcome(
     env: &Env,
     trace: &Path,
     panes: &Path,
-    message_ids: [&MessageId; 2],
+    message_ids: &[MessageId],
     child_name: &str,
     case: ResumeFollowUpCase,
     mut wrapper: std::process::Child,
@@ -9098,7 +9189,7 @@ fn assert_silent_resume_outcome(
     };
     let deadline = Instant::now() + SILENT_RESUME_REGISTER_LIMIT + Duration::from_secs(20);
     let settled = loop {
-        let records = message_ids.map(read);
+        let records: Vec<MessageRecord> = message_ids.iter().map(read).collect();
         if records.iter().all(|record| record.status.is_terminal()) || Instant::now() >= deadline {
             break records;
         }
@@ -9164,26 +9255,32 @@ fn assert_silent_resume_outcome(
             ),
         )
     };
-    let reason = format!(
-        "@{child_name}#main's resumed claude {what}; launch a fresh child with rimz subagents <profile> <task>"
-    );
     let notices = env.store().list_messages().unwrap();
     for record in &settled {
+        let receiver = record
+            .address
+            .as_deref()
+            .map_or_else(|| format!("@{child_name}"), str::to_owned);
+        let reason = format!(
+            "{receiver}'s resumed claude {what}; launch a fresh child with rimz subagents <profile> <task>"
+        );
         assert_eq!(record.status, status, "{context}");
         assert_eq!(
             record.last_error.as_deref(),
             Some(reason.as_str()),
             "{context}"
         );
-        assert!(
-            notices
-                .iter()
-                .any(|notice| notice.agent_id.as_str() == "parent"
-                    && notice.text.contains(record.message_id.as_str())
-                    && notice.text.contains(&format!("Reason: {reason}\n"))),
-            "the parent must be told why {} failed:\n{context}",
-            record.message_id
-        );
+        if matches!(record.sender, MessageSender::Agent { .. }) {
+            assert!(
+                notices
+                    .iter()
+                    .any(|notice| notice.agent_id.as_str() == "parent"
+                        && notice.text.contains(record.message_id.as_str())
+                        && notice.text.contains(&format!("Reason: {reason}\n"))),
+                "the parent must be told why {} failed:\n{context}",
+                record.message_id
+            );
+        }
     }
     assert!(
         wrapper_exit.is_some(),
@@ -11017,6 +11114,93 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
     let queued_id = MessageId::parse(&queued_id).expect("message id");
     assert_eq!(message_by_id(&env, &queued_id).status, MessageStatus::Sent);
     assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
+
+    // A compaction command waiting on a closed `Done` gate (on a `Failed` agent) still holds an
+    // older `--on any` prompt during sweeps, and `rimz message steer <id>` types the held prompt.
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-steer-failed", "feature-steer-failed", pane_env);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-steer-failed-trace.log");
+    let parked_any = run_success(
+        traced_rimz(&env, "zellij-steer-failed-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "--on", "any", "@claude", "--", "recover failed"]),
+        "queue --on any prompt while running",
+    );
+    let any_id = MessageId::parse(&queued_id_from_stdout(&parked_any.stdout)).expect("message id");
+    run_success(
+        traced_rimz(&env, "zellij-steer-failed-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["agents", "compact", "@claude"]),
+        "queue compaction behind --on any prompt",
+    );
+    let compact_id = env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.body == MessageBody::Command)
+        .expect("compaction command")
+        .message_id;
+    assert!(compact_id > any_id);
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-steer-failed",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        |_| {},
+    );
+    run_success(
+        traced_rimz(&env, "zellij-steer-failed-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep failed agent with closed-gate compaction",
+    );
+    assert!(
+        trace_lines(&trace_log).is_empty(),
+        "sweep must type nothing while the closed-gate compaction holds the lane: {:?}",
+        trace_lines(&trace_log)
+    );
+    assert_eq!(message_by_id(&env, &any_id).status, MessageStatus::Queued);
+    assert_eq!(
+        message_by_id(&env, &compact_id).status,
+        MessageStatus::Queued
+    );
+    let steered = run_success(
+        traced_rimz(&env, "zellij-steer-failed-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "steer", any_id.as_str()]),
+        "steer held --on any prompt past closed-gate compaction",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&steered.stdout).trim(),
+        format!(
+            "sent to {} ({any_id})",
+            named(&env, "sess-steer-failed", "@claude")
+        )
+    );
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .any(|line| is_paste(line, &user_message("recover failed"))),
+        "steer must paste the held prompt; trace: {:?}",
+        trace_lines(&trace_log)
+    );
+    assert_eq!(message_by_id(&env, &any_id).status, MessageStatus::Sent);
+    assert_eq!(
+        message_by_id(&env, &compact_id).status,
+        MessageStatus::Queued
+    );
 }
 
 #[test]

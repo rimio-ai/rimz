@@ -840,13 +840,14 @@ fn decide_now(
         let status = super::gate_status(head.gate, agent, now, snapshot, card_status);
         return Ok(Decided::Stop(Receipt::Deferred(Deferral::Status(status))));
     }
-    // A resume follow-up waits for the provider's own session start under every unforced
-    // kind: typing into a provider that has not started one is what kills the resume. Only a
-    // kind whose resume reports that start is held here; another keeps the boundary's timed hold.
-    let follow_up_held =
-        head.register_by.is_some() && !send.force && agent.resumed_provider_unreported();
+    // A resume follow-up or a compaction command waits for the provider's own session start under
+    // every unforced kind: typing into a provider that has not started one is what kills the
+    // resume, and a command outranks the follow-up in FIFO. Only a kind whose resume reports that
+    // start is held here; another keeps the boundary's timed hold.
+    let awaits_resume = head.awaits_resumed_provider();
+    let follow_up_held = awaits_resume && !send.force && agent.resumed_provider_unreported();
     if (send.kind == DeliveryKind::Boundary || follow_up_held)
-        && super::provider_start_pending(agent, head.register_by.is_some(), now)
+        && super::provider_start_pending(agent, awaits_resume, now)
     {
         return Ok(Decided::Stop(Receipt::Deferred(Deferral::ProviderStarting)));
     }

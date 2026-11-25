@@ -1859,13 +1859,16 @@ fn fold_lifecycle(
         state.last_prompt_at = Some(timestamp);
     }
     // A turn the user opened takes over from the compaction's owed continue, and so does any
-    // turn that starts after a compaction that followed the continue's enqueue: the agent is
-    // working again. A harness notice landing before that compaction leaves it owed.
+    // turn that starts after a compaction or a typed compaction command later than the continue's
+    // enqueue: the agent is working again. A harness notice landing before that leaves it owed.
+    let compacted_since = state
+        .compacted_at
+        .max(prior.and_then(|prior| prior.compacted_awaiting_prompt));
     let compacted_since_owed = state
         .soft_compact
         .as_ref()
         .and_then(|mark| mark.continue_owed.as_ref())
-        .zip(state.compacted_at)
+        .zip(compacted_since)
         .is_some_and(|(owed, compacted_at)| compacted_at > owed.queued_at);
     if turn_started
         && !keepalive_turn

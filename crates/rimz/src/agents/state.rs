@@ -1259,7 +1259,8 @@ pub struct SoftCompactMark {
     /// The continue most recently enqueued behind a compaction command, while that record has
     /// not reached a terminal status and the fold has not cleared it: an interrupt, a
     /// registration, a user-authored turn start, any non-keepalive turn start after a compaction
-    /// later than the enqueue (`AgentState::compacted_at`), or an automatic compaction that
+    /// or typed compaction command later than the enqueue (`AgentState::compacted_at` or prior
+    /// `AgentState::compacted_awaiting_prompt`), or an automatic compaction that
     /// ends inside the open turn. Another continue's terminal event leaves it. An
     /// interrupt only a provider's turn settle reports (Claude's Esc)
     /// withdraws it at read time, in `AgentState::soft_compact_in_flight`.

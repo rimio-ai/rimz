@@ -4832,7 +4832,8 @@ path = "crates/rimz/src/store"
 # message::opens_slash_command is the one slash-led test batching and the submit keys share (+1).
 # message::next_prompt_compact_kind shares the NextPrompt compaction-command check between batching and send decisions, and Store::claim_steer_batch replaces claim_message_spending_force (+1).
 # SidebarRow::delegated_wait exposes the ladder's waiting-subagent mark to sidebar and CLI readers (+1).
-surface-budget = 699
+# MessageRecord::awaits_resumed_provider shares the resumed-provider hold between pre-claim and write checks (+1).
+surface-budget = 700
 
 [[verdict]]
 kind = "item"

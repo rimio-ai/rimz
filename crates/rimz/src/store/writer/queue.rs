@@ -1550,8 +1550,9 @@ impl Store {
                 Vec::new()
             };
             // A resume follow-up whose provider never started a session fails at its deadline, and
-            // so does every record queued behind it on that card, which the same silent provider
-            // would otherwise be typed into once the follow-up stopped holding the lane.
+            // so does every record queued on that card (ahead of or behind the follow-up), which
+            // the same silent provider would otherwise be typed into once the follow-up stopped
+            // holding the lane.
             let failed_resumes: Vec<(MessageRecord, String, String)> = queue
                 .live()
                 .iter()

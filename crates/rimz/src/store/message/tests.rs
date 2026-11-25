@@ -2065,6 +2065,215 @@ fn a_forced_keepalive_passes_queued_records_but_not_a_write_in_flight() {
 }
 
 #[test]
+fn compaction_command_and_continue_order_across_all_rank_pairs() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let card = AgentCardRef::new(&receiver.kind, &receiver.agent_id, Some("coder"));
+    let ready = |message: &MessageRecord| message.is_deliverable(now);
+
+    let make = |kind: &str, id: u64, updated_at: Timestamp| {
+        let mut record = delivery_message(id, &receiver, DeliveryGate::Done, None);
+        record.updated_at = updated_at;
+        match kind {
+            "keepalive" => record.forced_keepalive = true,
+            "command" => record = record.with_body(MessageBody::Command),
+            "ordinary" => {}
+            "continue" => record.soft_compact = Some(SoftCompactStep::Continue),
+            _ => unreachable!(),
+        }
+        record
+    };
+
+    let ranks = ["keepalive", "command", "ordinary", "continue"];
+    for (hi_idx, hi) in ranks.iter().enumerate() {
+        for lo in &ranks[hi_idx + 1..] {
+            for hi_first in [true, false] {
+                let (hi_id, lo_id) = if hi_first { (1, 2) } else { (2, 1) };
+                let hi_rec = make(hi, hi_id, now + Duration::from_secs(10));
+                let lo_rec = make(lo, lo_id, now);
+                let live = if hi_first {
+                    vec![hi_rec.clone(), lo_rec.clone()]
+                } else {
+                    vec![lo_rec.clone(), hi_rec.clone()]
+                };
+                let hi_pos = if hi_first { 0 } else { 1 };
+                assert_eq!(
+                    queue_head(live.iter(), card, now).map(|m| &m.message_id),
+                    Some(&hi_rec.message_id),
+                    "{hi}({hi_id}) must outrank {lo}({lo_id}) in queue_head"
+                );
+                assert_eq!(
+                    delivery_batch_indices(&live, &hi_rec.message_id, AgentStatus::Idle, now),
+                    Some(vec![hi_pos]),
+                    "{hi}({hi_id}) must be claimed alone ahead of {lo}({lo_id})"
+                );
+                assert_eq!(
+                    delivery_batch_indices(&live, &lo_rec.message_id, AgentStatus::Idle, now),
+                    None,
+                    "{lo}({lo_id}) must be refused while {hi}({hi_id}) waits"
+                );
+                assert_eq!(
+                    older_ready_blocker(&live, &hi_rec, now, ready),
+                    None,
+                    "{hi}({hi_id}) has no blocker against {lo}({lo_id})"
+                );
+                assert_eq!(
+                    older_ready_blocker(&live, &lo_rec, now, ready).map(|m| &m.message_id),
+                    Some(&hi_rec.message_id),
+                    "{lo}({lo_id}) names {hi}({hi_id}) as blocker"
+                );
+                assert_eq!(
+                    queue_wake_deadline(&live, now),
+                    Some(hi_rec.updated_at),
+                    "wake deadline follows the ranked head {hi}({hi_id}), not follower {lo}({lo_id})"
+                );
+            }
+        }
+    }
+
+    // With two older prompts and a newer compaction command, the blocker named for the second
+    // prompt is the compaction command (the record typed next), not the smaller-id prompt.
+    let prompt_a = make("ordinary", 1, now);
+    let prompt_b = make("ordinary", 2, now);
+    let command = make("command", 3, now);
+    let live = [prompt_a, prompt_b.clone(), command.clone()];
+    assert_eq!(
+        older_ready_blocker(&live, &prompt_b, now, ready).map(|m| &m.message_id),
+        Some(&command.message_id),
+        "blocker must name the record typed next"
+    );
+}
+
+#[test]
+fn in_flight_records_hold_by_id_and_by_rank() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let ready = |message: &MessageRecord| message.is_deliverable(now);
+
+    for status in [MessageStatus::Claimed, MessageStatus::Sent] {
+        // Older in-flight prompt holds a newer compaction command.
+        let mut older_prompt = delivery_message(1, &receiver, DeliveryGate::Done, None);
+        older_prompt.status = status;
+        older_prompt.last_attempt_at = Some(now);
+        older_prompt.last_sent_at = Some(now);
+        let command = delivery_message(2, &receiver, DeliveryGate::Done, None)
+            .with_body(MessageBody::Command);
+        let live = [older_prompt.clone(), command.clone()];
+        assert_eq!(
+            (
+                delivery_batch_indices(&live, &command.message_id, AgentStatus::Idle, now),
+                older_ready_blocker(&live, &command, now, ready).map(|m| m.message_id.clone()),
+            ),
+            (None, Some(older_prompt.message_id.clone())),
+            "older {status:?} prompt must hold newer compaction command"
+        );
+
+        // Younger in-flight prompt holds an older compaction continue.
+        let mut continuation = delivery_message(1, &receiver, DeliveryGate::Done, None);
+        continuation.soft_compact = Some(SoftCompactStep::Continue);
+        let mut younger_prompt = delivery_message(2, &receiver, DeliveryGate::Done, None);
+        younger_prompt.status = status;
+        younger_prompt.last_attempt_at = Some(now);
+        younger_prompt.last_sent_at = Some(now);
+        let live = [continuation.clone(), younger_prompt.clone()];
+        assert_eq!(
+            (
+                delivery_batch_indices(&live, &continuation.message_id, AgentStatus::Idle, now),
+                older_ready_blocker(&live, &continuation, now, ready).map(|m| m.message_id.clone()),
+            ),
+            (None, Some(younger_prompt.message_id.clone())),
+            "younger {status:?} prompt must hold older continue"
+        );
+
+        // Older in-flight continue holds a newer ordinary prompt.
+        let mut in_flight_continue = delivery_message(1, &receiver, DeliveryGate::Done, None);
+        in_flight_continue.soft_compact = Some(SoftCompactStep::Continue);
+        in_flight_continue.status = status;
+        in_flight_continue.last_attempt_at = Some(now);
+        in_flight_continue.last_sent_at = Some(now);
+        let newer_prompt = delivery_message(2, &receiver, DeliveryGate::Done, None);
+        let live = [in_flight_continue.clone(), newer_prompt.clone()];
+        assert_eq!(
+            (
+                delivery_batch_indices(&live, &newer_prompt.message_id, AgentStatus::Idle, now),
+                older_ready_blocker(&live, &newer_prompt, now, ready).map(|m| m.message_id.clone()),
+            ),
+            (None, Some(in_flight_continue.message_id.clone())),
+            "older {status:?} continue must hold newer prompt"
+        );
+    }
+}
+
+#[test]
+fn compaction_continue_never_batches_or_blocks_fresh_sends_while_queued() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let card = AgentCardRef::new(&receiver.kind, &receiver.agent_id, Some("coder"));
+
+    let mut continuation = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    continuation.soft_compact = Some(SoftCompactStep::Continue);
+    assert!(!continuation.batchable());
+
+    // Prompts on both sides of a queued continue's id share one batch.
+    let before = delivery_message(1, &receiver, DeliveryGate::Done, None);
+    let after = delivery_message(3, &receiver, DeliveryGate::Done, None);
+    let live = [before.clone(), continuation.clone(), after.clone()];
+    assert_eq!(
+        delivery_batch_indices(&live, &before.message_id, AgentStatus::Idle, now),
+        Some(vec![0, 2]),
+        "follower walk must step over a queued continue"
+    );
+
+    // Prompts queued after a continue deliver together ahead of it.
+    let mut earlier_continue = continuation.clone();
+    earlier_continue.message_id = message_id(1);
+    let first_after = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    let second_after = delivery_message(3, &receiver, DeliveryGate::Done, None);
+    let live_after = [earlier_continue, first_after.clone(), second_after];
+    assert_eq!(
+        queue_head(live_after.iter(), card, now).map(|m| &m.message_id),
+        Some(&first_after.message_id)
+    );
+    assert_eq!(
+        delivery_batch_indices(&live_after, &first_after.message_id, AgentStatus::Idle, now),
+        Some(vec![1, 2])
+    );
+
+    // A claimed continue is not stepped over.
+    let mut claimed_continue = continuation.clone();
+    claimed_continue.status = MessageStatus::Claimed;
+    claimed_continue.last_attempt_at = Some(now);
+    let live_claimed = [before.clone(), claimed_continue.clone(), after];
+    assert_eq!(
+        delivery_batch_indices(&live_claimed, &before.message_id, AgentStatus::Idle, now),
+        Some(vec![0]),
+        "a claimed continue must stop the follower walk"
+    );
+
+    // A fresh send is not parked behind a queued continue, but still parks behind one claimed or sent,
+    // or behind a higher-ranked queued record beside it.
+    assert_eq!(
+        fresh_boundary_blocker([&continuation].into_iter(), card, now),
+        None
+    );
+    for status in [MessageStatus::Claimed, MessageStatus::Sent] {
+        let mut in_flight = continuation.clone();
+        in_flight.status = status;
+        in_flight.last_attempt_at = Some(now);
+        in_flight.last_sent_at = Some(now);
+        assert_eq!(
+            fresh_boundary_blocker([&in_flight].into_iter(), card, now),
+            Some(&in_flight),
+            "fresh send must park behind a {status:?} continue"
+        );
+    }
+    assert_eq!(
+        fresh_boundary_blocker([&continuation, &before].into_iter(), card, now),
+        Some(&before)
+    );
+}
+
+#[test]
 fn overdue_sent_prompt_releases_boundary_batch_without_reconciliation() {
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let receiver = agent("receiver", Some("coder"));
@@ -3295,13 +3504,25 @@ fn next_prompt_command_batches_immediate_continue_tail_and_respects_fifo_and_kin
     later_tail.message_id = message_id(3);
     assert_eq!(
         delivery_batch_indices(
-            &[command.clone(), peer, later_tail],
+            &[command.clone(), peer, later_tail.clone()],
             &command.message_id,
             AgentStatus::Idle,
             now
         ),
         Some(vec![0]),
-        "an intervening prompt keeps FIFO order and leaves the command bare"
+        "a prompt ranking between the command and its continue leaves the command bare"
+    );
+
+    let older = delivery_message(0, &agy, DeliveryGate::Done, None);
+    assert_eq!(
+        delivery_batch_indices(
+            &[older, command.clone(), later_tail.clone()],
+            &command.message_id,
+            AgentStatus::Idle,
+            now
+        ),
+        Some(vec![1]),
+        "an older waiting prompt ranks between the command and its continue too"
     );
 
     for kind in ["claude", "codex"] {

@@ -99,7 +99,12 @@ fn deferred_head_ignores_ready_followers_but_keeps_independent_wakes() {
         .iter()
         .map(|(case, _)| {
             let q = Queue::new();
-            q.queue_with(1, |record| record.retry_after = Some(retry_after));
+            q.queue_with(1, |record| {
+                record.retry_after = Some(retry_after);
+                if *case == "expiry" {
+                    record.body = MessageBody::Command;
+                }
+            });
             q.queue_with(2, |record| {
                 record.updated_at = updated_at;
                 match *case {

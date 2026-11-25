@@ -1155,7 +1155,7 @@ fn compact_flipper(
             request.workspace,
             request.store,
             CompactRequest {
-                // A prompt typed first leaves the hand-off owed; only the row at typing,
+                // A hand-off compaction ranks ahead of queued prompts; only the row at typing,
                 // under the limit or past its cache, withdraws it.
                 premises: vec![Premise::OverHandOffLimit { threshold }],
                 idle: false,
