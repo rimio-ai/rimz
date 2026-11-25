@@ -575,7 +575,11 @@ fn update_record<T>(
     Ok((record, outcome))
 }
 
-fn wake_workflow(paths: &StatePaths, record: &RunRecord) {
+/// Wake the live workflow attempt named on `record`, if any.
+///
+/// Called after releasing the workspace lock on a newly terminal transition,
+/// and by the host exec wrapper once a child exits with an already-terminal run.
+pub fn wake_workflow(paths: &StatePaths, record: &RunRecord) {
     let Some(attempt) = &record.workflow else {
         return;
     };
@@ -826,6 +830,21 @@ fn capped_failure_tail(tail: &str) -> Option<String> {
             .trim_end()
             .to_owned()
     })
+}
+
+/// The first `FAILURE_TAIL_CAP` bytes of a failure reason, cut on a UTF-8
+/// character boundary, or nothing for a blank one.
+fn capped_failure_head(reason: &str) -> Option<String> {
+    let reason = reason.trim_end();
+    if reason.trim().is_empty() {
+        return None;
+    }
+    let mut end = reason.len().min(FAILURE_TAIL_CAP);
+    while end > 0 && !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = reason[..end].trim_end();
+    (!head.trim().is_empty()).then(|| head.to_owned())
 }
 
 pub(super) fn timeout(
@@ -1149,21 +1168,73 @@ pub fn fail_if_owned(
     pane: Option<&PaneId>,
     reason: &str,
 ) -> Result<Option<RunRecord>> {
-    let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
-        let status = if record.interrupted_at.is_some() {
-            RunStatus::Canceled
-        } else {
-            RunStatus::Failed
-        };
-        if pane.is_some_and(|pane| record.superseded_in(pane)) || !record.mark_terminal(status, now)
-        {
-            return false;
-        }
-        if record.failure_tail.is_none() {
-            record.failure_tail = capped_failure_tail(reason);
-        }
-        true
-    })?;
+    fail_owned_with(
+        paths,
+        runtime,
+        run_id,
+        pane,
+        reason,
+        capped_failure_tail,
+        WorkflowWake::Send,
+    )
+}
+
+/// Fail an owned non-terminal run from the in-pane launch step without waking
+/// the workflow or the waiter; the host wrapper wakes both once the child exits.
+///
+/// Leaves runs that `pane` no longer owns ([`RunRecord::superseded_in`]) and
+/// runs that are already terminal untouched, keeps any existing `failure_tail`,
+/// and caps a newly written reason to its first `FAILURE_TAIL_CAP` bytes on a
+/// UTF-8 character boundary.
+pub fn fail_step_refusal(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+    pane: Option<&PaneId>,
+    reason: &str,
+) -> Result<Option<RunRecord>> {
+    fail_owned_with(
+        paths,
+        runtime,
+        run_id,
+        pane,
+        reason,
+        capped_failure_head,
+        WorkflowWake::Defer,
+    )
+}
+
+fn fail_owned_with(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+    pane: Option<&PaneId>,
+    reason: &str,
+    cap: fn(&str) -> Option<String>,
+    wake: WorkflowWake,
+) -> Result<Option<RunRecord>> {
+    let (record, wrote) = settle_terminal_with_wake(
+        paths,
+        run_id,
+        wake,
+        |record| read_run_spend(runtime, record),
+        |record, now| {
+            let status = if record.interrupted_at.is_some() {
+                RunStatus::Canceled
+            } else {
+                RunStatus::Failed
+            };
+            if pane.is_some_and(|pane| record.superseded_in(pane))
+                || !record.mark_terminal(status, now)
+            {
+                return false;
+            }
+            if record.failure_tail.is_none() {
+                record.failure_tail = cap(reason);
+            }
+            true
+        },
+    )?;
     Ok(wrote.then_some(record))
 }
 
@@ -1261,6 +1332,12 @@ fn settle_terminal(
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkflowWake {
+    Send,
+    Defer,
+}
+
 /// [`settle_terminal`] over the spend read `spend`. The read (a transcript
 /// parse) runs off-lock from an unlocked load, and is taken again when the
 /// binding it read moved before the lock; a run already terminal at that load
@@ -1270,6 +1347,16 @@ fn settle_terminal(
 fn settle_terminal_with(
     paths: &StatePaths,
     run_id: &RunId,
+    spend: impl FnMut(&RunRecord) -> RunSpend,
+    update: impl FnMut(&mut RunRecord, Timestamp) -> bool,
+) -> Result<(RunRecord, bool)> {
+    settle_terminal_with_wake(paths, run_id, WorkflowWake::Send, spend, update)
+}
+
+fn settle_terminal_with_wake(
+    paths: &StatePaths,
+    run_id: &RunId,
+    wake: WorkflowWake,
     mut spend: impl FnMut(&RunRecord) -> RunSpend,
     mut update: impl FnMut(&mut RunRecord, Timestamp) -> bool,
 ) -> Result<(RunRecord, bool)> {
@@ -1295,7 +1382,7 @@ fn settle_terminal_with(
             read.apply(record);
             Ok(RecordMutation::Write(true))
         })?;
-        if newly_terminal {
+        if newly_terminal && wake == WorkflowWake::Send {
             wake_workflow(paths, &record);
         }
         if !rebound {

@@ -3028,6 +3028,193 @@ fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
 }
 
 #[test]
+fn fail_step_refusal_fails_turn_and_session_runs_without_waking_workflow() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tracing_subscriber::prelude::*;
+
+    struct CountWorkflowWakes(Arc<AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CountWorkflowWakes {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            event.record(
+                &mut |field: &tracing::field::Field, value: &dyn std::fmt::Debug| {
+                    if field.name() == "message"
+                        && format!("{value:?}").contains("could not wake workflow attempt")
+                    {
+                        self.0.fetch_add(1, Ordering::SeqCst);
+                    }
+                },
+            );
+        }
+    }
+
+    let pane = PaneId::parse("tmux:%7").unwrap();
+    let other_pane = PaneId::parse("tmux:%9").unwrap();
+    let mut results = Vec::new();
+    for case in [
+        "turn_pending",
+        "session_running_at_rest",
+        "interrupted",
+        "already_terminal",
+        "handed_over",
+        "keeps_existing_tail",
+    ] {
+        let (_dir, paths, mut record) = setup();
+        let runtime_dir = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let workflow = crate::ids::WorkflowRunId::new();
+        std::fs::create_dir_all(paths.workflow(&workflow).record).unwrap();
+        record.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: workflow,
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        });
+        match case {
+            "turn_pending" => {}
+            "session_running_at_rest" => {
+                record.lifecycle = crate::store::run::RunLifecycle::Session;
+                record.status = RunStatus::Running;
+                record.agent_id = Some("ses_registered".into());
+            }
+            "interrupted" => {
+                record.interrupted_at = Some(Timestamp::now());
+            }
+            "already_terminal" => {
+                record.status = RunStatus::Completed;
+            }
+            "handed_over" => {
+                record.handed_over_from = Some(pane.clone());
+            }
+            "keeps_existing_tail" => {
+                record.failure_tail = Some("earlier reason".into());
+            }
+            _ => unreachable!(),
+        }
+        create(&paths, &record).unwrap();
+
+        #[cfg(unix)]
+        let sock = {
+            let sock_path = crate::store::run::run_socket_path(&runtime, &record.run_id);
+            let sock = std::os::unix::net::UnixDatagram::bind(&sock_path).unwrap();
+            sock.set_nonblocking(true).unwrap();
+            sock
+        };
+
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(CountWorkflowWakes(wakes.clone()));
+        let caller_pane = if case == "handed_over" {
+            &pane
+        } else {
+            &other_pane
+        };
+        let wrote = tracing::subscriber::with_default(subscriber, || {
+            fail_step_refusal(
+                &paths,
+                &runtime,
+                &record.run_id,
+                Some(caller_pane),
+                "step refused launch",
+            )
+            .unwrap()
+            .is_some()
+        });
+        let stored = load(&paths, &record.run_id).unwrap();
+        #[cfg(unix)]
+        let run_woken = {
+            let mut buf = [0u8; 256];
+            !matches!(
+                sock.recv(&mut buf),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock
+            )
+        };
+        #[cfg(not(unix))]
+        let run_woken = false;
+        results.push((
+            case,
+            wrote,
+            stored.status,
+            stored.failure_tail,
+            wakes.load(Ordering::SeqCst),
+            run_woken,
+        ));
+    }
+    assert_eq!(
+        results,
+        vec![
+            (
+                "turn_pending",
+                true,
+                RunStatus::Failed,
+                Some("step refused launch".to_owned()),
+                0,
+                false,
+            ),
+            (
+                "session_running_at_rest",
+                true,
+                RunStatus::Failed,
+                Some("step refused launch".to_owned()),
+                0,
+                false,
+            ),
+            (
+                "interrupted",
+                true,
+                RunStatus::Canceled,
+                Some("step refused launch".to_owned()),
+                0,
+                false,
+            ),
+            (
+                "already_terminal",
+                false,
+                RunStatus::Completed,
+                None,
+                0,
+                false
+            ),
+            ("handed_over", false, RunStatus::Pending, None, 0, false),
+            (
+                "keeps_existing_tail",
+                true,
+                RunStatus::Failed,
+                Some("earlier reason".to_owned()),
+                0,
+                false,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn fail_step_refusal_keeps_the_start_of_a_long_utf8_reason() {
+    let (_dir, paths, record) = setup();
+    let prefix = "a".repeat(FAILURE_TAIL_CAP - 1);
+    let reason = format!("{prefix}é{}", "z".repeat(200));
+    let settled = fail_step_refusal(&paths, &runtime_for(&paths), &record.run_id, None, &reason)
+        .unwrap()
+        .expect("newly failed");
+    assert_eq!(settled.status, RunStatus::Failed);
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert_eq!(stored.failure_tail.as_deref(), Some(prefix.as_str()));
+
+    let (_dir, paths, record) = setup();
+    let settled = fail_step_refusal(&paths, &runtime_for(&paths), &record.run_id, None, " \n\t ")
+        .unwrap()
+        .expect("blank reason still fails the run");
+    assert_eq!(settled.status, RunStatus::Failed);
+    assert_eq!(settled.failure_tail, None);
+}
+
+#[test]
 fn record_failure_tail_persists_first_non_empty_tail() {
     let (_dir, paths, record) = setup();
 

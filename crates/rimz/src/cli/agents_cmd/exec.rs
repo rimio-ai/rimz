@@ -756,6 +756,7 @@ fn settle_after_exit(
             globals,
             terminal_grace,
             rimz::mux::ambient_pane_id().as_ref(),
+            status.code(),
             || !parent_ended(),
         );
     }
@@ -905,12 +906,13 @@ fn settle_exited_run(
     globals: &GlobalFlags,
     terminal_grace: Duration,
     own_pane: Option<&rimz::ids::PaneId>,
+    child_exit_code: Option<i32>,
     report: impl FnOnce() -> bool,
 ) {
     if superseded(context, own_pane) {
         return;
     }
-    fail_run_if_child_exited_first(context, globals, terminal_grace, own_pane);
+    fail_run_if_child_exited_first(context, globals, terminal_grace, own_pane, child_exit_code);
     if superseded(context, own_pane) {
         return;
     }
@@ -2260,7 +2262,9 @@ fn fail_run_if_child_exited_first(
     globals: &GlobalFlags,
     terminal_grace: Duration,
     own_pane: Option<&rimz::ids::PaneId>,
+    child_exit_code: Option<i32>,
 ) {
+    let step_refused = child_exit_code == Some(rimz::agents::capabilities::SESSION_STEP_REFUSED);
     if let Err(error) =
         rimz::harness::hook_drain::drain_through(&context.store, 0, None, HOOK_DRAIN_WAIT)
     {
@@ -2269,7 +2273,8 @@ fn fail_run_if_child_exited_first(
     if superseded(context, own_pane) {
         return;
     }
-    if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
+    if !step_refused
+        && let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
         && record.lifecycle == rimz::store::run::RunLifecycle::Session
     {
         match rimz::harness::run::settle_session_exit(
@@ -2279,20 +2284,29 @@ fn fail_run_if_child_exited_first(
             || capture_own_failure_tail(context, globals).map(|(_, tail)| tail),
         ) {
             Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
-            Ok(None) => {}
+            Ok(None) => wake_if_already_terminal(context, own_pane),
             Err(error) => tracing::debug!(run_id = %context.run_id, %error,
                 "could not settle session run after provider exit"),
         }
         return;
     }
-    if wait_for_terminal_run(context, terminal_grace) {
+    let grace = if step_refused {
+        Duration::ZERO
+    } else {
+        terminal_grace
+    };
+    if wait_for_terminal_run(context, grace) {
         if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
             && record.status.is_terminal()
-            && record.status != rimz::store::run::RunStatus::Completed
-            && record.failure_tail.is_none()
+            && !own_pane.is_some_and(|pane| record.superseded_in(pane))
         {
-            // The provider exited independently; self-close must not race the waiter's capture.
-            record_own_run_failure_tail(context, globals, own_pane);
+            if record.status != rimz::store::run::RunStatus::Completed
+                && record.failure_tail.is_none()
+            {
+                // The provider exited independently; self-close must not race the waiter's capture.
+                record_own_run_failure_tail(context, globals, own_pane);
+            }
+            wake_settled_run(context, &record);
         }
         return;
     }
@@ -2304,10 +2318,30 @@ fn fail_run_if_child_exited_first(
     record_own_run_failure_tail(context, globals, own_pane);
     // No reason: the evidence is the pane tail, which the waiter still
     // captures when the read above found none.
-    fail_run_if_owned(context, own_pane, "");
+    if !fail_run_if_owned(context, own_pane, "") {
+        wake_if_already_terminal(context, own_pane);
+    }
 }
 
-fn fail_run_if_owned(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>, reason: &str) {
+fn wake_if_already_terminal(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>) {
+    if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
+        && record.status.is_terminal()
+        && !own_pane.is_some_and(|pane| record.superseded_in(pane))
+    {
+        wake_settled_run(context, &record);
+    }
+}
+
+fn wake_settled_run(context: &RunExecContext, record: &rimz::store::run::RunRecord) {
+    rimz::store::run::wake_run(context.store.runtime_paths(), record);
+    rimz::harness::run::wake_workflow(context.store.paths(), record);
+}
+
+fn fail_run_if_owned(
+    context: &RunExecContext,
+    own_pane: Option<&rimz::ids::PaneId>,
+    reason: &str,
+) -> bool {
     match rimz::harness::run::fail_if_owned(
         context.store.paths(),
         context.store.runtime_paths(),
@@ -2315,13 +2349,19 @@ fn fail_run_if_owned(context: &RunExecContext, own_pane: Option<&rimz::ids::Pane
         own_pane,
         reason,
     ) {
-        Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
-        Ok(None) => {}
-        Err(err) => tracing::debug!(
-            run_id = %context.run_id,
-            error = %err,
-            "could not mark supervised run failed",
-        ),
+        Ok(Some(record)) => {
+            rimz::store::run::wake_run(context.store.runtime_paths(), &record);
+            true
+        }
+        Ok(None) => false,
+        Err(err) => {
+            tracing::debug!(
+                run_id = %context.run_id,
+                error = %err,
+                "could not mark supervised run failed",
+            );
+            false
+        }
     }
 }
 

@@ -2581,7 +2581,8 @@ path = "crates/rimz/src/harness"
 # One-chain `--agent` override helpers (`AgentOverride`, `resolve_agent_override`, `check_agent_model_family`, `inline_layout_profile_targets`, `pick_in_launch_chain`) unify launch routing, spec resolution, and seat settings (+4).
 # `subagent_policy::allowed_specs` and `spec::explain_profile_chain` share one-chain explain and allowlist resolution with CLI explain (+2).
 # `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and detached CLI helper (+2).
-surface-budget = 1375
+# `run::fail_step_refusal` and `run::wake_workflow` split in-pane step refusal writes from host-side wakes (+2).
+surface-budget = 1377
 
 [[verdict]]
 kind = "item"
@@ -5995,7 +5996,19 @@ allowed-dependencies = [
 # release_rung restores a claimed stop rung the helper's interrupt could not deliver (+1).
 # release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow reconcile pass and cancel (+1).
 # subagent is the one subagent request the CLI and the MCP subagent tool build (+1).
-surface-budget = 67
+# fail_step_refusal lets the in-pane launch step fail its own run with a start-capped reason without waking (+1).
+# wake_workflow lets the host exec wrapper send the deferred workflow wake once the child exits (+1).
+surface-budget = 69
+
+[[verdict]]
+kind = "item"
+key = "harness::run::fail_step_refusal"
+reason = "The in-pane launch step fails its explicitly named, non-superseded run with a start-capped refusal reason in one locked write without spawning a workflow advance from inside a scoped sandbox."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::wake_workflow"
+reason = "The host exec wrapper sends the deferred workflow wake once a child exits with an already-terminal run, reusing the single workflow-wake lookup in run.rs."
 
 [[verdict]]
 kind = "item"
