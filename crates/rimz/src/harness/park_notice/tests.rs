@@ -799,3 +799,50 @@ fn park_action_tolerates_whole_second_truncation_but_rejects_later_activity() {
         );
     }
 }
+
+/// A progress hook moves a raw-failed row's clock without opening a turn: the same marker and
+/// refill name a new hold, whose claim adds no second span.
+#[test]
+fn a_failed_row_that_moved_on_the_same_marker_is_held_again_and_charged_once() {
+    use crate::harness::run::{claim_limit_hold, create, load};
+
+    let label = Some("Individual quota reached");
+    let (mut agents, mut run) = parked(TurnErrorClass::PausedRateLimit, label);
+    agents[1].status = AgentStatus::Failed;
+    agents[1].turn_started_at = Some(agents[1].last_activity);
+    run.started_at = agents[1].last_activity;
+    let deadline = run.started_at + HOUR;
+    run.deadline_at = Some(deadline);
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(run.workspace_id.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    create(&paths, &run).unwrap();
+
+    let parked_at = agents[1].last_activity;
+    let marker_at = parked_at + Duration::from_secs(1);
+    let until = marker_at + 3 * HOUR;
+    for activity in [parked_at, parked_at + Duration::from_secs(600)] {
+        agents[1].last_activity = activity;
+        let Some(ParkAction::Hold { hold, .. }) = action(
+            &load(&paths, &run.run_id).unwrap(),
+            &agents,
+            activity + Duration::from_secs(30),
+            Continuation::On,
+            LimitReading::Refill(until),
+        ) else {
+            panic!("the park at {activity} is held");
+        };
+        assert_eq!(
+            hold,
+            LimitHold {
+                activity,
+                since: marker_at,
+                until,
+            }
+        );
+        assert!(claim_limit_hold(&paths, &run.run_id, hold).unwrap());
+        let held = load(&paths, &run.run_id).unwrap();
+        assert_eq!(held.limit_hold, Some(hold));
+        assert_eq!(held.deadline_at, Some(deadline + 3 * HOUR));
+    }
+}

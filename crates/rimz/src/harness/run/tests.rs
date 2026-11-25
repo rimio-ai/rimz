@@ -81,7 +81,16 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
             let mut observation =
                 AgentLifecycleObservation::new(Some("leader".into()), signal.clone());
             assert_eq!(
-                fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
+                fold_lifecycle(
+                    &mut record,
+                    "claude",
+                    &observation,
+                    None,
+                    None,
+                    now,
+                    now,
+                    None
+                ),
                 LifecycleFold::Updated,
             );
             assert_eq!(record.status, RunStatus::Running);
@@ -90,10 +99,28 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
             let stopped = record.stopped_turn.as_ref().unwrap();
             assert_eq!((stopped.at, stopped.disposition), (now, disposition));
             observation.signal = resume;
-            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
+            fold_lifecycle(
+                &mut record,
+                "claude",
+                &observation,
+                None,
+                None,
+                now,
+                now,
+                None,
+            );
             assert!(record.stopped_turn.is_none());
             observation.signal = turn_end("leader").signal;
-            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
+            fold_lifecycle(
+                &mut record,
+                "claude",
+                &observation,
+                None,
+                None,
+                now,
+                now,
+                None,
+            );
             assert_eq!(record.status, RunStatus::Completed);
         }
     }
@@ -118,12 +145,30 @@ fn workflow_session_stops_are_evidence_until_work_resumes() {
         });
         let now = record.started_at;
         let mut observation = AgentLifecycleObservation::new(Some("leader".into()), signal);
-        fold_lifecycle(&mut record, "claude", &observation, None, now, now, None);
+        fold_lifecycle(
+            &mut record,
+            "claude",
+            &observation,
+            None,
+            None,
+            now,
+            now,
+            None,
+        );
         assert_eq!(record.status, RunStatus::Running);
         assert!(record.stopped_turn.is_some());
         observation.signal = turn_started();
         assert_eq!(
-            fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
+            fold_lifecycle(
+                &mut record,
+                "claude",
+                &observation,
+                None,
+                None,
+                now,
+                now,
+                None
+            ),
             LifecycleFold::Updated,
         );
         assert!(record.stopped_turn.is_none());
@@ -1478,6 +1523,7 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
             "claude",
             &observation,
             None,
+            None,
             reopen_at,
             reopen_at,
             None,
@@ -1716,7 +1762,8 @@ fn overdue_sent_wake_releases_a_clean_park_without_reconciliation_once_compactio
             &record.run_id,
             crate::agents::definition_by_kind("claude").unwrap(),
             &ended,
-            Some("answer".into())
+            Some("answer".into()),
+            None,
         )
         .unwrap()
         .is_none()
@@ -2665,7 +2712,7 @@ fn assert_spend_before_workflow_wake(end: SpendWake) {
             );
             settled.unwrap()
         }
-        SpendWake::Hook => settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
+        SpendWake::Hook => settle_lifecycle(&store, &record.run_id, adapter, &ended, None, None)
             .unwrap()
             .unwrap(),
         SpendWake::ExpiredHold => expire_interrupt(&store, &record.run_id, None)
@@ -3863,6 +3910,94 @@ fn a_hold_without_a_warn_claim_moves_only_the_deadline() {
     assert_eq!(loaded.deadline_notice_at, None);
 }
 
+/// A stored hold's span is in the stamps: a claim for another activity adds only what lies past
+/// it, until a resume ends that hold.
+#[test]
+fn a_claim_over_a_stored_hold_moves_the_deadline_only_past_its_until() {
+    const MIN: Duration = Duration::from_secs(60);
+    const HOUR: Duration = Duration::from_secs(3600);
+    let (_dir, paths, record) = held_candidate();
+    let first = hold_at(record.started_at + 10 * MIN, 2 * HOUR);
+    let later = first.activity + 5 * MIN;
+    let deadline = record.deadline_at.unwrap();
+    let notice = record.deadline_notice_at.unwrap();
+    let claim = |activity, since, until| {
+        let hold = crate::store::run::LimitHold {
+            activity,
+            since,
+            until,
+        };
+        assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
+        let loaded = load(&paths, &record.run_id).unwrap();
+        assert_eq!(loaded.limit_hold, Some(hold));
+        assert_eq!(loaded.park_noticed_activity, Some(activity));
+        loaded
+    };
+    let resume = |at| {
+        let mut resumed = load(&paths, &record.run_id).unwrap();
+        let observation = AgentLifecycleObservation::new(Some("child".into()), turn_started());
+        assert_eq!(
+            fold_lifecycle(
+                &mut resumed,
+                "claude",
+                &observation,
+                None,
+                None,
+                at,
+                at,
+                None
+            ),
+            LifecycleFold::Updated
+        );
+        assert_eq!(resumed.limit_hold, None);
+        create(&paths, &resumed).unwrap();
+        resumed
+    };
+    let start = || {
+        create(&paths, &record).unwrap();
+        assert!(claim_limit_hold(&paths, &record.run_id, first).unwrap());
+    };
+
+    let after = first.until + 10 * MIN;
+    for (label, since, until, moved) in [
+        ("same refill", first.since, first.until, 2 * HOUR),
+        (
+            "later refill",
+            first.since + 6 * MIN,
+            first.until + 30 * MIN,
+            2 * HOUR + 30 * MIN,
+        ),
+        (
+            "earlier refill",
+            first.since,
+            first.until - 30 * MIN,
+            2 * HOUR - 30 * MIN,
+        ),
+        ("later stop", after, after + HOUR, 3 * HOUR),
+    ] {
+        start();
+        let loaded = claim(later, since, until);
+        assert_eq!(loaded.deadline_at, Some(deadline + moved), "{label}");
+        assert_eq!(loaded.deadline_notice_at, Some(notice + moved), "{label}");
+    }
+
+    // A resume gives back what the last claim left, so two claims net to the time paused.
+    let resumed_at = first.since + 45 * MIN;
+    for until in [first.until, first.until + 30 * MIN, first.until - 30 * MIN] {
+        start();
+        claim(later, first.since, until);
+        let resumed = resume(resumed_at);
+        assert_eq!(resumed.deadline_at, Some(deadline + 45 * MIN));
+        assert_eq!(resumed.deadline_notice_at, Some(notice + 45 * MIN));
+    }
+
+    // The resume ended the hold, so a claim after it adds its own span.
+    let since = resumed_at + MIN;
+    let loaded = claim(since, since, since + HOUR);
+    assert_eq!(loaded.deadline_at, Some(deadline + 45 * MIN + HOUR));
+    assert_eq!(loaded.deadline_notice_at, Some(notice + 45 * MIN + HOUR));
+}
+
 #[test]
 fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
     let in_turn = [
@@ -3900,6 +4035,7 @@ fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
                 "claude",
                 &observation,
                 None,
+                None,
                 early,
                 early,
                 None
@@ -3920,7 +4056,16 @@ fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
         let late = hold.until + Duration::from_secs(60);
         let mut resumed = record.clone();
         assert_eq!(
-            fold_lifecycle(&mut resumed, "claude", &observation, None, late, late, None),
+            fold_lifecycle(
+                &mut resumed,
+                "claude",
+                &observation,
+                None,
+                None,
+                late,
+                late,
+                None
+            ),
             LifecycleFold::Updated,
             "{signal:?}"
         );
@@ -3968,6 +4113,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
             "claude",
             &observation,
             None,
+            None,
             now,
             observed_at,
             None,
@@ -3987,6 +4133,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
         "claude",
         &observation,
         None,
+        None,
         Some(between),
         || None,
     )
@@ -3998,6 +4145,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
         &mut resumed,
         "claude",
         &observation,
+        None,
         None,
         now,
         hold.since + Duration::from_millis(1),
@@ -4019,7 +4167,16 @@ fn a_reopen_clears_a_hold_and_rearms_from_the_timeout() {
     let now = record.started_at + Duration::from_secs(600);
     let observation = AgentLifecycleObservation::new(Some("child".into()), turn_started());
     assert_eq!(
-        fold_lifecycle(&mut record, "claude", &observation, None, now, now, None),
+        fold_lifecycle(
+            &mut record,
+            "claude",
+            &observation,
+            None,
+            None,
+            now,
+            now,
+            None
+        ),
         LifecycleFold::Updated
     );
     assert_eq!(record.status, RunStatus::Running);
@@ -4053,6 +4210,7 @@ fn a_limit_stop_fails_its_run_in_one_write_and_never_over_a_settled_or_claimed_r
             run_id,
             "antigravity",
             observation,
+            None,
             None,
             Some(stop_at),
             || None,
@@ -4491,7 +4649,7 @@ fn interrupted() -> LifecycleSignal {
 
 fn fold_at(record: &mut RunRecord, signal: LifecycleSignal, at: Timestamp) -> LifecycleFold {
     let observation = AgentLifecycleObservation::new(Some("child".into()), signal);
-    fold_lifecycle(record, "claude", &observation, None, at, at, None)
+    fold_lifecycle(record, "claude", &observation, None, None, at, at, None)
 }
 
 #[test]
@@ -4994,7 +5152,7 @@ fn a_turn_run_prices_from_its_sidecar_then_its_transcript() {
     for sidecar in [None, Some(0.5)] {
         let (_dir, store, record) = priced_store(sidecar);
         let observation = AgentLifecycleObservation::new(Some("child".into()), turn_ended());
-        let settled = settle_lifecycle(&store, &record.run_id, adapter, &observation, None)
+        let settled = settle_lifecycle(&store, &record.run_id, adapter, &observation, None, None)
             .unwrap()
             .expect("a turn end settles");
         assert_eq!(
@@ -5266,6 +5424,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                     "claude",
                     &observation,
                     Some("first".to_owned()),
+                    None,
                     parked,
                     parked,
                     Some(owed),
@@ -5283,6 +5442,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                 &mut record,
                 "claude",
                 &observation,
+                None,
                 None,
                 resumed,
                 resumed,
@@ -5317,6 +5477,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                     "claude",
                     &observation,
                     Some("second".to_owned()),
+                    None,
                     done,
                     done,
                     None,
@@ -5354,6 +5515,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                 "claude",
                 &observation,
                 Some(format!("turn {round}")),
+                None,
                 at,
                 at,
                 Some(OwedWake::Message),
@@ -5375,7 +5537,16 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
         }
         at += Duration::from_secs(600);
         observation.signal = turn_started();
-        fold_lifecycle(&mut record, "claude", &observation, None, at, at, None);
+        fold_lifecycle(
+            &mut record,
+            "claude",
+            &observation,
+            None,
+            None,
+            at,
+            at,
+            None,
+        );
         assert_eq!(record.parked_on, None, "round {round}");
         assert_eq!(record.limit_hold, None, "round {round}");
         assert_eq!(record.deadline_at, Some(at + span), "round {round}");
@@ -5962,5 +6133,289 @@ fn antigravity_parked_turn_compaction_keeps_row_parked_acks_compact_once_and_set
             }
             _ => {}
         }
+    }
+}
+
+#[test]
+fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
+    use crate::agents::{AgentTurnError, TurnErrorClass};
+    use crate::store::run::{LimitHold, ParkCause, ReportTo};
+
+    let marker = |class: TurnErrorClass, at: Timestamp, label: &str| AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class,
+        at,
+        label: Some(label.to_owned()),
+    };
+    let errored_end = |path: Option<&str>| {
+        let mut obs = AgentLifecycleObservation::new(
+            Some("child".into()),
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        );
+        obs.transcript_path = path.map(str::to_owned);
+        obs
+    };
+
+    // Admitted Running & Pending subagent runs stay open on rate or spend limits,
+    // keep transcript_path & last_message, and clear interrupt/park stamps.
+    for (initial_status, class) in [
+        (RunStatus::Running, TurnErrorClass::PausedRateLimit),
+        (RunStatus::Running, TurnErrorClass::PausedSpendLimit),
+        (RunStatus::Pending, TurnErrorClass::PausedRateLimit),
+    ] {
+        let (_dir, _paths, mut record) = held_candidate();
+        let kind = record.kind.clone();
+        record.status = initial_status;
+        record.interrupted_at = Some(record.started_at + Duration::from_secs(5));
+        record.parked_at = Some(record.started_at + Duration::from_secs(6));
+        record.parked_on = Some(ParkCause::Message);
+        let at = record.started_at + Duration::from_secs(30);
+        let mut obs = errored_end(Some("/tmp/child.jsonl"));
+        // The hold wins over the typed failure an Antigravity quota Stop also carries.
+        obs.limit_stop = Some(crate::agents::TurnLimitStop {
+            label: Some("Individual quota reached".to_owned()),
+            refill_in_secs: Some(3600),
+        });
+        let err = marker(class, at, "Individual quota reached");
+        assert_eq!(
+            fold_lifecycle(
+                &mut record,
+                kind.as_str(),
+                &obs,
+                Some("partial".to_owned()),
+                Some(&err),
+                at,
+                at,
+                None,
+            ),
+            LifecycleFold::Updated,
+            "{initial_status:?} {class:?}"
+        );
+        assert_eq!(record.status, RunStatus::Running);
+        assert_eq!(record.completed_at, None);
+        assert_eq!(record.interrupted_at, None);
+        assert_eq!(record.parked_at, None);
+        assert_eq!(record.parked_on, None);
+        assert_eq!(record.transcript_path.as_deref(), Some("/tmp/child.jsonl"));
+        assert_eq!(record.last_message.as_deref(), Some("partial"));
+        assert_eq!(
+            (&record.limit_failure, &record.failure_tail),
+            (&None, &None)
+        );
+    }
+
+    // Second limit Stop after an older hold ends the hold and returns unused deadline span;
+    // a replayed Stop of the same park (observed_at <= max(since, activity)) keeps the hold.
+    {
+        let (_dir, _paths, mut record) = held_candidate();
+        let kind = record.kind.clone();
+        let base_deadline = record.deadline_at.unwrap();
+        let park_at = record.started_at + Duration::from_secs(60);
+        let hold = LimitHold {
+            activity: park_at,
+            since: park_at,
+            until: park_at + Duration::from_secs(3600),
+        };
+        record.limit_hold = Some(hold);
+        record.deadline_at = Some(base_deadline + Duration::from_secs(3600));
+        record.deadline_notice_at = Some(base_deadline + Duration::from_secs(3000));
+        let err = marker(
+            TurnErrorClass::PausedRateLimit,
+            park_at,
+            "Individual quota reached",
+        );
+        let obs = errored_end(None);
+
+        let mut replayed = record.clone();
+        assert_eq!(
+            fold_lifecycle(
+                &mut replayed,
+                kind.as_str(),
+                &obs,
+                None,
+                Some(&err),
+                park_at + Duration::from_secs(600),
+                park_at,
+                None,
+            ),
+            LifecycleFold::Updated
+        );
+        assert_eq!(
+            replayed.limit_hold,
+            Some(hold),
+            "replayed Stop of the same park keeps its hold"
+        );
+        assert_eq!(replayed.deadline_at, record.deadline_at);
+
+        let second_at = park_at + Duration::from_secs(600);
+        let unused = hold.until.duration_since(second_at);
+        let err2 = marker(
+            TurnErrorClass::PausedRateLimit,
+            second_at,
+            "Individual quota reached",
+        );
+        assert_eq!(
+            fold_lifecycle(
+                &mut record,
+                kind.as_str(),
+                &obs,
+                None,
+                Some(&err2),
+                second_at,
+                second_at,
+                None,
+            ),
+            LifecycleFold::Updated
+        );
+        assert_eq!(
+            record.limit_hold, None,
+            "a newer limit Stop ends the older hold"
+        );
+        assert_eq!(
+            record.deadline_at,
+            Some(base_deadline + Duration::from_secs(3600) - unused)
+        );
+        assert_eq!(
+            record.deadline_notice_at,
+            Some(base_deadline + Duration::from_secs(3000) - unused)
+        );
+    }
+
+    // A Stop replayed after the child went back to work (observed_at < turn_opened_at) is ignored
+    // without touching transcript_path, last_message, or stamps.
+    {
+        let (_dir, _paths, mut record) = held_candidate();
+        let kind = record.kind.clone();
+        let old_stop = record.started_at + Duration::from_secs(30);
+        let reopened_turn = record.started_at + Duration::from_secs(60);
+        record.turn_opened_at = Some(reopened_turn);
+        record.last_message = Some("newer".to_owned());
+        record.parked_at = Some(reopened_turn + Duration::from_secs(10));
+        let obs = errored_end(Some("/tmp/stale.jsonl"));
+        let err = marker(
+            TurnErrorClass::PausedRateLimit,
+            old_stop,
+            "Individual quota reached",
+        );
+        assert_eq!(
+            fold_lifecycle(
+                &mut record,
+                kind.as_str(),
+                &obs,
+                Some("stale".to_owned()),
+                Some(&err),
+                reopened_turn + Duration::from_secs(20),
+                old_stop,
+                None,
+            ),
+            LifecycleFold::Ignored,
+            "replayed Stop from before turn_opened_at is ignored"
+        );
+        assert_eq!(record.last_message.as_deref(), Some("newer"));
+        assert_eq!(record.transcript_path, None);
+        assert!(record.parked_at.is_some());
+    }
+
+    // Already-terminal run stays terminal.
+    {
+        let (_dir, _paths, mut record) = held_candidate();
+        let kind = record.kind.clone();
+        record.status = RunStatus::Completed;
+        let at = record.started_at + Duration::from_secs(30);
+        let err = marker(
+            TurnErrorClass::PausedRateLimit,
+            at,
+            "Individual quota reached",
+        );
+        assert_eq!(
+            fold_lifecycle(
+                &mut record,
+                kind.as_str(),
+                &errored_end(None),
+                None,
+                Some(&err),
+                at,
+                at,
+                None,
+            ),
+            LifecycleFold::Ignored
+        );
+        assert_eq!(record.status, RunStatus::Completed);
+    }
+
+    // Cases that still settle Failed: Ended signal, non-limit marker, overload marker, no marker,
+    // non-subagent run, and ReportTo::Nobody.
+    let at = Timestamp::from_second(1_700_000_000).unwrap();
+    let rate_limit = marker(
+        TurnErrorClass::PausedRateLimit,
+        at,
+        "Individual quota reached",
+    );
+    let overload = marker(
+        TurnErrorClass::PausedOverloaded,
+        at,
+        "upstream server overloaded",
+    );
+    let fatal = marker(TurnErrorClass::Failed, at, "invalid tool schema");
+    for (case, signal, err, subagent, report_to) in [
+        (
+            "Ended even with limit marker",
+            LifecycleSignal::Ended,
+            Some(&rate_limit),
+            true,
+            ReportTo::Launcher,
+        ),
+        (
+            "no marker",
+            errored_end(None).signal,
+            None,
+            true,
+            ReportTo::Launcher,
+        ),
+        (
+            "fatal marker",
+            errored_end(None).signal,
+            Some(&fatal),
+            true,
+            ReportTo::Launcher,
+        ),
+        (
+            "overload marker",
+            errored_end(None).signal,
+            Some(&overload),
+            true,
+            ReportTo::Launcher,
+        ),
+        (
+            "non-subagent run",
+            errored_end(None).signal,
+            Some(&rate_limit),
+            false,
+            ReportTo::Launcher,
+        ),
+        (
+            "report_to Nobody",
+            errored_end(None).signal,
+            Some(&rate_limit),
+            true,
+            ReportTo::Nobody,
+        ),
+    ] {
+        let (_dir, _paths, mut record) = held_candidate();
+        let kind = record.kind.clone();
+        record.subagent = subagent;
+        record.report_to = report_to;
+        let obs = AgentLifecycleObservation::new(Some("child".into()), signal);
+        assert_eq!(
+            fold_lifecycle(&mut record, kind.as_str(), &obs, None, err, at, at, None),
+            LifecycleFold::NewlyTerminal,
+            "{case}"
+        );
+        assert_eq!(record.status, RunStatus::Failed, "{case}");
     }
 }

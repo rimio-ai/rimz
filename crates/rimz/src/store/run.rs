@@ -457,13 +457,16 @@ pub struct RunRecord {
     /// it in `last_message`. Kept by the terminal write, cleared by a reopen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_answer: Option<String>,
-    /// The child's `last_activity` at the provider-limit park its parent was
-    /// last told about. Activity is frozen while the turn is dead and advances
-    /// on any resume, so a later park carries a later value.
+    /// The child's `last_activity` at the provider-limit park last claimed for
+    /// this run. Activity advances on any resume, so a later park carries a
+    /// later value; a raw-failed row's also moves on a progress hook that opens
+    /// no turn, and the same park is then claimed again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park_noticed_activity: Option<Timestamp>,
     /// The provider-limit park this run is held through. Set with the deadline
-    /// shift when the park is classified, cleared by the first in-turn signal
+    /// shift when the park is classified, and replaced by a claim for a later
+    /// activity, which shifts only by what this hold's span does not cover.
+    /// Cleared by the first in-turn signal or newer limit-errored turn end
     /// (which pulls an early resume's unused hold back) and by a reopen; a
     /// terminal write keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

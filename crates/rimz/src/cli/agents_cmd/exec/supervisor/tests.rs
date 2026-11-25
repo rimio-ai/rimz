@@ -297,6 +297,7 @@ fn a_released_workflow_agent_survives_its_next_turn_end() {
             agent,
             &turn_end,
             Some("done".into()),
+            None,
         )
         .unwrap();
         let context = RunPaths {
