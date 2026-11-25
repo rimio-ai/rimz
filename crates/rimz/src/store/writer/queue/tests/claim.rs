@@ -201,18 +201,23 @@ fn sent_prompt_reconciliation_preserves_fifo_or_releases_timed_out_hold() {
             .unwrap()
             .expect("prompt claimed");
         let sent = q.record_sent_batch(&claimed, "session").unwrap();
-        let second = q.queue_with(2, |message| message.body = MessageBody::Command);
-        assert!(
-            q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, Timestamp::now())
-                .unwrap()
-                .is_none()
-        );
+        let second_prompt = q.queue_with(2, |_| {});
+        let command = q.queue_with(3, |message| message.body = MessageBody::Command);
+        for blocked in [&second_prompt, &command] {
+            assert!(
+                q.claim_delivery_batch(&blocked.message_id, AgentStatus::Idle, Timestamp::now())
+                    .unwrap()
+                    .is_none(),
+                "sent prompt with smaller id holds {}",
+                blocked.message_id
+            );
+        }
         let deadline = sent[0].last_sent_at.unwrap() + MessageBody::Prompt.delivery_window();
         let report = q.reconcile_stale_messages("session", deadline, 1).unwrap();
         if unconfirmed_sends == 1 {
             assert_eq!(report.timed_out, 1);
             assert!(
-                q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, deadline)
+                q.claim_delivery_batch(&command.message_id, AgentStatus::Idle, deadline)
                     .unwrap()
                     .is_some()
             );
@@ -221,10 +226,22 @@ fn sent_prompt_reconciliation_preserves_fifo_or_releases_timed_out_hold() {
         assert_eq!(report.requeued, 1);
         assert_eq!(q.by_id(&first.message_id).status, MessageStatus::Queued);
         assert!(
-            q.claim_delivery_batch(&second.message_id, AgentStatus::Idle, deadline)
+            q.claim_delivery_batch(&second_prompt.message_id, AgentStatus::Idle, deadline)
                 .unwrap()
                 .is_none(),
-            "reconciliation requeues the older prompt ahead of the command"
+            "reconciliation requeues the older prompt ahead of a later prompt"
+        );
+        // Once the older prompt returns to Queued, the waiting command ranks ahead of it.
+        let claimed_command = q
+            .claim_delivery_batch(&command.message_id, AgentStatus::Idle, deadline)
+            .unwrap()
+            .expect("queued command outranks requeued prompt");
+        q.record_sent_batch(&claimed_command, "session").unwrap();
+        assert!(
+            q.claim_delivery_batch(&second_prompt.message_id, AgentStatus::Idle, deadline)
+                .unwrap()
+                .is_none(),
+            "older requeued prompt still holds later prompt once command is sent"
         );
         assert!(
             q.claim_delivery_batch(&first.message_id, AgentStatus::Idle, deadline)

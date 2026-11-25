@@ -388,3 +388,109 @@ fn only_the_owed_continues_own_ending_settles_it() {
     ));
     assert_eq!(mark(&events, "sess-1"), json!({}));
 }
+
+#[test]
+fn owed_continue_settles_on_turn_started_after_command_sent_without_compaction_hook() {
+    let command_event = |at: i64, status: MessageStatus| {
+        let mut record = MessageRecord::new(
+            workspace(),
+            &agent("hermes", "sess-1", AgentStatus::Running, 0),
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_body(crate::store::message::MessageBody::Command);
+        record.status = status;
+        record.message_id = MessageId::parse("msg_bbbbbbbbbbbbbbbb").unwrap();
+        let method = if status == MessageStatus::Sent {
+            MessageEventMethod::Sent
+        } else {
+            MessageEventMethod::Queued
+        };
+        let mut event = EventEnvelope::message_event(&record, "session", method, None);
+        event.timestamp = epoch() + std::time::Duration::from_secs(at.try_into().unwrap());
+        event
+    };
+    let started = |at: i64, prompt: &str| {
+        raw_lifecycle_at(
+            "hermes",
+            at,
+            json!({
+                "agent_id": "sess-1",
+                "signal": {"signal": "turn_started"},
+                "prompt": prompt,
+            }),
+        )
+    };
+    let ended = |at: i64| {
+        raw_lifecycle_at(
+            "hermes",
+            at,
+            json!({
+                "agent_id": "sess-1",
+                "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": false},
+            }),
+        )
+    };
+    let continue_queued = {
+        let mut record = MessageRecord::new(
+            workspace(),
+            &agent("hermes", "sess-1", AgentStatus::Running, 0),
+            "keep going".to_owned(),
+            DeliveryGate::Done,
+        );
+        record.status = MessageStatus::Queued;
+        record.message_id = tagged_id("continue");
+        let mut event =
+            EventEnvelope::message_event(&record, "session", MessageEventMethod::Queued, None);
+        let mut params = event.params_value();
+        params["soft_compact"] = json!("continue");
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+        event.timestamp = epoch() + std::time::Duration::from_secs(3);
+        event
+    };
+    let notice = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\ncheck this";
+    let keepalive = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm.";
+    let owed = json!({"continue_owed": queued_at(3)});
+
+    // Harness prompt BEFORE command is sent leaves the continue owed.
+    let base = vec![
+        raw_lifecycle_at(
+            "hermes",
+            0,
+            json!({"agent_id": "sess-1", "signal": {"signal": "registered"}}),
+        ),
+        raw_lifecycle_at(
+            "hermes",
+            1,
+            json!({"agent_id": "sess-1", "signal": {"signal": "turn_started"}}),
+        ),
+        command_event(2, MessageStatus::Queued),
+        continue_queued,
+    ];
+    let mut before_sent = base.clone();
+    before_sent.push(ended(4));
+    before_sent.push(started(5, notice));
+    assert_eq!(
+        mark(&before_sent, "sess-1"),
+        owed,
+        "a harness turn before the command is sent leaves the continue owed"
+    );
+
+    // Command Sent with no compaction hook: keepalive keeps it owed, any real turn settles it.
+    let mut after_sent = base;
+    after_sent.push(ended(4));
+    after_sent.push(command_event(5, MessageStatus::Sent));
+    after_sent.push(started(6, keepalive));
+    after_sent.push(ended(7));
+    assert_eq!(
+        mark(&after_sent, "sess-1"),
+        owed,
+        "a keepalive turn after command Sent still settles nothing"
+    );
+    after_sent.push(started(8, notice));
+    assert_eq!(
+        mark(&after_sent, "sess-1"),
+        json!({}),
+        "a harness turn after command Sent settles the continue even with no compaction hook"
+    );
+}

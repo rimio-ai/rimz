@@ -1073,6 +1073,13 @@ impl MessageRecord {
                 })
     }
 
+    /// Whether delivery of this record waits for a resumed provider to report its own session
+    /// start rather than only the timed delivery window: a resume follow-up carrying
+    /// `register_by`, or a compaction command (`MessageBody::Command`) that can outrank one.
+    pub(crate) fn awaits_resumed_provider(&self) -> bool {
+        self.register_by.is_some() || self.body == MessageBody::Command
+    }
+
     /// The receiver as the sender addressed it, or its card name when the record kept no address.
     pub(crate) fn receiver_address(&self) -> String {
         self.address.clone().unwrap_or_else(|| {
@@ -1381,8 +1388,36 @@ impl MessageRecord {
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt
             && !self.forced_keepalive
+            && self.soft_compact != Some(SoftCompactStep::Continue)
             && !opens_slash_command(&self.text)
     }
+}
+
+/// Queue precedence within a card's lane: a forced keepalive, then a compaction
+/// command, then every other record, then a compaction continue. Within one
+/// rank, `msg_` id string order is FIFO order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum DeliveryRank {
+    ForcedKeepalive,
+    CompactionCommand,
+    Ordinary,
+    CompactionContinue,
+}
+
+fn delivery_rank(message: &MessageRecord) -> DeliveryRank {
+    if message.forced_keepalive {
+        DeliveryRank::ForcedKeepalive
+    } else if message.body == MessageBody::Command {
+        DeliveryRank::CompactionCommand
+    } else if message.soft_compact == Some(SoftCompactStep::Continue) {
+        DeliveryRank::CompactionContinue
+    } else {
+        DeliveryRank::Ordinary
+    }
+}
+
+fn queue_order_key(message: &MessageRecord) -> (DeliveryRank, &str) {
+    (delivery_rank(message), message.message_id.as_str())
 }
 
 /// Whether pasted text reaches the composer as a slash command: a slash-led message rides alone
@@ -1423,12 +1458,14 @@ pub fn format_dwell(secs: u64) -> String {
     format!("{secs}s")
 }
 
-/// The oldest ordinary queued message for one logical agent card, the next to
-/// deliver at a turn boundary. FIFO spans a card's provisional `launch_*` id
-/// and the session id it registers as, so pass the stable `agent_name` when
-/// known: a message queued before registration still sorts ahead of one queued
-/// after. FIFO also spans every session of the agent, of any kind, when the card
-/// carries the agent's launch. Hidden resume nudges live in a separate control lane.
+/// The next ordinary queued message to deliver for one logical agent card at a
+/// turn boundary, ordered by rank (forced keepalive, compaction command,
+/// ordinary record, compaction continue) and then `msg_` id. Queue order spans
+/// a card's provisional `launch_*` id and the session id it registers as, so
+/// pass the stable `agent_name` when known: a message queued before
+/// registration still sorts ahead of one queued after. It also spans every
+/// session of the agent, of any kind, when the card carries the agent's launch.
+/// Hidden resume nudges live in a separate control lane.
 pub fn queue_head<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     card: AgentCardRef<'_>,
@@ -1442,7 +1479,7 @@ pub fn queue_head<'a>(
                 && message.same_card(card)
                 && message.is_deliverable(now)
         })
-        .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+        .min_by_key(|message| queue_order_key(message))
 }
 
 /// Earliest FIFO-head, independent cleanup, schedule, condition, or recovery wake.
@@ -1500,7 +1537,9 @@ pub(crate) fn fresh_boundary_blocker<'a>(
     card: AgentCardRef<'_>,
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
-    queue_head(pending.clone(), card, now).or_else(|| in_flight_claim(pending, card, now))
+    queue_head(pending.clone(), card, now)
+        .filter(|head| head.soft_compact != Some(SoftCompactStep::Continue))
+        .or_else(|| in_flight_claim(pending, card, now))
 }
 
 /// A non-`Resume` unexpired claim or `Sent` prompt a fresh boundary send parks behind.
@@ -1519,9 +1558,10 @@ pub(crate) fn in_flight_claim<'a>(
     })
 }
 
-/// Oldest ready record ahead of `candidate` in the same logical-card lane.
-/// Callers choose what readiness means: Store claims use durable stamps, while
-/// diagnosis can use currently true dynamic conditions for the candidate.
+/// Highest-precedence ready record ahead of `candidate` in the same
+/// logical-card lane. Callers choose what readiness means: Store claims use
+/// durable stamps, while diagnosis can use currently true dynamic conditions
+/// for the candidate.
 pub(crate) fn older_ready_blocker<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     candidate: &MessageRecord,
@@ -1537,20 +1577,20 @@ pub(crate) fn older_ready_blocker<'a>(
                 && ahead_in_fifo(message, candidate)
                 && (message.status == MessageStatus::Sent || ready(message))
         })
-        .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+        .min_by_key(|message| queue_order_key(message))
 }
 
-/// Whether `other` holds `candidate`'s place in their lane. Id order is FIFO order, with one
-/// exception: a forced keepalive passes the queued records ahead of it, and once claimed or sent
-/// it holds them in turn until it settles.
+/// Whether `other` holds `candidate`'s place in their lane. Records order by
+/// `queue_order_key` (forced keepalive, compaction command, ordinary record,
+/// compaction continue, then id); in addition, an in-flight (`Claimed` or
+/// `Sent`) record with a smaller id holds a candidate of any rank.
 fn ahead_in_fifo(other: &MessageRecord, candidate: &MessageRecord) -> bool {
-    if other.message_id.as_str() < candidate.message_id.as_str() {
-        !(candidate.forced_keepalive && other.status == MessageStatus::Queued)
-    } else {
-        other.message_id != candidate.message_id
-            && other.forced_keepalive
-            && other.status != MessageStatus::Queued
+    if other.message_id == candidate.message_id {
+        return false;
     }
+    queue_order_key(other) < queue_order_key(candidate)
+        || (other.status != MessageStatus::Queued
+            && other.message_id.as_str() < candidate.message_id.as_str())
 }
 
 pub(crate) fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
@@ -1560,8 +1600,11 @@ pub(crate) fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) 
     }
 }
 
-/// Select one claimable FIFO batch from live records already ordered by
-/// message id. Returned indices retain that source order.
+/// Select one claimable boundary batch from live records already ordered by
+/// message id. Returned indices retain that source order. Queued compaction
+/// continues never join a batch and are stepped over during follower selection;
+/// a `CompactInstruction::NextPrompt` command claims its continue only when no
+/// other open record ranks between the two.
 pub(crate) fn delivery_batch_indices(
     live: &[MessageRecord],
     target_id: &MessageId,
@@ -1593,16 +1636,17 @@ pub(crate) fn delivery_batch_indices(
     }
     if head.body == MessageBody::Command {
         if next_prompt_compact_kind(&head.kind)
-            && let Some((index, candidate)) =
-                live.iter()
-                    .enumerate()
-                    .skip(head_index + 1)
-                    .find(|(_, message)| {
-                        message.status.is_open()
-                            && message.same_card(head.card_ref())
-                            && same_delivery_lane(head.gate, message.gate)
-                            && message.is_deliverable(now)
-                    })
+            && let Some((index, candidate)) = live
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| {
+                    queue_order_key(message) > queue_order_key(head)
+                        && message.status.is_open()
+                        && message.same_card(head.card_ref())
+                        && same_delivery_lane(head.gate, message.gate)
+                        && message.is_deliverable(now)
+                })
+                .min_by_key(|(_, message)| queue_order_key(message))
             && is_command_continue_tail(head, candidate)
             && claim_expired(candidate.last_attempt_at, now)
             && candidate.typing_hold.is_none_or(|hold| hold.until <= now)
@@ -1627,6 +1671,11 @@ pub(crate) fn delivery_batch_indices(
                 && message.is_deliverable(now)
         })
     {
+        if candidate.soft_compact == Some(SoftCompactStep::Continue)
+            && candidate.status == MessageStatus::Queued
+        {
+            continue;
+        }
         if !claim_expired(candidate.last_attempt_at, now)
             || candidate.typing_hold.is_some_and(|hold| hold.until > now)
             || !batch_compatible(head, candidate, status)

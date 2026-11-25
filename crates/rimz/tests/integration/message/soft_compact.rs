@@ -440,9 +440,9 @@ fn self_compaction_mid_turn_types_the_command_then_its_continue() {
         rimz::address::handle_with_name("@claude", fixture.records()[0].agent_name.as_deref());
     assert!(
         receipt.starts_with(&format!("queued compaction for {named} (msg_"))
-            && receipt
-                .trim_end()
-                .ends_with("delivers at its next turn boundary, then continues it"),
+            && receipt.trim_end().ends_with(
+                "delivers at its next turn boundary, then continues it if nothing else is waiting"
+            ),
         "{receipt}"
     );
     let records = fixture.records();
@@ -540,7 +540,7 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
         assert_eq!(
             receipt.trim_end(),
             format!(
-                "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it",
+                "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it if nothing else is waiting",
                 command.message_id,
                 rimz::address::handle_with_name("@claude", command.agent_name.as_deref())
             )
@@ -667,15 +667,6 @@ fn owed_continue_is_withdrawn_once_its_row_stops_owing_it() {
             fixture.context(20_000);
             let store = fixture.env.store();
             let agent = fixture.agent();
-            let earlier = MessageRecord::new(
-                fixture.env.workspace_id.clone(),
-                &agent,
-                "earlier user message".into(),
-                DeliveryGate::Done,
-            );
-            if after_claim {
-                store.queue_message(&earlier, "soft-test").unwrap();
-            }
             let mut continuation = MessageRecord::new(
                 fixture.env.workspace_id.clone(),
                 &agent,
@@ -707,7 +698,7 @@ fn owed_continue_is_withdrawn_once_its_row_stops_owing_it() {
                         "message",
                         "deliver",
                         "--message-id",
-                        earlier.message_id.as_str(),
+                        continuation.message_id.as_str(),
                     ])
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -1715,4 +1706,534 @@ fn ceiling_compact_helper_enforces_or_withdraws_pair_and_records_assist() {
         assert_eq!(stats["rollup"]["compacts"], 0);
         assert_eq!(stats["rollup"]["held"]["compacts"], 1);
     }
+}
+
+#[test]
+fn waiting_compaction_is_typed_ahead_of_older_queued_prompt_and_message_settles_continue() {
+    // Antigravity folds a command with its continue only when nothing waits between the two.
+    for (kind, with_compaction_hook, grown_fill) in [
+        ("claude", true, None),
+        ("claude", true, Some(121_771)),
+        ("claude", false, None),
+        ("antigravity", false, None),
+    ] {
+        let fixture = Fixture::new(kind);
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let agent = fixture.agent();
+        let digest = rimz::message::synthetic::SyntheticMessage {
+            agent: &agent,
+            text: "All 2 subagents settled (probe digest)".to_owned(),
+            sender: MessageSender::Harness {
+                notice: rimz::store::message::HarnessNotice::SubagentReport,
+            },
+            gate: DeliveryGate::Done,
+            premises: rimz::store::message::Premise::NONE,
+        }
+        .record(&workspace);
+        let second_waiting = rimz::message::synthetic::SyntheticMessage {
+            agent: &agent,
+            text: "second waiting notice".to_owned(),
+            sender: MessageSender::Harness {
+                notice: rimz::store::message::HarnessNotice::SubagentReport,
+            },
+            gate: DeliveryGate::Done,
+            premises: rimz::store::message::Premise::NONE,
+        }
+        .record(&workspace);
+        fixture
+            .env
+            .store()
+            .queue_message(&digest, &workspace.session_name)
+            .unwrap();
+        if with_compaction_hook && grown_fill.is_none() {
+            fixture
+                .env
+                .store()
+                .queue_message(&second_waiting, &workspace.session_name)
+                .unwrap();
+        }
+
+        fixture.compact(&[]);
+        let records = fixture.records();
+        let command = records
+            .iter()
+            .find(|r| r.body == MessageBody::Command)
+            .unwrap()
+            .clone();
+        let continuation = records
+            .iter()
+            .find(|r| r.soft_compact == Some(SoftCompactStep::Continue))
+            .unwrap()
+            .clone();
+        assert!(command.message_id > digest.message_id);
+
+        if with_compaction_hook && grown_fill.is_none() {
+            // `rimz message show` for a record behind both an older prompt and a newer compaction
+            // command names the compaction command — the record typed next.
+            let shown = run_success(
+                fixture
+                    .env
+                    .rimz()
+                    .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+                    .args([
+                        "message",
+                        "show",
+                        second_waiting.message_id.as_str(),
+                        "--json",
+                    ]),
+                "message show behind compaction",
+            );
+            let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+            assert_eq!(
+                shown["delivery"]["check"]["fifo"]["blocker"].as_str(),
+                Some(command.message_id.as_str()),
+                "show must name the compaction command as the blocker: {shown}"
+            );
+            assert!(
+                shown["delivery"]["verdict"]
+                    .as_str()
+                    .is_some_and(|v| v.contains(command.message_id.as_str())),
+                "verdict must name the compaction command: {shown}"
+            );
+            // Cancel the second notice so the rest of the test checks a single digest.
+            run_success(
+                fixture
+                    .env
+                    .rimz()
+                    .args(["message", "cancel", second_waiting.message_id.as_str()]),
+                "cancel extra notice",
+            );
+        }
+
+        if let Some(tokens) = grown_fill {
+            fixture.context(tokens);
+        }
+        fixture.end_turn();
+
+        // Sweep picks the compaction command as the head and types it alone ahead of the digest.
+        run_success(
+            traced_rimz(&fixture.env, "soft-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+                .args(["message", "sweep"]),
+            "sweep turn end with queued compaction",
+        );
+        let trace = fixture.trace();
+        assert_eq!(
+            trace.iter().filter(|l| is_compact_command(l)).count(),
+            1,
+            "compaction must be typed first: {trace:?}"
+        );
+        assert!(
+            !trace.iter().any(
+                |line| line.contains("\taction\twrite-chars\t") && line.ends_with("keep going")
+            ),
+            "the command is typed without its continue folded on: {trace:?}"
+        );
+        assert_eq!(fixture.status_of(&command.message_id), MessageStatus::Sent);
+        assert_eq!(fixture.status_of(&digest.message_id), MessageStatus::Queued);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Queued
+        );
+
+        if with_compaction_hook {
+            fixture.lifecycle(LifecycleSignal::Compacting);
+            fixture.lifecycle(compaction_end());
+            fixture.context(20_000);
+        }
+
+        // Next sweep delivers the waiting digest alone — never batched with the continue.
+        run_success(
+            traced_rimz(&fixture.env, "soft-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+                .args(["message", "sweep"]),
+            "sweep waiting digest after compaction",
+        );
+        assert_eq!(fixture.status_of(&digest.message_id), MessageStatus::Sent);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Queued,
+            "continue must not be batched with the waiting digest"
+        );
+        assert!(
+            !fixture
+                .trace()
+                .iter()
+                .any(|line| is_paste(line, "keep going")),
+            "continue must not be pasted with the waiting digest"
+        );
+
+        // The digest's turn start clears the owed continue and withdraws it in the ack commit.
+        let rendered_digest = format!(
+            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+            digest.text
+        );
+        fixture.lifecycle_with_prompt(
+            LifecycleSignal::TurnStarted { turn_id: None },
+            &rendered_digest,
+        );
+        let row = fixture.agent();
+        fixture
+            .env
+            .store()
+            .confirm_delivered_for_card_with(
+                row.card_ref(),
+                rimz::store::writer::DeliveryAck::TurnStarted {
+                    prompt: Some(&rendered_digest),
+                },
+                Some(&row),
+                row.epoch,
+                &workspace.session_name,
+                |_, _| {},
+            )
+            .unwrap();
+        assert_eq!(
+            fixture.status_of(&digest.message_id),
+            MessageStatus::Delivered
+        );
+        fixture.assert_canceled_with(
+            &continuation.message_id,
+            "compaction continue cleared before delivery",
+        );
+
+        // At that turn's end, nothing else is typed.
+        let trace_len = fixture.trace().len();
+        fixture.end_turn();
+        run_success(
+            traced_rimz(&fixture.env, "soft-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+                .args(["message", "sweep"]),
+            "sweep after digest turn ends",
+        );
+        assert!(
+            fixture.trace()[trace_len..]
+                .iter()
+                .all(|line| !line.contains("\taction\twrite") && !is_paste(line, "keep going")),
+            "nothing must be typed after the digest turn ends: {:?}",
+            &fixture.trace()[trace_len..]
+        );
+    }
+}
+
+#[test]
+fn prompts_around_a_queued_continue_batch_ahead_of_it_and_fresh_send_is_not_parked() {
+    // 1. Prompts on both sides of a queued continue's id share one batch ahead of it.
+    let fixture = Fixture::new("claude");
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let agent = fixture.agent();
+    let store = fixture.env.store();
+    let before = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &agent,
+        "first waiting prompt".into(),
+        DeliveryGate::Done,
+    );
+    store
+        .queue_message(&before, &workspace.session_name)
+        .unwrap();
+    let mut continuation = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &agent,
+        "keep going".into(),
+        DeliveryGate::Done,
+    );
+    continuation.soft_compact = Some(SoftCompactStep::Continue);
+    continuation.sender = MessageSender::System;
+    store
+        .queue_message(&continuation, &workspace.session_name)
+        .unwrap();
+    let after = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &agent,
+        "second waiting prompt".into(),
+        DeliveryGate::Done,
+    );
+    store
+        .queue_message(&after, &workspace.session_name)
+        .unwrap();
+    assert!(before.message_id < continuation.message_id);
+    assert!(continuation.message_id < after.message_id);
+
+    fixture.end_turn();
+    fixture.context(20_000);
+    run_success(
+        traced_rimz(&fixture.env, "soft-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep batch around continue",
+    );
+    assert_eq!(fixture.status_of(&before.message_id), MessageStatus::Sent);
+    assert_eq!(fixture.status_of(&after.message_id), MessageStatus::Sent);
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued,
+        "continue stays out of the batch"
+    );
+    let live = store.list_messages().unwrap();
+    let sent_before = live
+        .iter()
+        .find(|r| r.message_id == before.message_id)
+        .unwrap();
+    let sent_after = live
+        .iter()
+        .find(|r| r.message_id == after.message_id)
+        .unwrap();
+    assert_eq!(
+        sent_before.batch_id,
+        Some(before.message_id.clone()),
+        "prompts on both sides of continue must share one batch"
+    );
+    assert_eq!(sent_after.batch_id, sent_before.batch_id);
+
+    // 2. A fresh send to a resting agent whose continue is still Queued is not parked behind it.
+    let fixture = Fixture::new("claude");
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let store = fixture.env.store();
+    fixture.end_turn();
+    fixture.context(20_000);
+    let agent = fixture.agent();
+    let mut continuation = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &agent,
+        "keep going".into(),
+        DeliveryGate::Done,
+    );
+    continuation.soft_compact = Some(SoftCompactStep::Continue);
+    continuation.sender = MessageSender::System;
+    store
+        .queue_message(&continuation, &workspace.session_name)
+        .unwrap();
+
+    let send_out = run_success(
+        traced_rimz(&fixture.env, "soft-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args(["message", "@claude", "--", "fresh task for resting agent"]),
+        "fresh send past queued continue",
+    );
+    let stdout = String::from_utf8_lossy(&send_out.stdout);
+    assert!(
+        stdout.starts_with("sent to "),
+        "fresh send must deliver live instead of parking behind a queued continue: {stdout}"
+    );
+    let fresh_id = MessageId::parse(&sent_id_from_stdout(&send_out.stdout)).unwrap();
+    assert_eq!(fixture.status_of(&fresh_id), MessageStatus::Sent);
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued
+    );
+
+    // 3. A fresh send DOES park behind a continue that is already Sent.
+    let fixture = Fixture::new("claude");
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let store = fixture.env.store();
+    fixture.end_turn();
+    fixture.context(20_000);
+    let agent = fixture.agent();
+    let mut continuation = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &agent,
+        "keep going".into(),
+        DeliveryGate::Done,
+    );
+    continuation.soft_compact = Some(SoftCompactStep::Continue);
+    continuation.sender = MessageSender::System;
+    store
+        .queue_message(&continuation, &workspace.session_name)
+        .unwrap();
+    fixture.deliver(&continuation.message_id);
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Sent
+    );
+    let parked_out = run_success(
+        traced_rimz(&fixture.env, "soft-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "60000")
+            .args(["message", "@claude", "--", "must park behind sent continue"]),
+        "fresh send behind sent continue",
+    );
+    let parked_stdout = String::from_utf8_lossy(&parked_out.stdout);
+    assert!(
+        parked_stdout.contains(&format!("behind {}", continuation.message_id)),
+        "fresh send must park behind an in-flight continue: {parked_stdout}"
+    );
+}
+
+#[test]
+fn supervised_run_parked_on_continue_carries_on_through_a_waiting_message_turn() {
+    use rimz::harness::run;
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let fixture = Fixture::new("claude");
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let store = fixture.env.store();
+    let mut record = RunRecord::new(
+        fixture.env.workspace_id.clone(),
+        fixture.request.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "finish the task".into(),
+        fixture.env.project_root.clone(),
+    );
+    record.agent_id = Some(fixture.request.agent_id.clone());
+    record.status = RunStatus::Running;
+    record.subagent = true;
+    run::create(store.paths(), &record).unwrap();
+
+    let settle = |signal: LifecycleSignal, prompt: Option<&str>, text: &str| {
+        match prompt {
+            Some(prompt) => fixture.lifecycle_with_prompt(signal.clone(), prompt),
+            None => fixture.lifecycle(signal.clone()),
+        }
+        let mut obs = AgentLifecycleObservation::new(record.agent_id.clone(), signal);
+        obs.prompt = rimz::agents::SanitizedPrompt::new(prompt);
+        run::settle_lifecycle(
+            &store,
+            &record.run_id,
+            rimz::agents::definition_by_kind("claude").unwrap(),
+            &obs,
+            Some(text.into()),
+            None,
+        )
+        .unwrap()
+    };
+    let end = || LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+
+    // A message waits mid-turn, then the agent requests compaction.
+    let agent = fixture.agent();
+    let waiting = rimz::message::synthetic::SyntheticMessage {
+        agent: &agent,
+        text: "follow-up from parent".to_owned(),
+        sender: MessageSender::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: Some("parent-session".into()),
+            name: Some("planner".to_owned()),
+            profile: None,
+            role: None,
+            channel: None,
+        },
+        gate: DeliveryGate::Done,
+        premises: rimz::store::message::Premise::NONE,
+    }
+    .record(&workspace);
+    store
+        .queue_message(&waiting, &workspace.session_name)
+        .unwrap();
+    fixture.compact(&[]);
+    let records = fixture.records();
+    let command = records
+        .iter()
+        .find(|r| r.body == MessageBody::Command)
+        .unwrap()
+        .clone();
+    let continuation = records
+        .iter()
+        .find(|r| r.soft_compact == Some(SoftCompactStep::Continue))
+        .unwrap()
+        .clone();
+
+    // Turn ends: run parks on SoftCompact.
+    settle(end(), None, "wrapping up for compact");
+    let parked = run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(parked.status, RunStatus::Running);
+    assert!(parked.parked_at.is_some());
+    assert_eq!(
+        parked.parked_on,
+        Some(rimz::store::run::ParkCause::SoftCompact)
+    );
+
+    // Compaction runs first, then the waiting message is delivered ahead of the continue.
+    run_success(
+        traced_rimz(&fixture.env, "soft-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args(["message", "sweep"]),
+        "deliver compaction ahead of waiting message",
+    );
+    assert_eq!(
+        fixture.status_of(&command.message_id),
+        MessageStatus::Sent,
+        "compaction command must deliver ahead of the waiting message"
+    );
+    assert_eq!(
+        fixture.status_of(&waiting.message_id),
+        MessageStatus::Queued
+    );
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued
+    );
+    fixture.lifecycle(LifecycleSignal::Compacting);
+    fixture.lifecycle(compaction_end());
+    fixture.context(20_000);
+    run_success(
+        traced_rimz(&fixture.env, "soft-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args(["message", "sweep"]),
+        "deliver waiting message ahead of continue",
+    );
+    assert_eq!(fixture.status_of(&waiting.message_id), MessageStatus::Sent);
+    assert_eq!(
+        fixture.status_of(&continuation.message_id),
+        MessageStatus::Queued
+    );
+
+    // Waiting message opens a turn: park clears (run carries on, does NOT complete early) and
+    // the continue is withdrawn.
+    let rendered = format!(
+        "Type: AGENT_MESSAGE\nFrom: @planner (claude)\nContent:\n{}",
+        waiting.text
+    );
+    settle(
+        LifecycleSignal::TurnStarted { turn_id: None },
+        Some(&rendered),
+        "",
+    );
+    let row = fixture.agent();
+    store
+        .confirm_delivered_for_card_with(
+            row.card_ref(),
+            rimz::store::writer::DeliveryAck::TurnStarted {
+                prompt: Some(&rendered),
+            },
+            Some(&row),
+            row.epoch,
+            &workspace.session_name,
+            |_, _| {},
+        )
+        .unwrap();
+    let active = run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(
+        (active.status, active.parked_at),
+        (RunStatus::Running, None),
+        "run must carry on through the waiting message's turn"
+    );
+    fixture.assert_canceled_with(
+        &continuation.message_id,
+        "compaction continue cleared before delivery",
+    );
+
+    // Completing that turn completes the run with both turns' answers joined.
+    let finished = settle(end(), None, "finished after waiting message").unwrap();
+    assert_eq!(finished.status, RunStatus::Completed);
+    assert_eq!(
+        finished.last_message.as_deref(),
+        Some("wrapping up for compact\n\n---\n\nfinished after waiting message")
+    );
 }

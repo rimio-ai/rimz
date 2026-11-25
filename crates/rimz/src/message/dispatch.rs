@@ -23,7 +23,7 @@ use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, Premise,
-    WhenCondition, env_ms, fresh_boundary_blocker, queue_head, sender_notice,
+    WhenCondition, env_ms, fresh_boundary_blocker, sender_notice,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, count_rows_materialized};
 use crate::store::writer::{BoundaryClaim, ResumeAttempt};
@@ -602,7 +602,7 @@ fn agent_needs_live_resolution(
             .is_some_and(|definition| definition.capabilities.registers_lazily)
         || (deliver::receiver_readiness(agent, gate, force, now, snapshot, card_status)
             .accepts_prompt()
-            && queue_head(pending.iter(), agent.card_ref(), now).is_none())
+            && fresh_boundary_blocker(pending.iter(), agent.card_ref(), now).is_none())
 }
 
 struct PreparedMode {
@@ -1249,16 +1249,16 @@ fn dispatch_decision(
             };
         }
     }
-    if target.pane.is_none() {
-        return DispatchDecision::Parked {
-            reason: Some(ParkReason::NoPane),
-        };
-    }
     if let Some(agent) = target.agent.as_ref()
         && let Some(blocker) = fresh_boundary_blocker(pending.iter(), agent.card_ref(), now)
     {
         return DispatchDecision::Parked {
             reason: Some(ParkReason::Behind(blocker.message_id.clone())),
+        };
+    }
+    if target.pane.is_none() {
+        return DispatchDecision::Parked {
+            reason: Some(ParkReason::NoPane),
         };
     }
     DispatchDecision::Live

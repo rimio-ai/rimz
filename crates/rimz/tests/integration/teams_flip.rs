@@ -2917,10 +2917,10 @@ fn queued_flip_compaction_survives_a_later_turn() {
     );
 }
 
-/// The incident: a message waits for the member mid-turn, the member flips over its limit, the
-/// waiting message is typed at the turn end, and the compaction at the next one.
+/// A message waits for the member mid-turn, the member flips over its limit, the compaction is
+/// typed first at the turn end, and the waiting message follows once the compaction finishes.
 #[test]
-fn flip_compaction_is_typed_after_a_message_waiting_ahead_of_it() {
+fn flip_compaction_is_typed_ahead_of_a_message_waiting_before_it() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));
     fixture.running("reviewer", None);
@@ -2939,29 +2939,28 @@ fn flip_compaction_is_typed_after_a_message_waiting_ahead_of_it() {
     fixture.context_tokens("coder", 150_000);
     let command = fixture.queued_flip_compaction();
     fixture.hook("coder", "Stop", Some("terminal_3"));
-    wait_for_text_then_enter(&fixture.trace, "Check the subagent report.");
-    assert_eq!(fixture.message_status(&waiting), MessageStatus::Sent);
+    fixture.wait_for_compact_then_enter();
+    assert_eq!(
+        fixture.message_status(&command.message_id),
+        MessageStatus::Sent
+    );
+    assert_eq!(fixture.message_status(&waiting), MessageStatus::Queued);
     let lines = crate::common::trace_lines(&fixture.trace);
     assert!(
-        !lines.iter().any(|line| line.ends_with("\t/compact ")),
+        !lines
+            .iter()
+            .any(|line| line.contains("Check the subagent report.")),
         "trace={lines:?}"
     );
-    fixture.feed_from(
-        "claude",
-        "coder",
-        "coder",
-        "UserPromptSubmit",
-        Some("terminal_3"),
-        None,
-        "Check the subagent report.",
-    );
-    assert_eq!(fixture.message_status(&waiting), MessageStatus::Delivered);
-    fixture.hook("coder", "Stop", Some("terminal_3"));
-    fixture.wait_for_compact_then_enter();
-    assert_ne!(
+    fixture.hook("coder", "PreCompact", Some("terminal_3"));
+    fixture.context_tokens("coder", 20_000);
+    fixture.hook("coder", "PostCompact", Some("terminal_3"));
+    assert_eq!(
         fixture.message_status(&command.message_id),
-        MessageStatus::Canceled
+        MessageStatus::Delivered
     );
+    wait_for_text_then_enter(&fixture.trace, "Check the subagent report.");
+    assert_eq!(fixture.message_status(&waiting), MessageStatus::Sent);
 }
 
 /// A turn that outlives the cache lifetime (from a five-minute cache write) holds the command:

@@ -1509,7 +1509,7 @@ fn evaluate_delivery<'a>(
         },
         gate: GateCheck {
             provider_start_pending: agent.is_some_and(|agent| {
-                super::provider_start_pending(agent, message.register_by.is_some(), now)
+                super::provider_start_pending(agent, message.awaits_resumed_provider(), now)
             }),
             gate: message.gate,
             status,

@@ -43,7 +43,7 @@ pub(super) fn compact_agent(
             "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary, {}",
             agent.effective_status(jiff::Timestamp::now()).as_str(),
             if continues {
-                "then continues it"
+                "then continues it if nothing else is waiting"
             } else {
                 "with no continue after"
             },
@@ -52,7 +52,7 @@ pub(super) fn compact_agent(
             render::out(),
             "compaction {message_id} is already queued for {handle}; delivers at its next turn boundary, {}",
             if continues {
-                "then continues it"
+                "then continues it if nothing else is waiting"
             } else {
                 "with no continue after"
             },

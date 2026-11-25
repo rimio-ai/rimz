@@ -309,10 +309,10 @@ pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
 }
 
 /// Whether boundary delivery to `agent` waits for its resumed provider to report a session. A
-/// resume follow-up (`awaits_resume`, a record carrying `register_by`) to a kind whose resume
-/// reports its start waits until the provider reports, which the reconciler bounds at that
-/// deadline; any other record, and any record to another non-lazy kind, waits one delivery
-/// window from the resume stamp.
+/// record that awaits a resumed provider (`awaits_resume`: a follow-up carrying `register_by`, or
+/// a compaction command that can outrank one) to a kind whose resume reports its start waits until
+/// the provider reports, bounded by any follow-up's deadline in reconciliation; any other record,
+/// and any record to another non-lazy kind, waits one delivery window from the resume stamp.
 fn provider_start_pending(agent: &AgentState, awaits_resume: bool, now: Timestamp) -> bool {
     (awaits_resume && agent.resumed_provider_unreported())
         || agent.resumed_at.is_some_and(|resumed_at| {
