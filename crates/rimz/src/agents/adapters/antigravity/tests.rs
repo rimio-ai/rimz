@@ -501,37 +501,189 @@ fn post_tool_use_matchers_route_legacy_and_current_tool_names() {
     }
 }
 #[test]
-fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
-    for error in [
-        json!("rate limit reached; retry later"),
-        json!({"message": "quota exhausted", "retryAfterSeconds": 30}),
+fn a_string_stop_error_sets_a_marker_and_an_object_error_sets_none() {
+    let string_payload = with(
+        &hook_payload(),
+        [
+            ("terminationReason", json!("error")),
+            ("fullyIdle", json!(true)),
+            ("error", json!("rate limit reached; retry later")),
+        ],
+    );
+    let string_decoded = hook_output(&AntigravityAdapter, "Stop", &string_payload);
+    let marker = string_decoded
+        .turn_error()
+        .expect("a string Stop error sets a turn-error marker");
+    assert_eq!(marker.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        marker.label.as_deref(),
+        Some("rate limit reached; retry later")
+    );
+    assert!(!marker.ended_turn);
+    assert_eq!(marker.model, None);
+    assert_eq!(
+        hook_signal(&AntigravityAdapter, "Stop", &string_payload),
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        }
+    );
+
+    let object_payload = with(
+        &hook_payload(),
+        [
+            ("terminationReason", json!("error")),
+            ("fullyIdle", json!(true)),
+            (
+                "error",
+                json!({"message": "quota exhausted", "retryAfterSeconds": 30}),
+            ),
+        ],
+    );
+    assert!(
+        hook_output(&AntigravityAdapter, "Stop", &object_payload)
+            .turn_error()
+            .is_none(),
+        "an uncaptured object error sets no marker"
+    );
+    assert_eq!(
+        hook_signal(&AntigravityAdapter, "Stop", &object_payload),
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        }
+    );
+}
+
+#[test]
+fn stop_string_errors_set_capped_turn_error_markers_with_overload_demoted() {
+    use crate::agents::TurnErrorClass;
+
+    let captured_quota = "generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.";
+    let sentence =
+        "Individual quota reached. Please upgrade your subscription to increase your limits.";
+
+    for (reason, text, expected_class, expected_label) in [
+        (
+            "ERROR",
+            captured_quota,
+            TurnErrorClass::PausedRateLimit,
+            sentence,
+        ),
+        (
+            "ERROR",
+            "Your spend limit has been reached",
+            TurnErrorClass::PausedSpendLimit,
+            "Your spend limit has been reached",
+        ),
+        (
+            "ERROR",
+            "API Error: 503 Service Unavailable - overloaded",
+            TurnErrorClass::Failed,
+            "API Error: 503 Service Unavailable - overloaded",
+        ),
+        (
+            "ERROR",
+            "invalid request: missing parameter",
+            TurnErrorClass::Failed,
+            "invalid request: missing parameter",
+        ),
     ] {
         let payload = with(
             &hook_payload(),
             [
-                ("terminationReason", json!("error")),
+                ("terminationReason", json!(reason)),
                 ("fullyIdle", json!(true)),
-                ("error", error),
+                ("error", json!(text)),
             ],
         );
-        assert!(
-            hook_output(&AntigravityAdapter, "Stop", &payload)
-                .turn_error()
-                .cloned()
-                .is_none()
-        );
+        let decoded = hook_output(&AntigravityAdapter, "Stop", &payload);
+        let marker = decoded
+            .turn_error()
+            .unwrap_or_else(|| panic!("expected marker for {text:?}"));
+        assert_eq!(marker.class, expected_class, "{text:?}");
+        assert_eq!(marker.label.as_deref(), Some(expected_label), "{text:?}");
+        assert!(!marker.ended_turn);
+        assert_eq!(marker.model, None);
         assert_eq!(
-            hook_signal(&AntigravityAdapter, "Stop", &payload),
-            LifecycleSignal::TurnEnded {
+            decoded.lifecycle().map(|obs| &obs.signal),
+            Some(&LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
                 turn_id: None,
-            }
+            }),
+            "{text:?}"
+        );
+    }
+
+    for (label, payload) in [
+        (
+            "empty error string",
+            with(
+                &hook_payload(),
+                [
+                    ("terminationReason", json!("ERROR")),
+                    ("fullyIdle", json!(true)),
+                    ("error", json!("")),
+                ],
+            ),
+        ),
+        (
+            "whitespace-only error string",
+            with(
+                &hook_payload(),
+                [
+                    ("terminationReason", json!("ERROR")),
+                    ("fullyIdle", json!(true)),
+                    ("error", json!("   \n\t  ")),
+                ],
+            ),
+        ),
+        (
+            "object error",
+            with(
+                &hook_payload(),
+                [
+                    ("terminationReason", json!("ERROR")),
+                    ("fullyIdle", json!(true)),
+                    ("error", json!({"message": "Individual quota reached"})),
+                ],
+            ),
+        ),
+        (
+            "bare compact close",
+            with(
+                &hook_payload(),
+                [
+                    ("lastUserInput", json!("/compact")),
+                    ("terminationReason", json!("TERMINAL_CUSTOM_HOOK")),
+                    ("fullyIdle", json!(true)),
+                    ("error", json!("Individual quota reached")),
+                ],
+            ),
+        ),
+        (
+            "Stop without fullyIdle",
+            with(
+                &hook_payload(),
+                [
+                    ("terminationReason", json!("ERROR")),
+                    ("error", json!("Individual quota reached")),
+                ],
+            ),
+        ),
+    ] {
+        let decoded = hook_output(&AntigravityAdapter, "Stop", &payload);
+        assert!(
+            decoded.turn_error().is_none(),
+            "{label} must set no turn error"
         );
     }
 }
 #[test]
-fn quota_stops_carry_a_typed_provider_limit_and_no_turn_error() {
+fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
     const SENTENCE: &str =
         "Individual quota reached. Please upgrade your subscription to increase your limits.";
     let limit = |refill_in_secs| {
@@ -554,10 +706,16 @@ fn quota_stops_carry_a_typed_provider_limit_and_no_turn_error() {
             limit(Some(121 * 3600 + 44 * 60 + 54)),
         )
     );
-    assert!(
-        hook_output(&AntigravityAdapter, "Stop", &captured)
-            .turn_error()
-            .is_none()
+    let decoded = hook_output(&AntigravityAdapter, "Stop", &captured);
+    let marker = decoded
+        .turn_error()
+        .expect("a quota Stop sets a turn-error marker");
+    assert_eq!(
+        (marker.class, marker.label.as_deref()),
+        (
+            crate::agents::TurnErrorClass::PausedRateLimit,
+            Some(SENTENCE)
+        )
     );
 
     let transport = "generating and executing: transport error (ResourceExhausted, HTTP 429): ";
