@@ -149,7 +149,7 @@ Three optional field groups link entries. Each defaults empty, so older JSONL li
 
 `reply_to` carries parent message ids. The loop that fills it runs through the agent context:
 
-1. A turn start replaces `AgentContext.turn_opened_by` with every matched message id. An empty list clears the previous turn's value.
+1. A turn start replaces `AgentContext.turn_opened_by` with every matched message id. An empty list clears the previous turn's value. A mid-turn prompt whose sections all have `Harness` origin leaves `turn_opened_by` intact; a mixed mid-turn report replaces it with only its non-harness section ids.
 2. An agent-authored enqueue copies its sender row's `turn_opened_by` into the new record's `in_reply_to`, the row resolved as for sender notices ([messaging.md § Sender notices](./messaging.md#sender-notices)). A human sender, `--no-from`, a sender that resolves to no row, or missing context starts a new root.
 3. The turn's final `Assistant` entry and any blocking `Ask` copy `turn_opened_by` into `reply_to`. A Codex async `Ask` carries none.
 
@@ -179,7 +179,7 @@ The reader computes a current-life boundary: the earliest `registered_at` among 
 
 ### Harness-turn hiding
 
-The human view drops harness turns as units before assembly (`crates/rimz/src/cli/transcript/thread.rs::hide_harness_turns`). A turn's openers are the resolved `reply_to` parents of its output, or, when none were recorded, the session's latest preceding opener, which in an arrival-ordered view is the last one delivered before the output ran. An `Assistant` or `Error` entry whose openers are all harness entries hides with them. The exception is a turn that asked: when an `Ask` anywhere in the log, superseded ones included, shares one of those openers, the output stays, since that turn ends in a reply to the user's answer. `Ask` entries and agent-sent `Message` entries always stay. A kept output whose fallback opener was hidden is marked so that assembly roots it, instead of attaching it to an older visible opener.
+The human view drops harness turns as units before assembly (`crates/rimz/src/cli/transcript/thread.rs::hide_harness_turns`). A turn's openers are the resolved `reply_to` parents of its output, or, when none were recorded, the session's latest preceding opener (skipping any harness-origin `Prompt` that carries a `message_id`, since turns such a prompt opened record that id on their output), which in an arrival-ordered view is the last one delivered before the output ran. An `Assistant` or `Error` entry whose openers are all harness entries hides with them. The exception is a turn that asked: when an `Ask` anywhere in the log, superseded ones included, shares one of those openers, the output stays, since that turn ends in a reply to the user's answer. `Ask` entries and agent-sent `Message` entries always stay. A kept output whose fallback opener was hidden is marked so that assembly roots it, instead of attaching it to an older visible opener.
 
 ### Thread assembly
 

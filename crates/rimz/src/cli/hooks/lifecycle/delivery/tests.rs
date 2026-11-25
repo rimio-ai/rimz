@@ -874,3 +874,818 @@ fn triggered_compaction_end_acknowledges_sent_command_and_echo_or_failure_does_n
         assert_eq!(still_live, !should_confirm, "{label}");
     }
 }
+
+#[test]
+fn in_turn_compaction_close_with_prompt_delivers_tail_acknowledges_command_and_writes_harness_transcript()
+ {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::message::{
+        DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
+    };
+
+    let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let workspace = workspace();
+
+    for requeued_tail in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+        let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let session_id = "55e06aa1-53b9-4aac-ae73-3d46b4948532";
+        let state = rimz::testkit::agent_state("antigravity", session_id, jiff::Timestamp::now());
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: state.kind.clone(),
+                event_name: "PreInvocation",
+                observation: &AgentLifecycleObservation::new(
+                    Some(state.agent_id.clone()),
+                    LifecycleSignal::TurnStarted { turn_id: None },
+                ),
+                spawned_subagents: &[],
+            })
+            .unwrap();
+
+        let mut command = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_body(MessageBody::Command)
+        .with_sender(MessageSender::System)
+        .with_automated(true);
+        let mut tail = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "continue".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::System)
+        .with_automated(true);
+        tail.follows_command = Some(command.message_id.clone());
+        tail.soft_compact = Some(SoftCompactStep::Continue);
+        let tail = store
+            .queue_message_with_tail(&command, &tail, &workspace.session_name)
+            .unwrap();
+        command.status = MessageStatus::Sent;
+        command.last_sent_at = Some(jiff::Timestamp::now());
+        let mut tail_sent = tail.clone();
+        tail_sent.status = MessageStatus::Sent;
+        tail_sent.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(
+                &[command.clone(), tail_sent.clone()],
+                &workspace.session_name,
+            )
+            .unwrap();
+        if requeued_tail {
+            // Simulate reconciliation having re-queued the tail as awaiting late ack before the
+            // hook landed: the close must deliver the tail before compaction ack runs queued
+            // premise withdrawal.
+            let mut requeued = tail.clone();
+            requeued.status = MessageStatus::Queued;
+            requeued.unconfirmed_sends = 1;
+            requeued.last_sent_at = Some(jiff::Timestamp::now());
+            store
+                .queue_message(&requeued, &workspace.session_name)
+                .unwrap();
+        }
+
+        let agy_home = dir.path().join("agy-home");
+        let transcript_dir = agy_home
+            .join("brain")
+            .join(session_id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        let transcript_path = transcript_dir.join("transcript_full.jsonl");
+        let transcript = [
+            serde_json::json!({
+                "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-24T22:10:00Z",
+                "content": "<USER_REQUEST>\nstart\n</USER_REQUEST>"
+            }),
+            serde_json::json!({
+                "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-24T22:10:14Z",
+                "content": "<USER_REQUEST>\n/compact continue\n</USER_REQUEST>"
+            }),
+            serde_json::json!({
+                "step_index": 2, "source": "SYSTEM", "type": "CHECKPOINT",
+                "status": "DONE", "created_at": "2026-11-24T22:10:19Z",
+                "content": "# Resuming from a compaction"
+            }),
+            serde_json::json!({
+                "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                "status": "DONE", "created_at": "2026-11-24T22:10:27Z",
+                "content": ""
+            }),
+        ]
+        .into_iter()
+        .map(|row| row.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(&transcript_path, transcript).unwrap();
+        let payload = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "invocationNum": 1,
+            "initialNumSteps": 1,
+            "lastUserInput": "/compact continue"
+        });
+        let login_env = std::collections::BTreeMap::from([(
+            "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+            agy_home.to_string_lossy().into_owned(),
+        )]);
+        let mut decoded = agent
+            .decode_hook_in("PostInvocation", &payload, &login_env)
+            .unwrap();
+
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::ids::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: state.kind.clone(),
+            event: Some("PostInvocation".into()),
+            payload: payload.to_string(),
+            cwd: workspace.project_root.clone(),
+            hook_pid: std::process::id(),
+            env: Default::default(),
+        };
+        let recovered = store.read_events().unwrap();
+        with_frame_env(&frame, FrameAttempt::First, || {
+            super::super::handle_lifecycle_frame(
+                &workspace,
+                &store,
+                agent,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &crate::cli::GlobalFlags {
+                    root: None,
+                    mux: None,
+                    zellij: false,
+                    tmux: false,
+                    color: crate::cli::ColorWhen::Never,
+                },
+                &recovered,
+            )
+            .unwrap();
+        });
+
+        assert!(
+            store.list_messages().unwrap().is_empty(),
+            "requeued_tail={requeued_tail}: both command and tail should leave live queue"
+        );
+        let history = store.list_message_history().unwrap();
+        let cmd_done = history
+            .iter()
+            .find(|msg| msg.message_id == command.message_id)
+            .expect("command in history");
+        let tail_done = history
+            .iter()
+            .find(|msg| msg.message_id == tail.message_id)
+            .expect("tail in history");
+        assert_eq!(
+            cmd_done.status,
+            MessageStatus::Delivered,
+            "requeued_tail={requeued_tail}"
+        );
+        assert_eq!(
+            tail_done.status,
+            MessageStatus::Delivered,
+            "requeued_tail={requeued_tail}: tail must be delivered, not withdrawn ({:?})",
+            tail_done.last_error
+        );
+
+        let entries = rimz::transcript::read_since(store.paths(), jiff::Timestamp::UNIX_EPOCH)
+            .unwrap()
+            .entries;
+        let prompt_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.text == "continue")
+            .collect();
+        assert_eq!(
+            prompt_entries.len(),
+            1,
+            "requeued_tail={requeued_tail}: expected one transcript entry: {entries:?}"
+        );
+        assert_eq!(
+            prompt_entries[0].origin(),
+            rimz::transcript::EntryOrigin::Harness,
+            "requeued_tail={requeued_tail}"
+        );
+        assert_eq!(
+            prompt_entries[0].message_id.as_ref(),
+            Some(&tail.message_id),
+            "requeued_tail={requeued_tail}"
+        );
+
+        let row = agent_state(&store, agent, &state.agent_id).expect("row");
+        assert_eq!(row.compaction_count, 1, "requeued_tail={requeued_tail}");
+        assert_eq!(
+            row.compacted_awaiting_prompt, None,
+            "requeued_tail={requeued_tail}"
+        );
+    }
+}
+
+#[test]
+fn mid_turn_harness_prompt_preserves_open_turn_and_shows_final_reply_in_all_text_views() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::message::{
+        DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, SoftCompactStep,
+    };
+
+    let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let workspace = workspace();
+    let globals = crate::cli::GlobalFlags {
+        root: None,
+        mux: None,
+        zellij: false,
+        tmux: false,
+        color: crate::cli::ColorWhen::Never,
+    };
+    let apply = |store: &Store, event_name: &str, payload: &serde_json::Value, mut decoded| {
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::ids::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event: Some(event_name.into()),
+            payload: payload.to_string(),
+            cwd: workspace.project_root.clone(),
+            hook_pid: std::process::id(),
+            env: Default::default(),
+        };
+        let recovered = store.read_events().unwrap();
+        with_frame_env(&frame, FrameAttempt::First, || {
+            super::super::handle_lifecycle_frame(
+                &workspace,
+                store,
+                agent,
+                &mut decoded,
+                payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &globals,
+                &recovered,
+            )
+            .unwrap();
+        });
+    };
+
+    #[derive(Clone, Copy)]
+    enum MidTurnCase {
+        CompactionContinue,
+        ReminderSnapshot,
+    }
+
+    for recorded_opener in [false, true] {
+        for case in [
+            MidTurnCase::CompactionContinue,
+            MidTurnCase::ReminderSnapshot,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+            let runtime =
+                rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+            let store = Store::open(paths, runtime).unwrap();
+            let session_id = "20f06582-0fde-4cc2-9245-18a4bfd509f0";
+            let state =
+                rimz::testkit::agent_state("antigravity", session_id, jiff::Timestamp::now());
+            let opener_text = "Run all steps and reply ALL_STEPS_DONE.";
+            let opener_msg = recorded_opener.then(|| {
+                let mut msg = MessageRecord::new(
+                    workspace_id(),
+                    &state,
+                    opener_text.to_owned(),
+                    DeliveryGate::Done,
+                )
+                .with_sender(MessageSender::Human);
+                store.queue_message(&msg, &workspace.session_name).unwrap();
+                msg.status = MessageStatus::Sent;
+                msg.last_sent_at = Some(jiff::Timestamp::now());
+                store
+                    .record_sent_batch(std::slice::from_ref(&msg), &workspace.session_name)
+                    .unwrap();
+                msg
+            });
+
+            let agy_home = dir.path().join("agy-home");
+            let transcript_dir = agy_home
+                .join("brain")
+                .join(session_id)
+                .join(".system_generated")
+                .join("logs");
+            std::fs::create_dir_all(&transcript_dir).unwrap();
+            let transcript_path = transcript_dir.join("transcript_full.jsonl");
+            let login_env = std::collections::BTreeMap::from([(
+                "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+                agy_home.to_string_lossy().into_owned(),
+            )]);
+
+            // Step 1: Turn opens via PreInvocation(inv=0) with either typed or recorded opener.
+            let open_transcript = serde_json::json!({
+                "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-25T09:30:01Z",
+                "content": format!("<USER_REQUEST>\n{opener_text}\n</USER_REQUEST>")
+            })
+            .to_string();
+            std::fs::write(&transcript_path, &open_transcript).unwrap();
+            let pre_payload = serde_json::json!({
+                "conversationId": session_id,
+                "workspacePaths": [workspace.project_root],
+                "transcriptPath": transcript_path,
+                "invocationNum": 0,
+                "initialNumSteps": 1,
+                "lastUserInput": opener_text
+            });
+            let pre_decoded = agent
+                .decode_hook_in("PreInvocation", &pre_payload, &login_env)
+                .unwrap();
+            apply(&store, "PreInvocation", &pre_payload, pre_decoded);
+
+            let expected_opener: Vec<_> = opener_msg
+                .as_ref()
+                .map(|msg| msg.message_id.clone())
+                .into_iter()
+                .collect();
+            assert_eq!(
+                rimz::store::agent_context::read_one(
+                    store.runtime_paths(),
+                    "antigravity",
+                    session_id
+                )
+                .map(|record| record.context.turn_opened_by)
+                .unwrap_or_default(),
+                expected_opener
+            );
+
+            // Step 2: Mid-turn harness text arrives (either CompactionEnded continue or reminder snapshot).
+            let (mid_text, mid_id) = match case {
+                MidTurnCase::CompactionContinue => {
+                    let mut command = MessageRecord::new(
+                        workspace_id(),
+                        &state,
+                        "/compact".to_owned(),
+                        DeliveryGate::Done,
+                    )
+                    .with_body(MessageBody::Command)
+                    .with_sender(MessageSender::System)
+                    .with_automated(true);
+                    let mut tail = MessageRecord::new(
+                        workspace_id(),
+                        &state,
+                        "continue".to_owned(),
+                        DeliveryGate::Done,
+                    )
+                    .with_sender(MessageSender::System)
+                    .with_automated(true);
+                    tail.follows_command = Some(command.message_id.clone());
+                    tail.soft_compact = Some(SoftCompactStep::Continue);
+                    let mut tail = store
+                        .queue_message_with_tail(&command, &tail, &workspace.session_name)
+                        .unwrap();
+                    command.status = MessageStatus::Sent;
+                    command.last_sent_at = Some(jiff::Timestamp::now());
+                    tail.status = MessageStatus::Sent;
+                    tail.last_sent_at = Some(jiff::Timestamp::now());
+                    store
+                        .record_sent_batch(&[command, tail.clone()], &workspace.session_name)
+                        .unwrap();
+                    let mid_transcript = [
+                        open_transcript.clone(),
+                        serde_json::json!({
+                            "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                            "status": "DONE", "created_at": "2026-11-25T09:30:13Z",
+                            "content": "<USER_REQUEST>\n/compact continue\n</USER_REQUEST>"
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "step_index": 2, "source": "SYSTEM", "type": "CHECKPOINT",
+                            "status": "DONE", "created_at": "2026-11-25T09:30:20Z",
+                            "content": "# Resuming from a compaction"
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                            "status": "DONE", "created_at": "2026-11-25T09:30:25Z",
+                            "content": "ALL_STEPS_DONE"
+                        })
+                        .to_string(),
+                    ]
+                    .join("\n");
+                    std::fs::write(&transcript_path, &mid_transcript).unwrap();
+                    let post_payload = serde_json::json!({
+                        "conversationId": session_id,
+                        "workspacePaths": [workspace.project_root],
+                        "transcriptPath": transcript_path,
+                        "invocationNum": 1,
+                        "initialNumSteps": 1,
+                        "lastUserInput": "/compact continue"
+                    });
+                    let post_decoded = agent
+                        .decode_hook_in("PostInvocation", &post_payload, &login_env)
+                        .unwrap();
+                    apply(&store, "PostInvocation", &post_payload, post_decoded);
+                    ("continue", tail.message_id)
+                }
+                MidTurnCase::ReminderSnapshot => {
+                    let reminder_text = "Your context is getting high. Wrap up and compact.";
+                    let mut reminder = MessageRecord::new(
+                        workspace_id(),
+                        &state,
+                        reminder_text.to_owned(),
+                        DeliveryGate::Any,
+                    )
+                    .with_sender(MessageSender::System)
+                    .with_automated(true);
+                    reminder.soft_compact = Some(SoftCompactStep::WrapUp);
+                    store
+                        .queue_message(&reminder, &workspace.session_name)
+                        .unwrap();
+                    reminder.status = MessageStatus::Sent;
+                    reminder.last_sent_at = Some(jiff::Timestamp::now());
+                    store
+                        .record_sent_batch(std::slice::from_ref(&reminder), &workspace.session_name)
+                        .unwrap();
+                    let mid_transcript = [
+                        open_transcript.clone(),
+                        serde_json::json!({
+                            "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                            "status": "DONE", "created_at": "2026-11-25T09:30:13Z",
+                            "content": format!("<USER_REQUEST>\n{reminder_text}\n</USER_REQUEST>")
+                        })
+                        .to_string(),
+                        serde_json::json!({
+                            "step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                            "status": "DONE", "created_at": "2026-11-25T09:30:20Z",
+                            "content": "ALL_STEPS_DONE"
+                        })
+                        .to_string(),
+                    ]
+                    .join("\n");
+                    std::fs::write(&transcript_path, &mid_transcript).unwrap();
+                    let post_payload = serde_json::json!({
+                        "conversationId": session_id,
+                        "workspacePaths": [workspace.project_root],
+                        "transcriptPath": transcript_path,
+                        "invocationNum": 1,
+                        "initialNumSteps": 1,
+                        "lastUserInput": reminder_text
+                    });
+                    let post_decoded = agent
+                        .decode_hook_in("PostInvocation", &post_payload, &login_env)
+                        .unwrap();
+                    apply(&store, "PostInvocation", &post_payload, post_decoded);
+                    (reminder_text, reminder.message_id)
+                }
+            };
+
+            // Harness mid-turn text must NOT overwrite turn_opened_by.
+            assert_eq!(
+                rimz::store::agent_context::read_one(
+                    store.runtime_paths(),
+                    "antigravity",
+                    session_id
+                )
+                .map(|record| record.context.turn_opened_by)
+                .unwrap_or_default(),
+                expected_opener,
+                "recorded_opener={recorded_opener}: mid-turn harness text must keep open turn opener"
+            );
+
+            // Step 3: Turn finishes with final reply ALL_STEPS_DONE.
+            let stop_payload = serde_json::json!({
+                "conversationId": session_id,
+                "workspacePaths": [workspace.project_root],
+                "transcriptPath": transcript_path,
+                "fullyIdle": true,
+                "terminationReason": "NO_TOOL_CALL"
+            });
+            let stop_decoded = agent
+                .decode_hook_in("Stop", &stop_payload, &login_env)
+                .unwrap();
+            apply(&store, "Stop", &stop_payload, stop_decoded);
+
+            // Verify raw log keeps both the harness entry (with its id) and ALL_STEPS_DONE with original reply_to.
+            let raw = rimz::transcript::read_all(store.paths()).unwrap();
+            let reply = raw
+                .iter()
+                .find(|entry| entry.text == "ALL_STEPS_DONE")
+                .expect("ALL_STEPS_DONE recorded");
+            assert_eq!(reply.reply_to, expected_opener);
+            assert!(
+                raw.iter().any(|entry| entry.text == mid_text
+                    && entry.message_id.as_ref() == Some(&mid_id)
+                    && entry.origin() == rimz::transcript::EntryOrigin::Harness),
+                "mid-turn harness entry must remain recorded in log for --json"
+            );
+
+            // Verify all three human text views show ALL_STEPS_DONE and hide the harness text.
+            for (label, flat, last) in [
+                ("transcript", false, None),
+                ("transcript --flat", true, None),
+                ("agents show recent", false, Some(6)),
+            ] {
+                let rendered = crate::cli::transcript::render_text_view_in_paths(
+                    &workspace,
+                    store.paths(),
+                    Some("@all"),
+                    last,
+                    flat,
+                    crate::cli::transcript::Hidden::Skip,
+                )
+                .unwrap();
+                assert!(
+                    rendered.contains("ALL_STEPS_DONE"),
+                    "recorded_opener={recorded_opener} view={label}: reply missing:\n{rendered}"
+                );
+                assert!(
+                    rendered.contains(opener_text),
+                    "recorded_opener={recorded_opener} view={label}: opener missing:\n{rendered}"
+                );
+                assert!(
+                    !rendered.contains(mid_text),
+                    "recorded_opener={recorded_opener} view={label}: harness text leaked:\n{rendered}"
+                );
+            }
+        }
+    }
+
+    // Also verify a person's steer and a mixed [harness, person] mid-turn report keep replacing turn_opened_by
+    // with the person's id only, and a turn-end continue still owns its own turn.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+        let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let session_id = "0f251024-d1db-4c68-8a51-3ea03faa87d7";
+        let state = rimz::testkit::agent_state("antigravity", session_id, jiff::Timestamp::now());
+        let agy_home = dir.path().join("agy-home");
+        let transcript_dir = agy_home
+            .join("brain")
+            .join(session_id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        let transcript_path = transcript_dir.join("transcript_full.jsonl");
+        let login_env = std::collections::BTreeMap::from([(
+            "RIMZ_ANTIGRAVITY_HOME".to_owned(),
+            agy_home.to_string_lossy().into_owned(),
+        )]);
+
+        let mut opener_msg = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "initial task".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Human);
+        store
+            .queue_message(&opener_msg, &workspace.session_name)
+            .unwrap();
+        opener_msg.status = MessageStatus::Sent;
+        opener_msg.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(std::slice::from_ref(&opener_msg), &workspace.session_name)
+            .unwrap();
+
+        let open_row = serde_json::json!({
+            "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+            "status": "DONE", "created_at": "2026-11-25T09:42:00Z",
+            "content": "<USER_REQUEST>\ninitial task\n</USER_REQUEST>"
+        })
+        .to_string();
+        std::fs::write(&transcript_path, &open_row).unwrap();
+        let pre_payload = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "invocationNum": 0,
+            "initialNumSteps": 1,
+            "lastUserInput": "initial task"
+        });
+        let pre_decoded = agent
+            .decode_hook_in("PreInvocation", &pre_payload, &login_env)
+            .unwrap();
+        apply(&store, "PreInvocation", &pre_payload, pre_decoded);
+
+        // Mixed mid-turn report: harness reminder + human steer in one invocation.
+        let mut reminder = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "wrap up soon".to_owned(),
+            DeliveryGate::Any,
+        )
+        .with_sender(MessageSender::System)
+        .with_automated(true);
+        store
+            .queue_message(&reminder, &workspace.session_name)
+            .unwrap();
+        reminder.status = MessageStatus::Sent;
+        reminder.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(std::slice::from_ref(&reminder), &workspace.session_name)
+            .unwrap();
+
+        let mut human_steer = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "also check tests".to_owned(),
+            DeliveryGate::Any,
+        )
+        .with_sender(MessageSender::Human);
+        store
+            .queue_message(&human_steer, &workspace.session_name)
+            .unwrap();
+        human_steer.status = MessageStatus::Sent;
+        human_steer.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(std::slice::from_ref(&human_steer), &workspace.session_name)
+            .unwrap();
+
+        let mixed_transcript = [
+            open_row,
+            serde_json::json!({
+                "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-25T09:42:10Z",
+                "content": "<USER_REQUEST>\nwrap up soon\n</USER_REQUEST>"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 2, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-25T09:42:11Z",
+                "content": "<USER_REQUEST>\nalso check tests\n</USER_REQUEST>"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                "status": "DONE", "created_at": "2026-11-25T09:42:15Z",
+                "content": ""
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        std::fs::write(&transcript_path, &mixed_transcript).unwrap();
+        let mixed_payload = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "invocationNum": 1,
+            "initialNumSteps": 1,
+            "lastUserInput": "also check tests"
+        });
+        let mixed_decoded = agent
+            .decode_hook_in("PostInvocation", &mixed_payload, &login_env)
+            .unwrap();
+        apply(&store, "PostInvocation", &mixed_payload, mixed_decoded);
+
+        assert_eq!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", session_id)
+                .map(|record| record.context.turn_opened_by)
+                .unwrap_or_default(),
+            vec![human_steer.message_id.clone()],
+            "mixed mid-turn report must replace turn_opened_by with non-harness section ids only"
+        );
+
+        // A standalone person's steer in mid-turn replaces turn_opened_by unchanged.
+        let mut solo_steer = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "focus on unit tests".to_owned(),
+            DeliveryGate::Any,
+        )
+        .with_sender(MessageSender::Human);
+        store
+            .queue_message(&solo_steer, &workspace.session_name)
+            .unwrap();
+        solo_steer.status = MessageStatus::Sent;
+        solo_steer.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(std::slice::from_ref(&solo_steer), &workspace.session_name)
+            .unwrap();
+        let solo_transcript = [
+            mixed_transcript,
+            serde_json::json!({
+                "step_index": 4, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-25T09:42:20Z",
+                "content": "<USER_REQUEST>\nfocus on unit tests\n</USER_REQUEST>"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 5, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                "status": "DONE", "created_at": "2026-11-25T09:42:25Z",
+                "content": ""
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        std::fs::write(&transcript_path, &solo_transcript).unwrap();
+        let solo_payload = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "invocationNum": 2,
+            "initialNumSteps": 4,
+            "lastUserInput": "focus on unit tests"
+        });
+        let solo_decoded = agent
+            .decode_hook_in("PostInvocation", &solo_payload, &login_env)
+            .unwrap();
+        apply(&store, "PostInvocation", &solo_payload, solo_decoded);
+        assert_eq!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", session_id)
+                .map(|record| record.context.turn_opened_by)
+                .unwrap_or_default(),
+            vec![solo_steer.message_id],
+            "a person's steer keeps replacing turn_opened_by"
+        );
+
+        // Turn-end continue opening its own turn still records its id on turn_opened_by and hides its reply.
+        let mut turn_end_continue = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "continue".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::System)
+        .with_automated(true);
+        turn_end_continue.soft_compact = Some(SoftCompactStep::Continue);
+        store
+            .queue_message(&turn_end_continue, &workspace.session_name)
+            .unwrap();
+        turn_end_continue.status = MessageStatus::Sent;
+        turn_end_continue.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .record_sent_batch(
+                std::slice::from_ref(&turn_end_continue),
+                &workspace.session_name,
+            )
+            .unwrap();
+        let turn_end_transcript = [
+            solo_transcript,
+            serde_json::json!({
+                "step_index": 6, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+                "status": "DONE", "created_at": "2026-11-25T09:42:40Z",
+                "content": "<USER_REQUEST>\n/compact continue\n</USER_REQUEST>"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 7, "source": "MODEL", "type": "PLANNER_RESPONSE",
+                "status": "DONE", "created_at": "2026-11-25T09:42:45Z",
+                "content": "READY_FOR_NEXT_TASK"
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        std::fs::write(&transcript_path, &turn_end_transcript).unwrap();
+        let continue_pre = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "invocationNum": 0,
+            "initialNumSteps": 7,
+            "lastUserInput": "/compact continue"
+        });
+        let continue_decoded = agent
+            .decode_hook_in("PreInvocation", &continue_pre, &login_env)
+            .unwrap();
+        apply(&store, "PreInvocation", &continue_pre, continue_decoded);
+        assert_eq!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", session_id)
+                .map(|record| record.context.turn_opened_by)
+                .unwrap_or_default(),
+            vec![turn_end_continue.message_id],
+            "a continue opening its own turn still replaces turn_opened_by"
+        );
+        let continue_stop = serde_json::json!({
+            "conversationId": session_id,
+            "workspacePaths": [workspace.project_root],
+            "transcriptPath": transcript_path,
+            "fullyIdle": true,
+            "terminationReason": "NO_TOOL_CALL"
+        });
+        let continue_stop_decoded = agent
+            .decode_hook_in("Stop", &continue_stop, &login_env)
+            .unwrap();
+        apply(&store, "Stop", &continue_stop, continue_stop_decoded);
+        let rendered = crate::cli::transcript::render_text_view_in_paths(
+            &workspace,
+            store.paths(),
+            Some("@all"),
+            None,
+            false,
+            crate::cli::transcript::Hidden::Skip,
+        )
+        .unwrap();
+        assert!(
+            !rendered.contains("READY_FOR_NEXT_TASK"),
+            "turn-end continue's own reply must stay hidden:\n{rendered}"
+        );
+    }
+}

@@ -488,13 +488,13 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
             let role = visible_role(&record)?;
             let content = record.content.as_deref()?;
             let text = match role {
-                TranscriptRole::User | TranscriptRole::Steering => {
-                    normalize_user_content(Some(content))
-                }
-                TranscriptRole::Assistant => normalized(Some(content)),
-            }?;
-            // A bare `/compact` is a command to agy, not words of the user's.
-            (role != TranscriptRole::User || text != super::COMPACT_COMMAND).then_some(())?;
+                TranscriptRole::User => match user_row_prompt(Some(content))? {
+                    UserRowPrompt::CompactOnly => return None,
+                    UserRowPrompt::Prompt(text) => text,
+                },
+                TranscriptRole::Steering => normalize_user_content(Some(content))?,
+                TranscriptRole::Assistant => normalized(Some(content))?,
+            };
             Some(TranscriptMessage {
                 role,
                 at: record.created_at.parse::<Timestamp>().ok(),
@@ -519,9 +519,10 @@ fn newest_assistant(lines: &str) -> (Option<String>, bool) {
     for record in parse_records(lines) {
         if is_turn_start(&record) {
             // A bare `/compact` compacts the conversation without starting a new turn.
-            if normalize_user_content(record.content.as_deref()).as_deref()
-                != Some(super::COMPACT_COMMAND)
-            {
+            if !matches!(
+                user_row_prompt(record.content.as_deref()),
+                Some(UserRowPrompt::CompactOnly)
+            ) {
                 answer = None;
                 has_turn_start = true;
             }
@@ -561,6 +562,12 @@ pub(super) enum PromptEvidence {
     Prompt(String),
     /// Step `initialNumSteps - 1` is a bare `/compact` user row: the opener starts a compaction.
     Compact,
+    /// The invocation range held a `SYSTEM` / `CHECKPOINT` row, closing an in-turn or
+    /// automatic compaction and optionally carrying prompts taken in with it (compact prefix
+    /// stripped).
+    CompactionEnded {
+        prompt: Option<String>,
+    },
     /// The rows the read needs were read and hold no user row.
     NoPrompt,
     /// The transcript, or the rows the read needs, could not be read.
@@ -582,7 +589,7 @@ pub(super) fn read_prompt_under(
     match read {
         PromptRead::Newest => latest_prompt_under(home, path, session_id).into(),
         PromptRead::OpenedBelow(bound) => prompt_opened_under(home, path, session_id, bound),
-        PromptRead::TakenInFrom(step) => prompt_taken_in_under(home, path, session_id, step).into(),
+        PromptRead::TakenInFrom(step) => taken_in_under(home, path, session_id, step),
     }
 }
 
@@ -629,11 +636,8 @@ fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<Pr
     for record in parse_records(lines).filter(|record| record.step_index < bound) {
         let at_bound = record.step_index + 1 == bound;
         read_last |= at_bound;
-        let prompt =
-            is_turn_start(&record).then(|| normalize_user_content(record.content.as_deref()));
-        let is_compact = prompt
-            .as_ref()
-            .is_some_and(|text| text.as_deref() == Some(super::COMPACT_COMMAND));
+        let prompt = is_turn_start(&record).then(|| user_row_prompt(record.content.as_deref()));
+        let is_compact = matches!(prompt, Some(Some(UserRowPrompt::CompactOnly)));
         if at_bound {
             compact_at_bound = is_compact;
         }
@@ -645,8 +649,11 @@ fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<Pr
         {
             interval_started = true;
             opener = None;
-        } else if prompt.is_some() {
-            opener = prompt;
+        } else if let Some(user) = prompt {
+            opener = Some(match user {
+                Some(UserRowPrompt::Prompt(text)) => Some(text),
+                Some(UserRowPrompt::CompactOnly) | None => None,
+            });
         }
     }
     if compact_at_bound {
@@ -659,29 +666,62 @@ fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<Pr
     }
 }
 
-pub(super) fn prompt_taken_in_under(
-    home: &Path,
-    path: &Path,
-    session_id: &str,
-    from_step: u64,
-) -> Option<String> {
-    valid_transcript_under(home, path, session_id).then_some(())?;
-    let lines = read_transcript_tail(path)?;
-    // The invocation's own answer or a compaction checkpoint ends what it took in: a frame
-    // applied late reads a transcript that already holds later rows.
-    let prompts = parse_records(&lines)
+/// Inspect the invocation range starting at `from_step` up to the invocation's own
+/// `PLANNER_RESPONSE`, falling back to the whole transcript when the tail starts past
+/// `from_step`. A `SYSTEM` / `CHECKPOINT` row in that range reports an automatic compaction
+/// close carrying any stripped user prompts taken in with it.
+fn taken_in_under(home: &Path, path: &Path, session_id: &str, from_step: u64) -> PromptEvidence {
+    if !valid_transcript_under(home, path, session_id) {
+        return PromptEvidence::Unread;
+    }
+    let Some(tail) = read_transcript_tail_with_status(path) else {
+        return PromptEvidence::Unread;
+    };
+    if let Some(evidence) = taken_in_in(&tail.text, from_step, tail.whole_file) {
+        return evidence;
+    }
+    if tail.whole_file {
+        return PromptEvidence::NoPrompt;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|lines| taken_in_in(&lines, from_step, true))
+        .unwrap_or(PromptEvidence::Unread)
+}
+
+fn taken_in_in(lines: &str, from_step: u64, from_file_start: bool) -> Option<PromptEvidence> {
+    if !from_file_start {
+        let first_step = parse_records(lines).next()?.step_index;
+        if first_step > from_step {
+            return None;
+        }
+    }
+    let mut saw_checkpoint = false;
+    let mut prompts = Vec::new();
+    for record in parse_records(lines)
         .skip_while(|record| record.step_index < from_step)
-        .take_while(|record| {
-            !matches!(
-                record.record_type.as_str(),
-                "PLANNER_RESPONSE" | "CHECKPOINT"
-            )
-        })
-        .filter(is_turn_start)
-        .filter_map(|record| normalize_user_content(record.content.as_deref()))
-        .filter(|text| text != super::COMPACT_COMMAND)
-        .collect::<Vec<_>>();
-    (!prompts.is_empty()).then(|| prompts.join("\n\n"))
+        .take_while(|record| record.record_type != "PLANNER_RESPONSE")
+    {
+        if record.source == "SYSTEM" && record.record_type == "CHECKPOINT" {
+            saw_checkpoint = true;
+            break;
+        }
+        if is_turn_start(&record) {
+            match user_row_prompt(record.content.as_deref()) {
+                Some(UserRowPrompt::CompactOnly) => break,
+                Some(UserRowPrompt::Prompt(text)) => prompts.push(text),
+                None => {}
+            }
+        }
+    }
+    let prompt = (!prompts.is_empty()).then(|| prompts.join("\n\n"));
+    Some(if saw_checkpoint {
+        PromptEvidence::CompactionEnded { prompt }
+    } else if let Some(prompt) = prompt {
+        PromptEvidence::Prompt(prompt)
+    } else {
+        PromptEvidence::NoPrompt
+    })
 }
 
 pub(super) fn correlate_subagent(
@@ -1171,12 +1211,12 @@ fn fold(lines: &str) -> FoldedSession {
             continue;
         }
         let user_prompt = if role == TranscriptRole::User {
-            let prompt = normalize_user_content(record.content.as_deref());
-            // A bare `/compact` is a command to agy, not a turn start.
-            if prompt.as_deref() == Some(super::COMPACT_COMMAND) {
-                continue;
+            match user_row_prompt(record.content.as_deref()) {
+                // A bare `/compact` is a command to agy, not a turn start.
+                Some(UserRowPrompt::CompactOnly) => continue,
+                Some(UserRowPrompt::Prompt(prompt)) => Some(prompt),
+                None => None,
             }
-            prompt
         } else {
             None
         };
@@ -1358,6 +1398,31 @@ fn validate_result_workspaces(uris: Option<&[String]>, expected: &Path) -> Optio
         .iter()
         .any(|workspace| workspace == expected)
         .then_some(())
+}
+
+/// What a user row in an Antigravity transcript carries once any leading `/compact` command is
+/// stripped: a bare `/compact` carries no user prompt, while `/compact <text>` carries `<text>`.
+enum UserRowPrompt {
+    CompactOnly,
+    Prompt(String),
+}
+
+fn user_row_prompt(value: Option<&str>) -> Option<UserRowPrompt> {
+    let text = normalize_user_content(value)?;
+    if text == super::COMPACT_COMMAND {
+        return Some(UserRowPrompt::CompactOnly);
+    }
+    if let Some(rest) = text.strip_prefix(super::COMPACT_COMMAND)
+        && rest.starts_with(char::is_whitespace)
+    {
+        let rest = rest.trim();
+        return Some(if rest.is_empty() {
+            UserRowPrompt::CompactOnly
+        } else {
+            UserRowPrompt::Prompt(rest.to_owned())
+        });
+    }
+    Some(UserRowPrompt::Prompt(text))
 }
 
 fn normalize_user_content(value: Option<&str>) -> Option<String> {

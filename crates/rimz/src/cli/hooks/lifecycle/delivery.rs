@@ -13,7 +13,16 @@ pub(super) fn in_flight_messages_for_lifecycle(
     if !matches!(
         recorded.observation.signal,
         LifecycleSignal::TurnStarted { .. }
-    ) {
+            | LifecycleSignal::CompactionEnded {
+                failed: false,
+                echo: false,
+                ..
+            }
+    ) || (matches!(
+        recorded.observation.signal,
+        LifecycleSignal::CompactionEnded { .. }
+    ) && recorded.observation.prompt.is_none())
+    {
         return Vec::new();
     }
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {

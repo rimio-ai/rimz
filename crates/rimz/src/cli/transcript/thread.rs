@@ -220,10 +220,11 @@ pub(super) fn hide_harness_turns(
 
 /// The entries that opened each turn-output entry's turn: its resolved
 /// `reply_to` parents, or, when nothing was recorded (typed prompts), the
-/// latest opener for the same agent session, unless that opener was hidden.
-/// The view is in arrival order, so that opener is the last one delivered
-/// before the output: what the turn could have seen. Other entries open no
-/// turn.
+/// latest opener for the same agent session (skipping any harness-origin
+/// `Prompt` with a `message_id`, since turns such a prompt opened record that
+/// id on their output), unless that opener was hidden. The view is in arrival
+/// order, so that opener is the last one delivered before the output: what the
+/// turn could have seen. Other entries open no turn.
 pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
     let by_message_id = message_index(entries);
     let mut latest_opener = HashMap::<&AgentKey, usize>::new();
@@ -244,7 +245,12 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             | TranscriptKind::Message
             | TranscriptKind::SubagentReport
             | TranscriptKind::Wait => {
-                latest_opener.insert(agent, index);
+                let recorded_harness_prompt = *kind == TranscriptKind::Prompt
+                    && entry.is_harness()
+                    && entry.chat.message_id.is_some();
+                if !recorded_harness_prompt {
+                    latest_opener.insert(agent, index);
+                }
                 Vec::new()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error

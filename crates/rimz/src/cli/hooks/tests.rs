@@ -3084,6 +3084,63 @@ fn an_antigravity_rest_report_finishes_a_parked_turn_and_completes_its_run() {
             "{agent_id}"
         );
     }
+
+    // Mid-turn `/compact <message>` + `CHECKPOINT` followed by the parked turn's reply,
+    // and a bare `/compact` after a parked turn's reply, both harvest through `rest_turn_end_assistant_message`.
+    for (agent_id, lines, expected) in [
+        (
+            "parked-steered-compact",
+            include_str!("../../agents/adapters/antigravity/tests/fixtures/compaction/steered-bg-continue-transcript.jsonl")
+                .lines()
+                .take(22)
+                .map(|line| format!("{line}\n"))
+                .collect::<String>(),
+            "DONE_FG",
+        ),
+        (
+            "parked-bare-compact",
+            include_str!("../../agents/adapters/antigravity/tests/fixtures/compaction/parked-transcript.jsonl")
+                .lines()
+                .take(6)
+                .map(|line| format!("{line}\n"))
+                .collect::<String>(),
+            "STARTED",
+        ),
+    ] {
+        let (_dir, store) = hooks_test_store();
+        let home = tempfile::tempdir().unwrap();
+        let path = home
+            .path()
+            .join(".gemini/antigravity-cli/brain")
+            .join(agent_id)
+            .join(".system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, lines).unwrap();
+        let run = create_antigravity_child_run(&store, agent_id);
+        start_antigravity_turn(&store, agent_id);
+        stop_antigravity_turn(&store, agent_id, false);
+        let parked = antigravity_row(&store, agent_id);
+        let env = std::collections::BTreeMap::from([
+            ("RIMZ_RUN_ID".to_owned(), run.run_id.to_string()),
+            (
+                "HOME".to_owned(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+        ]);
+        feed_antigravity_statusline_at(
+            &store,
+            agent_id,
+            serde_json::json!({"agent_state": "idle"}),
+            &env,
+            parked.last_activity + jiff::SignedDuration::from_secs(3),
+        );
+        let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        assert_eq!(
+            (settled.status, settled.last_message.as_deref()),
+            (rimz::store::run::RunStatus::Completed, Some(expected)),
+            "{agent_id}"
+        );
+    }
 }
 
 #[test]

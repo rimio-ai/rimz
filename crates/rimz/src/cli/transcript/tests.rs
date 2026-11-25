@@ -1512,6 +1512,81 @@ fn turn_openers_resolve_reply_to_then_fall_back() {
     );
 }
 
+#[test]
+fn recorded_harness_prompt_does_not_steal_unlinked_reply_from_typed_opener() {
+    use TranscriptKind::{Assistant, Prompt};
+    let project = tempfile::TempDir::new().expect("project tempdir");
+    let (workspace, paths) = temp_workspace(&project);
+    let msg = |index: u64| rimz::ids::MessageId::parse(&message_id(index)).expect("message id");
+    let mut logged = Vec::new();
+    let mut push = |kind, from: Option<&str>, text, id: Option<u64>, parents: &[u64]| {
+        let mut entry = log_entry("antigravity", "receiver", kind, from, text);
+        entry.at = ts(&format!("2026-06-01T00:00:{:02}Z", logged.len()));
+        entry.message_id = id.map(msg);
+        entry.reply_to = parents.iter().copied().map(msg).collect();
+        logged.push(entry);
+    };
+    // Typed human opener (no message_id) -> mid-turn harness continue (with message_id) -> reply.
+    push(Prompt, None, "typed task", None, &[]);
+    push(Prompt, Some("rimz"), "continue", Some(2), &[]);
+    push(Assistant, None, "ALL_STEPS_DONE", None, &[]);
+    // Unrecorded harness prompt (no message_id, e.g. loop launch) still owns its unlinked reply.
+    push(Prompt, Some("rimz"), "loop launch", None, &[]);
+    push(Assistant, None, "loop reply", None, &[]);
+    for entry in &logged {
+        rimz::transcript::append(&paths, entry).expect("append");
+    }
+
+    let view = |json: bool, flat: bool, last: Option<usize>| {
+        chat_view_with_mode(
+            &workspace,
+            &paths,
+            Some("@all"),
+            None,
+            last,
+            false,
+            ViewMode {
+                hidden: Hidden::for_json(json),
+                flat,
+                since: ts("2026-05-01T00:00:00Z"),
+            },
+        )
+        .expect("view")
+    };
+    let texts = |view: &RenderedChat| {
+        selected_lines(view)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+    };
+
+    for (label, flat, last) in [
+        ("transcript", false, None),
+        ("transcript --flat", true, None),
+        ("agents show recent", false, Some(6)),
+    ] {
+        let human = view(false, flat, last);
+        assert_eq!(
+            texts(&human),
+            ["typed task", "ALL_STEPS_DONE"],
+            "{label}: final reply must show and harness entries stay hidden"
+        );
+    }
+    let threaded = entries_for_view(&view(false, false, None));
+    assert_eq!(threaded[0].block, threaded[1].block);
+    // JSON keeps the mid-turn continue and loop entries verbatim.
+    assert_eq!(
+        texts(&view(true, true, None)),
+        [
+            "typed task",
+            "continue",
+            "ALL_STEPS_DONE",
+            "loop launch",
+            "loop reply"
+        ]
+    );
+}
+
 fn flip_entry(at: &str, by: &str, from: Option<&str>, to: &str, note: Option<&str>) -> RenderEntry {
     let flip = rimz::harness::team_stage::StageSignal {
         team: "forge".to_owned(),
