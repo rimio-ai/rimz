@@ -365,7 +365,7 @@ Manual [`rimz accounts redeem`](../../reference/cli/accounts.md#redeem) supports
 
 With `[resume] auto_continue = true` (off by default), the producer resumes a [parked turn](#spent-windows-and-paused-rows) by delivering the nudge text `auto_continue_text` (`continue` by default) to the agent's pane through the same send path as `message --steer`. The agent's next hook moves the row back to `running`. The trigger and the `rimz agents auto-continue` helper that sends are [`harness/auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), and the pure arm decision is `resume_park`.
 
-A spent window supplies a reset clock only after the turn carries a provider-certified rate-limit marker. Account exhaustion, a stall, or message text never certify why a turn stopped. Antigravity's `agy -p /usage` windows carry reset clocks under a keyless kind-wide identity, but no Antigravity stop class is certified recoverable, so its quota never arms auto-continue.
+A spent window supplies a reset clock only after the turn carries a turn-error marker of a rate- or spend-limit class (`TurnErrorClass::is_limit`), emitted by the adapter from its provider hook or transcript error record. Account exhaustion alone, a stall, or an uncaptured error object never certifies why a turn stopped. Antigravity's `Stop` hook emits a limit marker when its string `error` classifies as a rate or spend limit, so its `agy -p /usage` windows supply reset clocks to auto-continue and subagent limit holds.
 
 #### Arm
 

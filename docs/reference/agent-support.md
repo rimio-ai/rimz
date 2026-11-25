@@ -105,7 +105,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 - A bare `/compact` compacts and is confirmed by its own hooks. It takes no instruction, and `rimz agents history` leaves the command out.
 - Children come from the parent's `invoke_subagent` transcript records (both 1.1.2 `INVOKE_SUBAGENT` results and 1.5.x `GENERIC` spawn acknowledgements), which give a child its name and task at its parent's next tool hook or stop after the record reaches disk. A child joins its parent at its own first hook, before those records exist, when its parent is the only live Antigravity conversation on that pane and runs in the child's workspace; otherwise it stays unlinked until then. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Background commands appear in `background_shells` and the card's waits list from the first `Stop` after Antigravity backgrounds them until they finish or are killed.
-- Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
+- A `Stop` with a non-empty string error surfaces the provider's message on the card; wording naming a rate or spend limit pauses the card, arms [auto-continue](../guide/loops.md#auto-continue) against the Gemini quota windows, and holds a supervised subagent run open until the refill (overload wording and non-limit errors stay `failed`, and a loop attempt still fails at the error).
 - Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review, and RimZ does not change it.
 
 ### Copilot

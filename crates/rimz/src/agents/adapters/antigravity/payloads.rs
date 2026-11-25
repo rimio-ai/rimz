@@ -167,6 +167,14 @@ impl StopPayload {
                 .is_some_and(|reason| reason.eq_ignore_ascii_case(COMPACTION_STOP_REASON))
     }
 
+    pub(super) fn error_message(&self) -> Option<&str> {
+        self.error
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+    }
+
     pub(super) fn failed(&self) -> bool {
         let reason = self
             .termination_reason

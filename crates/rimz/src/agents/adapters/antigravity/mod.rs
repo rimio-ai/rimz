@@ -41,10 +41,10 @@ use super::definition::{
 use super::hook_types::{HookEventSpec, PROVIDER_REST_EVENT, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
-    AgentLifecycleObservation, BackgroundShellReport, HookOutput, HookRouting,
+    AgentLifecycleObservation, AgentTurnError, BackgroundShellReport, HookOutput, HookRouting,
     LocalSessionObservation, Result, SanitizedPrompt, SpawnedSubagent, SubagentCorrelation,
     SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput, TranscriptMessage,
-    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    TurnErrorClass, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -612,6 +612,7 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
                     .map(|shells| BackgroundShellReport::Snapshot { shells });
             }
         }
+        decoded.set_turn_error(fields.turn_error);
         if let Some(observation) = fields.lifecycle {
             decoded.attach_lifecycle(observation);
         }
@@ -1073,6 +1074,34 @@ struct DecodedLifecycleFields {
     agent_id: Option<String>,
     worktree_path: Option<String>,
     lifecycle: Option<AgentLifecycleObservation>,
+    turn_error: Option<AgentTurnError>,
+}
+
+/// The marker for a string `Stop.error`, classified on the whole message and labelled with the
+/// provider's sentence when the stop names a limit, so the card shows the quota rather than the
+/// transport prefix.
+fn antigravity_turn_error(
+    message: &str,
+    limit_stop: Option<&crate::agents::TurnLimitStop>,
+) -> Option<AgentTurnError> {
+    let message = crate::agents::context::cap_turn_error_label(message)?;
+    // Overload / transient server errors stay `Failed` for Antigravity rather
+    // than arming backoff retries.
+    let class = match TurnErrorClass::classify_label(Some(message.as_str())) {
+        TurnErrorClass::PausedOverloaded => TurnErrorClass::Failed,
+        class => class,
+    };
+    let label = limit_stop
+        .and_then(|limit| limit.label.as_deref())
+        .and_then(crate::agents::context::cap_turn_error_label)
+        .unwrap_or(message);
+    Some(AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class,
+        at: Timestamp::now(),
+        label: Some(label),
+    })
 }
 
 fn decode_lifecycle_fields(
@@ -1083,6 +1112,7 @@ fn decode_lifecycle_fields(
     let mut prompt_read = None;
     let mut background_shells = None;
     let mut limit_stop = None;
+    let mut turn_error = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
             let Some(invocation) = payloads::parse_invocation(payload) else {
@@ -1162,12 +1192,22 @@ fn decode_lifecycle_fields(
                         Some(BackgroundShellReport::Snapshot { shells: Vec::new() });
                 }
                 limit_stop = stop.limit_stop();
-                stop.fully_idle
+                let signal = stop
+                    .fully_idle
                     .map(|fully_idle| LifecycleSignal::TurnEnded {
                         errored: failed,
                         parked_on_background: !fully_idle && !failed,
                         turn_id: None,
-                    })
+                    });
+                if matches!(
+                    signal,
+                    Some(LifecycleSignal::TurnEnded { errored: true, .. })
+                ) {
+                    turn_error = stop
+                        .error_message()
+                        .and_then(|message| antigravity_turn_error(message, limit_stop.as_ref()));
+                }
+                signal
             };
             (stop.common, signal)
         }
@@ -1183,6 +1223,7 @@ fn decode_lifecycle_fields(
         signal,
         prompt_read,
         background_shells,
+        turn_error,
         prompt_reader,
     );
     if let Some(observation) = fields.lifecycle.as_mut() {
@@ -1196,6 +1237,7 @@ fn observation_with_prompt_reader(
     signal: Option<LifecycleSignal>,
     prompt_read: Option<PromptRead>,
     background_shells: Option<BackgroundShellReport>,
+    turn_error: Option<AgentTurnError>,
     prompt_reader: impl FnOnce(&Path, &str, PromptRead) -> PromptEvidence,
 ) -> DecodedLifecycleFields {
     let Some(agent_id) = common
@@ -1216,6 +1258,7 @@ fn observation_with_prompt_reader(
             agent_id: Some(agent_id),
             worktree_path,
             lifecycle: None,
+            turn_error: None,
         };
     };
     let transcript_path = common
@@ -1260,6 +1303,7 @@ fn observation_with_prompt_reader(
                 agent_id: Some(agent_id),
                 worktree_path,
                 lifecycle: None,
+                turn_error: None,
             };
         }
     };
@@ -1280,6 +1324,7 @@ fn observation_with_prompt_reader(
         agent_id: Some(agent_id),
         worktree_path,
         lifecycle: Some(observation),
+        turn_error,
     }
 }
 
