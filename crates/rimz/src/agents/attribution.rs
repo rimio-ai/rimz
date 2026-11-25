@@ -694,22 +694,38 @@ fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEn
         let (base, explicit_label) = from
             .split_once('#')
             .map_or((from, None), |(base, label)| (base, Some(label)));
-        if let Some(member) = members.iter_mut().find(|member| {
-            let same_lane = match explicit_label {
-                // A header suffix is the lane's routing name (`main` for trunk).
-                Some(label) => member
-                    .channel
-                    .as_ref()
-                    .is_some_and(|name| name.as_str() == label),
-                None => member.channel == entry.channel,
-            };
-            super::petname::sender_handle(
-                member.attribution.role.as_deref(),
-                member.attribution.name.as_deref(),
-                &member.attribution.kind,
-            ) == base
-                && same_lane
-        }) {
+        // Seats can share a handle and lane (a molt that left its pane, a petname reused
+        // after an exit): the sender is the one registered last at or before the send.
+        let registered_by_send = |member: &FoldedMember| {
+            member
+                .attribution
+                .registered_at
+                .filter(|registered| *registered <= entry.at)
+        };
+        if let Some(member) = members
+            .iter_mut()
+            .filter(|member| {
+                let same_lane = match explicit_label {
+                    // A header suffix is the lane's routing name (`main` for trunk).
+                    Some(label) => member
+                        .channel
+                        .as_ref()
+                        .is_some_and(|name| name.as_str() == label),
+                    None => member.channel == entry.channel,
+                };
+                super::petname::sender_handle(
+                    member.attribution.role.as_deref(),
+                    member.attribution.name.as_deref(),
+                    &member.attribution.kind,
+                ) == base
+                    && same_lane
+            })
+            .max_by(|left, right| {
+                registered_by_send(left)
+                    .cmp(&registered_by_send(right))
+                    .then_with(|| member_order(&right.attribution, &left.attribution))
+            })
+        {
             member.attribution.messages.to_teammates =
                 member.attribution.messages.to_teammates.saturating_add(1);
         }

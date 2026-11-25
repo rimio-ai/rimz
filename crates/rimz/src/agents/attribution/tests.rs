@@ -1844,3 +1844,40 @@ fn petname_sent_messages_are_credited_despite_short_list_handle() {
     assert_eq!(report.totals.agents, 1);
     assert_eq!(report.groups[0].members[0].messages.to_teammates, 1);
 }
+
+#[test]
+fn same_handle_sent_messages_credit_the_seat_registered_before_each_send() {
+    let seat = |id: &str, registered| {
+        let mut seat = agent(Path::new("/repo/lane"), id, "claude", registered);
+        seat.name = Some("wise-route".to_owned());
+        seat
+    };
+    let sent = |seconds| {
+        let mut sent = TranscriptEntry::new(
+            at(seconds),
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("receiver"),
+            TranscriptKind::Message,
+            "hello".to_owned(),
+        );
+        sent.channel = Some(crate::ids::LaneName::dashed("lane"));
+        sent.from = Some("@wise-route".to_owned());
+        sent
+    };
+    let transcript = [sent(50), sent(150), sent(160)];
+    for seats in [
+        [seat("first", 10), seat("second", 100)],
+        [seat("second", 100), seat("first", 10)],
+    ] {
+        let report = build_with(&seats, &[], &transcript);
+        // A seat credited nothing has no contribution and leaves the report.
+        let sent_by = |registered| {
+            report.groups[0]
+                .members
+                .iter()
+                .find(|member| member.registered_at == Some(at(registered)))
+                .map_or(0, |member| member.messages.to_teammates)
+        };
+        assert_eq!((sent_by(10), sent_by(100)), (1, 2));
+    }
+}
