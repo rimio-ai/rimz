@@ -351,7 +351,7 @@ The [hooks](https://antigravity.google/docs/hooks/) page publishes these tool na
 | execution | `schedule` | `Prompt`, optional `DurationSeconds`, `CronExpression`, `MaxIterations` |
 | permission | `list_permissions` | none |
 | permission | `ask_permission` | `Action`, `Target`, `Reason` |
-| agent | `invoke_subagent` | `Subagents[]`, each `Prompt`, `Role`, `TypeName`, optional `Workspace` |
+| agent | `invoke_subagent` | 1.1.2: `Subagents[]`, each `Prompt`, `Role`, `TypeName`, optional `Workspace`; 1.5.x: flat `Prompt`, `Role`, `TypeName`, optional `Workspace` (one call per child) |
 | agent | `define_subagent` | `name`, `description`, `system_prompt`, optional `enable_mcp_tools`, `enable_write_tools`, `enable_subagent_tools` |
 | agent | `send_message` | `Recipient`, `Message` |
 | agent | `manage_subagents` | `Action` (`list`, `kill`, `kill_all`), optional `ConversationIds[]` |
@@ -484,8 +484,9 @@ Two JSONL transcripts live under `<app_data_dir>/brain/<conversationId>/.system_
 | --- | --- |
 | `step_index` | step index in the trajectory |
 | `source` | `USER_EXPLICIT`, `MODEL`, `SYSTEM`, and others |
-| `type` | step type, including `USER_INPUT`, `PLANNER_RESPONSE`, `INVOKE_SUBAGENT`, `CONVERSATION_HISTORY`, `CHECKPOINT` |
+| `type` | step type, including `USER_INPUT`, `PLANNER_RESPONSE`, `INVOKE_SUBAGENT`, `GENERIC`, `CONVERSATION_HISTORY`, `CHECKPOINT` |
 | `status` | `DONE`, `ERROR`, and others |
+| `error` | error text on `ERROR` tool steps (1.5.17 capture) |
 | `created_at` | RFC 3339 timestamp |
 | `content` | optional text |
 | `thinking` | model reasoning on `PLANNER_RESPONSE` steps |
@@ -549,6 +550,17 @@ A child is an ordinary conversation, and the 1.1.2 two-child capture showed how 
 - The next completed `MODEL` / `INVOKE_SUBAGENT` record's `content` holds consecutive JSON objects inside prose, one per child in request order. Each carries `conversationId`, a `file:` `logAbsoluteUri` naming the child's transcript under `brain/<conversationId>`, and optional `workspaceUris`.
 - The parent transcript flushed late: both children's `PreInvocation` and `Stop` hooks ran before the request and result records reached disk, and the records flushed before the parent's own `Stop`.
 - `manage_subagents` with `Action=list` returned the same child IDs after completion, with no lifecycle state.
+
+1.5.15 (2026-11-23) and 1.5.17 (2026-11-25) live captures observed a flat request and acknowledgement shape:
+
+- Request: each child is its own `invoke_subagent` entry in `PLANNER_RESPONSE.tool_calls` with flat `args` `{Prompt, Role, TypeName}` (and optional `Workspace`), with no `Subagents[]` wrapper. Asking for two children produced two flat calls in one `PLANNER_RESPONSE` (`tool_calls` length 2), each with its own `PreToolUse`/`PostToolUse` and `toolCall.id`.
+- Result acknowledgement: one `MODEL` / `GENERIC` / `DONE` row per call in call order, carrying no call ID. Its `content` opens with `Created At:` and `Completed At:` lines, then `Created the following subagent:`, one `{conversationId, logAbsoluteUri, workspaceUris}` JSON object, and `The subagent will send you a message when it has completed its task or requires guidance. There is no need to poll for its response.`. The row is written at spawn (about 2 s after the call, before the child's first tool call) as a spawn acknowledgement rather than completion proof.
+- Failed invocation: when a flat `invoke_subagent` call fails (for example `TypeName: "self"` under a custom `--agent`, returning `subagent "self" not found or not allowed to be invoked`), agy 1.5.17 writes a `MODEL` / `GENERIC` row at `step_index` equal to `planner.step_index + 1 + tool_call_index` with `status: "ERROR"`, a top-level `error` string holding the error text, and `content` opening with `Created At:` and `Completed At:` lines directly followed by `Encountered error in step execution: <error>`. `PostToolUse` carries the same `stepIdx` and `error` string, and a subsequent retried `PLANNER_RESPONSE` call pairs with its own `DONE` acknowledgement at its own step index.
+- Completion rows and reverse link: a child's step 0 is a `SYSTEM_MESSAGE` (`[Message] ... sender=<parent conversationId> ...`) holding the prompt. Completion in the parent transcript differed by release: 1.5.15 wrote a `SYSTEM` / `SYSTEM_MESSAGE` with `Subagent <id> has gone idle...`, while 1.5.17 wrote a `SYSTEM_MESSAGE` with `sender=<child conversationId>` only when the child called `send_message` (no `gone idle` row appeared, and the parent's own background tasks used the same shape with `sender=<parent id>/task-N`).
+- Hooks and `Stop.fullyIdle`: child and parent hooks on 1.5.15 and 1.5.17 shared one key set per event with no parent ID field (`SessionStart` was not wired in the 1.5.17 capture). Every captured `Stop` carried `terminationReason: "NO_TOOL_CALL"` and `continuationActive: false`. A child's `Stop` read `fullyIdle: false` while its own backgrounded command ran and `fullyIdle: true` on its final `Stop` after `send_message`. A parent's `Stop` read `fullyIdle: false` while a child ran, and in a two-child run the parent's final `Stop` landed 0.5 s before the second child's final `Stop` with `fullyIdle: false` and no later parent `Stop`. When the parent kept working while its child ran (unparked parent), the parent emitted no parked `Stop` and ended with a single `fullyIdle: true` `Stop` after the child's completion message arrived mid-turn.
+- Hook order and disk state at the first hooks (1.5.17, 2026-11-25: three scratch spawns, one of two children, timed at hook-script start, plus the room cases): the parent's `invoke_subagent` `PostToolUse` always comes first (12 of 12 spawns), and the child's first `PreInvocation` follows 24 ms to 53 ms later (the capture installed no `SessionStart` hook, so its timing is unmeasured); in a two-call spawn the first child's `PreInvocation` lands before the parent's `PreToolUse` for the second call. At that `PostToolUse` the call's own `GENERIC` acknowledgement is not yet in the parent's `transcript_full.jsonl` and the child's `logs/` directory does not exist (3 of 3); the row lands 0.03 s to 0.25 s later, by the child's first hook or only by the parent's `PostInvocation`. At the child's first `PreInvocation` its own transcript does not exist (3 of 3) and is on disk by its next hook.
+- First-hook marker: a child's first `PreInvocation` carries `invocationNum` 0, `initialNumSteps` 0, and an empty `lastUserInput`, while every top-level first `PreInvocation` carries `initialNumSteps` 1 and its non-empty prompt (7 children and 7 top-level conversations across the scratch and room captures). A child's later openers keep the empty `lastUserInput` with a nonzero `initialNumSteps`. The marker names no parent, and a top-level conversation started with no prompt, or resumed, was not captured.
+- Statusline: in the 1.5.17 capture, the parent's `subagents[]` entries carried `{name, role, model, status}` where `role` held the child's `Prompt` text rather than its `Role`, entry order varied between payloads, and `agent_state` read `idle` while a child ran.
 
 Print mode publishes the same relation directly: a `stream-json` `step_update` for an `invoke_subagent` step carries `subagent_info.subagents[]` with `type_name`, `role`, `conversation_id`, `log_uri`, and `workspace_uris` ([headless](https://antigravity.google/docs/cli/headless/)).
 

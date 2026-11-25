@@ -103,7 +103,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 - History replays every past session and prices its tokens at list price in `rimz stats`. A model the price book has no exact entry for shows tokens without dollars.
 - Tool activity comes from the `PostToolUse` hook on file-edit tools only.
 - A bare `/compact` compacts and is confirmed by its own hooks. It takes no instruction, and `rimz agents history` leaves the command out.
-- Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
+- Children come from the parent's `invoke_subagent` transcript records (both 1.1.2 `INVOKE_SUBAGENT` results and 1.5.x `GENERIC` spawn acknowledgements), which give a child its name and task at its parent's next tool hook or stop after the record reaches disk. A child joins its parent at its own first hook, before those records exist, when its parent is the only live Antigravity conversation on that pane and runs in the child's workspace; otherwise it stays unlinked until then. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Background commands appear in `background_shells` and the card's waits list from the first `Stop` after Antigravity backgrounds them until they finish or are killed.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
 - Yolo does not approve implementation plans (since 1.3.2). Only the user's `artifactReviewPolicy` setting lifts plan review, and RimZ does not change it.
