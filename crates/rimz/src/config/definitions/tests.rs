@@ -7911,3 +7911,370 @@ fn machine_config_retains_load_contexts_with_kind_bases_only() {
     assert!(contexts.agents.subagents.is_some());
     assert!(contexts.subagents.subagents.is_none());
 }
+
+fn resolve_synthetic_agents(
+    home: &Path,
+    rows: Vec<(&str, AgentFrontmatter, TomlExtras)>,
+) -> LoadedDefinitions {
+    definition(
+        home,
+        "agents/claude.md",
+        "capabilities: [read, write, bash]",
+        "Claude foundation.",
+    );
+    let base_loaded = load_checked(home);
+    let contexts = base_loaded
+        .contexts
+        .expect("machine load retains load contexts");
+    let mut tree = Namespace::default();
+    for (name, frontmatter, extras) in rows {
+        tree.definitions.insert(
+            name.to_owned(),
+            Definition {
+                path: home.join(format!("synthetic/{name}.toml")),
+                pack: None,
+                body: String::new(),
+                frontmatter,
+                extras,
+            },
+        );
+    }
+    let foreign = Namespace::default();
+    let traits = BTreeMap::new();
+    let scope = LoadScope {
+        context: &contexts.agents,
+        traits: &traits,
+    };
+    let mut loaded = LoadedDefinitions::default();
+    agent::resolve_namespace(
+        agent::Resolver::new(scope, "agents", [&tree, &foreign]),
+        &mut loaded,
+    );
+    loaded
+}
+
+fn synthetic_fm(agent: &str, model: Option<&str>) -> AgentFrontmatter {
+    let mut fm = AgentFrontmatter::default();
+    fm.agent = Some(agent.to_owned());
+    fm.description = Some("Synthetic row.".to_owned());
+    fm.model = model.map(str::to_owned);
+    fm
+}
+
+#[test]
+fn toml_extras_system_prompt_file_and_append_order_through_chain_and_override() {
+    let root = fixture();
+    let p_base = PromptSource::File(root.path().join("p-base.md"));
+    let c_base = PromptSource::File(root.path().join("c-base.md"));
+    let x_base = PromptSource::File(root.path().join("x-base.md"));
+    let p_app = PromptSource::File(root.path().join("p-app.md"));
+    let c_app = PromptSource::File(root.path().join("c-app.md"));
+    let l_app = PromptSource::File(root.path().join("l-app.md"));
+    let x_app = PromptSource::File(root.path().join("x-app.md"));
+
+    let loaded = resolve_synthetic_agents(
+        root.path(),
+        vec![
+            (
+                "parent",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: Some(p_base.clone()),
+                    append_system_prompt_files: vec![p_app.clone()],
+                    args: None,
+                },
+            ),
+            (
+                "child",
+                synthetic_fm("parent", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: vec![c_app.clone()],
+                    args: None,
+                },
+            ),
+            (
+                "child_override",
+                synthetic_fm("parent", None),
+                TomlExtras {
+                    system_prompt_file: Some(c_base.clone()),
+                    append_system_prompt_files: Vec::new(),
+                    args: None,
+                },
+            ),
+            (
+                "plain",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: vec![l_app.clone()],
+                    args: None,
+                },
+            ),
+            (
+                "over",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: Some(x_base.clone()),
+                    append_system_prompt_files: vec![x_app.clone()],
+                    args: None,
+                },
+            ),
+        ],
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+
+    let child = &loaded.agent_profiles.0["child"];
+    assert_eq!(child.system_prompt_file.as_ref(), Some(&p_base));
+    assert_eq!(
+        child.append_system_prompt_files,
+        vec![p_app.clone(), c_app.clone()]
+    );
+
+    let child_override = &loaded.agent_profiles.0["child_override"];
+    assert_eq!(child_override.system_prompt_file.as_ref(), Some(&c_base));
+    assert_eq!(
+        child_override.append_system_prompt_files,
+        vec![p_app.clone()]
+    );
+
+    let over = &loaded.agent_profiles.0["over"];
+    let child_under_x = child
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(child, Some(BuildBase::Profile(over)), None, None)
+        .unwrap();
+    assert_eq!(child_under_x.system_prompt_file.as_ref(), Some(&p_base));
+    assert_eq!(
+        child_under_x.append_system_prompt_files,
+        vec![x_app.clone(), p_app, c_app]
+    );
+
+    let plain = &loaded.agent_profiles.0["plain"];
+    let plain_under_x = plain
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(plain, Some(BuildBase::Profile(over)), None, None)
+        .unwrap();
+    assert_eq!(plain_under_x.system_prompt_file.as_ref(), Some(&x_base));
+    assert_eq!(plain_under_x.append_system_prompt_files, vec![x_app, l_app]);
+}
+
+#[test]
+fn toml_extras_prompt_files_refused_on_promptless_provider() {
+    let root = fixture();
+    let loaded = resolve_synthetic_agents(
+        root.path(),
+        vec![
+            (
+                "cursor_base",
+                synthetic_fm("cursor", None),
+                TomlExtras {
+                    system_prompt_file: Some(PromptSource::File(root.path().join("base.md"))),
+                    append_system_prompt_files: Vec::new(),
+                    args: None,
+                },
+            ),
+            (
+                "cursor_append",
+                synthetic_fm("cursor", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: vec![PromptSource::File(
+                        root.path().join("append.md"),
+                    )],
+                    args: None,
+                },
+            ),
+            (
+                "claude_prompt",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: Some(PromptSource::File(root.path().join("base.md"))),
+                    append_system_prompt_files: Vec::new(),
+                    args: None,
+                },
+            ),
+        ],
+    );
+    assert!(
+        loaded.failed.contains_key("cursor_base"),
+        "{:?}",
+        loaded.errors
+    );
+    assert!(
+        loaded.failed.contains_key("cursor_append"),
+        "{:?}",
+        loaded.errors
+    );
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .filter(|err| err.message.contains("takes no system prompt"))
+            .count()
+            == 2,
+        "{:?}",
+        loaded.errors
+    );
+    assert!(loaded.agent_profiles.0.contains_key("claude_prompt"));
+    let claude_prompt = &loaded.agent_profiles.0["claude_prompt"];
+    let err = claude_prompt
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(claude_prompt, None, Some("cursor"), None)
+        .unwrap_err();
+    assert!(
+        err.message.contains("takes no system prompt"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/codex.md",
+        "capabilities: [read, write, bash]",
+        "Codex foundation.",
+    );
+    let loaded = resolve_synthetic_agents(
+        root.path(),
+        vec![
+            (
+                "claude_row",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: Some("--claude-flag".to_owned()),
+                },
+            ),
+            (
+                "child_codex",
+                synthetic_fm("claude_row", Some("sol")),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: Some("--codex-flag".to_owned()),
+                },
+            ),
+            (
+                "child_inherit",
+                synthetic_fm("claude_row", Some("sol")),
+                TomlExtras::default(),
+            ),
+            (
+                "x_codex",
+                synthetic_fm("codex", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: Some("--x-codex".to_owned()),
+                },
+            ),
+            (
+                "x_claude",
+                synthetic_fm("claude", None),
+                TomlExtras {
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: Some("--x-claude".to_owned()),
+                },
+            ),
+        ],
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+
+    let claude_row = &loaded.agent_profiles.0["claude_row"];
+    assert_eq!(claude_row.args.as_deref(), Some("--claude-flag"));
+    let renders = claude_row.definition_renders.as_ref().unwrap();
+    assert_eq!(
+        renders.renders["claude"].args.as_deref(),
+        Some("--claude-flag")
+    );
+    assert_eq!(renders.renders["codex"].args, None);
+
+    let rebuilt_codex = claude_row
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(claude_row, None, Some("codex"), None)
+        .unwrap();
+    assert_eq!(rebuilt_codex.args, None);
+
+    let rebuilt_by_model = claude_row
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(claude_row, None, None, Some("sol"))
+        .unwrap();
+    assert_eq!(rebuilt_by_model.agent, "codex");
+    assert_eq!(rebuilt_by_model.args, None);
+
+    let child_codex = &loaded.agent_profiles.0["child_codex"];
+    assert_eq!(child_codex.agent, "codex");
+    assert_eq!(child_codex.args.as_deref(), Some("--codex-flag"));
+    let child_on_claude = child_codex
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(child_codex, None, Some("claude"), None)
+        .unwrap();
+    assert_eq!(child_on_claude.args.as_deref(), Some("--claude-flag"));
+
+    let child_inherit = &loaded.agent_profiles.0["child_inherit"];
+    assert_eq!(child_inherit.agent, "codex");
+    assert_eq!(child_inherit.args, None);
+
+    let x_codex = &loaded.agent_profiles.0["x_codex"];
+    let l_under_x_codex = claude_row
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(claude_row, Some(BuildBase::Profile(x_codex)), None, None)
+        .unwrap();
+    assert_eq!(l_under_x_codex.agent, "codex");
+    assert_eq!(l_under_x_codex.args.as_deref(), Some("--x-codex"));
+
+    let x_claude = &loaded.agent_profiles.0["x_claude"];
+    let l_under_x_claude = claude_row
+        .definition
+        .as_ref()
+        .unwrap()
+        .build(claude_row, Some(BuildBase::Profile(x_claude)), None, None)
+        .unwrap();
+    assert_eq!(l_under_x_claude.agent, "claude");
+    assert_eq!(l_under_x_claude.args.as_deref(), Some("--claude-flag"));
+}
+
+#[test]
+fn toml_extras_invalid_args_shell_quoting_refused() {
+    let root = fixture();
+    let loaded = resolve_synthetic_agents(
+        root.path(),
+        vec![(
+            "bad_args",
+            synthetic_fm("claude", None),
+            TomlExtras {
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                args: Some("--flag 'unclosed".to_owned()),
+            },
+        )],
+    );
+    assert!(loaded.failed.contains_key("bad_args"));
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .any(|err| err.message.contains("shell quoting")),
+        "{:?}",
+        loaded.errors
+    );
+}

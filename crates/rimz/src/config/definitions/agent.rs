@@ -75,6 +75,8 @@ impl PartialEq for DefinitionSource {
             && a.frontmatter == b.frontmatter
             && a.writers == b.writers
             && a.crafts == b.crafts
+            && a.system_prompt_file == b.system_prompt_file
+            && a.args == b.args
             && a.natural_kind == b.natural_kind
             && a.natural_variant == b.natural_variant
             && a.preference == b.preference
@@ -126,6 +128,25 @@ impl MemoKey {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KindArgs {
+    kind: String,
+    args: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PromptLayer {
+    owner: Option<String>,
+    source: PromptSource,
+}
+
+fn args_for_kind(layers: &[KindArgs], kind: &str) -> Option<String> {
+    layers
+        .iter()
+        .find(|entry| entry.kind == kind)
+        .map(|entry| entry.args.clone())
+}
+
 #[derive(Debug)]
 struct DefinitionSourceInner {
     name: String,
@@ -134,7 +155,9 @@ struct DefinitionSourceInner {
     chain: Vec<String>,
     frontmatter: AgentFrontmatter,
     writers: TuningWriters,
-    crafts: Vec<PromptSource>,
+    crafts: Vec<PromptLayer>,
+    system_prompt_file: Option<PromptSource>,
+    args: Vec<KindArgs>,
     natural_kind: String,
     natural_variant: Option<&'static agents::Variant>,
     preference: TierPreference,
@@ -153,6 +176,22 @@ enum CraftState<'a> {
         cached: Option<Result<String, DefinitionErr>>,
     },
     Rendered,
+}
+
+impl CraftState<'_> {
+    fn rendered_source(&self, origin: &Path) -> Option<PromptSource> {
+        let Self::Pending {
+            cached: Some(Ok(text)),
+            ..
+        } = self
+        else {
+            return None;
+        };
+        (!text.is_empty()).then(|| PromptSource::Text {
+            origin: origin.to_path_buf(),
+            text: text.clone(),
+        })
+    }
 }
 
 fn lists_agent_tool(fm: &AgentFrontmatter) -> bool {
@@ -175,15 +214,30 @@ pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str)
         || agents::keeps_model(to_kind, model)
 }
 
-fn merge_crafts(base: &[PromptSource], leaf: &[PromptSource]) -> Vec<PromptSource> {
-    let mut merged = base.to_vec();
-    for source in leaf {
-        if !merged
-            .iter()
-            .any(|existing| existing.origin() == source.origin())
+fn merge_crafts(
+    x_crafts: &[PromptLayer],
+    leaf_crafts: &[PromptLayer],
+    leaf_chain: &[String],
+) -> Vec<PromptLayer> {
+    let mut merged: Vec<PromptLayer> = x_crafts
+        .iter()
+        .filter(|layer| {
+            layer
+                .owner
+                .as_deref()
+                .is_none_or(|owner| !leaf_chain.iter().any(|entry| entry == owner))
+        })
+        .cloned()
+        .collect();
+    for layer in leaf_crafts {
+        if matches!(layer.source, PromptSource::Text { .. })
+            && merged
+                .iter()
+                .any(|existing| existing.source.origin() == layer.source.origin())
         {
-            merged.push(source.clone());
+            continue;
         }
+        merged.push(layer.clone());
     }
     merged
 }
@@ -374,7 +428,9 @@ impl DefinitionSourceInner {
         x_def: Option<&Self>,
         built_under: Option<MemoBase>,
         frontmatter: AgentFrontmatter,
-        crafts: Vec<PromptSource>,
+        crafts: Vec<PromptLayer>,
+        system_prompt_file: Option<PromptSource>,
+        args: Vec<KindArgs>,
         built: &Profile,
         preference: TierPreference,
         runtime_kind: Option<String>,
@@ -398,6 +454,8 @@ impl DefinitionSourceInner {
                 frontmatter,
                 writers,
                 crafts,
+                system_prompt_file,
+                args,
                 natural_kind: built.agent.clone(),
                 natural_variant: built.variant,
                 preference,
@@ -476,9 +534,22 @@ impl DefinitionSourceInner {
             }
         }
         let crafts = match x_def.filter(|_| !x_in_chain) {
-            Some(x) => merge_crafts(&x.crafts, &self.crafts),
+            Some(x) => merge_crafts(&x.crafts, &self.crafts, &self.chain),
             None => self.crafts.clone(),
         };
+        let craft_sources: Vec<PromptSource> =
+            crafts.iter().map(|layer| layer.source.clone()).collect();
+        let system_prompt_file = match x_def.filter(|_| !x_in_chain) {
+            Some(x) => self
+                .system_prompt_file
+                .clone()
+                .or_else(|| x.system_prompt_file.clone()),
+            None => self.system_prompt_file.clone(),
+        };
+        let mut merged_args = self.args.clone();
+        if let Some(x) = x_def.filter(|_| !x_in_chain) {
+            merged_args.extend(x.args.iter().cloned());
+        }
 
         let (effective_kind, effective_variant, effective_preference, effective_runtime_kind) =
             if !has_base {
@@ -552,7 +623,9 @@ impl DefinitionSourceInner {
                         variant,
                         false,
                         candidate_fm,
-                        crafts.clone(),
+                        craft_sources.clone(),
+                        system_prompt_file.clone(),
+                        args_for_kind(&merged_args, kind),
                         craft,
                     )
                 },
@@ -626,7 +699,9 @@ impl DefinitionSourceInner {
                 variant,
                 false,
                 fm,
-                crafts.clone(),
+                craft_sources,
+                system_prompt_file.clone(),
+                args_for_kind(&merged_args, kind),
                 craft,
             )?;
             (built, pre_base_fm)
@@ -637,6 +712,8 @@ impl DefinitionSourceInner {
                 built_under,
                 pre_base_fm,
                 crafts,
+                system_prompt_file,
+                merged_args,
                 &built,
                 effective_preference,
                 effective_runtime_kind,
@@ -654,6 +731,9 @@ struct Resolved {
     profile: Profile,
     preference: TierPreference,
     runtime_kind: Option<String>,
+    crafts: Vec<PromptLayer>,
+    system_prompt_file: Option<PromptSource>,
+    args: Vec<KindArgs>,
 }
 
 pub(super) fn empty_profile(kind: &str) -> Profile {
@@ -1006,6 +1086,13 @@ impl Resolver<'_> {
         if self.skip_subagents {
             fm.subagents = None;
         }
+        if let Some(raw) = definition.extras.args.as_deref()
+            && shlex::split(raw).is_none()
+        {
+            return Err(DefinitionErr::new(path, "check shell quoting in `args`"));
+        }
+        let mut system_prompt_file = definition.extras.system_prompt_file.clone();
+        let mut parent_args = Vec::new();
         if fm.model.is_some() && fm.tier.is_some() {
             return Err(DefinitionErr::new(
                 path,
@@ -1083,18 +1170,31 @@ impl Resolver<'_> {
             }
             None => vec![name.to_owned()],
         };
+        let mut crafts: Vec<PromptLayer>;
         let mut profile = if parent_name.is_empty() {
-            let mut profile = empty_profile("");
-            if !self.seat_crafts.is_empty() {
-                profile.append_system_prompt_files = self.seat_crafts.clone();
-            }
+            let profile = empty_profile("");
+            crafts = self
+                .seat_crafts
+                .iter()
+                .cloned()
+                .map(|source| PromptLayer {
+                    owner: None,
+                    source,
+                })
+                .collect();
             profile
         } else if let Some(runtime) = agents::find_runtime(&parent_name) {
             let mut profile = empty_profile(runtime.kind());
             profile.variant = runtime.variant;
-            if !self.seat_crafts.is_empty() {
-                profile.append_system_prompt_files = self.seat_crafts.clone();
-            }
+            crafts = self
+                .seat_crafts
+                .iter()
+                .cloned()
+                .map(|source| PromptLayer {
+                    owner: None,
+                    source,
+                })
+                .collect();
             profile
         } else {
             let in_own = self.tree.problems.contains_key(&parent_name)
@@ -1141,7 +1241,11 @@ impl Resolver<'_> {
                 }
                 let mut profile = empty_profile(&parent.profile.agent);
                 profile.variant = parent.profile.variant;
-                profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
+                crafts = parent.crafts;
+                if system_prompt_file.is_none() {
+                    system_prompt_file = parent.system_prompt_file;
+                }
+                parent_args = parent.args;
                 profile
             } else {
                 self.tree.lookup(&parent_name, path)?;
@@ -1201,6 +1305,20 @@ impl Resolver<'_> {
             .map(str::parse::<ModelTier>)
             .transpose()
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+        for extra_prompt in &definition.extras.append_system_prompt_files {
+            crafts.push(PromptLayer {
+                owner: Some(name.to_owned()),
+                source: extra_prompt.clone(),
+            });
+        }
+        let mut args = Vec::new();
+        if let Some(raw) = &definition.extras.args {
+            args.push(KindArgs {
+                kind: profile.agent.clone(),
+                args: raw.clone(),
+            });
+        }
+        args.extend(parent_args);
         let mut craft_state = CraftState::Pending {
             traits: self.scope.traits,
             body: &definition.body,
@@ -1217,7 +1335,9 @@ impl Resolver<'_> {
             chain: chain.clone(),
             frontmatter: unresolved.clone(),
             writers: writers.clone(),
-            crafts: profile.append_system_prompt_files.clone(),
+            crafts,
+            system_prompt_file: system_prompt_file.clone(),
+            args: args.clone(),
             natural_kind: profile.agent.clone(),
             natural_variant: profile.variant,
             preference: preference.clone(),
@@ -1281,7 +1401,13 @@ impl Resolver<'_> {
                     error
                 })?
         };
-        source.crafts = profile.append_system_prompt_files.clone();
+        if let Some(craft_text) = craft_state.rendered_source(path) {
+            source.crafts.push(PromptLayer {
+                owner: None,
+                source: craft_text,
+            });
+        }
+        let resolved_crafts = source.crafts.clone();
         source.natural_kind = profile.agent.clone();
         source.natural_variant = profile.variant;
         let def_source = DefinitionSource {
@@ -1307,6 +1433,9 @@ impl Resolver<'_> {
             profile,
             preference,
             runtime_kind,
+            crafts: resolved_crafts,
+            system_prompt_file,
+            args,
         })
     }
 
@@ -1362,6 +1491,8 @@ impl Resolver<'_> {
             true,
             fm,
             Vec::new(),
+            None,
+            None,
             &mut craft_state,
         )?;
         profile.system_prompt_file = profile.append_system_prompt_files.pop();
@@ -1392,13 +1523,17 @@ fn finish_profile(
     kind_base: bool,
     mut fm: AgentFrontmatter,
     crafts: Vec<PromptSource>,
+    system_prompt_file: Option<PromptSource>,
+    args: Option<String>,
     craft_state: &mut CraftState<'_>,
 ) -> Result<Profile, DefinitionErr> {
     let shared = &context.shared;
     let mut profile = empty_profile(kind);
     profile.variant = variant;
     profile.kind_base = kind_base;
+    profile.system_prompt_file = system_prompt_file;
     profile.append_system_prompt_files = crafts;
+    profile.args = args;
     let takes_system_prompt = agents::find_definition(kind)
         .is_some_and(|definition| definition.spec().launch.takes_system_prompt());
     if let Some(error) = shared.failed_bases.get(kind) {
@@ -1705,15 +1840,33 @@ fn finish_profile(
             ));
         }
     }
-    if !takes_system_prompt && !profile.append_system_prompt_files.is_empty() {
+    if !takes_system_prompt && profile.system_prompt_file.is_some() {
         return Err(DefinitionErr::new(
             path,
+            format!(
+                "runs on {kind}, which takes no system prompt, so `system-prompt-file` cannot be \
+                 delivered; remove it or run on a kind that takes a system prompt"
+            ),
+        ));
+    }
+    if !takes_system_prompt && !profile.append_system_prompt_files.is_empty() {
+        let message = if profile
+            .append_system_prompt_files
+            .iter()
+            .any(|source| matches!(source, PromptSource::File(_)))
+        {
+            format!(
+                "runs on {kind}, which takes no system prompt, so `append-system-prompt-files` \
+                 cannot be delivered; remove it or run on a kind that takes a system prompt"
+            )
+        } else {
             format!(
                 "runs on {kind}, which takes no system prompt, so its craft body cannot be \
                  delivered; remove the body or run this definition on a kind that takes a \
                  system prompt"
-            ),
-        ));
+            )
+        };
+        return Err(DefinitionErr::new(path, message));
     }
     // Prompt-taking kinds need their base even when the definition adds no craft.
     if takes_system_prompt && !shared.bases.contains_key(kind) {

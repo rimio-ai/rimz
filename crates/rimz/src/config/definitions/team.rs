@@ -437,6 +437,7 @@ impl SeatLoader<'_> {
                     pack: None,
                     body: definition.body.clone(),
                     frontmatter: fm,
+                    extras: super::TomlExtras::default(),
                 },
             )]),
             failed: BTreeSet::new(),
