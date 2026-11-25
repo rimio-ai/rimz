@@ -3449,11 +3449,8 @@ fn restore_resume_cell(
                 Some(TuningSource::KindBase(_) | TuningSource::BuiltIn | TuningSource::Recorded)
             );
         if !keep_override_effort {
-            let base = profiles
-                .0
-                .get(kind.as_str())
-                .filter(|base| base.kind_base)
-                .and_then(|base| base.effort.clone());
+            let base = crate::harness::spec::kind_base_for(kind.as_str(), profiles, None, fallback)
+                .and_then(|base| Some((base.effort.clone()?, base.kind_base)));
             (posture.effort, posture.tuning.effort) = if let Some(effort) = &definition.effort {
                 let writer = profile_row
                     .and_then(|row| row.definition.as_ref())
@@ -3463,8 +3460,13 @@ fn restore_resume_cell(
                     Some(effort.clone()),
                     writer.map(|name| TuningSource::Profile(name.to_owned())),
                 )
-            } else if let Some(effort) = base {
-                (Some(effort), Some(TuningSource::KindBase(kind.clone())))
+            } else if let Some((effort, kind_base)) = base {
+                let source = if kind_base {
+                    TuningSource::KindBase(kind.clone())
+                } else {
+                    TuningSource::Profile(kind.to_string())
+                };
+                (Some(effort), Some(source))
             } else {
                 let effort = crate::agents::definition_defaults(kind.as_str(), Some(&model)).effort;
                 (

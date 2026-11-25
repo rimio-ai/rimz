@@ -1774,7 +1774,7 @@ fn fill_layer(
     resolved.fill_missing(&adjusted, name);
 }
 
-fn kind_base_for<'a>(
+pub(super) fn kind_base_for<'a>(
     kind: &str,
     own: &'a ProfilesConfig,
     other: Option<&'a ProfilesConfig>,
