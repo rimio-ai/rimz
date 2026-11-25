@@ -531,6 +531,124 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
     }
 }
 #[test]
+fn quota_stops_carry_a_typed_provider_limit_and_no_turn_error() {
+    const SENTENCE: &str =
+        "Individual quota reached. Please upgrade your subscription to increase your limits.";
+    let limit = |refill_in_secs| {
+        Some(crate::agents::TurnLimitStop {
+            label: Some(SENTENCE.to_owned()),
+            refill_in_secs,
+        })
+    };
+    // The agy 1.5.17 Stop a weekly-spent login sent on 2026-11-25, verbatim.
+    let captured = json_value(include_str!("tests/fixtures/quota_stop.json"));
+    let observation = hook_observation(&AntigravityAdapter, "Stop", &captured).unwrap();
+    assert_eq!(
+        (observation.signal, observation.limit_stop),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            limit(Some(121 * 3600 + 44 * 60 + 54)),
+        )
+    );
+    assert!(
+        hook_output(&AntigravityAdapter, "Stop", &captured)
+            .turn_error()
+            .is_none()
+    );
+
+    let transport = "generating and executing: transport error (ResourceExhausted, HTTP 429): ";
+    let twice = |resets: &str| {
+        format!("{transport}{SENTENCE}{resets}: RESOURCE_EXHAUSTED (code 429): {SENTENCE}{resets}")
+    };
+    for (error, refill) in [
+        (
+            format!("{transport}{SENTENCE} Resets in 1h26m55s."),
+            Some(5215),
+        ),
+        (twice(" Resets in 1h26m55s."), Some(5215)),
+        (twice(" Resets in 90m."), Some(5400)),
+        (twice(" Resets in 42s."), Some(42)),
+        (twice(" Resets in 1.5s."), Some(2)),
+        (twice(" Resets in 2h0m0.25s."), Some(7201)),
+        (twice(" Resets in 500ms."), Some(1)),
+        (twice(" Resets in 750µs."), Some(1)),
+        (twice(""), None),
+        (twice(" Resets in -1h."), None),
+        (twice(" Resets in soon."), None),
+        (twice(" Resets in 3d."), None),
+        (twice(" Resets in ."), None),
+    ] {
+        let payload = with(
+            &captured,
+            [
+                ("error", json!(error)),
+                ("conversationId", json!(SESSION_ID)),
+            ],
+        );
+        let observation = hook_observation(&AntigravityAdapter, "Stop", &payload).unwrap();
+        assert_eq!(observation.limit_stop, limit(refill), "{error}");
+        assert!(
+            matches!(
+                observation.signal,
+                LifecycleSignal::TurnEnded { errored: true, .. }
+            ),
+            "{error}"
+        );
+    }
+
+    for (reason, error) in [
+        ("ERROR", json!("rate limit reached; retry later")),
+        (
+            "ERROR",
+            json!({"message": "quota exhausted", "retryAfterSeconds": 30}),
+        ),
+        (
+            "ERROR",
+            json!("transport error (Unavailable, HTTP 503): backend unavailable"),
+        ),
+        ("ERROR", json!("429 Too Many Requests")),
+        (
+            "ERROR",
+            json!(
+                "generating and executing: transport error (Internal, HTTP 500): backend \
+                 ResourceExhausted while serving request 74291"
+            ),
+        ),
+        (
+            "ERROR",
+            json!({"message": "RESOURCE_EXHAUSTED (code 429): quota"}),
+        ),
+        ("MAX_INVOCATIONS", json!("")),
+        ("MAX_TOKEN_BUDGET_EXCEEDED", json!(null)),
+        ("max_steps_exceeded", json!("")),
+    ] {
+        let payload = with(
+            &captured,
+            [
+                ("terminationReason", json!(reason)),
+                ("error", error.clone()),
+            ],
+        );
+        let observation = hook_observation(&AntigravityAdapter, "Stop", &payload).unwrap();
+        assert_eq!(
+            (observation.signal, observation.limit_stop),
+            (
+                LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+                None,
+            ),
+            "{reason} {error}"
+        );
+    }
+}
+#[test]
 fn stop_termination_reasons_fail_only_on_errors_and_limits() {
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
         errored,

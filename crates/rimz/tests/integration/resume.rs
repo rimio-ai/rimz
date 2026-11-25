@@ -61,6 +61,7 @@ fn registered(
         parent_agent_id: None,
         background_shells: None,
         background_scripts: None,
+        limit_stop: None,
     }
 }
 

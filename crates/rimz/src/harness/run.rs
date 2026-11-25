@@ -1854,6 +1854,16 @@ fn fold_lifecycle(
             TerminalDisposition::Failed => RunStatus::Failed,
             TerminalDisposition::Canceled => RunStatus::Canceled,
         };
+        if record.status == RunStatus::Failed
+            && let Some(stop) = observation.limit_stop.as_ref()
+        {
+            let failure = stop_limit_failure(stop, observed_at);
+            if record.failure_tail.is_none() {
+                record.failure_tail =
+                    capped_failure_tail(&super::park_notice::failure_tail(&failure));
+            }
+            record.limit_failure = Some(failure);
+        }
         record.completed_at = Some(now);
         record.parked_at = None;
         record.parked_on = None;
@@ -1907,6 +1917,30 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
+}
+
+/// The limit failure of a provider stop observed at `stopped_at`: its refill is that time plus
+/// the distance the stop named, never the fold's clock, so a replayed stop computes the same one.
+fn stop_limit_failure(
+    stop: &crate::agents::TurnLimitStop,
+    stopped_at: Timestamp,
+) -> crate::store::run::LimitFailure {
+    use crate::store::run::LimitFailureCause;
+
+    let refill_at = stop.refill_in_secs.and_then(|secs| {
+        stopped_at
+            .checked_add(std::time::Duration::from_secs(secs))
+            .ok()
+    });
+    crate::store::run::LimitFailure {
+        cause: if refill_at.is_some() {
+            LimitFailureCause::RefillKnown
+        } else {
+            LimitFailureCause::RefillUnknown
+        },
+        refill_at,
+        label: stop.label.clone(),
+    }
 }
 
 /// Give the turn opening at `now` the run's whole timeout again: `deadline_at`

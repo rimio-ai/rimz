@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agents::TurnLimitStop;
 use crate::agents::payload::non_empty_trimmed;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -161,6 +162,66 @@ impl StopPayload {
             .iter()
             .any(|failed| failed.eq_ignore_ascii_case(reason))
             || value_is_error(self.error.as_ref())
+    }
+}
+
+impl StopPayload {
+    /// The provider limit a failed stop names: a string `error` holding one of
+    /// `QUOTA_STATUSES` whole, as agy 1.5.17 sends for a spent quota. The label is
+    /// the provider's sentence once, without the transport prefix or its `Resets in` clause,
+    /// and the refill is that clause's Go duration.
+    pub(super) fn limit_stop(&self) -> Option<TurnLimitStop> {
+        let Some(Value::String(error)) = self.error.as_ref() else {
+            return None;
+        };
+        if !self.failed() {
+            return None;
+        }
+        let message_at = QUOTA_STATUSES
+            .iter()
+            .filter_map(|status| error.rfind(status).map(|at| at + status.len()))
+            .max()?;
+        let message = error[message_at..].trim_start_matches(':');
+        let label = message
+            .split(REFILL_CLAUSE)
+            .next()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(ToOwned::to_owned);
+        let refill_in_secs = message
+            .rsplit_once(REFILL_CLAUSE)
+            .and_then(|(_, after)| after.split_whitespace().next())
+            .map(|duration| duration.trim_end_matches(['.', ':']))
+            .and_then(go_duration_secs);
+        Some(TurnLimitStop {
+            label,
+            refill_in_secs,
+        })
+    }
+}
+
+/// The two gRPC status forms agy puts before a quota message, each matched whole so a status
+/// and a code from different parts of the text never combine.
+const QUOTA_STATUSES: [&str; 2] = [
+    "(ResourceExhausted, HTTP 429)",
+    "RESOURCE_EXHAUSTED (code 429)",
+];
+
+/// The clause agy appends to a quota message, followed by the refill as a Go duration.
+const REFILL_CLAUSE: &str = "Resets in ";
+
+/// Whole seconds, rounded up, in a Go `time.Duration` string (`1h26m55s`, `1.5s`, `500ms`),
+/// or `None` for a negative duration or text jiff's duration parser refuses.
+fn go_duration_secs(text: &str) -> Option<u64> {
+    let duration: jiff::SignedDuration = text.parse().ok()?;
+    if duration.is_negative() {
+        return None;
+    }
+    let whole = u64::try_from(duration.as_secs()).ok()?;
+    if duration.subsec_nanos() > 0 {
+        whole.checked_add(1)
+    } else {
+        Some(whole)
     }
 }
 

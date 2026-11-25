@@ -684,6 +684,7 @@ fn inject_lifecycle_with_launch(
         parent_agent_id: None,
         background_shells: None,
         background_scripts: None,
+        limit_stop: None,
     };
     crate::common::wait::stamp_hook_lane(env, &mut obs);
     let envelope = EventEnvelope::agent_lifecycle(

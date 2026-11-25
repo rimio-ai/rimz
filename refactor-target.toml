@@ -498,7 +498,8 @@ upward-dependencies = [
 # HookContextReply::event names the post-tool event the hook feed claims a deadline rung on (+1).
 # DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
 # notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
-surface-budget = 1381
+# TurnLimitStop carries a provider stop report's limit from the adapter to the run fold (+1).
+surface-budget = 1382
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -8815,6 +8816,11 @@ reason = "Returned by emblem_for from private emblems; the root re-export is its
 kind = "item"
 key = "agents::BackgroundShellReport"
 reason = "A public HookOutput field exposes this private background_shell type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::TurnLimitStop"
+reason = "A public AgentLifecycleObservation field exposes this private observation type; the root re-export is its only public path."
 
 [[verdict]]
 kind = "item"
