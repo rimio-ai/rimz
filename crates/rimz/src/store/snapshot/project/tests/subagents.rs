@@ -401,6 +401,207 @@ fn subagent_adoption_attaches_an_existing_root_once() {
 }
 
 #[test]
+fn subagent_adoption_strips_root_launch_identity_and_restores_parent_handle() {
+    let pane = "tmux:%5";
+    let lane =
+        crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo").named("dev".parse().unwrap());
+    let mut parent_launch_payload = launch_payload("launch_parent", "coder");
+    parent_launch_payload.launch_id = Some("launch_parent".into());
+    parent_launch_payload.pane_id = Some(PaneId::parse(pane).unwrap());
+    let parent_launch = launch_event("antigravity", parent_launch_payload);
+    let parent_start = raw_lifecycle_at(
+        "antigravity",
+        1,
+        serde_json::json!({
+            "event_name": "PreInvocation",
+            "agent_id": "parent",
+            "launch_id": "launch_parent",
+            "agent_name": "coder",
+            "role": "implementer",
+            "team": "core",
+            "profile": "default",
+            "lane": lane,
+            "channel": "dev",
+            "launch_depth": 1,
+            "pane_id": pane,
+            "transcript_path": "/tmp/parent.jsonl",
+            "agent_pid": 4242,
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+    // Child-A fires two unjoined hooks carrying parent's inherited env; the second
+    // hook steals `"coder"` in the name registry because prior.launch_id matches parent's.
+    let child_a_hook_1 = raw_lifecycle_at(
+        "antigravity",
+        2,
+        serde_json::json!({
+            "event_name": "PreInvocation",
+            "agent_id": "child-a",
+            "launch_id": "launch_parent",
+            "agent_name": "coder",
+            "role": "implementer",
+            "team": "core",
+            "profile": "default",
+            "lane": lane,
+            "channel": "dev",
+            "launch_depth": 1,
+            "pane_id": pane,
+            "transcript_path": "/tmp/child-a.jsonl",
+            "agent_pid": 4242,
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+    let child_a_hook_2 = raw_lifecycle_at(
+        "antigravity",
+        3,
+        serde_json::json!({
+            "event_name": "PostToolUse",
+            "agent_id": "child-a",
+            "launch_id": "launch_parent",
+            "agent_name": "coder",
+            "role": "implementer",
+            "team": "core",
+            "profile": "default",
+            "lane": lane,
+            "channel": "dev",
+            "launch_depth": 1,
+            "pane_id": pane,
+            "agent_pid": 4242,
+            "signal": { "signal": "tool_used", "effect": "observed" },
+        }),
+    );
+    // Child-B also fires an unjoined hook with parent env, then is adopted with no agent_name.
+    let child_b_hook = raw_lifecycle_at(
+        "antigravity",
+        4,
+        serde_json::json!({
+            "event_name": "PreInvocation",
+            "agent_id": "child-b",
+            "launch_id": "launch_parent",
+            "agent_name": "coder",
+            "role": "implementer",
+            "team": "core",
+            "profile": "default",
+            "pane_id": pane,
+            "transcript_path": "/tmp/child-b.jsonl",
+            "agent_pid": 4242,
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+    let adopt_a = raw_lifecycle_at(
+        "antigravity",
+        5,
+        serde_json::json!({
+            "event_name": "SubagentAdopted",
+            "agent_id": "child-a",
+            "parent_agent_id": "parent",
+            "agent_name": "self",
+            "role": "Command Runner",
+            "task": "Command Runner",
+            "pane_id": pane,
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+    let adopt_b = raw_lifecycle_at(
+        "antigravity",
+        6,
+        serde_json::json!({
+            "event_name": "SubagentAdopted",
+            "agent_id": "child-b",
+            "parent_agent_id": "parent",
+            "pane_id": pane,
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+
+    let raw = [
+        parent_launch,
+        parent_start,
+        child_a_hook_1,
+        child_a_hook_2,
+        child_b_hook,
+        adopt_a,
+        adopt_b,
+    ];
+    let decoded = decode_events(&raw);
+
+    // Cold single-pass fold.
+    let (cold_agents, cold_identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &decoded,
+    );
+    // Warm incremental event-by-event fold.
+    let (mut warm_agents, mut warm_identity) = (BTreeMap::new(), AgentIdentityState::default());
+    for event in &decoded {
+        let (next_agents, next_identity) = reduce_agent_states_seeded_with_identity(
+            warm_agents,
+            warm_identity,
+            std::slice::from_ref(event),
+        );
+        warm_agents = next_agents;
+        warm_identity = next_identity;
+    }
+    assert_eq!(warm_agents, cold_agents, "warm fold must match cold fold");
+    assert_eq!(
+        warm_identity, cold_identity,
+        "warm identity state must match cold identity state"
+    );
+
+    let kind = AgentKind::new_unchecked("antigravity");
+    let parent = cold_agents
+        .get(&(kind.clone(), AgentSessionId::from("parent")))
+        .expect("parent");
+    assert_eq!(parent.name.as_deref(), Some("coder"));
+    assert_eq!(parent.launch_id.as_deref(), Some("launch_parent"));
+    assert_eq!(parent.role.as_deref(), Some("implementer"));
+    assert_eq!(parent.team.as_deref(), Some("core"));
+    assert_eq!(
+        cold_identity.names.get("coder"),
+        Some(&(kind.clone(), AgentSessionId::from("parent"))),
+        "parent handle must resolve back to parent after adopting name-stealing child"
+    );
+
+    let child_a = cold_agents
+        .get(&(kind.clone(), AgentSessionId::from("child-a")))
+        .expect("child-a");
+    assert_eq!(child_a.parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(child_a.status, AgentStatus::Running);
+    assert_eq!(child_a.name.as_deref(), Some("self"));
+    assert_eq!(child_a.role.as_deref(), Some("Command Runner"));
+    assert_eq!(child_a.launch_id, None);
+    assert!(child_a.prior_launch_ids.is_empty());
+    assert!(!child_a.launch_bound);
+    assert_eq!(child_a.profile, None);
+    assert_eq!(child_a.team, None);
+    assert_eq!(child_a.channel, None);
+    assert_eq!(child_a.launch_depth, None);
+    assert_eq!(
+        child_a.pane.as_ref().map(|p| p.pane_id.as_str()),
+        Some(pane)
+    );
+    assert_eq!(
+        child_a.transcript_path.as_deref(),
+        Some("/tmp/child-a.jsonl")
+    );
+
+    let child_b = cold_agents
+        .get(&(kind, AgentSessionId::from("child-b")))
+        .expect("child-b");
+    assert_eq!(child_b.parent_agent_id.as_deref(), Some("parent"));
+    assert_ne!(
+        child_b.name.as_deref(),
+        Some("coder"),
+        "nameless adoption must not retain parent's stolen handle"
+    );
+    assert_eq!(child_b.launch_id, None);
+    assert!(child_b.prior_launch_ids.is_empty());
+    assert_eq!(child_b.role, None);
+    assert_eq!(child_b.team, None);
+    assert_eq!(child_b.profile, None);
+}
+
+#[test]
 fn root_and_child_labels_do_not_contend_across_allocator_rebuilds() {
     let child = raw_lifecycle(
         "cursor",

@@ -312,29 +312,58 @@ impl CardIdentityAllocator {
         agent_id: &AgentSessionId,
         observation: &AgentLifecycleObservation,
         prior: Option<&AgentState>,
-        rows: &impl ClaimRows,
+        adopting_root: bool,
+        map: &BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let child = observation.parent_agent_id.is_some()
             || prior.is_some_and(AgentState::is_provider_subagent);
         let name = if child {
-            self.names.retain(|_, owner| owner != &key);
-            self.assign_child_name(observation.agent_name.as_deref(), prior, agent_id)
+            self.release_child_names(&key, map);
+            let name_prior = (!adopting_root).then_some(prior).flatten();
+            self.assign_child_name(observation.agent_name.as_deref(), name_prior, agent_id)
         } else {
-            self.assign_name(&key, observation, prior, rows)
+            self.assign_name(&key, observation, prior, map)
         };
         let name_explicit = observation.parent_agent_id.is_some()
             && observation.agent_name.as_deref() == Some(name.as_str())
-            || prior
-                .and_then(|state| state.name.as_deref())
-                .is_some_and(|prior_name| {
-                    prior.is_some_and(|state| state.name_explicit) && name == prior_name
-                });
+            || (!adopting_root
+                && prior
+                    .and_then(|state| state.name.as_deref())
+                    .is_some_and(|prior_name| {
+                        prior.is_some_and(|state| state.name_explicit) && name == prior_name
+                    }));
         let kind_ordinal = self.assign_ordinal(kind, agent_id, observation, prior);
         CardIdentity {
             name,
             name_explicit,
             kind_ordinal,
+        }
+    }
+
+    /// Release any handle owned by a newly parented child and re-seat each
+    /// released name onto the first surviving non-subagent row holding it,
+    /// matching `from_map_and_state` so warm and cold folds agree.
+    fn release_child_names(
+        &mut self,
+        key: &(AgentKind, AgentSessionId),
+        map: &BTreeMap<(AgentKind, AgentSessionId), Arc<AgentState>>,
+    ) {
+        let released: Vec<String> = self
+            .names
+            .iter()
+            .filter(|(_, owner)| *owner == key)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in released {
+            self.names.remove(&name);
+            if let Some((owner, _)) = map.iter().find(|(candidate, state)| {
+                *candidate != key
+                    && !state.is_provider_subagent()
+                    && state.name.as_deref() == Some(name.as_str())
+            }) {
+                self.names.insert(name, owner.clone());
+            }
         }
     }
 

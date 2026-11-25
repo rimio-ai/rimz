@@ -629,9 +629,15 @@ impl ReducerState {
                 "non-start lifecycle event created an unseen session in the reducer",
             );
         }
-        let card_identity = self
-            .identity
-            .assign(&kind, &agent_id, observation, prior, &self.map);
+        let adopting_root = adopts_root(event_name, prior.map(|prior| &prior.parent_agent_id));
+        let card_identity = self.identity.assign(
+            &kind,
+            &agent_id,
+            observation,
+            prior,
+            adopting_root,
+            &self.map,
+        );
         let mut state = assemble_agent_state(AgentStateInput {
             kind: &kind,
             agent_id: &agent_id,
@@ -1154,6 +1160,74 @@ fn clear_current_window(usage: &mut AgentUsageSummary) {
     };
 }
 
+/// Whether `event_name` attaches a row whose prior parent is `prior_parent` (`None`
+/// for an unseen row) to a parent as an adopted root, which drops the launch
+/// identity the root copied from its parent's process environment
+/// ([`strip_root_launch_identity`]). The reducer and the lifecycle follower both
+/// decide it here.
+pub(in crate::store) fn adopts_root(
+    event_name: Option<&str>,
+    prior_parent: Option<&Option<AgentSessionId>>,
+) -> bool {
+    event_name == Some("SubagentAdopted") && prior_parent.is_some_and(Option::is_none)
+}
+
+/// The parent a row holds after `event_name` carrying `event_parent`, given its prior parent
+/// (`None` for an unseen row): an established parent stays, and the event's parent takes on
+/// an unseen row or a root the event adopts ([`adopts_root`]).
+pub(in crate::store) fn parent_after(
+    prior_parent: Option<&Option<AgentSessionId>>,
+    event_name: Option<&str>,
+    event_parent: Option<AgentSessionId>,
+) -> Option<AgentSessionId> {
+    match prior_parent {
+        Some(Some(parent)) => Some(parent.clone()),
+        Some(None) if adopts_root(event_name, prior_parent) => event_parent,
+        Some(None) => None,
+        None => event_parent,
+    }
+}
+
+/// Drop launch-scoped identity that an unjoined provider subagent copied from
+/// its parent's process environment or inherited as a provisional root before
+/// `SubagentAdopted` attached it to its parent.
+fn strip_root_launch_identity(state: &mut AgentState) {
+    state.launch_id = None;
+    state.prior_launch_ids.clear();
+    state.epoch = 0;
+    state.launch_bound = false;
+    state.system_prompt_digest = None;
+    state.launch_warnings.clear();
+    state.profile = None;
+    state.profile_scope = None;
+    state.login = None;
+    state.tier = None;
+    state.record = None;
+    state.mode = None;
+    state.isolation = None;
+    state.effective_isolation = None;
+    state.checkout = None;
+    state.add_dirs.clear();
+    state.untrusted_checkout = false;
+    state.role = None;
+    state.team = None;
+    state.loop_task = None;
+    state.loop_booked_by.clear();
+    state.loop_fire = None;
+    state.workflow = None;
+    state.tune = Default::default();
+    state.automation = None;
+    state.launch_group = None;
+    state.launch_ordinal = None;
+    state.molted_from = None;
+    state.lane = None;
+    state.channel = None;
+    state.root_lane = false;
+    state.launch_depth = None;
+    state.launched_by = None;
+    state.task = None;
+}
+
 fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let mut state = carried_base(
         input.kind,
@@ -1161,6 +1235,13 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.prior,
         input.event.timestamp,
     );
+    let adopting_root = adopts_root(
+        input.event_name,
+        input.prior.map(|prior| &prior.parent_agent_id),
+    );
+    if adopting_root {
+        strip_root_launch_identity(&mut state);
+    }
     fold_launch_params(&mut state, &input.observation.launch, true);
     state.resumed_at =
         (input.event_name == Some("rimz.agent-resumed")).then_some(input.event.timestamp);
@@ -1171,7 +1252,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let ends_session_shells = !snapshot
         && matches!(
             &input.signal,
-            lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
+            lifecycle::LifecycleSignal::Ended
+                | lifecycle::LifecycleSignal::Registered
+                | lifecycle::LifecycleSignal::SubagentStopped { .. }
         );
     let linked_continuation = !snapshot
         && input.prior.is_none()
@@ -1265,12 +1348,11 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     // Established lineage stays authoritative. The explicit adoption event is
     // the one path that converts a provisional root after provider evidence
     // became readable later than the child's own hooks.
-    let parent_agent_id = match input.prior {
-        Some(prior) if prior.parent_agent_id.is_some() => prior.parent_agent_id.clone(),
-        Some(_) if input.event_name == Some("SubagentAdopted") => input.event_parent_agent_id,
-        Some(_) => None,
-        None => input.event_parent_agent_id,
-    };
+    let parent_agent_id = parent_after(
+        input.prior.map(|prior| &prior.parent_agent_id),
+        input.event_name,
+        input.event_parent_agent_id,
+    );
     let worktree = worktree_projection(
         input.observation,
         input.prior,
@@ -1278,11 +1360,11 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.event_name,
     );
     let runtime_owner = runtime_projection(input.observation, input.prior, input.agent_id);
-    let provider_subagent =
-        parent_agent_id.is_some() && input.prior.is_none_or(|prior| prior.launch_depth.is_none());
+    let provider_subagent = parent_agent_id.is_some()
+        && (adopting_root || input.prior.is_none_or(|prior| prior.launch_depth.is_none()));
     let task = task_projection(
         input.observation,
-        input.prior,
+        (!adopting_root).then_some(input.prior).flatten(),
         provider_subagent,
         input.event_task,
     );
@@ -1329,9 +1411,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.compacted_from = Some(compacted_from.clone());
     }
     state.usage = usage;
-    // A shell or script never outlives its session: an end or a real
-    // registration drops the lists before this event's own reports land.
-    // Snapshots keep them.
+    // A shell or script never outlives its session or native subagent: an end,
+    // a subagent stop, or a real registration drops the lists before this
+    // event's own reports land. Snapshots keep them.
     if ends_session_shells {
         state.background_shells.clear();
         state.background_scripts.clear();

@@ -111,6 +111,8 @@ struct FollowState {
     /// decision the snapshot makes.
     launch: Option<AgentSessionId>,
     epoch: u32,
+    /// The row's parent, as the fold keeps it, for the adoption decision.
+    parent_agent_id: Option<AgentSessionId>,
 }
 
 /// Events and non-fatal archive-gap warnings observed in one poll.
@@ -174,6 +176,7 @@ impl EventFollower {
                     closed_turn_id: agent.closed_turn_id.clone(),
                     launch: agent.launch_id.clone(),
                     epoch: agent.epoch,
+                    parent_agent_id: agent.parent_agent_id.clone(),
                 };
                 (key, state)
             })
@@ -297,7 +300,23 @@ impl EventFollower {
             }) {
                 continue;
             }
-            let (launch, epoch) = launch_after(prior, observation);
+            let event_name = payload.event_name.as_deref();
+            let prior_parent = prior.map(|state| &state.parent_agent_id);
+            let (launch, epoch) = if snapshot::adopts_root(event_name, prior_parent) {
+                (None, 0)
+            } else {
+                launch_after(prior, observation)
+            };
+            let parent_agent_id = snapshot::parent_after(
+                prior_parent,
+                event_name,
+                observation
+                    .parent_agent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|parent| !parent.is_empty())
+                    .map(AgentSessionId::from),
+            );
             if observation.is_state_snapshot() {
                 let next = AgentState::snapshot_transition(
                     prior.map(|state| &state.lifecycle),
@@ -312,10 +331,12 @@ impl EventFollower {
                     closed_turn_id: None,
                     launch: None,
                     epoch: 0,
+                    parent_agent_id: None,
                 });
                 state.lifecycle = next;
                 state.open_ask_key = None;
                 (state.launch, state.epoch) = (launch, epoch);
+                state.parent_agent_id = parent_agent_id;
                 self.ended.retain(|ended| ended != &key);
                 continue;
             }
@@ -372,6 +393,7 @@ impl EventFollower {
                     closed_turn_id,
                     launch,
                     epoch,
+                    parent_agent_id,
                 },
             );
             self.ended.retain(|ended| ended != &key);
