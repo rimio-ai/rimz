@@ -161,7 +161,9 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
 /// One generated event. Actions 12-14 are a swap of `agent_id`'s launch at
 /// `epoch` (its reservation starting, bound, failed) and 15 its session's
 /// registration stamped at `epoch`; a lifecycle action is stamped one epoch
-/// lower when `epoch` is above 0, and unstamped at 0.
+/// lower when `epoch` is above 0, and unstamped at 0. Action 16 is a turn end
+/// parked on background work, 17 a manual compaction close, and 18 that close
+/// retiring a context reading.
 fn sequence_event(
     workspace: &WorkspaceId,
     kind: &str,
@@ -230,7 +232,7 @@ fn sequence_event(
         }
         event.params = serde_json::value::to_raw_value(&params).unwrap();
         event
-    } else if action >= 10 {
+    } else if matches!(action, 10 | 11) {
         let mut params = serde_json::json!({"agent_id": agent_id, "setting": "keep-warm"});
         if action == 10 {
             params["value"] = serde_json::json!("2h");
@@ -300,9 +302,29 @@ fn sequence_event(
                     failed: false,
                 },
             ),
+            16 => (
+                "Stop",
+                lifecycle::LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: true,
+                    turn_id: None,
+                },
+            ),
+            17 | 18 => (
+                "PostCompact",
+                lifecycle::LifecycleSignal::CompactionEnded {
+                    auto: Some(false),
+                    failed: false,
+                },
+            ),
             _ => ("SessionStart", lifecycle::LifecycleSignal::Registered),
         };
         let mut event = lifecycle_at(workspace, kind, name, agent_id, signal);
+        if action == 18 {
+            let mut params = event.params_value();
+            params["retired_context_tokens"] = serde_json::json!(26_700);
+            event.params = serde_json::value::to_raw_value(&params).unwrap();
+        }
         if epoch > 0 {
             let mut params = event.params_value();
             params["launch_id"] = serde_json::json!(launch);
@@ -325,7 +347,7 @@ proptest::proptest! {
     /// events included.
     #[test]
     fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
-        seq in proptest::collection::vec((0usize..2, 0usize..16, 0usize..3, 0u32..3), 1..12),
+        seq in proptest::collection::vec((0usize..2, 0usize..19, 0usize..3, 0u32..3), 1..12),
         split in proptest::prelude::any::<proptest::sample::Index>(),
     ) {
         use proptest::prelude::prop_assert_eq;
