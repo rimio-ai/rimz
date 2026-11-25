@@ -819,3 +819,58 @@ fn a_molt_to_another_kind_confirms_and_wakes_the_records_queued_for_the_agent() 
     );
     assert_eq!(spawns, vec![Some(queued.message_id.to_string())]);
 }
+
+#[test]
+fn triggered_compaction_end_acknowledges_sent_command_and_echo_or_failure_does_not() {
+    use rimz::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+
+    let cases = [
+        ("auto true", Some(true), false, false, true),
+        ("auto false", Some(false), false, false, true),
+        ("triggerless echo", None, false, false, false),
+        ("flagged echo", Some(true), false, true, false),
+        ("failed close", Some(true), true, false, false),
+    ];
+    let agent = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let workspace = workspace();
+    for (label, auto, failed, echo, should_confirm) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+        let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        let state = rimz::testkit::agent_state("antigravity", "sess-1", jiff::Timestamp::now());
+        let mut command = MessageRecord::new(
+            workspace_id(),
+            &state,
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_body(MessageBody::Command);
+        command.status = MessageStatus::Sent;
+        command.last_sent_at = Some(jiff::Timestamp::now());
+        store
+            .queue_message(&command, &workspace.session_name)
+            .unwrap();
+
+        let recorded = RecordedLifecycle {
+            model_hint: None,
+            observation: AgentLifecycleObservation::new(
+                Some(state.agent_id.clone()),
+                LifecycleSignal::CompactionEnded { auto, failed, echo },
+            ),
+            receipt: Default::default(),
+        };
+        let delivered = confirm_sent_message_for_lifecycle(&store, agent, &recorded, &workspace);
+        assert_eq!(
+            delivered.len(),
+            usize::from(should_confirm),
+            "{label}: delivered={delivered:?}"
+        );
+        let still_live = store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .any(|msg| msg.message_id == command.message_id);
+        assert_eq!(still_live, !should_confirm, "{label}");
+    }
+}
