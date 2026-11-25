@@ -313,9 +313,10 @@ fn inner_role() {
         "slow-term-group" => {
             let started = std::env::var(STARTED_FILE_ENV).unwrap();
             let finished = std::env::var(FINISHED_FILE_ENV).unwrap();
-            // The background child writes the started file once it has reset sh's inherited TERM
-            // trap: a group SIGTERM sent before that reset reaches the trap's handler in the child,
-            // and the surviving `sleep 600` then holds the outer's drain open past the test's bound.
+            // The background child writes the started file once it has reset sh's inherited
+            // TERM trap: a group SIGTERM sent before that reset reaches the trap's handler in the
+            // child, and the surviving `sleep 600` then holds the outer's drain open past the
+            // test's bound.
             let mut grandchild = Command::new("sh")
                 .args([
                     "-c",
