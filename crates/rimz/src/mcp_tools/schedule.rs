@@ -17,15 +17,17 @@ use crate::config::{LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
 use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
-use crate::harness::plan::{NotOneAgent, ResolvedSingleAgentLaunch};
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
 use crate::harness::schedule::{self, ScheduleErr, TaskShape};
 use crate::harness::signal::SelectorErr;
+use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
 use crate::launcher::workflow_start;
-use crate::mcp::catalog::{ScheduleArgs, ScheduleOverlap, ScheduleTrigger, WorkflowArgs};
+use crate::mcp::catalog::{
+    ScheduleArgs, ScheduleOverlap, ScheduleTarget, ScheduleTrigger, WorkflowArgs,
+};
 use crate::mcp::{Answer, Failure};
 
 /// What a booker hears of a fire: nothing delivers one a message.
@@ -37,6 +39,8 @@ struct Launch {
     target: String,
     args: Vec<String>,
     worktree: Option<String>,
+    /// Whether the booking sets a place (`worktree`, `from_pr`, or `cwd`).
+    has_place: bool,
     /// The agent kinds the target routes to; empty for a team or a workflow.
     kinds: Vec<String>,
     warnings: Vec<String>,
@@ -58,7 +62,7 @@ pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure
     let booked_by = booking_chain(&rows.agents, booker);
     crate::harness::name::validate_name(&args.name).map_err(anyhow::Error::from)?;
     let root = room.workspace.project_root.clone();
-    let launch = launch(&room, &machine, args)?;
+    let launch = launch(tools, &room, &machine, args)?;
     let mut entry = TaskEntry {
         kind: Some(launch.kind),
         target: Some(launch.target.clone()),
@@ -76,7 +80,7 @@ pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure
         repeat: args.repeat,
         ..TaskEntry::default()
     };
-    set_trigger(&mut entry, &args.trigger, &args.name, &machine)?;
+    set_trigger(&mut entry, args, &machine)?;
     if let Some(clauses) = &entry.when {
         let scope = entry.run_dir();
         let place = WhenPlace {
@@ -107,7 +111,7 @@ pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure
     catalog.replace_machine(&args.name, &entry)?;
     let mut warnings = launch.warnings;
     warnings.extend(idle_warning(args));
-    if launch.worktree.is_none() && room.workspace.worktree_root != root {
+    if !launch.has_place && room.workspace.worktree_root != root {
         warnings.push(format!(
             "runs at the project root {}, not {}; set `worktree` to run each fire in a \
              RimZ-owned worktree",
@@ -158,60 +162,146 @@ fn refuse_held_name(
     )))
 }
 
-fn launch(room: &Room, machine: &MachineConfig, args: &ScheduleArgs) -> Result<Launch, Failure> {
+fn launch(
+    tools: &Tools,
+    room: &Room,
+    machine: &MachineConfig,
+    args: &ScheduleArgs,
+) -> Result<Launch, Failure> {
     let root = &room.workspace.project_root;
     if let Some(worktree) = &args.worktree {
         crate::worktree::parse_requested_name(worktree).map_err(anyhow::Error::from)?;
     }
     // A fire meeting the closed worktree an earlier fire's agent or team left launches fresh
-    // there; without `--fresh` an unattended launch refuses it.
+    // there; without `--fresh` an unattended launch refuses it. Emit it once even if the caller
+    // also set `arguments.fresh`.
     let fresh = args.worktree.as_ref().map(|_| "--fresh".to_owned());
-    match (&args.run.agent, &args.run.team, &args.run.workflow) {
-        (Some(agent), _, _) => {
-            ResolvedSingleAgentLaunch::for_booking(&agent.profile, &room.workspace).map_err(
-                |err| match err.downcast_ref::<NotOneAgent>() {
-                    Some(NotOneAgent::Cells(_)) => Failure::new(format!(
-                        "`run.agent.profile` `{}` names more than one cell; name one agent profile",
-                        agent.profile
-                    )),
-                    Some(NotOneAgent::Command(_)) => Failure::new(format!(
-                        "`run.agent.profile` `{}` names a command, not an agent; name an agent \
-                         profile",
-                        agent.profile
-                    )),
-                    None => Failure::from(err),
-                },
-            )?;
+    match &args.target {
+        ScheduleTarget::Agent(agent) => {
+            let profile = agent.profile.trim();
             let effective = effective::load(machine, root).map_err(anyhow::Error::from)?;
+            if effective.teams.0.contains_key(profile) {
+                return Err(Failure::new(format!(
+                    "`arguments.profile` `{profile}` is a team; book it with `tool` `team`"
+                )));
+            }
+            let agent_override =
+                crate::harness::plan::normalized_preset_value(agent.agent.as_deref());
             let lane = crate::harness::lanes::directory_channel(root, root);
             let snapshot = lane
                 .as_ref()
                 .map(|_| room.store.snapshot_cached())
                 .transpose()
                 .map_err(anyhow::Error::from)?;
+            let overrides = LaunchOverrides {
+                agent: agent_override.clone(),
+                ..LaunchOverrides::default()
+            };
+            let finalized = crate::launcher::resolve::resolve_finalized_layout(
+                snapshot.as_ref(),
+                machine,
+                &effective,
+                ProfileScope::Agents,
+                Some(profile),
+                Some(&agent.prompt),
+                &overrides,
+                None,
+                None,
+                lane.as_ref(),
+                false,
+                None,
+            )?;
+            let cells: Vec<&Cell> = finalized
+                .resolved
+                .layout
+                .columns
+                .iter()
+                .flat_map(|column| &column.rows)
+                .collect();
+            match cells.as_slice() {
+                [Cell::Agent(_)] => {}
+                [_] => {
+                    return Err(Failure::new(format!(
+                        "`arguments.profile` `{profile}` names a command, not an agent; name an \
+                         agent profile"
+                    )));
+                }
+                _ => {
+                    return Err(Failure::new(format!(
+                        "`arguments.profile` `{profile}` names more than one cell; name one agent \
+                         profile"
+                    )));
+                }
+            }
+            if let Some(name) = agent.name.as_deref() {
+                crate::harness::plan::validate_agent_name(name)
+                    .map_err(|err| Failure::new(format!("`arguments.name`: {err}")))?;
+            }
+            let from_pr = parse_pr_flag(agent.from_pr.as_deref())?;
+            if args.repeats() && from_pr.is_some() && finalized.resolved.team_name.is_some() {
+                return Err(Failure::new(
+                    "`arguments.from_pr`: a repeating booking of a team seat cannot use \
+                     `from_pr`; set top-level `worktree` or use a one-shot trigger",
+                ));
+            }
+            let cwd = agent
+                .cwd
+                .as_deref()
+                .map(|cwd| {
+                    let resolved = tools.dir(Some(cwd))?;
+                    let host = crate::launcher::checkout::resolve_launch_cwd(
+                        Some(&resolved),
+                        room.store.paths(),
+                    )?
+                    .unwrap_or(resolved);
+                    host.to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| Failure::new("`arguments.cwd` is not valid UTF-8"))
+                })
+                .transpose()?;
             let kinds = crate::launcher::resolve::routable_kinds(
                 snapshot.as_ref(),
                 machine,
                 &effective,
                 ProfileScope::Agents,
-                Some(&agent.profile),
+                Some(profile),
                 Some(&agent.prompt),
-                &LaunchOverrides::default(),
+                &overrides,
                 None,
                 None,
                 lane.as_ref(),
-                false,
+                agent.name.is_some(),
             )?;
+            let mut tail = Vec::new();
+            tail.extend(fresh);
+            if let Some(description) = &agent.description {
+                tail.push(format!("--description={description}"));
+            }
+            if let Some(name) = &agent.name {
+                tail.push(format!("--name={name}"));
+            }
+            if let Some(agent_override) = &agent_override {
+                tail.push(format!("--agent={agent_override}"));
+            }
+            if let Some(from_pr) = &from_pr {
+                tail.push(format!("--from-pr={from_pr}"));
+            }
+            if let Some(cwd) = &cwd {
+                tail.push(format!("--cwd={cwd}"));
+            }
+            tail.push(agent.prompt.clone());
             Ok(Launch {
                 kind: LaunchKind::Agent,
-                target: agent.profile.clone(),
-                args: fresh.into_iter().chain([agent.prompt.clone()]).collect(),
+                target: profile.to_owned(),
+                args: tail,
                 worktree: args.worktree.clone(),
+                has_place: args.worktree.is_some() || from_pr.is_some() || cwd.is_some(),
                 kinds,
                 warnings: Vec::new(),
             })
         }
-        (None, Some(team), _) => {
+        ScheduleTarget::Team(team) => {
+            let team_name = team.team.trim();
             // A team's fire loads the machine config strictly, where this tool reads it
             // leniently.
             let strict = MachineConfig::load().map_err(|err| {
@@ -220,23 +310,40 @@ fn launch(room: &Room, machine: &MachineConfig, args: &ScheduleArgs) -> Result<L
                 ))
             })?;
             let effective = effective::load(&strict, root).map_err(anyhow::Error::from)?;
-            if !effective.teams.0.contains_key(&team.team) {
-                return Err(Failure::new(format!("unknown team `{}`", team.team)));
+            if !effective.teams.0.contains_key(team_name) {
+                return Err(Failure::new(format!("unknown team `{team_name}`")));
             }
+            let from_pr = parse_pr_flag(team.from_pr.as_deref())?;
+            let mut tail = Vec::new();
+            tail.extend(fresh);
+            if let Some(description) = &team.description {
+                tail.push(format!("--description={description}"));
+            }
+            if let Some(from_pr) = &from_pr {
+                tail.push(format!("--from-pr={from_pr}"));
+            }
+            tail.push(team.prompt.clone());
             Ok(Launch {
                 kind: LaunchKind::Team,
-                target: team.team.clone(),
-                args: fresh.into_iter().chain([team.goal.clone()]).collect(),
+                target: team_name.to_owned(),
+                args: tail,
                 worktree: args.worktree.clone(),
+                has_place: true,
                 kinds: Vec::new(),
                 warnings: Vec::new(),
             })
         }
-        (None, None, Some(run)) => workflow_launch(root, args.worktree.as_deref(), run),
-        (None, None, None) => Err(Failure::new(
-            "`run` takes exactly one of `agent`, `team`, or `workflow`",
-        )),
+        ScheduleTarget::Workflow(run) => workflow_launch(root, args.worktree.as_deref(), run),
     }
+}
+
+fn parse_pr_flag(raw: Option<&str>) -> Result<Option<String>, Failure> {
+    raw.map(|raw| {
+        crate::forge::parse(raw)
+            .map(|_| raw.trim().to_owned())
+            .map_err(|err| Failure::new(format!("`arguments.from_pr`: {err}")))
+    })
+    .transpose()
 }
 
 fn workflow_launch(
@@ -244,15 +351,9 @@ fn workflow_launch(
     worktree: Option<&str>,
     run: &WorkflowArgs,
 ) -> Result<Launch, Failure> {
-    let name = Path::new(&run.name);
-    let worktree = match (worktree, run.worktree.as_deref()) {
-        (Some(outer), Some(inner)) if outer != inner => {
-            return Err(Failure::new(
-                "`worktree` and `run.workflow.worktree` differ; keep one",
-            ));
-        }
-        (outer, inner) => outer.or(inner).map(str::to_owned),
-    };
+    let wf_name = run.name.as_str();
+    let name = Path::new(wf_name);
+    let worktree = worktree.map(str::to_owned);
     let dir = workflow_start::definition_dir(name)?
         .ok_or_else(|| Failure::new(workflow_start::not_deployed(name)))?;
     let warnings = workflow_start::validated(&dir, Some(root))?
@@ -264,13 +365,12 @@ fn workflow_launch(
             == workflow::ScopeKind::Project
     {
         return Err(Failure::new(format!(
-            "workflow `{}` has scope = project, so it runs at the project root; remove \
-             `worktree`",
-            run.name
+            "workflow `{wf_name}` has scope = project, so it runs at the project root; remove \
+             `worktree`"
         )));
     }
-    parse_when("run.workflow.deadline", run.deadline.as_deref())?;
-    parse_when("run.workflow.give_up", run.give_up.as_deref())?;
+    parse_when("arguments.deadline", run.deadline.as_deref())?;
+    parse_when("arguments.give_up", run.give_up.as_deref())?;
     let mut tail = Vec::new();
     for (flag, value) in [
         ("--prompt", &run.prompt),
@@ -278,17 +378,19 @@ fn workflow_launch(
         ("--give-up", &run.give_up),
     ] {
         if let Some(value) = value {
-            tail.extend([flag.to_owned(), value.clone()]);
+            tail.push(format!("{flag}={value}"));
         }
     }
     if run.skip_capacity {
         tail.push("--skip-capacity".to_owned());
     }
+    let has_place = worktree.is_some();
     Ok(Launch {
         kind: LaunchKind::Workflow,
-        target: run.name.clone(),
+        target: wf_name.to_owned(),
         args: tail,
         worktree,
+        has_place,
         kinds: Vec::new(),
         warnings,
     })
@@ -296,35 +398,38 @@ fn workflow_launch(
 
 fn set_trigger(
     entry: &mut TaskEntry,
-    trigger: &ScheduleTrigger,
-    name: &str,
+    args: &ScheduleArgs,
     machine: &MachineConfig,
 ) -> Result<(), Failure> {
     let now = Timestamp::now().to_zoned_datetime(machine.time_zone());
-    if let Some(at) = &trigger.at {
-        let fire_at =
-            schedule::resolve_once_at(name, at, &now).map_err(|err| at_refusal(err, "`at`"))?;
-        entry.fire_at = Some(fire_at);
+    match args.trigger {
+        ScheduleTrigger::At => {
+            let fire_at = schedule::resolve_once_at(&args.name, &args.value, &now)
+                .map_err(|err| at_refusal(err, "`at`"))?;
+            entry.fire_at = Some(fire_at);
+        }
+        ScheduleTrigger::In => {
+            let delay = schedule::parse_delay(&args.value)
+                .map_err(|err| Failure::new(format!("invalid in `{}`: {err}", args.value)))?;
+            let fire_at = schedule::delayed_instant(delay, now.timestamp()).map_err(|_| {
+                Failure::new(format!(
+                    "invalid in `{}`: lands past the latest time RimZ can schedule",
+                    args.value
+                ))
+            })?;
+            entry.fire_at = Some(fire_at);
+        }
+        ScheduleTrigger::Every => entry.every = Some(args.value.clone()),
+        ScheduleTrigger::Cron => entry.cron = Some(args.value.clone()),
+        ScheduleTrigger::Signal => {
+            entry.signal = Some(args.value.clone());
+            entry.matches = args.matches.clone().filter(|matches| !matches.is_empty());
+        }
+        ScheduleTrigger::When => {
+            entry.when = Some(vec![args.value.clone()]);
+            entry.hold.clone_from(&args.hold);
+        }
     }
-    if let Some(after) = &trigger.after {
-        let delay = schedule::parse_delay(after)
-            .map_err(|err| Failure::new(format!("invalid in `{after}`: {err}")))?;
-        let fire_at = schedule::delayed_instant(delay, now.timestamp()).map_err(|_| {
-            Failure::new(format!(
-                "invalid in `{after}`: lands past the latest time RimZ can schedule"
-            ))
-        })?;
-        entry.fire_at = Some(fire_at);
-    }
-    entry.every.clone_from(&trigger.every);
-    entry.cron.clone_from(&trigger.cron);
-    entry.signal.clone_from(&trigger.signal);
-    entry.matches = trigger
-        .matches
-        .clone()
-        .filter(|matches| !matches.is_empty());
-    entry.when = trigger.when.clone().map(|when| vec![when]);
-    entry.hold.clone_from(&trigger.hold);
     Ok(())
 }
 
@@ -352,17 +457,16 @@ fn window_account(kinds: &[String], entry: &TaskEntry) -> anyhow::Result<WindowA
 
 /// The note `rimz loop add` owes a repeating agent or team booking with no overlap policy.
 fn idle_warning(args: &ScheduleArgs) -> Option<String> {
-    let repeats = args.repeat || args.trigger.every.is_some() || args.trigger.cron.is_some();
-    if !repeats || args.overlap.is_some() || args.run.workflow.is_some() {
+    if !args.repeats() || args.overlap.is_some() {
         return None;
     }
-    let (handoff, choices) = if args.run.team.is_some() {
-        ("`run.team.goal`", "`replace`")
-    } else {
-        ("`run.agent.prompt`", "`replace` or `allow`")
+    let choices = match args.target {
+        ScheduleTarget::Team(_) => "`replace`",
+        ScheduleTarget::Agent(_) => "`replace` or `allow`",
+        ScheduleTarget::Workflow(_) => return None,
     };
     Some(format!(
-        "note: an agent left idle holds later fires; say in {handoff} when it ends its session, \
-         or set `overlap` to {choices}"
+        "note: an agent left idle holds later fires; say in `arguments.prompt` when it ends its \
+         session, or set `overlap` to {choices}"
     ))
 }

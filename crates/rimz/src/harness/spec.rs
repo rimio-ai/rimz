@@ -1102,7 +1102,8 @@ pub fn parse_layout_spec(
     parse_layout_spec_validated(raw, profiles, commands, None)
 }
 
-pub(super) fn resolve_spec(
+#[cfg(test)]
+fn resolve_spec(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1111,6 +1112,7 @@ pub(super) fn resolve_spec(
     resolve_spec_with_agent_override(arg, profiles, profiles, commands, teams, None)
 }
 
+#[cfg(test)]
 pub(super) fn resolve_spec_with_agent_override(
     arg: Option<&str>,
     profiles: &ProfilesConfig,

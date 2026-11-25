@@ -208,16 +208,11 @@ impl Tool {
         }
     }
 
-    /// The characters of the descriptions of the tool's arguments, which a
-    /// provider may count with the tool's own description.
+    /// The characters of every description the tool's input schema carries,
+    /// top-level and nested, which a provider may count with the tool's own
+    /// description.
     pub(super) fn argument_text_len(&self) -> usize {
-        (self.schema)()["properties"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(_, property)| property["description"].as_str())
-            .map(|text| text.chars().count())
-            .sum()
+        schema_description_len(&(self.schema)())
     }
 
     /// The call the arguments make, or the error naming the argument that
@@ -332,11 +327,9 @@ pub static TOOLS: [Tool; 17] = [
         command: "",
         declared: &[],
         verbs: &[],
-        schema: schema::<ScheduleArgs>,
+        schema: schema::<ScheduleInput>,
         output: Some(start_schema),
-        parse: |arguments| {
-            parse::<ScheduleArgs>(arguments).map(|args| Call::Schedule(Box::new(args)))
-        },
+        parse: parse_schedule,
     },
     Tool {
         name: "message",
@@ -643,6 +636,20 @@ fn schema<T: JsonSchema>() -> Value {
     }
     drop_null(&mut schema);
     schema
+}
+
+fn schema_description_len(value: &Value) -> usize {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, child)| match child {
+                Value::String(text) if key == "description" => text.chars().count(),
+                _ => schema_description_len(child),
+            })
+            .sum(),
+        Value::Array(items) => items.iter().map(schema_description_len).sum(),
+        _ => 0,
+    }
 }
 
 fn drop_null(value: &mut Value) {
@@ -1002,180 +1009,23 @@ impl ToolArgs for WorkflowArgs {
     }
 }
 
-/// When a booking fires: exactly one of `at`, `in`, `every`, `cron`, `signal`, or `when`. A
-/// provider keeps no `oneOf`, so `refusal` holds the choice.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduleTrigger {
-    /// Once, at this clock time.
-    pub at: Option<String>,
-    /// Once, after this delay.
-    #[serde(rename = "in")]
-    pub after: Option<String>,
-    /// Repeating, at this interval.
-    pub every: Option<String>,
-    /// Repeating, on this cron schedule.
-    pub cron: Option<String>,
-    /// On this signal.
-    pub signal: Option<String>,
-    /// `signal` only: payload fields that must equal these values.
-    #[serde(rename = "match")]
-    pub matches: Option<std::collections::BTreeMap<String, String>>,
-    /// When this condition reads true.
-    pub when: Option<String>,
-    /// `when` only: how long it must hold.
-    #[serde(rename = "for")]
-    pub hold: Option<String>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ScheduleTrigger {
+    At,
+    In,
+    Every,
+    Cron,
+    Signal,
+    When,
 }
 
-impl ScheduleTrigger {
-    fn refusal(&self) -> Option<String> {
-        let forms = [
-            self.at.is_some(),
-            self.after.is_some(),
-            self.every.is_some(),
-            self.cron.is_some(),
-            self.signal.is_some(),
-            self.when.is_some(),
-        ];
-        if forms.into_iter().filter(|set| *set).count() != 1 {
-            return Some(
-                "`trigger` takes exactly one of `at`, `in`, `every`, `cron`, `signal`, or `when`"
-                    .to_owned(),
-            );
-        }
-        if self.matches.is_some() && self.signal.is_none() {
-            return Some("`match` takes a `signal` trigger".to_owned());
-        }
-        if self
-            .matches
-            .as_ref()
-            .is_some_and(|matches| matches.contains_key(""))
-        {
-            return Some("a `match` key is empty".to_owned());
-        }
-        (self.hold.is_some() && self.when.is_none())
-            .then(|| "`for` takes a `when` trigger".to_owned())
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduleAgent {
-    /// The agent profile each fire launches.
-    pub profile: String,
-    /// The task for each fire: its goal, and where the result goes.
-    pub prompt: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduleTeam {
-    /// The team each fire launches.
-    pub team: String,
-    /// The goal for the team's leader.
-    pub goal: String,
-}
-
-/// What a fire launches: exactly one of `agent`, `team`, or `workflow`.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduleRun {
-    /// Launch a fresh agent.
-    pub agent: Option<ScheduleAgent>,
-    /// Launch a team.
-    pub team: Option<ScheduleTeam>,
-    /// Start a run of a deployed workflow.
-    pub workflow: Option<WorkflowArgs>,
-}
-
-/// Why a value a fire's launch passes as a word of its own would read as a flag there.
-fn flag_refusal(field: &str, value: &str) -> Option<String> {
-    value
-        .starts_with('-')
-        .then(|| format!("`{field}` starts with `-`, which a fire's launch reads as a flag"))
-}
-
-impl ScheduleRun {
-    /// Why this target could never launch from a fire: each refusal is one the check of
-    /// `rimz loop add` would make of the stored launch, or one its fire's spawn would make.
-    fn refusal(&self) -> Option<String> {
-        let blank = |field: &str, value: &str| {
-            value
-                .trim()
-                .is_empty()
-                .then(|| format!("`{field}` is blank"))
-        };
-        // A free-text positional takes a leading `- `, as a bulleted prompt has; any other
-        // leading `-` parses as an option.
-        let text_flag = |field: &str, value: &str| {
-            let rest = value.strip_prefix('-')?;
-            if rest.starts_with(char::is_whitespace) {
-                return None;
-            }
-            flag_refusal(field, value)
-        };
-        let nul = |field: &str, value: Option<&str>| {
-            value.is_some_and(|value| value.contains('\0')).then(|| {
-                format!("`{field}` holds a NUL character, which a fire's launch cannot pass")
-            })
-        };
-        match (&self.agent, &self.team, &self.workflow) {
-            (Some(agent), None, None) => blank("run.agent.profile", &agent.profile)
-                .or_else(|| blank("run.agent.prompt", &agent.prompt))
-                .or_else(|| flag_refusal("run.agent.profile", &agent.profile))
-                .or_else(|| text_flag("run.agent.prompt", &agent.prompt))
-                .or_else(|| nul("run.agent.prompt", Some(&agent.prompt)))
-                .or_else(|| {
-                    agent.profile.starts_with(['@', '#']).then(|| {
-                        "`run.agent.profile` is a profile, not an address or scope".to_owned()
-                    })
-                })
-                .or_else(|| {
-                    // `launch` is the verb a launch spec may follow, so a spec named that is a
-                    // verb too.
-                    let launches = agent.profile != "launch"
-                        && crate::pane::command_is_launch_chrome(&format!(
-                            "rimz agents {} prompt",
-                            agent.profile
-                        ));
-                    (!launches).then(|| {
-                        format!(
-                            "`run.agent.profile` `{}` is a `rimz agents` verb, which a fire's \
-                             launch reads in place of a profile",
-                            agent.profile
-                        )
-                    })
-                }),
-            (None, Some(team), None) => blank("run.team.team", &team.team)
-                .or_else(|| flag_refusal("run.team.team", &team.team))
-                .or_else(|| blank("run.team.goal", &team.goal))
-                .or_else(|| text_flag("run.team.goal", &team.goal))
-                .or_else(|| nul("run.team.goal", Some(&team.goal))),
-            (None, None, Some(workflow)) => workflow.refusal().or_else(|| {
-                if let Some(reason) = flag_refusal("run.workflow.name", &workflow.name)
-                    .or_else(|| {
-                        workflow
-                            .worktree
-                            .as_deref()
-                            .and_then(|name| flag_refusal("run.workflow.worktree", name))
-                    })
-                    .or_else(|| nul("run.workflow.prompt", workflow.prompt.as_deref()))
-                {
-                    return Some(reason);
-                }
-                if workflow.input.is_some() {
-                    return Some(
-                        "`run.workflow.input`: a fire starts a run with no input".to_owned(),
-                    );
-                }
-                workflow.detach.then(|| {
-                    "`run.workflow.detach`: a fire's run owes its task a report".to_owned()
-                })
-            }),
-            _ => Some("`run` takes exactly one of `agent`, `team`, or `workflow`".to_owned()),
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ScheduleTool {
+    Agent,
+    Team,
+    Workflow,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
@@ -1188,6 +1038,290 @@ pub enum ScheduleOverlap {
     Allow,
 }
 
+/// What a fire launches, parsed through the named tool's own argument parser and `refusal`.
+#[derive(Debug)]
+pub enum ScheduleTarget {
+    Agent(AgentArgs),
+    Team(TeamArgs),
+    Workflow(WorkflowArgs),
+}
+
+// Wire schema for `schedule`; `parse_schedule` turns it into a validated `ScheduleArgs`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ScheduleInput {
+    /// Booking name; reusing a name you hold replaces it (canceling unstarted live runs and
+    /// clearing strikes and history), while another starter's name is refused.
+    name: String,
+    /// What fires the booking.
+    trigger: ScheduleTrigger,
+    /// The trigger's argument: a clock time, delay, interval, cron expression, signal name, or
+    /// condition.
+    value: String,
+    /// Launch tool each fire invokes.
+    tool: ScheduleTool,
+    /// Arguments for `tool`, in that tool's shape without `worktree` (pass top-level `worktree`).
+    arguments: serde_json::Map<String, Value>,
+    /// `signal` only: payload fields that must equal these values (`*` matches any value).
+    #[serde(rename = "match")]
+    matches: Option<BTreeMap<String, String>>,
+    /// `when` only: duration the condition must hold before firing.
+    #[serde(rename = "for")]
+    hold: Option<String>,
+    /// `signal` or `when` only: fire on every match rather than once (default once).
+    #[serde(default)]
+    repeat: bool,
+    /// RimZ-owned worktree for every fire, created at the first fire when missing.
+    worktree: Option<String>,
+    /// Repeating triggers only: answer to a trigger during a live fire (`skip` default;
+    /// `coalesce` or `queue` hold it, `replace` stops the live fire first, `allow` launches beside
+    /// it for `agent` only).
+    overlap: Option<ScheduleOverlap>,
+    /// Disable after this many failed fires in a row (default `3`; `0` never).
+    max_strikes: Option<u32>,
+}
+
+/// A validated `schedule` call, with `arguments` parsed into its typed launch target.
+#[derive(Debug)]
+pub struct ScheduleArgs {
+    pub name: String,
+    pub trigger: ScheduleTrigger,
+    pub value: String,
+    pub matches: Option<BTreeMap<String, String>>,
+    pub hold: Option<String>,
+    pub repeat: bool,
+    pub target: ScheduleTarget,
+    pub worktree: Option<String>,
+    pub overlap: Option<ScheduleOverlap>,
+    pub max_strikes: Option<u32>,
+}
+
+impl ScheduleArgs {
+    /// Whether the booking's trigger can fire more than once.
+    pub fn repeats(&self) -> bool {
+        matches!(self.trigger, ScheduleTrigger::Every | ScheduleTrigger::Cron) || self.repeat
+    }
+}
+
+/// Why a value a fire's launch passes as a word of its own would read as a flag there.
+fn flag_refusal(field: &str, value: &str) -> Option<String> {
+    value
+        .starts_with('-')
+        .then(|| format!("`{field}` starts with `-`, which a fire's launch reads as a flag"))
+}
+
+/// A free-text positional takes a leading `- `, as a bulleted prompt has; any other leading `-`
+/// parses as an option.
+fn text_flag_refusal(field: &str, value: &str) -> Option<String> {
+    let rest = value.strip_prefix('-')?;
+    if rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    flag_refusal(field, value)
+}
+
+fn nul_refusal(field: &str, value: Option<&str>) -> Option<String> {
+    value
+        .is_some_and(|value| value.contains('\0'))
+        .then(|| format!("`{field}` holds a NUL character, which a fire's launch cannot pass"))
+}
+
+fn parse_carried<T: ToolArgs>(arguments: Value) -> Result<T, serde_json::Error> {
+    parse::<T>(arguments).map_err(|err| {
+        let mut reason = err.to_string();
+        if let Some((head, tail)) = reason.split_once("expected one of ") {
+            let tail = tail.replace(", `worktree`", "").replace("`worktree`, ", "");
+            reason = format!("{head}expected one of {tail}");
+        }
+        let formatted = if reason.contains("`worktree`") {
+            format!("`arguments` (with top-level `worktree`): {reason}")
+        } else {
+            format!("`arguments`: {reason}")
+        };
+        serde::de::Error::custom(formatted)
+    })
+}
+
+fn parse_schedule(raw: Value) -> Result<Call, serde_json::Error> {
+    let input = serde_json::from_value::<ScheduleInput>(raw)?;
+    if let Some(reason) = schedule_input_refusal(&input) {
+        return Err(serde::de::Error::custom(reason));
+    }
+    if input.arguments.contains_key("worktree") {
+        return Err(serde::de::Error::custom(
+            "`arguments.worktree`: pass top-level `worktree` instead",
+        ));
+    }
+    let mut forwarded = input.arguments;
+    if let Some(worktree) = &input.worktree {
+        forwarded.insert("worktree".to_owned(), Value::String(worktree.clone()));
+    }
+    let forwarded = Value::Object(forwarded);
+    let target = match input.tool {
+        ScheduleTool::Agent => ScheduleTarget::Agent(parse_carried::<AgentArgs>(forwarded)?),
+        ScheduleTool::Team => ScheduleTarget::Team(parse_carried::<TeamArgs>(forwarded)?),
+        ScheduleTool::Workflow => {
+            ScheduleTarget::Workflow(parse_carried::<WorkflowArgs>(forwarded)?)
+        }
+    };
+    let args = ScheduleArgs {
+        name: input.name,
+        trigger: input.trigger,
+        value: input.value,
+        matches: input.matches,
+        hold: input.hold,
+        repeat: input.repeat,
+        target,
+        worktree: input.worktree,
+        overlap: input.overlap,
+        max_strikes: input.max_strikes,
+    };
+    if let Some(reason) = schedule_target_refusal(&args) {
+        return Err(serde::de::Error::custom(reason));
+    }
+    Ok(Call::Schedule(Box::new(args)))
+}
+
+fn schedule_input_refusal(input: &ScheduleInput) -> Option<String> {
+    if input.matches.is_some() && input.trigger != ScheduleTrigger::Signal {
+        return Some("`match` takes a `signal` trigger".to_owned());
+    }
+    if input
+        .matches
+        .as_ref()
+        .is_some_and(|matches| matches.contains_key(""))
+    {
+        return Some("a `match` key is empty".to_owned());
+    }
+    if input.hold.is_some() && input.trigger != ScheduleTrigger::When {
+        return Some("`for` takes a `when` trigger".to_owned());
+    }
+    let by_clock = matches!(
+        input.trigger,
+        ScheduleTrigger::Every | ScheduleTrigger::Cron
+    );
+    let by_event = matches!(
+        input.trigger,
+        ScheduleTrigger::Signal | ScheduleTrigger::When
+    );
+    if input.repeat && !by_event {
+        return Some("`repeat` takes a `signal` or `when` trigger".to_owned());
+    }
+    if input.overlap.is_some() && !by_clock && !input.repeat {
+        return Some("`overlap` takes a repeating trigger".to_owned());
+    }
+    if let Some(name) = input.worktree.as_deref() {
+        if name.trim().is_empty() {
+            return Some("`worktree` is blank".to_owned());
+        }
+        if let Some(reason) =
+            flag_refusal("worktree", name).or_else(|| nul_refusal("worktree", Some(name)))
+        {
+            return Some(reason);
+        }
+    }
+    if let Some(reason) = nul_refusal("value", Some(&input.value))
+        .or_else(|| nul_refusal("for", input.hold.as_deref()))
+    {
+        return Some(reason);
+    }
+    if let Some(matches) = &input.matches {
+        for (key, value) in matches {
+            if let Some(reason) =
+                nul_refusal("match", Some(key)).or_else(|| nul_refusal("match", Some(value)))
+            {
+                return Some(reason);
+            }
+        }
+    }
+    None
+}
+
+/// Refusals particular to a fire beyond what the carried tool's own `ToolArgs::refusal` holds:
+/// each is one `rimz loop add`'s check or a fire's child launch would refuse.
+fn schedule_target_refusal(args: &ScheduleArgs) -> Option<String> {
+    match &args.target {
+        ScheduleTarget::Agent(agent) => {
+            let profile = agent.profile.trim();
+            nul_refusal("arguments.profile", Some(&agent.profile))
+                .or_else(|| flag_refusal("arguments.profile", profile))
+                .or_else(|| {
+                    profile.starts_with(['@', '#']).then(|| {
+                        "`arguments.profile` is a profile, not an address or scope".to_owned()
+                    })
+                })
+                .or_else(|| {
+                    // `launch` is the verb a launch spec may follow, so a spec named that is a
+                    // verb too.
+                    let launches = profile != "launch"
+                        && crate::pane::command_is_launch_chrome(&format!(
+                            "rimz agents {profile} prompt"
+                        ));
+                    (!launches).then(|| {
+                        format!(
+                            "`arguments.profile` `{profile}` is a `rimz agents` verb, which a \
+                             fire's launch reads in place of a profile"
+                        )
+                    })
+                })
+                .or_else(|| text_flag_refusal("arguments.prompt", &agent.prompt))
+                .or_else(|| nul_refusal("arguments.prompt", Some(&agent.prompt)))
+                .or_else(|| nul_refusal("arguments.description", agent.description.as_deref()))
+                .or_else(|| nul_refusal("arguments.name", agent.name.as_deref()))
+                .or_else(|| nul_refusal("arguments.agent", agent.agent.as_deref()))
+                .or_else(|| nul_refusal("arguments.from_pr", agent.from_pr.as_deref()))
+                .or_else(|| {
+                    let cwd = agent.cwd.as_deref().map(|path| path.to_string_lossy());
+                    nul_refusal("arguments.cwd", cwd.as_deref())
+                })
+        }
+        ScheduleTarget::Team(team) => {
+            let team_name = team.team.trim();
+            nul_refusal("arguments.team", Some(&team.team))
+                .or_else(|| flag_refusal("arguments.team", team_name))
+                .or_else(|| {
+                    team_name.contains('#').then(|| {
+                        "`arguments.team` cannot include `#lane`; pass top-level `worktree` \
+                         instead"
+                            .to_owned()
+                    })
+                })
+                .or_else(|| text_flag_refusal("arguments.prompt", &team.prompt))
+                .or_else(|| nul_refusal("arguments.prompt", Some(&team.prompt)))
+                .or_else(|| nul_refusal("arguments.description", team.description.as_deref()))
+                .or_else(|| nul_refusal("arguments.from_pr", team.from_pr.as_deref()))
+                .or_else(|| {
+                    (args.repeats() && team.from_pr.is_some()).then(|| {
+                        "`arguments.from_pr`: a repeating team booking cannot use `from_pr`; set \
+                         top-level `worktree` or use a one-shot trigger"
+                            .to_owned()
+                    })
+                })
+        }
+        ScheduleTarget::Workflow(workflow) => {
+            if workflow.name.trim().is_empty() {
+                return Some("`arguments.name` is blank".to_owned());
+            }
+            nul_refusal("arguments.name", Some(&workflow.name))
+                .or_else(|| flag_refusal("arguments.name", &workflow.name))
+                .or_else(|| nul_refusal("arguments.prompt", workflow.prompt.as_deref()))
+                .or_else(|| nul_refusal("arguments.deadline", workflow.deadline.as_deref()))
+                .or_else(|| nul_refusal("arguments.give_up", workflow.give_up.as_deref()))
+                .or_else(|| {
+                    workflow
+                        .input
+                        .is_some()
+                        .then(|| "`arguments.input`: a fire starts a run with no input".to_owned())
+                })
+                .or_else(|| {
+                    workflow.detach.then(|| {
+                        "`arguments.detach`: a fire's run owes its task a report".to_owned()
+                    })
+                })
+        }
+    }
+}
+
 /// How a message reaches its receiver, as `rimz message` sends it bare, with `--steer`, or
 /// with `--interrupt`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -1197,52 +1331,6 @@ pub enum MessageMode {
     Park,
     Steer,
     Interrupt,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduleArgs {
-    /// The booking's name; booking a name you hold replaces it.
-    pub name: String,
-    /// When it fires: one of `at`, `in`, `every`, `cron`, `signal` with optional `match`, or
-    /// `when` with optional `for`.
-    pub trigger: ScheduleTrigger,
-    /// `signal` or `when` only: fire on every match rather than once.
-    #[serde(default)]
-    pub repeat: bool,
-    /// What each fire launches: `agent`, `team`, or `workflow`.
-    pub run: ScheduleRun,
-    /// Run every fire in this RimZ-owned worktree, created at the first fire when missing.
-    pub worktree: Option<String>,
-    /// A repeating booking's answer to a trigger during a live fire; `skip` by default.
-    pub overlap: Option<ScheduleOverlap>,
-    /// Disable after this many failed fires in a row; 3 by default, 0 never.
-    pub max_strikes: Option<u32>,
-}
-
-impl ToolArgs for ScheduleArgs {
-    fn refusal(&self) -> Option<String> {
-        if let Some(reason) = self.trigger.refusal() {
-            return Some(reason);
-        }
-        let by_clock = self.trigger.every.is_some() || self.trigger.cron.is_some();
-        let by_event = self.trigger.signal.is_some() || self.trigger.when.is_some();
-        if self.repeat && !by_event {
-            return Some("`repeat` takes a `signal` or `when` trigger".to_owned());
-        }
-        if self.overlap.is_some() && !by_clock && !self.repeat {
-            return Some("`overlap` takes a repeating trigger".to_owned());
-        }
-        if let Some(name) = self.worktree.as_deref() {
-            if name.trim().is_empty() {
-                return Some("`worktree` is blank".to_owned());
-            }
-            if let Some(reason) = flag_refusal("worktree", name) {
-                return Some(reason);
-            }
-        }
-        self.run.refusal()
-    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
