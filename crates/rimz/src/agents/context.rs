@@ -59,11 +59,13 @@ impl SignIn {
 pub struct ContextObservation {
     pub agent_id: AgentSessionId,
     pub context: AgentContext,
-    /// The provider reports itself at rest with no background work, so a turn
-    /// the hooks still hold open ended without a hook: the statusline feed
-    /// appends a rest report (`PROVIDER_REST_EVENT`) that the hook drainer turns
-    /// into an interrupt on such a turn. A report newer than the row's last
-    /// activity also empties its listed background shells.
+    /// The provider reports its foreground turn idle with no tracked background
+    /// tasks or pending confirmation (native subagents may still be running):
+    /// the statusline feed appends a rest report (`PROVIDER_REST_EVENT`) that
+    /// the hook drainer decides in log order, interrupting an open turn,
+    /// finishing a parked turn when the report also rules out live native
+    /// subagents, and emptying listed background shells when newer than the
+    /// row's last activity.
     pub provider_at_rest: bool,
 }
 

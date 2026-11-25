@@ -2651,6 +2651,15 @@ impl AgentState {
         !self.background_shells.is_empty() && reported_at > self.last_activity
     }
 
+    /// Whether a provider's report at `reported_at` that no background work remains finishes a
+    /// turn this hook-folded row holds parked on background work: running in `TurnPhase::Parked`
+    /// with no activity as new as the report.
+    pub fn rest_ends_parked_turn(&self, reported_at: Timestamp) -> bool {
+        self.status == AgentStatus::Running
+            && self.phase == TurnPhase::Parked
+            && reported_at > self.last_activity
+    }
+
     /// Whether this live card is still owed the continue queued behind its compaction command:
     /// the fold's mark owes it and no interrupt the provider settled after its queue withdrew it.
     /// A settle is compared with the queue instant, not `last_activity`, since the compaction's

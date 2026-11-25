@@ -94,6 +94,26 @@ pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
 /// an unknown event.
 pub const PROVIDER_REST_EVENT: &str = "RimzProviderRest";
 
+/// What a provider's rest report ([`PROVIDER_REST_EVENT`]) establishes about its
+/// conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProviderRest {
+    /// The foreground turn is idle with no background tasks or pending
+    /// confirmation, while native subagents may still be running.
+    Foreground,
+    /// Nothing remains running: the foreground turn is idle with no background
+    /// tasks, no pending confirmation, and no live native subagents.
+    Complete,
+}
+
+impl ProviderRest {
+    /// Whether this report proves no background work remains, so a parked turn
+    /// can finish.
+    pub(super) const fn ends_parked_turn(self) -> bool {
+        matches!(self, Self::Complete)
+    }
+}
+
 /// Provider-neutral result of decoding one native hook payload.
 #[derive(Debug, PartialEq)]
 pub struct HookOutput {
@@ -125,7 +145,7 @@ enum CanonicalHookFact {
     FinalOutput(String),
     Error(AgentTurnError),
     Context(Box<ContextObservation>),
-    ProviderRest,
+    ProviderRest(ProviderRest),
     Progress,
     SessionEnded,
 }
@@ -303,12 +323,23 @@ impl HookOutput {
         })
     }
 
+    /// What this frame reports about the provider resting ([`PROVIDER_REST_EVENT`]), if anything.
+    pub(super) fn provider_rest(&self) -> Option<ProviderRest> {
+        self.event.facts.iter().find_map(|fact| match fact {
+            CanonicalHookFact::ProviderRest(rest) => Some(*rest),
+            _ => None,
+        })
+    }
+
     /// Whether this frame is the provider's report that its agent rests ([`PROVIDER_REST_EVENT`]).
     pub fn reports_provider_rest(&self) -> bool {
-        self.event
-            .facts
-            .iter()
-            .any(|fact| matches!(fact, CanonicalHookFact::ProviderRest))
+        self.provider_rest().is_some()
+    }
+
+    /// Whether this rest report rules out remaining background work, so a parked turn can finish.
+    pub fn provider_rest_ends_parked_turn(&self) -> bool {
+        self.provider_rest()
+            .is_some_and(ProviderRest::ends_parked_turn)
     }
 
     pub fn turn_error(&self) -> Option<&AgentTurnError> {
@@ -432,10 +463,10 @@ impl HookOutput {
         );
     }
 
-    pub(super) fn set_provider_rest(&mut self) {
+    pub(super) fn set_provider_rest(&mut self, rest: ProviderRest) {
         self.replace_fact(
-            |fact| matches!(fact, CanonicalHookFact::ProviderRest),
-            Some(CanonicalHookFact::ProviderRest),
+            |fact| matches!(fact, CanonicalHookFact::ProviderRest(_)),
+            Some(CanonicalHookFact::ProviderRest(rest)),
         );
     }
 

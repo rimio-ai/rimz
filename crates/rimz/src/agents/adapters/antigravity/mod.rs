@@ -574,8 +574,11 @@ impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
             HookRouting::session(fields.agent_id.map(Into::into))
                 .with_worktree(fields.worktree_path),
         );
-        if event_name == PROVIDER_REST_EVENT {
-            decoded.set_provider_rest();
+        if event_name == PROVIDER_REST_EVENT
+            && let Ok(statusline) = statusline::StatuslinePayload::deserialize(payload)
+            && let Some(rest) = statusline.provider_rest()
+        {
+            decoded.set_provider_rest(rest);
         }
         if let Some(observation) = fields.lifecycle.as_mut()
             && matches!(observation.signal, LifecycleSignal::TurnEnded { .. })

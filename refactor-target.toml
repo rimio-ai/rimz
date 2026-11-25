@@ -491,7 +491,9 @@ upward-dependencies = [
 # mounts_login_files, mounted_login_binds}, and create_empty_provider_file let a mounted-home
 # provider share its default history while binding only per-account login files (+6); remove dead
 # account_history_shareable (-1).
-surface-budget = 1366
+# HookOutput::provider_rest_ends_parked_turn and AgentState::rest_ends_parked_turn gate ending a
+# parked turn on a provider rest report across the adapter/CLI hook seam (+2).
+surface-budget = 1368
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

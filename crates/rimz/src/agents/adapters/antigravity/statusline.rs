@@ -9,6 +9,7 @@ use crate::agents::context::{
     AgentAccount, AgentContext, AgentCurrentUsage, AgentTokenUsage, TurnSettle, TurnSettleOutcome,
     clamp_pct,
 };
+use crate::agents::hook_types::ProviderRest;
 use crate::agents::payload::non_empty_trimmed;
 
 #[derive(Debug, Default, Deserialize)]
@@ -27,6 +28,9 @@ pub(super) struct StatuslinePayload {
     tool_confirmation_pending: Option<bool>,
     agent_state: Option<String>,
     task_count: Option<u64>,
+    /// Native subagent list, kept raw whole so an unexpected shape never drops
+    /// the rest of the payload and counts as live when gating a parked turn end.
+    subagents: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -134,6 +138,36 @@ impl StatuslinePayload {
             .is_some_and(|state| state.trim().eq_ignore_ascii_case("idle"))
             && self.task_count.unwrap_or(0) == 0
             && self.tool_confirmation_pending != Some(true)
+    }
+
+    /// Whether the payload lists any native subagent whose status is anything
+    /// other than `completed` (an unknown status, missing status, or non-array
+    /// value counts as live).
+    fn has_live_subagent(&self) -> bool {
+        match &self.subagents {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(entries)) => entries.iter().any(|entry| {
+                !entry
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .is_some_and(|status| status.trim().eq_ignore_ascii_case("completed"))
+            }),
+            Some(_) => true,
+        }
+    }
+
+    /// What this statusline payload establishes about its conversation resting:
+    /// `None` unless [`Self::at_rest`] holds; `Complete` when no native subagent
+    /// is live either, and `Foreground` while any native subagent may still run.
+    pub(super) fn provider_rest(&self) -> Option<ProviderRest> {
+        if !self.at_rest() {
+            return None;
+        }
+        Some(if self.has_live_subagent() {
+            ProviderRest::Foreground
+        } else {
+            ProviderRest::Complete
+        })
     }
 
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {

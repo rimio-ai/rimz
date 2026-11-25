@@ -518,8 +518,13 @@ fn newest_assistant(lines: &str) -> (Option<String>, bool) {
     let mut has_turn_start = false;
     for record in parse_records(lines) {
         if is_turn_start(&record) {
-            answer = None;
-            has_turn_start = true;
+            // A bare `/compact` compacts the conversation without starting a new turn.
+            if normalize_user_content(record.content.as_deref()).as_deref()
+                != Some(super::COMPACT_COMMAND)
+            {
+                answer = None;
+                has_turn_start = true;
+            }
         } else if record.status == "DONE"
             && visible_role(&record) == Some(TranscriptRole::Assistant)
             && let Some(text) = normalized(record.content.as_deref())
