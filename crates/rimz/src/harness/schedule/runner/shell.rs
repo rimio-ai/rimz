@@ -31,6 +31,10 @@ impl Fire<'_> {
         // served.
         let trigger = self.effect_prompt(String::new());
         let created_tree = self.prepare_row_tree()?;
+        // Before the fire opens its mark: a failed test leaves the checkout's mark as it is.
+        let checkout = self.fire_dir();
+        std::fs::metadata(&checkout)
+            .with_context(|| format!("task checkout {}", checkout.display()))?;
         let (fire, displaced) = self.open_fire()?;
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_LOOP_AFTER_OPEN_FIRE");
@@ -44,9 +48,6 @@ impl Fire<'_> {
             fire: Some(self.run_fire(&trigger)),
             fire_facts: Some(self.fire_facts()),
         };
-        let checkout = self.fire_dir();
-        std::fs::metadata(&checkout)
-            .with_context(|| format!("task checkout {}", checkout.display()))?;
         let created = crate::harness::workflow::create(
             &state,
             definition,

@@ -1354,6 +1354,68 @@ fn a_settle_of_a_withdrawn_mark_writes_nothing() {
     assert_eq!(records.get(&fire.core.task_id).unwrap().strikes, 0);
 }
 
+/// A command fire whose checkout is gone, its own `dir` or a scheduler's, leaves that checkout's
+/// mark as it found it: none, or an earlier fire's, settled or open.
+#[test]
+fn a_command_fire_whose_checkout_is_gone_leaves_its_mark_as_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    record_room(&root).unwrap();
+    let catalog = TaskCatalog::load(Some(&root)).unwrap();
+    let gone = root.join("gone");
+    let mut outcomes = Vec::new();
+    for each_worktree in [false, true] {
+        for found in [None, Some(Some(LoopRunResult::Errored)), Some(None)] {
+            let mut fire = launch_fire(
+                &root,
+                &catalog,
+                TaskEntry {
+                    args: vec!["true".to_owned()],
+                    timeout: Some("1m".to_owned()),
+                    dir: (!each_worktree).then(|| gone.clone()),
+                    each_worktree,
+                    ..TaskEntry::default()
+                },
+                LoopRunMode::Scheduled,
+            )
+            .with_checkout(each_worktree.then(|| gone.clone()));
+            let task = fire.core.task_id.clone();
+            let marks = || {
+                task_record::load()
+                    .unwrap()
+                    .get(&task)
+                    .unwrap()
+                    .marks
+                    .clone()
+            };
+            if let Some(result) = found {
+                let mark = FireMark {
+                    result,
+                    ..dead_mark(FireId::new(&task), false)
+                };
+                task_record_store::mutate(|records| {
+                    let record = records.get_mut(&task).unwrap();
+                    record.marks.insert(gone.clone(), mark);
+                })
+                .unwrap();
+            }
+            let before = marks();
+            let error = fire.prepare(&mut |_| Ok(())).unwrap_err();
+            let error = format!("{error:#}");
+            outcomes.push((
+                each_worktree,
+                found,
+                error.contains("task checkout"),
+                marks() == before,
+            ));
+        }
+    }
+    assert!(
+        outcomes.iter().all(|case| case.2 && case.3),
+        "(each worktree, found, refused, mark kept): {outcomes:?}"
+    );
+}
+
 /// A fire opens its mark on the task id it cached at its start: a rename mid-fire mints no
 /// second id.
 #[test]
