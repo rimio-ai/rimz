@@ -244,6 +244,7 @@ pub struct LoadedDefinitions {
     pub warnings: Vec<crate::packs::Problem>,
     pack_problems: BTreeMap<PackName, Vec<Problem>>,
     pub(in crate::config) consensus_pieces: ConsensusPieces,
+    pub(in crate::config) contexts: Option<LoadContexts>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -512,6 +513,14 @@ impl SubagentCheck {
 struct LoadContext {
     shared: Arc<SharedLoadState>,
     subagents: Option<Arc<SubagentCheck>>,
+}
+
+/// Both namespace load contexts retained on [`super::MachineConfig`] after a machine load, so
+/// project rows and later bare-name sources build without rereading disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadContexts {
+    agents: Arc<LoadContext>,
+    subagents: Arc<LoadContext>,
 }
 
 /// The inputs every resolver and seat loader in one [`load`] shares.
@@ -1077,6 +1086,10 @@ fn load_resolved(
         subagents: Some(Arc::new(SubagentCheck::from_namespace(
             &subagents, &children,
         ))),
+    });
+    loaded.contexts = Some(LoadContexts {
+        agents: Arc::clone(&agents_ctx),
+        subagents: Arc::clone(&subagents_ctx),
     });
     let agents_scope = LoadScope {
         context: &agents_ctx,

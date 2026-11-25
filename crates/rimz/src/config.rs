@@ -645,6 +645,9 @@ pub struct MachineConfig {
     /// The definitions' trait claims, which a project team's `consensus` names.
     #[serde(skip)]
     pub consensus_pieces: definitions::ConsensusPieces,
+    /// Retained machine-definition load contexts for both namespaces, absent on default configs.
+    #[serde(skip)]
+    pub definition_contexts: Option<definitions::LoadContexts>,
 }
 
 impl MachineConfig {
@@ -907,6 +910,7 @@ impl MachineConfig {
             r#loop: loop_,
             notices: ConfigNotices::default(),
             consensus_pieces: definitions::ConsensusPieces::default(),
+            definition_contexts: None,
         }
     }
 
@@ -946,6 +950,7 @@ impl MachineConfig {
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
         self.consensus_pieces = loaded.consensus_pieces;
+        self.definition_contexts = loaded.contexts;
         notices.failed_definitions = loaded.failed;
         notices.definition_errors.extend(loaded.errors);
         notices.definition_warnings.extend(loaded.warnings);
