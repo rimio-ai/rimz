@@ -36,33 +36,423 @@ fn the_reference_table_lists_every_tool_under_its_capability() {
 }
 
 #[test]
-fn a_schedule_takes_exactly_one_trigger_and_declares_no_command() {
-    let schedule = TOOLS.iter().find(|tool| tool.name == "schedule").unwrap();
+fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
+    let schedule = tool("schedule");
     assert_eq!(schedule.commands(), Vec::<String>::new());
     assert!(Capability::Loop.starts_things());
-    let run = serde_json::json!({"agent": {"profile": "worker", "prompt": "go"}});
-    for trigger in [
-        serde_json::json!({"at": "09:00", "every": "1h"}),
-        serde_json::json!({"every": "1h", "match": {"branch": "x"}}),
-        serde_json::json!({"cron": "@daily", "for": "1m"}),
-        serde_json::json!({}),
+
+    let schema = &schedule.listing(&Wording::built_in())["inputSchema"];
+    assert_eq!(
+        schema["required"],
+        json!(["name", "trigger", "value", "tool", "arguments"])
+    );
+    assert_eq!(
+        schema["properties"]["trigger"]["enum"],
+        json!(["at", "in", "every", "cron", "signal", "when"])
+    );
+    assert_eq!(
+        schema["properties"]["tool"]["enum"],
+        json!(["agent", "team", "workflow"])
+    );
+    assert_eq!(schema["properties"]["arguments"]["type"], json!("object"));
+    assert!(schema["properties"].get("worktree").is_some(), "{schema}");
+    assert!(schema["properties"].get("run").is_none(), "{schema}");
+
+    let agent_args = json!({"profile": "worker", "prompt": "go"});
+    let team_args = json!({"team": "forge", "prompt": "go"});
+    let workflow_args = json!({"name": "held"});
+
+    // Valid flat calls across triggers and all three targets.
+    for valid in [
+        json!({
+            "name": "n",
+            "trigger": "signal",
+            "value": "ci.failed",
+            "match": {"branch": "x"},
+            "repeat": true,
+            "tool": "agent",
+            "arguments": agent_args,
+        }),
+        json!({
+            "name": "n",
+            "trigger": "when",
+            "value": "ci=passed",
+            "for": "5m",
+            "repeat": true,
+            "overlap": "replace",
+            "worktree": "fix",
+            "tool": "team",
+            "arguments": team_args,
+        }),
+        json!({
+            "name": "n",
+            "trigger": "in",
+            "value": "30m",
+            "tool": "team",
+            "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"},
+        }),
+        json!({
+            "name": "n",
+            "trigger": "every",
+            "value": "1h",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "go", "from_pr": "42"},
+        }),
+        json!({
+            "name": "n",
+            "trigger": "every",
+            "value": "1h",
+            "worktree": "fix",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "go", "fresh": true},
+        }),
+        json!({
+            "name": "n",
+            "trigger": "cron",
+            "value": "0 9 * * mon",
+            "tool": "workflow",
+            "arguments": {
+                "name": "held",
+                "prompt": "--check",
+                "deadline": "8h",
+                "give_up": "2h",
+                "skip_capacity": true,
+            },
+        }),
     ] {
-        let arguments = serde_json::json!({"name": "n", "trigger": trigger, "run": run});
-        assert!(schedule.call(arguments).is_err(), "{trigger}");
+        assert!(schedule.call(valid.clone()).is_ok(), "{valid}");
     }
-    let arguments = serde_json::json!({
-        "name": "n",
-        "trigger": {"signal": "ci.failed", "match": {"branch": "x"}},
-        "repeat": true,
-        "run": run,
-    });
-    assert!(schedule.call(arguments).is_ok());
-    let two_targets = serde_json::json!({
-        "name": "n",
-        "trigger": {"every": "1h"},
-        "run": {"agent": {"profile": "worker", "prompt": "go"}, "team": {"team": "t", "goal": "g"}},
-    });
-    assert!(schedule.call(two_targets).is_err());
+
+    // Trigger-option refusals: each option given to a trigger that cannot take it.
+    let mut trigger_failures = Vec::new();
+    for (label, arguments, expected) in [
+        (
+            "match on at",
+            json!({"name": "n", "trigger": "at", "value": "09:00", "match": {"branch": "x"}, "tool": "agent", "arguments": agent_args}),
+            "`match` takes a `signal` trigger",
+        ),
+        (
+            "match on in",
+            json!({"name": "n", "trigger": "in", "value": "5m", "match": {"branch": "x"}, "tool": "agent", "arguments": agent_args}),
+            "`match` takes a `signal` trigger",
+        ),
+        (
+            "match on every",
+            json!({"name": "n", "trigger": "every", "value": "1h", "match": {"branch": "x"}, "tool": "agent", "arguments": agent_args}),
+            "`match` takes a `signal` trigger",
+        ),
+        (
+            "match on cron",
+            json!({"name": "n", "trigger": "cron", "value": "@daily", "match": {"branch": "x"}, "tool": "agent", "arguments": agent_args}),
+            "`match` takes a `signal` trigger",
+        ),
+        (
+            "match on when",
+            json!({"name": "n", "trigger": "when", "value": "ci=passed", "match": {"branch": "x"}, "tool": "agent", "arguments": agent_args}),
+            "`match` takes a `signal` trigger",
+        ),
+        (
+            "empty match key",
+            json!({"name": "n", "trigger": "signal", "value": "ci.failed", "match": {"": "x"}, "tool": "agent", "arguments": agent_args}),
+            "a `match` key is empty",
+        ),
+        (
+            "for on at",
+            json!({"name": "n", "trigger": "at", "value": "09:00", "for": "1m", "tool": "agent", "arguments": agent_args}),
+            "`for` takes a `when` trigger",
+        ),
+        (
+            "for on in",
+            json!({"name": "n", "trigger": "in", "value": "5m", "for": "1m", "tool": "agent", "arguments": agent_args}),
+            "`for` takes a `when` trigger",
+        ),
+        (
+            "for on every",
+            json!({"name": "n", "trigger": "every", "value": "1h", "for": "1m", "tool": "agent", "arguments": agent_args}),
+            "`for` takes a `when` trigger",
+        ),
+        (
+            "for on cron",
+            json!({"name": "n", "trigger": "cron", "value": "@daily", "for": "1m", "tool": "agent", "arguments": agent_args}),
+            "`for` takes a `when` trigger",
+        ),
+        (
+            "for on signal",
+            json!({"name": "n", "trigger": "signal", "value": "ci.failed", "for": "1m", "tool": "agent", "arguments": agent_args}),
+            "`for` takes a `when` trigger",
+        ),
+        (
+            "repeat on at",
+            json!({"name": "n", "trigger": "at", "value": "09:00", "repeat": true, "tool": "agent", "arguments": agent_args}),
+            "`repeat` takes a `signal` or `when` trigger",
+        ),
+        (
+            "repeat on in",
+            json!({"name": "n", "trigger": "in", "value": "5m", "repeat": true, "tool": "agent", "arguments": agent_args}),
+            "`repeat` takes a `signal` or `when` trigger",
+        ),
+        (
+            "repeat on every",
+            json!({"name": "n", "trigger": "every", "value": "1h", "repeat": true, "tool": "agent", "arguments": agent_args}),
+            "`repeat` takes a `signal` or `when` trigger",
+        ),
+        (
+            "repeat on cron",
+            json!({"name": "n", "trigger": "cron", "value": "@daily", "repeat": true, "tool": "agent", "arguments": agent_args}),
+            "`repeat` takes a `signal` or `when` trigger",
+        ),
+        (
+            "overlap on at",
+            json!({"name": "n", "trigger": "at", "value": "09:00", "overlap": "skip", "tool": "agent", "arguments": agent_args}),
+            "`overlap` takes a repeating trigger",
+        ),
+        (
+            "overlap on in",
+            json!({"name": "n", "trigger": "in", "value": "5m", "overlap": "skip", "tool": "agent", "arguments": agent_args}),
+            "`overlap` takes a repeating trigger",
+        ),
+        (
+            "overlap on one-shot signal",
+            json!({"name": "n", "trigger": "signal", "value": "ci.failed", "overlap": "skip", "tool": "agent", "arguments": agent_args}),
+            "`overlap` takes a repeating trigger",
+        ),
+        (
+            "overlap on one-shot when",
+            json!({"name": "n", "trigger": "when", "value": "ci=passed", "overlap": "skip", "tool": "agent", "arguments": agent_args}),
+            "`overlap` takes a repeating trigger",
+        ),
+    ] {
+        match schedule.call(arguments) {
+            Ok(_) => trigger_failures.push(format!("{label}: accepted")),
+            Err(err) if !err.to_string().contains(expected) => {
+                trigger_failures.push(format!("{label}: got {err:?}, wanted {expected:?}"));
+            }
+            Err(_) => {}
+        }
+    }
+    assert_eq!(trigger_failures, Vec::<String>::new());
+
+    // Target, worktree, and fire-only refusals.
+    let mut target_failures = Vec::new();
+    for (label, arguments, expected) in [
+        (
+            "arguments.worktree on agent",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "worktree": "feat"}}),
+            "arguments.worktree",
+        ),
+        (
+            "arguments.worktree on team",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "team", "arguments": {"team": "forge", "prompt": "go", "worktree": "feat"}}),
+            "arguments.worktree",
+        ),
+        (
+            "arguments.worktree on workflow",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "held", "worktree": "feat"}}),
+            "arguments.worktree",
+        ),
+        (
+            "team with no place",
+            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "team", "arguments": team_args}),
+            "`arguments` (with top-level `worktree`): give exactly one of `worktree` and `from_pr`",
+        ),
+        (
+            "team with worktree and from_pr",
+            json!({"name": "n", "trigger": "in", "value": "5m", "worktree": "fix", "tool": "team", "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"}}),
+            "`arguments` (with top-level `worktree`): give exactly one of `worktree` and `from_pr`",
+        ),
+        (
+            "team with goal instead of prompt",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "fix", "tool": "team", "arguments": {"team": "forge", "goal": "go"}}),
+            "`arguments`: unknown field `goal`",
+        ),
+        (
+            "workflow missing required name",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {}}),
+            "`arguments`: missing field `name`",
+        ),
+        (
+            "workflow path name",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "a/b"}}),
+            "`arguments`: `name` is a deployed workflow's name, not a path",
+        ),
+        (
+            "agent blank profile",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": " ", "prompt": "go"}}),
+            "`arguments`: `profile` is blank",
+        ),
+        (
+            "repeating team every with from_pr",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "team", "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"}}),
+            "arguments.from_pr",
+        ),
+        (
+            "repeating team signal with from_pr",
+            json!({"name": "n", "trigger": "signal", "value": "ci.failed", "repeat": true, "tool": "team", "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"}}),
+            "arguments.from_pr",
+        ),
+        (
+            "team with #lane",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "fix", "tool": "team", "arguments": {"team": "forge#fix", "prompt": "go"}}),
+            "arguments.team",
+        ),
+        (
+            "agent fresh without worktree",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "fresh": true}}),
+            "`arguments` (with top-level `worktree`): `fresh` needs `worktree`",
+        ),
+        (
+            "agent worktree with cwd",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "fix", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "cwd": "."}}),
+            "`arguments` (with top-level `worktree`): give at most one of `worktree`, `from_pr`, and `cwd`",
+        ),
+        (
+            "agent unknown field",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "model": "opus"}}),
+            "`arguments`: unknown field `model`",
+        ),
+        (
+            "workflow input",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "held", "input": {"outcome": "go"}}}),
+            "arguments.input",
+        ),
+        (
+            "workflow detach",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "held", "detach": true}}),
+            "arguments.detach",
+        ),
+        (
+            "agent verb profile trimmed",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": " logs ", "prompt": "go"}}),
+            "arguments.profile",
+        ),
+        (
+            "agent launch verb profile",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "launch", "prompt": "go"}}),
+            "arguments.profile",
+        ),
+        (
+            "agent address profile",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "@coder", "prompt": "go"}}),
+            "arguments.profile",
+        ),
+        (
+            "agent flag profile",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "-w", "prompt": "go"}}),
+            "arguments.profile",
+        ),
+        (
+            "agent flag prompt",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "-w now"}}),
+            "arguments.prompt",
+        ),
+        (
+            "team flag name",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "fix", "tool": "team", "arguments": {"team": "-nightly", "prompt": "go"}}),
+            "arguments.team",
+        ),
+        (
+            "workflow flag name",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "-nightly"}}),
+            "arguments.name",
+        ),
+        (
+            "top-level worktree flag",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "-probe", "tool": "workflow", "arguments": workflow_args}),
+            "`worktree` starts with `-`",
+        ),
+        (
+            "NUL in agent description",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "description": "a\0b"}}),
+            "arguments.description",
+        ),
+        (
+            "NUL in agent name",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "name": "a\0b"}}),
+            "arguments.name",
+        ),
+        (
+            "NUL in agent override",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "agent": "a\0b"}}),
+            "arguments.agent",
+        ),
+        (
+            "NUL in agent cwd",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "cwd": "a\0b"}}),
+            "arguments.cwd",
+        ),
+        (
+            "NUL in workflow deadline",
+            json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "held", "deadline": "8h\0"}}),
+            "arguments.deadline",
+        ),
+        (
+            "NUL in top-level worktree",
+            json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "a\0b", "tool": "workflow", "arguments": workflow_args}),
+            "`worktree` holds a NUL",
+        ),
+    ] {
+        match schedule.call(arguments) {
+            Ok(_) => target_failures.push(format!("{label}: accepted")),
+            Err(err) if !err.to_string().contains(expected) => {
+                target_failures.push(format!("{label}: got {err:?}, wanted {expected:?}"));
+            }
+            Err(_) => {}
+        }
+    }
+    assert_eq!(target_failures, Vec::<String>::new());
+
+    // An unknown field inside `arguments` never lists `worktree` among expected keys.
+    for unknown in [
+        json!({"name": "n", "trigger": "every", "value": "1h", "worktree": "fix", "tool": "team", "arguments": {"team": "forge", "goal": "go"}}),
+        json!({"name": "n", "trigger": "every", "value": "1h", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "model": "opus"}}),
+        json!({"name": "n", "trigger": "every", "value": "1h", "tool": "workflow", "arguments": {"name": "held", "once": true}}),
+    ] {
+        let err = schedule
+            .call(unknown.clone())
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            err.starts_with("`arguments`: ") && !err.contains("`worktree`"),
+            "{unknown}: {err}"
+        );
+    }
+}
+
+#[test]
+fn argument_text_len_counts_nested_descriptions() {
+    let nested = Tool {
+        name: "nested",
+        capability: None,
+        purpose: Purpose::Guides,
+        read_only: true,
+        command: "",
+        declared: &[],
+        verbs: &[],
+        schema: || {
+            json!({
+                "type": "object",
+                "description": "root",
+                "properties": {
+                    "description": { "type": "string", "description": "label" },
+                    "top": {
+                        "type": "object",
+                        "description": "outer",
+                        "properties": {
+                            "leaf": { "type": "string", "description": "inner" }
+                        }
+                    },
+                    "list": {
+                        "type": "array",
+                        "description": "items",
+                        "items": { "type": "string", "description": "one" }
+                    }
+                }
+            })
+        },
+        output: None,
+        parse: |arguments| parse::<GuideArgs>(arguments).map(Call::Guide),
+    };
+    assert_eq!(nested.argument_text_len(), 27);
 }
 
 #[test]
@@ -412,6 +802,12 @@ fn schemas_are_inline_objects_without_null_types() {
         let listing = tool.listing(&Wording::built_in());
         let schema = &listing["inputSchema"];
         assert_eq!(schema["type"], "object", "{}", tool.name);
+        assert!(
+            schema.get("description").is_none(),
+            "{}: root inputSchema carries internal doc {:?}",
+            tool.name,
+            schema.get("description")
+        );
         let text = schema.to_string();
         for absent in ["null", "$ref", "$schema", "definitions", "anyOf", "oneOf"] {
             assert!(!text.contains(absent), "{}: {text}", tool.name);

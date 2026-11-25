@@ -1,21 +1,25 @@
-# What a fire launches
+# What differs at a fire
+
+Every fire runs its target through the `rimz` CLI rather than in-process, so NUL in any string and values that would parse as a flag or a verb (such as a prompt starting with `-` other than a `- ` bullet, or a `rimz agents` verb as `profile`) are refused at booking.
+
+A missing worktree is created in the project root's repository rather than your checkout.
+
+A `signal` or `when` fire appends its evidence line (``Rule `ci-fix` fired here. ci.failed on feat-x #91 @88824c2``) to an agent's or team leader's prompt and to workflow agent and message steps, and passes it as `RIMZ_LOOP_TRIGGER` to workflow commands and checks, so the prompt need not restate what fired it.
 
 ## Agent
 
-`rimz agents profiles` lists the profiles a booking can launch. The profile is the agent's job description, the same on every launch; the `prompt` carries the task for this fire. A signal or condition fire appends its evidence line to the prompt (``Rule \`ci-fix\` fired here. ci.failed on feat-x #91 @88824c2``), so the prompt need not say what fired it.
+A relative `cwd` resolves at the booking call and is stored absolute. A worktree booking already launches fresh into a closed worktree an earlier fire left, so `fresh` is accepted beside `worktree` and stored once. `from_pr` works on a plain profile for both one-shot and repeating bookings; a repeating booking whose target resolves to a team seat (such as `team.role` or a bare role qualified by the root's lane) refuses `from_pr` because a later fire strikes on the closed pull-request worktree.
 
-The fire records `launched` once the launch places the agent, so only a failed launch strikes. The agent then runs in its own pane like any other agent in the room: the user can watch it and type into it. Until it ends, even idle in its pane, the fire stays live, so on a repeating booking say in the prompt when it ends its session, such as once its PR merges. To let every fire's agent stay, set `overlap` to `allow`.
-
-A headless run (`-p`), a fresh worktree per fire (a bare `-w`), and permission flags are launch arguments this tool does not take: the user books those with `rimz loop add <name> --agent <profile> ... -- <arguments>`.
+The fire records `launched` once the launch places the agent, so only a failed launch strikes. A headless run (`-p`), a fresh worktree per fire (a bare `-w`), and permission flags stay with `rimz loop add <name> --agent <profile> ... -- <arguments>`.
 
 ## Team
 
-The `goal` goes to the team's leader; write it like an agent's prompt. The fire records `launched` once the team's agents are placed. The team keeps running after that, past `Done`, until `rimz teams stop <team>#<lane>`, and until every member ends the fire stays live. On a repeating booking, `overlap: replace` stops the earlier fire's team before the new one launches. Each member runs in the permission mode its role or profile sets. In a folder whose trust is undecided, the fired team stops at its folder-trust prompt until someone answers it; `rimz trust grant --agents <kind>` before the first fire settles it.
+A `#lane` suffix on `team` is refused. The fire records `launched` once the team's agents are placed. Each member runs in the permission mode its role or profile sets. The team stays running past `Done` until `rimz teams stop <team>#<lane>`, holding the fire live until every member ends. In a folder whose trust is undecided, the fired team stops at its folder-trust prompt until someone answers it (`rimz trust grant --agents <kind>` before the first fire settles it).
 
 ## Workflow
 
-`rimz workflow show <name>` prints what a run does. The fire ends when the booking's own run ends: done, or a strike. The workflow's own `deadline` bounds the run, and `deadline` in `run.workflow` sets one for this booking; with neither, only each step's timeout applies. A signal or condition fire's evidence reaches each command and check of the run as `RIMZ_LOOP_TRIGGER`, and is appended to the prompt of each agent and message step.
+The fire ends when the workflow run ends: done, or a strike. With no `deadline` in the definition or `arguments`, only each step's timeout bounds the run.
 
 ## Not offered here
 
-Each of these stays with `rimz loop add`, which the user runs: a shell command or message (the kinds without a target), `--each-worktree` fan-out with `--once-per-checkout`, and `--project`, a task committed with the repository.
+Messages and `--each-worktree` fan-out with `--once-per-checkout` also stay with `rimz loop add`.

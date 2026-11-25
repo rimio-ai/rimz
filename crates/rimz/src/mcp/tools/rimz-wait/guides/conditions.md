@@ -10,7 +10,7 @@
 
 Each key but the two `window` keys also takes a branch, as `pr[<branch>]`. The forge keys (`ci`, `pr`, `pr.<field>`) read that branch on the forge and take whatever pull request they find there, so a reused branch name can read an old PR as `merged`; `team.stage[<branch>]` reads the board of the local checkout on that branch. For your own PR, arm from its checkout with bare `pr`.
 
-A `schedule` booking reads its condition at the project root: its bare keys read the root's branch, so name a feature branch as `pr[<branch>]`, and its window terms read the provider of the agent the booking launches.
+For a `schedule` booking, `window` terms read the provider of the agent the booking launches (including any `arguments.agent` override).
 
 `none` means the probe found nothing to read: no PR, no CI, an open PR outside the queue, a merged or closed PR for the `pr.<field>` terms, or no review decision. GitHub may report no decision when the base branch requires no review, so `pr.review=approved` may never fire there. A PR in the merge queue still reads `pr=open`, so pair a queue term with it: `pr=open && pr.queue=dequeued`.
 

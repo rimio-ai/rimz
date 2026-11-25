@@ -2554,12 +2554,7 @@ fn failed_kind_bases_refuse_bare_cells_overrides_and_loop_resolution() {
         .err()
         .map(|error| error.to_string()),
     );
-    actual.push(
-        resolve_single_agent_spec("amp", &launch, &machine.agents.commands)
-            .err()
-            .map(|error| error.to_string()),
-    );
-    assert_eq!(actual, vec![machine.definition_failure_for("amp"); 12],);
+    assert_eq!(actual, vec![machine.definition_failure_for("amp"); 11],);
     assert_eq!(
         super::resolve_launch(
             &launch,
@@ -2628,7 +2623,7 @@ roles = [{role = 'worker', profile = 'no-base'}]
         (ProfileScope::Subagents, Some("crew.worker"), None),
         (ProfileScope::Subagents, Some("crew.worker"), Some("codex")),
     ];
-    let mut actual: Vec<_> = cases
+    let actual: Vec<_> = cases
         .into_iter()
         .map(|(scope, spec, agent_override)| {
             super::resolve_launch(
@@ -2642,11 +2637,6 @@ roles = [{role = 'worker', profile = 'no-base'}]
             .map(|error| error.to_string())
         })
         .collect();
-    actual.push(
-        resolve_single_agent_spec("myprof", &launch, &machine.agents.commands)
-            .err()
-            .map(|error| error.to_string()),
-    );
     let expected = vec![machine.definition_failure_for("claude"); actual.len()];
     for (scope, spec) in [
         (ProfileScope::Agents, "no-base"),
@@ -2749,13 +2739,6 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
             );
         }
     }
-    for spec in ["crew", "crew.lead"] {
-        actual.push(
-            resolve_single_agent_spec(spec, &launch, &Default::default())
-                .err()
-                .map(|err| err.to_string()),
-        );
-    }
     actual.push(
         super::resolve_launch(
             &launch,
@@ -2767,7 +2750,7 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
         .err()
         .map(|err| err.to_string()),
     );
-    assert_eq!(actual, vec![Some(detail); 15]);
+    assert_eq!(actual, vec![Some(detail); 13]);
 }
 
 #[test]
