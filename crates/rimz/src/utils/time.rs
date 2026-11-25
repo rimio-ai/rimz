@@ -1,4 +1,5 @@
 //! Wall clock and parsers for compact, human-authored time values across RimZ domains.
+//! [`unix_now_ms`] is the crate's one Unix-millisecond clock.
 
 use std::num::ParseIntError;
 use std::str::FromStr;

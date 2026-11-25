@@ -35,7 +35,7 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
-- `examples/` is sample configuration for users to copy. Do not read it unless the user asks, and do not treat it as authority on behaviour.
+- Do not read `examples/` unless the user asks: it is sample configuration for users to copy, never authority on behaviour.
 - A change to any Markdown file, an `AGENTS.md` included, follows [docs/AGENTS.md](./docs/AGENTS.md).
 
 ## Before a change
@@ -64,18 +64,18 @@ These hold for a change anywhere in the tree, and no gate catches a skipped one.
 
 Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHITECTURE.md); each module's `//!` header is the per-file authority.
 
-**Repository**: `crates/rimz/` (the binary and its runtime/domain library, plus `benches/`, `scenarios/`, and the `presence/`, `pricing/`, `themes/`, and `keymaps/` data it embeds), `crates/rimz-presence-zellij/` (Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (`docs/externals/` mirrors upstream), `xtask/` (task runner, every gate, contributor automation), [`loops/`](./loops/README.md) (one directory per repository loop task), `examples/`, `ci/`, `docker/`, `scripts/`, `supply-chain/`.
+**Repository**: `crates/rimz/` (the binary and its runtime/domain library, plus `benches/`, `scenarios/`, and the `presence/`, `pricing/`, `themes/`, and `keymaps/` data it embeds), `crates/rimz-presence-zellij/` (Zellij presence plugin), `docs/` (`docs/externals/` mirrors upstream), `xtask/` (task runner, every gate, contributor automation), [`loops/`](./loops/README.md) (one directory per repository loop task), `examples/`, `ci/`, `docker/`, `scripts/`, `supply-chain/`.
 
 **Subsystems** in `crates/rimz/src/`, each carrying its own `AGENTS.md` contract:
 
 - `cli/`: command parsing, one `run(...)` per subcommand, shared `cli/render/` output.
-- `agents/`: the provider-neutral `AgentDefinition` catalog, capability contracts, `state.rs` rollup, handle minting (`petname`), private `adapters/`, spend/pricing/account machinery, provider login resolution (`login`).
+- `agents/`: the provider-neutral agent catalog, capability contracts, state rollup, handle minting, provider adapters, spend/pricing/account machinery, provider login resolution.
 - `room/`: managed-room context, birth/reset/teardown lifecycle, health gating.
 - `sandbox/`: Linux bubblewrap mount views, provider-home binds, per-agent temp units, skill views, capability preflight.
-- `harness/`: layout IR, runtime profile resolution and `--agent` chain overrides (`spec.rs`), teams and board stage flips, launch plan and argv, supervised runs, workflows (`workflow/`), the hook drainer (`hook_drain.rs`), loop scheduling and signals, resume and rebirth recovery, hibernation (`hibernate.rs`, `hibernate/`, with `proc/cgroup.rs`), the note store (`notes.rs`).
+- `harness/`: layout IR, runtime profile resolution, teams and board stage flips, launch plan and argv, supervised runs, workflows, the hook drainer, loop scheduling and signals, resume and rebirth recovery, hibernation, the note store.
 - `message/`: delivery: park-vs-live dispatch, live-pane send, the shared turn reader, scheduled wakeups, synthetic card text.
-- `store/`: durable state engine: `Store` handle, snapshot schema, framed event log, hook ingress and drain cursor (`ingress.rs`), message queue, run and workflow records, GC.
-- `mux/`: Zellij/tmux seam: `MuxBackend`, live-session snapshot, subprocess engine, reconcile planner, recovery, focus anchor, per-pane write lock.
+- `store/`: durable state engine: snapshot schema, framed event log, hook ingress and drain cursor, message queue, run and workflow records, GC.
+- `mux/`: Zellij/tmux seam: live-session snapshot, subprocess engine, reconcile planner, recovery, focus anchor, per-pane write lock.
 - `sidebar/`: data plane: presence ingestion, host production, pulled-truth/event fusion, projection fold, heavy-lane refresh.
 - `sidebar_pane/`: native renderer: per-pane supervisor, per-session host, attach wire, pets, ratatui edge.
 - `remote/`: SSH grammar, reconnect policy, link health, `remote.toml`.
@@ -84,11 +84,11 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 
 **Top-level modules** in `crates/rimz/src/`:
 
-- `launcher/`: launch orchestration, checkout creation, session swaps (`swap.rs`, `molt.rs`), the agent tree stop, the agent and team joins, and the production workflow host.
-- `disk`: atomic publish, home and workspace paths, JSONL append, locks and leases (`disk::lease`), usage and output measurement.
-- `address`: agent-address grammar, pane binding, launch-instance grouping, and `address::selector` (the `agents list` fields and `--filter`). `workspace`: resolution, `workspace.json`, and the room identity pin. `web`, `worktree`, `forge` (with PR state).
+- `launcher/`: launch orchestration, checkout creation, session swaps and molt, the agent tree stop, the agent and team joins, and the production workflow host.
+- `disk`: atomic publish, home and workspace paths, JSONL append, locks and leases, usage and output measurement.
+- `address`: agent-address grammar, pane binding, launch-instance grouping, and the `agents list` selector. `workspace`: resolution and the room identity pin. `web`, `worktree`, `forge` (with PR state).
 - `transcript`, `pane` (identity and classification), `pixel_wire` (kitty placeholder encoding), `sock`, `ids`, `trust`, `wakeup` (the sidebar wire).
-- `utils::{time, path, parallel, tokens, env}` (`utils::time` holds the crate's one Unix-millisecond clock), `fs_watch`, `theme`.
+- `utils::{time, path, parallel, tokens, env}`, `fs_watch`, `theme`.
 - Daemon view: `daemon_view`, `daemon_content`, `reload`, `remote_control`.
 - `observability`, `agent_activity`, `lane`, `proc`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
-- `blocker` (start preconditions; the CLI owns their presentation), `update` and `uninstall` (install lifecycle), `packs/` (pack sources; the definition, skill, and workflow readers own item scanning), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` tool catalog, wording, and stdio loop), `mcp_tools` (the runner that makes each tool call in the server's process).
+- `blocker` (start preconditions), `update` and `uninstall` (install lifecycle), `packs/` (pack sources), `lsp/` (shared language servers), `mcp/` (the `rimz mcp serve` server), `mcp_tools` (its tool runner).
