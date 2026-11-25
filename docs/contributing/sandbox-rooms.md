@@ -68,7 +68,7 @@ Run a sidebar's Look first, then capture or click it: an unwatched sidebar can h
 | `Click` | Sends a click at column 2 of the sidebar row in `ROOM_ROW`, counted from zero. `sidebar click` is testkit-only: it goes through the host's room socket, so it tests hit testing and focus routing but skips terminal input. |
 | `Role`, `As` | An agent's pane and the pid of that pane's process (`-` when the multiplexer reports none), and a prefix that runs a RimZ command as that agent. |
 | `Stage`, `Flip` | The board's stage and owner, and a command that moves it to `Review`. |
-| `Focus` | Reads which pane has focus from the multiplexer. Use it, not `rimz pane list`, which reports no focus on Zellij. On Zellij it lists every pane, and `is_focused` is per tab ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)), so it proves focus inside a tab, not which tab the client views. |
+| `Focus` | Reads which pane has focus from the multiplexer. Use it, not `rimz pane list`, which reports no focus on Zellij. On Zellij it lists every pane, and `is_focused` is per tab ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)), so it proves focus inside a tab, not which tab the client views. `zellij --session <session> action list-clients` names the pane the client views, and `go-to-tab-name <tab>` in its place moves the client, which [a focus sent from outside a pane does not do](./sidebar-live-check.md#the-check-sequence). |
 
 A Zellij card prints pane ids as `zellij:terminal_<n>` and `--zellij` in place of `--tmux`. Its Look runs `zellij --session <session> action go-to-tab <n>`, and its Focus runs `zellij --session <session> action list-panes -a -j`.
 
