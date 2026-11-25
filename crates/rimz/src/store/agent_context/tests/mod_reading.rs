@@ -75,7 +75,7 @@ fn a_mod_reading_sets_its_fields_and_keeps_the_statusline_rest() {
         total_cost_usd: Some(0.001),
         ..AgentCost::default()
     });
-    write(&runtime, "claude", "s", &pushed, None).unwrap();
+    write(&runtime, "claude", "s", &pushed, None, false).unwrap();
     let stored = read_one(&runtime, "claude", "s").unwrap().context;
 
     assert!(
@@ -128,7 +128,7 @@ fn a_mod_reading_sets_its_fields_and_keeps_the_statusline_rest() {
     );
 
     let later = ctx(at(30));
-    write(&runtime, "claude", "s", &later, None).unwrap();
+    write(&runtime, "claude", "s", &later, None, true).unwrap();
     let context = read_one(&runtime, "claude", "s").unwrap().context;
     assert_eq!(
         (
@@ -191,7 +191,7 @@ fn a_mod_scan_never_moves_a_marker_backwards() {
     let mut stored = ctx(at(0));
     stored.settle = Some(interrupted(100));
     stored.turn_error = Some(died(100));
-    write(&runtime, "claude", "s", &stored, None).unwrap();
+    write(&runtime, "claude", "s", &stored, None, false).unwrap();
     let markers = |runtime: &RuntimePaths| {
         let context = read_one(runtime, "claude", "s").unwrap().context;
         (
@@ -291,6 +291,7 @@ fn the_mod_wins_each_reading_it_carried_over_the_statusline() {
         "s",
         &statusline_push(at(0), split(1, 1_000)),
         None,
+        false,
     )
     .unwrap();
     merge_mod_reading(
@@ -316,7 +317,7 @@ fn the_mod_wins_each_reading_it_carried_over_the_statusline() {
 
     let mut renamed = statusline_push(at(20), split(5, 30_000));
     renamed.session_name = Some("renamed".into());
-    write(&runtime, "claude", "s", &renamed, None).unwrap();
+    write(&runtime, "claude", "s", &renamed, None, false).unwrap();
     let context = read_one(&runtime, "claude", "s").unwrap().context;
     assert_eq!(mod_readings(&context), mod_readings(&after_step));
     assert_eq!(context.session_name.as_deref(), Some("renamed"));
@@ -328,7 +329,7 @@ fn the_mod_wins_each_reading_it_carried_over_the_statusline() {
 
     let mut sparse = AgentContext::new("claude", at(30));
     sparse.session_name = Some("again".into());
-    write(&runtime, "claude", "s", &sparse, None).unwrap();
+    write(&runtime, "claude", "s", &sparse, None, false).unwrap();
     let context = read_one(&runtime, "claude", "s").unwrap().context;
     assert_eq!(
         mod_readings(&context),
@@ -347,13 +348,14 @@ fn a_reading_the_mod_never_carried_stays_with_the_statusline() {
         "s",
         &statusline_push(at(0), split(1, 1_000)),
         None,
+        false,
     )
     .unwrap();
     merge_mod_reading(&runtime, "claude", "s", reading(at(10), 38_328, 0.0), None).unwrap();
     let mut moved = statusline_push(at(20), split(5, 30_000));
     moved.model_id = Some("claude-opus-4-9".into());
     moved.agent_version = Some("2.1.330".into());
-    write(&runtime, "claude", "s", &moved, None).unwrap();
+    write(&runtime, "claude", "s", &moved, None, false).unwrap();
     let context = read_one(&runtime, "claude", "s").unwrap().context;
     assert_eq!(
         mod_readings(&context),
@@ -377,6 +379,7 @@ fn a_mod_report_after_a_compaction_retires_the_count_and_split() {
         "s",
         &statusline_push(at(0), split(1, 1_000)),
         None,
+        false,
     )
     .unwrap();
     merge_mod_reading(
@@ -418,6 +421,7 @@ fn a_mod_report_after_a_compaction_retires_the_count_and_split() {
         "s",
         &statusline_push(at(30), split(3, 20_000)),
         None,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -455,6 +459,7 @@ fn the_marks_survive_a_local_refresh_and_an_unmarked_record_loads() {
         "s",
         &statusline_push(at(20), split(1, 1_000)),
         None,
+        false,
     )
     .unwrap();
     let record = read_one(&runtime, "claude", "s").unwrap();
@@ -475,6 +480,7 @@ fn the_marks_survive_a_local_refresh_and_an_unmarked_record_loads() {
         "s",
         &statusline_push(at(30), split(1, 1_000)),
         None,
+        false,
     )
     .unwrap();
     assert_eq!(

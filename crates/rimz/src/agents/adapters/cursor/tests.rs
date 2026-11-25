@@ -2533,3 +2533,41 @@ fn hook_command_preserves_parent_pid_attribution() {
     assert!(RIMZ_HOOK_COMMAND.starts_with("RIMZ_AGENT_PID=$PPID"));
     assert!(RIMZ_HOOK_COMMAND.contains("--source cursor"));
 }
+
+#[test]
+fn observe_context_sets_turn_error_observed_only_when_transcript_is_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("clean.jsonl");
+    std::fs::write(&clean, "{\"type\":\"turn_ended\",\"status\":\"success\"}\n").unwrap();
+    let stat = crate::agents::TranscriptStat::from_path(&clean).unwrap();
+    let payload = json!({ "session_id": "conv-1" });
+
+    let readable = observe_context_with_markers("cursor", &payload, |_| {
+        transcript::turn_markers_at(&clean, stat)
+    })
+    .unwrap();
+    assert!(
+        readable.turn_error_observed,
+        "a readable Cursor transcript tail marks the turn-error observation authoritative"
+    );
+    assert!(readable.context.turn_error.is_none());
+
+    let torn = dir.path().join("torn.jsonl");
+    std::fs::write(&torn, "{\"type\":\"assistant\"}\n{\"type\":\"turn_en").unwrap();
+    let stat = crate::agents::TranscriptStat::from_path(&torn).unwrap();
+    let torn_tail = observe_context_with_markers("cursor", &payload, |_| {
+        transcript::turn_markers_at(&torn, stat)
+    })
+    .unwrap();
+    assert!(
+        !torn_tail.turn_error_observed,
+        "a tail not parsed to its end must keep any stored turn-error marker"
+    );
+
+    let unreadable = observe_context_with_markers("cursor", &payload, |_| None).unwrap();
+    assert!(
+        !unreadable.turn_error_observed,
+        "an unreadable Cursor transcript must keep any stored turn-error marker"
+    );
+    assert!(unreadable.context.turn_error.is_none());
+}

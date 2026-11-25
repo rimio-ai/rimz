@@ -1546,12 +1546,16 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
         let parsed: statusline::StatuslinePayload = Deserialize::deserialize(payload).ok()?;
         let agent_id = parsed.session_id.clone()?;
         let mut context = parsed.into_context(source, Timestamp::now());
+        let mut turn_error_observed = false;
         if let Some(tail) = transcript_tail_from_payload(payload) {
+            turn_error_observed = true;
             context.turn_error = statusline::detect_turn_error(&tail);
             context.settle = statusline::detect_turn_interrupted(&tail)
                 .map(|at| TurnSettle::new(at, TurnSettleOutcome::Interrupted));
         }
-        super::ContextObservation::new(agent_id, context)
+        let mut observation = super::ContextObservation::new(agent_id, context)?;
+        observation.turn_error_observed = turn_error_observed;
+        Some(observation)
     }
 
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {

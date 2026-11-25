@@ -175,12 +175,16 @@ impl AgentContextRecord {
         agent_id: &str,
         context: AgentContext,
         owner_started_at: Option<Timestamp>,
+        turn_error_observed: bool,
     ) -> bool {
         let mut context = context;
         self.mod_readings.keep(&self.context, &mut context);
         self.stamp_incoming_windows(&mut context, owner_started_at);
         context.account = self.stamped_account(context.account, context.observed_at);
         let observed_cost = context.cost.is_some();
+        if !turn_error_observed && context.turn_error.is_none() {
+            context.turn_error.clone_from(&self.context.turn_error);
+        }
         let model_id = context.model_id.clone().or(self.context.model_id.clone());
         if let Some(error) = &mut context.turn_error {
             error.stamp_model(self.context.turn_error.as_ref(), model_id.as_deref());

@@ -2066,7 +2066,7 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
             current_usage: None,
             session_usage: None,
         });
-        agent_context::write(store.runtime_paths(), kind, agent_id, &ctx, None).unwrap();
+        agent_context::write(store.runtime_paths(), kind, agent_id, &ctx, None, false).unwrap();
     };
     let append =
         |store: &Store, kind: &str, agent_id: &str, event: &str, signal: LifecycleSignal| {

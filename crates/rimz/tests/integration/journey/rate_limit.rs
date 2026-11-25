@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use jiff::{SignedDuration, Timestamp};
 use rimz::agents::account::RateLimitsCache;
@@ -37,7 +38,13 @@ fn rate_limit_recovery_renders_park_and_reset_countdown() {
         "claude",
         &user_prompt_submit("sess-limit", "finish release notes"),
     );
-    feed_statusline(&room, "sess-limit", 100, future(3600));
+    let transcript = env.project_root.join("sess-limit.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n",
+    )
+    .expect("write transcript without a turn error");
+    feed_statusline(&room, "sess-limit", &transcript, 100, future(3600));
     room.agent_hook_in_room_runtime(
         "claude",
         &json!({
@@ -66,7 +73,7 @@ fn rate_limit_recovery_renders_park_and_reset_countdown() {
     );
 
     room.publish_rate_limits(&rate_cache(0, future(5 * 3600)));
-    feed_statusline(&room, "sess-limit", 100, past(60));
+    feed_statusline(&room, "sess-limit", &transcript, 100, past(60));
     let screen = room.wait_for(|s| running_row(s, "claude") && s.contains("⏸︎ 0"), SETTLE);
     assert!(
         running_row(&screen, "claude") && screen.contains("⏸︎ 0"),
@@ -117,11 +124,18 @@ fn stalled_stream_error_renders_backoff_park() {
     );
 }
 
-fn feed_statusline(room: &RoomHarness<'_>, session_id: &str, used: u8, resets_at: Timestamp) {
+fn feed_statusline(
+    room: &RoomHarness<'_>,
+    session_id: &str,
+    transcript: &Path,
+    used: u8,
+    resets_at: Timestamp,
+) {
     let out = room.run_statusline_feed(
         "claude",
         &json!({
             "session_id": session_id,
+            "transcript_path": transcript,
             "model": { "id": "claude-opus-4-8", "display_name": "Opus 4.8" },
             "context_window": { "context_window_size": 200000, "used_percentage": 42 },
             "rate_limits": {

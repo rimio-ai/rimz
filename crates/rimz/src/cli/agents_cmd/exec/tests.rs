@@ -2081,7 +2081,7 @@ mod runs {
                 total_cost_usd: Some(cost),
                 ..Default::default()
             });
-            rimz::store::agent_context::write(&runtime, "claude", id, &ctx, None)
+            rimz::store::agent_context::write(&runtime, "claude", id, &ctx, None, false)
                 .expect("write context");
             let observation = rimz::agents::AgentLifecycleObservation::new(
                 Some(id.into()),

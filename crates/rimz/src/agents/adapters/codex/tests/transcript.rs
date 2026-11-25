@@ -266,7 +266,13 @@ fn permission_refresh_keeps_proof_without_the_ask_or_asking_call() {
         prior.apply_local_refresh(CodexAdapter.spec(), refresh, since);
         assert_eq!(prior.context.permission_settle, proof);
     }
-    prior.apply_context_refresh("codex", "permission-session", AgentContext::default(), None);
+    prior.apply_context_refresh(
+        "codex",
+        "permission-session",
+        AgentContext::default(),
+        None,
+        false,
+    );
     assert_eq!(
         prior.context.permission_settle, proof,
         "rich writers keep local proof"

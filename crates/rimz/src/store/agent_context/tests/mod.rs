@@ -45,7 +45,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
 fn write_then_read_round_trips() {
     let (_dir, runtime) = runtime();
     let now = Timestamp::now();
-    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None, false).unwrap();
     let all = read_all(&runtime);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].kind, "claude");
@@ -91,7 +91,7 @@ fn statusline_windows_keep_content_stamps_per_key() {
             windows.remove(0);
         }
         context.rate_limits = Some(AgentRateLimits { windows }.stamped_at(at));
-        write(&runtime, "claude", "sess-1", &context, None).unwrap();
+        write(&runtime, "claude", "sess-1", &context, None, false).unwrap();
         let stored = read_one(&runtime, "claude", "sess-1").unwrap().context;
         assert_eq!(stored.observed_at, at);
         assert_eq!(
@@ -143,12 +143,12 @@ fn statusline_window_stamp_changes_only_for_new_content() {
                 ..Default::default()
             }],
         });
-        write(&runtime, "claude", name, &context, None).unwrap();
+        write(&runtime, "claude", name, &context, None, false).unwrap();
         context.observed_at = at;
         let window = &mut context.rate_limits.as_mut().unwrap().windows[0];
         window.observed_at = Some(at);
         window.resets_at = Some(reset + SignedDuration::from_secs(reset_change));
-        write(&runtime, "claude", name, &context, None).unwrap();
+        write(&runtime, "claude", name, &context, None, false).unwrap();
         assert_eq!(
             read_one(&runtime, "claude", name)
                 .unwrap()
@@ -187,7 +187,7 @@ fn first_statusline_windows_use_the_owner_start_floor() {
                 if prior == "empty" {
                     context.rate_limits = Some(AgentRateLimits::default());
                 }
-                write(&runtime, "claude", &session, &context, None).unwrap();
+                write(&runtime, "claude", &session, &context, None, false).unwrap();
             }
             let mut context = ctx(capture);
             context.rate_limits = Some(AgentRateLimits {
@@ -206,7 +206,7 @@ fn first_statusline_windows_use_the_owner_start_floor() {
                     })
                     .collect(),
             });
-            write(&runtime, "claude", &session, &context, owner).unwrap();
+            write(&runtime, "claude", &session, &context, owner, false).unwrap();
             let windows = read_one(&runtime, "claude", &session)
                 .unwrap()
                 .context
@@ -244,7 +244,7 @@ fn a_new_window_in_a_populated_sidecar_keeps_capture_time() {
             ..Default::default()
         }],
     });
-    write(&runtime, "claude", "session", &context, Some(owner)).unwrap();
+    write(&runtime, "claude", "session", &context, Some(owner), false).unwrap();
     let later = capture + SignedDuration::from_secs(20);
     context.observed_at = later;
     let windows = &mut context.rate_limits.as_mut().unwrap().windows;
@@ -255,7 +255,7 @@ fn a_new_window_in_a_populated_sidecar_keeps_capture_time() {
         observed_at: Some(later),
         ..Default::default()
     });
-    write(&runtime, "claude", "session", &context, Some(owner)).unwrap();
+    write(&runtime, "claude", "session", &context, Some(owner), false).unwrap();
     let windows = read_one(&runtime, "claude", "session")
         .unwrap()
         .context
@@ -294,7 +294,7 @@ fn turn_openers_replace_and_survive_statusline_refresh() {
     let second = crate::ids::MessageId::parse("msg_123456789abcdef0").unwrap();
 
     assert!(merge_turn_opened_by(&runtime, "claude", "sess-1", vec![first.clone()]).unwrap());
-    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None, false).unwrap();
     assert_eq!(
         read_one(&runtime, "claude", "sess-1")
             .unwrap()
@@ -327,7 +327,7 @@ fn statusline_refresh_replaces_the_live_fast_reading() {
     for fast in [Some(true), Some(false), None] {
         let mut context = ctx(Timestamp::now());
         context.fast = fast;
-        write(&runtime, "claude", "sess-1", &context, None).unwrap();
+        write(&runtime, "claude", "sess-1", &context, None, false).unwrap();
         assert_eq!(
             read_one(&runtime, "claude", "sess-1").unwrap().context.fast,
             fast
@@ -343,7 +343,7 @@ fn post_compaction_estimate_survives_whole_context_statusline_refresh() {
     record.context.post_compaction_tokens = Some(14_786);
     write_record(&runtime, &record).unwrap();
 
-    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None, false).unwrap();
     let stored = read_one(&runtime, "claude", "sess-1").unwrap();
     assert_eq!(stored.context.post_compaction_tokens, Some(14_786));
     assert!(stored.context.tokens.is_none());
@@ -362,7 +362,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         }),
         ..Default::default()
     });
-    write(&runtime, "claude", "sess-1", &folded, None).unwrap();
+    write(&runtime, "claude", "sess-1", &folded, None, false).unwrap();
 
     let mut statusline = ctx(now);
     statusline.tokens = Some(crate::agents::AgentTokenUsage {
@@ -370,7 +370,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         used_percentage: Some(25),
         ..Default::default()
     });
-    write(&runtime, "claude", "sess-1", &statusline, None).unwrap();
+    write(&runtime, "claude", "sess-1", &statusline, None, false).unwrap();
     let tokens = read_one(&runtime, "claude", "sess-1")
         .unwrap()
         .context
@@ -384,7 +384,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         Some(90)
     );
 
-    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None, false).unwrap();
     assert_eq!(
         read_one(&runtime, "claude", "sess-1")
             .unwrap()
@@ -415,7 +415,7 @@ fn statusline_refresh_keeps_the_local_fold_bound_to_its_transcript() {
     record.spend_fold = Some(spend_fold);
     write_record(&runtime, &record).unwrap();
 
-    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None, false).unwrap();
     let refreshed = read_one(&runtime, "claude", "sess-1").unwrap();
     assert_eq!(
         refreshed.transcript_path.as_deref(),
@@ -438,7 +438,7 @@ fn locally_priced_cost_deduplicates_accumulates_and_survives_statusline_refresh(
     let mut context = ctx(Timestamp::now());
     context.source = "cursor".to_owned();
     context.model_id = Some("auto".to_owned());
-    write(&runtime, "cursor", "sess-1", &context, None).unwrap();
+    write(&runtime, "cursor", "sess-1", &context, None, false).unwrap();
     let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
@@ -476,7 +476,7 @@ fn observed_cost_ownership_wins_over_later_local_accumulation() {
         total_cost_usd: Some(10.0),
         ..Default::default()
     });
-    write(&runtime, "cursor", "sess-1", &context, None).unwrap();
+    write(&runtime, "cursor", "sess-1", &context, None, false).unwrap();
     let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
@@ -509,7 +509,15 @@ fn statusline_and_locally_priced_cost_writers_serialize_without_lost_fields() {
         context.source = "cursor".to_owned();
         context.model_display_name = Some("Auto".to_owned());
         statusline_barrier.wait();
-        write(&statusline_runtime, "cursor", "sess-race", &context, None).unwrap();
+        write(
+            &statusline_runtime,
+            "cursor",
+            "sess-race",
+            &context,
+            None,
+            false,
+        )
+        .unwrap();
     });
     let cost_runtime = runtime.clone();
     let cost_barrier = barrier.clone();
@@ -546,13 +554,115 @@ fn statusline_and_locally_priced_cost_writers_serialize_without_lost_fields() {
 fn old_record_is_read_liveness_gating_is_the_rollups_job() {
     let (_dir, runtime) = runtime();
     let old = Timestamp::from_second(0).unwrap();
-    write(&runtime, "claude", "sess-old", &ctx(old), None).unwrap();
+    write(&runtime, "claude", "sess-old", &ctx(old), None, false).unwrap();
 
     let all = read_all(&runtime);
 
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].agent_id, "sess-old");
     assert_eq!(all[0].context.observed_at, old);
+}
+
+#[test]
+fn turn_error_survives_unobserved_statusline_push_and_clears_when_observed() {
+    use crate::agents::context::{AgentTurnError, TurnErrorClass};
+
+    let (_dir, runtime) = runtime();
+    let marker_at = Timestamp::from_second(1_000).unwrap();
+    let marker = AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class: TurnErrorClass::PausedRateLimit,
+        at: marker_at,
+        label: Some("Individual quota reached".into()),
+    };
+
+    // Hook marker lands before the first statusline push (so no model stamp yet).
+    assert!(merge_turn_error(&runtime, "antigravity", "sess-1", marker.clone()).unwrap());
+    let mut first_push = ctx(Timestamp::from_second(1_001).unwrap());
+    first_push.model_id = Some("gemini-4-neon-high".into());
+    write(&runtime, "antigravity", "sess-1", &first_push, None, false).unwrap();
+    let after_first = read_one(&runtime, "antigravity", "sess-1")
+        .unwrap()
+        .context
+        .turn_error;
+    assert_eq!(
+        after_first,
+        Some(AgentTurnError {
+            model: Some("gemini-4-neon-high".into()),
+            ..marker.clone()
+        }),
+        "an unobserved push keeps the stored marker and stamps its model before stamp_model"
+    );
+
+    // A later unobserved push on another model keeps both the marker and its first model stamp.
+    let mut second_push = ctx(Timestamp::from_second(1_002).unwrap());
+    second_push.model_id = Some("gemini-4-hydrogen-high".into());
+    write(&runtime, "antigravity", "sess-1", &second_push, None, false).unwrap();
+    let after_second = read_one(&runtime, "antigravity", "sess-1")
+        .unwrap()
+        .context
+        .turn_error;
+    assert_eq!(
+        after_second.as_ref().and_then(|err| err.model.as_deref()),
+        Some("gemini-4-neon-high"),
+        "a kept marker keeps the model it was first stamped with"
+    );
+
+    // An observed push carrying no marker (Claude/Cursor with a clean readable tail) clears it.
+    let clear_push = ctx(Timestamp::from_second(1_003).unwrap());
+    write(&runtime, "antigravity", "sess-1", &clear_push, None, true).unwrap();
+    assert_eq!(
+        read_one(&runtime, "antigravity", "sess-1")
+            .unwrap()
+            .context
+            .turn_error,
+        None,
+        "an observed push with turn_error == None clears the stored marker"
+    );
+
+    // Qwen and Copilot statusline observations leave turn_error_observed false, so hook markers survive.
+    for (kind, payload) in [
+        (
+            "qwen",
+            serde_json::json!({
+                "session_id": "qwen-1",
+                "model": { "id": "qwen3-coder" },
+            }),
+        ),
+        (
+            "copilot",
+            serde_json::json!({
+                "session_id": "copilot-1",
+                "model": { "id": "gpt-5" },
+            }),
+        ),
+    ] {
+        let def = crate::agents::definition_by_kind(kind).unwrap();
+        let obs = def.observe_context(kind, &payload).unwrap();
+        assert!(
+            !obs.turn_error_observed,
+            "{kind} statusline does not read a turn-error source"
+        );
+        assert!(merge_turn_error(&runtime, kind, obs.agent_id.as_str(), marker.clone()).unwrap());
+        write(
+            &runtime,
+            kind,
+            obs.agent_id.as_str(),
+            &obs.context,
+            None,
+            obs.turn_error_observed,
+        )
+        .unwrap();
+        let kept = read_one(&runtime, kind, obs.agent_id.as_str())
+            .unwrap()
+            .context
+            .turn_error;
+        assert!(
+            kept.is_some(),
+            "{kind} hook-written marker must survive its statusline push"
+        );
+    }
 }
 
 mod merge;

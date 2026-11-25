@@ -633,18 +633,7 @@ impl crate::agents::capabilities::SessionCapability for CursorAdapter {
 
 impl crate::agents::capabilities::ContextCapability for CursorAdapter {
     fn observe_context(&self, source: &str, payload: &Value) -> Option<super::ContextObservation> {
-        let payload = statusline::StatuslinePayload::deserialize(payload).ok()?;
-        let agent_id = payload.session_id.clone()?;
-        let markers = payload
-            .session_id
-            .as_deref()
-            .and_then(transcript::statusline_turn_markers);
-        let mut context = payload.into_context(source, Timestamp::now());
-        if let Some(markers) = markers {
-            context.settle = markers.settle;
-            context.turn_error = markers.turn_error;
-        }
-        super::ContextObservation::new(agent_id, context)
+        observe_context_with_markers(source, payload, transcript::statusline_turn_markers)
     }
 
     fn price_turn_locally(
@@ -858,6 +847,25 @@ impl CursorAdapter {
 // Capabilities this agent has no behavior for; every method keeps its
 // default from `agents::capabilities`.
 impl crate::agents::capabilities::RuntimeControlCapability for CursorAdapter {}
+
+fn observe_context_with_markers(
+    source: &str,
+    payload: &Value,
+    read_markers: impl FnOnce(&str) -> Option<transcript::TurnMarkers>,
+) -> Option<super::ContextObservation> {
+    let payload = statusline::StatuslinePayload::deserialize(payload).ok()?;
+    let agent_id = payload.session_id.clone()?;
+    let markers = payload.session_id.as_deref().and_then(read_markers);
+    let mut context = payload.into_context(source, Timestamp::now());
+    let turn_error_observed = markers.as_ref().is_some_and(|markers| !markers.torn_suffix);
+    if let Some(markers) = markers {
+        context.settle = markers.settle;
+        context.turn_error = markers.turn_error;
+    }
+    let mut observation = super::ContextObservation::new(agent_id, context)?;
+    observation.turn_error_observed = turn_error_observed;
+    Some(observation)
+}
 
 #[cfg(test)]
 mod tests;

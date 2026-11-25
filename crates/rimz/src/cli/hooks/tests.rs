@@ -529,6 +529,7 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
                     &format!("agent-{slot}"),
                     &rimz::agents::AgentContext::new("claude", jiff::Timestamp::now()),
                     None,
+                    false,
                 )
                 .unwrap();
             }
@@ -636,6 +637,7 @@ fn cold_team_tool_frames_read_a_constant_number_of_sidecars() {
                 &format!("agent-{slot}"),
                 &rimz::agents::AgentContext::new("claude", jiff::Timestamp::now()),
                 None,
+                false,
             )
             .unwrap();
         }

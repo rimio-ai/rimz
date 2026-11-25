@@ -1855,7 +1855,7 @@ fn statusline_payloads_carry_no_cost_and_keep_the_turn_end_total() {
             .unwrap()
             .context;
         assert!(context.cost.is_none());
-        record.apply_context_refresh("antigravity", SESSION_ID, context, None);
+        record.apply_context_refresh("antigravity", SESSION_ID, context, None, false);
         assert_eq!(
             record
                 .context

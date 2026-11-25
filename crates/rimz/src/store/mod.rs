@@ -603,13 +603,14 @@ mod tests {
             }),
             ..AgentContext::new("claude", error_at)
         };
-        agent_context::write(&runtime, "claude", "agent-0", &context, None).unwrap();
+        agent_context::write(&runtime, "claude", "agent-0", &context, None, false).unwrap();
         agent_context::write(
             &runtime,
             "claude",
             "unrelated-agent",
             &AgentContext::new("claude", error_at),
             None,
+            false,
         )
         .unwrap();
 
@@ -651,6 +652,7 @@ mod tests {
                 &format!("agent-{index}"),
                 &context,
                 None,
+                false,
             )
             .unwrap();
         }
@@ -706,7 +708,7 @@ mod tests {
             }),
             ..AgentContext::new("claude", at + std::time::Duration::from_secs(1))
         };
-        agent_context::write(&runtime, "claude", "agent-0", &replacement, None).unwrap();
+        agent_context::write(&runtime, "claude", "agent-0", &replacement, None, false).unwrap();
         let selected = store.snapshot_with_context(own).unwrap();
         assert_eq!(
             selected.agents[0]
@@ -872,8 +874,15 @@ mod tests {
         for label in ["first", "replacement"] {
             let mut context = AgentContext::new("claude", Timestamp::now());
             context.session_name = Some(label.to_owned());
-            agent_context::write(store.runtime_paths(), "claude", "agent-0", &context, None)
-                .unwrap();
+            agent_context::write(
+                store.runtime_paths(),
+                "claude",
+                "agent-0",
+                &context,
+                None,
+                false,
+            )
+            .unwrap();
             let before = snapshot::fold_testkit::rollup_rows_materialized();
             let row = store
                 .agent_with_context(&kind, &agent_id, RuntimeScope::Runtime)

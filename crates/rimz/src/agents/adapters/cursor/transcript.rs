@@ -38,6 +38,8 @@ enum TerminalOutcome {
 pub(super) struct TurnMarkers {
     pub settle: Option<TurnSettle>,
     pub turn_error: Option<AgentTurnError>,
+    /// The tail ends mid-record, so its missing turn error says nothing.
+    pub torn_suffix: bool,
 }
 
 pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
@@ -101,7 +103,10 @@ pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnM
             }),
             ..TurnMarkers::default()
         },
-        None => TurnMarkers::default(),
+        None => TurnMarkers {
+            torn_suffix: tail.torn_suffix,
+            ..TurnMarkers::default()
+        },
     })
 }
 

@@ -266,6 +266,7 @@ fn fixture_with_history(closed: usize) -> Env {
             &format!("work-{index}"),
             &AgentContext::new("claude", Timestamp::now()),
             None,
+            false,
         )
         .unwrap();
     }

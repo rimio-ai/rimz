@@ -295,6 +295,7 @@ mod latency {
                     &session,
                     &AgentContext::new("claude", jiff::Timestamp::now()),
                     None,
+                    false,
                 )
                 .unwrap();
             }

@@ -3109,8 +3109,15 @@ mod refusal_fold {
                 turn_error,
                 ..AgentContext::new("claude", at)
             };
-            crate::store::agent_context::write(&self.runtime, "claude", session, &context, None)
-                .unwrap();
+            crate::store::agent_context::write(
+                &self.runtime,
+                "claude",
+                session,
+                &context,
+                None,
+                true,
+            )
+            .unwrap();
         }
 
         fn rows(&self) -> (crate::store::snapshot::SidebarSnapshot, Vec<AgentState>) {

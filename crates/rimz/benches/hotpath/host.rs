@@ -457,6 +457,7 @@ impl Room {
                 &format!("scale-{index}"),
                 &AgentContext::new("claude", jiff::Timestamp::now()),
                 None,
+                false,
             )
             .unwrap();
         }
