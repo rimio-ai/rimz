@@ -417,7 +417,12 @@ pub struct SubagentSpawnInput<'a> {
     pub login_env: &'a std::collections::BTreeMap<String, String>,
 }
 
-/// One settled child recovered from validated provider-owned evidence.
+/// One child recovered from validated provider-owned evidence.
+///
+/// `finished` is `true` when the provider evidence proves the child has
+/// finished (a completed subagent tool result, a completed/interrupted child
+/// record), and `false` when the evidence records only a spawn
+/// acknowledgement for a child that may still be running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnedSubagent {
     pub child_agent_id: AgentSessionId,
@@ -426,6 +431,7 @@ pub struct SpawnedSubagent {
     pub prompt: Option<String>,
     pub model: Option<String>,
     pub usage: AgentUsageSummary,
+    pub finished: bool,
 }
 
 /// Durable provider-neutral token and context-window enrichment.

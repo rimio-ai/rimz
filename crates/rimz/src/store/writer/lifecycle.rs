@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
+use crate::agents::lifecycle::{
+    self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind, TurnPhase,
+};
 use crate::agents::{
     AgentLifecycleObservation, AgentState, AgentStatus, SessionOrigin, SpawnedSubagent, ToolEffect,
 };
@@ -551,6 +553,10 @@ fn derive_lifecycle_events(
         );
     }
 
+    // Reverse pass: adopt or reconcile provider-evidenced children, closing any
+    // returned child on an unparked parent turn end. A child already under this
+    // root that still awaits its spawn metadata takes it through the adoption,
+    // closed in the same record when it is finished.
     if intent.observation.parent_agent_id.is_none()
         && matches!(
             intent.observation.signal,
@@ -558,34 +564,52 @@ fn derive_lifecycle_events(
         )
         && let Some(parent_id) = intent.observation.agent_id.as_ref()
     {
+        let parent_unparked_end = matches!(
+            intent.observation.signal,
+            LifecycleSignal::TurnEnded {
+                parked_on_background: false,
+                ..
+            }
+        );
+        let parent_pane = intent.observation.pane_id.clone().or_else(|| {
+            agents
+                .find(&intent.agent_kind, parent_id)
+                .and_then(|parent| parent.pane.as_ref())
+                .map(|pane| pane.pane_id.clone())
+        });
         for child in intent.spawned_subagents {
             let child_state = agents.find(&intent.agent_kind, &child.child_agent_id);
+            let child_finished = child.finished || parent_unparked_end;
             let errored = child_state.is_some_and(|state| state.status == AgentStatus::Failed);
-            let mut observation = AgentLifecycleObservation::new(
-                Some(child.child_agent_id.clone()),
-                LifecycleSignal::SubagentStopped { errored },
-            );
+            let signal = if child_finished {
+                LifecycleSignal::SubagentStopped { errored }
+            } else {
+                unfinished_adoption_signal(child_state)
+            };
+            let mut observation =
+                AgentLifecycleObservation::new(Some(child.child_agent_id.clone()), signal.clone());
             observation.agent_name = child.agent_name.clone();
             observation.launch.role = child.role.clone();
             observation.launch.model = child.model.clone();
             observation.task = child.role.clone().or_else(|| child.prompt.clone());
             observation.prompt = crate::agents::SanitizedPrompt::new(child.prompt.as_deref());
             observation.usage = child.usage.clone();
-            observation.pane_id = intent.observation.pane_id.clone();
-            if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
-                append_reconciliation(workspace_id, intent, agents, parent_id, observation, staged);
-            } else {
+            observation.pane_id = parent_pane.clone();
+            let parented = child_state.is_some_and(|state| state.parent_agent_id.is_some());
+            if !parented || child_state.is_some_and(awaits_spawn_metadata) {
                 append_adoption(
                     workspace_id,
                     intent,
                     agents,
                     parent_id,
                     observation,
-                    LifecycleSignal::SubagentStopped { errored },
+                    signal,
                     None,
                     login,
                     staged,
                 );
+            } else if child_finished {
+                append_reconciliation(workspace_id, intent, agents, parent_id, observation, staged);
             }
         }
     }
@@ -693,6 +717,75 @@ fn root_parent(
     )
 }
 
+/// Signal for adopting a child whose provider evidence proves only spawn, not
+/// completion. Because durable `SubagentAdopted` records carry only a
+/// [`LifecycleSignal`] (and replay recomputes status/phase solely through
+/// `lifecycle::step`), this maps every live `(AgentStatus, TurnPhase)` pair
+/// totally to a signal that preserves its status, phase, open ask, and turn
+/// clocks, using `SubagentStarted` only for an unseen or ended row. A running
+/// row between tools takes a keyless `AskResolved`, which `lifecycle::step`
+/// ignores outside a waiting row, so the adoption opens no turn.
+fn unfinished_adoption_signal(child_state: Option<&AgentState>) -> LifecycleSignal {
+    let Some(state) = child_state.filter(|state| state.ended_at.is_none()) else {
+        return LifecycleSignal::SubagentStarted;
+    };
+    match (state.status, state.phase) {
+        (AgentStatus::Running | AgentStatus::Paused, TurnPhase::Parked) => {
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+                turn_id: None,
+            }
+        }
+        (AgentStatus::Running | AgentStatus::Paused, TurnPhase::Acting) => {
+            LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Observed,
+                name: None,
+                native_key: None,
+                turn_id: None,
+            }
+        }
+        (AgentStatus::Running | AgentStatus::Paused, TurnPhase::Reasoning | TurnPhase::Idle) => {
+            LifecycleSignal::AskResolved { native_key: None }
+        }
+        (AgentStatus::Waiting, _) => match state.open_ask.as_ref() {
+            Some(ask) => LifecycleSignal::AwaitingInput {
+                kind: ask.kind,
+                ask_id: Some(ask.id.clone()),
+                detail: ask.detail.clone(),
+                extra_questions: ask.extra_questions,
+                native_key: ask.native_key.clone(),
+            },
+            None => LifecycleSignal::AwaitingInput {
+                kind: lifecycle::AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                extra_questions: 0,
+                native_key: None,
+            },
+        },
+        (AgentStatus::Success, _) => LifecycleSignal::SubagentStopped { errored: false },
+        (AgentStatus::Failed, _) => LifecycleSignal::SubagentStopped { errored: true },
+        (AgentStatus::Idle | AgentStatus::Sleeping, _) => {
+            LifecycleSignal::TurnInterrupted { turn_id: None }
+        }
+    }
+}
+
+/// Whether a running child joined by its pane at its first hook still lacks the spawn
+/// metadata (type name, role, prompt) that only its parent's transcript carries.
+fn awaits_spawn_metadata(state: &AgentState) -> bool {
+    state.ended_at.is_none()
+        && !state.name_explicit
+        && state.role.is_none()
+        && state.prompt.is_none()
+}
+
+/// Adopt an unseen child or an unjoined root under `parent_id`, or give a child
+/// already under it its spawn metadata, refusing a row parented elsewhere or
+/// stamped on another pane. The adopted row takes its parent's login and lane
+/// (after the fold strips any root launch identity it copied from the parent
+/// process environment).
 #[allow(clippy::too_many_arguments)]
 fn append_adoption(
     workspace_id: &WorkspaceId,
@@ -712,7 +805,10 @@ fn append_adoption(
         return;
     }
     let child_state = agents.find(&intent.agent_kind, &child_id);
-    if child_state.is_some_and(|state| state.parent_agent_id.is_some())
+    let (root_parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
+    if child_state
+        .and_then(|state| state.parent_agent_id.as_ref())
+        .is_some_and(|parent| *parent != root_parent_id)
         || child_state
             .and_then(|state| state.pane.as_ref())
             .is_some_and(|pane| observation.pane_id.as_ref() != Some(&pane.pane_id))
@@ -720,17 +816,13 @@ fn append_adoption(
         return;
     }
     observation.signal = signal;
-    if child_state.is_none() {
-        let parent = agents.find(&intent.agent_kind, parent_id);
-        observation.launch.login =
-            parent.map_or_else(|| login.cloned(), |parent| parent.login.clone());
-        // A native child the adoption creates is in its parent's lane.
-        if observation.launch.lane.is_none() {
-            observation.launch.lane = parent.and_then(|parent| parent.lane.clone());
-        }
+    let parent = agents.find(&intent.agent_kind, parent_id);
+    observation.launch.login = parent.map_or_else(|| login.cloned(), |parent| parent.login.clone());
+    // A native child the adoption creates or adopts belongs to its parent's lane.
+    if observation.launch.lane.is_none() {
+        observation.launch.lane = parent.and_then(|parent| parent.lane.clone());
     }
-    let (parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
-    observation.parent_agent_id = Some(parent_id);
+    observation.parent_agent_id = Some(root_parent_id);
     if parent_kind != intent.agent_kind {
         observation.launch.parent_agent_kind = Some(parent_kind);
     }
@@ -835,10 +927,19 @@ fn append_reconciliation(
     // A recomputed gauge percentage is not new provider token metadata.
     merged_usage.context_pct = child_state.usage.context_pct;
     let tokens_changed = merged_usage != child_state.usage;
-    // Provider-settled truth closes a child the rollup still holds running,
-    // even when the provider has no new metadata to carry with the close.
-    // Once terminal, the metadata delta remains the reconciliation dedupe.
-    if child_state.status != AgentStatus::Running && !model_changed && !tokens_changed {
+    // Provider-settled truth (or an unparked parent turn end while the parent
+    // transcript still names the child) closes a child the rollup still holds
+    // open or carrying background shells/scripts, even when the provider has no
+    // new metadata to carry with the close. Once terminal with no shells or
+    // scripts, the metadata delta remains the reconciliation dedupe.
+    if !matches!(
+        child_state.status,
+        AgentStatus::Running | AgentStatus::Waiting
+    ) && child_state.background_shells.is_empty()
+        && child_state.background_scripts.is_empty()
+        && !model_changed
+        && !tokens_changed
+    {
         return;
     }
     observation.agent_name = None;

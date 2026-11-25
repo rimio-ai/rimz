@@ -1485,6 +1485,7 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
             run_total_tokens: Some(total_tokens),
             ..Default::default()
         },
+        finished: true,
     };
     for (facts, expected) in [
         (spawned("old-model", 10), 1),
@@ -1827,6 +1828,7 @@ fn a_native_child_row_takes_its_parents_lane_on_either_creating_path() {
         prompt: Some("child task".to_owned()),
         model: None,
         usage: Default::default(),
+        finished: true,
     };
     append(&parent, std::slice::from_ref(&spawned));
 
@@ -1993,6 +1995,7 @@ fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
         prompt: None,
         model: None,
         usage: Default::default(),
+        finished: true,
     };
     let mut stop = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("s2")),
@@ -2433,4 +2436,717 @@ fn lagging_kind_compaction_close_stamps_sidecar_occupancy_and_non_declaring_kind
         assert_eq!(row.retired_context_tokens, Some(26_700));
         assert_eq!(row.context_used_tokens(), Some(99_000));
     }
+}
+
+#[test]
+fn unfinished_spawned_child_adopts_preserving_status_and_leaves_already_adopted_open() {
+    let (_dir, store) = test_store();
+    let kind = AgentKind::new_unchecked("antigravity");
+    let pane = PaneId::parse("tmux:%1").unwrap();
+
+    let append =
+        |id: &str, event_name: &str, signal: LifecycleSignal, spawned: &[SpawnedSubagent]| {
+            let mut obs = AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
+            obs.pane_id = Some(pane.clone());
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: kind.clone(),
+                    event_name,
+                    observation: &obs,
+                    spawned_subagents: spawned,
+                })
+                .unwrap()
+        };
+
+    append(
+        "parent",
+        "PreInvocation",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        &[],
+    );
+
+    // Seed children that arrived as roots before parent transcript flush.
+    for id in [
+        "child-open",
+        "child-acting",
+        "child-parked",
+        "child-waiting",
+        "child-idle",
+        "child-done",
+        "child-failed",
+        "child-reaped",
+    ] {
+        append(
+            id,
+            "PreInvocation",
+            LifecycleSignal::TurnStarted { turn_id: None },
+            &[],
+        );
+    }
+    append(
+        "child-acting",
+        "PostToolUse",
+        LifecycleSignal::ToolUsed {
+            effect: ToolEffect::Editing,
+            name: Some("edit_file".into()),
+            native_key: None,
+            turn_id: None,
+        },
+        &[],
+    );
+    append(
+        "child-parked",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+        &[],
+    );
+    let waiting_ask_id = crate::ids::AskId::new();
+    append(
+        "child-waiting",
+        "PermissionRequest",
+        LifecycleSignal::AwaitingInput {
+            kind: lifecycle::AskKind::Permission,
+            ask_id: Some(waiting_ask_id.clone()),
+            detail: Some("approve shell".into()),
+            extra_questions: 1,
+            native_key: Some("tool_1".into()),
+        },
+        &[],
+    );
+    append(
+        "child-idle",
+        "Stop",
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+        &[],
+    );
+    append(
+        "child-done",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        &[],
+    );
+    append(
+        "child-failed",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        &[],
+    );
+    append(
+        "child-reaped",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        &[],
+    );
+    append(
+        "child-reaped",
+        "ReapedSuperseded",
+        LifecycleSignal::Ended,
+        &[],
+    );
+
+    let unfinished = |id: &str| SpawnedSubagent {
+        child_agent_id: AgentSessionId::from(id),
+        agent_name: Some("self".to_owned()),
+        role: Some(format!("role-{id}")),
+        prompt: Some(format!("prompt-{id}")),
+        model: None,
+        usage: Default::default(),
+        finished: false,
+    };
+    let batch = [
+        unfinished("child-open"),
+        unfinished("child-acting"),
+        unfinished("child-parked"),
+        unfinished("child-waiting"),
+        unfinished("child-idle"),
+        unfinished("child-done"),
+        unfinished("child-failed"),
+        unfinished("child-reaped"),
+        unfinished("child-unseen"),
+    ];
+
+    // Parked parent Stop adopts each unfinished child while preserving its status.
+    append(
+        "parent",
+        "Stop",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+        &batch,
+    );
+
+    let snap = store.snapshot_cached().unwrap();
+    let row = |id: &str| {
+        find_agent(&snap.agents, "antigravity", &AgentSessionId::from(id))
+            .unwrap_or_else(|| panic!("missing {id}"))
+    };
+
+    assert_eq!(row("child-open").parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(row("child-open").status, AgentStatus::Running);
+    assert_eq!(row("child-open").phase, TurnPhase::Reasoning);
+
+    assert_eq!(
+        row("child-acting").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-acting").status, AgentStatus::Running);
+    assert_eq!(row("child-acting").phase, TurnPhase::Acting);
+
+    assert_eq!(
+        row("child-parked").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-parked").status, AgentStatus::Running);
+    assert_eq!(row("child-parked").phase, TurnPhase::Parked);
+
+    assert_eq!(
+        row("child-waiting").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-waiting").status, AgentStatus::Waiting);
+    let open_ask = row("child-waiting")
+        .open_ask
+        .as_ref()
+        .expect("waiting child keeps its open ask across adoption");
+    assert_eq!(open_ask.id, waiting_ask_id);
+    assert_eq!(open_ask.kind, lifecycle::AskKind::Permission);
+    assert_eq!(open_ask.detail.as_deref(), Some("approve shell"));
+    assert_eq!(open_ask.extra_questions, 1);
+    assert_eq!(open_ask.native_key.as_deref(), Some("tool_1"));
+
+    assert_eq!(row("child-idle").parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(row("child-idle").status, AgentStatus::Idle);
+
+    assert_eq!(row("child-done").parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(row("child-done").status, AgentStatus::Success);
+
+    assert_eq!(
+        row("child-failed").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-failed").status, AgentStatus::Failed);
+
+    assert_eq!(
+        row("child-reaped").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-reaped").status, AgentStatus::Success);
+    assert!(row("child-reaped").ended_at.is_none());
+
+    assert_eq!(
+        row("child-unseen").parent_agent_id.as_deref(),
+        Some("parent")
+    );
+    assert_eq!(row("child-unseen").status, AgentStatus::Running);
+
+    // Repeating parent ToolUsed or parked Stop with finished: false must emit nothing
+    // and keep open children in their current status.
+    for (event_name, signal) in [
+        (
+            "PostToolUse",
+            LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Observed,
+                name: Some("run_command".into()),
+                native_key: None,
+                turn_id: None,
+            },
+        ),
+        (
+            "Stop",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+                turn_id: None,
+            },
+        ),
+    ] {
+        let receipt = append("parent", event_name, signal, &batch);
+        let child_events: Vec<_> = receipt
+            .events
+            .iter()
+            .filter(|event| event.agent_id.as_str() != "parent")
+            .collect();
+        assert!(
+            child_events.is_empty(),
+            "{event_name} with finished:false should not re-adopt or reconcile already-adopted children: {child_events:?}"
+        );
+    }
+    let snap = store.snapshot_cached().unwrap();
+    for id in ["child-open", "child-acting", "child-parked", "child-unseen"] {
+        assert_eq!(
+            find_agent(&snap.agents, "antigravity", &AgentSessionId::from(id))
+                .unwrap()
+                .status,
+            AgentStatus::Running,
+            "{id} stays Running across repeated unfinished parent events"
+        );
+    }
+    assert_eq!(
+        find_agent(
+            &snap.agents,
+            "antigravity",
+            &AgentSessionId::from("child-waiting")
+        )
+        .unwrap()
+        .status,
+        AgentStatus::Waiting,
+        "child-waiting stays Waiting across repeated unfinished parent events"
+    );
+
+    // By contrast, finished: true still reconciles an already-adopted open child to Success.
+    let mut finished_open = unfinished("child-open");
+    finished_open.finished = true;
+    let receipt = append(
+        "parent",
+        "PostToolUse",
+        LifecycleSignal::ToolUsed {
+            effect: ToolEffect::Observed,
+            name: None,
+            native_key: None,
+            turn_id: None,
+        },
+        std::slice::from_ref(&finished_open),
+    );
+    assert_eq!(receipt.events.len(), 1);
+    let snap = store.snapshot_cached().unwrap();
+    assert_eq!(
+        find_agent(
+            &snap.agents,
+            "antigravity",
+            &AgentSessionId::from("child-open")
+        )
+        .unwrap()
+        .status,
+        AgentStatus::Success
+    );
+}
+
+#[test]
+fn parent_unparked_turn_end_closes_returned_children_and_leaves_unreturned_open() {
+    let (_dir, store) = test_store();
+    let kind = AgentKind::new_unchecked("antigravity");
+    let pane = PaneId::parse("tmux:%2").unwrap();
+
+    let append_obs =
+        |obs: &AgentLifecycleObservation, event_name: &str, spawned: &[SpawnedSubagent]| {
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: kind.clone(),
+                    event_name,
+                    observation: obs,
+                    spawned_subagents: spawned,
+                })
+                .unwrap()
+        };
+
+    let mut parent_start = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    parent_start.pane_id = Some(pane.clone());
+    append_obs(&parent_start, "PreInvocation", &[]);
+
+    let start_provider_child = |id: &str, role: Option<&str>| {
+        let mut obs = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::SubagentStarted,
+        );
+        obs.parent_agent_id = Some(AgentSessionId::from("parent"));
+        obs.launch.role = role.map(ToOwned::to_owned);
+        obs.pane_id = Some(pane.clone());
+        append_obs(&obs, "PreInvocation", &[]);
+    };
+    for id in [
+        "child-running",
+        "child-parked",
+        "child-waiting",
+        "child-settled",
+        "child-unreturned",
+    ] {
+        start_provider_child(id, Some("Runner"));
+    }
+    // Joined by its pane at its first hook: no type name, role, or prompt yet, parked on a
+    // background shell when its parent's turn ends.
+    start_provider_child("child-pane-joined", None);
+    let mut pane_joined_parked = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-pane-joined")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+    );
+    pane_joined_parked.parent_agent_id = Some(AgentSessionId::from("parent"));
+    pane_joined_parked.background_shells = Some(crate::agents::BackgroundShellReport::Snapshot {
+        shells: vec![crate::agents::BackgroundShell {
+            id: "shell-1".to_owned(),
+            command: Some("sleep 30".to_owned()),
+            description: None,
+            started_at: jiff::Timestamp::now(),
+        }],
+    });
+    append_obs(&pane_joined_parked, "Stop", &[]);
+
+    let mut parked = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-parked")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+    );
+    parked.parent_agent_id = Some(AgentSessionId::from("parent"));
+    append_obs(&parked, "Stop", &[]);
+
+    let mut waiting = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-waiting")),
+        LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind: lifecycle::AskKind::Permission,
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        },
+    );
+    waiting.parent_agent_id = Some(AgentSessionId::from("parent"));
+    append_obs(&waiting, "PermissionRequest", &[]);
+
+    let mut settled = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-settled")),
+        LifecycleSignal::SubagentStopped { errored: false },
+    );
+    settled.parent_agent_id = Some(AgentSessionId::from("parent"));
+    append_obs(&settled, "Stop", &[]);
+
+    // A RimZ-launched child shares parent_agent_id but is not a provider subagent.
+    let mut launched = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-launched")),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    launched.parent_agent_id = Some(AgentSessionId::from("parent"));
+    launched.launch_id = Some(AgentSessionId::from("launch_child"));
+    launched.launch.launch_depth = Some(1);
+    launched.pane_id = Some(PaneId::parse("tmux:%9").unwrap());
+    append_obs(&launched, "PreInvocation", &[]);
+
+    // Unparked parent TurnEnded arrives pane-less (as RimzProviderRest does) with the
+    // transcript-named children marked finished: false.
+    let unfinished = |id: &str| SpawnedSubagent {
+        child_agent_id: AgentSessionId::from(id),
+        agent_name: Some("self".to_owned()),
+        role: Some("Runner".to_owned()),
+        prompt: Some("run".to_owned()),
+        model: None,
+        usage: Default::default(),
+        finished: false,
+    };
+    let returned = [
+        unfinished("child-running"),
+        unfinished("child-parked"),
+        unfinished("child-waiting"),
+        unfinished("child-settled"),
+        unfinished("child-via-spawn"),
+        unfinished("child-pane-joined"),
+    ];
+    let parent_rest = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let receipt = append_obs(&parent_rest, "RimzProviderRest", &returned);
+    let child_events: Vec<_> = receipt
+        .events
+        .iter()
+        .filter(|event| event.agent_id.as_str() != "parent")
+        .collect();
+    assert_eq!(
+        child_events.len(),
+        5,
+        "expected 2 adoptions (via-spawn, pane-joined) + 3 reconciliations (running, parked, waiting; settled skipped): {child_events:?}"
+    );
+
+    let snap = store.snapshot_cached().unwrap();
+    let row = |id: &str| {
+        find_agent(&snap.agents, "antigravity", &AgentSessionId::from(id))
+            .unwrap_or_else(|| panic!("missing {id}"))
+    };
+    for id in [
+        "child-running",
+        "child-parked",
+        "child-waiting",
+        "child-settled",
+        "child-via-spawn",
+        "child-pane-joined",
+    ] {
+        assert_eq!(row(id).status, AgentStatus::Success, "{id}");
+        assert_eq!(
+            row(id).pane.as_ref().map(|p| &p.pane_id),
+            Some(&pane),
+            "{id} inherits parent pane even when rest report is pane-less"
+        );
+    }
+    let pane_joined = row("child-pane-joined");
+    assert_eq!(
+        (
+            pane_joined.role.as_deref(),
+            pane_joined.task.as_deref(),
+            pane_joined.prompt.as_deref(),
+            pane_joined.background_shells.len(),
+        ),
+        (Some("Runner"), Some("Runner"), Some("run"), 0),
+        "a pane-joined child closed by its parent's turn end takes its spawn metadata"
+    );
+    assert_eq!(
+        row("child-unreturned").status,
+        AgentStatus::Running,
+        "provider child absent from spawned_subagents stays open on unparked parent turn end"
+    );
+    assert_eq!(
+        row("child-launched").status,
+        AgentStatus::Running,
+        "RimZ-launched child stays open on parent unparked turn end"
+    );
+
+    // Repeating parent unparked TurnEnded with the same returned list is idempotent.
+    let repeat = append_obs(&parent_rest, "RimzProviderRest", &returned);
+    let repeat_child_events: Vec<_> = repeat
+        .events
+        .iter()
+        .filter(|event| event.agent_id.as_str() != "parent")
+        .collect();
+    assert!(
+        repeat_child_events.is_empty(),
+        "repeated unparked parent turn end must emit no duplicate reconciliations: {repeat_child_events:?}"
+    );
+}
+
+#[test]
+fn spawn_metadata_fill_keeps_a_running_childs_turn_clocks() {
+    let (_dir, store) = test_store();
+    let kind = AgentKind::new_unchecked("antigravity");
+    let pane = PaneId::parse("tmux:%3").unwrap();
+    let append_obs = |obs: &AgentLifecycleObservation, spawned: &[SpawnedSubagent]| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: kind.clone(),
+                event_name: "PostToolUse",
+                observation: obs,
+                spawned_subagents: spawned,
+            })
+            .unwrap();
+    };
+    let mut parent = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    parent.pane_id = Some(pane.clone());
+    append_obs(&parent, &[]);
+    // Joined by its pane at its first hook, with no spawn metadata yet.
+    let mut child = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child")),
+        LifecycleSignal::SubagentStarted,
+    );
+    child.parent_agent_id = Some(AgentSessionId::from("parent"));
+    child.pane_id = Some(pane);
+    append_obs(&child, &[]);
+    let row = || {
+        let snap = store.snapshot_cached().unwrap();
+        find_agent(&snap.agents, "antigravity", &AgentSessionId::from("child"))
+            .unwrap()
+            .clone()
+    };
+    let opened = row();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    parent.signal = LifecycleSignal::ToolUsed {
+        effect: ToolEffect::Observed,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    };
+    let spawned = SpawnedSubagent {
+        child_agent_id: AgentSessionId::from("child"),
+        agent_name: Some("worker".to_owned()),
+        role: Some("Runner".to_owned()),
+        prompt: Some("run".to_owned()),
+        model: None,
+        usage: Default::default(),
+        finished: false,
+    };
+    append_obs(&parent, std::slice::from_ref(&spawned));
+    let filled = row();
+    assert_eq!(
+        (
+            filled.role.as_deref(),
+            filled.status,
+            filled.phase,
+            filled.turn_started_at,
+            filled.user_turn_started_at,
+        ),
+        (
+            Some("Runner"),
+            opened.status,
+            opened.phase,
+            opened.turn_started_at,
+            opened.user_turn_started_at,
+        ),
+        "the metadata fill opens no turn"
+    );
+}
+
+#[test]
+fn parent_unparked_turn_end_clears_reconciled_child_background_shell_and_rests_parent() {
+    let (_dir, store) = test_store();
+    let kind = AgentKind::new_unchecked("antigravity");
+    let pane = PaneId::parse("tmux:%12").unwrap();
+    let started_at = jiff::Timestamp::now();
+
+    let append_obs =
+        |obs: &AgentLifecycleObservation, event_name: &str, spawned: &[SpawnedSubagent]| {
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: kind.clone(),
+                    event_name,
+                    observation: obs,
+                    spawned_subagents: spawned,
+                })
+                .unwrap()
+        };
+
+    let mut parent_start = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    parent_start.pane_id = Some(pane.clone());
+    append_obs(&parent_start, "PreInvocation", &[]);
+
+    for id in ["child-parked-shell", "child-settled-shell"] {
+        let mut start = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::SubagentStarted,
+        );
+        start.parent_agent_id = Some(AgentSessionId::from("parent"));
+        start.pane_id = Some(pane.clone());
+        append_obs(&start, "PreInvocation", &[]);
+    }
+
+    let mut parked_shell = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-parked-shell")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+            turn_id: None,
+        },
+    );
+    parked_shell.parent_agent_id = Some(AgentSessionId::from("parent"));
+    parked_shell.background_shells = Some(crate::agents::BackgroundShellReport::Snapshot {
+        shells: vec![crate::agents::BackgroundShell {
+            id: "child-parked-shell/task-2".to_owned(),
+            command: Some("sleep 90".to_owned()),
+            description: None,
+            started_at,
+        }],
+    });
+    append_obs(&parked_shell, "Stop", &[]);
+
+    // A child whose raw status already settled via TurnEnded while still listing a shell.
+    let mut settled_shell = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child-settled-shell")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    settled_shell.parent_agent_id = Some(AgentSessionId::from("parent"));
+    settled_shell.background_shells = Some(crate::agents::BackgroundShellReport::Started {
+        shell: crate::agents::BackgroundShell {
+            id: "child-settled-shell/task-3".to_owned(),
+            command: Some("sleep 90".to_owned()),
+            description: None,
+            started_at,
+        },
+    });
+    append_obs(&settled_shell, "Stop", &[]);
+
+    let unfinished = |id: &str| SpawnedSubagent {
+        child_agent_id: AgentSessionId::from(id),
+        agent_name: Some("rimz-control".to_owned()),
+        role: Some("worker".to_owned()),
+        prompt: Some("run".to_owned()),
+        model: None,
+        usage: Default::default(),
+        finished: false,
+    };
+    let returned = [
+        unfinished("child-parked-shell"),
+        unfinished("child-settled-shell"),
+    ];
+    let parent_rest = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let receipt = append_obs(&parent_rest, "RimzProviderRest", &returned);
+    let reconciled: Vec<_> = receipt
+        .events
+        .iter()
+        .filter(|event| event.agent_id.as_str() != "parent")
+        .collect();
+    assert_eq!(
+        reconciled.len(),
+        2,
+        "both parked and shell-holding children must reconcile: {reconciled:?}"
+    );
+
+    let snap = store.snapshot_cached().unwrap();
+    for id in ["child-parked-shell", "child-settled-shell"] {
+        let child = find_agent(&snap.agents, "antigravity", &AgentSessionId::from(id)).unwrap();
+        assert_eq!(child.status, AgentStatus::Success, "{id}");
+        assert_eq!(child.phase, TurnPhase::Idle, "{id}");
+        assert!(
+            child.background_shells.is_empty(),
+            "{id} must clear background_shells on reconciliation: {:?}",
+            child.background_shells
+        );
+    }
+
+    let repeat = append_obs(&parent_rest, "RimzProviderRest", &returned);
+    let repeat_child_events: Vec<_> = repeat
+        .events
+        .iter()
+        .filter(|event| event.agent_id.as_str() != "parent")
+        .collect();
+    assert!(
+        repeat_child_events.is_empty(),
+        "repeated rest report after shell clear must be idempotent: {repeat_child_events:?}"
+    );
 }

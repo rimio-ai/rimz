@@ -251,9 +251,14 @@ pub trait HookCapability: CoreCapability {
         None
     }
 
-    /// Enumerate children proven settled by provider-owned durable records.
-    /// The shared hook path adopts a missing stopped child or closes an
-    /// existing child bracket, then reconciles exact model/token metadata.
+    /// Enumerate children evidenced by provider-owned durable records.
+    /// When [`SpawnedSubagent::finished`] is `true`, the shared hook path
+    /// adopts a missing stopped child or closes an existing child bracket and
+    /// reconciles exact model/token metadata. When `false` (a spawn
+    /// acknowledgement), it adopts an unseen or unjoined root child without
+    /// deciding completion and leaves already-adopted children open until the
+    /// child ends or the parent's unparked turn ends while its transcript
+    /// still names the child.
     fn spawned_subagents(&self, _input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
         Vec::new()
     }

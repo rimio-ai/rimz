@@ -49,6 +49,21 @@ pub(super) struct InvocationPayload {
     pub initial_num_steps: Option<u64>,
 }
 
+impl InvocationPayload {
+    /// Whether this opens a native subagent's first turn. On 1.5.17 a child's first invocation
+    /// starts on an empty transcript with an empty `lastUserInput`, while a top-level
+    /// conversation's carries its prompt row and that prompt. The payload names no parent.
+    pub(super) fn opens_native_subagent(&self) -> bool {
+        self.invocation_num == Some(0)
+            && self.initial_num_steps == Some(0)
+            && self
+                .common
+                .last_user_input
+                .as_deref()
+                .is_some_and(|input| input.trim().is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct PostToolPayload {

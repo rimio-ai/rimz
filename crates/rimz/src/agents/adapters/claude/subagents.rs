@@ -79,6 +79,7 @@ fn interrupted_subagent(transcript: PathBuf) -> Option<SpawnedSubagent> {
             output_tokens: usage.output_tokens,
             ..Default::default()
         },
+        finished: true,
     })
 }
 

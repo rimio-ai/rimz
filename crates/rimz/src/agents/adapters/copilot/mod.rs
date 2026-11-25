@@ -615,6 +615,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                     run_total_tokens: child.total_tokens,
                     ..Default::default()
                 },
+                finished: true,
             })
             .collect()
     }

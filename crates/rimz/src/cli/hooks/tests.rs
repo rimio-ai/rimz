@@ -1621,6 +1621,7 @@ impl rimz::agents::capabilities::HookCapability for CorrelationTestAdapter {
                     prompt: Some(prompt.to_owned()),
                     model: None,
                     usage: Default::default(),
+                    finished: true,
                 }
             };
         match input.parent_agent_id.as_str() {
@@ -4563,6 +4564,1186 @@ fn antigravity_parent_stop_rematerializes_a_reaped_child() {
     assert_eq!(child.name.as_deref(), Some("reaped-name"));
     assert_eq!(child.role.as_deref(), Some("reaped-role"));
     assert_eq!(child.task.as_deref(), Some("reaped-role"));
+}
+
+#[test]
+fn antigravity_1_5_parked_parent_adopts_running_child_and_stays_live_through_rest_report() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    const PARENT_ID: &str = "7a15efc9-8932-49d0-94bd-570987788652";
+    const CHILD_ID: &str = "e3853508-d326-4994-8c58-ac0eaa585583";
+    const FIXTURE: &str = include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/subagent_flat_one_child.jsonl"
+    );
+
+    let write_agy_fixture =
+        |home: &std::path::Path, workspace: &std::path::Path, session_id: &str, fixture: &str| {
+            let agy_home = home.join(".gemini/antigravity-cli");
+            let path = agy_home
+                .join("brain")
+                .join(session_id)
+                .join(".system_generated/logs/transcript_full.jsonl");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let home_uri = url::Url::from_directory_path(&agy_home)
+                .unwrap()
+                .to_string();
+            let workspace_uri = url::Url::from_directory_path(workspace)
+                .unwrap()
+                .to_string();
+            std::fs::write(
+                &path,
+                fixture
+                    .replace("__HOME_URI__", home_uri.trim_end_matches('/'))
+                    .replace("__WORKSPACE__", &workspace.display().to_string())
+                    .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/')),
+            )
+            .unwrap();
+            path
+        };
+
+    let feed_in_env = |store: &rimz::Store,
+                       workspace: &std::path::Path,
+                       pane: &PaneId,
+                       env: &std::collections::BTreeMap<String, String>,
+                       event_name: &str,
+                       payload: serde_json::Value| {
+        let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: payload.to_string(),
+            cwd: workspace.to_path_buf(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, env).unwrap();
+            decoded.update_lifecycle(|obs| {
+                obs.pane_id = Some(pane.clone());
+            });
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+
+    // Case 1: parent parks first (events 64 -> 70), then child runs and settles, then rest report.
+    {
+        let (dir, store) = hooks_test_store();
+        let home = dir.path().join("home");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let parent_transcript = write_agy_fixture(&home, &workspace, PARENT_ID, FIXTURE);
+        let child_transcript = write_antigravity_transcript(&home, CHILD_ID, "child-done");
+        let pane = PaneId::parse("tmux:%11").unwrap();
+
+        let launch = store
+            .begin_agent_launch_batch(
+                &[rimz::store::writer::AgentLaunchRequest {
+                    login: rimz::store::writer::LaunchLogin::RoomDefault,
+                    kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+                    agent_id: AgentSessionId::from("launch_parent"),
+                    name: rimz::store::writer::AgentLaunchName::Explicit("coder".into()),
+                    launch: rimz::agents::LaunchParams {
+                        role: Some("implementer".into()),
+                        ..Default::default()
+                    },
+                    run_id: None,
+                    prompt: None,
+                }],
+                rimz::store::writer::AgentLaunchScope {
+                    session_name: "main".into(),
+                    cwd: workspace.clone(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap();
+        store
+            .bind_agent_launch(
+                launch.single_identity().unwrap(),
+                "main",
+                &workspace,
+                &pane,
+                None,
+            )
+            .unwrap();
+
+        let env = std::collections::BTreeMap::from([
+            ("HOME".into(), home.display().to_string()),
+            ("RIMZ_AGENT_ID".into(), "launch_parent".into()),
+            ("RIMZ_AGENT_NAME".into(), "coder".into()),
+            ("RIMZ_AGENT_ROLE".into(), "implementer".into()),
+            ("TMUX_PANE".into(), "%11".into()),
+            ("TMUX".into(), "/tmp/tmux-test,1,0".into()),
+        ]);
+        let payload = |id: &str, transcript: &std::path::Path| {
+            serde_json::json!({
+                "conversationId": id,
+                "workspacePaths": [workspace.display().to_string()],
+                "transcriptPath": transcript.display().to_string(),
+            })
+        };
+
+        // 1. Parent PreInvocation.
+        let mut p_start = payload(PARENT_ID, &parent_transcript);
+        p_start["invocationNum"] = serde_json::json!(0);
+        feed_in_env(&store, &workspace, &pane, &env, "PreInvocation", p_start);
+
+        // 2. Parent Stop (fullyIdle: false) -> adopts child as Running.
+        let mut p_park = payload(PARENT_ID, &parent_transcript);
+        p_park["fullyIdle"] = serde_json::json!(false);
+        p_park["terminationReason"] = serde_json::json!("model_stop");
+        feed_in_env(&store, &workspace, &pane, &env, "Stop", p_park);
+
+        let child = antigravity_row(&store, CHILD_ID);
+        assert_eq!(child.parent_agent_id.as_deref(), Some(PARENT_ID));
+        assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+        assert_eq!(child.name.as_deref(), Some("self"));
+        assert_eq!(child.role.as_deref(), Some("Command Runner"));
+        assert_eq!(child.launch_id, None);
+
+        // 3. Child PreInvocation & parked Stop with parent's inherited env.
+        let mut c_start = payload(CHILD_ID, &child_transcript);
+        c_start["invocationNum"] = serde_json::json!(0);
+        feed_in_env(&store, &workspace, &pane, &env, "PreInvocation", c_start);
+
+        let mut c_park = payload(CHILD_ID, &child_transcript);
+        c_park["fullyIdle"] = serde_json::json!(false);
+        c_park["terminationReason"] = serde_json::json!("model_stop");
+        feed_in_env(&store, &workspace, &pane, &env, "Stop", c_park);
+
+        let parent_mid = antigravity_row(&store, PARENT_ID);
+        assert_eq!(parent_mid.status, rimz::agents::AgentStatus::Running);
+        assert_eq!(parent_mid.phase, rimz::agents::lifecycle::TurnPhase::Parked);
+        assert_eq!(parent_mid.name.as_deref(), Some("coder"));
+        let child_mid = antigravity_row(&store, CHILD_ID);
+        assert_eq!(child_mid.parent_agent_id.as_deref(), Some(PARENT_ID));
+        assert_eq!(child_mid.status, rimz::agents::AgentStatus::Running);
+        assert_eq!(child_mid.phase, rimz::agents::lifecycle::TurnPhase::Parked);
+
+        // 4. Child unparked Stop -> settles child to Success.
+        let mut c_stop = payload(CHILD_ID, &child_transcript);
+        c_stop["fullyIdle"] = serde_json::json!(true);
+        c_stop["terminationReason"] = serde_json::json!("model_stop");
+        feed_in_env(&store, &workspace, &pane, &env, "Stop", c_stop);
+        let child_done = antigravity_row(&store, CHILD_ID);
+        assert_eq!(child_done.status, rimz::agents::AgentStatus::Success);
+        assert_eq!(child_done.parent_agent_id.as_deref(), Some(PARENT_ID));
+
+        // 5. Parent statusline rest report -> ends parent cleanly, no ReapedSuperseded.
+        feed_antigravity_statusline_in(
+            &store,
+            PARENT_ID,
+            serde_json::json!({
+                "agent_state": "idle",
+                "task_count": 0,
+                "active_subagents": 0,
+            }),
+            &env,
+        );
+        let parent_end = antigravity_row(&store, PARENT_ID);
+        assert_eq!(parent_end.status, rimz::agents::AgentStatus::Success);
+        assert_eq!(parent_end.name.as_deref(), Some("coder"));
+        assert!(
+            store.read_events().unwrap().iter().all(|event| !matches!(
+                event.kind(),
+                rimz::store::event::EventKind::AgentLifecycle(p)
+                    if p.event_name.as_deref() == Some("ReapedSuperseded")
+            )),
+            "parent must not be superseded by its own subagent"
+        );
+    }
+
+    // Case 2: child fires BEFORE parent transcript flushes (child-first race),
+    // and never sends an unparked Stop -> parent rest report closes the transcript-named child.
+    {
+        let (dir, store) = hooks_test_store();
+        let home = dir.path().join("home");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let parent_transcript = write_antigravity_transcript(&home, PARENT_ID, "working");
+        let child_transcript = write_antigravity_transcript(&home, CHILD_ID, "child-done");
+        let pane = PaneId::parse("tmux:%12").unwrap();
+
+        let env = std::collections::BTreeMap::from([
+            ("HOME".into(), home.display().to_string()),
+            ("RIMZ_AGENT_ID".into(), "launch_parent_2".into()),
+            ("RIMZ_AGENT_NAME".into(), "coder".into()),
+            ("RIMZ_AGENT_ROLE".into(), "implementer".into()),
+            ("TMUX_PANE".into(), "%12".into()),
+            ("TMUX".into(), "/tmp/tmux-test,1,0".into()),
+        ]);
+        let payload = |id: &str, transcript: &std::path::Path| {
+            serde_json::json!({
+                "conversationId": id,
+                "workspacePaths": [workspace.display().to_string()],
+                "transcriptPath": transcript.display().to_string(),
+            })
+        };
+
+        let mut p_start = payload(PARENT_ID, &parent_transcript);
+        p_start["invocationNum"] = serde_json::json!(0);
+        feed_in_env(&store, &workspace, &pane, &env, "PreInvocation", p_start);
+
+        // Child fires before parent's transcript has the invoke_subagent ack.
+        let mut c_start = payload(CHILD_ID, &child_transcript);
+        c_start["invocationNum"] = serde_json::json!(0);
+        feed_in_env(&store, &workspace, &pane, &env, "PreInvocation", c_start);
+
+        // Now parent transcript flushes and parent parks.
+        let parent_transcript = write_agy_fixture(&home, &workspace, PARENT_ID, FIXTURE);
+        let mut p_park = payload(PARENT_ID, &parent_transcript);
+        p_park["fullyIdle"] = serde_json::json!(false);
+        p_park["terminationReason"] = serde_json::json!("model_stop");
+        feed_in_env(&store, &workspace, &pane, &env, "Stop", p_park);
+
+        let child_adopted = antigravity_row(&store, CHILD_ID);
+        assert_eq!(child_adopted.parent_agent_id.as_deref(), Some(PARENT_ID));
+        assert_eq!(child_adopted.status, rimz::agents::AgentStatus::Running);
+        assert_eq!(child_adopted.launch_id, None);
+        assert_eq!(child_adopted.role.as_deref(), Some("Command Runner"));
+
+        // Child never sends an unparked Stop; parent's rest report closes the transcript-named child.
+        feed_antigravity_statusline_in(
+            &store,
+            PARENT_ID,
+            serde_json::json!({
+                "agent_state": "idle",
+                "task_count": 0,
+                "active_subagents": 0,
+            }),
+            &env,
+        );
+        assert_eq!(
+            antigravity_row(&store, PARENT_ID).status,
+            rimz::agents::AgentStatus::Success
+        );
+        assert_eq!(
+            antigravity_row(&store, CHILD_ID).status,
+            rimz::agents::AgentStatus::Success
+        );
+    }
+}
+
+#[test]
+fn antigravity_1_5_unparked_parent_tool_use_adopts_running_child() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    const PARENT_ID: &str = "73a69aaa-de21-4e7c-a8e9-001a0bd06bb3";
+    const CHILD_ID: &str = "e191dc2b-a952-4c18-84b8-6a7018a60b5b";
+    const FIXTURE: &str = include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/subagent_flat_with_background_tool.jsonl"
+    );
+
+    let (dir, store) = hooks_test_store();
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let agy_home = home.join(".gemini/antigravity-cli");
+    let parent_transcript = agy_home
+        .join("brain")
+        .join(PARENT_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(parent_transcript.parent().unwrap()).unwrap();
+    let home_uri = url::Url::from_directory_path(&agy_home)
+        .unwrap()
+        .to_string();
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
+    std::fs::write(
+        &parent_transcript,
+        FIXTURE
+            .replace("__HOME_URI__", home_uri.trim_end_matches('/'))
+            .replace("__WORKSPACE__", &workspace.display().to_string())
+            .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/')),
+    )
+    .unwrap();
+    write_antigravity_transcript(&home, CHILD_ID, "kid-done");
+
+    let pane = PaneId::parse("tmux:%13").unwrap();
+    let env = std::collections::BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let feed = |event_name: &str, payload: serde_json::Value| {
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: payload.to_string(),
+            cwd: workspace.clone(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, &env).unwrap();
+            decoded.update_lifecycle(|obs| {
+                obs.pane_id = Some(pane.clone());
+            });
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+
+    feed(
+        "PreInvocation",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "invocationNum": 0,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+    feed(
+        "PostToolUse:mutating",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "toolName": "run_command",
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+
+    let child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(child.parent_agent_id.as_deref(), Some(PARENT_ID));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(child.role.as_deref(), Some("Shell Command Runner"));
+    assert_eq!(
+        antigravity_row(&store, PARENT_ID).status,
+        rimz::agents::AgentStatus::Running
+    );
+}
+
+#[test]
+fn antigravity_1_5_retry_after_failed_invoke_subagent_adopts_child_and_keeps_parent_live() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    const PARENT_ID: &str = "f723af7d-3444-4539-80da-fc1659ba1328";
+    const CHILD_ID: &str = "15de371b-2484-4ab5-ac31-d9f1d4448544";
+    const FIXTURE: &str = include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/subagent_flat_retry_after_error.jsonl"
+    );
+
+    let (dir, store) = hooks_test_store();
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let agy_home = home.join(".gemini/antigravity-cli");
+    let parent_transcript = agy_home
+        .join("brain")
+        .join(PARENT_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(parent_transcript.parent().unwrap()).unwrap();
+    let home_uri = url::Url::from_directory_path(&agy_home)
+        .unwrap()
+        .to_string();
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
+    std::fs::write(
+        &parent_transcript,
+        FIXTURE
+            .replace("__HOME_URI__", home_uri.trim_end_matches('/'))
+            .replace("__WORKSPACE__", &workspace.display().to_string())
+            .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/')),
+    )
+    .unwrap();
+    let child_transcript = write_antigravity_transcript(&home, CHILD_ID, "CHILD DONE");
+
+    let pane = PaneId::parse("tmux:%9").unwrap();
+    let launch = store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+                agent_id: AgentSessionId::from("launch_retry_parent"),
+                name: rimz::store::writer::AgentLaunchName::Explicit("control".into()),
+                launch: rimz::agents::LaunchParams {
+                    profile: Some("control".into()),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: "main".into(),
+                cwd: workspace.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            launch.single_identity().unwrap(),
+            "main",
+            &workspace,
+            &pane,
+            None,
+        )
+        .unwrap();
+
+    let env = std::collections::BTreeMap::from([
+        ("HOME".into(), home.display().to_string()),
+        ("RIMZ_AGENT_ID".into(), "launch_retry_parent".into()),
+        ("RIMZ_AGENT_NAME".into(), "control".into()),
+        ("RIMZ_AGENT_PROFILE".into(), "control".into()),
+        ("TMUX_PANE".into(), "%9".into()),
+        ("TMUX".into(), "/tmp/tmux-test,1,0".into()),
+    ]);
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let feed = |event_name: &str, payload: serde_json::Value| {
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: payload.to_string(),
+            cwd: workspace.clone(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, &env).unwrap();
+            decoded.update_lifecycle(|obs| {
+                obs.pane_id = Some(pane.clone());
+            });
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+
+    feed(
+        "PreInvocation",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "invocationNum": 0,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+    // Child fires PreInvocation with parent's env before parent parks.
+    feed(
+        "PreInvocation",
+        serde_json::json!({
+            "conversationId": CHILD_ID,
+            "invocationNum": 0,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": child_transcript.display().to_string(),
+        }),
+    );
+    // Parent parks -> reverse pass must adopt the retried child cleanly.
+    feed(
+        "Stop",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "fullyIdle": false,
+            "terminationReason": "NO_TOOL_CALL",
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+
+    let child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(child.parent_agent_id.as_deref(), Some(PARENT_ID));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(child.name.as_deref(), Some("rimz-control-e9002e0d677a"));
+    assert_eq!(child.role.as_deref(), Some("worker"));
+    assert_eq!(child.launch_id, None);
+    let parent = antigravity_row(&store, PARENT_ID);
+    assert_eq!(parent.name.as_deref(), Some("control"));
+    assert_eq!(parent.ended_at, None);
+}
+
+#[test]
+fn antigravity_1_5_native_child_joins_its_pane_parent_at_its_first_hook() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    // Live case-b on agy 1.5.17: an unparked parent spawns one child, and the child's first
+    // PreInvocation lands before the parent's acknowledgement row or the child's own
+    // transcript is on disk.
+    const PARENT_ID: &str = "983360c6-1527-4014-8d1e-339f881f2b0a";
+    const CHILD_ID: &str = "f7eabe82-a8b3-4467-b564-728ef297065e";
+    const FIXTURE: &str = include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/subagent_flat_unparked_parent.jsonl"
+    );
+    const CHILD_FIXTURE: &str = include_str!(
+        "../../agents/adapters/antigravity/tests/fixtures/subagent_flat_unparked_child.jsonl"
+    );
+    const PROMPT: &str = "1. Call invoke_subagent once, then run sleep 15 && echo P1.";
+
+    let (dir, store) = hooks_test_store();
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let agy_home = home.join(".gemini/antigravity-cli");
+    let logs = |id: &str| {
+        agy_home
+            .join("brain")
+            .join(id)
+            .join(".system_generated/logs")
+    };
+    let parent_transcript = logs(PARENT_ID).join("transcript_full.jsonl");
+    std::fs::create_dir_all(parent_transcript.parent().unwrap()).unwrap();
+    let home_uri = url::Url::from_directory_path(&agy_home)
+        .unwrap()
+        .to_string();
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
+    let fixture = FIXTURE
+        .replace("__HOME_URI__", home_uri.trim_end_matches('/'))
+        .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/'));
+    let write_parent_steps = |steps: usize| {
+        let lines = fixture.lines().take(steps).collect::<Vec<_>>();
+        std::fs::write(&parent_transcript, lines.join("\n")).unwrap();
+    };
+    // At the parent's invoke_subagent PostToolUse only the request is on disk.
+    write_parent_steps(2);
+    let child_transcript = logs(CHILD_ID).join("transcript_full.jsonl");
+
+    let pane = PaneId::parse("tmux:%11").unwrap();
+    let launch = store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+                agent_id: AgentSessionId::from("launch_case_b_parent"),
+                name: rimz::store::writer::AgentLaunchName::Explicit("control".into()),
+                launch: rimz::agents::LaunchParams {
+                    profile: Some("control".into()),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: "main".into(),
+                cwd: workspace.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            launch.single_identity().unwrap(),
+            "main",
+            &workspace,
+            &pane,
+            None,
+        )
+        .unwrap();
+    // The child runs in the parent's agy process, so its hooks carry the parent's launch env.
+    let env = std::collections::BTreeMap::from([
+        ("HOME".into(), home.display().to_string()),
+        ("RIMZ_AGENT_ID".into(), "launch_case_b_parent".into()),
+        ("RIMZ_AGENT_NAME".into(), "control".into()),
+        ("RIMZ_AGENT_PROFILE".into(), "control".into()),
+        ("TMUX_PANE".into(), "%11".into()),
+        ("TMUX".into(), "/tmp/tmux-test,1,0".into()),
+    ]);
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let feed_as = |event_name: &str,
+                   id: &str,
+                   fields: serde_json::Value,
+                   recast: fn(&mut AgentLifecycleObservation)| {
+        let (transcript, input) = if id == PARENT_ID {
+            (&parent_transcript, PROMPT)
+        } else {
+            (&child_transcript, "")
+        };
+        let mut payload = serde_json::json!({
+            "conversationId": id,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": transcript.display().to_string(),
+            "lastUserInput": input,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: payload.to_string(),
+            cwd: workspace.clone(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, &env).unwrap();
+            decoded.update_lifecycle(|obs| {
+                obs.pane_id = Some(pane.clone());
+                recast(obs);
+            });
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+    let feed = |event_name: &str, id: &str, fields: serde_json::Value| {
+        feed_as(event_name, id, fields, |_| {});
+    };
+    let reader = rimz::address::AddressContext {
+        channel: None,
+        origin: rimz::address::ChannelOrigin::Stamped,
+    };
+    let assert_parent_live = |step: &str| {
+        let rollup = store.snapshot_cached().unwrap();
+        let mut pane_ref = rimz::pane::PaneRef::from_id(pane.clone());
+        pane_ref.command = Some("agy".to_owned());
+        pane_ref.cwd = Some(workspace.display().to_string());
+        let view = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            store.paths().workspace_id.clone(),
+            rollup.agents.as_ref().clone(),
+            jiff::Timestamp::now(),
+        )
+        .with_live_panes(vec![pane_ref], None);
+        let addressable = rimz::address::addressable_agents(&view)
+            .iter()
+            .map(|agent| agent.agent_id.to_string())
+            .collect::<Vec<_>>();
+        let resolved = ["@control", &format!("@{PARENT_ID}")].map(|address| {
+            rimz::address::resolve_one(&view, address, None, &reader)
+                .map(|agent| agent.agent_id.to_string())
+                .map_err(|err| format!("{err:?}"))
+        });
+        let sub_agents = view.rows().find(|row| row.id == PARENT_ID).map(|row| {
+            row.sub_agents()
+                .iter()
+                .map(|child| child.id.clone())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            (addressable, resolved, sub_agents),
+            (
+                vec![PARENT_ID.to_owned()],
+                [Ok(PARENT_ID.to_owned()), Ok(PARENT_ID.to_owned())],
+                Some(vec![CHILD_ID.to_owned()]),
+            ),
+            "{step}"
+        );
+        let child = antigravity_row(&store, CHILD_ID);
+        assert_eq!(
+            (
+                child.parent_agent_id.as_deref(),
+                child.launch_id.as_ref(),
+                child.profile.as_deref(),
+            ),
+            (Some(PARENT_ID), None, None),
+            "{step}: the child carries none of the parent's launch identity"
+        );
+    };
+    let adoptions = || {
+        store
+            .read_events()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    rimz::store::event::EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("SubagentAdopted")
+                )
+            })
+            .count()
+    };
+
+    let opener = |steps: u64| serde_json::json!({"invocationNum": 0, "initialNumSteps": steps});
+    feed("PreInvocation", PARENT_ID, opener(1));
+    let invoke = serde_json::json!({"stepIdx": 1, "toolCall": {"name": "invoke_subagent"}});
+    feed("PostToolUse:observed", PARENT_ID, invoke);
+    assert_eq!(antigravity_row(&store, PARENT_ID).parent_agent_id, None);
+
+    feed("PreInvocation", CHILD_ID, opener(0));
+    assert_parent_live("after the child's first hook");
+    let child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(child.role, None);
+
+    // The acknowledgement lands, and both conversations run on.
+    write_parent_steps(6);
+    std::fs::create_dir_all(child_transcript.parent().unwrap()).unwrap();
+    for name in ["transcript.jsonl", "transcript_full.jsonl"] {
+        let child = CHILD_FIXTURE.replace("__HOME_URI__", home_uri.trim_end_matches('/'));
+        std::fs::write(logs(CHILD_ID).join(name), child).unwrap();
+    }
+    let invocation =
+        |num: u64, steps: u64| serde_json::json!({"invocationNum": num, "initialNumSteps": steps});
+    feed("PostInvocation", PARENT_ID, invocation(0, 1));
+    feed("PostInvocation", CHILD_ID, invocation(0, 0));
+    let parked = serde_json::json!({"fullyIdle": false, "terminationReason": "NO_TOOL_CALL"});
+    feed("Stop", CHILD_ID, parked.clone());
+    assert_parent_live("after the child's parked Stop");
+    let parked_child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(adoptions(), 0);
+
+    // The parent's parked Stop names the child: the reverse pass fills its spawn metadata
+    // once and leaves its status and phase alone.
+    feed("Stop", PARENT_ID, parked);
+    assert_parent_live("after the parent's parked Stop");
+    let child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(
+        (
+            child.name.as_deref(),
+            child.role.as_deref(),
+            child.prompt.is_some(),
+            child.status,
+            child.phase,
+        ),
+        (
+            Some("rimz-control-e9002e0d677a"),
+            Some("worker"),
+            true,
+            parked_child.status,
+            parked_child.phase,
+        )
+    );
+    assert_eq!(adoptions(), 1);
+
+    // The child's later compaction edges and a state snapshot of it stay under its parent:
+    // none takes the parent's name or launch identity from the shared process environment.
+    let identity = |row: rimz::agents::AgentState| {
+        (
+            row.name,
+            row.role,
+            row.profile,
+            row.launch_id,
+            row.parent_agent_id,
+        )
+    };
+    let joined = identity(antigravity_row(&store, CHILD_ID));
+    type Recast = fn(&mut AgentLifecycleObservation);
+    let recasts: [(&str, Recast); 3] = [
+        ("Compacting", |obs| obs.signal = LifecycleSignal::Compacting),
+        ("CompactionEnded", |obs| {
+            obs.signal = LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+                echo: false,
+            }
+        }),
+        ("state snapshot", |obs| obs.state_snapshot = Some(true)),
+    ];
+    for (step, recast) in recasts {
+        let tool = serde_json::json!({"stepIdx": 2, "toolCall": {"name": "view_file"}});
+        feed_as("PostToolUse:observed", CHILD_ID, tool, recast);
+        assert_eq!(
+            identity(antigravity_row(&store, CHILD_ID)),
+            joined,
+            "{step}"
+        );
+        assert_parent_live(step);
+    }
+
+    let run_command = serde_json::json!({"stepIdx": 3, "toolCall": {"name": "run_command"}});
+    feed("PostToolUse:mutating", PARENT_ID, run_command);
+    assert_eq!(adoptions(), 1, "a later parent hook fills nothing twice");
+
+    // The child resumes from its background task and finishes.
+    feed("PreInvocation", CHILD_ID, opener(4));
+    assert_parent_live("after the child's resumed opener");
+    let idle = serde_json::json!({"fullyIdle": true, "terminationReason": "NO_TOOL_CALL"});
+    feed("Stop", CHILD_ID, idle.clone());
+    let child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(child.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(child.parent_agent_id.as_deref(), Some(PARENT_ID));
+    feed("Stop", PARENT_ID, idle);
+    let parent = antigravity_row(&store, PARENT_ID);
+    assert_eq!(parent.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(parent.ended_at, None);
+    assert!(
+        store.read_events().unwrap().iter().all(|event| !matches!(
+            event.kind(),
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("ReapedSuperseded")
+        )),
+        "no row on the pane is reaped as superseded"
+    );
+}
+
+#[test]
+fn antigravity_native_child_opener_joins_only_one_live_pane_root() {
+    let (dir, store) = hooks_test_store();
+    let workspace = dir.path().join("workspace");
+    let other_workspace = dir.path().join("branch");
+    for path in [&workspace, &other_workspace] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    // Delegates decoding to the Antigravity adapter and joins "child-clean" to "root" by
+    // transcript; every other child has no transcript evidence.
+    let adapter = hook_definition(Box::leak(Box::new(CorrelationTestAdapter::default())));
+    let start_in = |id: &str, steps: u64, input: &str, cwd: &std::path::Path| {
+        let mut payload = antigravity_payload(id);
+        payload["workspacePaths"] = serde_json::json!([cwd.display().to_string()]);
+        payload["invocationNum"] = serde_json::json!(0);
+        payload["initialNumSteps"] = serde_json::json!(steps);
+        payload["lastUserInput"] = serde_json::json!(input);
+        feed_antigravity(&store, &adapter, "PreInvocation", payload);
+        let row = antigravity_row(&store, id);
+        (row.parent_agent_id.map(|id| id.to_string()), row.name)
+    };
+    let start = |id: &str, steps: u64, input: &str| start_in(id, steps, input, &workspace);
+
+    // No root on the pane: the child registers as a root, as a missed first hook does.
+    let (parent, _) = start("orphan-child", 0, "");
+    assert_eq!(parent, None);
+    let ended = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("orphan-child")),
+        LifecycleSignal::Ended,
+    );
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: "hooks-test",
+            agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event_name: "ReapedDead",
+            observation: &ended,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+
+    // The one live root on the pane parents the opener; a fresh launch's opener and a second
+    // top-level conversation's opener on the same pane stay roots.
+    let (parent, pane_root) = start("pane-root", 1, "spawn a worker");
+    assert_eq!(parent, None);
+    assert_eq!(start("pane-child", 0, "").0.as_deref(), Some("pane-root"));
+    // An opener in another workspace (a `branch`, `share`, or worktree child) stays a root,
+    // as the transcript join keeps it.
+    assert_eq!(start_in("branch-child", 0, "", &other_workspace).0, None);
+    let (parent, _) = start("root", 1, "/new prompt");
+    assert_eq!(parent, None);
+    assert_eq!(antigravity_row(&store, "pane-root").name, pane_root);
+
+    // Two live roots on the pane: the opener joins neither, unless a parent's transcript
+    // names it.
+    assert_eq!(start("ambiguous-child", 0, "").0, None);
+    assert_eq!(
+        start("child-clean", 0, ""),
+        (Some("root".to_owned()), Some("name-child-clean".to_owned()))
+    );
+}
+
+#[test]
+fn antigravity_native_child_opener_joins_its_pane_root_past_the_transcript_candidate_bound() {
+    let (dir, store) = hooks_test_store();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let pane = PaneId::parse("tmux:%21").unwrap();
+    let append = |id: &str, signal: LifecycleSignal, parent: Option<&str>| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
+        observation.parent_agent_id = parent.map(AgentSessionId::from);
+        observation.pane_id = Some(pane.clone());
+        observation.worktree_path = Some(workspace.display().to_string());
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: "hooks-test",
+                agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+                event_name: "PreInvocation",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    };
+    append(
+        "bound-root",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        None,
+    );
+    // Earlier native children of the root keep the pane's candidate set past the bound the
+    // transcript scan reads.
+    for index in 0..64 {
+        let id = format!("earlier-child-{index}");
+        append(&id, LifecycleSignal::SubagentStarted, Some("bound-root"));
+    }
+
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let mut payload = antigravity_payload("late-child");
+    payload["workspacePaths"] = serde_json::json!([workspace.display().to_string()]);
+    payload["invocationNum"] = serde_json::json!(0);
+    payload["initialNumSteps"] = serde_json::json!(0);
+    payload["lastUserInput"] = serde_json::json!("");
+    let mut decoded = adapter.decode_hook("PreInvocation", &payload).unwrap();
+    decoded.update_lifecycle(|observation| observation.pane_id = Some(pane.clone()));
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        adapter,
+        &mut decoded,
+        &payload,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+    assert_eq!(
+        antigravity_row(&store, "late-child")
+            .parent_agent_id
+            .as_deref(),
+        Some("bound-root")
+    );
+}
+
+#[test]
+fn antigravity_1_5_killed_parked_child_rests_with_no_shells_after_parent_rest_report() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+
+    const PARENT_ID: &str = "96f57d1b-763b-41a9-9810-81de0eb36c58";
+    const CHILD_ID: &str = "cd31b7f8-acde-4fb9-8034-3bcc0d7d9b7e";
+
+    let (dir, store) = hooks_test_store();
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let agy_home = home.join(".gemini/antigravity-cli");
+    let home_uri = url::Url::from_directory_path(&agy_home)
+        .unwrap()
+        .to_string();
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
+
+    // Parent transcript from case-c: spawns CHILD_ID and replies PARENT WAITING.
+    let parent_transcript = agy_home
+        .join("brain")
+        .join(PARENT_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(parent_transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &parent_transcript,
+        [
+            serde_json::json!({
+                "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                "created_at": "2026-11-25T16:09:56Z", "content": "<USER_REQUEST>\ninvoke worker\n</USER_REQUEST>"
+            }),
+            serde_json::json!({
+                "step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-11-25T16:09:56Z",
+                "tool_calls": [{"name": "invoke_subagent", "args": {"Prompt": "sleep 90", "Role": "worker", "TypeName": "rimz-control-e9002e0d677a", "Workspace": "inherit"}}]
+            }),
+            serde_json::json!({
+                "step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-11-25T16:09:58Z",
+                "content": format!(
+                    "Created At: 2026-11-25T10:09:58-06:00\nCompleted At: 2026-11-25T10:09:58-06:00\nCreated the following subagent:\n{{\n  \"conversationId\":  \"{CHILD_ID}\",\n  \"logAbsoluteUri\":  \"{}/brain/{CHILD_ID}/.system_generated/logs/transcript.jsonl\",\n  \"workspaceUris\":  [\"{}\"]\n}}\n",
+                    home_uri.trim_end_matches('/'),
+                    workspace_uri.trim_end_matches('/')
+                )
+            }),
+            serde_json::json!({
+                "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-11-25T16:09:59Z", "content": "PARENT WAITING"
+            }),
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n"),
+    )
+    .unwrap();
+
+    // Child transcript from case-c: running background command `sleep 90` at step 2.
+    let child_logs = agy_home
+        .join("brain")
+        .join(CHILD_ID)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&child_logs).unwrap();
+    let child_body = [
+        serde_json::json!({
+            "step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+            "created_at": "2026-11-25T16:09:59Z",
+            "tool_calls": [{"name": "run_command", "args": {"CommandLine": "sleep 90", "WaitMsBeforeAsync": 100000}}]
+        }),
+        serde_json::json!({
+            "step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "RUNNING",
+            "created_at": "2026-11-25T16:10:00Z",
+            "content": format!(
+                "Created At: 2026-11-25T10:10:00-06:00\nTool is running as a background task with task id: {CHILD_ID}/task-2\nTask Description: sleep 90\nTask logs are available at: {}/brain/{CHILD_ID}/.system_generated/tasks/task-2.log",
+                home_uri.trim_end_matches('/')
+            )
+        }),
+        serde_json::json!({
+            "step_index": 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+            "created_at": "2026-11-25T16:10:11Z", "content": "Waiting for sleep 90."
+        }),
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    let child_transcript = child_logs.join("transcript_full.jsonl");
+    std::fs::write(&child_transcript, &child_body).unwrap();
+    std::fs::write(child_logs.join("transcript.jsonl"), &child_body).unwrap();
+
+    let pane = PaneId::parse("tmux:%12").unwrap();
+    let env = std::collections::BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let feed = |event_name: &str, payload: serde_json::Value| {
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: payload.to_string(),
+            cwd: workspace.clone(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, &env).unwrap();
+            decoded.update_lifecycle(|obs| {
+                obs.pane_id = Some(pane.clone());
+            });
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+
+    // 1. Parent starts, child starts, parent parks (adopts child), child parks with task-2.
+    feed(
+        "PreInvocation",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "invocationNum": 0,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+    feed(
+        "PreInvocation",
+        serde_json::json!({
+            "conversationId": CHILD_ID,
+            "invocationNum": 0,
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": child_transcript.display().to_string(),
+        }),
+    );
+    feed(
+        "Stop",
+        serde_json::json!({
+            "conversationId": PARENT_ID,
+            "fullyIdle": false,
+            "terminationReason": "NO_TOOL_CALL",
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": parent_transcript.display().to_string(),
+        }),
+    );
+    feed(
+        "Stop",
+        serde_json::json!({
+            "conversationId": CHILD_ID,
+            "fullyIdle": false,
+            "terminationReason": "NO_TOOL_CALL",
+            "workspacePaths": [workspace.display().to_string()],
+            "transcriptPath": child_transcript.display().to_string(),
+        }),
+    );
+    let parked_child = antigravity_row(&store, CHILD_ID);
+    assert_eq!(parked_child.parent_agent_id.as_deref(), Some(PARENT_ID));
+    assert_eq!(parked_child.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(parked_child.background_shells.len(), 1);
+
+    // 2. Child is killed in /agents (no child hook). Parent's statusline reports idle
+    // with the child completed -> RimzProviderRest closes both parent and child.
+    feed_antigravity_statusline_in(
+        &store,
+        PARENT_ID,
+        serde_json::json!({
+            "agent_state": "idle",
+            "subagents": [{"name": "rimz-control-e9002e0d677a", "role": "worker", "status": "completed"}],
+        }),
+        &env,
+    );
+
+    let child_after = antigravity_row(&store, CHILD_ID);
+    assert_eq!(child_after.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(child_after.phase, rimz::agents::lifecycle::TurnPhase::Idle);
+    assert!(
+        child_after.background_shells.is_empty(),
+        "reconciled child must hold no background shell: {:?}",
+        child_after.background_shells
+    );
+
+    // Verify projected view too: parent must read Success with no running subagent.
+    let rollup = store.snapshot_cached().unwrap();
+    let now = jiff::Timestamp::now();
+    let mut pane_ref = rimz::pane::PaneRef::from_id(pane);
+    pane_ref.command = Some("agy".to_owned());
+    pane_ref.cwd = Some(workspace.display().to_string());
+    let view = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        store.paths().workspace_id.clone(),
+        rollup.agents.as_ref().clone(),
+        now,
+    )
+    .with_live_panes(vec![pane_ref], None);
+    let parent_row = view
+        .rows()
+        .find(|row| row.id == PARENT_ID)
+        .expect("parent row in projected view");
+    assert_eq!(
+        parent_row.status(),
+        Some(rimz::agents::AgentStatus::Success),
+        "parent must rest at Success with no running subagent"
+    );
+    assert_eq!(parent_row.sub_agents().len(), 1);
+    assert_eq!(
+        parent_row.sub_agents()[0].status,
+        rimz::agents::AgentStatus::Success
+    );
+    assert!(!parent_row.sub_agents()[0].holds_parent_turn());
 }
 
 #[test]
