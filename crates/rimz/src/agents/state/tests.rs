@@ -3019,6 +3019,60 @@ fn a_provider_rest_clears_background_shells_only_when_newer_and_non_empty() {
 }
 
 #[test]
+fn a_provider_rest_ends_only_a_parked_turn_older_than_the_report() {
+    let reported_at = Timestamp::from_second(1_050).unwrap();
+    let mut parked = test_agent(AgentStatus::Running, 1_000);
+    parked.phase = TurnPhase::Parked;
+    let mut parked_subsecond = test_agent(AgentStatus::Running, 1_049);
+    parked_subsecond.phase = TurnPhase::Parked;
+    parked_subsecond.last_activity = Timestamp::from_millisecond(1_049_100).unwrap();
+    let mut parked_one_sec = test_agent(AgentStatus::Running, 1_049);
+    parked_one_sec.phase = TurnPhase::Parked;
+    let mut parked_with_shell = test_agent(AgentStatus::Running, 1_000);
+    parked_with_shell.phase = TurnPhase::Parked;
+    parked_with_shell.background_shells.push(BackgroundShell {
+        id: "task-1".into(),
+        command: Some("sleep 60".into()),
+        description: None,
+        started_at: Timestamp::from_second(990).unwrap(),
+    });
+    let mut parked_equal = test_agent(AgentStatus::Running, 1_050);
+    parked_equal.phase = TurnPhase::Parked;
+    let mut parked_newer = test_agent(AgentStatus::Running, 1_060);
+    parked_newer.phase = TurnPhase::Parked;
+    let cases = [
+        ("parked", parked),
+        ("parked 0.9 s before rest", parked_subsecond),
+        ("parked 1 s before rest", parked_one_sec),
+        ("parked with shell", parked_with_shell),
+        ("parked equal to rest", parked_equal),
+        ("parked newer than rest", parked_newer),
+        ("running", test_agent(AgentStatus::Running, 1_000)),
+        ("waiting", test_agent(AgentStatus::Waiting, 1_000)),
+        ("idle", test_agent(AgentStatus::Idle, 1_000)),
+        ("success", test_agent(AgentStatus::Success, 1_000)),
+        ("failed", test_agent(AgentStatus::Failed, 1_000)),
+    ];
+    let ends = cases.map(|(label, row)| (label, row.rest_ends_parked_turn(reported_at)));
+    assert_eq!(
+        ends,
+        [
+            ("parked", true),
+            ("parked 0.9 s before rest", true),
+            ("parked 1 s before rest", true),
+            ("parked with shell", true),
+            ("parked equal to rest", false),
+            ("parked newer than rest", false),
+            ("running", false),
+            ("waiting", false),
+            ("idle", false),
+            ("success", false),
+            ("failed", false),
+        ]
+    );
+}
+
+#[test]
 fn an_owed_continue_is_withdrawn_only_by_an_interrupt_settled_after_its_queue() {
     let queued_at = Timestamp::from_second(1_000).unwrap();
     let mut row = crate::testkit::agent_state("claude", "sess", queued_at);

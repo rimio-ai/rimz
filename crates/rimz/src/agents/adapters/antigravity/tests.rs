@@ -1807,6 +1807,195 @@ fn a_rest_frame_decodes_to_a_rest_report_routed_to_its_conversation() {
     assert!(!stop.reports_provider_rest());
 }
 
+#[test]
+fn statusline_reports_rest_scope_without_reading_transcript() {
+    use crate::agents::hook_types::ProviderRest;
+
+    let cases = [
+        ("idle", json!({"agent_state": "idle"})),
+        (
+            "null subagents",
+            json!({"agent_state": "idle", "subagents": null}),
+        ),
+        (
+            "empty subagents",
+            json!({"agent_state": "idle", "subagents": []}),
+        ),
+        (
+            "completed subagent",
+            json!({
+                "agent_state": "idle",
+                "subagents": [{"name": "self", "role": "worker", "status": "completed"}]
+            }),
+        ),
+        (
+            "uppercase completed subagent",
+            json!({"agent_state": "idle", "subagents": [{"status": "COMPLETED"}]}),
+        ),
+        (
+            "completed and running subagents",
+            json!({
+                "agent_state": "idle",
+                "subagents": [{"status": "completed"}, {"status": "running"}]
+            }),
+        ),
+        (
+            "running subagent",
+            json!({
+                "agent_state": "idle",
+                "subagents": [{"name": "self", "role": "worker", "status": "running"}]
+            }),
+        ),
+        (
+            "unknown subagent status",
+            json!({"agent_state": "idle", "subagents": [{"status": "pending"}]}),
+        ),
+        (
+            "missing subagent status",
+            json!({"agent_state": "idle", "subagents": [{}]}),
+        ),
+        (
+            "non-array subagents",
+            json!({"agent_state": "idle", "subagents": "unexpected"}),
+        ),
+        (
+            "background task present",
+            json!({"agent_state": "idle", "task_count": 1}),
+        ),
+        ("working", json!({"agent_state": "working"})),
+        (
+            "pending confirmation",
+            json!({"agent_state": "idle", "tool_confirmation_pending": true}),
+        ),
+    ];
+    let observed: Vec<_> = cases
+        .into_iter()
+        .map(|(label, mut payload)| {
+            payload["conversation_id"] = json!(SESSION_ID);
+            let context = AntigravityAdapter
+                .observe_context("antigravity", &payload)
+                .unwrap();
+            let decoded = AntigravityAdapter
+                .decode_hook_in(
+                    crate::agents::PROVIDER_REST_EVENT,
+                    &payload,
+                    &BTreeMap::new(),
+                )
+                .unwrap();
+            (label, context.provider_at_rest, decoded.provider_rest())
+        })
+        .collect();
+    assert_eq!(
+        observed,
+        vec![
+            ("idle", true, Some(ProviderRest::Complete)),
+            ("null subagents", true, Some(ProviderRest::Complete)),
+            ("empty subagents", true, Some(ProviderRest::Complete)),
+            ("completed subagent", true, Some(ProviderRest::Complete)),
+            (
+                "uppercase completed subagent",
+                true,
+                Some(ProviderRest::Complete)
+            ),
+            (
+                "completed and running subagents",
+                true,
+                Some(ProviderRest::Foreground)
+            ),
+            ("running subagent", true, Some(ProviderRest::Foreground)),
+            (
+                "unknown subagent status",
+                true,
+                Some(ProviderRest::Foreground)
+            ),
+            (
+                "missing subagent status",
+                true,
+                Some(ProviderRest::Foreground)
+            ),
+            ("non-array subagents", true, Some(ProviderRest::Foreground)),
+            ("background task present", false, None),
+            ("working", false, None),
+            ("pending confirmation", false, None),
+        ]
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir
+        .path()
+        .join(".gemini/antigravity-cli/brain")
+        .join(SESSION_ID)
+        .join(".system_generated/logs/transcript.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            user_record(0, AT_09, "run sleep"),
+            record(
+                1,
+                "MODEL",
+                "PLANNER_RESPONSE",
+                "DONE",
+                AT_10,
+                "parked reply"
+            ),
+        ),
+    )
+    .unwrap();
+    let login_env =
+        BTreeMap::from([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())]);
+    let complete_payload = json!({
+        "conversation_id": SESSION_ID,
+        "agent_state": "idle",
+        "transcript_path": "/nonexistent/.gemini/antigravity/brain/wrong/transcript.jsonl",
+        "subagents": [{"name": "self", "status": "completed"}],
+    });
+    let complete = AntigravityAdapter
+        .decode_hook_in(
+            crate::agents::PROVIDER_REST_EVENT,
+            &complete_payload,
+            &login_env,
+        )
+        .unwrap();
+    let running_payload = json!({
+        "conversation_id": SESSION_ID,
+        "agent_state": "idle",
+        "subagents": [{"name": "self", "status": "running"}],
+    });
+    let running = AntigravityAdapter
+        .decode_hook_in(
+            crate::agents::PROVIDER_REST_EVENT,
+            &running_payload,
+            &login_env,
+        )
+        .unwrap();
+    let missing_home = tempfile::tempdir().unwrap();
+    let missing_env = BTreeMap::from([(
+        "HOME".to_owned(),
+        missing_home.path().to_string_lossy().into_owned(),
+    )]);
+    let unreadable = AntigravityAdapter
+        .decode_hook_in(
+            crate::agents::PROVIDER_REST_EVENT,
+            &complete_payload,
+            &missing_env,
+        )
+        .unwrap();
+    assert_eq!(
+        [
+            (complete.provider_rest(), complete.final_message()),
+            (running.provider_rest(), running.final_message()),
+            (unreadable.provider_rest(), unreadable.final_message()),
+        ],
+        [
+            (Some(ProviderRest::Complete), None),
+            (Some(ProviderRest::Foreground), None),
+            (Some(ProviderRest::Complete), None),
+        ]
+    );
+}
+
 fn statusline_fixture(source: &str) -> statusline::StatuslinePayload {
     serde_json::from_str(source).unwrap()
 }
@@ -2875,6 +3064,45 @@ fn final_assistant_is_bounded_to_the_latest_turn() {
             assert_eq!(session::last_assistant_message(&path), None);
         }
     }
+}
+
+#[test]
+fn final_assistant_survives_bare_compact_but_clears_on_compact_with_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    let fixture = include_str!("tests/fixtures/compaction/parked-transcript.jsonl");
+    // Rows 0 to 5: user prompt, run_command, background task, "STARTED", bare `/compact`,
+    // and the compaction `CHECKPOINT`.
+    let through_compact: String = fixture
+        .lines()
+        .take(6)
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&path, &through_compact).unwrap();
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("STARTED"),
+        "a bare /compact row must not clear the parked turn's reply"
+    );
+
+    // `/compact <message>` starts a new turn and clears the previous answer.
+    let with_compact_prompt = format!(
+        "{through_compact}{}\n",
+        user_record(
+            6,
+            AT_12,
+            "<USER_REQUEST>\n/compact focus on tests\n</USER_REQUEST>"
+        )
+    );
+    std::fs::write(&path, with_compact_prompt).unwrap();
+    assert_eq!(session::last_assistant_message(&path), None);
+
+    // Full fixture (after the background task wakes and the model replies "SLEPT").
+    std::fs::write(&path, fixture).unwrap();
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("SLEPT")
+    );
 }
 
 #[test]

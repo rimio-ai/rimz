@@ -143,13 +143,18 @@ pub(super) fn release_resolved_keyed_ask(
 /// (`AgentState::rest_interrupts_turn`) ends with `TurnInterrupted`, as another
 /// provider's interrupt hook ends it; when the row also lists background shells
 /// (`AgentState::rest_clears_background_shells`), the same observation empties
-/// the list. A resting or parked row that still lists shells clears them with a
-/// keyless `AskResolved` carrying an empty `BackgroundShellReport::Snapshot`:
-/// `lifecycle::step` ignores `AskResolved` on every non-waiting row, leaving
-/// status, phase, an owed compaction continue, and any open supervised run
-/// untouched while `assemble_agent_state` still applies the empty snapshot. The
-/// audit scope leaves out the transcript overlay, which can open a turn before
-/// its hook. Any other row records nothing.
+/// the list. A parked turn (`AgentState::rest_ends_parked_turn`) ends cleanly
+/// with an unparked `TurnEnded` when the report rules out live native subagents
+/// too (`HookOutput::provider_rest_ends_parked_turn`), keeping any owed
+/// compaction continue and emptying listed shells when present. Any other row
+/// (including a parked row whose report carries a live subagent) that still
+/// lists shells clears them with a keyless `AskResolved` carrying an empty
+/// `BackgroundShellReport::Snapshot`: `lifecycle::step` ignores `AskResolved`
+/// on every non-waiting row, leaving status, phase, an owed compaction
+/// continue, and any open supervised run untouched while `assemble_agent_state`
+/// still applies the empty snapshot. The audit scope leaves out the transcript
+/// overlay, which can open a turn before its hook. Any other row records
+/// nothing.
 pub(super) fn record_provider_rest(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -168,12 +173,20 @@ pub(super) fn record_provider_rest(
     };
     let reported_at = rimz::harness::hook_drain::frame_timestamp();
     let interrupts = row.rest_interrupts_turn(reported_at);
+    let ends_parked =
+        decoded.provider_rest_ends_parked_turn() && row.rest_ends_parked_turn(reported_at);
     let clears_shells = row.rest_clears_background_shells(reported_at);
-    if !interrupts && !clears_shells {
+    if !interrupts && !ends_parked && !clears_shells {
         return Ok(None);
     }
     let signal = if interrupts {
         LifecycleSignal::TurnInterrupted { turn_id: None }
+    } else if ends_parked {
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        }
     } else {
         LifecycleSignal::AskResolved { native_key: None }
     };

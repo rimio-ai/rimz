@@ -71,7 +71,7 @@ pub(super) fn handle_lifecycle_frame(
     globals: &GlobalFlags,
     recovered: &[rimz::store::event::EventEnvelope],
 ) -> Result<rimz::agents::HookReply> {
-    let workflow_edge = decoded.lifecycle().is_some() || decoded.turn_error().is_some();
+    let workflow_edge = is_workflow_edge(decoded);
     let replay = rimz::harness::hook_drain::is_replay();
     let agent_id = decoded.event_agent_id().cloned();
     let (released, recorded, derived) = if replay {
@@ -358,7 +358,11 @@ pub(super) fn handle_lifecycle_frame(
     let mut run_completion = None;
     if let Some(recorded) = recorded.as_ref() {
         let assistant_message = assistant_message_for_lifecycle(recorded, run_id.is_some(), || {
-            decoded.final_message().map(ToOwned::to_owned)
+            if decoded.reports_provider_rest() {
+                rest_turn_end_assistant_message(agent, recorded)
+            } else {
+                decoded.final_message().map(ToOwned::to_owned)
+            }
         });
         if !ping_edge && !replaced {
             run_completion = record_run_lifecycle(
@@ -409,18 +413,20 @@ pub(super) fn handle_lifecycle_frame(
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
             _ => &[],
         };
-        if let Err(err) = record_conversation(
-            workspace,
-            store,
-            agent,
-            recorded,
-            ConversationInput {
-                assistant_message: assistant_message.as_deref(),
-                questions,
-                sections: &sections,
-                run_id: run_id.as_ref(),
-            },
-        ) {
+        if !decoded.reports_provider_rest()
+            && let Err(err) = record_conversation(
+                workspace,
+                store,
+                agent,
+                recorded,
+                ConversationInput {
+                    assistant_message: assistant_message.as_deref(),
+                    questions,
+                    sections: &sections,
+                    run_id: run_id.as_ref(),
+                },
+            )
+        {
             warn!(
                 agent = agent.spec().kind,
                 event = %event_name,
@@ -493,6 +499,59 @@ fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     if let Err(err) = result {
         warn!(error = %err, "lifecycle: failed to spawn the adapter refresh helper");
     }
+}
+
+fn is_workflow_edge(decoded: &HookOutput) -> bool {
+    decoded.lifecycle().is_some()
+        || decoded.turn_error().is_some()
+        || decoded.reports_provider_rest()
+}
+
+/// Harvest the conversation's last reply from its transcript only when a provider
+/// rest report recorded a parked turn's clean end, never on an interrupt or shell
+/// clear. Resolves the transcript by conversation id through the adapter so an
+/// unreadable or absent transcript still ends the turn with no answer.
+fn rest_turn_end_assistant_message(
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+) -> Option<String> {
+    if !matches!(
+        recorded.observation.signal,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let agent_id = recorded.observation.agent_id.as_ref()?;
+    let path = agent.session_transcript(
+        agent_id.as_str(),
+        None,
+        &rimz::harness::hook_drain::login_env(),
+    )?;
+    let messages = match agent.read_transcript_messages(&path, Some(agent_id)) {
+        Ok(messages) => messages,
+        Err(error) => {
+            warn!(
+                agent = agent.spec().kind,
+                agent_id = %agent_id,
+                %error,
+                "lifecycle: failed to read transcript for rest turn end",
+            );
+            return None;
+        }
+    };
+    messages
+        .into_iter()
+        .rev()
+        .take_while(|message| message.role != rimz::agents::transcript::TranscriptRole::User)
+        .find(|message| {
+            message.role == rimz::agents::transcript::TranscriptRole::Assistant
+                && !message.text.trim().is_empty()
+        })
+        .map(|message| message.text)
 }
 
 fn assistant_message_for_lifecycle(
@@ -1308,6 +1367,36 @@ mod tests {
                 .and_then(|cost| cost.total_cost_usd),
             Some(9.75)
         );
+    }
+
+    #[test]
+    fn a_provider_rest_report_is_a_workflow_edge() {
+        let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+        let complete = adapter
+            .decode_hook(
+                rimz::agents::PROVIDER_REST_EVENT,
+                &serde_json::json!({"conversation_id": "sess-1", "agent_state": "idle"}),
+            )
+            .unwrap();
+        let foreground = adapter
+            .decode_hook(
+                rimz::agents::PROVIDER_REST_EVENT,
+                &serde_json::json!({
+                    "conversation_id": "sess-1",
+                    "agent_state": "idle",
+                    "subagents": [{"name": "self", "status": "running"}],
+                }),
+            )
+            .unwrap();
+        let ignored = adapter
+            .decode_hook(
+                "SessionStart",
+                &serde_json::json!({"conversationId": "sess-1"}),
+            )
+            .unwrap();
+        assert!(is_workflow_edge(&complete));
+        assert!(is_workflow_edge(&foreground));
+        assert!(!is_workflow_edge(&ignored));
     }
 
     fn test_agent() -> AgentState {
