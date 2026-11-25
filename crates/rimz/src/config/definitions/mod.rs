@@ -361,12 +361,21 @@ pub struct DefinitionRow {
     pub signals: Vec<super::TeamSignalBinding>,
 }
 
+/// Profile values carried only by project TOML rows, lowered beside frontmatter by the builder.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct TomlExtras {
+    pub system_prompt_file: Option<super::PromptSource>,
+    pub append_system_prompt_files: Vec<super::PromptSource>,
+    pub args: Option<String>,
+}
+
 #[derive(Clone)]
 struct Definition {
     path: PathBuf,
     pack: Option<PackName>,
     body: String,
     frontmatter: AgentFrontmatter,
+    extras: TomlExtras,
 }
 
 #[derive(Default)]
@@ -844,6 +853,7 @@ fn load_resolved(
                                 pack: item.pack.clone(),
                                 body: body.trim().to_owned(),
                                 frontmatter: fm.clone(),
+                                extras: TomlExtras::default(),
                             },
                         )]),
                         ..Namespace::default()
@@ -924,6 +934,7 @@ fn load_resolved(
                     pack: item.pack.clone(),
                     body: body.trim().to_owned(),
                     frontmatter: fm,
+                    extras: TomlExtras::default(),
                 };
                 for key in &keys {
                     tree.definitions.insert(key.clone(), definition.clone());
