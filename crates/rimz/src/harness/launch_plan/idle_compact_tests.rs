@@ -57,11 +57,31 @@ fn native_idle_compaction(plan: &LaunchPlan) -> Option<bool> {
 fn native_idle_compaction_follows_the_resolved_seat_floor() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
-    let mut machine = crate::config::MachineConfig::default();
-    machine.agents.profiles = toml::from_str(
-        "[warm]\nagent = 'claude'\nidle-compact = '80k'\n\
-         [inherited]\nagent = 'warm'\n\
-         [cold]\nagent = 'inherited'\nidle-compact = 'off'",
+    std::fs::create_dir_all(config.path().join("agents")).unwrap();
+    for (name, content) in [
+        (
+            "claude",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            "warm",
+            "---\ndescription: Warm\nagent: claude\nidle-compact: 80k\n---\n",
+        ),
+        (
+            "inherited",
+            "---\ndescription: Inherited\nagent: warm\n---\n",
+        ),
+        (
+            "cold",
+            "---\ndescription: Cold\nagent: inherited\nidle-compact: off\n---\n",
+        ),
+    ] {
+        std::fs::write(config.path().join(format!("agents/{name}.md")), content).unwrap();
+    }
+    let mut machine = crate::config::MachineConfig::parse_text(
+        &config.path().join("config.toml"),
+        "",
+        config.path(),
     )
     .unwrap();
     machine.agents.teams = toml::from_str(

@@ -472,6 +472,7 @@ fn definition_summary_groups_causes_and_deduplicates_team_roles() {
     };
     let failed = DefinitionCause::DependsOnFailed {
         name: "finder".to_owned(),
+        subagent: false,
     };
     let names = [
         "agents/coder",
@@ -556,6 +557,7 @@ fn definition_summary_escapes_a_pack_file_name_in_every_group() {
         DefinitionCause::Invalid,
         DefinitionCause::DependsOnFailed {
             name: "worker".to_owned(),
+            subagent: false,
         },
         DefinitionCause::MissingSkill {
             skill: "one".parse().unwrap(),
@@ -602,4 +604,71 @@ fn definition_summary_unions_roots_per_skill() {
     assert!(lines[0].starts_with("1 definition"));
     assert!(lines[0].contains("'one'") && lines[0].contains("/a or /b"));
     assert!(lines[1].contains("'two'"));
+}
+
+#[test]
+fn judgment_warns_on_failed_project_definition_rows() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.broken]\nagent = \"claude\"\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let machine =
+        MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path()).unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(project.path(), None).unwrap();
+    let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+    let judgment = judge_with_config_root(
+        &machine,
+        &workspace,
+        home.path(),
+        MuxName::Tmux,
+        &admission,
+        false,
+        None,
+    )
+    .unwrap();
+    let project_config = project
+        .path()
+        .join(".rimz/config.toml")
+        .display()
+        .to_string();
+    assert!(
+        judgment.skipped.iter().any(|entry| {
+            entry.setting == project_config
+                && entry.message.contains("[profiles.broken]")
+                && entry.message.contains("description")
+                && !entry.message.starts_with(&project_config)
+        }),
+        "{:?}",
+        judgment.skipped
+    );
+
+    // A file-level project config load error must surface as a warning instead of being dropped.
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[tiers]\nsenior = [\"claude\"]\n",
+    )
+    .unwrap();
+    let judgment = judge_with_config_root(
+        &machine,
+        &workspace,
+        home.path(),
+        MuxName::Tmux,
+        &admission,
+        false,
+        None,
+    )
+    .unwrap();
+    assert!(
+        judgment
+            .skipped
+            .iter()
+            .any(|entry| entry.setting == project_config && entry.message.contains("tiers")),
+        "project load error must surface in room judgment warnings: {:?}",
+        judgment.skipped
+    );
 }

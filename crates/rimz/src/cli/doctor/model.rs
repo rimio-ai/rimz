@@ -934,6 +934,8 @@ pub(super) struct Trust {
     pub(super) state: TrustState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) granted_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) definition_errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

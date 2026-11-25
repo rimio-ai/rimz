@@ -240,7 +240,7 @@ mod tests {
     fn caller(allowed: Option<Vec<&str>>) -> (AgentState, ProfilesConfig) {
         let mut caller = AgentState::stub("claude", "parent", AgentStatus::Running);
         caller.profile = Some("planner".to_owned());
-        let profiles = ProfilesConfig(BTreeMap::from([(
+        let profiles = ProfilesConfig::from(BTreeMap::from([(
             "planner".to_owned(),
             Profile {
                 empty_dir: None,
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn catalog_combines_profiles_and_commands() {
         let (_, profiles) = caller(None);
-        let subagent_profiles = ProfilesConfig(BTreeMap::from([(
+        let subagent_profiles = ProfilesConfig::from(BTreeMap::from([(
             "explorer".to_owned(),
             Profile {
                 empty_dir: None,
@@ -685,44 +685,46 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_profile_reads_subagents_directly_without_toml_or_kind_base_walk() {
-        let mut profiles: ProfilesConfig = toml::from_str(
-            r#"
-            [parent]
-            agent = "claude"
-            subagents = ["advisor"]
-            [child]
-            agent = "parent"
-            [claude]
-            agent = "claude"
-            subagents = ["other"]
-            "#,
-        )
-        .unwrap();
-        profiles.0.get_mut("claude").unwrap().kind_base = true;
+    fn unchanged_profile_reads_subagents_directly_without_parent_or_kind_base_walk() {
+        let home = tempfile::tempdir().unwrap();
+        let def = |rel: &str, yaml: &str| {
+            let path = home.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("---\ndescription: d\n{yaml}\n---\nB.\n")).unwrap();
+        };
+        def("agents/claude.md", "tools: [Read]\nsubagents: [other]");
+        def("subagents/advisor.md", "agent: claude");
+        def("subagents/other.md", "agent: claude");
+        def("agents/parent.md", "agent: claude\nsubagents: [advisor]");
+        def("agents/child.md", "agent: parent");
+        let loaded = crate::config::definitions::load(
+            home.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &home.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
+        );
+        assert!(loaded.errors.is_empty(), "errors: {:?}", loaded.errors);
+        let mut profiles = loaded.agent_profiles;
+        assert_eq!(
+            profiles.0["child"].definition.as_ref().unwrap().chain(),
+            &["child", "parent"]
+        );
+        // Clear `child`'s own allowlist so a post-launch walk up `parent` or `claude` would leak.
+        profiles.0.get_mut("child").unwrap().subagents = None;
         let empty = ProfilesConfig::default();
-
-        assert_eq!(
+        let check = |name| {
             allowed_specs(
-                Some("child"),
+                Some(name),
                 None,
                 Some("claude"),
                 ProfileScope::Agents,
                 &profiles,
                 &empty,
-            ),
-            None
-        );
-        assert_eq!(
-            allowed_specs(
-                Some("parent"),
-                None,
-                Some("claude"),
-                ProfileScope::Agents,
-                &profiles,
-                &empty,
-            ),
-            Some(vec!["advisor".to_owned()])
-        );
+            )
+        };
+        assert_eq!(check("child"), None);
+        assert_eq!(check("parent"), Some(vec!["advisor".to_owned()]));
     }
 }

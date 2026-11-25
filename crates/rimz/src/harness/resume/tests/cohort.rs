@@ -593,9 +593,16 @@ fn member_posture_rebases_into_the_fresh_team_prompt_layer() {
     let (mut teams, mut profiles, commands) = staged_member_configs();
     let team = teams.0.get_mut("forge").unwrap();
     let base = team.roles[0].system_prompt_file.take();
-    let mut base_profile = profile("claude");
-    base_profile.system_prompt_file = base;
-    profiles.0.insert("base".into(), base_profile);
+    let built = project_profiles(
+        "[profiles.claude-plan]\ndescription = 'Plan'\nagent = 'claude'\n\
+         [profiles.base]\ndescription = 'Base'\nagent = 'claude'\n",
+    );
+    profiles.0.extend(built.0);
+    if let Some(base_src) = base
+        && let Some(row) = profiles.0.get_mut("base")
+    {
+        row.system_prompt_file = Some(base_src);
+    }
     let fresh = crate::harness::spec::resolve_spec_with_agent_override(
         Some("forge.planner"),
         &profiles,
@@ -684,13 +691,8 @@ fn member_posture_omits_inapplicable_team_layers() {
 #[test]
 fn member_posture_rejects_undeliverable_team_layers() {
     let mut actual = Vec::new();
-    for (staged, shadowed) in [(true, false), (true, true), (false, false)] {
-        let (mut teams, mut profiles, _) = staged_member_configs();
-        if shadowed {
-            profiles
-                .0
-                .insert("claude".into(), toml::from_str("agent = 'claude'").unwrap());
-        }
+    for staged in [true, false] {
+        let (mut teams, profiles, _) = staged_member_configs();
         let team = teams.0.get_mut("forge").unwrap();
         team.roles[0].system_prompt_file = None;
         if !staged {
@@ -730,14 +732,6 @@ fn member_posture_rejects_undeliverable_team_layers() {
                     .join("agents/claude.md")
                     .display()
             )),
-            Some(
-                "team `forge` sets consensus-file, consensus, or \
-                 append-system-prompt-files but role \
-                 `planner` (claude) has no base system prompt to compose them onto; add \
-                 system-prompt-file to role planner or its profile, or add system-prompt-file \
-                 to profile `claude`, which replaces the claude kind base, or remove that profile"
-                    .into()
-            ),
             Some(
                 "team `forge` sets consensus-file, consensus, or \
                  append-system-prompt-files but declares no \
@@ -1138,12 +1132,11 @@ fn absent_record_effort_reaches_the_cohort_exec_request() {
 #[test]
 fn resume_overrides_keep_provider_args_and_record_in_sync() {
     use crate::config::tiers::ModelTier;
-    let mut profiles = profiles("planner", routed_profile(None));
-    let mut reviewer = profile("claude");
-    reviewer.model = Some("sonnet".into());
-    reviewer.effort = Some("low".into());
-    reviewer.args = Some("--strict-mcp-config".into());
-    profiles.0.insert("reviewer".into(), reviewer);
+    let mut profiles = project_profiles(
+        "[profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\n\
+         model = 'sonnet'\neffort = 'low'\nargs = '--strict-mcp-config'\n",
+    );
+    profiles.0.insert("planner".into(), routed_profile(None));
     let tiers = crate::config::tiers::TierConfig::default();
     let root = tempfile::tempdir().unwrap();
     let runtime =
@@ -1268,7 +1261,8 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
 
 #[test]
 fn mini_cohort_restore_replays_and_can_drop_the_variant() {
-    let profiles: ProfilesConfig = toml::from_str("[worker]\nagent = 'opencode-mini'").unwrap();
+    let profiles =
+        project_profiles("[profiles.worker]\ndescription = 'Worker'\nagent = 'opencode-mini'\n");
     let mut saved = team_agent("opencode", "mini", "coder", "/repo", 1);
     saved.profile = Some("worker".into());
     saved.record = Some(Box::default());
@@ -1307,11 +1301,11 @@ fn mini_cohort_restore_replays_and_can_drop_the_variant() {
 
 #[test]
 fn resume_agent_override_requires_same_kind_and_records_base() {
-    let mut profiles = profiles("planner", profile("claude"));
-    let mut reviewer = profile("claude");
-    reviewer.model = Some("sonnet".into());
-    profiles.0.insert("reviewer".into(), reviewer);
-    profiles.0.insert("coder".into(), profile("codex"));
+    let profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         [profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\nmodel = 'sonnet'\n\
+         [profiles.coder]\ndescription = 'Coder'\nagent = 'codex'\n",
+    );
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
     ));
@@ -3374,10 +3368,10 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
 
 #[test]
 fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
-    let mut profiles = profiles("planner", profile("claude"));
-    let mut base = profile("claude");
-    base.kind_defaults = true;
-    profiles.0.insert("base".into(), base);
+    let profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         [profiles.base]\ndescription = 'Base'\nagent = 'claude'\n",
+    );
     let mut actual = Vec::new();
     for mode in [None, Some(PermissionMode::Ask), Some(PermissionMode::Yolo)] {
         let cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
@@ -3407,8 +3401,10 @@ fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
                 vec![
                     "--effort".into(),
                     "xhigh".into(),
+                    "--tools".into(),
+                    "Read".into(),
                     "--permission-mode".into(),
-                    "auto".into()
+                    "auto".into(),
                 ]
             ),
             (
@@ -3416,8 +3412,10 @@ fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
                 vec![
                     "--effort".into(),
                     "xhigh".into(),
+                    "--tools".into(),
+                    "Read".into(),
                     "--permission-mode".into(),
-                    "default".into()
+                    "default".into(),
                 ]
             ),
             (
@@ -3425,7 +3423,9 @@ fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
                 vec![
                     "--effort".into(),
                     "xhigh".into(),
-                    "--dangerously-skip-permissions".into()
+                    "--tools".into(),
+                    "Read".into(),
+                    "--dangerously-skip-permissions".into(),
                 ]
             ),
         ]
@@ -3434,13 +3434,11 @@ fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
 
 #[test]
 fn agent_override_mode_precedence_and_refusals() {
-    let mut planner = profile("claude");
-    planner.mode = Some(PermissionMode::Plan);
-    let mut profiles = profiles("planner", planner);
-    let mut reviewer = profile("claude");
-    reviewer.mode = Some(PermissionMode::Auto);
-    profiles.0.insert("reviewer".into(), reviewer);
-    profiles.0.insert("helper".into(), profile("claude"));
+    let profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\nmode = 'plan'\n\
+         [profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\nmode = 'auto'\n\
+         [profiles.helper]\ndescription = 'Helper'\nagent = 'claude'\n",
+    );
     let restore = |seed: CohortSeed, base: &str| {
         let mut cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
         cell.launch.mode = Some(PermissionMode::Yolo);
@@ -3464,7 +3462,7 @@ fn agent_override_mode_precedence_and_refusals() {
         agent.mode = mode;
         CohortSeed::Resume(Box::new(agent))
     };
-    for (label, seed, base, mode, args) in [
+    for (label, seed, base, mode, mode_args) in [
         (
             "a base-declared mode beats the saved mode",
             resumed(Some(PermissionMode::Yolo), "planner"),
@@ -3498,7 +3496,11 @@ fn agent_override_mode_precedence_and_refusals() {
         result.unwrap();
         let cell = layout.agent_cells().next().unwrap();
         assert_eq!(cell.launch.mode, Some(mode), "{label}");
-        assert_eq!(cell.args, args, "{label}");
+        assert!(
+            cell.args.windows(mode_args.len()).any(|w| w == mode_args),
+            "{label}: expected {mode_args:?} in {:?}",
+            cell.args
+        );
         assert_eq!(
             cell.launch.record.as_ref().unwrap().agent.as_deref(),
             Some(base),

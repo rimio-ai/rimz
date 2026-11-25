@@ -2737,17 +2737,24 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
 #[test]
 fn explain_mcps_reads_a_profiles_own_codex_overrides_as_codex_applies_them() {
     let env = Env::new();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "codex",
+        "description: Codex base\ntools: [Read]",
+        "Codex base.",
+    );
     env.write_config(
         &env.project_root,
-        "[profiles.xlast]\nagent = 'codex'\nmcps = ['*', 'rimz:always']\n\
+        "[profiles.xlast]\ndescription = 'xlast'\nagent = 'codex'\nmcps = ['*', 'rimz:always']\n\
          args = \"-c 'mcp_servers.rimz.omit_tools_from=[]'\"\n\
-         [profiles.xconf]\nagent = 'codex'\nmcps = ['*']\n\
+         [profiles.xconf]\ndescription = 'xconf'\nagent = 'codex'\nmcps = ['*']\n\
          args = \"'--config=mcp_servers.rimz.omit_tools_from=[\\\"deferred\\\"]'\"\n\
-         [profiles.xtable]\nagent = 'codex'\nmcps = ['*']\n\
+         [profiles.xtable]\ndescription = 'xtable'\nagent = 'codex'\nmcps = ['*']\n\
          args = \"-c 'mcp_servers={notion={enabled=false},github={command=\\\"gh\\\"}}'\"\n\
-         [profiles.xoff]\nagent = 'codex'\nmcps = ['*']\n\
+         [profiles.xoff]\ndescription = 'xoff'\nagent = 'codex'\nmcps = ['*']\n\
          args = \"-c mcp_servers.rimz.enabled=false\"\n\
-         [profiles.xtableoff]\nagent = 'codex'\nmcps = ['*']\n\
+         [profiles.xtableoff]\ndescription = 'xtableoff'\nagent = 'codex'\nmcps = ['*']\n\
          args = \"-c 'mcp_servers={rimz={enabled=false}}'\"\n",
     );
     let granted = env.rimz().args(["trust", "grant"]).output().unwrap();

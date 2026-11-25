@@ -25,6 +25,26 @@ pub(super) fn judge(
     live: bool,
     agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
 ) -> Result<Judgment> {
+    judge_with_config_root(
+        machine,
+        workspace,
+        &crate::disk::paths::rimz_home(),
+        mux,
+        hibernation,
+        live,
+        agent_shell,
+    )
+}
+
+fn judge_with_config_root(
+    machine: &MachineConfig,
+    workspace: &ResolvedWorkspace,
+    config_root: &Path,
+    mux: MuxName,
+    hibernation: &Admission,
+    live: bool,
+    agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
+) -> Result<Judgment> {
     let mut skipped = Vec::new();
     let mut warn = |setting: String, message: String| {
         let entry = SkippedSetting { setting, message };
@@ -51,6 +71,32 @@ pub(super) fn judge(
             crate::disk::paths::agents_home().display().to_string(),
             definitions.join("; "),
         );
+    }
+    let project_config = workspace
+        .project_root
+        .join(".rimz")
+        .join("config.toml")
+        .display()
+        .to_string();
+    let project_prefix = format!("{project_config}: ");
+    match crate::config::effective::load_with_roots(machine, &workspace.project_root, config_root) {
+        Ok(effective) => {
+            for error in effective.project_definition_errors() {
+                let message = error
+                    .strip_prefix(&project_prefix)
+                    .unwrap_or(error)
+                    .to_owned();
+                warn(project_config.clone(), message);
+            }
+        }
+        Err(error) => {
+            let text = error.to_string();
+            let message = text
+                .strip_prefix(&project_prefix)
+                .unwrap_or(&text)
+                .to_owned();
+            warn(project_config, message);
+        }
     }
     for error in &errors {
         match error {

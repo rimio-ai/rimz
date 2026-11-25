@@ -681,11 +681,21 @@ mod tests {
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         state_paths.ensure_dirs().unwrap();
         runtime.ensure_dirs().unwrap();
-        let mut config = MachineConfig::default();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join("agents")).unwrap();
+        std::fs::write(
+            home.join("agents/codex.md"),
+            "---\ndescription: Codex base\ntools: [Read]\n---\nCodex house.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("agents/astra.md"),
+            "---\ndescription: Astra\nagent: codex\nkeep-warm: 3h\n---\n",
+        )
+        .unwrap();
+        let mut config = MachineConfig::parse_text(&home.join("config.toml"), "", &home).unwrap();
         config.harness.cache_keepalive = true;
         config.harness.keep_warm = crate::config::KeepWarm::Off;
-        config.agents.profiles =
-            toml::from_str("[astra]\nagent = 'codex'\nkeep-warm = '3h'\n").unwrap();
         let now = Timestamp::now();
         let mut bare = crate::testkit::agent_state("codex", "codex-bare", now);
         bare.status = AgentStatus::Idle;

@@ -341,7 +341,10 @@ impl SeatLoader<'_> {
                 let handle = role.role.as_deref().unwrap_or(&role.agent);
                 if self.agents.definitions.contains_key(&role.agent) || self.agents.failed.contains(&role.agent) {
                     return DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects failed agent '{}'", role.agent))
-                        .with_cause(DefinitionCause::DependsOnFailed { name: role.agent.clone() });
+                        .with_cause(DefinitionCause::DependsOnFailed {
+                            name: role.agent.clone(),
+                            subagent: false,
+                        });
                 }
                 DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown agent '{}'; team roles can select definitions from agents only", role.agent))
             })?;

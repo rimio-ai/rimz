@@ -200,13 +200,9 @@ fn recorded_permission_override_replaces_saved_mode_and_provider_args() {
 
 #[test]
 fn recorded_agent_override_rebases_model_and_records_base() {
-    let mut profiles = profiles("planner", profile("claude"));
-    profiles.0.insert(
-        "reviewer".into(),
-        Profile {
-            model: Some("sonnet".into()),
-            ..profile("claude")
-        },
+    let profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         [profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\nmodel = 'sonnet'\n",
     );
     let (plan, _) = single(
         &saved(),
@@ -326,7 +322,7 @@ fn recorded_tier_override_takes_the_kind_base_effort_a_fresh_tier_launch_takes()
 }
 
 #[test]
-fn recorded_tier_override_takes_the_project_toml_base_effort_a_fresh_launch_takes() {
+fn recorded_tier_override_keeps_machine_kind_base_effort_despite_kind_named_project_row() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     for (name, text) in [
@@ -345,7 +341,7 @@ fn recorded_tier_override_takes_the_project_toml_base_effort_a_fresh_launch_take
     std::fs::create_dir(project.path().join(".rimz")).unwrap();
     std::fs::write(
         project.path().join(".rimz/config.toml"),
-        "[profiles.claude]\nagent = \"claude\"\neffort = \"low\"\n\
+        "[profiles.claude]\ndescription = \"Shadow\"\nagent = \"claude\"\neffort = \"low\"\n\
          system-prompt-file = \"base.md\"\n",
     )
     .unwrap();
@@ -356,8 +352,9 @@ fn recorded_tier_override_takes_the_project_toml_base_effort_a_fresh_launch_take
             .unwrap();
     let launch =
         crate::config::effective::load_with_roots(&machine, project.path(), root.path()).unwrap();
+    assert!(launch.definition_failure_for("claude").is_some());
     let fresh = crate::harness::spec::resolve_profile("planner", &launch.profiles).unwrap();
-    assert_eq!(fresh.launch.effort.as_deref(), Some("low"));
+    assert_eq!(fresh.launch.effort.as_deref(), Some("high"));
 
     let mut saved = saved();
     saved.tier = Some(tier_stamp("opus"));
@@ -374,7 +371,7 @@ fn recorded_tier_override_takes_the_project_toml_base_effort_a_fresh_launch_take
         },
     );
     let request = decode_exec_request(&single_pane_argv(&plan));
-    assert_eq!(request.identity.params.effort.as_deref(), Some("low"));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
 }
 
 #[test]
@@ -586,14 +583,10 @@ fn opencode_model_and_agent_resume_overrides_keep_effort_for_the_session_step() 
                 effort: Some("high".into()),
                 ..Default::default()
             }));
-            let mut profiles = profiles("worker", profile("opencode"));
-            profiles.0.insert(
-                "replacement".into(),
-                Profile {
-                    model: Some("provider/new".into()),
-                    effort: Some("max".into()),
-                    ..profile("opencode")
-                },
+            let profiles = project_profiles(
+                "[profiles.worker]\ndescription = 'Worker'\nagent = 'opencode'\n\
+                 [profiles.replacement]\ndescription = 'Replacement'\nagent = 'opencode'\n\
+                 model = 'provider/new'\neffort = 'max'\n",
             );
             let (plan, _) = single(
                 &saved,
@@ -1097,4 +1090,168 @@ fn single_resume_same_kind_agent_override_on_tiered_profile_succeeds() {
                 .into()
         )
     );
+}
+
+#[test]
+fn project_row_replay_passes_when_valid_and_degrades_like_failed_markdown_when_broken() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::create_dir_all(home.path().join("subagents")).unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    for (rel, body) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Claude base.\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            "agents/codex.md",
+            "---\ndescription: Codex base.\ntools: [Read]\n---\nCodex house.\n",
+        ),
+        (
+            "agents/sub_worker.md",
+            "---\ndescription: Machine sub worker.\nagent: claude\n---\nMachine sub worker.\n",
+        ),
+        (
+            "agents/ov.md",
+            "---\ndescription: Machine ov.\nagent: claude\n---\nMachine ov.\n",
+        ),
+        (
+            "subagents/ok_sub.md",
+            "---\ndescription: Healthy subagent.\nagent: claude\n---\nOk sub.\n",
+        ),
+    ] {
+        std::fs::write(home.path().join(rel), body).unwrap();
+    }
+    let cfg_path = home.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let machine = crate::config::MachineConfig::parse_text(&cfg_path, "", home.path()).unwrap();
+
+    // Valid project row replays without degradation.
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.worker]\ndescription = 'Worker.'\nagent = 'claude'\neffort = 'high'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let restore_ok =
+        LaneRestoreConfig::load_with_roots(&machine, project.path(), home.path(), |_, _| None)
+            .unwrap();
+    let record = crate::agents::LaunchRecord {
+        effort: Some("high".to_owned()),
+        ..Default::default()
+    };
+    let ok_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("worker"),
+            kind: &crate::ids::AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &restore_ok.profiles,
+        None,
+    );
+    assert!(ok_posture.degraded.is_none(), "{:?}", ok_posture.degraded);
+
+    // Broken project rows (agent row, subagent row shadowing machine, kind-named row, and
+    // failing subagent override) degrade through `LaneRestoreConfig::load_with_roots`.
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.worker]\nagent = 'claude'\n\
+         [profiles.codex]\ndescription = 'Kind named'\nagent = 'codex'\n\
+         [subagents.profiles.sub_worker]\nagent = 'claude'\n\
+         [subagents.profiles.ov]\nagent = 'claude'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let restore =
+        LaneRestoreConfig::load_with_roots(&machine, project.path(), home.path(), |_, _| None)
+            .unwrap();
+    assert!(!restore.profiles.0.contains_key("worker"));
+    let bad_posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("worker"),
+            kind: &crate::ids::AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &restore.profiles,
+        None,
+    );
+    let reason = bad_posture
+        .degraded
+        .as_ref()
+        .expect("broken project row must degrade with reason")
+        .to_string();
+    assert!(
+        reason.contains("[profiles.worker]") && reason.contains("description"),
+        "{reason}"
+    );
+
+    let mut sub_worker =
+        crate::testkit::agent_state("claude", "sub-worker", jiff::Timestamp::UNIX_EPOCH);
+    sub_worker.profile = Some("sub_worker".into());
+    sub_worker.profile_scope = Some(crate::config::effective::ProfileScope::Subagents);
+    sub_worker.worktree_path = Some(project.path().display().to_string());
+    sub_worker.record = Some(Box::default());
+
+    let mut kind_named =
+        crate::testkit::agent_state("codex", "kind-named", jiff::Timestamp::UNIX_EPOCH);
+    kind_named.profile = Some("codex".into());
+    kind_named.worktree_path = Some(project.path().display().to_string());
+    kind_named.record = Some(Box::default());
+
+    let mut failed_ov =
+        crate::testkit::agent_state("claude", "failed-ov", jiff::Timestamp::UNIX_EPOCH);
+    failed_ov.profile = Some("ok_sub".into());
+    failed_ov.profile_scope = Some(crate::config::effective::ProfileScope::Subagents);
+    failed_ov.worktree_path = Some(project.path().display().to_string());
+    failed_ov.record = Some(Box::new(crate::agents::LaunchRecord {
+        agent: Some("ov".into()),
+        ..Default::default()
+    }));
+
+    let workspace = crate::WorkspaceResolver::resolve_under(
+        project.path(),
+        None,
+        &home.path().join("rimz-state"),
+    )
+    .unwrap();
+    let state = crate::StatePaths::for_project_root(&workspace.project_root).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let logins = crate::agents::room_accounts(&state.workspace_record, None, &machine).unwrap();
+    let catalog = crate::agents::LoginCatalog::default();
+    let options = SingleResumeOptions::default();
+    for (label, agent) in [
+        ("sub_worker", &sub_worker),
+        ("kind_named", &kind_named),
+        ("failed_ov", &failed_ov),
+    ] {
+        let (plan, _) = plan_recorded_resume(
+            agent,
+            ResumeContext {
+                in_place: false,
+                project_root: Some(project.path()),
+                workspace_id: &state.workspace_id,
+                rimz_bin: std::path::Path::new("rimz"),
+                runtime: &runtime,
+                profiles: &restore.profiles,
+                subagent_profiles: &restore.subagent_profiles,
+                max: 10,
+                logins: &logins,
+                catalog: &catalog,
+            },
+            &options,
+            |_| true,
+            |_| true,
+        );
+        assert_eq!(plan.tabs.len(), 1, "{label}");
+        assert!(
+            plan.warnings.iter().any(|w| w.contains("resuming bare")),
+            "{label}: expected degrade warning, got {:?}",
+            plan.warnings
+        );
+    }
 }

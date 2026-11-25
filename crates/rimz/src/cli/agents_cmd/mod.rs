@@ -1851,6 +1851,7 @@ pub(super) fn create_on_miss(
             Some(&create.selector),
             &machine_config.agents.commands,
         )?;
+        launch.block_failed_reference(Some(&create.selector), None)?;
         bail!(
             "`{target}` names a specific agent that is not running; create one with `@<kind>` or a configured profile (`rimz agents profiles`)"
         );

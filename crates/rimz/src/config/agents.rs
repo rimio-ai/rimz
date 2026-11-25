@@ -446,18 +446,41 @@ pub enum LaunchPlacement {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
-pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
+pub struct ProfilesConfig(
+    pub BTreeMap<String, Profile>,
+    #[serde(skip)] BTreeMap<String, String>,
+);
+
+impl From<BTreeMap<String, Profile>> for ProfilesConfig {
+    fn from(profiles: BTreeMap<String, Profile>) -> Self {
+        Self(profiles, BTreeMap::new())
+    }
+}
 
 impl ProfilesConfig {
     /// The row a launch word or an `agent:` value names: the word itself, or for an alias with
     /// no row of its own (`agy`, `mcode`), its kind, which keys the kind's base.
     pub(crate) fn key<'a>(&self, word: &'a str) -> &'a str {
-        if self.0.contains_key(word) {
+        if self.0.contains_key(word) || self.1.contains_key(word) {
             return word;
         }
         crate::agents::find_runtime(word)
             .filter(|runtime| runtime.variant.is_none())
             .map_or(word, |runtime| runtime.kind())
+    }
+
+    /// Failure detail when `word` (or its unshadowed alias target, matching [`Self::key`])
+    /// names a failed project row in this table.
+    pub(crate) fn failed(&self, word: &str) -> Option<&str> {
+        self.1.get(self.key(word)).map(String::as_str)
+    }
+
+    pub(in crate::config) fn set_failed_project_rows(&mut self, failed: BTreeMap<String, String>) {
+        self.1 = failed;
+    }
+
+    pub(in crate::config) fn failed_project_rows(&self) -> &BTreeMap<String, String> {
+        &self.1
     }
 
     /// The nearest profile maximum, else `fallback`; explicit `off` stops inheritance.
@@ -473,8 +496,8 @@ impl ProfilesConfig {
         .unwrap_or(fallback)
     }
 
-    /// The nearest declared value; explicit off values stop the walk. Markdown chains arrive
-    /// resolved, while TOML chains follow `agent` references within this table.
+    /// The nearest declared value; explicit off values stop the walk. Loaded definition chains
+    /// arrive resolved; rows whose `agent` names another row still follow it within this table.
     pub(crate) fn setting<T>(&self, name: &str, pick: impl Fn(&Profile) -> Option<T>) -> Option<T> {
         let mut profile = self.0.get(name)?;
         for _ in 0..self.0.len() {
@@ -559,10 +582,10 @@ pub struct Profile {
     pub agent: String,
     #[serde(skip)]
     pub variant: Option<&'static crate::agents::Variant>,
-    /// Complete family renders exist only for Markdown definitions.
+    /// Complete family renders for loaded definitions (Markdown and trusted project TOML).
     #[serde(skip)]
     pub definition_renders: Option<super::tiers::DefinitionRenders>,
-    /// Retained Markdown loader state for rebuilding this row under an override, kind, or model.
+    /// Retained definition-loader state for rebuilding this row under an override, kind, or model.
     #[serde(skip)]
     pub definition: Option<super::definitions::DefinitionSource>,
     /// Whether unwritten effort takes the definition default of the kind and model
@@ -699,10 +722,10 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Rebuild a Markdown-defined row (standalone definition or team seat) under an optional
-    /// `--agent` base, target kind, and model without rereading disk.
+    /// Rebuild a definition-backed row (Markdown definition, trusted project profile, or team
+    /// seat) under an optional `--agent` base, target kind, and model without rereading disk.
     ///
-    /// Returns `None` for TOML rows and kind bases, which have no Markdown chain build.
+    /// Returns `None` for kind bases and rows without retained loader state.
     pub fn build_under(
         &self,
         base: Option<super::definitions::BuildBase<'_>>,

@@ -253,6 +253,7 @@ pub(super) fn load_catalog(
     let ctx = Ctx::open(globals)?;
     report_unknown_config_keys(machine)?;
     let effective = rimz::config::effective::load(machine, &ctx.workspace.project_root)?;
+    crate::cli::report_project_definition_errors(&effective)?;
     let snapshot = ctx.published_snapshot()?;
     let demotion = rimz::harness::park_demotion(
         Some(&ctx.store),
@@ -308,13 +309,17 @@ pub(super) fn load_catalog(
     ))
 }
 
-pub(super) fn effective_catalog(globals: &GlobalFlags) -> Result<(TeamsConfig, ProfilesConfig)> {
+pub(super) fn effective_catalog(
+    globals: &GlobalFlags,
+) -> Result<rimz::config::effective::LaunchAgents> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
-    let catalog = rimz::config::effective::load(&machine, &workspace.project_root)?;
-    Ok((catalog.teams, catalog.profiles))
+    Ok(rimz::config::effective::load(
+        &machine,
+        &workspace.project_root,
+    )?)
 }
 
 fn build_catalog(

@@ -693,10 +693,47 @@ fn idle() -> AgentState {
     agent
 }
 
+/// Load trusted project `[profiles.*]` rows through the real definition loader
+/// against Claude and Codex kind bases.
+fn loaded_project_profiles(project_toml: &str) -> crate::config::ProfilesConfig {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            home.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\ntools: [Read]\n---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(project.path().join(".rimz/config.toml"), project_toml).unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
+    assert!(
+        launch.project_definition_errors().is_empty(),
+        "unexpected project definition errors: {:?}",
+        launch.project_definition_errors()
+    );
+    launch.profiles
+}
+
 fn profile(keep_warm: Option<KeepWarm>) -> Profile {
-    let mut profile: Profile = toml::from_str("agent = \"claude\"").unwrap();
-    profile.keep_warm = keep_warm.map(Into::into);
-    profile
+    let keep_warm_line = match keep_warm {
+        Some(KeepWarm::Off) => "keep-warm = \"off\"\n".to_owned(),
+        Some(KeepWarm::For(duration)) => format!("keep-warm = \"{}s\"\n", duration.as_secs()),
+        None => String::new(),
+    };
+    loaded_project_profiles(&format!(
+        "[profiles.warm]\ndescription = \"Warm\"\nagent = \"claude\"\n{keep_warm_line}"
+    ))
+    .0
+    .remove("warm")
+    .unwrap()
 }
 
 fn team(keep_warm: Option<KeepWarm>) -> Team {
@@ -723,26 +760,31 @@ fn policy(solo: Option<KeepWarm>, role: Option<KeepWarm>) -> SeatPolicy {
 #[test]
 fn keep_warm_global_default_yields_to_the_profile_chain_and_excludes_children() {
     let held = SeatPolicy {
-        profiles: toml::from_str(
+        profiles: loaded_project_profiles(
             r#"
-[base]
+[profiles.base]
+description = 'Base'
 agent = 'claude'
-[warm]
+[profiles.warm]
+description = 'Warm'
 agent = 'base'
 keep-warm = '1h'
-[inherited]
+[profiles.inherited]
+description = 'Inherited'
 agent = 'warm'
-[cold]
+[profiles.cold]
+description = 'Cold'
 agent = 'warm'
 keep-warm = 'off'
-[inherited-cold]
+[profiles.inherited-cold]
+description = 'Inherited cold'
 agent = 'cold'
-[nearest]
+[profiles.nearest]
+description = 'Nearest'
 agent = 'cold'
 keep-warm = '1h'
 "#,
-        )
-        .unwrap(),
+        ),
         ..SeatPolicy::default()
     };
     let harness = toml::from_str("keep_warm = '2h'").unwrap();
@@ -1067,23 +1109,29 @@ fn keep_warm_horizon_follows_role_or_profile_and_ttl_admission() {
 }
 
 #[test]
-fn keep_warm_follows_a_toml_base_chain_and_skips_launched_children() {
+fn keep_warm_follows_a_project_profile_chain_and_skips_launched_children() {
     let config = HarnessConfig::default();
-    let mut held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
-    let child = |keep_warm| {
-        let mut profile: Profile = toml::from_str("agent = \"warm\"").unwrap();
-        profile.keep_warm = keep_warm;
-        profile
+    let held = SeatPolicy {
+        profiles: loaded_project_profiles(
+            r#"
+[profiles.warm]
+description = 'Warm'
+agent = 'claude'
+keep-warm = '2h'
+[profiles.child]
+description = 'Child'
+agent = 'warm'
+[profiles.grandchild]
+description = 'Grandchild'
+agent = 'child'
+[profiles.cold]
+description = 'Cold'
+agent = 'warm'
+keep-warm = 'off'
+"#,
+        ),
+        ..SeatPolicy::default()
     };
-    held.profiles.0.insert("child".into(), child(None));
-    held.profiles.0.insert("grandchild".into(), {
-        let mut profile: Profile = toml::from_str("agent = \"child\"").unwrap();
-        profile.keep_warm = None;
-        profile
-    });
-    held.profiles
-        .0
-        .insert("cold".into(), child(Some(KeepWarm::Off.into())));
     let mut agent = idle();
     for (profile, expected) in [
         ("child", Some(TWO_HOURS)),
@@ -1112,17 +1160,21 @@ fn keep_warm_follows_a_toml_base_chain_and_skips_launched_children() {
 fn idle_compact_floor_follows_role_then_profile_chain_then_harness() {
     let harness: HarnessConfig = toml::from_str("idle_compact = \"100k\"").unwrap();
     let mut policy = policy(None, None);
-    policy.profiles.0.get_mut("warm").unwrap().idle_compact = Some(IdleCompact::Tokens(30_000));
-    policy.profiles.0.insert("child".into(), {
-        let mut profile: Profile = toml::from_str("agent = \"warm\"").unwrap();
-        profile.idle_compact = None;
-        profile
-    });
-    policy.profiles.0.insert("cold".into(), {
-        let mut profile: Profile = toml::from_str("agent = \"warm\"").unwrap();
-        profile.idle_compact = Some(IdleCompact::Off);
-        profile
-    });
+    policy.profiles = loaded_project_profiles(
+        r#"
+[profiles.warm]
+description = 'Warm'
+agent = 'claude'
+idle-compact = '30k'
+[profiles.child]
+description = 'Child'
+agent = 'warm'
+[profiles.cold]
+description = 'Cold'
+agent = 'warm'
+idle-compact = 'off'
+"#,
+    );
     policy.teams.0.get_mut("forge").unwrap().roles[0].idle_compact =
         Some(IdleCompact::Tokens(200_000));
     let mut agent = idle();

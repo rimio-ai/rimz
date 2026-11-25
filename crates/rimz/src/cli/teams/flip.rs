@@ -50,7 +50,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         &machine.agents.commands,
     )?;
     let team = effective.teams.0.get(team_name).with_context(|| {
-        machine
+        effective
             .definition_failure_for(team_name)
             .unwrap_or_else(|| format!("team `{team_name}` is no longer configured"))
     })?;

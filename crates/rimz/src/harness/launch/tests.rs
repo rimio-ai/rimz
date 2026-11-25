@@ -2568,8 +2568,22 @@ fn process_compiler_keeps_a_trusted_code_mode_value_over_an_inherited_marker() {
 #[test]
 fn process_compiler_places_mini_before_options_and_translates_auto_approve() {
     let project = tempfile::tempdir().unwrap();
-    let profiles = toml::from_str("[mini]\nagent = 'opencode-mini'\nmode = 'yolo'").unwrap();
-    let cell = crate::harness::spec::profile_cell("mini", &profiles);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/opencode.md"),
+        "---\ndescription: OpenCode base\n---\nOpenCode house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/mini.md"),
+        "---\ndescription: OpenCode mini\nagent: opencode-mini\nmode: yolo\n---\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
+    let cell = crate::harness::spec::profile_cell("mini", &machine.agents.profiles);
     assert!(cell.is_ok(), "mini variant must resolve: {cell:?}");
     let mini_args = cell.unwrap().args;
     let cases = [

@@ -75,7 +75,22 @@ impl LaneRestoreConfig {
         project_root: &Path,
         unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
     ) -> anyhow::Result<Self> {
-        let mut launch = crate::config::effective::load(machine, project_root)?;
+        Self::load_with_roots(
+            machine,
+            project_root,
+            &crate::disk::paths::rimz_home(),
+            unavailable,
+        )
+    }
+
+    fn load_with_roots(
+        machine: &crate::config::MachineConfig,
+        project_root: &Path,
+        config_root: &Path,
+        unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
+    ) -> anyhow::Result<Self> {
+        let mut launch =
+            crate::config::effective::load_with_roots(machine, project_root, config_root)?;
         launch.route(
             &machine.tiers,
             crate::config::effective::ProfileScope::Agents,
@@ -85,21 +100,13 @@ impl LaneRestoreConfig {
             None,
             unavailable,
         )?;
+        let failed_definitions = launch.all_failed_definitions();
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,
             subagent_profiles: launch.subagent_profiles,
             commands: machine.agents.commands.clone(),
-            failed_definitions: machine
-                .notices
-                .failed_definitions
-                .keys()
-                .filter_map(|name| {
-                    machine
-                        .definition_failure_for(name)
-                        .map(|detail| (name.clone(), detail))
-                })
-                .collect(),
+            failed_definitions,
         })
     }
 }
@@ -536,6 +543,7 @@ fn resolve_posture_with_role(
     let base_name = request.record.and_then(|record| record.agent.as_deref());
     if (request.stamped_tier.is_some() || request.record.is_some())
         && base_name.is_none()
+        && profiles.failed(name).is_none()
         && let Some(profile) = profiles.0.get(name)
     {
         let rendered = profile
@@ -610,12 +618,10 @@ fn resolve_posture_with_role(
         }
     }
     // The role is the last layer over the profile, so it loses its model when
-    // a launch record decides the model (with or without a recorded `--agent`);
-    // a `--model` in its raw `args` stays too.
+    // a launch record or tier stamp decides the model; a `--model` in its raw
+    // `args` stays too.
     let modelless_role = role
-        .filter(|_| {
-            request.record.is_some() && (request.stamped_tier.is_none() || base_name.is_some())
-        })
+        .filter(|_| request.record.is_some() || request.stamped_tier.is_some())
         .map(|role| crate::config::RoleBinding {
             model: None,
             ..role.clone()
@@ -739,7 +745,6 @@ fn resolve_posture_with_role(
             team,
             &role.role,
             &cell.kind,
-            profiles.0.contains_key(cell.kind.as_str()),
             cell.system_prompt_file.is_some(),
         )
         .map_err(|err| PostureDegrade::TeamPromptRejected {
@@ -3386,6 +3391,9 @@ fn restore_resume_cell(
         ResumeLaunchPosture::from(&*cell)
     };
     if let Some((tier, tiers)) = overrides.tier {
+        if let Some(detail) = profile.and_then(|name| profiles.failed(name)) {
+            return Err(error(detail.to_owned()));
+        }
         let profile_row = profile.and_then(|name| profiles.0.get(name));
         let definition = profile_row
             .and_then(|profile| profile.definition_renders.as_ref())

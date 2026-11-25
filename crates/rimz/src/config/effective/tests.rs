@@ -7,11 +7,25 @@ use tempfile::tempdir;
 
 #[test]
 fn keep_warm_declared_horizon_resolves_seats_without_live_admission() {
-    let profiles: ProfilesConfig = toml::from_str(
-        "[base]\nagent = 'pi'\nkeep-warm = '1h'\n\
-         [worker]\nagent = 'base'\n[off]\nagent = 'worker'\nkeep-warm = 'off'",
-    )
-    .unwrap();
+    let home = tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for (name, content) in [
+        ("pi", "---\ndescription: Pi base\n---\nPi house.\n"),
+        (
+            "base",
+            "---\ndescription: Base\nagent: pi\nkeep-warm: 1h\n---\n",
+        ),
+        ("worker", "---\ndescription: Worker\nagent: base\n---\n"),
+        (
+            "off",
+            "---\ndescription: Off\nagent: worker\nkeep-warm: off\n---\n",
+        ),
+    ] {
+        std::fs::write(home.path().join(format!("agents/{name}.md")), content).unwrap();
+    }
+    let machine =
+        MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path()).unwrap();
+    let profiles = machine.agents.profiles;
     let teams: TeamsConfig = toml::from_str(
         "[forge]\nkeep-warm = '2h'\nroles = [\
          {role = 'lead', profile = 'worker', keep-warm = '3h'},\
@@ -78,15 +92,72 @@ fn keep_warm_declared_horizon_resolves_seats_without_live_admission() {
 #[test]
 fn smart_compact_resolves_role_profile_scope_and_explicit_off() {
     use crate::store::message::AutoCompact;
-    let profiles: ProfilesConfig = toml::from_str(
-        "[base]\nagent = 'claude'\nsmart-compact = '200k'\n\
-         [worker]\nagent = 'base'\n[off]\nagent = 'base'\nsmart-compact = 'off'\n\
-         [cycle]\nagent = 'cycle'\n[solo]\nagent = 'claude'\nsmart-compact = '70%'",
+    let agents_home = tempdir().unwrap();
+    let subagents_home = tempdir().unwrap();
+    std::fs::create_dir_all(agents_home.path().join("agents")).unwrap();
+    std::fs::create_dir_all(subagents_home.path().join("agents")).unwrap();
+    std::fs::create_dir_all(subagents_home.path().join("subagents")).unwrap();
+    for (root, rel, content) in [
+        (
+            agents_home.path(),
+            "agents/claude.md",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            agents_home.path(),
+            "agents/base.md",
+            "---\ndescription: Base\nagent: claude\nsmart-compact: 200k\n---\n",
+        ),
+        (
+            agents_home.path(),
+            "agents/worker.md",
+            "---\ndescription: Worker\nagent: base\n---\n",
+        ),
+        (
+            agents_home.path(),
+            "agents/off.md",
+            "---\ndescription: Off\nagent: base\nsmart-compact: off\n---\n",
+        ),
+        (
+            agents_home.path(),
+            "agents/solo.md",
+            "---\ndescription: Solo\nagent: claude\nsmart-compact: 70%\n---\n",
+        ),
+        (
+            subagents_home.path(),
+            "agents/claude.md",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
+        ),
+        (
+            subagents_home.path(),
+            "subagents/base.md",
+            "---\ndescription: Sub base\nagent: claude\nsmart-compact: 50k\n---\n",
+        ),
+        (
+            subagents_home.path(),
+            "subagents/worker.md",
+            "---\ndescription: Sub worker\nagent: base\n---\n",
+        ),
+    ] {
+        std::fs::write(root.join(rel), content).unwrap();
+    }
+    let machine = MachineConfig::parse_text(
+        &agents_home.path().join("config.toml"),
+        "",
+        agents_home.path(),
     )
     .unwrap();
-    let children: ProfilesConfig =
-        toml::from_str("[base]\nagent = 'claude'\nsmart-compact = '50k'\n[worker]\nagent = 'base'")
-            .unwrap();
+    let sub_machine = MachineConfig::parse_text(
+        &subagents_home.path().join("config.toml"),
+        "",
+        subagents_home.path(),
+    )
+    .unwrap();
+    let mut profiles = machine.agents.profiles;
+    profiles
+        .0
+        .insert("cycle".into(), toml::from_str("agent = 'cycle'").unwrap());
+    let children = sub_machine.subagents.profiles;
     let teams: TeamsConfig = toml::from_str(
         "[forge]\nroles = [\
          {role = 'lead', profile = 'worker', smart-compact = '80%'},\
@@ -136,31 +207,30 @@ fn smart_compact_resolves_role_profile_scope_and_explicit_off() {
 
 #[test]
 fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_errors() {
-    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let (_machine, loaded) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        "[profiles.worker]\ndescription = 'Claude worker'\nagent = 'claude'\n\
+         [profiles.other]\ndescription = 'Codex worker'\nagent = 'codex'\n",
+    );
+    let mut profiles = loaded.profiles.clone();
+    // Drop the claude kind base to mirror a failed kind base that never loaded into `profiles`.
+    profiles.0.remove("claude");
     let mut launch = super::load_with_roots(
         &MachineConfig::default(),
-        root.path(),
-        &root.path().join("home"),
+        project.path(),
+        &project.path().join("empty-home"),
     )
     .unwrap();
     let detail = "/definitions/agents/claude.md: invalid frontmatter";
     launch
         .failed_definitions
         .insert("claude".into(), detail.into());
-    let mut profiles = profiles([
-        ("worker", profile("claude", None)),
-        ("inherited", profile("worker", None)),
-        ("cycle", profile("cycle", None)),
-        ("typo", profile("never-defined", None)),
-    ]);
-    let names = [
-        " claude ",
-        "worker",
-        "inherited",
-        "cycle",
-        "typo",
-        "missing",
-    ];
+    let names = [" claude ", "worker", "other", "missing"];
     let actual: Vec<_> = names
         .map(|name| {
             launch
@@ -169,20 +239,9 @@ fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_e
                 .map(|error| error.to_string())
         })
         .into();
-    profiles.0.insert("claude".into(), profile("claude", None));
-    for name in names {
-        launch.block_failed_profile(name, &profiles).unwrap();
-    }
     assert_eq!(
         actual,
-        [
-            Some(detail.to_owned()),
-            Some(detail.to_owned()),
-            Some(detail.to_owned()),
-            None,
-            None,
-            None
-        ]
+        [Some(detail.to_owned()), Some(detail.to_owned()), None, None,]
     );
 }
 
@@ -548,7 +607,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     assert!(
         error
             .to_string()
-            .contains("model tiers resolve in Markdown definitions")
+            .contains("model tiers resolve in definitions")
     );
     for reason in [
         crate::agents::TierSkipReason::LoggedOut,
@@ -745,7 +804,7 @@ fn mini_tier_and_model_overrides_keep_the_selected_interface() {
     assert!(
         refusal
             .to_string()
-            .contains("--tier needs Markdown definitions"),
+            .contains("--tier needs a profile definition"),
         "{refusal}"
     );
 }
@@ -1248,7 +1307,7 @@ fn team_cli_models_route_each_markdown_role() {
     assert!(
         error
             .to_string()
-            .contains("--tier needs Markdown definitions"),
+            .contains("--tier needs a profile definition"),
         "{error}"
     );
     launch
@@ -1298,13 +1357,22 @@ fn team_cli_models_route_each_markdown_role() {
 fn trusted_repo_cannot_set_allowed_tools() {
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
-    write_project_config(
-        &project,
-        "[profiles.worker]\nagent = 'claude'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
+    seed_definition_home(config.path());
+    let (_machine, effective) = load_trusted_project(
+        config.path(),
+        project.path(),
+        "",
+        "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
     );
-    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
-    let effective = load(&AgentsConfig::default(), project.path(), config.path()).unwrap();
-    assert!(effective.profiles.0["worker"].allowed_tools.is_none());
+    assert!(!effective.profiles.0.contains_key("worker"));
+    let detail = effective
+        .definition_failure_for("worker")
+        .expect("unknown allowed-tools keys must fail the row");
+    assert!(
+        detail.contains("[profiles.worker]")
+            && (detail.contains("allowed_tools") || detail.contains("allowed-tools")),
+        "{detail}"
+    );
 }
 
 #[test]
@@ -1483,11 +1551,11 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
 }
 
 fn profiles(entries: impl IntoIterator<Item = (&'static str, Profile)>) -> ProfilesConfig {
-    ProfilesConfig(
+    ProfilesConfig::from(
         entries
             .into_iter()
             .map(|(name, profile)| (name.to_owned(), profile))
-            .collect(),
+            .collect::<BTreeMap<_, _>>(),
     )
 }
 
@@ -1611,9 +1679,50 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
 
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
+    seed_definition_home(config.path());
+    std::fs::write(
+        config.path().join("agents/pi.md"),
+        "---\ndescription: Pi base\ntools: [Read]\n---\nPi house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base\ntools: [Read]\n---\nAntigravity house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/md-worker.md"),
+        "---\ndescription: MD Worker\nagent: codex\n---\nMD worker.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/md-agy.md"),
+        "---\ndescription: MD Agy\nagent: antigravity\n---\nMD agy.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/md-agy-explicit.md"),
+        "---\ndescription: MD Agy Explicit\nagent: antigravity\nauto-compact: 400k\n---\nMD explicit.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/md-bad-ac.md"),
+        "---\ndescription: MD Bad\nagent: codex\nauto-compact: bogus\n---\nMD bad.\n",
+    )
+    .unwrap();
     write_project_config(
         &project,
-        "[profiles.worker]\nagent = 'codex'\n[profiles.agy]\nagent = 'antigravity'\n[profiles.parent]\nagent = 'codex'\nauto-compact = '200k'\n[profiles.child]\nagent = 'parent'\n[profiles.pi]\nagent = 'pi'\n[profiles.claude]\nagent = 'claude'\nauto-compact = '200k'\n[profiles.planner]\nagent = 'claude'\n[subagents.profiles.worker]\nagent = 'codex'\n[subagents.profiles.codex]\nagent = 'codex'",
+        "[profiles.worker]\ndescription = 'Worker'\nagent = 'codex'\n\
+         [profiles.agy-row]\ndescription = 'Agy'\nagent = 'antigravity'\n\
+         [profiles.agy-explicit]\ndescription = 'Agy explicit'\nagent = 'antigravity'\nauto-compact = '400k'\n\
+         [profiles.bad-ac]\ndescription = 'Bad'\nagent = 'codex'\nauto-compact = 'bogus'\n\
+         [profiles.bad-off]\ndescription = 'Bad off'\nagent = 'antigravity'\nauto-compact = 'off'\n\
+         [profiles.parent]\ndescription = 'Parent'\nagent = 'codex'\nauto-compact = '200k'\n\
+         [profiles.child]\ndescription = 'Child'\nagent = 'parent'\n\
+         [profiles.pi-row]\ndescription = 'Pi'\nagent = 'pi'\n\
+         [profiles.claude-row]\ndescription = 'Claude'\nagent = 'claude'\nauto-compact = '200k'\n\
+         [profiles.planner]\ndescription = 'Planner'\nagent = 'claude-row'\n\
+         [subagents.profiles.sub-worker]\ndescription = 'Sub worker'\nagent = 'codex'\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
     for (setting, expected_default, expected_codex, expected_agy) in [
@@ -1631,12 +1740,26 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
         ),
         (Some(AutoCompactWindow::Off), None, None, None),
     ] {
-        let mut machine = MachineConfig::default();
-        machine.harness.auto_compact = setting;
+        let machine_toml = match setting {
+            None => String::new(),
+            Some(AutoCompactWindow::Tokens(n)) => format!("[harness]\nauto_compact = '{n}'\n"),
+            Some(AutoCompactWindow::Off) => "[harness]\nauto_compact = 'off'\n".to_owned(),
+        };
+        let cfg_path = config.path().join("config.toml");
+        std::fs::write(&cfg_path, &machine_toml).unwrap();
+        let machine = MachineConfig::parse_text(&cfg_path, &machine_toml, config.path()).unwrap();
         let effective = load_with_roots(&machine, project.path(), config.path()).unwrap();
-        for profiles in [&effective.profiles, &effective.subagent_profiles] {
-            let worker = agents_spec::resolve_profile("worker", profiles).unwrap();
+        let md_worker = agents_spec::resolve_profile("md-worker", &effective.profiles).unwrap();
+        let md_agy = agents_spec::resolve_profile("md-agy", &effective.profiles).unwrap();
+        let md_agy_explicit =
+            agents_spec::resolve_profile("md-agy-explicit", &effective.profiles).unwrap();
+        for (name, profiles) in [
+            ("worker", &effective.profiles),
+            ("sub-worker", &effective.subagent_profiles),
+        ] {
+            let worker = agents_spec::resolve_profile(name, profiles).unwrap();
             assert_eq!(worker.auto_compact_default, expected_default);
+            assert_eq!(worker.auto_compact_default, md_worker.auto_compact_default);
             assert_eq!(
                 worker
                     .auto_compact_default
@@ -1644,19 +1767,47 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
                 expected_codex
             );
         }
-        let agy = agents_spec::resolve_profile("agy", &effective.profiles).unwrap();
+        let agy = agents_spec::resolve_profile("agy-row", &effective.profiles).unwrap();
+        assert_eq!(agy.auto_compact_default, expected_default);
+        assert_eq!(agy.auto_compact_default, md_agy.auto_compact_default);
         assert_eq!(
             agy.auto_compact_default
                 .and_then(|d| d.resolve_for_kind(&agy.kind)),
             expected_agy
         );
+        let agy_explicit =
+            agents_spec::resolve_profile("agy-explicit", &effective.profiles).unwrap();
+        assert_eq!(agy_explicit.auto_compact.as_deref(), Some("400000"));
+        assert_eq!(agy_explicit.auto_compact, md_agy_explicit.auto_compact);
+        let pi = agents_spec::resolve_profile("pi-row", &effective.profiles).unwrap();
         assert_eq!(
-            agents_spec::resolve_profile("codex", &effective.subagent_profiles)
-                .unwrap()
-                .auto_compact_default,
-            expected_default
+            pi.auto_compact_default
+                .and_then(|d| d.resolve_for_kind(&pi.kind)),
+            None
         );
-        for name in ["parent", "child", "claude", "planner"] {
+        let md_bad_reason = machine
+            .definition_failure_for("md-bad-ac")
+            .expect("md-bad-ac must fail");
+        let md_suffix = md_bad_reason
+            .split_once(": ")
+            .map(|(_, rest)| rest)
+            .unwrap();
+        let proj_bad_reason = effective
+            .definition_failure_for("bad-ac")
+            .expect("bad-ac must fail per row");
+        assert!(
+            proj_bad_reason.contains("[profiles.bad-ac]") && proj_bad_reason.contains(md_suffix),
+            "project auto-compact validation must match Markdown: proj={proj_bad_reason} md={md_bad_reason}"
+        );
+        let proj_off_reason = effective
+            .definition_failure_for("bad-off")
+            .expect("bad-off must fail per row");
+        assert!(
+            proj_off_reason.contains("[profiles.bad-off]")
+                && proj_off_reason.contains("auto-compact: off"),
+            "{proj_off_reason}"
+        );
+        for name in ["parent", "child", "claude-row", "planner"] {
             assert_eq!(
                 agents_spec::resolve_profile(name, &effective.profiles)
                     .unwrap()
@@ -1665,7 +1816,7 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
                 Some("200000")
             );
         }
-        for name in ["pi", "codex"] {
+        for name in ["pi-row", "codex"] {
             assert_eq!(
                 agents_spec::resolve_profile(name, &effective.profiles)
                     .unwrap()
@@ -1680,14 +1831,24 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
 fn trusted_repo_profile_overlays_machine_profile() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
+    seed_definition_home(config.path());
     write_project_config(
         &project,
-        "[profiles.planner]\nagent = \"claude\"\nargs = \"--repo\"\n",
+        "[profiles.planner]\ndescription = \"Planner\"\nagent = \"claude\"\nargs = \"--repo\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-    let machine = profiles([("planner", profile("claude", Some("--machine")))]);
+    let cfg_path = config.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let mut machine = MachineConfig::parse_text(&cfg_path, "", config.path()).unwrap();
+    machine
+        .agents
+        .profiles
+        .0
+        .insert("planner".into(), profile("claude", Some("--machine")));
 
-    let effective = effective_profiles(&machine, project.path(), config.path()).expect("effective");
+    let effective = load_with_roots(&machine, project.path(), config.path())
+        .expect("effective")
+        .profiles;
 
     assert_eq!(
         effective.0.get("planner").and_then(|p| p.args.as_deref()),
@@ -2018,17 +2179,21 @@ fn repo_profile_cannot_inherit_machine_profile() {
 fn repo_empty_dir_profiles_are_admitted_in_both_scopes() {
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
-    write_project_config(
-        &project,
-        "[profiles.searcher]\nagent = 'claude'\nempty-dir = true\n[subagents.profiles.searcher]\nagent = 'claude'\nempty-dir = true\n",
+    seed_definition_home(config.path());
+    let (_machine, effective) = load_trusted_project(
+        config.path(),
+        project.path(),
+        "",
+        "[profiles.searcher]\ndescription = 'Searcher'\nagent = 'claude'\nempty-dir = true\n\
+         [subagents.profiles.sub-searcher]\ndescription = 'Sub searcher'\nagent = 'claude'\nempty-dir = true\n",
     );
-    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
-    let effective =
-        load_with_roots(&MachineConfig::default(), project.path(), config.path()).unwrap();
-    for profiles in [&effective.profiles, &effective.subagent_profiles] {
-        assert!(profiles.0.contains_key("searcher"));
+    for (profiles, name) in [
+        (&effective.profiles, "searcher"),
+        (&effective.subagent_profiles, "sub-searcher"),
+    ] {
+        assert!(profiles.0.contains_key(name));
         assert_eq!(
-            serde_json::to_value(&profiles.0["searcher"]).unwrap()["empty-dir"],
+            serde_json::to_value(&profiles.0[name]).unwrap()["empty-dir"],
             true
         );
     }
@@ -2065,34 +2230,55 @@ fn repo_profiles_cannot_set_isolation_in_either_scope() {
 fn repo_profile_typo_reports_unknown_base_not_machine_escape() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(&project, "[profiles.child]\nagent = \"typoo\"\n");
+    seed_definition_home(config.path());
+    write_project_config(
+        &project,
+        "[profiles.child]\ndescription = \"Child\"\nagent = \"typoo\"\n",
+    );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-    let machine = profiles([("machine-base", profile("claude", Some("--machine")))]);
+    let cfg_path = config.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let mut machine = MachineConfig::parse_text(&cfg_path, "", config.path()).unwrap();
+    machine
+        .agents
+        .profiles
+        .0
+        .insert("machine-base".into(), profile("claude", Some("--machine")));
 
-    let err = effective_profiles(&machine, project.path(), config.path()).expect_err("typo");
-
-    assert!(matches!(
-        err,
-        EffectiveConfigErr::Agents {
-            source: crate::harness::spec::LayoutErr::UnknownProfileBase { profile, base },
-            ..
-        } if profile == "child" && base == "typoo"
-    ));
+    let effective =
+        load_with_roots(&machine, project.path(), config.path()).expect("per-row failure loads");
+    assert!(!effective.profiles.0.contains_key("child"));
+    let detail = effective
+        .definition_failure_for("child")
+        .expect("typo fails the row");
+    assert!(
+        detail.contains("[profiles.child]") && detail.contains("typoo"),
+        "{detail}"
+    );
 }
 
 #[test]
 fn trusted_repo_subagent_profile_overlays_machine_profile() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
+    seed_definition_home(config.path());
     write_project_config(
         &project,
-        "[subagents.profiles.reviewer]\nagent = \"codex\"\nargs = \"--repo\"\n",
+        "[subagents.profiles.reviewer]\ndescription = \"Reviewer\"\nagent = \"codex\"\nargs = \"--repo\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-    let machine = profiles([("reviewer", profile("claude", Some("--machine")))]);
+    let cfg_path = config.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let mut machine = MachineConfig::parse_text(&cfg_path, "", config.path()).unwrap();
+    machine
+        .subagents
+        .profiles
+        .0
+        .insert("reviewer".into(), profile("claude", Some("--machine")));
 
-    let effective =
-        effective_subagent_profiles(&machine, project.path(), config.path()).expect("effective");
+    let effective = load_with_roots(&machine, project.path(), config.path())
+        .expect("effective")
+        .subagent_profiles;
 
     let reviewer = effective.0.get("reviewer").expect("reviewer profile");
     assert_eq!(reviewer.agent, "codex");
@@ -2103,16 +2289,14 @@ fn trusted_repo_subagent_profile_overlays_machine_profile() {
 fn trusted_repo_allowlist_can_reference_repo_subagent_profile() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(
-        &project,
-        "[profiles.planner]\nagent = \"claude\"\nsubagents = [\"repo-child\"]\n\
-         [subagents.profiles.repo-child]\nagent = \"codex\"\n",
+    seed_definition_home(config.path());
+    let (_machine, effective) = load_trusted_project(
+        config.path(),
+        project.path(),
+        "",
+        "[profiles.planner]\ndescription = \"Planner\"\nagent = \"claude\"\nsubagents = [\"repo-child\"]\n\
+         [subagents.profiles.repo-child]\ndescription = \"Repo child\"\nagent = \"codex\"\n",
     );
-    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-
-    let effective =
-        super::load_with_roots(&MachineConfig::default(), project.path(), config.path())
-            .expect("merged catalogs validate together");
 
     assert_eq!(
         effective
@@ -2199,16 +2383,17 @@ fn repo_subagent_profile_cannot_inherit_machine_subagent_profile() {
 fn repo_profiles_resolve_repo_and_builtin_bases() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(
-        &project,
-        "[profiles.base]\nagent = \"codex\"\nmode = \"ask\"\n\n[profiles.child]\nagent = \"base\"\nargs = \"--child\"\n",
+    seed_definition_home(config.path());
+    let (_machine, effective) = load_trusted_project(
+        config.path(),
+        project.path(),
+        "",
+        "[profiles.base]\ndescription = \"Base\"\nagent = \"codex\"\nmode = \"ask\"\n\n\
+         [profiles.child]\ndescription = \"Child\"\nagent = \"base\"\nargs = \"--child\"\n",
     );
-    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
-    let effective = effective_profiles(&ProfilesConfig::default(), project.path(), config.path())
-        .expect("effective");
-
-    let child = crate::harness::spec::resolve_profile("child", &effective).expect("resolve child");
+    let child =
+        crate::harness::spec::resolve_profile("child", &effective.profiles).expect("resolve child");
     assert_eq!(child.kind.as_str(), "codex");
     assert_eq!(child.launch.mode, Some(PermissionMode::Ask));
     assert_eq!(child.args.as_deref(), Some("--child"));
@@ -2218,21 +2403,17 @@ fn repo_profiles_resolve_repo_and_builtin_bases() {
 fn repo_prompt_file_paths_resolve_against_rimz_dir() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(
-        &project,
-        "[profiles.planner]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
-    );
-    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-
-    let effective = effective_profiles(
-        &ProfilesConfig(BTreeMap::new()),
-        project.path(),
+    seed_definition_home(config.path());
+    let (_machine, effective) = load_trusted_project(
         config.path(),
-    )
-    .expect("effective");
+        project.path(),
+        "",
+        "[profiles.planner]\ndescription = \"Planner\"\nagent = \"claude\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+    );
 
     assert_eq!(
         effective
+            .profiles
             .0
             .get("planner")
             .and_then(|profile| profile.system_prompt_file.as_ref()),
@@ -2246,12 +2427,17 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
 fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
+    seed_definition_home(config.path());
     write_project_config(
         &project,
-        "[profiles.planner]\nagent = \"claude\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+        "[profiles.planner]\ndescription = \"Planner\"\nagent = \"claude\"\n\n\
+         [[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
-    let machine = TeamsConfig(BTreeMap::from([(
+    let cfg_path = config.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let mut machine = MachineConfig::parse_text(&cfg_path, "", config.path()).unwrap();
+    machine.agents.teams.0.insert(
         "review".to_owned(),
         Team {
             roles: vec![role("local", "local-profile")],
@@ -2264,9 +2450,11 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
             append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
-    )]));
+    );
 
-    let effective = effective_teams(&machine, project.path(), config.path()).expect("effective");
+    let effective = load_with_roots(&machine, project.path(), config.path())
+        .expect("effective")
+        .teams;
 
     let role = &effective.0.get("review").expect("repo team").roles[0];
     assert_eq!(role.role, "planner");
@@ -2283,22 +2471,21 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
 fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
-    let base = crate::config::PromptSource::Text {
-        origin: config.path().join("agents/claude.md"),
-        text: "Kind base.".into(),
-    };
+    let base_path = config.path().join("agents/claude.md");
     let mut actual = Vec::new();
     for has_base in [true, false] {
-        let mut machine = MachineConfig::default();
         if has_base {
-            machine.agents.profiles.0.insert(
-                "claude".into(),
-                Profile {
-                    system_prompt_file: Some(base.clone()),
-                    ..profile("claude", None)
-                },
-            );
+            std::fs::create_dir_all(config.path().join("agents")).unwrap();
+            std::fs::write(
+                &base_path,
+                "---\ndescription: Claude base\ntools: [Read]\n---\nKind base.\n",
+            )
+            .unwrap();
+        } else {
+            let _ = std::fs::remove_file(&base_path);
         }
+        let machine =
+            MachineConfig::load_from(&config.path().join("config.toml"), config.path()).unwrap();
         for layer in [
             "consensus-file = 'consensus.md'",
             "append-system-prompt-files = ['pipeline.md']",
@@ -2306,7 +2493,7 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
             write_project_config(
                 &project,
                 &format!(
-                    "[profiles.worker]\nagent = 'claude'\n\
+                    "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
                      [agents.teams.crew]\n{layer}\nlayout = 'lead'\n\
                      roles = [{{role = 'lead', profile = 'worker', owns = ['Plan']}}]\n"
                 ),
@@ -2317,28 +2504,35 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
             let Ok(launch) = loaded else {
                 continue;
             };
-            let resolved = crate::harness::spec::resolve_team(
+            if !has_base {
+                let crew_err = launch
+                    .definition_failure_for("crew")
+                    .expect("crew fails when worker lacks kind base");
+                let worker_err = launch
+                    .definition_failure_for("worker")
+                    .expect("worker fails without kind base");
+                assert!(
+                    crew_err.contains(&base_path.display().to_string()),
+                    "{crew_err}"
+                );
+                assert!(
+                    worker_err.contains(&base_path.display().to_string()),
+                    "{worker_err}"
+                );
+                continue;
+            }
+            let layout = crate::harness::spec::resolve_team(
                 "crew",
                 &launch.teams,
                 &launch.profiles,
                 &CommandsConfig::default(),
-            );
-            if !has_base {
-                assert!(
-                    matches!(
-                        &resolved,
-                        Err(crate::harness::spec::LayoutErr::TeamPromptWithoutBase {
-                            team, role, ..
-                        }) if team == "crew" && role == "lead"
-                    ),
-                    "{resolved:?}"
-                );
-                crate::harness::spec::resolve_profile("worker", &launch.profiles).unwrap();
-                continue;
-            }
-            let layout = resolved.unwrap();
+            )
+            .unwrap();
             let cell = layout.agent_cells().next().unwrap();
-            assert_eq!(cell.system_prompt_file.as_ref(), Some(&base));
+            assert_eq!(
+                cell.system_prompt_file.as_ref().map(|s| s.origin()),
+                Some(base_path.as_path())
+            );
             let prompt = cell.team_prompt.as_ref().unwrap();
             if layer.starts_with("consensus-file") {
                 assert_eq!(
@@ -2364,13 +2558,14 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
 fn repo_teams_compose_consensus_pieces_from_the_machine_trait_claims() {
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
+    seed_definition_home(config.path());
     std::fs::create_dir_all(config.path().join("traits")).unwrap();
     std::fs::write(config.path().join("traits/house.md"), "House.").unwrap();
     let machine =
         MachineConfig::load_from(&config.path().join("config.toml"), config.path()).unwrap();
     let crew = |extra: &str| {
         format!(
-            "[profiles.worker]\nagent = 'claude'\n\
+            "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
              [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
              append-system-prompt-files = ['pipeline.md']\n{extra}\n\
              roles = [{{role = 'lead', profile = 'worker', owns = ['Plan', 'Reflect']}}]\n"
@@ -2670,7 +2865,7 @@ fn tier_routes_read_an_alias_launch_word_as_its_kind() {
     for (alias, kind) in [("agy", "antigravity"), ("mcode", "minimax")] {
         let (routed, profiles) = route(alias);
         assert!(
-            !format!("{routed:?}").contains("needs Markdown definitions"),
+            !format!("{routed:?}").contains("needs a profile definition"),
             "{alias}: {routed:?}"
         );
         assert_eq!((routed, profiles), route(kind), "{alias}");
@@ -2720,4 +2915,1946 @@ fn kind_base_model_route_onto_missing_non_tier_base_refuses() {
             |_, _| None,
         )
         .expect("bare kind without base row stays accepted");
+}
+
+fn seed_definition_home(home: &std::path::Path) {
+    std::fs::create_dir_all(home.join("agents")).unwrap();
+    std::fs::create_dir_all(home.join("subagents")).unwrap();
+    std::fs::create_dir_all(home.join("skills/review")).unwrap();
+    std::fs::create_dir_all(home.join("skills/manual-only")).unwrap();
+    std::fs::write(
+        home.join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read, Skill]\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("agents/codex.md"),
+        "---\ndescription: Codex base\ntools: [Read, Skill]\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base\ntools: [Read, Skill]\n---\nAgy house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("skills/review/SKILL.md"),
+        "---\nname: review\ndescription: Review skill\n---\nReview body.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("skills/manual-only/SKILL.md"),
+        "---\nname: manual-only\ndescription: Manual skill\ndisable-model-invocation: true\n---\nManual.\n",
+    )
+    .unwrap();
+}
+
+fn load_trusted_project(
+    home: &std::path::Path,
+    project: &std::path::Path,
+    machine_toml: &str,
+    project_toml: &str,
+) -> (MachineConfig, LaunchAgents) {
+    let cfg_path = home.join("config.toml");
+    std::fs::write(&cfg_path, machine_toml).unwrap();
+    let machine = MachineConfig::parse_text(&cfg_path, machine_toml, home).unwrap();
+    std::fs::create_dir_all(project.join(".rimz")).unwrap();
+    std::fs::write(project.join(".rimz/config.toml"), project_toml).unwrap();
+    crate::trust::grant_with_roots(project, home).unwrap();
+    let launch = load_with_roots(&machine, project, home).expect("project config must load");
+    (machine, launch)
+}
+
+fn assert_row_refused(
+    machine: &MachineConfig,
+    launch: &LaunchAgents,
+    scope: ProfileScope,
+    project: &std::path::Path,
+    table: &str,
+    name: &str,
+    expected_fragment: &str,
+) {
+    let err = crate::harness::plan::resolve_launch(
+        launch,
+        scope,
+        &machine.agents.commands,
+        Some(name),
+        None,
+    )
+    .expect_err(&format!("{table}.{name} must refuse"));
+    let text = err.to_string();
+    let cfg = project.join(".rimz/config.toml").display().to_string();
+    assert!(
+        text.contains(&cfg),
+        "{table}.{name}: missing config path {cfg} in: {text}"
+    );
+    assert!(
+        text.contains(&format!("[{table}.{name}]")),
+        "{table}.{name}: missing section [{table}.{name}] in: {text}"
+    );
+    assert!(
+        text.contains(expected_fragment),
+        "{table}.{name}: missing `{expected_fragment}` in: {text}"
+    );
+}
+
+#[test]
+fn project_rows_1_through_15_refuse_per_row_with_contract_details() {
+    // Rows 1, 4, 6, 10, 11, 12, 13, 14 (unknown skill & promptless prompt), 15, plus per-row
+    // checks.
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let mut deep = String::new();
+    deep.push_str("[profiles.d0]\ndescription = 'd0'\nagent = 'claude'\n");
+    for i in 1..=16 {
+        deep.push_str(&format!(
+            "[profiles.d{i}]\ndescription = 'd{i}'\nagent = 'd{}'\n",
+            i - 1
+        ));
+    }
+    let config = format!(
+        r#"
+[profiles.ok]
+description = "Passing sibling."
+agent = "claude"
+
+[profiles.r1_missing]
+agent = "claude"
+
+[profiles.r1_multiline]
+description = "line one\nline two"
+agent = "claude"
+
+[profiles.r4_foreign]
+description = "Foreign model."
+agent = "claude"
+model = "sol"
+
+[profiles.r6_rel]
+description = "Relative effort."
+agent = "claude"
+effort = "+1"
+
+[profiles.r10_manual]
+description = "User-only skill."
+agent = "claude"
+skills = ["manual-only"]
+
+[subagents.profiles.r11_idle]
+description = "Idle compact on subagent."
+agent = "claude"
+idle-compact = "100k"
+
+[profiles.r12_yolo]
+description = "Cell word yolo."
+agent = "claude"
+subagents = ["codex-yolo"]
+
+[profiles.r12_fast]
+description = "Cell word fast."
+agent = "claude"
+subagents = ["codex-fast"]
+
+[profiles.r12_general]
+description = "Row 12 undefined general"
+agent = "claude"
+subagents = ["general"]
+
+[profiles.r12_mini]
+description = "Cell word mini."
+agent = "claude"
+subagents = ["opencode-mini"]
+
+[profiles.r12_term]
+description = "Cell word term."
+agent = "claude"
+subagents = ["term"]
+
+[profiles.r13_unknown]
+description = "Unknown tools key."
+agent = "claude"
+tools = ["Read"]
+
+[profiles.r14_skill]
+description = "Unknown skill."
+agent = "claude"
+skills = ["not-installed"]
+
+[profiles.r14_promptless]
+description = "Prompt file on cursor."
+agent = "cursor"
+system-prompt-file = "prompt.md"
+
+[profiles."r15.dot"]
+description = "Dotted name."
+agent = "claude"
+
+[profiles.claude]
+description = "Provider kind name."
+agent = "claude"
+
+[profiles.agy]
+description = "Provider alias name."
+agent = "claude"
+
+[profiles.opencode-mini]
+description = "Provider variant name."
+agent = "claude"
+
+[profiles.r15_both]
+description = "In both tables."
+agent = "claude"
+
+[subagents.profiles.r15_both]
+description = "In both tables."
+agent = "claude"
+
+[profiles.cyc_a]
+description = "Cycle A."
+agent = "cyc_b"
+
+[profiles.cyc_b]
+description = "Cycle B."
+agent = "cyc_a"
+
+[profiles.unk_base]
+description = "Unknown base."
+agent = "no-such-parent"
+
+[profiles.droid_model]
+description = "Droid model."
+agent = "droid"
+model = "custom-model"
+
+[profiles.bad_budget]
+description = "Bad budget."
+agent = "claude"
+budget = "not-a-budget"
+
+[profiles.bad_compact]
+description = "Bad compact."
+agent = "claude"
+auto-compact = "10k"
+
+[profiles.bad_args]
+description = "Bad args."
+agent = "claude"
+args = "--flag 'unclosed"
+
+[profiles.bad_warm]
+description = "Keep warm while."
+agent = "claude"
+keep-warm = {{ max = "1h", while = "team.stage!=Done" }}
+
+[profiles.plus_sub]
+description = "Plus subagent."
+agent = "claude"
+subagents = ["+codex"]
+
+{deep}
+"#
+    );
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", &config);
+    // Passing sibling still launches!
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("ok"),
+        None,
+    )
+    .expect("passing sibling launches");
+
+    for (scope, table, name, fragment) in [
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r1_missing",
+            "description",
+        ),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r1_multiline",
+            "multi-line",
+        ),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r4_foreign",
+            "runs on 'codex'",
+        ),
+        (ProfileScope::Agents, "profiles", "r6_rel", "relative"),
+        (ProfileScope::Agents, "profiles", "r10_manual", "user-only"),
+        (
+            ProfileScope::Subagents,
+            "subagents.profiles",
+            "r11_idle",
+            "idle-compact",
+        ),
+        (ProfileScope::Agents, "profiles", "r12_yolo", "codex-yolo"),
+        (ProfileScope::Agents, "profiles", "r12_fast", "codex-fast"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r12_general",
+            "allows unknown subagent profile(s) [\"general\"]",
+        ),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r12_mini",
+            "opencode-mini",
+        ),
+        (ProfileScope::Agents, "profiles", "r12_term", "term"),
+        (ProfileScope::Agents, "profiles", "r13_unknown", "tools"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r14_skill",
+            "not-installed",
+        ),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "r14_promptless",
+            "takes no system prompt",
+        ),
+        (ProfileScope::Agents, "profiles", "r15.dot", "unsafe"),
+        (ProfileScope::Agents, "profiles", "claude", "agent runtime"),
+        (ProfileScope::Agents, "profiles", "agy", "agent runtime"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "opencode-mini",
+            "agent runtime",
+        ),
+        (ProfileScope::Agents, "profiles", "r15_both", "both"),
+        (
+            ProfileScope::Subagents,
+            "subagents.profiles",
+            "r15_both",
+            "both",
+        ),
+        (ProfileScope::Agents, "profiles", "cyc_a", "follows itself"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "unk_base",
+            "unknown profile",
+        ),
+        (ProfileScope::Agents, "profiles", "d16", "16"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "droid_model",
+            "does not support profile field `model`",
+        ),
+        (ProfileScope::Agents, "profiles", "bad_budget", "budget"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "bad_compact",
+            "auto-compact",
+        ),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "bad_args",
+            "shell quoting",
+        ),
+        (ProfileScope::Agents, "profiles", "bad_warm", "keep-warm"),
+        (
+            ProfileScope::Agents,
+            "profiles",
+            "plus_sub",
+            "Markdown definitions only",
+        ),
+    ] {
+        assert_row_refused(
+            &machine,
+            &launch,
+            scope,
+            project.path(),
+            table,
+            name,
+            fragment,
+        );
+    }
+    // Depth 16 itself (`d15`, chain length 16) loads.
+    assert!(launch.profiles.0.contains_key("d15"));
+
+    // Row 2: machine kind base exists without tools/capabilities (claude, codex, antigravity).
+    let home2 = tempdir().unwrap();
+    let project2 = tempdir().unwrap();
+    std::fs::create_dir_all(home2.path().join("agents")).unwrap();
+    for kind in ["claude", "codex", "antigravity"] {
+        std::fs::write(
+            home2.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\n---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    let (m2, l2) = load_trusted_project(
+        home2.path(),
+        project2.path(),
+        "",
+        "[profiles.c]\ndescription = 'c'\nagent = 'claude'\n\
+         [profiles.x]\ndescription = 'x'\nagent = 'codex'\n\
+         [profiles.a]\ndescription = 'a'\nagent = 'antigravity'\n",
+    );
+    for (name, kind) in [("c", "claude"), ("x", "codex"), ("a", "antigravity")] {
+        let base_path = home2.path().join(format!("agents/{kind}.md"));
+        assert_row_refused(
+            &m2,
+            &l2,
+            ProfileScope::Agents,
+            project2.path(),
+            "profiles",
+            name,
+            &format!("machine kind base {}", base_path.display()),
+        );
+    }
+
+    // Row 3: missing machine kind base gives missing_kind_base text (before tools check).
+    let home3 = tempdir().unwrap();
+    let project3 = tempdir().unwrap();
+    let (m3, l3) = load_trusted_project(
+        home3.path(),
+        project3.path(),
+        "",
+        "[profiles.a]\ndescription = 'a'\nagent = 'claude'\n",
+    );
+    assert_row_refused(
+        &m3,
+        &l3,
+        ProfileScope::Agents,
+        project3.path(),
+        "profiles",
+        "a",
+        "whose kind base is missing",
+    );
+
+    // Rows 8, 9, and 14 (RimZ capability in skills beside capabilities base).
+    let home4 = tempdir().unwrap();
+    let project4 = tempdir().unwrap();
+    std::fs::create_dir_all(home4.path().join("agents")).unwrap();
+    std::fs::create_dir_all(home4.path().join("skills/review")).unwrap();
+    std::fs::write(
+        home4.path().join("skills/review/SKILL.md"),
+        "---\nname: review\ndescription: Review\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home4.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read, Agent]\n---\nHouse.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home4.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\ncapabilities: [read, write, bash]\n---\nHouse.\n",
+    )
+    .unwrap();
+    let (m4, l4) = load_trusted_project(
+        home4.path(),
+        project4.path(),
+        "",
+        "[profiles.r8]\ndescription = 'No Skill tool'\nagent = 'claude'\nskills = ['review']\n\
+         [profiles.r9]\ndescription = 'Agent tool + subagents'\nagent = 'claude'\nsubagents = ['codex']\n\
+         [profiles.r14_cap]\ndescription = 'Cap in skills'\nagent = 'codex'\nskills = ['rimz-wait']\n",
+    );
+    assert_row_refused(
+        &m4,
+        &l4,
+        ProfileScope::Agents,
+        project4.path(),
+        "profiles",
+        "r8",
+        "no Skill tool",
+    );
+    assert_row_refused(
+        &m4,
+        &l4,
+        ProfileScope::Agents,
+        project4.path(),
+        "profiles",
+        "r9",
+        "Agent tool",
+    );
+    assert_row_refused(
+        &m4,
+        &l4,
+        ProfileScope::Agents,
+        project4.path(),
+        "profiles",
+        "r14_cap",
+        "capabilities",
+    );
+}
+
+#[test]
+fn project_rows_5_7_16_17_18_and_tier_resolve_as_definitions() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read, Skill]\nmode: plan\nskills: [review]\n\
+         mcps: [rimz-lsp]\nbudget: 12\nidle-compact: 150k\nsmart-compact: 200k\n---\nClaude house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/md_l.md"),
+        "---\ndescription: Markdown L\nagent: claude\n---\nMD L craft.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.path().join("skills/other")).unwrap();
+    std::fs::write(
+        home.path().join("skills/other/SKILL.md"),
+        "---\nname: other\ndescription: Other\n---\nOther.\n",
+    )
+    .unwrap();
+    let (machine, mut launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "[tiers]\nsenior = ['opus', 'astra']\n",
+        r#"
+[profiles.parent]
+description = "Claude parent."
+agent = "claude"
+subagents = ["codex"]
+idle-compact = "120k"
+keep-warm = "1h"
+
+[profiles.r5_child]
+description = "Follows codex model."
+agent = "parent"
+model = "sol"
+
+[profiles.r7_effort]
+description = "Default effort."
+agent = "claude"
+
+[profiles.r16_x]
+description = "Project X."
+agent = "claude"
+mode = "ask"
+skills = ["other"]
+mcps = ["rimz-wait"]
+subagents = []
+budget = "5"
+idle-compact = "180k"
+smart-compact = "150k"
+
+[profiles.r18_chain]
+description = "Chained auto-compact default."
+agent = "parent"
+
+[subagents.profiles.r17_sub]
+description = "Subagent inheriting direct row."
+agent = "parent"
+
+[agents.teams.proj_team]
+roles = [{ role = "lead", profile = "r7_effort", model = "sonnet" }]
+"#,
+    );
+
+    // Row 5: child on claude parent with codex model runs on codex.
+    let r5 = agents_spec::resolve_profile("r5_child", &launch.profiles).unwrap();
+    assert_eq!(r5.kind.as_str(), "codex");
+    assert_eq!(r5.launch.model.as_deref(), Some("sol"));
+
+    // Row 7: unset effort gets built-in default (`xhigh`).
+    let r7 = agents_spec::resolve_profile("r7_effort", &launch.profiles).unwrap();
+    assert_eq!(r7.launch.effort.as_deref(), Some("xhigh"));
+
+    // Row 16: project X over Markdown L beats provider base on mode, skills, mcps, subagents,
+    // budget, and compaction settings.
+    let r16 =
+        agents_spec::resolve_profile_under("md_l", Some("r16_x"), &launch.profiles, None).unwrap();
+    assert_eq!(r16.launch.mode, Some(PermissionMode::Ask));
+    assert_eq!(
+        r16.skills
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["other"]
+    );
+    assert_eq!(
+        r16.mcps
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["rimz-wait"]
+    );
+    assert_eq!(r16.launch.budget.as_deref(), Some("$5.00"));
+    assert_eq!(
+        SmartCompactSeat {
+            team: None,
+            role: None,
+            profile: Some("md_l"),
+            agent: Some("r16_x"),
+            kind: Some("claude"),
+            scope: ProfileScope::Agents,
+        }
+        .explicit(&launch.teams, &launch.profiles, &launch.subagent_profiles),
+        Some(crate::config::FlipCompact::Threshold(
+            crate::store::message::AutoCompact::Tokens(150_000)
+        ))
+    );
+    assert_eq!(
+        IdleCompactSeat {
+            team: None,
+            role: None,
+            profile: Some("md_l"),
+            agent: Some("r16_x"),
+            kind: Some("claude"),
+            scope: ProfileScope::Agents,
+            launched_child: false,
+        }
+        .resolve(
+            &launch.teams,
+            &launch.profiles,
+            &launch.subagent_profiles,
+            &machine.harness
+        ),
+        Some(180_000)
+    );
+    assert_eq!(
+        crate::harness::subagent_policy::catalog(
+            Some("md_l"),
+            Some("r16_x"),
+            Some("claude"),
+            ProfileScope::Agents,
+            &launch.profiles,
+            &launch.subagent_profiles,
+            &machine.agents.commands,
+        ),
+        crate::harness::subagent_policy::SubagentCatalog::NoneAllowed
+    );
+
+    // Row 17: subagent inherits project [profiles] row, dropping direct-only fields.
+    let r17_row = &launch.subagent_profiles.0["r17_sub"];
+    assert_eq!(r17_row.agent, "claude");
+    assert_eq!(r17_row.subagents, None);
+    assert_eq!(r17_row.idle_compact, None);
+    assert_eq!(r17_row.keep_warm, None);
+
+    // Row 18: auto-compact default applied on chained row.
+    let r18 = agents_spec::resolve_profile("r18_chain", &launch.profiles).unwrap();
+    assert_eq!(
+        r18.auto_compact_default,
+        Some(crate::config::AutoCompactDefault::BuiltIn)
+    );
+    assert_eq!(
+        r18.auto_compact_default
+            .and_then(|d| d.resolve_for_kind(&r18.kind)),
+        Some(272_000)
+    );
+
+    // `--tier` on project profile AND on project team with TOML role `model`.
+    let mut tier_solo = launch.clone();
+    tier_solo
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("r7_effort"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            Some("codex"),
+            |_, _| None,
+        )
+        .expect("--tier on project profile succeeds");
+    let solo_resolved =
+        agents_spec::resolve_profile_under("r7_effort", Some("codex"), &tier_solo.profiles, None)
+            .unwrap();
+    assert_eq!(solo_resolved.kind.as_str(), "codex");
+    assert_eq!(solo_resolved.launch.model.as_deref(), Some("astra"));
+    assert_eq!(
+        solo_resolved.launch.tier.as_ref().map(|t| t.tier),
+        Some(super::super::tiers::ModelTier::Senior)
+    );
+
+    launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("proj_team"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            Some("codex"),
+            |_, _| None,
+        )
+        .expect("--tier on project team succeeds");
+    let team_resolved = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("proj_team"),
+        Some("codex"),
+    )
+    .unwrap();
+    let seat = team_resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(seat.kind.as_str(), "codex");
+    assert_eq!(seat.launch.model.as_deref(), Some("astra"));
+    assert_eq!(
+        seat.launch.tier.as_ref().map(|t| t.tier),
+        Some(super::super::tiers::ModelTier::Senior)
+    );
+}
+
+#[test]
+fn project_row_and_markdown_with_same_lines_produce_identical_launch() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/md_same.md"),
+        "---\ndescription: Same lines.\nagent: claude\nmodel: opus\neffort: high\nmode: ask\n\
+         budget: 9\nfast: on\nskills: [review]\nmcps: [rimz-lsp]\n---\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/md_other.md"),
+        "---\ndescription: Other.\nagent: codex\nmodel: sol\neffort: low\nmode: plan\n---\n",
+    )
+    .unwrap();
+    let (machine, launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        r#"
+[profiles.toml_same]
+description = "Same lines."
+agent = "claude"
+model = "opus"
+effort = "high"
+mode = "ask"
+budget = "9"
+fast = "on"
+skills = ["review"]
+mcps = ["rimz-lsp"]
+
+[agents.teams.t_toml]
+roles = [{ role = "lead", profile = "toml_same" }]
+"#,
+    );
+    let mut teams = launch.teams.clone();
+    let mut md_team = teams.0["t_toml"].clone();
+    md_team.roles[0].profile = "md_same".to_owned();
+    teams.0.insert("t_md".to_owned(), md_team);
+
+    let compare = |spec_a: &str, ov_a: Option<&str>, spec_b: &str, ov_b: Option<&str>| {
+        let mut launch_cmp = launch.clone();
+        launch_cmp.teams = teams.clone();
+        let a = crate::harness::plan::resolve_launch(
+            &launch_cmp,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec_a),
+            ov_a,
+        )
+        .unwrap();
+        let b = crate::harness::plan::resolve_launch(
+            &launch_cmp,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec_b),
+            ov_b,
+        )
+        .unwrap();
+        let ca = a.layout.agent_cells().next().unwrap();
+        let cb = b.layout.agent_cells().next().unwrap();
+        assert_eq!(ca.kind, cb.kind);
+        assert_eq!(ca.args, cb.args);
+        assert_eq!(ca.system_prompt_file, cb.system_prompt_file);
+        assert_eq!(ca.append_system_prompt_files, cb.append_system_prompt_files);
+        assert_eq!(ca.launch.model, cb.launch.model);
+        assert_eq!(ca.launch.effort, cb.launch.effort);
+        assert_eq!(ca.launch.mode, cb.launch.mode);
+        assert_eq!(ca.launch.budget, cb.launch.budget);
+        assert_eq!(ca.skills, cb.skills);
+        assert_eq!(ca.mcps, cb.mcps);
+        assert_eq!(ca.tools, cb.tools);
+    };
+
+    // As L, as X over MD L, under MD X, and as a team seat.
+    compare("toml_same", None, "md_same", None);
+    compare("md_other", Some("toml_same"), "md_other", Some("md_same"));
+    compare("toml_same", Some("md_other"), "md_same", Some("md_other"));
+    compare("t_toml", None, "t_md", None);
+}
+
+#[test]
+fn project_row_failure_is_isolated_from_passing_rows_and_unrelated_teams() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let (machine, launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        r#"
+[profiles.good]
+description = "Good profile."
+agent = "claude"
+
+[profiles.bad]
+agent = "claude"
+
+[agents.teams.good_team]
+roles = [{ role = "lead", profile = "good" }]
+
+[agents.teams.bad_team]
+roles = [{ role = "lead", profile = "bad" }]
+"#,
+    );
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("good"),
+        None,
+    )
+    .expect("good profile launches");
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("good_team"),
+        None,
+    )
+    .expect("unrelated team launches");
+
+    for (spec, agent_ov) in [
+        (Some("bad"), None),
+        (Some("good"), Some("bad")),
+        (Some("bad_team"), None),
+        (Some("bad_team.lead"), None),
+    ] {
+        let err = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            spec,
+            agent_ov,
+        )
+        .expect_err(&format!("spec={spec:?} ov={agent_ov:?} must refuse"));
+        let text = err.to_string();
+        assert!(text.contains("[profiles.bad]"), "{text}");
+        assert!(text.contains("description"), "{text}");
+    }
+}
+
+#[test]
+fn failed_project_row_shadows_machine_namesake_and_kind_row_keeps_machine_defs_working() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/shared.md"),
+        "---\ndescription: Machine shared\nagent: claude\n---\nShared craft.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/md_child.md"),
+        "---\ndescription: Machine child\nagent: claude\n---\nChild craft.\n",
+    )
+    .unwrap();
+    let (machine, launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        "[profiles.shared]\nagent = 'claude'\n\
+         [profiles.claude]\ndescription = 'Shadow kind'\nagent = 'claude'\n",
+    );
+    assert_row_refused(
+        &machine,
+        &launch,
+        ProfileScope::Agents,
+        project.path(),
+        "profiles",
+        "shared",
+        "description",
+    );
+    for (spec, ov) in [
+        (Some("claude"), None),
+        (Some("claude-yolo"), None),
+        (Some("md_child"), Some("claude")),
+    ] {
+        let err = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            spec,
+            ov,
+        )
+        .expect_err(&format!("spec={spec:?} ov={ov:?} must refuse"));
+        assert!(err.to_string().contains("[profiles.claude]"), "{err}");
+    }
+    // Machine Markdown definitions on `claude` still work!
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("md_child"),
+        None,
+    )
+    .expect("machine definition on claude stays unaffected");
+}
+
+#[test]
+fn project_toml_only_keys_preserve_prompt_order_and_drop_args_on_kind_switch() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let (machine, launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        r#"
+[profiles.parent]
+description = "Parent."
+agent = "claude"
+system-prompt-file = "p-base.md"
+append-system-prompt-files = ["p-app.md"]
+args = "--parent-claude"
+
+[profiles.child]
+description = "Child."
+agent = "parent"
+append-system-prompt-files = ["c-app.md"]
+"#,
+    );
+    let same = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("child"),
+        None,
+    )
+    .unwrap();
+    let cell = same.layout.agent_cells().next().unwrap();
+    assert_eq!(
+        cell.system_prompt_file,
+        Some(crate::config::PromptSource::File(
+            project.path().join(".rimz/p-base.md")
+        ))
+    );
+    assert_eq!(
+        cell.append_system_prompt_files,
+        vec![
+            crate::config::PromptSource::File(project.path().join(".rimz/p-app.md")),
+            crate::config::PromptSource::File(project.path().join(".rimz/c-app.md")),
+        ]
+    );
+    assert!(
+        cell.args.iter().any(|a| a == "--parent-claude"),
+        "{:?}",
+        cell.args
+    );
+
+    let switched = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("child"),
+        Some("codex"),
+    )
+    .unwrap();
+    let switched_cell = switched.layout.agent_cells().next().unwrap();
+    assert_eq!(switched_cell.kind.as_str(), "codex");
+    assert!(
+        !switched_cell.args.iter().any(|a| a == "--parent-claude"),
+        "{:?}",
+        switched_cell.args
+    );
+}
+
+#[test]
+fn project_config_loads_without_machine_load_contexts() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(
+        &project,
+        "[profiles.promptless]\ndescription = 'Amp row.'\nagent = 'amp'\n\
+         [profiles.needs_base]\ndescription = 'Claude row.'\nagent = 'claude'\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    let machine = MachineConfig::default();
+    assert!(machine.definition_contexts.is_none());
+    let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
+    assert!(launch.profiles.0.contains_key("promptless"));
+    assert_row_refused(
+        &machine,
+        &launch,
+        ProfileScope::Agents,
+        project.path(),
+        "profiles",
+        "needs_base",
+        "whose kind base is missing",
+    );
+}
+
+#[test]
+fn machine_definition_under_edited_project_override_never_serves_stale_memo() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/md_l.md"),
+        "---\ndescription: MD L\nagent: claude\n---\nMD L craft.\n",
+    )
+    .unwrap();
+    let cfg_path = home.path().join("config.toml");
+    let machine = MachineConfig::parse_text(&cfg_path, "", home.path()).unwrap();
+
+    // First project config: X sets effort = low.
+    write_project_config(
+        &project,
+        "[profiles.px]\ndescription = 'X v1'\nagent = 'claude'\neffort = 'low'\n",
+    );
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let launch1 = load_with_roots(&machine, project.path(), home.path()).unwrap();
+    let r1 =
+        agents_spec::resolve_profile_under("md_l", Some("px"), &launch1.profiles, None).unwrap();
+    assert_eq!(r1.launch.effort.as_deref(), Some("low"));
+
+    // Second project config in the same process sharing `machine`: X sets effort = high.
+    write_project_config(
+        &project,
+        "[profiles.px]\ndescription = 'X v2'\nagent = 'claude'\neffort = 'high'\n",
+    );
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let launch2 = load_with_roots(&machine, project.path(), home.path()).unwrap();
+    let r2 =
+        agents_spec::resolve_profile_under("md_l", Some("px"), &launch2.profiles, None).unwrap();
+    assert_eq!(r2.launch.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn team_role_args_drop_on_provider_switch_for_model_and_tier_on_fresh_and_replay() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base.\ntools: [Read]\n---\nAntigravity house.\n",
+    )
+    .unwrap();
+    let machine_toml = "\
+        [tiers]\n\
+        senior = [\"gpt-5.5\"]\n\
+        junior = [\"sonnet\"]\n";
+    let project_toml = "\
+        [profiles.ok]\n\
+        description = \"Project Claude row.\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [agents.teams.crew]\n\
+        roles = [{ role = \"lead\", profile = \"ok\", args = \"--role-claude-flag\" }]\n";
+    let (machine, base_launch) =
+        load_trusted_project(home.path(), project.path(), machine_toml, project_toml);
+    let cases = [
+        // A provider switch drops role args.
+        (None, Some("gpt-5.5"), "codex", false),
+        (
+            Some(crate::config::tiers::ModelTier::Senior),
+            None,
+            "codex",
+            false,
+        ),
+        // Non-tier provider switch exercises build_under on replay as well.
+        (None, Some("neon"), "antigravity", false),
+        // The same provider keeps role args.
+        (None, Some("opus"), "claude", true),
+        (
+            Some(crate::config::tiers::ModelTier::Junior),
+            None,
+            "claude",
+            true,
+        ),
+    ];
+
+    for (tier, model, expected_kind, expect_role_arg) in cases {
+        let spec = "crew.lead";
+        let mut routed = base_launch.clone();
+        routed
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(spec),
+                tier,
+                model,
+                None,
+                |_, _| None,
+            )
+            .unwrap_or_else(|err| panic!("{spec} tier={tier:?} model={model:?}: {err}"));
+        let mut resolved = crate::harness::plan::resolve_launch(
+            &routed,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .unwrap_or_else(|err| panic!("resolve {spec} tier={tier:?} model={model:?}: {err}"));
+        let preset = crate::agents::LaunchPreset {
+            model: model.map(str::to_owned),
+            ..Default::default()
+        };
+        crate::harness::plan::finalize_launch_layout(
+            &mut resolved.layout,
+            crate::harness::plan::LaunchFinalizeOptions {
+                smart_compact: None,
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config: None,
+            },
+        )
+        .unwrap_or_else(|err| panic!("finalize {spec} tier={tier:?} model={model:?}: {err}"));
+        let fresh = resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(
+            fresh.kind.as_str(),
+            expected_kind,
+            "fresh kind for {spec} tier={tier:?} model={model:?}"
+        );
+        assert_eq!(
+            fresh.args.iter().any(|arg| arg == "--role-claude-flag"),
+            expect_role_arg,
+            "fresh args for {spec} tier={tier:?} model={model:?}: {:?}",
+            fresh.args
+        );
+
+        let record = crate::agents::LaunchRecord {
+            model: fresh.launch.model.clone(),
+            effort: fresh.launch.effort.clone(),
+            fast: fresh.launch.fast,
+            ..Default::default()
+        };
+        let replay = crate::harness::resume::resolve_member_posture(
+            crate::harness::resume::PostureRequest {
+                record: Some(&record),
+                profile: Some("ok"),
+                kind: &fresh.kind,
+                stamped_mode: fresh.launch.mode,
+                stamped_tier: fresh.launch.tier.as_deref(),
+            },
+            &base_launch.profiles,
+            None,
+            &base_launch.teams,
+            Some("crew"),
+            Some("lead"),
+        );
+        assert!(
+            replay.degraded.is_none(),
+            "replay degraded for {spec} tier={tier:?} model={model:?}: {:?}",
+            replay.degraded
+        );
+        assert_eq!(
+            replay
+                .launch
+                .args
+                .iter()
+                .any(|arg| arg == "--role-claude-flag"),
+            expect_role_arg,
+            "replay args for {spec} tier={tier:?} model={model:?}: {:?}",
+            replay.launch.args
+        );
+        let mut fresh_sorted = fresh.args.clone();
+        fresh_sorted.sort();
+        let mut replay_sorted = replay.launch.args.clone();
+        replay_sorted.sort();
+        assert_eq!(
+            replay_sorted, fresh_sorted,
+            "replay argv must match fresh argv for {spec} tier={tier:?} model={model:?}"
+        );
+        assert_eq!(replay.launch.model, fresh.launch.model);
+        assert_eq!(replay.launch.effort, fresh.launch.effort);
+        assert_eq!(replay.launch.tier, fresh.launch.tier);
+    }
+}
+
+#[test]
+fn mutual_agent_and_subagent_failure_reports_root_cause_for_both() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let project_toml = "\
+        [profiles.a]\n\
+        description = \"Broken agent\"\n\
+        agent = \"claude\"\n\
+        budget = \"garbage\"\n\
+        subagents = [\"s\"]\n\
+        \n\
+        [subagents.profiles.s]\n\
+        description = \"Child following a\"\n\
+        agent = \"a\"\n\
+        \n\
+        [profiles.chain_base]\n\
+        description = \"Broken chain root\"\n\
+        agent = \"claude\"\n\
+        budget = \"garbage\"\n\
+        \n\
+        [profiles.chain_mid]\n\
+        description = \"Mid depending on broken root\"\n\
+        agent = \"chain_base\"\n\
+        subagents = [\"chain_sub\"]\n\
+        \n\
+        [subagents.profiles.chain_sub]\n\
+        description = \"Sub following mid\"\n\
+        agent = \"chain_mid\"\n\
+        \n\
+        [profiles.good_parent]\n\
+        description = \"Healthy parent\"\n\
+        agent = \"claude\"\n\
+        subagents = [\"bad_child\"]\n\
+        \n\
+        [subagents.profiles.bad_child]\n\
+        description = \"Broken child\"\n\
+        agent = \"good_parent\"\n\
+        budget = \"garbage\"\n";
+    let (_machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    let detail_a = launch.definition_failure_for("a").expect("a must fail");
+    assert!(
+        detail_a.contains("garbage"),
+        "a must name its own budget error, got: {detail_a}"
+    );
+    assert!(
+        !detail_a.contains("allows subagent"),
+        "a must report its own budget error rather than cycling through s, got: {detail_a}"
+    );
+    let detail_s = launch.definition_failure_for("s").expect("s must fail");
+    assert!(
+        detail_s.contains("follows `a`")
+            && detail_s.contains("caused by:")
+            && detail_s.contains("garbage"),
+        "s must trace back to a's budget error, got: {detail_s}"
+    );
+
+    let detail_mid = launch
+        .definition_failure_for("chain_mid")
+        .expect("chain_mid must fail");
+    assert!(
+        detail_mid.contains("garbage"),
+        "chain_mid must end at chain_base's budget error, got: {detail_mid}"
+    );
+    let detail_sub = launch
+        .definition_failure_for("chain_sub")
+        .expect("chain_sub must fail");
+    assert!(
+        detail_sub.contains("garbage"),
+        "chain_sub must end at chain_base's budget error, got: {detail_sub}"
+    );
+
+    let detail_bad_child = launch
+        .definition_failure_for("bad_child")
+        .expect("bad_child must fail");
+    assert!(
+        detail_bad_child.contains("garbage"),
+        "bad_child must name its budget error, got: {detail_bad_child}"
+    );
+    let detail_good_parent = launch
+        .definition_failure_for("good_parent")
+        .expect("good_parent must fail");
+    assert!(
+        detail_good_parent.contains("allows subagent 'bad_child'")
+            && detail_good_parent.contains("caused by:")
+            && detail_good_parent.contains("garbage"),
+        "good_parent must trace to bad_child's budget error, got: {detail_good_parent}"
+    );
+}
+
+#[test]
+fn failed_project_row_and_team_never_fall_through_to_other_readings() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/antigravity.md"),
+        "---\ndescription: Antigravity base.\n---\nAntigravity house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/foo.md"),
+        "---\ndescription: Machine foo.\nagent: claude\n---\nMachine foo.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/shared.md"),
+        "---\ndescription: Machine shared.\nagent: claude\n---\nMachine shared.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.path().join("teams")).unwrap();
+    std::fs::write(
+        home.path().join("teams/mteam.md"),
+        "---\nleader: lead\nstages: [Build]\nlayout: \"lead,shared\"\nroles:\n  - role: lead\n    agent: foo\n    owns: [Build]\n---\nBuild.\n",
+    )
+    .unwrap();
+
+    let project_toml = "\
+        [profiles.ok]\n\
+        description = \"Healthy\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.claude-yolo]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.claude-fast]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.git]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.peer]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.agy]\n\
+        agent = \"antigravity\"\n\
+        \n\
+        [profiles.work]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.shared]\n\
+        agent = \"claude\"\n\
+        \n\
+        [agents.teams.foo]\n\
+        layout = \"lead\"\n\
+        [[agents.teams.foo.roles]]\n\
+        role = \"lead\"\n\
+        profile = \"work\"\n";
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    for (spec, expected) in [
+        ("claude-yolo", "description"),
+        ("claude-fast", "description"),
+        ("git", "description"),
+        ("git,ok", "description"),
+        ("git:lead", "description"),
+        ("peer", "description"),
+        ("agy", "takes the name of an agent runtime"),
+        ("agy-fast", "takes the name of an agent runtime"),
+        ("agy-yolo", "takes the name of an agent runtime"),
+        ("foo", "description"),
+        ("foo.lead", "description"),
+        ("mteam", "description"),
+    ] {
+        let err = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .expect_err(&format!("{spec} must refuse instead of falling through"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains(expected),
+            "{spec} must report `{expected}`, got: {msg}"
+        );
+    }
+
+    // An `[agents.commands]` entry keeps winning over a same-named failed project row.
+    let mut commands = machine.agents.commands.clone();
+    commands.0.insert("git".to_owned(), "git status".to_owned());
+    let resolved = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &commands,
+        Some("git"),
+        None,
+    )
+    .expect("[agents.commands] git must still win over failed project [profiles.git]");
+    assert!(
+        resolved.layout.agent_cells().next().is_none(),
+        "git command cell should not resolve as an agent"
+    );
+}
+
+#[test]
+fn failed_project_row_in_team_layout_variant_fails_only_that_team() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    let project_toml = "\
+        [profiles.ok]\n\
+        description = \"Healthy\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.work]\n\
+        agent = \"claude\"\n\
+        \n\
+        [agents.teams.tc]\n\
+        layout = \"lead,work-fast\"\n\
+        [[agents.teams.tc.roles]]\n\
+        role = \"lead\"\n\
+        profile = \"ok\"\n";
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    // Healthy rows still launch.
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("ok"),
+        None,
+    )
+    .expect("healthy row ok must still launch");
+
+    // Only the team citing the failed row fails.
+    for spec in ["tc", "tc.lead"] {
+        let err = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .expect_err(&format!("{spec} must fail with work's detail"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("description"),
+            "{spec} must surface work's failure detail, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn tier_refuses_failed_project_row_team_and_markdown_ahead_of_eligibility() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/bad_md.md"),
+        "---\nagent: claude\n---\nMissing description.\n",
+    )
+    .unwrap();
+    let project_toml = "\
+        [profiles.ok]\n\
+        description = \"Healthy\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.bad]\n\
+        agent = \"claude\"\n\
+        \n\
+        [agents.teams.broken_team]\n\
+        layout = \"lead\"\n\
+        [[agents.teams.broken_team.roles]]\n\
+        role = \"lead\"\n\
+        profile = \"bad\"\n";
+    let (machine, base_launch) =
+        load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    for target in [
+        "bad",
+        "bad-fast",
+        "broken_team",
+        "broken_team.lead",
+        "bad_md",
+    ] {
+        let mut launch = base_launch.clone();
+        let err = launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(target),
+                Some(super::super::tiers::ModelTier::Senior),
+                None,
+                None,
+                |_, _| None,
+            )
+            .expect_err(&format!("--tier on {target} must refuse"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("description") && !msg.contains("Markdown definitions"),
+            "--tier on {target} must report failure detail ahead of eligibility, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn failed_subagent_kind_named_and_override_never_bypass_guard_on_replay_or_seat_settings() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/worker.md"),
+        "---\ndescription: Machine worker.\nagent: claude\nkeep-warm: 1h\n---\nMachine worker.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/ov.md"),
+        "---\ndescription: Machine override.\nagent: claude\nkeep-warm: 2h\n---\nMachine ov.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.path().join("subagents")).unwrap();
+    std::fs::write(
+        home.path().join("subagents/ok_sub.md"),
+        "---\ndescription: Healthy subagent.\nagent: claude\n---\nOk sub.\n",
+    )
+    .unwrap();
+
+    let project_toml = "\
+        [profiles.codex]\n\
+        description = \"Illegal kind-named agent\"\n\
+        agent = \"codex\"\n\
+        \n\
+        [subagents.profiles.worker]\n\
+        agent = \"claude\"\n\
+        \n\
+        [subagents.profiles.claude]\n\
+        description = \"Illegal kind-named subagent\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [subagents.profiles.ov]\n\
+        agent = \"claude\"\n";
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    // 1. Failing [subagents.profiles.worker] with machine agents/worker.md must NOT resolve to
+    //    machine worker on replay or seat settings.
+    let mut sub_worker =
+        crate::testkit::agent_state("claude", "sub-worker", jiff::Timestamp::UNIX_EPOCH);
+    sub_worker.profile = Some("worker".into());
+    sub_worker.profile_scope = Some(ProfileScope::Subagents);
+    sub_worker.worktree_path = Some(project.path().display().to_string());
+    sub_worker.record = Some(Box::default());
+
+    let mut kind_named =
+        crate::testkit::agent_state("codex", "kind-named", jiff::Timestamp::UNIX_EPOCH);
+    kind_named.profile = Some("codex".into());
+    kind_named.worktree_path = Some(project.path().display().to_string());
+    kind_named.record = Some(Box::default());
+
+    let mut failed_ov =
+        crate::testkit::agent_state("claude", "failed-ov", jiff::Timestamp::UNIX_EPOCH);
+    failed_ov.profile = Some("ok_sub".into());
+    failed_ov.profile_scope = Some(ProfileScope::Subagents);
+    failed_ov.worktree_path = Some(project.path().display().to_string());
+    failed_ov.record = Some(Box::new(crate::agents::LaunchRecord {
+        agent: Some("ov".into()),
+        ..Default::default()
+    }));
+
+    let workspace = crate::WorkspaceResolver::resolve_under(
+        project.path(),
+        None,
+        &home.path().join("rimz-state"),
+    )
+    .unwrap();
+    let state = crate::StatePaths::for_project_root(&workspace.project_root).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let logins = crate::agents::room_accounts(&state.workspace_record, None, &machine).unwrap();
+    let catalog = crate::agents::LoginCatalog::default();
+    let options = crate::harness::resume::SingleResumeOptions::default();
+    for (label, agent) in [
+        ("sub_worker", &sub_worker),
+        ("kind_named", &kind_named),
+        ("failed_ov", &failed_ov),
+    ] {
+        let (plan, _) = crate::harness::resume::plan_recorded_resume(
+            agent,
+            crate::harness::resume::ResumeContext {
+                in_place: false,
+                project_root: Some(project.path()),
+                workspace_id: &state.workspace_id,
+                rimz_bin: std::path::Path::new("rimz"),
+                runtime: &runtime,
+                profiles: &launch.profiles,
+                subagent_profiles: &launch.subagent_profiles,
+                max: 10,
+                logins: &logins,
+                catalog: &catalog,
+            },
+            &options,
+            |_| true,
+            |_| true,
+        );
+        assert_eq!(
+            plan.tabs.len(),
+            1,
+            "{label}: expected 1 planned tab, got {}",
+            plan.tabs.len()
+        );
+        assert!(
+            plan.warnings.iter().any(|w| w.contains("resuming bare")),
+            "{label}: failed project row must degrade with reason instead of silently falling back, got warnings: {:?}",
+            plan.warnings
+        );
+    }
+
+    // Child resume gate (`block_failed_launch` via `profiles_for_launch`) refuses all three:
+    // failing `[subagents.profiles.worker]`, kind-named `[subagents.profiles.claude]`, and
+    // failing override `[subagents.profiles.ov]` shadowing machine `agents/ov.md`.
+    for (label, kind, profile, record_agent, expected) in [
+        (
+            "child_worker",
+            "claude",
+            Some("worker"),
+            None,
+            "description",
+        ),
+        (
+            "child_claude",
+            "claude",
+            Some("claude"),
+            None,
+            "takes the name of an agent runtime",
+        ),
+        (
+            "child_failed_ov",
+            "claude",
+            Some("ok_sub"),
+            Some("ov"),
+            "description",
+        ),
+    ] {
+        let own = launch.profiles_for_launch(ProfileScope::Subagents, profile);
+        let fallback = std::ptr::eq(own, &launch.subagent_profiles).then_some(&launch.profiles);
+        let record = crate::agents::LaunchRecord {
+            agent: record_agent.map(str::to_owned),
+            ..Default::default()
+        };
+        let err = launch
+            .block_failed_launch(
+                &crate::ids::AgentKind::new_unchecked(kind),
+                profile,
+                Some(&record),
+                own,
+                fallback,
+            )
+            .expect_err(&format!("{label} must refuse on child resume"));
+        assert!(
+            err.to_string().contains(expected),
+            "{label} must report `{expected}`, got: {err}"
+        );
+    }
+
+    // Seat settings must NOT read machine agents/worker.md for failing [subagents.profiles.worker]
+    // or machine agents/ov.md for failing [subagents.profiles.ov].
+    let kw_worker = resolve_seat_setting(
+        Some("worker"),
+        None,
+        Some("claude"),
+        ProfileScope::Subagents,
+        &launch.profiles,
+        &launch.subagent_profiles,
+        false,
+        |p| p.keep_warm.clone(),
+    );
+    assert!(
+        kw_worker.is_none(),
+        "failed [subagents.profiles.worker] must not read machine worker keep-warm: {kw_worker:?}"
+    );
+    let kw_ov = resolve_seat_setting(
+        Some("ok_sub"),
+        Some("ov"),
+        Some("claude"),
+        ProfileScope::Subagents,
+        &launch.profiles,
+        &launch.subagent_profiles,
+        false,
+        |p| p.keep_warm.clone(),
+    );
+    assert!(
+        kw_ov.is_none(),
+        "failed [subagents.profiles.ov] override must not read machine ov keep-warm: {kw_ov:?}"
+    );
+    // Kind-named failing [profiles.codex] must not read retained kind base codex.
+    let mut launch_with_base_kw = launch.clone();
+    launch_with_base_kw
+        .profiles
+        .0
+        .get_mut("codex")
+        .unwrap()
+        .keep_warm = launch.profiles.0["worker"].keep_warm.clone();
+    let kw_codex = resolve_seat_setting(
+        Some("codex"),
+        None,
+        Some("codex"),
+        ProfileScope::Agents,
+        &launch_with_base_kw.profiles,
+        &launch_with_base_kw.subagent_profiles,
+        false,
+        |p| p.keep_warm.clone(),
+    );
+    assert!(
+        kw_codex.is_none(),
+        "failed [profiles.codex] must not read retained kind base keep-warm: {kw_codex:?}"
+    );
+}
+
+#[test]
+fn machine_definition_under_project_override_validates_project_subagents_and_isolates_memo() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::create_dir_all(home.path().join("subagents")).unwrap();
+    std::fs::write(
+        home.path().join("subagents/mkid.md"),
+        "---\ndescription: Machine subagent.\nagent: claude\n---\nMachine kid.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/l.md"),
+        "---\ndescription: Machine leaf.\nagent: claude\n---\nMachine leaf.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/m.md"),
+        "---\ndescription: Machine override.\nagent: claude\nsubagents: [mkid]\n---\nMachine ov.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/l_bad.md"),
+        "---\ndescription: Machine leaf naming project subagent directly.\nagent: claude\nsubagents: [kid]\n---\nBad leaf.\n",
+    )
+    .unwrap();
+
+    let project_toml = "\
+        [subagents.profiles.kid]\n\
+        description = \"Project subagent\"\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.x]\n\
+        description = \"Project override\"\n\
+        agent = \"claude\"\n\
+        subagents = [\"kid\"]\n";
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    // Ordinary launch: machine `l` under project `--agent x` must succeed and inherit `kid`.
+    let resolved = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("l"),
+        Some("x"),
+    )
+    .expect("machine l under project --agent x listing project subagent kid must succeed");
+    let cell = resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind.as_str(), "claude");
+
+    // Replay of `l` under recorded `--agent x` must also succeed without degrading.
+    let record = crate::agents::LaunchRecord {
+        agent: Some("x".to_owned()),
+        ..Default::default()
+    };
+    let replay = crate::harness::resume::resolve_posture(
+        crate::harness::resume::PostureRequest {
+            record: Some(&record),
+            profile: Some("l"),
+            kind: &crate::ids::AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &launch.profiles,
+        None,
+    );
+    assert!(
+        replay.degraded.is_none(),
+        "replay of l under project --agent x must not degrade: {:?}",
+        replay.degraded
+    );
+
+    // Machine `l_bad` (listing `kid` itself, not inherited from project X) still fails at load.
+    assert!(
+        launch.definition_failure_for("l_bad").is_some(),
+        "machine definition writing project-only subagent itself must still fail"
+    );
+
+    // Building `l` under machine `--agent m` after project `x` must remain isolated.
+    let resolved_m = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("l"),
+        Some("m"),
+    )
+    .expect("machine l under machine --agent m must succeed");
+    assert_eq!(
+        resolved_m
+            .layout
+            .agent_cells()
+            .next()
+            .unwrap()
+            .kind
+            .as_str(),
+        "claude"
+    );
+}
+
+#[test]
+fn project_prompt_pieces_keep_trunk_order_and_repeats_across_direct_override_and_replay() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::write(
+        home.path().join("agents/md_base.md"),
+        "---\ndescription: MD base.\nagent: claude\n---\nMD_BASE\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/md_kid.md"),
+        "---\ndescription: MD kid.\nagent: md_base\n---\nMD_KID\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/md_top.md"),
+        "---\ndescription: MD top.\nagent: md_kid\n---\nMD_TOP\n",
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(project.path().join(".rimz/a.md"), "AAA\n").unwrap();
+    std::fs::write(project.path().join(".rimz/b.md"), "BBB\n").unwrap();
+    std::fs::write(project.path().join(".rimz/c.md"), "CCC\n").unwrap();
+
+    let project_toml = "\
+        [profiles.base]\n\
+        description = \"Base\"\n\
+        agent = \"claude\"\n\
+        append-system-prompt-files = [\"a.md\"]\n\
+        \n\
+        [profiles.kid]\n\
+        description = \"Kid\"\n\
+        agent = \"base\"\n\
+        append-system-prompt-files = [\"b.md\", \"a.md\"]\n\
+        \n\
+        [profiles.rep]\n\
+        description = \"Rep\"\n\
+        agent = \"claude\"\n\
+        append-system-prompt-files = [\"b.md\", \"a.md\", \"b.md\"]\n\
+        \n\
+        [profiles.one]\n\
+        description = \"One\"\n\
+        agent = \"base\"\n\
+        append-system-prompt-files = [\"c.md\"]\n\
+        \n\
+        [profiles.top]\n\
+        description = \"Top\"\n\
+        agent = \"kid\"\n\
+        append-system-prompt-files = [\"c.md\"]\n";
+    let (machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    let read_pieces = |sources: &[crate::config::PromptSource]| -> Vec<String> {
+        sources
+            .iter()
+            .map(|src| match src {
+                crate::config::PromptSource::Text { text, .. } => text.trim().to_owned(),
+                crate::config::PromptSource::File(path) => {
+                    std::fs::read_to_string(path).unwrap().trim().to_owned()
+                }
+            })
+            .collect()
+    };
+
+    let pieces_for = |spec: &str, ov: Option<&str>| {
+        let resolved = crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec),
+            ov,
+        )
+        .unwrap_or_else(|e| panic!("resolve {spec} ov={ov:?}: {e}"));
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        read_pieces(&cell.append_system_prompt_files)
+    };
+
+    assert_eq!(pieces_for("kid", None), vec!["AAA", "BBB", "AAA"]);
+    assert_eq!(pieces_for("rep", None), vec!["BBB", "AAA", "BBB"]);
+    assert_eq!(
+        pieces_for("one", Some("kid")),
+        vec!["BBB", "AAA", "AAA", "CCC"]
+    );
+    assert_eq!(
+        pieces_for("base", Some("top")),
+        vec!["BBB", "AAA", "CCC", "AAA"]
+    );
+    assert_eq!(
+        pieces_for("md_base", Some("md_top")),
+        vec!["MD_BASE", "MD_KID", "MD_TOP"]
+    );
+
+    // Replay of `one --agent kid` and `base --agent top` preserves exact order and repeats.
+    for (profile, ov, expected) in [
+        ("one", "kid", vec!["BBB", "AAA", "AAA", "CCC"]),
+        ("base", "top", vec!["BBB", "AAA", "CCC", "AAA"]),
+    ] {
+        let record = crate::agents::LaunchRecord {
+            agent: Some(ov.to_owned()),
+            ..Default::default()
+        };
+        let replay = crate::harness::resume::resolve_posture(
+            crate::harness::resume::PostureRequest {
+                record: Some(&record),
+                profile: Some(profile),
+                kind: &crate::ids::AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &launch.profiles,
+            None,
+        );
+        assert!(replay.degraded.is_none(), "{:?}", replay.degraded);
+        assert_eq!(
+            read_pieces(&replay.launch.append_system_prompt_files),
+            expected,
+            "replay {profile} --agent {ov}"
+        );
+    }
+}
+
+#[test]
+fn advisory_project_subagent_shadow_and_kind_named_cause_chain() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::create_dir_all(home.path().join("subagents")).unwrap();
+    // Broken machine subagent (frontmatter problem) shadowed by a broken project subagent.
+    std::fs::write(home.path().join("subagents/dup.md"), "invalid frontmatter").unwrap();
+
+    let project_toml = "\
+        [subagents.profiles.dup]\n\
+        agent = \"claude\"\n\
+        \n\
+        [profiles.caller_dup]\n\
+        description = \"Calls dup\"\n\
+        agent = \"claude\"\n\
+        subagents = [\"dup\"]\n\
+        \n\
+        [subagents.profiles.codex]\n\
+        description = \"Kind-named subagent\"\n\
+        agent = \"codex\"\n\
+        \n\
+        [profiles.caller_k]\n\
+        description = \"Calls codex subagent\"\n\
+        agent = \"claude\"\n\
+        subagents = [\"codex\"]\n";
+    let (_machine, launch) = load_trusted_project(home.path(), project.path(), "", project_toml);
+
+    let detail_dup = launch
+        .definition_failure_for("caller_dup")
+        .expect("caller_dup must fail");
+    assert!(
+        detail_dup.contains("description") && !detail_dup.contains("frontmatter"),
+        "caller_dup must trace to project dup's error, not machine dup's problem: {detail_dup}"
+    );
+
+    let detail_k = launch
+        .definition_failure_for("caller_k")
+        .expect("caller_k must fail");
+    assert!(
+        detail_k.contains("caused by:") && detail_k.contains("[subagents.profiles.codex]"),
+        "caller_k must keep caused-by chain to kind-named failed subagent row: {detail_k}"
+    );
 }

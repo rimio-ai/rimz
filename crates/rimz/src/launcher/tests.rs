@@ -1420,11 +1420,11 @@ fn bare_kind_with_markdown_override_and_routing_keeps_override_lines_and_tuning_
     for (rel, content) in [
         (
             "agents/claude.md",
-            "---\ndescription: Claude base\neffort: medium\n---\nClaude house.",
+            "---\ndescription: Claude base\ntools: [Read]\neffort: medium\n---\nClaude house.",
         ),
         (
             "agents/codex.md",
-            "---\ndescription: Codex base\neffort: medium\nfast: off\n---\nCodex house.",
+            "---\ndescription: Codex base\ntools: [Read]\neffort: medium\nfast: off\n---\nCodex house.",
         ),
         (
             "agents/mdp.md",
@@ -1450,9 +1450,9 @@ fn bare_kind_with_markdown_override_and_routing_keeps_override_lines_and_tuning_
     .unwrap();
     std::fs::write(
         project.join(".rimz/config.toml"),
-        "[profiles.tl]\nagent = 'claude'\neffort = 'high'\n\
-         [profiles.tk]\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
-         [subagents.profiles.tsub]\nagent = 'claude'\neffort = 'high'\n",
+        "[profiles.tl]\ndescription = 'Tl'\nagent = 'claude'\neffort = 'high'\n\
+         [profiles.tk]\ndescription = 'Tk'\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
+         [subagents.profiles.tsub]\ndescription = 'Tsub'\nagent = 'claude'\neffort = 'high'\n",
     )
     .unwrap();
     crate::trust::grant_with_roots(&project, root.path()).unwrap();
@@ -1866,21 +1866,26 @@ fn review_findings_toml_role_ancestor_tiered_model_and_variant() {
         repo.path().join(".rimz/config.toml"),
         r#"
 [profiles.toml_claude]
+description = "TOML claude"
 agent = "claude"
 model = "opus"
 
 [profiles.toml_codex]
+description = "TOML codex"
 agent = "codex"
 model = "sol"
 
 [profiles.toml_sub]
+description = "TOML sub"
 agent = "toml_codex"
 
 [profiles.toml_sub_opus]
+description = "TOML sub opus"
 agent = "toml_codex"
 model = "opus"
 
 [profiles.toml_other]
+description = "TOML other"
 agent = "toml_codex"
 model = "astra"
 
@@ -1957,6 +1962,11 @@ roles = [{ role = "lead", profile = "toml_claude", model = "sol" }]
     // The final kind base still fills the model the dropped role model leaves unset.
     let based = tempfile::tempdir().unwrap();
     std::fs::create_dir(based.path().join("agents")).unwrap();
+    std::fs::write(
+        based.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
+    )
+    .unwrap();
     std::fs::write(
         based.path().join("agents/codex.md"),
         "---\ndescription: Codex base\nmodel: gpt-6\ntools: [Read]\n---\nCodex house.\n",
@@ -2377,14 +2387,17 @@ fn launch_and_replay_engine_matrix_matches_one_chain_rule() {
         repo.path().join(".rimz/config.toml"),
         r#"
 [profiles.toml_anc]
+description = "TOML ancestor"
 agent = "codex"
 model = "sol"
 
 [profiles.toml_l]
+description = "TOML leaf"
 agent = "toml_anc"
 model = "opus"
 
 [profiles.x_toml]
+description = "TOML X"
 agent = "codex"
 model = "astra"
 
@@ -2484,14 +2497,18 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
                 },
             };
 
-            let x_is_md = matches!(
+            let l_is_def = matches!(
+                l,
+                LForm::Markdown | LForm::MdSeat | LForm::Toml | LForm::TomlSeat
+            );
+            let x_is_def = matches!(
                 x,
-                XForm::MdModel | XForm::MdTier | XForm::MdPlain | XForm::Ancestor
-                    if !matches!(l, LForm::Toml | LForm::TomlSeat)
-            ) || (matches!(x, XForm::SelfL)
-                && matches!(l, LForm::Markdown | LForm::MdSeat));
-            let l_is_md = matches!(l, LForm::Markdown | LForm::MdSeat);
-            let l_is_toml = matches!(l, LForm::Toml | LForm::TomlSeat);
+                XForm::MdModel
+                    | XForm::MdTier
+                    | XForm::MdPlain
+                    | XForm::TomlModel
+                    | XForm::Ancestor
+            ) || (matches!(x, XForm::SelfL) && l_is_def);
             let l_is_bare = matches!(l, LForm::BareKind);
 
             // Expected X kind, variant, and engine write.
@@ -2510,8 +2527,9 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
                 XForm::BareKind => (Some("antigravity"), None, None, false),
                 XForm::Variant => (Some("opencode"), Some("mini"), None, false),
                 XForm::SelfL => match l {
-                    LForm::Markdown => (Some("claude"), None, Some("opus"), false),
-                    LForm::Toml | LForm::TomlSeat => (Some("codex"), None, Some("opus"), false),
+                    LForm::Markdown | LForm::Toml | LForm::TomlSeat => {
+                        (Some("claude"), None, Some("opus"), false)
+                    }
                     LForm::KindBase => (Some("claude"), None, None, false),
                     LForm::BareKind => (Some("antigravity"), None, None, false),
                     LForm::MdSeat => (Some("claude"), None, Some("sonnet"), false),
@@ -2519,8 +2537,11 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
                 XForm::Ancestor => (Some("codex"), None, Some("sol"), false),
             };
             let l_orig_kind = match l {
-                LForm::Markdown | LForm::KindBase | LForm::MdSeat => "claude",
-                LForm::Toml | LForm::TomlSeat => "codex",
+                LForm::Markdown
+                | LForm::Toml
+                | LForm::KindBase
+                | LForm::TomlSeat
+                | LForm::MdSeat => "claude",
                 LForm::BareKind => "antigravity",
             };
             let l_own_model = match l {
@@ -2531,12 +2552,13 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
 
             for sel in [Sel::None, Sel::Model, Sel::Tier] {
                 // Skip combinations the loader/router explicitly refuses:
-                // 1. Markdown L built onto bare kind `antigravity` (no `agents/antigravity.md` kind base).
-                if l_is_md && x_kind == Some("antigravity") && !matches!(sel, Sel::Tier) {
+                // 1. Definition L built onto bare kind `antigravity` (no `agents/antigravity.md`
+                //    kind base).
+                if l_is_def && x_kind == Some("antigravity") && !matches!(sel, Sel::Tier) {
                     continue;
                 }
-                // 2. `--tier` requires Markdown L, kind base L, or bare L with Markdown X.
-                if matches!(sel, Sel::Tier) && (l_is_toml || (l_is_bare && !x_is_md)) {
+                // 2. `--tier` requires definition L, kind base L, or bare L with definition X.
+                if matches!(sel, Sel::Tier) && l_is_bare && !x_is_def {
                     continue;
                 }
                 // Pick a `--model` compatible with X's kind (or L's kind when X is None).

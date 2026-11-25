@@ -637,16 +637,75 @@ mod tests {
     use crate::agents::PermissionMode;
     use crate::store::writer::AgentLaunchName;
 
+    /// Build a temp home + project with kind bases, optional Markdown definitions, and optional
+    /// trusted `.rimz/config.toml` loaded through the real definition loader.
+    fn loaded_molt_fixture(
+        defs: &[(&str, &str)],
+        project_toml: Option<&str>,
+    ) -> (
+        tempfile::TempDir,
+        crate::config::MachineConfig,
+        crate::config::effective::LaunchAgents,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(home.join("agents")).unwrap();
+        std::fs::create_dir_all(home.join("subagents")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        for (kind, extra) in [
+            ("claude", "tools: [Read]\n"),
+            ("codex", "tools: [Read]\n"),
+            ("opencode", ""),
+        ] {
+            std::fs::write(
+                home.join(format!("agents/{kind}.md")),
+                format!("---\ndescription: {kind} base\n{extra}---\n{kind} house.\n"),
+            )
+            .unwrap();
+        }
+        for (rel, body) in defs {
+            let path = home.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let machine =
+            crate::config::MachineConfig::parse_text(&home.join("config.toml"), "", &home).unwrap();
+        assert!(
+            machine.notices.definition_errors.is_empty(),
+            "unexpected definition errors: {:?}",
+            machine.notices.definition_errors
+        );
+        if let Some(toml) = project_toml {
+            std::fs::create_dir_all(project.join(".rimz")).unwrap();
+            std::fs::write(project.join(".rimz/config.toml"), toml).unwrap();
+            crate::trust::grant_with_roots(&project, &home).unwrap();
+        }
+        let effective =
+            crate::config::effective::load_with_roots(&machine, &project, &home).unwrap();
+        assert!(
+            effective.project_definition_errors().is_empty(),
+            "unexpected project definition errors: {:?}",
+            effective.project_definition_errors()
+        );
+        (dir, machine, effective)
+    }
+
     #[test]
     fn replacement_resolves_a_child_fork_and_its_alias_in_the_subagent_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut machine = crate::config::MachineConfig::default();
-        machine.subagents.profiles = serde_json::from_value(serde_json::json!({
-            "worker": {"agent": "claude", "model": "opus"},
-            "replacement": {"agent": "codex", "model": "gpt-6.1-sol"}
-        }))
-        .unwrap();
-        let effective = crate::config::effective::load(&machine, dir.path()).unwrap();
+        let (_dir, machine, effective) = loaded_molt_fixture(
+            &[
+                (
+                    "subagents/worker.md",
+                    "---\ndescription: Worker\nagent: claude\nmodel: opus\n---\n",
+                ),
+                (
+                    "subagents/replacement.md",
+                    "---\ndescription: Replacement\nagent: codex\nmodel: gpt-6.1-sol\n---\n",
+                ),
+            ],
+            None,
+        );
         let mut agent = crate::testkit::agent_state("claude", "fork", jiff::Timestamp::UNIX_EPOCH);
         agent.profile = Some("worker".into());
         agent.profile_scope = Some(ProfileScope::Subagents);
@@ -665,10 +724,13 @@ mod tests {
 
     #[test]
     fn mini_molt_rebases_the_variant_without_losing_the_role() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut machine = crate::config::MachineConfig::default();
-        machine.agents.profiles = toml::from_str("[worker]\nagent = 'opencode-mini'").unwrap();
-        let effective = crate::config::effective::load(&machine, dir.path()).unwrap();
+        let (_dir, machine, effective) = loaded_molt_fixture(
+            &[(
+                "agents/worker.md",
+                "---\ndescription: Mini worker\nagent: opencode-mini\n---\n",
+            )],
+            None,
+        );
         let mut agent =
             crate::testkit::agent_state("opencode", "mini", jiff::Timestamp::UNIX_EPOCH);
         agent.profile = Some("worker".into());
@@ -694,22 +756,28 @@ mod tests {
 
     #[test]
     fn replacement_rebases_the_same_role_without_replaying_the_old_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let role_prompt = dir.path().join("role.md");
+        let prompt_dir = tempfile::tempdir().unwrap();
+        let role_prompt = prompt_dir.path().join("role.md");
         std::fs::write(&role_prompt, "Keep the role's job").unwrap();
-        let mut machine = crate::config::MachineConfig::default();
-        machine.agents.profiles = serde_json::from_value(serde_json::json!({
-            "worker": {"agent": "claude", "model": "opus"},
-            "replacement": {
-                "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium",
-                "auto-compact": "200k"
-            }
-        }))
-        .unwrap();
-        machine.agents.teams = serde_json::from_value(serde_json::json!({
-            "forge": {"roles": [{"role": "coder", "profile": "worker", "system-prompt-file": role_prompt}]}
-        })).unwrap();
-        let effective = crate::config::effective::load(&machine, dir.path()).unwrap();
+        let project_toml = |extra_args: &str| {
+            format!(
+                "[profiles.worker]\n\
+                 description = 'Worker'\n\
+                 agent = 'claude'\n\
+                 model = 'opus'\n\
+                 [profiles.replacement]\n\
+                 description = 'Replacement'\n\
+                 agent = 'codex'\n\
+                 model = 'gpt-6.1-sol'\n\
+                 effort = 'medium'\n\
+                 auto-compact = '200k'\n\
+                 {extra_args}\
+                 [agents.teams.forge]\n\
+                 roles = [{{ role = 'coder', profile = 'worker', system-prompt-file = '{}' }}]\n",
+                role_prompt.display()
+            )
+        };
+        let (dir, machine, effective) = loaded_molt_fixture(&[], Some(&project_toml("")));
         let mut agent = crate::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
         agent.profile = Some("worker".into());
         agent.team = Some("forge".into());
@@ -757,20 +825,25 @@ mod tests {
         );
         assert_eq!(posture.launch.mode, agent.mode);
         assert_eq!(posture.launch.isolation, agent.isolation);
-        assert_eq!(posture.launch.system_prompt_file, Some(role_prompt.into()));
+        assert_eq!(
+            posture.launch.system_prompt_file,
+            Some(role_prompt.clone().into())
+        );
         assert_eq!(
             posture.launch.record.as_ref().unwrap().agent.as_deref(),
             Some("replacement")
         );
 
-        machine
-            .agents
-            .profiles
-            .0
-            .get_mut("replacement")
-            .unwrap()
-            .args = Some("-c approvals_reviewer=user".into());
-        let effective = crate::config::effective::load(&machine, dir.path()).unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::write(
+            project.join(".rimz/config.toml"),
+            project_toml("args = '-c approvals_reviewer=user'\n"),
+        )
+        .unwrap();
+        crate::trust::grant_with_roots(&project, &home).unwrap();
+        let effective =
+            crate::config::effective::load_with_roots(&machine, &project, &home).unwrap();
         agent.mode = Some(PermissionMode::Auto);
         let (_, posture) = replacement_posture(
             &agent,

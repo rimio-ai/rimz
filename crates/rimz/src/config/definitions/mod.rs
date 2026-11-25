@@ -10,6 +10,7 @@ mod catalog;
 pub mod customization;
 pub(crate) mod frontmatter;
 pub mod inventory;
+mod project;
 pub mod review;
 mod team;
 mod traits;
@@ -17,6 +18,7 @@ mod traits;
 pub use agent::DefinitionSource;
 pub(crate) use agent::keeps_inherited_model;
 pub(super) use agent::{TierCandidates, build_tier_candidates};
+pub(in crate::config) use project::{ProjectProfilesInput, resolve_project_profiles};
 pub use traits::ConsensusPieces;
 
 #[cfg(test)]
@@ -35,23 +37,19 @@ use super::{
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::AgentFrontmatter;
 
-/// An override base passed to [`Profile::build_under`]: a Markdown definition row, or a resolved
-/// provider runtime (bare kind, kind base, or project TOML chain) with an optional written model.
+/// An override base passed to [`Profile::build_under`]: a definition-backed row (Markdown or
+/// trusted project TOML), or a resolved provider runtime (bare kind or kind base).
 #[derive(Clone, Copy)]
 pub enum BuildBase<'a> {
     Profile(&'a Profile),
-    Runtime(crate::agents::Runtime, Option<&'a str>),
+    Runtime(crate::agents::Runtime),
 }
 
 impl std::fmt::Debug for BuildBase<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Profile(profile) => f.debug_tuple("Profile").field(profile).finish(),
-            Self::Runtime(runtime, model) => f
-                .debug_tuple("Runtime")
-                .field(&runtime.name())
-                .field(model)
-                .finish(),
+            Self::Runtime(runtime) => f.debug_tuple("Runtime").field(&runtime.name()).finish(),
         }
     }
 }
@@ -264,7 +262,7 @@ pub enum DefinitionCause {
         roots: Vec<PathBuf>,
     },
     /// A parent, kind base, allowed subagent, or team role's agent failed to load.
-    DependsOnFailed { name: String },
+    DependsOnFailed { name: String, subagent: bool },
     /// A pack-scoped diagnostic that does not refuse unrelated launches.
     PackProblem,
     /// The message describes a failure that has no more specific grouping.
@@ -332,7 +330,13 @@ impl DefinitionErr {
     /// Whether this kind base failure is packs claiming `kind` at once, which a dependent
     /// repeats whole: no one file is the one to fix.
     fn is_conflict_over(&self, kind: &str) -> bool {
-        matches!(&self.cause, DefinitionCause::DependsOnFailed { name } if name == kind)
+        matches!(
+            &self.cause,
+            DefinitionCause::DependsOnFailed {
+                name,
+                subagent: false
+            } if name == kind
+        )
     }
 }
 
@@ -459,7 +463,7 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Immutable state from one definitions load, retained by stored Markdown rows so on-demand
+/// Immutable state from one definitions load, retained by stored definitions so on-demand
 /// builds reuse kind bases, tiers, and the skill catalog without rereading disk.
 #[derive(Debug, PartialEq, Eq)]
 struct SharedLoadState {
@@ -473,7 +477,7 @@ struct SharedLoadState {
 
 /// The subagent-namespace names and diagnostics needed to validate a direct definition's
 /// `subagents:` list after the load returns.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SubagentCheck {
     defined: BTreeSet<String>,
     failed: BTreeSet<String>,
@@ -586,7 +590,10 @@ impl Failed<'_> {
                         path,
                         format!("follows `{key}`, which failed to load: {error}"),
                     )
-                    .with_cause(DefinitionCause::DependsOnFailed { name: key }),
+                    .with_cause(DefinitionCause::DependsOnFailed {
+                        name: key,
+                        subagent: false,
+                    }),
                 );
             }
         }
@@ -607,6 +614,40 @@ fn is_safe_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Shared name check for ordinary definitions (Markdown and project TOML): safe identifier,
+/// not a provider runtime name, and (when `validate_teams` is `Some`) valid in the launch
+/// namespace against `validate_teams`.
+fn check_definition_name(
+    path: &Path,
+    name: &str,
+    validate_teams: Option<&TeamsConfig>,
+) -> Result<(), DefinitionErr> {
+    if !is_safe_name(name) {
+        return Err(DefinitionErr::new(
+            path,
+            format!("has unsafe definition name {name:?}"),
+        ));
+    }
+    if crate::agents::find_runtime(name).is_some() {
+        return Err(DefinitionErr::new(
+            path,
+            "takes the name of an agent runtime; rename it",
+        ));
+    }
+    if let Some(teams) = validate_teams {
+        crate::harness::spec::validate_config(
+            &ProfilesConfig::from(BTreeMap::from([(
+                name.to_owned(),
+                agent::empty_profile(""),
+            )])),
+            &CommandsConfig::default(),
+            teams,
+        )
+        .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+    }
+    Ok(())
 }
 
 /// `commands` are the `[agents.commands]` names a `subagents:` list may also allow.
@@ -689,8 +730,12 @@ fn load_resolved(
     };
     for (name, claim) in &sources.claims["definitions"] {
         if let ClaimResolution::Conflict { claims, message } = claim {
-            let error = DefinitionErr::new(&claims[0].path, message)
-                .with_cause(DefinitionCause::DependsOnFailed { name: name.clone() });
+            let error = DefinitionErr::new(&claims[0].path, message).with_cause(
+                DefinitionCause::DependsOnFailed {
+                    name: name.clone(),
+                    subagent: false,
+                },
+            );
             for tree in [&mut agents, &mut subagents] {
                 tree.failed.insert(name.clone());
                 tree.problems.insert(name.clone(), error.clone());
@@ -704,8 +749,12 @@ fn load_resolved(
         if let ClaimResolution::Conflict { claims, message } = claim {
             failed_bases.insert(
                 name.clone(),
-                DefinitionErr::new(&claims[0].path, message)
-                    .with_cause(DefinitionCause::DependsOnFailed { name: name.clone() }),
+                DefinitionErr::new(&claims[0].path, message).with_cause(
+                    DefinitionCause::DependsOnFailed {
+                        name: name.clone(),
+                        subagent: false,
+                    },
+                ),
             );
         }
     }
@@ -886,26 +935,11 @@ fn load_resolved(
                     });
                     return Ok(());
                 }
-                if !is_safe_name(name) {
-                    return Err(DefinitionErr::new(
-                        path,
-                        format!("has unsafe definition name {name:?}"),
-                    ));
-                }
-                if crate::agents::find_runtime(name).is_some() {
-                    return Err(DefinitionErr::new(
-                        path,
-                        "takes the name of an agent runtime; rename it",
-                    ));
-                }
-                if item.pack.is_some() {
-                    crate::harness::spec::validate_config(
-                        &ProfilesConfig(BTreeMap::from([(name.clone(), agent::empty_profile(""))])),
-                        &CommandsConfig::default(),
-                        &super::AgentsConfig::default().teams,
-                    )
-                    .map_err(|error| item.error(error))?;
-                }
+                let validate_teams = item
+                    .pack
+                    .is_some()
+                    .then(|| super::AgentsConfig::default().teams);
+                check_definition_name(path, name, validate_teams.as_ref())?;
                 for key in &keys {
                     if let Some(previous) = names.get(key) {
                         tree.failed.insert(key.clone());
@@ -992,7 +1026,7 @@ fn load_resolved(
             let Some(listed) = &base.rows.0.subagents else {
                 continue;
             };
-            match agent::subagent_names(&base.item.path, listed, &subagent_check) {
+            match agent::subagent_names(&base.item.path, listed, &subagent_check, true) {
                 Ok(names) => base.rows.0.subagents = Some(names),
                 Err(error) => refused.push((index, error)),
             }

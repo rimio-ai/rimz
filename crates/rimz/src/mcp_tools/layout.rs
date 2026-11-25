@@ -89,7 +89,7 @@ pub(super) fn launch_team(tools: &Tools, args: &TeamArgs) -> Result<Answer, Fail
     let from_pr = pr_target(args.from_pr.as_deref())?;
     let (room, machine, effective) = caller_room(tools, "a team")?;
     let team = args.team.trim();
-    require_team(&effective, &machine, team)?;
+    require_team(&effective, team)?;
     let (opened, warnings) = open(
         &room,
         machine,
@@ -148,16 +148,12 @@ fn caller_room(
 }
 
 /// `team` launches only a configured team, and names the valid ones when it is not.
-fn require_team(
-    effective: &LaunchAgents,
-    machine: &MachineConfig,
-    team: &str,
-) -> Result<(), Failure> {
+fn require_team(effective: &LaunchAgents, team: &str) -> Result<(), Failure> {
     let teams = &effective.teams;
     if teams.0.contains_key(team) {
         return Ok(());
     }
-    if let Some(detail) = machine.definition_failure_for(team) {
+    if let Some(detail) = effective.definition_failure_for(team) {
         return Err(Failure::new(detail));
     }
     if teams.role_spec(team).is_some() {

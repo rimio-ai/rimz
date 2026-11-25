@@ -1191,14 +1191,22 @@ fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
     assert!(init_git_repo(&env.project_root));
     env.record(&env.project_root);
     env.install_agent_hooks("codex");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "codex",
+        "description: Codex base\ntools: [Read]",
+        "Codex base.",
+    );
     env.write_config(
         &env.project_root,
         r#"
-        [profiles.codex]
+        [profiles.coder]
+        description = "Coder"
         agent = "codex"
         [[agents.teams.forge.roles]]
         role = "coder"
-        profile = "codex"
+        profile = "coder"
         signals = [{ signal = "ci.failed" }]
         "#,
     );
@@ -1544,12 +1552,20 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
         ]
     ));
     env.install_agent_hooks("claude");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\ntools: [Read]",
+        "Claude base.",
+    );
     env.write_config(&env.project_root, r#"
-        [profiles.claude]
+        [profiles.coder]
+        description = "Coder"
         agent = "claude"
         [[agents.teams.forge.roles]]
         role = "coder"
-        profile = "claude"
+        profile = "coder"
         signals = [{ signal = "pr.conflicted", match = { branch = "*" } }, { signal = "team.stage", match = { team = "*", to = "Done" } }]
     "#);
     loop_ok(&env, &["trust", "grant"]);

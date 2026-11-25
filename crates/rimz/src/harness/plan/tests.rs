@@ -673,30 +673,36 @@ fn unsupported_profile_effort_warns_and_leaves_no_launch_stamp() {
 
 #[test]
 fn role_tools_render_once_for_every_profile_cell_path() {
-    let tools = crate::agents::ToolSet::parse(
-        &[
-            "AskUserQuestion",
-            "Bash",
-            "Edit",
-            "Glob",
-            "Grep",
-            "Read",
-            "Skill",
-            "WebFetch",
-            "WebSearch",
-            "Write",
-        ]
-        .map(str::to_owned),
-    )
-    .unwrap();
-    let worker = Profile {
-        tools: Some(tools),
-        ..configured_profile("claude", None, None, None, None, None)
-    };
-    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([
-        ("worker".into(), worker.clone()),
-        ("claude".into(), worker),
-    ]));
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    let tools =
+        "[AskUserQuestion, Bash, Edit, Glob, Grep, Read, Skill, WebFetch, WebSearch, Write]";
+    for (name, body) in [
+        (
+            "claude",
+            format!("---\ndescription: Claude base\ntools: {tools}\n---\nClaude."),
+        ),
+        (
+            "pi",
+            format!("---\ndescription: Pi base\ntools: {tools}\n---\nPi."),
+        ),
+        (
+            "worker",
+            format!("---\ndescription: Worker\nagent: claude\ntools: {tools}\n---\n"),
+        ),
+    ] {
+        std::fs::write(root.path().join(format!("agents/{name}.md")), body).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &Default::default(),
+        &root.path().join("config.toml"),
+        &Default::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let profiles = loaded.agent_profiles;
     let teams: crate::config::TeamsConfig =
         toml::from_str("[crew]\nroles = [{role = 'lead', profile = 'worker'}]").unwrap();
     for spec in [
@@ -759,7 +765,7 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
         (
             vec!["Bash(git *)", "Read", "Read(path)", "WebSearch"],
             "pi",
-            vec!["--tools", "bash,read", "--no-skills"],
+            vec!["--thinking", "xhigh", "--tools", "bash,read", "--no-skills"],
             vec![
                 crate::harness::spec::CellNotice::DroppedTools {
                     tools: vec!["WebSearch".into()],
@@ -772,7 +778,7 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
         (
             vec!["WebSearch"],
             "pi",
-            vec!["--no-tools", "--no-skills"],
+            vec!["--thinking", "xhigh", "--no-tools", "--no-skills"],
             vec![crate::harness::spec::CellNotice::DroppedTools {
                 tools: vec!["WebSearch".into()],
             }],
@@ -791,17 +797,35 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
         ),
         (vec!["Read"], "omp", vec![], vec![]),
     ] {
-        let mut worker = configured_profile("claude", None, None, None, None, None);
-        worker.tools = Some(
-            crate::agents::ToolSet::parse(
-                &entries.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for kind in ["claude", "pi", "opencode", "omp"] {
+            std::fs::write(
+                root.path().join(format!("agents/{kind}.md")),
+                format!("---\ndescription: {kind} base\n---\n{kind}."),
             )
-            .unwrap(),
+            .unwrap();
+        }
+        let tools_yaml = entries
+            .iter()
+            .map(|e| format!("'{e}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        std::fs::write(
+            root.path().join("agents/worker.md"),
+            format!("---\ndescription: Worker\nagent: claude\ntools: [{tools_yaml}]\n---\n"),
+        )
+        .unwrap();
+        let loaded = crate::config::definitions::load(
+            root.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &Default::default(),
+            &root.path().join("config.toml"),
+            &Default::default(),
+            None,
         );
-        let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
-            "worker".into(),
-            worker,
-        )]));
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let profiles = loaded.agent_profiles;
         let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
             Some("worker"),
             &profiles,
@@ -836,12 +860,34 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
             expected_notices
         );
     }
-    let mut worker = configured_profile("claude", None, None, None, None, None);
-    worker.tools = Some(crate::agents::ToolSet::parse(&["Bash".into()]).unwrap());
-    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
-        "worker".into(),
-        worker,
-    )]));
+    let codex_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(codex_root.path().join("agents")).unwrap();
+    for (name, body) in [
+        (
+            "claude",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.",
+        ),
+        (
+            "codex",
+            "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.",
+        ),
+        (
+            "worker",
+            "---\ndescription: Worker\nagent: claude\ntools: [Bash]\n---\n",
+        ),
+    ] {
+        std::fs::write(codex_root.path().join(format!("agents/{name}.md")), body).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        codex_root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &Default::default(),
+        &codex_root.path().join("config.toml"),
+        &Default::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let profiles = loaded.agent_profiles;
     let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
         Some("worker"),
         &profiles,
@@ -869,7 +915,7 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
 
 #[test]
 fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
-    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+    let profiles = crate::config::ProfilesConfig::from(std::collections::BTreeMap::from([(
         "compact".into(),
         Profile {
             auto_compact: Some("272k".into()),
@@ -904,10 +950,30 @@ fn cross_kind_model_drops_warn_unless_the_launch_supplies_a_replacement() {
         ("claude", "sonnet", "codex", Some("explicit"), false),
         ("claude", "sonnet", "codex", Some("tier-model"), true),
     ] {
-        let profiles: crate::config::ProfilesConfig = toml::from_str(&format!(
-            "[worker]\nagent = '{source}'\nmodel = '{model}'\n"
-        ))
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for kind in ["claude", "codex"] {
+            std::fs::write(
+                root.path().join(format!("agents/{kind}.md")),
+                format!("---\ndescription: {kind} base\ntools: [Read]\n---\n{kind}."),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.path().join("agents/worker.md"),
+            format!("---\ndescription: Worker\nagent: {source}\nmodel: {model}\n---\n"),
+        )
         .unwrap();
+        let loaded = crate::config::definitions::load(
+            root.path(),
+            crate::config::definitions::SkillCheck::Skip,
+            &Default::default(),
+            &root.path().join("config.toml"),
+            &Default::default(),
+            None,
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let profiles = loaded.agent_profiles;
         let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
             Some("worker"),
             &profiles,
@@ -2260,24 +2326,56 @@ fn finalized_smart_compact_warnings(
 fn finalized_smart_compact_warns_only_for_explicit_skipping_seats() {
     use crate::config::effective::ProfileScope::{Agents, Subagents};
 
-    let config = r#"
-[agents.profiles.base]
-agent = "amp"
-smart-compact = "200k"
-[agents.profiles.coder]
-agent = "base"
-[agents.profiles.muted]
-agent = "base"
-smart-compact = "off"
-[agents.profiles.enabled]
-agent = "codex"
-smart-compact = "200k"
-[subagents.profiles.coder]
-agent = "kiro"
-smart-compact = "60%"
-[agents.teams.forge]
-roles = [{role = "reviewer", profile = "coder", smart-compact = "70%", flip-compact = "off"}]
-"#;
+    let root = tempfile::tempdir().unwrap();
+    let sub_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(sub_root.path().join("subagents")).unwrap();
+    for (dir, rel, body) in [
+        (
+            root.path(),
+            "agents/codex.md",
+            "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.",
+        ),
+        (
+            root.path(),
+            "agents/base.md",
+            "---\ndescription: Base\nagent: amp\nsmart-compact: 200k\n---\n",
+        ),
+        (
+            root.path(),
+            "agents/coder.md",
+            "---\ndescription: Coder\nagent: base\n---\n",
+        ),
+        (
+            root.path(),
+            "agents/muted.md",
+            "---\ndescription: Muted\nagent: base\nsmart-compact: off\n---\n",
+        ),
+        (
+            root.path(),
+            "agents/enabled.md",
+            "---\ndescription: Enabled\nagent: codex\nsmart-compact: 200k\n---\n",
+        ),
+        (
+            sub_root.path(),
+            "subagents/coder.md",
+            "---\ndescription: Sub coder\nagent: kiro\nsmart-compact: 60%\n---\n",
+        ),
+    ] {
+        std::fs::write(dir.join(rel), body).unwrap();
+    }
+    let mut machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let sub_machine =
+        MachineConfig::parse_text(&sub_root.path().join("config.toml"), "", sub_root.path())
+            .unwrap();
+    machine.subagents.profiles = sub_machine.subagents.profiles;
+    machine.agents.teams = toml::from_str(
+        "[forge]\nroles = [{role = 'reviewer', profile = 'coder', smart-compact = '70%', flip-compact = 'off'}]",
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let effective = effective_launch(&machine, dir.path());
     for (spec, scope, expected) in [
         (
             "coder",
@@ -2305,11 +2403,38 @@ roles = [{role = "reviewer", profile = "coder", smart-compact = "70%", flip-comp
         ("amp", Agents, vec![]),
         ("codex", Agents, vec![]),
     ] {
-        assert_eq!(
-            finalized_smart_compact_warnings(config, spec, scope, None),
-            expected,
-            "{spec} {scope:?}"
-        );
+        let mut resolved = super::resolve_launch(
+            &effective,
+            scope,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .unwrap();
+        let actual: Vec<String> = finalize_launch_layout(
+            &mut resolved.layout,
+            LaunchFinalizeOptions {
+                smart_compact: Some(LaunchCompactPolicy::new(
+                    &effective,
+                    &machine.harness,
+                    scope,
+                    resolved.team_name.as_deref(),
+                )),
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &Default::default(),
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+                machine_config: None,
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|warning| warning.to_string())
+        .collect();
+        assert_eq!(actual, expected, "{spec} {scope:?}");
     }
 }
 
@@ -2390,7 +2515,7 @@ fn failed_definitions_refuse_only_the_requested_launch() {
     }
     std::fs::write(
         root.path().join("agents/codex.md"),
-        "---\ndescription: Codex base\n---\nCodex base.",
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex base.",
     )
     .unwrap();
     for (namespace, name) in [
@@ -2466,7 +2591,7 @@ fn failed_definitions_refuse_only_the_requested_launch() {
     std::fs::create_dir(root.path().join(".rimz")).unwrap();
     std::fs::write(
         root.path().join(".rimz/config.toml"),
-        "[profiles.broken]\nagent = 'codex'\n",
+        "[profiles.broken]\ndescription = 'Project broken override'\nagent = 'codex'\n",
     )
     .unwrap();
     let launch = effective_launch(&machine, root.path());
@@ -2590,6 +2715,11 @@ fn failed_kind_bases_refuse_project_profile_chains_in_each_launch_shape() {
     for directory in ["agents", "subagents", "teams", ".rimz"] {
         std::fs::create_dir(root.path().join(directory)).unwrap();
     }
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex base.\n",
+    )
+    .unwrap();
     for path in ["agents/claude.md", "subagents/amp.md", "teams/good-crew.md"] {
         std::fs::write(root.path().join(path), "invalid frontmatter").unwrap();
     }
@@ -2597,21 +2727,27 @@ fn failed_kind_bases_refuse_project_profile_chains_in_each_launch_shape() {
         MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
     let config = "\
 [profiles.myprof]
+description = 'My prof'
 agent = 'claude'
 [profiles.inherited]
+description = 'Inherited'
 agent = 'myprof'
-[profiles.no-base]
+[profiles.good-codex]
+description = 'Good codex'
 agent = 'codex'
 [profiles.other-failure]
+description = 'Other failure'
 agent = 'amp'
-[subagents.profiles.myprof]
+[subagents.profiles.sub-codex]
+description = 'Sub codex'
 agent = 'codex'
 [subagents.profiles.child]
+description = 'Child'
 agent = 'claude'
 [agents.teams.crew]
 roles = [{role = 'worker', profile = 'myprof'}]
 [agents.teams.good-crew]
-roles = [{role = 'worker', profile = 'no-base'}]
+roles = [{role = 'worker', profile = 'good-codex'}]
 ";
     std::fs::write(root.path().join(".rimz/config.toml"), config).unwrap();
     crate::trust::grant_with_roots(root.path(), &root.path().join("config-home")).unwrap();
@@ -2628,7 +2764,7 @@ roles = [{role = 'worker', profile = 'no-base'}]
         (ProfileScope::Subagents, Some("child-fast"), None),
         (ProfileScope::Subagents, Some("child"), Some("codex")),
         (ProfileScope::Subagents, Some("codex"), Some("child")),
-        (ProfileScope::Subagents, Some("myprof"), Some("child")),
+        (ProfileScope::Subagents, Some("sub-codex"), Some("child")),
         (ProfileScope::Agents, Some("crew"), None),
         (ProfileScope::Agents, Some("crew.worker"), None),
         (ProfileScope::Agents, Some("crew"), Some("codex")),
@@ -2636,24 +2772,25 @@ roles = [{role = 'worker', profile = 'no-base'}]
         (ProfileScope::Subagents, Some("crew.worker"), None),
         (ProfileScope::Subagents, Some("crew.worker"), Some("codex")),
     ];
-    let actual: Vec<_> = cases
-        .into_iter()
-        .map(|(scope, spec, agent_override)| {
-            super::resolve_launch(
-                &launch,
-                scope,
-                &machine.agents.commands,
-                spec,
-                agent_override,
-            )
-            .err()
-            .map(|error| error.to_string())
-        })
-        .collect();
-    let expected = vec![machine.definition_failure_for("claude"); actual.len()];
+    let claude_failure = machine.definition_failure_for("claude").unwrap();
+    for (scope, spec, agent_override) in cases {
+        let err = super::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            spec,
+            agent_override,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains(&claude_failure),
+            "({scope:?}, {spec:?}, {agent_override:?}): expected `{claude_failure}` in `{err}`"
+        );
+    }
     for (scope, spec) in [
-        (ProfileScope::Agents, "no-base"),
-        (ProfileScope::Subagents, "myprof"),
+        (ProfileScope::Agents, "good-codex"),
+        (ProfileScope::Subagents, "sub-codex"),
         (ProfileScope::Agents, "good-crew"),
         (ProfileScope::Subagents, "good-crew.worker"),
     ] {
@@ -2665,14 +2802,20 @@ roles = [{role = 'worker', profile = 'no-base'}]
         Some("other-failure"),
         None,
     )
-    .err()
-    .map(|error| error.to_string());
+    .unwrap_err()
+    .to_string();
+    assert!(
+        other_failure.contains(&machine.definition_failure_for("amp").unwrap()),
+        "{other_failure}"
+    );
 
+    // Project rows named after a provider kind refuse with rename advice and never replace the
+    // broken kind base.
     std::fs::write(
         root.path().join(".rimz/config.toml"),
         format!(
-            "{config}\n[profiles.claude]\nagent = 'claude'\n\
-                 [subagents.profiles.claude]\nagent = 'claude'\n"
+            "{config}\n[profiles.claude]\ndescription = 'Shadow'\nagent = 'claude'\n\
+                 [subagents.profiles.claude]\ndescription = 'Sub shadow'\nagent = 'claude'\n"
         ),
     )
     .unwrap();
@@ -2680,17 +2823,29 @@ roles = [{role = 'worker', profile = 'no-base'}]
     let shadowed = effective_launch(&machine, root.path());
     for (scope, spec) in [
         (ProfileScope::Agents, "claude"),
+        (ProfileScope::Subagents, "claude"),
+    ] {
+        let err =
+            super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
+                .unwrap_err()
+                .to_string();
+        assert!(
+            err.contains("[profiles.claude]") || err.contains("[subagents.profiles.claude]"),
+            "{err}"
+        );
+    }
+    for (scope, spec) in [
         (ProfileScope::Agents, "myprof"),
         (ProfileScope::Agents, "inherited"),
         (ProfileScope::Agents, "crew.worker"),
-        (ProfileScope::Subagents, "claude"),
         (ProfileScope::Subagents, "child"),
     ] {
-        super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
-            .unwrap();
+        let err =
+            super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains(&claude_failure), "{scope:?} {spec}: {err}");
     }
-    assert_eq!(actual, expected, "{cases:?}");
-    assert_eq!(other_failure, machine.definition_failure_for("amp"));
 }
 
 #[test]
@@ -2699,36 +2854,31 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
 
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
     std::fs::write(root.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
+         [profiles.inherited]\ndescription = 'Inherited'\nagent = 'worker'\n\
+         [profiles.bare]\ndescription = 'Bare'\nagent = 'codex'\n\
+         [subagents.profiles.child-override]\ndescription = 'Child'\nagent = 'claude'\n\
+         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         roles = [{role = 'lead', profile = 'inherited', owns = ['Plan']}]\n\
+         [agents.teams.other]\nconsensus-file = 'consensus.md'\n\
+         roles = [{role = 'lead', profile = 'bare', owns = ['Plan']}]\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(root.path(), root.path()).unwrap();
     let machine =
         MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
     let detail = machine.definition_failure_for("claude").unwrap();
-    let mut launch = effective_launch(&machine, root.path());
-    for (name, base) in [
-        ("worker", "claude"),
-        ("inherited", "worker"),
-        ("bare", "codex"),
-    ] {
-        launch.profiles.0.insert(
-            name.into(),
-            configured_profile(base, None, None, None, None, None),
-        );
-    }
-    launch.subagent_profiles = launch.profiles.clone();
-    launch.subagent_profiles.0.insert(
-        "child-override".into(),
-        configured_profile("claude", None, None, None, None, None),
-    );
-    for (name, profile) in [("crew", "inherited"), ("other", "bare")] {
-        launch.teams.0.insert(
-            name.into(),
-            toml::from_str(&format!(
-                "consensus-file = 'consensus.md'\n\
-                 roles = [{{role = 'lead', profile = '{profile}', owns = ['Plan']}}]"
-            ))
-            .unwrap(),
-        );
-    }
+    let launch =
+        crate::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
     let mut actual = Vec::new();
     for scope in [ProfileScope::Agents, ProfileScope::Subagents] {
         for (spec, agent_override) in [
@@ -2763,7 +2913,13 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
         .err()
         .map(|err| err.to_string()),
     );
-    assert_eq!(actual, vec![Some(detail); 13]);
+    assert_eq!(actual.len(), 13);
+    for err in &actual {
+        let text = err
+            .as_deref()
+            .expect("must refuse with claude base failure");
+        assert!(text.contains(&detail), "expected `{detail}` in `{text}`");
+    }
 }
 
 #[test]
@@ -3260,32 +3416,51 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         root.path(),
     )
     .unwrap();
-    let switched = |profile: &str| {
+    let switched = |profile: &str, strip_prompt: bool| {
+        let base_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(base_dir.path().join("agents")).unwrap();
+        std::fs::write(
+            base_dir.path().join("agents/antigravity.md"),
+            "---\ndescription: Antigravity base\ntools: [Read]\n---\nAgy.",
+        )
+        .unwrap();
+        for entry in std::fs::read_dir(root.path().join("agents")).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(
+                entry.path(),
+                base_dir.path().join("agents").join(entry.file_name()),
+            )
+            .unwrap();
+        }
         let loaded = crate::config::definitions::load(
-            root.path(),
+            base_dir.path(),
             crate::config::definitions::SkillCheck::Skip,
             &Default::default(),
-            &root.path().join("config.toml"),
+            &base_dir.path().join("config.toml"),
             &Default::default(),
             None,
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let mut profiles = loaded.agent_profiles;
-        // Without `agents/antigravity.md`, switching a Markdown profile onto antigravity refuses
-        // at layout resolution; detach `definition` to exercise `compile_layout_panes`'s
-        // no-prompt agent-file guard on a promptless cell (such as a TOML profile).
-        if let Some(row) = profiles.0.get_mut(profile) {
-            row.definition = None;
-        }
-        crate::harness::spec::resolve_spec_with_agent_override(
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
             Some(profile),
-            &profiles,
-            &profiles,
+            &loaded.agent_profiles,
+            &loaded.agent_profiles,
             &Default::default(),
             &Default::default(),
             Some("antigravity"),
         )
-        .expect("promptless cell renders")
+        .expect("cell renders with kind base");
+        if strip_prompt {
+            // Strip the prompt (and inherited base tools on mcps-only cases) to exercise
+            // `compile_layout_panes`'s no-prompt agent-file guard directly.
+            for cell in layout.agent_cells_mut() {
+                cell.system_prompt_file = None;
+                if matches!(profile, "limited" | "everything") {
+                    cell.tools = None;
+                }
+            }
+        }
+        layout
     };
     let loaded_without_base = crate::config::definitions::load(
         root.path(),
@@ -3345,7 +3520,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         .map_err(|error| error.to_string())
     };
 
-    let bodyless = switched("readseat");
+    let bodyless = switched("readseat", true);
     let cell = bodyless.agent_cells().next().unwrap();
     assert_eq!(cell.tools.as_deref(), Some(&["Read".to_owned()][..]));
     assert_eq!(
@@ -3357,30 +3532,25 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
     let bare = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("antigravity")));
     assert_eq!(compile(&bare, None), Ok(()));
 
-    let limited = switched("limited");
+    let limited = switched("limited", true);
     assert_eq!(
         compile(&limited, None),
         Err("antigravity applies a `mcps` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/antigravity.md` or another prompt source, or remove `mcps`".to_owned())
     );
     assert_eq!(compile(&limited, Some(&resumed)), Ok(()));
-    assert_eq!(compile(&switched("everything"), None), Ok(()));
+    assert_eq!(compile(&switched("everything", true), None), Ok(()));
     assert!(
-        compile(&switched("both"), None)
+        compile(&switched("both", true), None)
             .unwrap_err()
             .ends_with("or remove `tools`")
     );
     assert!(
-        compile(&switched("granted"), None)
+        compile(&switched("granted", true), None)
             .unwrap_err()
             .ends_with("or remove `capabilities`")
     );
 
-    std::fs::write(
-        root.path().join("agents/antigravity.md"),
-        "---\ndescription: Base.\n---\nBase.",
-    )
-    .unwrap();
-    let based = switched("readseat");
+    let based = switched("readseat", false);
     assert!(
         based
             .agent_cells()
@@ -3390,7 +3560,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
             .is_some()
     );
     assert_eq!(compile(&based, None), Ok(()));
-    assert_eq!(compile(&switched("limited"), None), Ok(()));
+    assert_eq!(compile(&switched("limited", false), None), Ok(()));
 }
 
 #[test]
@@ -3678,19 +3848,27 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
 #[test]
 fn provider_override_replaces_provider_fields_and_carries_portable_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let mut machine = MachineConfig::default();
-    machine.agents.profiles.0.insert(
-        "coder".to_owned(),
-        configured_profile(
-            "codex",
-            Some(PermissionMode::Auto),
-            Some("profile-model"),
-            Some("high"),
-            None,
-            Some("--raw profile"),
-        ),
-    );
-    let launch = effective_launch(&machine, dir.path());
+    let home = tempfile::tempdir().expect("home dir");
+    std::fs::create_dir(home.path().join("agents")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            home.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\ntools: [Read]\n---\n{kind}."),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir(dir.path().join(".rimz")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/config.toml"),
+        "[profiles.coder]\ndescription = 'Coder'\nagent = 'codex'\nmode = 'auto'\n\
+         model = 'profile-model'\neffort = 'high'\nargs = '--raw profile'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(dir.path(), home.path()).unwrap();
+    let machine =
+        MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path()).unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, dir.path(), home.path()).unwrap();
     let resolved = resolve_launch(
         &launch,
         &machine.agents.commands,
@@ -3703,9 +3881,15 @@ fn provider_override_replaces_provider_fields_and_carries_portable_fields() {
     assert_eq!(cell.launch.profile.as_deref(), Some("coder"));
     assert_eq!(cell.launch.model, None);
     assert_eq!(cell.launch.effort.as_deref(), Some("high"));
-    assert_eq!(
-        cell.args,
-        ["--effort", "high", "--permission-mode", "auto",]
+    assert!(
+        cell.args.windows(2).any(|w| w == ["--effort", "high"])
+            && cell
+                .args
+                .windows(2)
+                .any(|w| w == ["--permission-mode", "auto"])
+            && !cell.args.iter().any(|a| a == "--raw"),
+        "{:?}",
+        cell.args
     );
 
     let mut resolved = resolve_launch(
@@ -4540,7 +4724,7 @@ fn finalized_launch_records_only_the_configured_enforced_auto_compact_count() {
         } else {
             configured.map(str::to_owned)
         };
-        let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+        let profiles = crate::config::ProfilesConfig::from(std::collections::BTreeMap::from([(
             "compact".into(),
             Profile {
                 auto_compact: configured,
@@ -5750,9 +5934,10 @@ fn subagent_profile_print_plan_resolves_the_subagent_table_as_a_top_level_agent(
 #[test]
 fn profile_agent_override_replaces_the_tier_model_and_is_recorded() {
     let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     for (name, body) in [
-        ("claude", ""),
+        ("claude", "tools: [Read]\n"),
         ("worker", "agent: claude\ntier: junior\ntools: [Bash]\n"),
     ] {
         std::fs::write(
@@ -5761,24 +5946,19 @@ fn profile_agent_override_replaces_the_tier_model_and_is_recorded() {
         )
         .unwrap();
     }
-    let mut machine = MachineConfig::default();
-    let definitions = crate::config::definitions::load(
-        root.path(),
-        crate::config::definitions::SkillCheck::Skip,
-        &machine.agents.commands,
-        &root.path().join("config.toml"),
-        &machine.tiers,
-        None,
-    );
-    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
-    machine.agents.profiles = definitions.agent_profiles;
-    machine.agents.profiles.0.insert(
-        "fast".into(),
-        toml::from_str(
-            "agent = 'claude'\nmodel = 'haiku'\neffort = 'low'\nmode = 'yolo'\nargs = '--profile-flag'",
-        )
-        .unwrap(),
-    );
+    let mut machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.fast]\ndescription = 'Fast'\nagent = 'claude'\nmodel = 'haiku'\n\
+         effort = 'low'\nmode = 'yolo'\nargs = '--profile-flag'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), root.path()).unwrap();
+    machine.agents.profiles = effective.profiles;
     let actual = [false, true].map(|tier| {
         let mut request = supervised_request("worker", "Read the brief.");
         request.agent = Some("fast".into());
@@ -6636,7 +6816,7 @@ fn kind_base_code_mode_on_a_kind_without_it_warns_and_launches_without_it() {
         code_mode: Some(crate::agents::Toggle::On),
         ..configured_profile(agent, None, None, None, None, None)
     };
-    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([
+    let profiles = crate::config::ProfilesConfig::from(std::collections::BTreeMap::from([
         ("copilot".into(), base("copilot")),
         ("claude".into(), base("claude")),
         ("codex".into(), base("codex")),

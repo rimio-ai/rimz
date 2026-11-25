@@ -76,7 +76,7 @@ fn seed(kind: &str, profile: Option<&str>, mode: Option<PermissionMode>) -> Fork
 }
 
 fn profiles(name: &str, profile: Profile) -> ProfilesConfig {
-    ProfilesConfig(BTreeMap::from([(name.to_owned(), profile)]))
+    ProfilesConfig::from(BTreeMap::from([(name.to_owned(), profile)]))
 }
 
 fn profile(agent: &str) -> Profile {
@@ -107,13 +107,25 @@ fn fork_posture_refuses_profiles_and_recorded_overrides_on_a_failed_kind() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("agents")).unwrap();
     std::fs::write(dir.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+    std::fs::create_dir(dir.path().join("teams")).unwrap();
+    std::fs::write(dir.path().join("teams/crew.md"), "invalid frontmatter").unwrap();
+    std::fs::create_dir(dir.path().join(".rimz")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/config.toml"),
+        "[profiles.broken]\nagent = \"codex\"\n\n[agents.teams.projcrew]\nlayout = \"lead\"\n[[agents.teams.projcrew.roles]]\nrole = \"lead\"\nprofile = \"broken\"\n",
+    )
+    .unwrap();
+    rimz::trust::grant(dir.path()).unwrap();
     let mut machine =
         rimz::config::MachineConfig::parse_text(&dir.path().join("config.toml"), "", dir.path())
             .unwrap();
     machine.agents.profiles = profiles("worker", profile("claude"));
-    let effective =
-        rimz::config::effective::load_with_roots(&machine, dir.path(), &dir.path().join("home"))
-            .unwrap();
+    let effective = rimz::config::effective::load_with_roots(
+        &machine,
+        dir.path(),
+        &rimz::disk::paths::rimz_home(),
+    )
+    .unwrap();
     let direct = seed("claude", Some("worker"), None);
     let mut bare = seed("claude", None, None);
     bare.launch.record = Some(Box::default());
@@ -130,6 +142,20 @@ fn fork_posture_refuses_profiles_and_recorded_overrides_on_a_failed_kind() {
     assert_eq!(
         Vec::from(actual),
         vec![machine.definition_failure_for("claude"); 3]
+    );
+    let md_team_seat = seed("codex", Some("crew.lead"), None);
+    assert_eq!(
+        super::fork_posture(&md_team_seat, &effective)
+            .err()
+            .map(|error| error.to_string()),
+        machine.definition_failure_for("crew")
+    );
+    let proj_team_seat = seed("codex", Some("projcrew.lead"), None);
+    assert_eq!(
+        super::fork_posture(&proj_team_seat, &effective)
+            .err()
+            .map(|error| error.to_string()),
+        effective.definition_failure_for("projcrew")
     );
 }
 

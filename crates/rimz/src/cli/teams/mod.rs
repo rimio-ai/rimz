@@ -377,14 +377,19 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         None => match args.name.filter(|name| !name.trim().is_empty()) {
             Some(name) => {
-                let (teams, profiles) = list::effective_catalog(globals)?;
+                let effective = list::effective_catalog(globals)?;
                 let team = name.split_once('#').map_or(name.as_str(), |(team, _)| team);
-                if !teams.0.contains_key(team)
-                    && let Some(detail) = crate::cli::machine_config().definition_failure_for(team)
+                if !effective.teams.0.contains_key(team)
+                    && let Some(detail) = effective.definition_failure_for(team)
                 {
                     bail!("{detail}");
                 }
-                guard_launch(&name, args.prompt.as_deref(), &teams, &profiles)?;
+                guard_launch(
+                    &name,
+                    args.prompt.as_deref(),
+                    &effective.teams,
+                    &effective.profiles,
+                )?;
                 if args.json {
                     bail!(
                         "--json is only supported with `rimz teams list`; use `rimz teams show {name} --json` for one team"
@@ -596,14 +601,14 @@ pub(super) fn check_loop_launch(
 }
 
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
-    let (teams, profiles) = list::effective_catalog(globals)?;
-    if !teams.0.contains_key(name)
-        && let Some(detail) = crate::cli::machine_config().definition_failure_for(name)
+    let effective = list::effective_catalog(globals)?;
+    if !effective.teams.0.contains_key(name)
+        && let Some(detail) = effective.definition_failure_for(name)
     {
         bail!("{detail}");
     }
-    validate_team_name(name, &teams, &profiles)?;
-    Ok(teams)
+    validate_team_name(name, &effective.teams, &effective.profiles)?;
+    Ok(effective.teams)
 }
 
 fn validate_team_name(

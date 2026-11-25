@@ -794,6 +794,9 @@ pub fn check_subagent_profile_spec(
     let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
         bail!("{TAKES}; name one (`rimz subagents profiles` lists them)");
     };
+    if let Some(detail) = launch.subagent_profiles.failed(spec) {
+        bail!("{detail}");
+    }
     if launch
         .subagent_profiles
         .0
@@ -834,6 +837,11 @@ pub fn resolve_launch(
     agent_override: Option<&str>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
     launch.block_set_failure()?;
+    if let Some(raw) = spec.map(str::trim).filter(|raw| !raw.is_empty())
+        && !commands.0.contains_key(raw)
+    {
+        launch.block_failed_team(raw)?;
+    }
     let profiles = launch.profiles_for(scope);
     let fallback =
         (scope == crate::config::effective::ProfileScope::Subagents).then_some(&launch.profiles);
@@ -872,6 +880,9 @@ pub fn resolve_launch(
         }
         Err(err) => {
             block_failed_team_prompt(launch, profiles, fallback, &err, agent_override)?;
+            if let Some(name) = agent_override {
+                launch.block_failed_override(name, profiles, fallback)?;
+            }
             return Err(err.into());
         }
     };
@@ -1565,7 +1576,7 @@ pub(super) fn finalize_agent_cell(
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
     let mut preset = options.preset.clone();
-    // Routed cells consumed the CLI model in their walk; exact TOML cells still need it.
+    // Tier-routed cells already carry their resolved model; other cells still take the CLI model.
     if cell.launch.tier.is_some() {
         preset.model = None;
     }
