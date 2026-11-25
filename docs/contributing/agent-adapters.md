@@ -203,6 +203,8 @@ What a change to a shipped adapter also runs, pins, and checks. The [module cont
 
 A new file in an adapter directory gets a row in its adapter page's `## Files` table when the page has one.
 
+A capture added to a protocol reference that contradicts a shape the adapter's internals page states as live-verified lands with the parser fix, or with a gap entry on that internals page naming the contradicted shape.
+
 ### Launch surface and routine verbs
 
 - A change to a provider's launch argv or its `--settings` JSON also runs `cargo xtask test -E 'binary(integration) & test(/^sandbox::/)'`: `sandbox::sandbox_skills_under_host_use_provider_switches` pins the rendered Claude settings, and adapter-focused filters miss it.
