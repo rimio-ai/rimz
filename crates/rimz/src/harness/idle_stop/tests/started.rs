@@ -285,6 +285,46 @@ fn a_working_descendant_holds_the_tree_under_its_path() {
     assert_eq!(read.closing[0].command, None, "closing with it is no hint");
 }
 
+#[test]
+fn a_lingering_failed_child_lists_as_closing_unless_in_debt() {
+    let (dir, store) = fixture();
+    let (parent, _) = rested();
+    register(&store, "session-1", None);
+    register(&store, "child", Some(&parent));
+    let mut run = RunRecord::new(
+        store.paths().workspace_id.clone(),
+        parent.kind.clone(),
+        PermissionMode::Auto,
+        "work".to_owned(),
+        dir.path().to_owned(),
+    );
+    run.agent_id = Some("child".into());
+    run.status = RunStatus::Failed;
+    run.joined_at = Some(ts(1_100));
+    crate::harness::run::create(store.paths(), &run).expect("run");
+    let mut child = kept_child(&parent, "child");
+    child.status = AgentStatus::Failed;
+    let agents = [parent.clone(), child.clone()];
+    let (verdict, read) = both(&store, dir.path(), &agents, &parent, DUE);
+    assert_eq!(verdict, Verdict::Stop { idle_secs: 180 });
+    assert!(read.holding.is_empty(), "{:?}", read.holding);
+    assert_eq!(rows(&read.closing), [(RowKind::Subagent, "@child")]);
+
+    let message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &child,
+        "retry".to_owned(),
+        DeliveryGate::Done,
+    );
+    store
+        .queue_message(&message, "idle-stop-test")
+        .expect("queue");
+    let (verdict, read) = both(&store, dir.path(), &agents, &parent, DUE);
+    assert_eq!(verdict, Verdict::Hold(Hold::Tree));
+    assert_eq!(rows(&read.holding), [(RowKind::Subagent, "@child")]);
+    assert!(read.closing.is_empty(), "{:?}", read.closing);
+}
+
 /// A team leader seat the shown agent launched, registered in the log and on the row.
 fn launched_team(store: &Store, worktree: &std::path::Path, agent: &AgentState) -> AgentState {
     let kind = agent.kind.clone();

@@ -45,6 +45,7 @@ struct Task {
 struct Sources<'a> {
     owners: Owners<'a>,
     agents: Vec<&'a AgentState>,
+    runs: crate::store::run::RunListing,
     state: &'a crate::StatePaths,
     catalog: TaskCatalog,
     now: Timestamp,
@@ -60,9 +61,11 @@ pub(super) fn tasks(tools: &Tools, args: &TasksArgs) -> Result<Answer, Failure> 
     let agent = resolve_me(&room.store, &snapshot)?;
     let started = super::control::started(&room, agent)?;
     let audit = room.store.audit_rows().map_err(anyhow::Error::from)?;
+    let runs = crate::harness::run::listing(room.store.paths()).map_err(anyhow::Error::from)?;
     let sources = Sources {
         owners: Owners::new(agent, &snapshot.agents, &audit, room.store.paths()),
         agents: snapshot.agents.iter().chain(audit.iter()).collect(),
+        runs,
         state: room.store.paths(),
         catalog: TaskCatalog::load_room_lenient(&room.workspace.project_root, room.store.paths()),
         now: Timestamp::now(),
@@ -100,7 +103,14 @@ impl Sources<'_> {
                 } else {
                     TaskKind::Agent
                 };
-                let status = if row.status == "ended" {
+                let terminal_child_run = task_kind == TaskKind::Subagent
+                    && self
+                        .runs
+                        .iter()
+                        .filter(|run| run.matches_agent(agent))
+                        .max_by_key(|run| run.updated_at)
+                        .is_some_and(|run| run.status.is_terminal());
+                let status = if row.status == "ended" || terminal_child_run {
                     "done"
                 } else {
                     "running"

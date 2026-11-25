@@ -1352,15 +1352,25 @@ fn subagent_launch_defaults_parse_and_round_trip() {
     assert_eq!(defaulted.subagents.timeout, "30m");
     assert_eq!(defaulted.subagents.warn, ["10m", "5m"]);
     assert_eq!(defaulted.subagents.grace, "5m");
+    assert_eq!(defaulted.subagents.linger, "10m");
+    assert_eq!(
+        defaulted.subagents.linger().expect("default linger"),
+        Duration::from_secs(10 * 60)
+    );
 
     let parsed: AgentsConfig = toml::from_str(
         "[subagents]\n\
-         timeout = \"45m\"\nwarn = [\"9m\", \"2m\"]\ngrace = \"1m\"\n",
+         timeout = \"45m\"\nwarn = [\"9m\", \"2m\"]\ngrace = \"1m\"\nlinger = \"2m\"\n",
     )
     .expect("parse subagent defaults");
     assert_eq!(parsed.subagents.timeout, "45m");
     assert_eq!(parsed.subagents.warn, ["9m", "2m"]);
     assert_eq!(parsed.subagents.grace, "1m");
+    assert_eq!(parsed.subagents.linger, "2m");
+    assert_eq!(
+        parsed.subagents.linger().expect("configured linger"),
+        Duration::from_secs(2 * 60)
+    );
 
     let encoded = toml::to_string(&parsed).expect("serialize agents");
     assert_eq!(
@@ -1371,6 +1381,34 @@ fn subagent_launch_defaults_parse_and_round_trip() {
     let parsed =
         toml::from_str::<AgentsConfig>("[subagents]\nbudget = \"5/day\"\n").expect("ignored key");
     assert_eq!(parsed.subagents, SubagentsConfig::default());
+}
+
+#[test]
+fn subagent_linger_enforces_one_minute_floor_and_falls_back_to_default() {
+    assert_eq!(
+        SubagentsConfig::parse_linger("1m").expect("exact floor"),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        SubagentsConfig::parse_linger("60s").expect("60s equals floor"),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        SubagentsConfig::parse_linger("2h").expect("hours"),
+        Duration::from_secs(2 * 3600)
+    );
+    for bad in ["0s", "59s", "10", "soon", ""] {
+        let config = SubagentsConfig {
+            linger: bad.to_owned(),
+            ..Default::default()
+        };
+        assert!(config.linger().is_err(), "accepted invalid linger `{bad}`");
+        assert_eq!(
+            config.linger_or_default(),
+            SubagentsConfig::DEFAULT_LINGER,
+            "invalid linger `{bad}` must fall back to 10m"
+        );
+    }
 }
 
 #[test]

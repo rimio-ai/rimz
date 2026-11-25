@@ -42,9 +42,9 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `print` | always `true` | selects RimZ's supervised run, not provider print mode, so interactive providers can take follow-up turns |
 | `bg` | always `true` | single launch and fanout share one background composition |
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
-| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Supervised preparation stores `self_cleanup_on_completion && !keep` as the leader's `cleanup` (`crates/rimz/src/launcher/supervised.rs::prepare`) |
+| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider once the report is queued or joined and the child rests unfocused for `[agents.subagents] linger`, then closes the pane. Supervised preparation stores `self_cleanup_on_completion && !keep` as the leader's `cleanup` (`crates/rimz/src/launcher/supervised.rs::prepare`) |
 | `keep` | `--keep`, default false | turns automatic completion cleanup off and holds the pane past provider exit until the parent ends or Ctrl-C, under a live parent watch |
-| `timeout` | `--timeout`, else the profile's `timeout:`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
+| `timeout` | `--timeout`, else the profile's `timeout:`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a lingering terminal run |
 | `warn` | `--warn`, else `[agents.subagents] warn`, default `["10m", "5m"]` | offsets before the soft bound, normalized against the final timeout |
 | `grace` | `--grace`, else `[agents.subagents] grace`, default `5m` | reporting time before the producer kills the run. Zero is stored absent |
 | `report_to` | `launcher` | see [which runs a fleet owes](#which-runs-a-fleet-owes) for `nobody` |
@@ -264,7 +264,7 @@ Each step names the section that owns it.
 3. Work. The child runs until its work ends. A clean turn end with an owed harness wake [parks](./scripting.md#parked-runs) the run as `Running`, so the parent's digest still waits for it. An interrupted turn [holds the run open](./scripting.md#interrupted-subagent-turns) for 60 seconds, and a new turn in that time continues it. Otherwise the child's hooks fold a terminal status into the run record.
 4. Publish. The newly terminal write publishes the answer to a [response file](#response-files) before the record lands.
 5. Report. The child's in-pane wrapper runs the [fleet reporter](#the-fleet-report). Once nothing in the fleet is still running, the reporter queues one digest to the launcher.
-6. Clean up. After the parent's receiving turn ends, the wrapper stops the idle child, stamps its row's `ended_at`, and closes its pane ([cleanup after receipt](#cleanup-after-receipt)). One-shot providers exit on their own. Interactive providers stay available for [follow-ups](#follow-ups-and-resume) until then.
+6. Clean up. After its report is queued or joined and the child rests unfocused for `[agents.subagents] linger` (default `10m`), the wrapper stops the idle child, stamps its row's `ended_at`, and closes its pane ([cleanup after receipt](#cleanup-after-receipt)). One-shot providers exit on their own. Interactive providers stay available for [follow-ups](#follow-ups-and-resume) until then.
 7. Retain. The run record survives the close. The ended child stays under any visible row of its parent's launch, so `list` and `wait` still report the outcome. A finished child keeps its verdict on the card as prior-turn history past the parent's next prompt boundary ([sidebar.md § Sub-agent lists](../sidebar/sidebar.md#sub-agent-lists)). A retained child is at rest and never holds its parent in `running` ([model.md](../agents/model.md#observed-ends-and-reaped-ends)). The run record's own outcome is what `list`, `wait`, and the digest report.
 
 A parent that is gone ends the child through the [backstops](#backstops), whatever step it is at.
@@ -383,25 +383,26 @@ An unresolved caller is a human shell and counts as attended. A failed snapshot 
 
 ## Cleanup after receipt
 
-A launched child waits for its parent to receive the answer before the wrapper stops the provider and closes the pane. `RunMonitor` in [`cli/agents_cmd/exec/supervisor.rs`](../../../crates/rimz/src/cli/agents_cmd/exec/supervisor.rs) polls the run record every 250 ms with self-cleanup on, and runs two kinds of `supervise-duty` helper (`cli/agents_cmd/exec/duty.rs`) so the wrapper itself never folds the store:
+A launched child keeps its pane open after settling until its report is durable and the child has rested unfocused for `[agents.subagents] linger` (default `10m`, floor `1m`, read from machine config on each check so edits reach lingering children). `RunMonitor` in [`cli/agents_cmd/exec/supervisor.rs`](../../../crates/rimz/src/cli/agents_cmd/exec/supervisor.rs) polls the run record every 250 ms with self-cleanup on, and runs two kinds of `supervise-duty` helper (`cli/agents_cmd/exec/duty.rs`) so the wrapper itself never folds the store:
 
 - A resident `Strand` helper runs only while the run is parked and nonterminal. It repairs the fleet's digests and checks for a [stranded park](./scripting.md#parked-runs) every 5 s. When the run leaves that phase, it finishes its current work and is reaped, never killed mid-write.
-- A one-shot `Receipt` helper runs the [fleet reporter](#composing-the-digest) when the record changed since its last start and still owes a report, then answers whether the parent has received the answer. A new record revision, queue `(mtime, len)` changes, parent lifecycle frames, a waiter leaving, or a 60 s fallback trigger it, with at most one in flight and a 1 s floor between starts. While a terminal run awaits receipt, the wrapper wakes the parent watchdog to drain parent frames every second, without speeding up pane probes or confirmation helpers.
+- A one-shot `Receipt` helper runs the [fleet reporter](#composing-the-digest) when the record changed since its last start and still owes a report, then answers whether the child is ready for idle close. A new record revision, queue `(mtime, len)` changes, a waiter leaving, a turn opening after an untaken follow-up, or a 60 s fallback trigger it, with at most one in flight and a 1 s floor between starts.
 
 Helpers also finish their current work when the wrapper exits, and a strand helper stops iterating once its wrapper is gone.
 
-Cleanup requires all of these, in a receipt answer requested after the waiter left:
+Idle close requires all of these, in a receipt answer requested after the waiter left:
 
 - the run is terminal, with no answer still owed a report
 - no waiter is live on the run
-- the current answer was received, through `joined_at` or a `Delivered` digest in message history
+- the current answer was joined (`joined_at`), or its run settled (`completed_at`) before this wrapper bound, or the report message it names is present in the queue or in any retained message-history bucket (closing the stamp-before-queue window without waiting for delivery). A follow-up's reopen clears `completed_at`, so a new answer always settles after the bind
 - the child has no open turn
 - no non-terminal queued message is addressed to the child
-- the parent has no open turn. An absent or ended parent counts as having none
+- the child's pane is not the focused pane by a fresh focus fact (`crates/rimz/src/sidebar/cache.rs::fresh_pane_focused`, within `FOCUS_HOLD_TTL` or a fresh focus anchor; missing, unreadable, or stale frames hold nothing)
+- the child has rested for at least `[agents.subagents] linger` (falling back to the `10m` default when machine config is unreadable or invalid) from `crates/rimz/src/harness/idle_stop.rs::rested_since`, taking the latest of `turn_ended_at`, the settle marker, `last_activity` in `snapshot_cached`, and the wrapper's own bind timestamp (`bound_at`). A message-driven resume whose follow-up settled without opening a turn (`Duty::Receipt { skip_linger: true, .. }`) omits only this wait until a turn opens on that wrapper, while keeping every condition above.
 
-`RunExecContext::parent_received_and_rested` in the helper reads the queue and history before `snapshot_cached`, whose rest certificates inform `holds_open_turn`. The order matters because a pane send leaves a message `Sent`, and the receiver's turn hook folds `TurnStarted` before acknowledging `Delivered`.
+`RunExecContext::idle_close_ready_with_clock` in the helper reads the queue before `snapshot_cached`, whose rest certificates inform `holds_open_turn`, and takes one clock instant after those reads to evaluate focus freshness and `linger`. The parent's turn state and the report's delivery are not read. When a store or queue read fails, the duty exits non-zero and leaves the pane open for the next check.
 
-A `nobody` run owes no report, so `RunMonitor::poll` cleans it up as soon as no waiter is live and any [resume hold](#the-receiving-turn-hold) has released, without waiting for a parent turn. Timeout pane retention and the resume exit policy still read `keep`.
+A `nobody` run owes no report, so `RunMonitor::poll` cleans it up as soon as no waiter is live and any [resume hold](#the-receiving-turn-hold) has released, without running the receipt duty. Timeout pane retention and the resume exit policy still read `keep`.
 
 ### `--keep`
 
@@ -426,7 +427,7 @@ The last three run in the room host, so without a sidebar host there is no sweep
 
 The watchdog ([`harness/parent_watch.rs`](../../../crates/rimz/src/harness/parent_watch.rs)) runs on its own thread in every subagent wrapper with a run context and launch identity, and continues through a post-exit hold. Admission is decided once at wrapper start, even if its startup projection cannot resolve the parent. An unseeded watch, or one whose seed reads the parent's agent ended (`WatchdogSeed::parent_ended`, judged over the holder's rows as `agents::state::agent_end` judges them), asks its first confirmation at once. Its seed cursor precedes the startup projection read and is captured under the rotation lock.
 
-Every `PROBE_INTERVAL` (60 seconds), `LaunchTail` streams lifecycle, launch, and attach frames into the parent launch's member map without opening a store. A frame stamped with the parent's launch id joins the map whatever its kind, so a cross-kind molt's replacement is a member, and a `failed` launch frame counts its provisional row as ended. Attach frames can move the parent pane but do not revive ended members. While a terminal run awaits receipt, tail drains speed up to 1 s. Three things nominate a verdict:
+Every `PROBE_INTERVAL` (60 seconds), `LaunchTail` streams lifecycle, launch, and attach frames into the parent launch's member map without opening a store. A frame stamped with the parent's launch id joins the map whatever its kind, so a cross-kind molt's replacement is a member, and a `failed` launch frame counts its provisional row as ended. Attach frames can move the parent pane but do not revive ended members. Three things nominate a verdict:
 
 - every known member has ended, or one member ended in the tail while another stays live (which of them holds the agent is the helper's to read)
 - a tail error or an archive gap
@@ -454,7 +455,7 @@ The sweep reads no message queue, so the peer helper verifies on both checks tha
 
 ### The deadline ladder
 
-The ladder bounds pending and running work, never a terminal child awaiting receipt. [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) evaluates only `Pending` and `Running` records. A terminal child awaiting receipt can linger while its parent lives, and is bounded by the watchdog, the orphan sweep, the parent stop cascade, and `rimz subagents stop`.
+The ladder bounds pending and running work, never a lingering terminal child. [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) evaluates only `Pending` and `Running` records. A terminal child lingers until `[agents.subagents] linger` elapses while its parent lives, and is also bounded by the watchdog, the orphan sweep, the parent stop cascade, and `rimz subagents stop`.
 
 `deadline_at` is the soft bound, and `kill_due` fires at `deadline_at + grace`. `due_rung` selects the latest crossed warning or stop above `deadline_notice_at`, and `run::claim_rung` claims it under the workspace lock. The hook feed skips provider-native children and asks a context-capable adapter to attach the rung only on an accepted event. `stop_due_by_pane` reads what the kind declares to decide when the host sends the stop rung itself. A kind with hook context leaves the rung to the hook for `min(10s, grace / 2)` after the deadline; once that passes with the rung still unclaimed, the host sends it as an unforced interrupt, unless the child is waiting on input. A kind without hook context gets it from the host at the deadline, as that interrupt. Every kind declares interrupt keys ([the message keys](./messaging.md#the-message-keys)), so the host stop is always an interrupt. The hook and the host claim the same rung under the lock, so the stop reaches a child by one channel.
 
@@ -516,13 +517,13 @@ The request reuses the child's session, launch identity, newest run, and keep po
 
 Only a start opens a pane. Joiners never extend the wait, and a follow-up at or after its deadline starts a new resume without needing a sweep. Steer and interrupt become the child's next boundary prompt. A failed split errors that same record and returns the error, without an unresolved-message bounce. A confirmed opening keeps the record regardless of the three-second bind check, which is placement pacing and diagnostic evidence only. There is no second dispatch.
 
-The receipt names the message id, the resuming child, and the absolute UTC registration deadline. The message is the next prompt, `TurnStarted` reopens the run, and the receiving-turn cleanup rule applies again. An explicit stop, a failure, or a timeout does not prevent a later parent-message resume when its preconditions pass.
+The receipt names the message id, the resuming child, and the absolute UTC registration deadline. The message is the next prompt, `TurnStarted` reopens the run, and the idle-close cleanup rule applies again. An explicit stop, a failure, or a timeout does not prevent a later parent-message resume when its preconditions pass.
 
 Every subagent resume reuses a run id, so the exec wrapper supervises it. The wrapped resume appends `rimz.agent-resumed` with `Registered` after recording its pane and before spawning the provider, as every resume does ([model.md](../agents/model.md)). That makes the row live without waiting for a lazily registering provider's first hook. Attach alone changes placement, not lifecycle. After spawning the provider and recording its pane again, every resumed wrapper triggers queued-head delivery through the same library helper as the registration hook reactor ([messaging.md](./messaging.md#what-triggers-a-delivery)), since the plain resume stamp does not invoke that reactor.
 
 ### The receiving-turn hold
 
-When the reused run is terminal before spawn, the wrapper holds receiving-parent cleanup until `TurnStarted` reopens it. The durable follow-up ordinal detects the reopen even when the turn completes between monitor polls. The message doorway carries its queued id as `ExecRequest.follow_up_message`, including in `ParkState.request`. While the ordinal has not advanced, a `Queued`, `Claimed`, `Sent`, or `Delivered` message keeps the hold, and any other terminal status or a missing record releases it to ordinary settlement. The wrapper reads that status without a store fold, under the workspace lock across queue and retained history, and caches it until the queue stamp changes. An unreadable record keeps the hold until that stamp changes too. A request without the id keeps the ordinal-only hold. A failed follow-up does not rewrite or report the already-reported answer.
+When the reused run is terminal before spawn and a follow-up message started the resume (`ExecRequest.follow_up_message` is set), the wrapper holds idle cleanup until `TurnStarted` reopens it. The durable follow-up ordinal detects the reopen even when the turn completes between monitor polls. While the ordinal has not advanced, a `Queued`, `Claimed`, `Sent`, or `Delivered` message keeps the hold, and any other terminal status or a missing record releases it to idle-close settlement with `skip_linger: true` on `Duty::Receipt`, skipping the `[agents.subagents] linger` wait while keeping the report, open-turn, queued-message, and focus checks. That exemption ends as soon as a turn opens on that wrapper (`follow_ups` advances past the awaited ordinal or the run leaves terminal status), so any later finish lingers normally; a hold that drops because the follow-up opened a turn takes no exemption. The wrapper reads that status without a store fold, under the workspace lock across queue and retained history, and caches it until the queue stamp changes. An unreadable record keeps the hold until that stamp changes too. A wrapper started on a terminal run without a follow-up message takes no reopen hold and closes under the ordinary `linger` rule measured from its bind. A failed follow-up does not rewrite or report the already-reported answer.
 
 ### Messages for a child that ended
 

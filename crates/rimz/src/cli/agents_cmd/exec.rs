@@ -1415,27 +1415,26 @@ impl RunExecContext {
             .is_some_and(|record| record.status.is_terminal())
     }
 
-    fn parent_received_and_rested(
+    fn idle_close_ready_with_clock(
         &self,
         record: &rimz::store::run::RunRecord,
+        bound_at: jiff::Timestamp,
+        linger: Option<Duration>,
+        now: impl FnOnce() -> jiff::Timestamp,
     ) -> std::result::Result<bool, rimz::store::StoreErr> {
-        if record.owes_report() {
+        if !record.status.is_terminal() || record.owes_report() {
             return Ok(false);
         }
         // Pane send leaves a prompt Sent. The lifecycle hook records TurnStarted
         // before confirming Delivered; queue-before-snapshot preserves that order.
         let messages = self.store.list_messages()?;
-        if record.joined_at.is_none() {
-            // A queued report is not yet delivered; history is read only once it leaves the queue.
+        // A run settled before this wrapper bound left its stamp-before-queue window
+        // with an earlier wrapper, however long history keeps the report's row.
+        if record.joined_at.is_none() && record.completed_at.is_none_or(|at| at >= bound_at) {
             let Some(report) = record.report_message_id.as_ref() else {
                 return Ok(false);
             };
-            if messages.iter().any(|message| &message.message_id == report)
-                || !self.store.list_message_history()?.iter().any(|message| {
-                    &message.message_id == report
-                        && message.status == rimz::store::message::MessageStatus::Delivered
-                })
-            {
+            if rimz::store::message::read_status(self.store.paths(), report)?.is_none() {
                 return Ok(false);
             }
         }
@@ -1454,10 +1453,29 @@ impl RunExecContext {
         {
             return Ok(false);
         }
-        Ok(
-            !rimz::address::launched_parent(snapshot.agents.iter(), child)
-                .is_some_and(|parent| parent.ended_at.is_none() && parent.holds_open_turn()),
-        )
+        let now = now();
+        let now_ms = u64::try_from(now.as_millisecond()).unwrap_or(0);
+        if let Some(pane) = child
+            .pane
+            .as_ref()
+            .map(|pane| &pane.pane_id)
+            .or(record.pane_id.as_ref())
+            && rimz::sidebar::cache::fresh_pane_focused(
+                self.store.runtime_paths(),
+                &self.session_name,
+                pane,
+                now_ms,
+            )
+        {
+            return Ok(false);
+        }
+        let Some(linger) = linger else {
+            return Ok(true);
+        };
+        let rest_since = rimz::harness::idle_stop::rested_since(child, bound_at);
+        Ok(now > rest_since
+            && Duration::try_from(now.duration_since(rest_since))
+                .is_ok_and(|elapsed| elapsed >= linger))
     }
 
     fn load_record(&self) -> Option<rimz::store::run::RunRecord> {
@@ -1479,8 +1497,11 @@ fn resumed_run_follow_ups(
     request: &rimz::harness::launch::ExecRequest,
     record: &rimz::store::run::RunRecord,
 ) -> Option<u32> {
-    (request.subagent && exec_attach_target(request).is_some() && record.status.is_terminal())
-        .then_some(record.follow_ups)
+    (request.subagent
+        && request.follow_up_message.is_some()
+        && exec_attach_target(request).is_some()
+        && record.status.is_terminal())
+    .then_some(record.follow_ups)
 }
 
 fn run_exec_context(

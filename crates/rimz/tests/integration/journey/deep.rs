@@ -2390,7 +2390,7 @@ fn tmux_settled_subagent_reports_to_parent() {
     for run in [&first_run, &waited_run] {
         assert!(
             tmux_pane_alive(&socket, &session, run.pane_id.as_ref().unwrap().raw()),
-            "received child must stay alive during the parent's receiving turn"
+            "finished child pane must stay alive while within linger"
         );
     }
 
@@ -2409,19 +2409,21 @@ fn tmux_settled_subagent_reports_to_parent() {
         !wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET).holds_open_turn(),
         "the unattended wait must run after the parent turn ended"
     );
+    // Give RunMonitor (> 2x RUN_MONITOR_POLL) a chance to poll after the parent
+    // rests; idle linger (10m default) keeps interactive child panes open past
+    // the parent's receiving turn.
+    std::thread::sleep(Duration::from_millis(600));
     for run in [&first_run, &waited_run] {
         let pane = run.pane_id.as_ref().unwrap().raw();
-        let deadline = Instant::now() + CAPTURE_BUDGET;
-        while Instant::now() < deadline && tmux_pane_alive(&socket, &session, pane) {
-            std::thread::sleep(Duration::from_millis(25));
-        }
         assert!(
-            !tmux_pane_alive(&socket, &session, pane),
-            "child pane must close after the parent's receiving turn ends"
+            tmux_pane_alive(&socket, &session, pane),
+            "finished child pane must outlive the parent's receiving turn while within linger"
         );
     }
 
     // The stdin-only stub echoes pasted digests but fires no receiving hooks.
+    // Deliver each digest and return the parent to rest so the next step starts
+    // from a settled parent, while asserting each lingering child stays open.
     let receive_and_finish = |run: &rimz::store::run::RunRecord| {
         let reported_run = rimz::harness::run::load(env.store().paths(), &run.run_id)
             .expect("reload reported child");
@@ -2431,7 +2433,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             .expect("read sent digest")
             .into_iter()
             .find(|message| Some(&message.message_id) == reported_run.report_message_id.as_ref())
-            .expect("child digest awaiting receipt");
+            .expect("queued child digest");
         for event in ["UserPromptSubmit", "Stop"] {
             let output = env.run_installed_hook_in_pane(
                 "codex",
@@ -2446,14 +2448,21 @@ fn tmux_settled_subagent_reports_to_parent() {
             );
             assert!(output.status.success(), "parent {event}: {output:?}");
         }
+        assert_eq!(
+            env.store()
+                .list_message_history()
+                .expect("read delivered digest")
+                .iter()
+                .find(|message| message.message_id == report.message_id)
+                .expect("delivered child digest")
+                .status,
+            rimz::store::message::MessageStatus::Delivered
+        );
+        std::thread::sleep(Duration::from_millis(600));
         let pane = run.pane_id.as_ref().unwrap().raw();
-        let deadline = Instant::now() + CAPTURE_BUDGET;
-        while Instant::now() < deadline && tmux_pane_alive(&socket, &session, pane) {
-            std::thread::sleep(Duration::from_millis(25));
-        }
         assert!(
-            !tmux_pane_alive(&socket, &session, pane),
-            "child pane must close after the parent's receiving turn ends"
+            tmux_pane_alive(&socket, &session, pane),
+            "finished child pane must outlive the parent's receiving turn while within linger"
         );
     };
 
@@ -2619,6 +2628,43 @@ fn tmux_settled_subagent_reports_to_parent() {
         "parent pane did not receive status-only digests; timed report: {timed_report:?}\n{parent_frame}"
     );
     receive_and_finish(&timed_run);
+
+    // Waiting out the 1m linger floor + 60s duty cadence would risk nextest's
+    // 120s slow-timeout budget, so close the lingering children via parent stop
+    // and assert every lingering pane reclaims cleanly.
+    let stopped_parent = env
+        .rimz()
+        .env("TMUX", tmux_env(&socket))
+        .args(["--mux", "tmux", "agents", "stop", "@report-parent"])
+        .bounded_output_within(Duration::from_secs(20))
+        .expect("stop report parent");
+    assert!(
+        stopped_parent.status.success(),
+        "stopping report parent failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stopped_parent.stdout),
+        String::from_utf8_lossy(&stopped_parent.stderr)
+    );
+    let lingering = [&first_run, &waited_run, &unattended_run, &timed_run];
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while Instant::now() < deadline
+        && (tmux_pane_alive(&socket, &session, &parent_pane_raw)
+            || lingering
+                .iter()
+                .any(|run| tmux_pane_alive(&socket, &session, run.pane_id.as_ref().unwrap().raw())))
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !tmux_pane_alive(&socket, &session, &parent_pane_raw),
+        "parent pane should close on stop"
+    );
+    for run in lingering {
+        let pane = run.pane_id.as_ref().unwrap().raw();
+        assert!(
+            !tmux_pane_alive(&socket, &session, pane),
+            "lingering child pane {pane} should close when its parent stops"
+        );
+    }
 }
 
 /// A `--wait` launch by the parent, which returns while its child runs.
@@ -4725,7 +4771,7 @@ fn capture_until_with_join(
             .arg(socket)
             .args(["capture-pane", "-p"]);
         if join_wrapped {
-            // Digest recipients can shrink while terminal children await receipt.
+            // Digest recipients can shrink while lingering terminal children stay open.
             command.args(["-J", "-S", "-"]);
         }
         let out = command

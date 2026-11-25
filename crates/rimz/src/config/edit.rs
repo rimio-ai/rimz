@@ -1809,6 +1809,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || matches!(path, [root, leaf] if root == "gc" && matches!(leaf.as_str(), "transcript_retention" | "team_notes_retention" | "automation_notes_retention"))
         || matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min")
         || matches!(path, [root, leaf] if root == "remote" && leaf == "paste_max")
+        || matches!(path, [root, table, leaf] if root == "agents" && table == "subagents" && matches!(leaf.as_str(), "timeout" | "grace" | "linger"))
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -1887,6 +1888,24 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if let Err(err) = crate::utils::size::parse_byte_size(raw) {
             invalid_value!("remote.paste_max {err}");
+        }
+    }
+    if matches!(path, [root, table, leaf] if root == "agents" && table == "subagents" && leaf == "linger")
+    {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("agents.subagents.linger must be a duration string");
+        };
+        if let Err(err) = super::SubagentsConfig::parse_linger(raw) {
+            invalid_value!("{err}");
+        }
+    }
+    if matches!(path, [root, table, leaf] if root == "agents" && table == "subagents" && matches!(leaf.as_str(), "timeout" | "grace"))
+    {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("{} must be a duration string", path.join("."));
+        };
+        if let Err(err) = crate::utils::time::parse_compact_duration(raw) {
+            invalid_value!("{} {err}; use a duration such as 30m or 5m", path.join("."));
         }
     }
     if matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_percent")
