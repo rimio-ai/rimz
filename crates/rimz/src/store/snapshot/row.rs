@@ -1153,6 +1153,18 @@ impl AgentCard {
         self.sub_agents.iter().filter(|child| !child.prior_turn)
     }
 
+    /// Prior-round subagents ordered newest rest instant first (`None` last,
+    /// preserving snapshot order on ties).
+    pub(crate) fn prior_sub_agents_newest_first(&self) -> Vec<&SidebarSubAgent> {
+        let mut prior: Vec<&SidebarSubAgent> = self
+            .sub_agents
+            .iter()
+            .filter(|child| child.prior_turn)
+            .collect();
+        prior.sort_by_key(|child| std::cmp::Reverse(child.rested_at));
+        prior
+    }
+
     /// Session cost plus the cost of pane-backed children this session launched.
     pub fn cost_usd(&self) -> Option<f64> {
         crate::agents::spending::sum_optional_cost(

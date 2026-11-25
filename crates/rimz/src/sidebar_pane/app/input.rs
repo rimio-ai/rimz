@@ -26,6 +26,12 @@ pub(in crate::sidebar_pane) enum Wakeup {
     },
     /// A key effect's worker failed; its reason becomes the pane notice.
     Notice(String),
+    /// A detached `rimz agents resume <id>` worker finished; clears the in-flight mark
+    /// and surfaces any first stderr line as the pane notice.
+    ReopenFinished {
+        id: String,
+        notice: Option<String>,
+    },
     FocusDispatched {
         input: crate::ids::FocusNonce,
         nonce: crate::ids::FocusNonce,

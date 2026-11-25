@@ -392,11 +392,18 @@ pub(super) fn handle_wakeup(
         | Wakeup::FocusFailed { .. }
         | Wakeup::FocusSuperseded { .. }
         | Wakeup::FocusDispatched { .. }
-        | Wakeup::Notice(_) => InputOutcome::default(),
+        | Wakeup::Notice(_)
+        | Wakeup::ReopenFinished { .. } => InputOutcome::default(),
     };
     outcome.redraw |= pending_moved;
     outcome
 }
+
+/// How long a reopen in-flight mark outlives activation when neither the detached
+/// `rimz agents resume` helper nor a live pane ends it first: longer than the CLI's
+/// 10 s bind ceiling (`SUBAGENT_REOPEN_BIND_TIMEOUT`) so a slow reopen is not offered
+/// a second time while the command still runs.
+pub(super) const REOPEN_MARK_BOUND_MS: u64 = 15_000;
 
 impl LoopState {
     pub(in crate::sidebar_pane::app) fn inspect_view<T>(
@@ -1043,6 +1050,16 @@ impl LoopState {
             Wakeup::Notice(reason) => {
                 self.views.with(&mut self.pane, Route::READ, |state, v| {
                     v.state.notice = Some(reason);
+                    state.dirty = true;
+                });
+                Ok(())
+            }
+            Wakeup::ReopenFinished { id, notice } => {
+                self.views.registry.lock().note_reopening(&id, None);
+                self.views.with(&mut self.pane, Route::READ, |state, v| {
+                    if let Some(reason) = notice {
+                        v.state.notice = Some(reason);
+                    }
                     state.dirty = true;
                 });
                 Ok(())
@@ -1867,7 +1884,29 @@ impl LoopState {
                 InputEffect::Close(pane) => {
                     let room = &self.pane.config.room.session_name;
                     let argv = key_spawn::close_argv(&pane, room, self.pane.config.room.mux);
-                    self.spawn_rimz(argv);
+                    self.spawn_rimz(argv, None);
+                }
+                InputEffect::ReopenSubAgent(id) => {
+                    let already = self.views.with(&mut self.pane, Route::READ, |state, v| {
+                        if v.state.reopening.contains_key(&id) {
+                            return true;
+                        }
+                        state.dirty = true;
+                        false
+                    });
+                    if !already {
+                        let until_ms = self
+                            .pane
+                            .clock
+                            .now_ms()
+                            .saturating_add(REOPEN_MARK_BOUND_MS);
+                        self.views
+                            .registry
+                            .lock()
+                            .note_reopening(&id, Some(until_ms));
+                        let argv = key_spawn::reopen_argv(&id);
+                        self.spawn_rimz(argv, Some(id));
+                    }
                 }
                 InputEffect::Palette { args, from_pane } => {
                     let own = &self.pane.config.own_pane;
@@ -1882,7 +1921,7 @@ impl LoopState {
                         from_pane.as_ref(),
                         client.as_deref(),
                     );
-                    self.spawn_rimz(argv);
+                    self.spawn_rimz(argv, None);
                 }
                 InputEffect::WidthReset => self.pane.width_control.reset(),
                 InputEffect::Repaint | InputEffect::DismissAlert => {}
@@ -1898,9 +1937,9 @@ impl LoopState {
     }
 
     /// Run a key's `rimz` command off the loop; play clocks run none.
-    fn spawn_rimz(&self, argv: Vec<String>) {
+    fn spawn_rimz(&self, argv: Vec<String>, reopen_id: Option<String>) {
         if self.pane.clock.effects_enabled() {
-            key_spawn::spawn_rimz(&self.pane.runtime, argv, self.pane.wake.clone());
+            key_spawn::spawn_rimz(&self.pane.runtime, argv, self.pane.wake.clone(), reopen_id);
         }
     }
 
@@ -2463,7 +2502,17 @@ impl LoopState {
             v.state.closing.retain(|pane, until_ms| {
                 *until_ms > now_ms && current.row_owning_pane(pane).is_some()
             });
-            state.dirty |= v.state.closing.len() != marks;
+            let reopening_marks = v.state.reopening.len();
+            v.state.reopening.retain(|id, until_ms| {
+                *until_ms > now_ms
+                    && current
+                        .rows()
+                        .flat_map(|row| row.sub_agents().iter())
+                        .find(|child| child.id == *id)
+                        .is_some_and(|child| child.pane.is_none())
+            });
+            state.dirty |=
+                v.state.closing.len() != marks || v.state.reopening.len() != reopening_marks;
             let interval = render::animation_interval(
                 &v.context.current,
                 v.state,

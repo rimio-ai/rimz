@@ -125,6 +125,12 @@ pub(crate) enum Component {
     Compaction,
     /// The `⧉` subagents header.
     SubagentHeader,
+    /// The fold line under a card's delegation entries that opens its prior-round children.
+    PriorSubagentsFold,
+    /// A paneless subagent entry that cannot be reopened (provider-native or without resume).
+    SubagentInert,
+    /// A paneless reopenable subagent entry while `rimz agents resume` is in flight.
+    SubagentReopening,
     /// The `⧖` pending-waits header.
     WaitHeader,
     /// The booked-launches header glyph.
@@ -268,6 +274,9 @@ impl Component {
         Component::CacheWrite,
         Component::Compaction,
         Component::SubagentHeader,
+        Component::PriorSubagentsFold,
+        Component::SubagentInert,
+        Component::SubagentReopening,
         Component::WaitHeader,
         Component::BookedHeader,
         Component::BookingWaiting,
@@ -326,7 +335,7 @@ impl Component {
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix
             | EntryAgentName => palette.body,
             WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent
-            | UploadTrack | EntryParkedBg => palette.faint,
+            | UploadTrack | EntryParkedBg | SubagentInert => palette.faint,
             WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
@@ -349,7 +358,7 @@ impl Component {
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
             | NeedsYouFilter | BookingWaiting | BookingEnded | EntryLane | EntryTeamTag
-            | EntryStage | CardClosing => palette.muted,
+            | EntryStage | CardClosing | PriorSubagentsFold | SubagentReopening => palette.muted,
         })
     }
 }

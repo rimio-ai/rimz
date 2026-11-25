@@ -49,31 +49,44 @@ pub(super) fn close_argv(pane: &PaneId, session: &str, mux: MuxName) -> Vec<Stri
     .to_vec()
 }
 
+/// `rimz agents resume <session_id>` for a paneless reopenable child.
+pub(super) fn reopen_argv(session_id: &str) -> Vec<String> {
+    ["agents", "resume", session_id].map(str::to_owned).to_vec()
+}
+
 /// Run `rimz` with `argv` on a worker. The child inherits the host's
-/// environment, which already carries no pane identity.
+/// environment, which already carries no pane identity. When `reopen_id` is
+/// `Some`, completion always reports [`Wakeup::ReopenFinished`] so the view
+/// clears its in-flight mark and surfaces any first stderr line as the notice.
 pub(super) fn spawn_rimz(
     runtime: &RuntimePaths,
     argv: Vec<String>,
     wake: Option<SyncSender<Wakeup>>,
+    reopen_id: Option<String>,
 ) {
     #[cfg(test)]
     {
-        let _ = (runtime, wake);
+        let _ = (runtime, wake, reopen_id);
         SPAWNED.with(|spawned| spawned.borrow_mut().push(argv));
     }
     #[cfg(not(test))]
     {
         let mut command = Command::new(crate::proc::rimz_exe());
         crate::child_process::anchor_detached_command(&mut command, runtime).args(argv);
-        run_reporting(command, wake);
+        run_reporting(command, wake, reopen_id);
     }
 }
 
 /// Run `command` on a worker and report its first stderr line, or a non-zero
 /// exit with none, through `wake`. Stderr counts whatever the exit: `rimz
 /// sidebar close` prints a refusal there, from the host or from its own read
-/// of the room, and still exits 0.
-fn run_reporting(mut command: Command, wake: Option<SyncSender<Wakeup>>) {
+/// of the room, and still exits 0. When `reopen_id` is `Some`, every exit
+/// sends [`Wakeup::ReopenFinished`] with any refusal line attached.
+fn run_reporting(
+    mut command: Command,
+    wake: Option<SyncSender<Wakeup>>,
+    reopen_id: Option<String>,
+) {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -87,15 +100,19 @@ fn run_reporting(mut command: Command, wake: Option<SyncSender<Wakeup>>) {
                     .find(|line| !line.is_empty())
                     .map(str::to_owned);
                 match first {
-                    Some(line) => line,
-                    None if output.status.success() => return,
-                    None => format!("rimz exited with {}", output.status),
+                    Some(line) => Some(line),
+                    None if output.status.success() => None,
+                    None => Some(format!("rimz exited with {}", output.status)),
                 }
             }
-            Err(err) => format!("rimz did not start: {err}"),
+            Err(err) => Some(format!("rimz did not start: {err}")),
         };
         if let Some(wake) = wake {
-            let _ = wake.try_send(Wakeup::Notice(reason));
+            if let Some(id) = reopen_id {
+                let _ = wake.try_send(Wakeup::ReopenFinished { id, notice: reason });
+            } else if let Some(reason) = reason {
+                let _ = wake.try_send(Wakeup::Notice(reason));
+            }
         }
     });
 }
@@ -188,7 +205,7 @@ mod tests {
             "-c",
             "printf '\\nno client attached\\nsecond\\n' >&2; exit 2",
         ]);
-        run_reporting(failing, Some(wake.clone()));
+        run_reporting(failing, Some(wake.clone()), None);
         assert_eq!(
             notices.recv_timeout(Duration::from_secs(10)),
             Ok(Wakeup::Notice("no client attached".into()))
@@ -198,7 +215,7 @@ mod tests {
             "-c",
             "echo 'sidebar close: pane tmux:%9 is not in session room; nothing was closed' >&2",
         ]);
-        run_reporting(refused, Some(wake.clone()));
+        run_reporting(refused, Some(wake.clone()), None);
         assert_eq!(
             notices.recv_timeout(Duration::from_secs(10)),
             Ok(Wakeup::Notice(
@@ -206,9 +223,32 @@ mod tests {
             )),
             "a refusal printed before a clean exit still reaches the pane"
         );
+        let mut reopen_err = Command::new("sh");
+        reopen_err.args([
+            "-c",
+            "echo 'cannot reopen @coder: parent ended' >&2; exit 1",
+        ]);
+        run_reporting(reopen_err, Some(wake.clone()), Some("child-1".into()));
+        assert_eq!(
+            notices.recv_timeout(Duration::from_secs(10)),
+            Ok(Wakeup::ReopenFinished {
+                id: "child-1".into(),
+                notice: Some("cannot reopen @coder: parent ended".into()),
+            })
+        );
+        let mut reopen_ok = Command::new("sh");
+        reopen_ok.args(["-c", "true"]);
+        run_reporting(reopen_ok, Some(wake.clone()), Some("child-2".into()));
+        assert_eq!(
+            notices.recv_timeout(Duration::from_secs(10)),
+            Ok(Wakeup::ReopenFinished {
+                id: "child-2".into(),
+                notice: None,
+            })
+        );
         let mut clean = Command::new("sh");
         clean.args(["-c", "true"]);
-        run_reporting(clean, Some(wake));
+        run_reporting(clean, Some(wake), None);
         assert!(
             notices.recv_timeout(Duration::from_secs(10)).is_err(),
             "a clean, quiet exit sends nothing and the worker drops its sender"

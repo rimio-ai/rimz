@@ -52,6 +52,8 @@ pub(super) enum InputEffect {
     ),
     /// Run `rimz sidebar close --pane` for this card's pane on a worker.
     Close(PaneId),
+    /// Run `rimz agents resume <id>` for a paneless reopenable child on a worker.
+    ReopenSubAgent(String),
     /// Open the palette popup: `args` picks its mode, `from_pane` the card it
     /// starts on. The loop adds the room and the tmux client.
     Palette {
@@ -386,6 +388,21 @@ fn key_outcome(
             }
             match view.entry_cursor.clone() {
                 Some(EntryCursor::SubAgent(pane)) => return InputOutcome::focus(pane),
+                Some(EntryCursor::ReopenSubAgent(id)) => {
+                    return effect(InputEffect::ReopenSubAgent(id));
+                }
+                Some(EntryCursor::PriorSubagentsToggle) => {
+                    let Some(row_id) = view
+                        .selected_index
+                        .and_then(|index| view.visible_roster(snapshot).row(index))
+                        .map(|row| row.id.clone())
+                    else {
+                        return InputOutcome::default();
+                    };
+                    toggle_prior_subagents(view, snapshot, row_id);
+                    view.request(ViewportIntent::Hold);
+                    return InputOutcome::redraw();
+                }
                 None => {}
             }
             // Focus the current visible row without moving the highlight — it
@@ -711,6 +728,12 @@ pub(super) fn handle_mouse_click(
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
+        Some(HitTarget::TogglePriorSubagents { row }) => {
+            toggle_prior_subagents(view, snapshot, row);
+            view.request(ViewportIntent::Hold);
+            InputOutcome::redraw()
+        }
+        Some(HitTarget::ReopenSubAgent(id)) => effect(InputEffect::ReopenSubAgent(id)),
         Some(HitTarget::Row(_) | HitTarget::SubAgentPane(_) | HitTarget::Hyperlink(_)) | None => {
             InputOutcome::default()
         }
@@ -748,6 +771,8 @@ pub(super) fn click_focus_pane(
         | HitTarget::ToggleGroup(_)
         | HitTarget::ToggleInactive
         | HitTarget::MoreInactive
+        | HitTarget::TogglePriorSubagents { .. }
+        | HitTarget::ReopenSubAgent(_)
         | HitTarget::UnreadBanner
         | HitTarget::FocusMarker
         | HitTarget::Hyperlink(_) => None,
@@ -861,6 +886,43 @@ fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: S
         .delegation_overrides
         .insert(row_id, DelegationPin { open, turn });
     anchor_selection(ui, snapshot);
+}
+
+/// Toggle an agent card's prior-round subagents fold without moving focus.
+/// Keeps the card's selection, and when closing drops a keyboard cursor that
+/// was resting on an entry inside the fold, lands it on the fold line.
+fn toggle_prior_subagents(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
+    let Some(agent) = snapshot
+        .rows()
+        .find(|row| row.id == row_id)
+        .and_then(SidebarRow::as_agent)
+    else {
+        return;
+    };
+    let turn = agent.user_turn_started_at;
+    let selected_same_row = ui
+        .selected_index
+        .and_then(|index| ui.visible_roster(snapshot).row(index))
+        .is_some_and(|row| row.id == row_id);
+    let had_cursor = ui.entry_cursor.is_some();
+    let closing = ui.toggles.prior_subagents_open.get(&row_id) == Some(&turn);
+    if closing {
+        ui.toggles.prior_subagents_open.remove(&row_id);
+    } else {
+        ui.toggles.prior_subagents_open.insert(row_id, turn);
+    }
+    anchor_selection(ui, snapshot);
+    if closing
+        && selected_same_row
+        && had_cursor
+        && ui.entry_cursor.is_none()
+        && let Some(index) = ui.selected_index
+        && ui
+            .entry_stops(snapshot, index)
+            .contains(&EntryCursor::PriorSubagentsToggle)
+    {
+        ui.entry_cursor = Some(EntryCursor::PriorSubagentsToggle);
+    }
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears

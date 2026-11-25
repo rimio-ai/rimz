@@ -1490,6 +1490,7 @@ fn long_wait_clocks_and_child_runtimes_stay_muted() {
         Some("Explore"),
     );
     child.parent_agent_id = Some("claude-1".into());
+    child.launch_depth = Some(1);
     child.subagent_started_at = Some(started);
     let snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);

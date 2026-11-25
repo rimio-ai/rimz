@@ -398,8 +398,9 @@ fn subagent_child_row_appears_and_leaves_at_the_next_turn() {
             "subagent stop settles the child to success for the current turn:\n{screen}"
         );
 
-        // The card lists the current turn's children only, so the next prompt
-        // takes the landed child and its summary line off the card.
+        // The standing delegation line lists the current turn's children only,
+        // so the next prompt folds the landed child into `earlier` and drops
+        // `⧉ 1`.
         room.agent_hook(agent.source(), &agent.prompt("next parent turn"));
         let next_turn_without_child = |screen: &str| {
             screen.contains("next parent turn")

@@ -624,6 +624,17 @@ impl Views {
         }
     }
 
+    /// Mark the paneless child `id` as reopening in every view until `until_ms`,
+    /// or lift the mark from every view with `None`.
+    pub(super) fn note_reopening(&mut self, id: &str, until_ms: Option<u64>) {
+        for entry in self.entries.values_mut() {
+            match until_ms {
+                Some(until_ms) => entry.state.reopening.insert(id.to_owned(), until_ms),
+                None => entry.state.reopening.remove(id),
+            };
+        }
+    }
+
     /// The focus events recorded since the last take, in recorded order.
     pub(super) fn take_work_focus(&mut self) -> Vec<(u64, Vec<PaneId>)> {
         std::mem::take(&mut self.work_focus)

@@ -55,6 +55,7 @@ impl CardHeights {
             now,
             typing_until: _, // Marks never change a card's height.
             closing: _,
+            reopening: _,
             width,
             tier: _, // Derived from width.
             bands,
@@ -67,6 +68,7 @@ impl CardHeights {
             selected_index: _,
             held_expansions: _,
             delegation_overrides: _,
+            prior_subagents_open: _,
             lead_unread: _, // Derived from the owned groups.
             // Content-only; test builds re-measure every hit to guard this premise.
             animation_phase: _,
