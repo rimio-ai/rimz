@@ -666,10 +666,11 @@ fn prompt_opened_in(lines: &str, bound: u64, from_file_start: bool) -> Option<Pr
     }
 }
 
-/// Inspect the invocation range starting at `from_step` up to the invocation's own
-/// `PLANNER_RESPONSE`, falling back to the whole transcript when the tail starts past
-/// `from_step`. A `SYSTEM` / `CHECKPOINT` row in that range reports an automatic compaction
-/// close carrying any stripped user prompts taken in with it.
+/// Inspect the invocation range starting at `from_step`, falling back to the whole transcript
+/// when the tail starts past `from_step`. The range ends at the first of the invocation's own
+/// `PLANNER_RESPONSE`, a `SYSTEM` / `CHECKPOINT` row, or a bare `/compact` row (bracketed by
+/// its own opener and `Stop`), and rows past that end are not reported. A `CHECKPOINT` end
+/// reports an automatic compaction close carrying any stripped user prompts read before it.
 fn taken_in_under(home: &Path, path: &Path, session_id: &str, from_step: u64) -> PromptEvidence {
     if !valid_transcript_under(home, path, session_id) {
         return PromptEvidence::Unread;
