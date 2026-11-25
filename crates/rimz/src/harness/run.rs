@@ -981,7 +981,10 @@ pub fn release_rung(
 /// already claimed write nothing. The first claim of a park stores `hold` and
 /// moves `deadline_at`, and `deadline_notice_at` when set, later by the held
 /// span; a claim again of a stored hold (one an older binary released) moves
-/// nothing. Returns whether this caller made the claim.
+/// nothing. A claim for another activity over a stored hold counts its span
+/// from that hold's `until` when that is later than its own `since`, so no
+/// span is added twice and an earlier refill gives time back. Returns whether
+/// this caller made the claim.
 pub fn claim_limit_hold(
     paths: &StatePaths,
     run_id: &RunId,
@@ -1001,7 +1004,10 @@ pub fn claim_limit_hold(
             .limit_hold
             .is_none_or(|stored| stored.activity != activity)
         {
-            let held = hold.until.duration_since(hold.since);
+            let unheld_from = record
+                .limit_hold
+                .map_or(hold.since, |stored| hold.since.max(stored.until));
+            let held = hold.until.duration_since(unheld_from);
             record.deadline_at = record.deadline_at.map(|at| at + held);
             record.deadline_notice_at = record.deadline_notice_at.map(|at| at + held);
             record.limit_hold = Some(hold);
@@ -1430,17 +1436,31 @@ pub fn record_lifecycle(
     last_message: Option<String>,
     owed: impl FnOnce() -> Option<OwedWake>,
 ) -> Result<Option<RunRecord>> {
-    record_lifecycle_at(paths, run_id, kind, observation, last_message, None, owed)
+    record_lifecycle_at(
+        paths,
+        run_id,
+        kind,
+        observation,
+        last_message,
+        None,
+        None,
+        owed,
+    )
 }
 
 /// [`record_lifecycle`] for an observation the hook ingress stamped at `observed_at`; `None`
 /// reads it as observed when the fold runs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal hook-fold entry point taking frame metadata from settle_lifecycle"
+)]
 fn record_lifecycle_at(
     paths: &StatePaths,
     run_id: &RunId,
     kind: &str,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
+    turn_error: Option<&crate::agents::AgentTurnError>,
     observed_at: Option<Timestamp>,
     owed: impl FnOnce() -> Option<OwedWake>,
 ) -> Result<Option<RunRecord>> {
@@ -1466,6 +1486,7 @@ fn record_lifecycle_at(
                 kind,
                 observation,
                 last_message,
+                turn_error,
                 now,
                 observed_at,
                 owed,
@@ -1570,6 +1591,7 @@ pub fn settle_lifecycle(
     agent: &AgentDefinition,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
+    turn_error: Option<&crate::agents::AgentTurnError>,
 ) -> Result<Option<RunRecord>> {
     let kind = agent.spec().kind;
     let record = record_lifecycle_at(
@@ -1578,6 +1600,7 @@ pub fn settle_lifecycle(
         kind,
         observation,
         last_message,
+        turn_error,
         store.hook_ingress_at(),
         || {
             let agent_id = observation.agent_id.as_ref()?;
@@ -1718,11 +1741,16 @@ enum LifecycleFold {
 /// nothing else. A new park cause rules on each reopen write (the rearm, `report_to`,
 /// `follow_ups`, `follow_up`, and the cleared `opened_by`, `limit_hold`, and
 /// `interrupted_at`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pure fold taking the decoded frame's message, turn error, timestamps, and owed wake"
+)]
 fn fold_lifecycle(
     record: &mut RunRecord,
     kind: &str,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
+    turn_error: Option<&crate::agents::AgentTurnError>,
     now: Timestamp,
     observed_at: Timestamp,
     owed: Option<OwedWake>,
@@ -1816,6 +1844,25 @@ fn fold_lifecycle(
     }
     let stop_changed = fold_stopped_turn(record, &observation.signal, now);
     if let Some(disposition) = observation.signal.terminal_disposition() {
+        let limit_park = record.stopped_turn.is_none()
+            && matches!(
+                observation.signal,
+                LifecycleSignal::TurnEnded { errored: true, .. }
+            )
+            && record.subagent
+            && record.report_to == ReportTo::Launcher
+            && turn_error.is_some_and(|error| {
+                crate::agents::state::effective_turn_error_class(error).is_limit()
+            });
+        // A Stop replayed after the child went back to work belongs to the
+        // earlier turn and must not overwrite the live turn's metadata or hold.
+        if limit_park
+            && record
+                .turn_opened_at
+                .is_some_and(|opened| observed_at < opened)
+        {
+            return LifecycleFold::Ignored;
+        }
         if let Some(path) = observation.transcript_path.as_ref() {
             record.transcript_path = Some(path.clone());
         }
@@ -1824,6 +1871,16 @@ fn fold_lifecycle(
         }
         if record.stopped_turn.is_some() && !matches!(observation.signal, LifecycleSignal::Ended) {
             record.status = RunStatus::Running;
+            return LifecycleFold::Updated;
+        }
+        if limit_park {
+            record.status = RunStatus::Running;
+            // Clear prior interrupt/park stamps so expire_interrupt and
+            // settle_stranded_park do not settle the limit-parked run.
+            record.interrupted_at = None;
+            record.parked_at = None;
+            record.parked_on = None;
+            end_limit_hold(record, observed_at, now);
             return LifecycleFold::Updated;
         }
         if disposition == TerminalDisposition::Completed
@@ -1998,11 +2055,12 @@ fn stamp_turn_start(record: &mut RunRecord, observed_at: Timestamp) -> bool {
     changed
 }
 
-/// End a provider-limit hold on the child's first in-turn signal observed after
-/// the park: a hook received at or before the stop or the activity naming the
-/// park is the stopped turn's own, applied late, and keeps the hold. A resume
-/// before the reset gives the unused rest of the held span back to both
-/// deadline stamps. Returns whether a hold was ended.
+/// End a provider-limit hold on the child's first in-turn signal or newer
+/// limit-errored turn end observed after the park: a hook received at or before
+/// the stop or the activity naming the park is the stopped turn's own, applied
+/// late, and keeps the hold. A resume or newer park before the reset gives the
+/// unused rest of the held span back to both deadline stamps. Returns whether a
+/// hold was ended.
 fn end_limit_hold(record: &mut RunRecord, observed_at: Timestamp, now: Timestamp) -> bool {
     let Some(hold) = record
         .limit_hold

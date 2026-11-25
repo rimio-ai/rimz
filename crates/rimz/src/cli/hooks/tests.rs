@@ -1550,6 +1550,9 @@ fn hooks_test_globals() -> crate::cli::GlobalFlags {
     }
 }
 
+/// Antigravity with a fixed table of provider-native children in place of its transcript
+/// correlation. Any id outside this list is uncorrelated: a test of a child's hook asserts the
+/// child row's `parent_agent_id` before it asserts an absence.
 #[derive(Default)]
 struct CorrelationTestAdapter {
     correlation_calls: AtomicUsize,
@@ -2798,6 +2801,294 @@ fn an_antigravity_rest_report_opens_the_interrupt_hold_of_a_supervised_child() {
         (held.status, held.interrupted_at),
         (rimz::store::run::RunStatus::Running, Some(frames[0].ts))
     );
+}
+
+#[test]
+fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::run::{LimitHold, ParkCause, ReportTo, RunStatus};
+    use rimz::transcript::TranscriptKind;
+
+    const CAPTURED_QUOTA_ERROR: &str = "generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.";
+
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
+    let feed_in = |store: &rimz::Store,
+                   adapter: &rimz::agents::AgentDefinition,
+                   event_name: &str,
+                   payload: serde_json::Value,
+                   env: &std::collections::BTreeMap<String, String>,
+                   ts: jiff::Timestamp| {
+        let workspace = hooks_test_workspace(Some("main"));
+        let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts,
+            source: adapter.spec().kind_id(),
+            event: Some(event_name.to_owned()),
+            payload: serde_json::to_string(&payload).unwrap(),
+            cwd: workspace.project_root.clone(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            let mut decoded = adapter.decode_hook_in(event_name, &payload, env).unwrap();
+            handle_lifecycle_hook(
+                &workspace,
+                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &hooks_test_globals(),
+            )
+            .unwrap();
+        });
+    };
+
+    // 1. Admitted subagent run stays open on captured quota Stop, clears interrupt/park stamps,
+    //    records an Error transcript entry, and survives a statusline push reading Paused.
+    let mut run = create_antigravity_child_run(&store, "agy-child");
+    let t0 = jiff::Timestamp::now();
+    run.timeout = Some(std::time::Duration::from_secs(1800));
+    run.deadline_at = Some(t0 + std::time::Duration::from_secs(1800));
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let run_env =
+        std::collections::BTreeMap::from([("RIMZ_RUN_ID".to_owned(), run.run_id.to_string())]);
+
+    let mut start = antigravity_payload("agy-child");
+    start["invocationNum"] = serde_json::json!(0);
+    feed_in(
+        &store,
+        adapter,
+        "PreInvocation",
+        start.clone(),
+        &run_env,
+        t0,
+    );
+
+    // Stamped after the turn start, so only the Stop can clear them.
+    let mut started = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    started.interrupted_at = Some(t0 + std::time::Duration::from_secs(1));
+    started.parked_at = Some(t0 + std::time::Duration::from_secs(1));
+    started.parked_on = Some(ParkCause::Message);
+    rimz::harness::run::create(store.paths(), &started).unwrap();
+    let t1 = t0 + std::time::Duration::from_secs(2);
+    let mut quota_stop = antigravity_payload("agy-child");
+    quota_stop["terminationReason"] = serde_json::json!("ERROR");
+    quota_stop["fullyIdle"] = serde_json::json!(true);
+    quota_stop["error"] = serde_json::json!(CAPTURED_QUOTA_ERROR);
+    feed_in(&store, adapter, "Stop", quota_stop.clone(), &run_env, t1);
+
+    let after_stop = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(
+        after_stop.status,
+        RunStatus::Running,
+        "quota Stop keeps admitted subagent run open"
+    );
+    assert_eq!(after_stop.completed_at, None);
+    assert_eq!(
+        after_stop.limit_failure, None,
+        "the hold wins over the stop's typed limit"
+    );
+    assert_eq!(after_stop.interrupted_at, None);
+    assert_eq!(after_stop.parked_at, None);
+    assert_eq!(after_stop.parked_on, None);
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.entry == TranscriptKind::Error
+                && entry.agent_id.as_str() == "agy-child"
+                && entry.text.contains("Individual quota reached")),
+        "errored Antigravity Stop with a marker appends an Error transcript entry"
+    );
+
+    // Statusline push keeps the marker, stamps model, and the row reads Paused.
+    feed_antigravity_statusline_in(
+        &store,
+        "agy-child",
+        serde_json::json!({
+            "agent_state": "idle",
+            "model": { "id": "gemini-4-neon-high" }
+        }),
+        &run_env,
+    );
+    let sidecar =
+        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "agy-child")
+            .expect("sidecar present after statusline push");
+    let marker = sidecar
+        .context
+        .turn_error
+        .as_ref()
+        .expect("turn_error survives statusline push");
+    assert_eq!(marker.class, rimz::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(marker.model.as_deref(), Some("gemini-4-neon-high"));
+    let mut row = antigravity_row(&store, "agy-child");
+    rimz::store::agent_context::attach_child_display_context(
+        store.runtime_paths(),
+        std::iter::once(&mut row),
+    );
+    assert_eq!(
+        row.effective_status(jiff::Timestamp::now()),
+        rimz::agents::AgentStatus::Paused,
+        "card reads Paused after statusline push"
+    );
+
+    // A second limit Stop ends a hold claimed since its turn started, and opens a new park.
+    let t2 = t1 + std::time::Duration::from_secs(300);
+    feed_in(&store, adapter, "PreInvocation", start, &run_env, t2);
+    let held_at = t2 + std::time::Duration::from_secs(1);
+    let hold = LimitHold {
+        activity: held_at,
+        since: held_at,
+        until: held_at + std::time::Duration::from_secs(3600),
+    };
+    assert!(rimz::harness::run::claim_limit_hold(store.paths(), &run.run_id, hold).unwrap());
+    let t3 = held_at + std::time::Duration::from_secs(1);
+    feed_in(&store, adapter, "Stop", quota_stop.clone(), &run_env, t3);
+    let after_second = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(after_second.status, RunStatus::Running);
+    assert_eq!(
+        after_second.limit_hold, None,
+        "a second limit Stop ends the older hold"
+    );
+
+    // 2. Non-limit error settles Failed; ReportTo::Nobody settles Failed even on quota.
+    let non_limit_run = create_antigravity_child_run(&store, "agy-non-limit");
+    let non_limit_env = std::collections::BTreeMap::from([(
+        "RIMZ_RUN_ID".to_owned(),
+        non_limit_run.run_id.to_string(),
+    )]);
+    let mut non_limit_stop = antigravity_payload("agy-non-limit");
+    non_limit_stop["terminationReason"] = serde_json::json!("ERROR");
+    non_limit_stop["fullyIdle"] = serde_json::json!(true);
+    non_limit_stop["error"] = serde_json::json!("invalid tool schema");
+    feed_in(&store, adapter, "Stop", non_limit_stop, &non_limit_env, t3);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &non_limit_run.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Failed,
+        "non-limit error settles Failed"
+    );
+
+    let mut nobody_run = create_antigravity_child_run(&store, "agy-nobody");
+    nobody_run.report_to = ReportTo::Nobody;
+    rimz::harness::run::create(store.paths(), &nobody_run).unwrap();
+    let nobody_env = std::collections::BTreeMap::from([(
+        "RIMZ_RUN_ID".to_owned(),
+        nobody_run.run_id.to_string(),
+    )]);
+    let mut nobody_stop = quota_stop;
+    nobody_stop["conversationId"] = serde_json::json!("agy-nobody");
+    feed_in(&store, adapter, "Stop", nobody_stop, &nobody_env, t3);
+    let nobody_settled = rimz::harness::run::load(store.paths(), &nobody_run.run_id).unwrap();
+    assert_eq!(
+        (
+            nobody_settled.status,
+            nobody_settled.limit_failure.map(|failure| failure.cause)
+        ),
+        (
+            RunStatus::Failed,
+            Some(rimz::store::run::LimitFailureCause::RefillKnown)
+        ),
+        "run with ReportTo::Nobody fails with the typed limit"
+    );
+
+    // 3. Provider-native Antigravity child's quota Stop writes no marker to either sidecar.
+    let provider = Box::leak(Box::new(CorrelationTestAdapter::default()));
+    let corr_adapter = hook_definition(&*provider);
+    let mut root = antigravity_payload("root");
+    root["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &corr_adapter, "PreInvocation", root);
+    let mut native_child = antigravity_payload("child-clean");
+    native_child["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &corr_adapter, "PreInvocation", native_child.clone());
+    assert_eq!(
+        antigravity_row(&store, "child-clean")
+            .parent_agent_id
+            .as_deref(),
+        Some("root")
+    );
+    native_child["terminationReason"] = serde_json::json!("ERROR");
+    native_child["fullyIdle"] = serde_json::json!(true);
+    native_child["error"] = serde_json::json!(CAPTURED_QUOTA_ERROR);
+    feed_antigravity(&store, &corr_adapter, "Stop", native_child);
+    for id in ["root", "child-clean"] {
+        let marker = rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", id)
+            .and_then(|record| record.context.turn_error);
+        assert_eq!(
+            marker, None,
+            "{id}: a provider-native child's quota Stop writes no marker"
+        );
+    }
+}
+
+#[test]
+fn qwen_rate_limit_stop_failure_keeps_admitted_subagent_run_open() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::run::RunStatus;
+
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("qwen").unwrap();
+    let mut run = rimz::store::run::RunRecord::new(
+        store.paths().workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("qwen"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    run.subagent = true;
+    run.status = RunStatus::Running;
+    run.agent_id = Some("qwen-child".into());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let env =
+        std::collections::BTreeMap::from([("RIMZ_RUN_ID".to_owned(), run.run_id.to_string())]);
+    let payload = serde_json::json!({
+        "session_id": "qwen-child",
+        "cwd": "/tmp/hooks-test",
+        "error": "rate_limit",
+        "last_assistant_message": "Rate limit exceeded"
+    });
+    let ts = jiff::Timestamp::now();
+    let workspace = hooks_test_workspace(Some("main"));
+    let frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
+        schema_version: "1".into(),
+        event_id: rimz::EventId::new(),
+        ts,
+        source: adapter.spec().kind_id(),
+        event: Some("StopFailure".to_owned()),
+        payload: serde_json::to_string(&payload).unwrap(),
+        cwd: workspace.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: env.clone(),
+    };
+    with_frame_env(&frame, FrameAttempt::First, || {
+        let mut decoded = adapter
+            .decode_hook_in("StopFailure", &payload, &env)
+            .unwrap();
+        handle_lifecycle_hook(
+            &workspace,
+            &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+            adapter,
+            &mut decoded,
+            &payload,
+            rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+            &hooks_test_globals(),
+        )
+        .unwrap();
+    });
+    let after = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(
+        after.status,
+        RunStatus::Running,
+        "Qwen rate-limit StopFailure keeps admitted subagent run open"
+    );
+    assert_eq!(after.completed_at, None);
 }
 
 #[test]
@@ -5925,7 +6216,7 @@ fn a_stream_reply_line_answers_only_its_own_frame() {
 }
 
 #[test]
-fn an_antigravity_quota_stop_fails_its_run_with_the_limit_on_apply_and_replay() {
+fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_replay() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
 
     let payload: serde_json::Value = serde_json::from_str(include_str!(
@@ -5938,7 +6229,10 @@ fn an_antigravity_quota_stop_fails_its_run_with_the_limit_on_apply_and_replay() 
     for replay in [false, true] {
         let (_dir, store) = hooks_test_store();
         let workspace = hooks_test_workspace(Some("main"));
-        let run = create_antigravity_child_run(&store, agent_id);
+        // A detached run is outside the limit hold, so the stop fails it with the typed limit.
+        let mut run = create_antigravity_child_run(&store, agent_id);
+        run.report_to = rimz::store::run::ReportTo::Nobody;
+        rimz::harness::run::create(store.paths(), &run).unwrap();
         let frame = rimz::store::ingress::HookIngress {
             boot_id: None,
             schema_version: "1".into(),

@@ -371,6 +371,7 @@ pub(super) fn handle_lifecycle_frame(
                 &event_name,
                 recorded,
                 assistant_message.as_deref(),
+                decoded.turn_error(),
                 run_id.as_ref(),
             );
         }
@@ -845,6 +846,7 @@ fn record_run_lifecycle(
     event_name: &str,
     recorded: &RecordedLifecycle,
     assistant_message: Option<&str>,
+    turn_error: Option<&rimz::agents::AgentTurnError>,
     run_id: Option<&rimz::RunId>,
 ) -> Option<rimz::store::run::RunRecord> {
     let run_id = run_id?;
@@ -854,6 +856,7 @@ fn record_run_lifecycle(
         agent,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
+        turn_error,
     ) {
         Ok(record) => record.or_else(|| {
             if !rimz::harness::hook_drain::is_replay() {

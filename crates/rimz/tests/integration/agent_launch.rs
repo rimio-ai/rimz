@@ -3808,7 +3808,8 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
         "the hold leaves the run open"
     );
 
-    // The child resumes, works, and parks again: a new park, a second hold.
+    // The child acts and parks again on the same refill, its resume reported by no hook: a new
+    // hold, inside the span the first one already added.
     let resumed_at = heartbeat();
     seed_marker(resumed_at + std::time::Duration::from_secs(1));
     assert!(producer_owes_notice(), "a later park is owed again");
@@ -3820,9 +3821,9 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
     let second = reheld.limit_hold.expect("the second park holds too");
     assert_eq!(second.activity, resumed_at);
     assert_eq!(
-        reheld.deadline_at,
-        Some(held.deadline_at.unwrap() + second.until.duration_since(second.since)),
-        "each park gets its own hold"
+        (second.until, reheld.deadline_at),
+        (reset, held.deadline_at),
+        "a span already added is not added again"
     );
     assert!(!producer_owes_notice());
 }

@@ -1153,11 +1153,9 @@ fn an_antigravity_quota_stop_reaches_the_digest_row_with_its_limit_and_refill() 
     ))
     .unwrap();
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
-    let observation = adapter
-        .decode_hook("Stop", &payload)
-        .unwrap()
-        .take_lifecycle()
-        .unwrap();
+    let mut decoded = adapter.decode_hook("Stop", &payload).unwrap();
+    let marker = decoded.turn_error().cloned();
+    let observation = decoded.take_lifecycle().unwrap();
     let (_dir, _workspace, store) = fixture();
     let mut record = RunRecord::new(
         store.paths().workspace_id.clone(),
@@ -1167,6 +1165,8 @@ fn an_antigravity_quota_stop_reaches_the_digest_row_with_its_limit_and_refill() 
         PathBuf::from("/tmp/subagent-report"),
     );
     record.subagent = true;
+    // A detached run is outside the limit hold, so the stop fails it with the typed limit.
+    record.report_to = rimz::store::run::ReportTo::Nobody;
     record.status = RunStatus::Running;
     record.agent_id = observation.agent_id.clone();
     rimz::harness::run::create(store.paths(), &record).unwrap();
@@ -1177,6 +1177,7 @@ fn an_antigravity_quota_stop_reaches_the_digest_row_with_its_limit_and_refill() 
         adapter,
         &observation,
         None,
+        marker.as_ref(),
     )
     .unwrap()
     .expect("the quota stop settles the run");

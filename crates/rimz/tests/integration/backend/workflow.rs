@@ -206,8 +206,15 @@ pub(super) fn check_layout(
             },
         ] {
             let observation = AgentLifecycleObservation::new(Some(leader.agent_id.clone()), signal);
-            rimz::harness::run::settle_lifecycle(&store, &run.run_id, adapter, &observation, None)
-                .unwrap();
+            rimz::harness::run::settle_lifecycle(
+                &store,
+                &run.run_id,
+                adapter,
+                &observation,
+                None,
+                None,
+            )
+            .unwrap();
         }
         if lifecycle == "session" {
             assert_eq!(

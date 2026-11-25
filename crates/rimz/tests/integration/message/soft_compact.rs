@@ -936,6 +936,7 @@ fn supervised_run_parks_until_the_compaction_continue_turn_finishes() {
                 rimz::agents::definition_by_kind("claude").unwrap(),
                 &AgentLifecycleObservation::new(record.agent_id.clone(), signal),
                 Some(text.into()),
+                None,
             )
             .unwrap()
         };
