@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::*;
-use crate::agents::{AgentContext, AgentTurnError, PermissionMode, TurnErrorClass};
+use crate::agents::{AgentContext, AgentStatus, AgentTurnError, PermissionMode, TurnErrorClass};
 use crate::store::run::RunStatus;
 
 fn parked(class: TurnErrorClass, label: Option<&str>) -> (Vec<AgentState>, RunRecord) {
@@ -109,8 +109,22 @@ fn only_a_live_limit_park_with_a_live_parent_is_classified() {
     agents[1].status = AgentStatus::Failed;
     agents[1].turn_started_at = Some(agents[1].last_activity);
     assert!(
+        eligible(&run, &agents),
+        "a raw-failed child with a current-turn limit marker is parked"
+    );
+    let (mut agents, run) = fresh();
+    agents[1].status = AgentStatus::Failed;
+    agents[1].turn_started_at = Some(agents[1].last_activity + Duration::from_secs(10));
+    assert!(
         !eligible(&run, &agents),
-        "a failed row is settled, not parked"
+        "a raw-failed child with no current-turn limit marker is not parked"
+    );
+    let (mut agents, run) = fresh();
+    agents[1].status = AgentStatus::Failed;
+    agents[1].turn_started_at = None;
+    assert!(
+        !eligible(&run, &agents),
+        "a raw-failed child with no turn start is not parked"
     );
     let (mut agents, run) = fresh();
     agents[0].ended_at = Some(Timestamp::now());
@@ -645,5 +659,143 @@ fn the_failure_tail_names_the_label_and_the_refill_without_a_duration_or_setting
             label,
         };
         assert_eq!(failure_tail(&failure), expected, "{cause:?}");
+    }
+}
+
+#[test]
+fn park_action_tolerates_whole_second_truncation_but_rejects_later_activity() {
+    let subsec = Timestamp::from_nanosecond(1_700_000_000_500_000_000).unwrap();
+    let truncated = Timestamp::from_second(subsec.as_second()).unwrap();
+    let later_same_sec = Timestamp::from_nanosecond(1_700_000_000_750_000_000).unwrap();
+    let earlier_same_sec = Timestamp::from_nanosecond(1_700_000_000_250_000_000).unwrap();
+    let earlier_sec = Timestamp::from_nanosecond(1_699_999_999_750_000_000).unwrap();
+    let later_sec = Timestamp::from_second(subsec.as_second() + 1).unwrap();
+
+    let (mut agents, mut run) = parked(
+        TurnErrorClass::PausedRateLimit,
+        Some("Individual quota reached"),
+    );
+    agents[1].status = AgentStatus::Failed;
+    run.started_at = earlier_sec;
+    agents[1].turn_started_at = Some(earlier_sec);
+    agents[1].last_activity = subsec;
+    mark(
+        &mut agents[1],
+        TurnErrorClass::PausedRateLimit,
+        Some("Individual quota reached"),
+    );
+    let marker_at = agents[1]
+        .context
+        .as_ref()
+        .unwrap()
+        .turn_error
+        .as_ref()
+        .unwrap()
+        .at;
+    let until = marker_at + HOUR;
+    let hold = LimitHold {
+        activity: subsec,
+        since: marker_at,
+        until,
+    };
+    run.limit_hold = Some(hold);
+    run.park_noticed_activity = Some(subsec);
+    let due = until.max(marker_at + FAIL_WINDOW);
+
+    let mut unclaimed = run.clone();
+    unclaimed.park_noticed_activity = None;
+    for (label, activity_at) in [
+        ("cut to the whole second", truncated),
+        ("earlier in the same second", earlier_same_sec),
+    ] {
+        // The held-failure branch still fails with the hold's original activity stamp.
+        let mut folded = agents.clone();
+        folded[1].last_activity = activity_at;
+        let Some(ParkAction::Fail {
+            activity, failure, ..
+        }) = action(&run, &folded, due, Continuation::Off, LimitReading::Unknown)
+        else {
+            panic!("{label}: an expired hold still fails");
+        };
+        assert_eq!(activity, hold.activity, "{label}");
+        assert_eq!(failure.cause, LimitFailureCause::RefillKnown, "{label}");
+        assert_eq!(failure.refill_at, Some(until), "{label}");
+
+        // Re-claim of a stored hold whose claim stamp was cleared tolerates it too.
+        let Some(ParkAction::Hold {
+            hold: reclaimed, ..
+        }) = action(
+            &unclaimed,
+            &folded,
+            marker_at + Duration::from_secs(30),
+            Continuation::Off,
+            LimitReading::Unknown,
+        )
+        else {
+            panic!("{label}: a stored hold is still re-claimed");
+        };
+        assert_eq!(reclaimed, hold, "{label}");
+    }
+
+    // An earlier second is another activity, and a claimed run stays claimed over it.
+    let mut earlier = agents.clone();
+    earlier[1].last_activity = earlier_sec;
+    assert!(
+        action(
+            &run,
+            &earlier,
+            due,
+            Continuation::Off,
+            LimitReading::Unknown
+        )
+        .is_none()
+    );
+    let Some(ParkAction::Fail {
+        activity, failure, ..
+    }) = action(
+        &unclaimed,
+        &earlier,
+        due,
+        Continuation::Off,
+        LimitReading::Unknown,
+    )
+    else {
+        panic!("an earlier second is classified, not re-claimed");
+    };
+    assert_eq!(activity, earlier_sec);
+    assert_eq!(failure.cause, LimitFailureCause::RefillUnknown);
+
+    // A child that acted later in the same second or a later second is classified afresh: the
+    // old hold neither fails it nor is re-claimed.
+    for (label, acted_at) in [
+        ("later in same second", later_same_sec),
+        ("later second", later_sec),
+    ] {
+        let mut acted = agents.clone();
+        acted[1].last_activity = acted_at;
+        let Some(ParkAction::Fail {
+            activity, failure, ..
+        }) = action(&run, &acted, due, Continuation::Off, LimitReading::Unknown)
+        else {
+            panic!("{label}: the later activity is classified");
+        };
+        assert_eq!(activity, acted_at, "{label}");
+        assert_eq!(
+            (failure.cause, failure.refill_at),
+            (LimitFailureCause::RefillUnknown, None),
+            "{label}: the expired hold's refill does not name this failure"
+        );
+        // Re-claim with an active marker must reclassify rather than returning the old hold.
+        let result = action(
+            &unclaimed,
+            &acted,
+            marker_at + Duration::from_secs(30),
+            Continuation::Off,
+            LimitReading::Unknown,
+        );
+        assert!(
+            !matches!(result, Some(ParkAction::Hold { hold: got, .. }) if got == hold),
+            "{label}: must not re-claim the older hold after child acted"
+        );
     }
 }

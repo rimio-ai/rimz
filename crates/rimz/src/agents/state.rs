@@ -447,10 +447,10 @@ pub enum AgentStatus {
     /// failed (`AgentLaunchState::Failed`), so a predicate meant for only one
     /// of them reads more than the status.
     Failed,
-    /// Parked because this agent stopped mid-turn on a provider limit.
+    /// Parked because this agent stopped on a provider limit or budget cap.
     /// Attention-class but non-actionable: there is nothing to do until the
-    /// provider recovers or its window resets. Projected from a `Running`
-    /// status, never reported by the agent.
+    /// provider recovers or its window resets. Projected from a `Running` or
+    /// `Failed` status (or from a budget park), never reported by the agent.
     Paused,
     /// Resting on a timer, signal, condition, or file watch for display;
     /// operational reads include every pending one-shot wake.
@@ -875,6 +875,7 @@ struct RowEvidence<'a> {
     demotion: &'a super::ParkDemotion,
     stalled_after_secs: u32,
     tool_repeat_attention_after: u32,
+    turn_started_at: Option<Timestamp>,
 }
 
 /// Where the displayed-status rung walk stopped.
@@ -903,9 +904,10 @@ enum RungLabel<'a> {
 /// `rested_status` (no `row`) and the sidebar row's `project_display`. It
 /// reads `status`, `phase`, `context`, and `last_activity` from its caller,
 /// which on the row path are the card's seeded fields and the child-folded
-/// clock, and the budget park, the turn start, and the waiting answer proof
-/// from `source`. It leaves `status` normalized past waiting resolution, and
-/// `phase` at `Reasoning` for a released wait.
+/// clock, and the budget park, the turn start (a promoted child's, from its own
+/// row), and the waiting answer proof from `source`. It leaves `status`
+/// normalized past waiting resolution, and `phase` at `Reasoning` for a released
+/// wait.
 fn walk_rungs<'a>(
     source: Option<&'a AgentState>,
     status: &mut AgentStatus,
@@ -943,7 +945,9 @@ fn walk_rungs<'a>(
     if !interrupted && let Some(park) = source.and_then(|agent| agent.budget_park.as_ref()) {
         return Rung::Decided(Paused, RungLabel::Budget(park));
     }
-    let turn_started_at = source.and_then(|agent| agent.turn_started_at);
+    let turn_started_at = source
+        .and_then(|agent| agent.turn_started_at)
+        .or_else(|| row.and_then(|row| row.turn_started_at));
     if let Some(error) = display_turn_error(status, context, last_activity, turn_started_at) {
         // A limit marker on a refused model the agent has since left rests as if
         // it were gone: the open turn it paused and the errored end it raised alike.
@@ -1047,9 +1051,10 @@ fn project_refusal(
 /// come from `source`, and the fallback when no rung decides is the source's
 /// own `rested_status` on its own clock, so a parent kept fresh by a finished
 /// child does not stall on its own silence. The stall rung runs before the
-/// display-only lift of wait and shell work. The model refusal reads
-/// `refusal_source`, the root source or a promoted launched child's own state,
-/// and decides before a waiting subagent can turn the card to `waiting`.
+/// display-only lift of wait and shell work. `card_agent` is the root source or a
+/// promoted launched child's own state: the model refusal and a promoted
+/// child's turn start read it, and the refusal decides before a waiting
+/// subagent can turn the card to `waiting`.
 #[expect(
     clippy::too_many_arguments,
     reason = "each slot is a card field the projection writes in place, and the row facts \
@@ -1057,7 +1062,7 @@ fn project_refusal(
 )]
 pub(crate) fn project_display(
     source: Option<&AgentState>,
-    refusal_source: Option<&AgentState>,
+    card_agent: Option<&AgentState>,
     status: &mut AgentStatus,
     phase: &mut TurnPhase,
     turn_error_label: &mut Option<String>,
@@ -1085,6 +1090,7 @@ pub(crate) fn project_display(
         demotion,
         stalled_after_secs,
         tool_repeat_attention_after,
+        turn_started_at: card_agent.and_then(|agent| agent.turn_started_at),
     });
     let mut open = *status;
     let decided = match walk_rungs(source, &mut open, phase, context, last_activity, row, now) {
@@ -1116,7 +1122,7 @@ pub(crate) fn project_display(
             *turn_error_label = Some(format!("loop: {} ×{}", repeat.tool, repeat.count));
         }
     }
-    if let Some(agent) = refusal_source {
+    if let Some(agent) = card_agent {
         project_refusal(
             agent,
             &mut projected,

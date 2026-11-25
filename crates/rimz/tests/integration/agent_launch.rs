@@ -3966,6 +3966,249 @@ fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
     );
 }
 
+#[test]
+fn raw_failed_limit_parked_child_is_held_failed_beyond_horizon_and_keeps_label_in_digest() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("antigravity");
+    let child_id = AgentSessionId::from("agy-child-session");
+    let far_child_id = AgentSessionId::from("agy-far-session");
+    let sibling_id = AgentSessionId::from("otter-session");
+
+    let open_run = |id: &AgentSessionId, name: &str| {
+        let mut run = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            child_kind.clone(),
+            rimz::agents::PermissionMode::Auto,
+            format!("{name} task"),
+            env.project_root.clone(),
+        );
+        run.agent_id = Some(id.clone());
+        run.agent_name = Some(name.to_owned());
+        run.subagent = true;
+        run.status = rimz::store::run::RunStatus::Running;
+        run.timeout = Some(std::time::Duration::from_secs(1800));
+        run.deadline_at = Some(run.started_at + std::time::Duration::from_secs(1800));
+        run
+    };
+
+    let run = open_run(&child_id, "still-silver");
+    let deadline = run.deadline_at.unwrap();
+    rimz::harness::run::create(store.paths(), &run).expect("create held child's run");
+
+    let mut sibling = open_run(&sibling_id, "calm-otter");
+    sibling.status = rimz::store::run::RunStatus::Completed;
+    sibling.completed_at = Some(jiff::Timestamp::now());
+    sibling.last_message = Some("the sibling's answer".to_owned());
+    rimz::harness::run::create(store.paths(), &sibling).expect("create sibling's run");
+
+    let started = jiff::Timestamp::now();
+    seed_parent_and_child(
+        &env,
+        &workspace,
+        &store,
+        (&parent_kind, &parent_id),
+        (&child_kind, &child_id),
+        started,
+        None,
+    );
+    // End the child's turn errored so its stored status is raw `Failed`.
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: child_kind.clone(),
+            event_name: "Stop",
+            observation: &rimz::agents::AgentLifecycleObservation::new(
+                Some(child_id.clone()),
+                rimz::agents::LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+            spawned_subagents: &[],
+        })
+        .expect("record child errored stop");
+    // Seed the settled sibling row.
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &child_kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: sibling_id.clone(),
+                launch_id: None,
+                agent_name: "calm-otter".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(parent_kind.clone()),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed sibling row");
+
+    let invoke_helper = |run_id: &rimz::RunId| {
+        let request = rimz::harness::park_notice::ParkNoticeRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            run_id: run_id.clone(),
+            horizon_secs: 6 * 3600,
+            continuation: rimz::harness::park_notice::Continuation::On,
+        };
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "park-notice",
+                &request,
+            ))
+            .assert()
+            .success();
+    };
+
+    // Missing sidecar leaves the raw-failed child alone (neither held nor failed).
+    let reset_near = jiff::Timestamp::now() + std::time::Duration::from_secs(3600);
+    publish_spent_window(&env, &child_kind, reset_near);
+    invoke_helper(&run.run_id);
+    let untouched = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
+    assert_eq!(untouched.status, rimz::store::run::RunStatus::Running);
+    assert!(untouched.limit_hold.is_none());
+    assert!(untouched.limit_failure.is_none());
+
+    // Now write the limit marker: inside the horizon the helper holds the run and
+    // triggers the sibling digest carrying the provider's label on the held line.
+    let label = "Individual quota reached";
+    let marker_at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
+    let seed_marker = |id: &AgentSessionId| {
+        let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), marker_at);
+        context.turn_error = Some(rimz::agents::AgentTurnError {
+            model: None,
+            ended_turn: false,
+            class: rimz::agents::TurnErrorClass::PausedRateLimit,
+            at: marker_at,
+            label: Some(label.to_owned()),
+        });
+        rimz::store::agent_context::write_record(
+            &env.runtime_paths(),
+            &rimz::agents::context::record::AgentContextRecord::new(
+                child_kind.as_str(),
+                id.as_str(),
+                context,
+            ),
+        )
+        .expect("seed limit marker");
+    };
+    seed_marker(&child_id);
+    invoke_helper(&run.run_id);
+
+    let held = rimz::harness::run::load(store.paths(), &run.run_id).expect("load held run");
+    assert_eq!(held.status, rimz::store::run::RunStatus::Running);
+    let hold = held.limit_hold.expect("raw-failed child run is held");
+    assert_eq!(hold.until, reset_near);
+    assert_eq!(
+        held.deadline_at,
+        Some(deadline + hold.until.duration_since(hold.since))
+    );
+    let messages = store.list_messages().expect("list messages");
+    assert_eq!(messages.len(), 1, "sibling digest queued when child held");
+    assert!(
+        messages[0].text.contains(&format!(
+            "- @still-silver: paused on a provider limit: \"{label}\"; it refills in "
+        )),
+        "held line carries provider label: {}",
+        messages[0].text
+    );
+
+    // Beyond the horizon: a raw-failed child's run fails immediately with BeyondHoldLimit.
+    let mut far_run = open_run(&far_child_id, "far-silver");
+    far_run.keep = true;
+    rimz::harness::run::create(store.paths(), &far_run).expect("create far child run");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &child_kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: far_child_id.clone(),
+                launch_id: None,
+                agent_name: "far-silver".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(parent_kind.clone()),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed far child row");
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: child_kind.clone(),
+            event_name: "PreInvocation",
+            observation: &rimz::agents::AgentLifecycleObservation::new(
+                Some(far_child_id.clone()),
+                rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+            spawned_subagents: &[],
+        })
+        .expect("start far child turn");
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: child_kind.clone(),
+            event_name: "Stop",
+            observation: &rimz::agents::AgentLifecycleObservation::new(
+                Some(far_child_id.clone()),
+                rimz::agents::LifecycleSignal::TurnEnded {
+                    errored: true,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+            spawned_subagents: &[],
+        })
+        .expect("end far child turn errored");
+    seed_marker(&far_child_id);
+    let reset_far = jiff::Timestamp::now() + std::time::Duration::from_secs(30 * 3600);
+    publish_spent_window(&env, &child_kind, reset_far);
+    invoke_helper(&far_run.run_id);
+
+    let failed = rimz::harness::run::load(store.paths(), &far_run.run_id).expect("load far run");
+    assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+    assert_eq!(
+        failed.limit_failure,
+        Some(rimz::store::run::LimitFailure {
+            cause: rimz::store::run::LimitFailureCause::BeyondHoldLimit,
+            refill_at: Some(reset_far),
+            label: Some(label.to_owned()),
+        })
+    );
+}
+
 /// Seed a planner parent and its launched still-silver child, the child's turn started, every
 /// event stamped `at`. A `child_host` puts the child in that pane with that owner process.
 fn seed_parent_and_child(

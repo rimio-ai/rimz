@@ -17,6 +17,13 @@ pub(super) fn run(request: ParkNoticeRequest, globals: &super::GlobalFlags) -> R
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
     rimz::store::agent_context::attach_rest_certificates(ctx.runtime(), audit.agents.iter_mut());
+    rimz::store::agent_context::attach_child_display_context(
+        ctx.runtime(),
+        audit
+            .agents
+            .iter_mut()
+            .filter(|agent| agent.status == rimz::agents::AgentStatus::Failed),
+    );
     // Fold the per-tool heartbeat as the producer's enrich does, so both sides
     // name the park by the same `last_activity` and the claim satisfies the detector.
     let heartbeats = rimz::agent_activity::read_for_keys(

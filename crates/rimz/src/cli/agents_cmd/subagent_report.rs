@@ -116,7 +116,7 @@ pub(super) fn report_fleet_with_kind(
         .filter(|run| FleetRuns::is_held(run))
         .filter_map(|run| Some((&run.kind, run.agent_id.as_ref()?)))
         .collect::<Vec<_>>();
-    rimz::store::agent_context::attach_rest_certificates(
+    rimz::store::agent_context::attach_child_display_context(
         store.runtime_paths(),
         projection.agents.iter_mut().filter(|agent| {
             held_children
