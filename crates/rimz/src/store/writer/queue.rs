@@ -11,7 +11,7 @@ use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
     MessageStatus, SoftCompactStep, TypingHold, TypingHoldReplay, claim_expired,
-    delivery_batch_indices, fresh_boundary_blocker, sender_notice,
+    delivery_batch_indices, fresh_boundary_blocker, sender_notice, steer_batch_indices,
 };
 
 use super::super::{Result, Store, ingress, message};
@@ -1085,7 +1085,7 @@ impl Store {
                 };
                 message.pane_id = supplied.pane_id.clone();
                 message.batch_id = supplied.batch_id.clone();
-                if message.body == MessageBody::Command {
+                if message.body == MessageBody::Command || message.follows_command.is_some() {
                     message.text.clone_from(&supplied.text);
                 }
                 message.sent_epoch = supplied.sent_epoch;
@@ -1124,7 +1124,7 @@ impl Store {
         else {
             return Ok(None);
         };
-        if claimed.len() > 1 {
+        if claimed.len() > 1 && claimed[0].body == MessageBody::Prompt {
             let batch_id = claimed[0].message_id.clone();
             for message in &mut claimed {
                 message.batch_id = Some(batch_id.clone());
@@ -1133,24 +1133,29 @@ impl Store {
         Ok(Some(claimed))
     }
 
+    /// Claims as [`Self::claim_message_for_steer`], pairing a compaction command with its
+    /// queued continue tail on `CompactInstruction::NextPrompt` kinds. When `spend_force` is set,
+    /// clears the stored records' `force` so only this attempt has it while the returned copies
+    /// keep it.
+    #[must_use = "durability barrier; check the result"]
+    pub(crate) fn claim_steer_batch(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+        spend_force: bool,
+    ) -> Result<Option<Vec<MessageRecord>>> {
+        self.claim_message(message_id, now, spend_force, true)
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn claim_message_for_steer(
         &self,
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
-        self.claim_message(message_id, now, false)
-    }
-
-    /// Claims as [`Self::claim_message_for_steer`] and clears the stored record's force, so that
-    /// only this attempt has it. The returned copy keeps it.
-    #[must_use = "durability barrier; check the result"]
-    pub fn claim_message_spending_force(
-        &self,
-        message_id: &MessageId,
-        now: Timestamp,
-    ) -> Result<Option<MessageRecord>> {
-        self.claim_message(message_id, now, true)
+        Ok(self
+            .claim_message(message_id, now, false, false)?
+            .and_then(|mut claimed| claimed.pop()))
     }
 
     fn claim_message(
@@ -1158,21 +1163,30 @@ impl Store {
         message_id: &MessageId,
         now: Timestamp,
         spend_force: bool,
-    ) -> Result<Option<MessageRecord>> {
+        pair_tail: bool,
+    ) -> Result<Option<Vec<MessageRecord>>> {
         self.commit_queue(|queue| {
-            let Some(index) = queue.live().iter().position(|message| {
-                message.message_id == *message_id && message.status == MessageStatus::Queued
-            }) else {
+            let indices = if pair_tail {
+                steer_batch_indices(queue.live(), message_id, now)
+            } else {
+                queue
+                    .live()
+                    .iter()
+                    .position(|message| {
+                        message.message_id == *message_id && message.status == MessageStatus::Queued
+                    })
+                    .filter(|&index| claim_expired(queue.live()[index].last_attempt_at, now))
+                    .map(|index| vec![index])
+            };
+            let Some(indices) = indices else {
                 return Ok(None);
             };
-            if !claim_expired(queue.live()[index].last_attempt_at, now) {
-                return Ok(None);
+            let claimed = queue.claim_indices(&indices, now);
+            if spend_force {
+                for &index in &indices {
+                    queue.live[index].force = false;
+                }
             }
-            let claimed = queue
-                .claim_indices(std::slice::from_ref(&index), now)
-                .pop()
-                .expect("selected claim index returns one message");
-            queue.live[index].force &= !spend_force;
             Ok(Some(claimed))
         })
     }

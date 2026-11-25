@@ -1450,3 +1450,117 @@ fn a_record_parked_before_a_swap_binds_the_holders_pane() {
     let check = explain(&parked, std::slice::from_ref(&parked), &live, now);
     assert_eq!(check.pane.pane_id.as_ref(), Some(&holder_pane));
 }
+
+#[test]
+fn execute_attempt_unprompted_compaction_fails_only_command_and_releases_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::workspace::ResolvedWorkspace {
+        workspace_id: crate::ids::WorkspaceId::from_project_root(dir.path()),
+        project_root: dir.path().into(),
+        cwd_project_root: None,
+        root_class: crate::workspace::RootClass::Directory,
+        worktree_root: dir.path().into(),
+        worktree_branch: None,
+        session_name: "room".into(),
+        mux_hint: None,
+    };
+    let store = crate::Store::open(
+        crate::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state"))
+            .unwrap(),
+        crate::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+            .unwrap(),
+    )
+    .unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("antigravity");
+    let session = crate::ids::AgentSessionId::from("sess-repeat");
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let record_signal = |signal| {
+        let mut obs = crate::agents::AgentLifecycleObservation::new(Some(session.clone()), signal);
+        obs.pane_id = Some(pane_id.clone());
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: kind.clone(),
+                event_name: "fixture",
+                observation: &obs,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    };
+    record_signal(crate::agents::LifecycleSignal::Registered);
+    record_signal(crate::agents::LifecycleSignal::Compacting);
+    record_signal(crate::agents::LifecycleSignal::CompactionEnded {
+        auto: Some(false),
+        failed: false,
+        echo: false,
+    });
+    let row = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == session)
+        .cloned()
+        .unwrap();
+    let command = MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &row,
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_body(MessageBody::Command)
+    .with_sender(MessageSender::System)
+    .with_pane_id(pane_id.clone());
+    let mut tail = MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &row,
+        "continue".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::System)
+    .with_pane_id(pane_id.clone());
+    tail.soft_compact = Some(crate::store::message::SoftCompactStep::Continue);
+    tail.follows_command = Some(command.message_id.clone());
+    let tail = store
+        .queue_message_with_tail(&command, &tail, &workspace.session_name)
+        .unwrap();
+    let now = Timestamp::now();
+    let claimed_cmd = store
+        .claim_message_for_steer(&command.message_id, now)
+        .unwrap()
+        .unwrap();
+    let claimed_tail = store
+        .claim_message_for_steer(&tail.message_id, now)
+        .unwrap()
+        .unwrap();
+    let live = snapshot(row.clone(), true, now);
+    let target = live.agent_panes[0].clone();
+    let card_status = CardStatus::from_demotion(crate::agents::ParkDemotion::default());
+    let mut live_send = send::LiveSend::new(false, crate::message::DeliveryKind::Boundary);
+    let outcome = execute_attempt(
+        Attempt {
+            workspace: &workspace,
+            store: &store,
+            snapshot: &live,
+            target: &target,
+            bound: Some(&row),
+            card_status: &card_status,
+            records: &[claimed_cmd, claimed_tail],
+            source: AttemptSource::Claimed,
+        },
+        &mut live_send,
+    )
+    .unwrap();
+    assert!(matches!(outcome, AttemptOutcome::Queued));
+    let (live_msgs, history) = store.list_messages_and_history().unwrap();
+    let settled_cmd = history
+        .iter()
+        .find(|record| record.message_id == command.message_id)
+        .expect("command settled terminally");
+    assert_eq!(settled_cmd.status, MessageStatus::Errored);
+    let released_tail = live_msgs
+        .iter()
+        .find(|record| record.message_id == tail.message_id)
+        .expect("tail returned to Queued rather than failing with the command");
+    assert_eq!(released_tail.status, MessageStatus::Queued);
+    assert_eq!(released_tail.attempts, 0);
+}

@@ -450,19 +450,16 @@ fn attempt_delivery(
             store.claim_delivery_batch(&candidate.message.message_id, candidate.status, now)?
         }
         // A retry is a boundary send, whose keys could answer a prompt the steer's chord spares.
-        DeliveryPolicy::Steer { .. }
-            if super::prompt_chord(crate::agents::message_keys(
+        DeliveryPolicy::Steer { .. } => {
+            let spend_force = super::prompt_chord(crate::agents::message_keys(
                 candidate
                     .bound
                     .map_or(&candidate.message.kind, |row| &row.kind),
             ))
-            .is_some() =>
-        {
-            store
-                .claim_message_spending_force(&candidate.message.message_id, now)?
-                .map(|message| vec![message])
+            .is_some();
+            store.claim_steer_batch(&candidate.message.message_id, now, spend_force)?
         }
-        DeliveryPolicy::Steer { .. } | DeliveryPolicy::Interrupt { .. } => store
+        DeliveryPolicy::Interrupt { .. } => store
             .claim_message_for_steer(&candidate.message.message_id, now)?
             .map(|message| vec![message]),
     };
@@ -492,7 +489,8 @@ fn attempt_delivery(
         policy.kind(),
     );
     live_send.past_typing_hold = first.forced_keepalive;
-    let batch_id = (send_messages.len() > 1).then(|| first.message_id.clone());
+    let batch_id = (send_messages.len() > 1 && first.body == MessageBody::Prompt)
+        .then(|| first.message_id.clone());
     for message in &mut send_messages {
         message.batch_id = batch_id.clone();
     }
@@ -556,11 +554,19 @@ pub(super) fn execute_attempt(
                 return Ok(AttemptOutcome::Queued);
             }
             store.record_message_delivery_failures(
-                records,
+                std::slice::from_ref(head),
                 crate::store::writer::DeliveryFailureDisposition::Terminal,
                 "a compaction never follows a compaction; the agent has not taken a turn since its last one",
                 &workspace.session_name,
             )?;
+            if records.len() > 1 {
+                store.release_message_claims(
+                    &records[1..],
+                    "deferred: compaction ahead of it was rejected as a repeat",
+                    false,
+                    &workspace.session_name,
+                )?;
+            }
             return Ok(AttemptOutcome::Queued);
         }
     }
@@ -664,16 +670,26 @@ pub(super) fn execute_attempt(
                 DeliveryKind::Steer => Some(TypingHoldReplay::Steer),
                 DeliveryKind::Interrupt => Some(TypingHoldReplay::Interrupt),
             };
-            store.hold_message_claims(
-                records,
-                TypingHold {
-                    until,
-                    replay,
-                    force: live_send.force,
-                },
-                compacted,
-                &workspace.session_name,
-            )?;
+            let (head_slice, tail_slice) =
+                if head.body == MessageBody::Command && records.len() > 1 && replay.is_some() {
+                    records.split_at(1)
+                } else {
+                    (records, &[][..])
+                };
+            for (slice, slice_replay) in [(head_slice, replay), (tail_slice, None)] {
+                if !slice.is_empty() {
+                    store.hold_message_claims(
+                        slice,
+                        TypingHold {
+                            until,
+                            replay: slice_replay,
+                            force: live_send.force,
+                        },
+                        compacted,
+                        &workspace.session_name,
+                    )?;
+                }
+            }
             Ok(AttemptOutcome::TypingHeld { until })
         }
         Ok(send::Receipt::SkippedWaiting(reason)) => {

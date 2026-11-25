@@ -34,8 +34,11 @@ impl Fixture {
             label: "@worker".into(),
             step: SoftCompactStep::WrapUp,
         };
+        let program = rimz::agents::spec_by_kind(kind)
+            .and_then(|spec| spec.launch.program)
+            .unwrap_or(kind);
         let session = env.resolve_workspace(&env.project_root).session_name;
-        let mut pane = agent_pane(&env, kind);
+        let mut pane = agent_pane(&env, program);
         pane.session_name = session.clone();
         let panes = env.write_pane_fixture(std::slice::from_ref(&pane));
         let frame = rimz::sidebar::frame::assemble_frame(
@@ -1349,4 +1352,165 @@ fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_c
         3,
         "/clear drops the mark and re-arms without the fill guard"
     );
+}
+
+#[test]
+fn next_prompt_kind_folds_command_and_continue_at_turn_end_and_on_steer() {
+    // 1. Turn-end delivery on antigravity with multi-line continue text folds onto one typed line,
+    //    records both Sent with batch_id None and the folded text on the tail, and presses Enter
+    //    alone (never send_now).
+    {
+        let fixture = Fixture::new("antigravity");
+        run_success(
+            fixture.env.rimz().args([
+                "config",
+                "set",
+                "resume.auto_continue_text",
+                "  keep going\n\n  on step 2  ",
+            ]),
+            "set multi-line continue text",
+        );
+        fixture.compact(&[]);
+        let (command, continuation) = fixture.command_and_continue();
+        fixture.end_turn();
+        fixture.deliver(&command.message_id);
+
+        let trace = fixture.trace();
+        assert_compact_segments_then_enter(&trace, "keep going on step 2");
+        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+        let tail_at = trace
+            .iter()
+            .position(|line| line.ends_with(&format!("{write_prefix}keep going on step 2")))
+            .expect("folded continue typed");
+        assert_eq!(
+            keys_after(&trace, tail_at),
+            vec!["13".to_owned()],
+            "boundary folded command presses Enter only, never Alt+M: {trace:?}"
+        );
+        assert!(
+            !trace.iter().any(|line| is_paste(line, "keep going")),
+            "folded continue is typed on the command line, not pasted: {trace:?}"
+        );
+        let records = fixture.records();
+        let sent_cmd = records
+            .iter()
+            .find(|r| r.message_id == command.message_id)
+            .unwrap();
+        let sent_tail = records
+            .iter()
+            .find(|r| r.message_id == continuation.message_id)
+            .unwrap();
+        assert_eq!(sent_cmd.status, MessageStatus::Sent);
+        assert_eq!(sent_cmd.text, "/compact");
+        assert_eq!(sent_cmd.batch_id, None);
+        assert_eq!(sent_tail.status, MessageStatus::Sent);
+        assert_eq!(sent_tail.text, "keep going on step 2");
+        assert_eq!(sent_tail.batch_id, None);
+    }
+
+    // 2. An interrupt before turn end withdraws the continue and types bare `/compact` + Enter.
+    {
+        let fixture = Fixture::new("antigravity");
+        fixture.compact(&[]);
+        let (command, continuation) = fixture.command_and_continue();
+        fixture.lifecycle(LifecycleSignal::TurnInterrupted { turn_id: None });
+        fixture.deliver(&command.message_id);
+
+        let trace = fixture.trace();
+        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+        let bare_at = trace
+            .iter()
+            .position(|line| line.ends_with(&format!("{write_prefix}/compact")))
+            .unwrap_or_else(|| panic!("expected bare /compact write: {trace:?}"));
+        assert_eq!(keys_after(&trace, bare_at), vec!["13".to_owned()]);
+        assert_eq!(fixture.status_of(&command.message_id), MessageStatus::Sent);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Canceled
+        );
+    }
+
+    // 3. Steering a queued compaction with a live tail into an open turn types the folded line
+    //    and presses send_now (Enter then Alt+M on Antigravity).
+    {
+        let fixture = Fixture::new("antigravity");
+        fixture.compact(&[]);
+        let (command, continuation) = fixture.command_and_continue();
+        run_success(
+            traced_rimz(&fixture.env, "soft-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture.panes)
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+                .args(["message", "steer", command.message_id.as_str()]),
+            "steer queued compaction",
+        );
+        let trace = fixture.trace();
+        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+        assert!(
+            trace
+                .iter()
+                .any(|line| line.ends_with(&format!("{write_prefix}/compact "))),
+            "expected command token segment: {trace:?}"
+        );
+        let tail_at = trace
+            .iter()
+            .position(|line| line.ends_with(&format!("{write_prefix}keep going")))
+            .unwrap_or_else(|| panic!("expected folded continue segment: {trace:?}"));
+        assert_eq!(
+            keys_after(&trace, tail_at),
+            vec!["13".to_owned(), "27\t109".to_owned()],
+            "steered folded compaction into an open turn presses send_now: {trace:?}"
+        );
+        assert_eq!(fixture.status_of(&command.message_id), MessageStatus::Sent);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Sent
+        );
+    }
+
+    // 4. An intervening prompt between command and tail keeps FIFO order: bare `/compact` first.
+    {
+        let fixture = Fixture::new("antigravity");
+        fixture.compact(&["--no-continue"]);
+        let command = fixture
+            .records()
+            .into_iter()
+            .find(|r| r.body == MessageBody::Command)
+            .unwrap();
+        let peer = MessageRecord::new(
+            fixture.env.workspace_id.clone(),
+            &fixture.agent(),
+            "peer update".to_owned(),
+            DeliveryGate::Done,
+        );
+        fixture
+            .env
+            .store()
+            .queue_message(&peer, "soft-test")
+            .unwrap();
+        fixture.compact(&[]);
+        let continuation = fixture
+            .records()
+            .into_iter()
+            .find(|r| r.soft_compact == Some(SoftCompactStep::Continue))
+            .unwrap();
+        assert!(command.message_id < peer.message_id && peer.message_id < continuation.message_id);
+
+        fixture.end_turn();
+        fixture.deliver(&command.message_id);
+        let trace = fixture.trace();
+        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+        assert!(
+            trace
+                .iter()
+                .any(|line| line.ends_with(&format!("{write_prefix}/compact"))),
+            "expected bare /compact ahead of intervening peer: {trace:?}"
+        );
+        assert_eq!(fixture.status_of(&command.message_id), MessageStatus::Sent);
+        assert_eq!(fixture.status_of(&peer.message_id), MessageStatus::Queued);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Queued
+        );
+    }
 }

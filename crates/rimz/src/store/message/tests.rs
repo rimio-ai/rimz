@@ -3261,3 +3261,60 @@ fn stage_visit_ends_on_another_stage_or_a_later_visit_to_the_same_stage() {
         [None, None, ended.clone(), ended.clone(), ended]
     );
 }
+
+#[test]
+fn next_prompt_command_batches_immediate_continue_tail_and_respects_fifo_and_kind() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let pair = |kind: &str| {
+        let mut receiver = agent("sess", None);
+        receiver.kind = AgentKind::new_unchecked(kind);
+        let command = delivery_message(1, &receiver, DeliveryGate::Done, None)
+            .with_body(MessageBody::Command)
+            .with_sender(MessageSender::System);
+        let mut tail = delivery_message(2, &receiver, DeliveryGate::Done, None)
+            .with_sender(MessageSender::System);
+        tail.soft_compact = Some(SoftCompactStep::Continue);
+        tail.follows_command = Some(command.message_id.clone());
+        (receiver, command, tail)
+    };
+
+    let (agy, command, tail) = pair("antigravity");
+    assert_eq!(
+        delivery_batch_indices(
+            &[command.clone(), tail.clone()],
+            &command.message_id,
+            AgentStatus::Idle,
+            now
+        ),
+        Some(vec![0, 1]),
+        "a NextPrompt command claims its immediate continue tail at the boundary"
+    );
+
+    let peer = delivery_message(2, &agy, DeliveryGate::Done, None);
+    let mut later_tail = tail;
+    later_tail.message_id = message_id(3);
+    assert_eq!(
+        delivery_batch_indices(
+            &[command.clone(), peer, later_tail],
+            &command.message_id,
+            AgentStatus::Idle,
+            now
+        ),
+        Some(vec![0]),
+        "an intervening prompt keeps FIFO order and leaves the command bare"
+    );
+
+    for kind in ["claude", "codex"] {
+        let (_, command, tail) = pair(kind);
+        assert_eq!(
+            delivery_batch_indices(
+                &[command.clone(), tail],
+                &command.message_id,
+                AgentStatus::Idle,
+                now
+            ),
+            Some(vec![0]),
+            "{kind} does not fold a command with its continue tail"
+        );
+    }
+}
