@@ -133,7 +133,7 @@ For turn-lifecycle runs, what passes is classified by `LifecycleSignal::terminal
 | `TurnEnded { errored: false, parked_on_background: false }`, nothing owed | `Completed` |
 | Same clean end, harness wake or conversation prompt owed | stays `Running` with `parked_at` set and `parked_on` naming the owed term: the transcript path and the answer so far are stored, and no wake is sent |
 | `TurnEnded { errored: true, parked_on_background: false }` | `Failed` |
-| `TurnEnded { parked_on_background: true }` | not terminal: the agent parked on background work and ends the turn later |
+| `TurnEnded { parked_on_background: true }` | not terminal: the agent parked on background work and ends the turn later (through a later turn end, or for Antigravity through a complete provider rest report newer than the row's last activity, which feeds a clean unparked `TurnEnded` with the transcript's last assistant message: [Interrupt](../agents/adapter_antigravity.md#interrupt)) |
 | `TurnInterrupted` | `Canceled` |
 | `Ended` | `Failed`: the session ended without reporting a turn result |
 | `TurnStarted`, `ToolUsed`, or `AwaitingInput` on a parked run | clears `parked_at` and `parked_on`, seals a non-empty `last_message` into `parked_answer`, stays `Running`; a park on `message` also rearms the deadline |
