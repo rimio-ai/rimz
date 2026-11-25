@@ -188,11 +188,33 @@ fn collect_show_report(
         )
     });
     let (ask, ask_next_step) = match agent.as_ref().zip(report_agent.as_ref()) {
-        Some((agent, entry)) if !agent.is_reviewing_permission(snapshot.now) => (
-            crate::cli::transcript::latest_ask_view(workspace, agent)?,
-            show_ask_next_step(store.paths(), agent, &entry.handle)?,
-        ),
-        _ => (None, None),
+        Some((agent, entry)) => {
+            if let Some(wait) = row_for_agent(snapshot, agent)
+                .and_then(rimz::store::snapshot::SidebarRow::delegated_wait)
+            {
+                let target = if wait.pane.is_some() {
+                    let child_id = rimz::ids::AgentSessionId::from(wait.child_id.as_str());
+                    rimz::store::snapshot::find_agent(
+                        &snapshot.agents,
+                        wait.kind.as_str(),
+                        &child_id,
+                    )
+                    .map(|child| rimz::address::paste_address(child, snapshot, &reader))
+                    .unwrap_or_else(|| format!("@{}", wait.handle))
+                } else {
+                    entry.handle.clone()
+                };
+                (None, Some(format!("rimz agents focus {target}")))
+            } else if !agent.is_reviewing_permission(snapshot.now) {
+                (
+                    crate::cli::transcript::latest_ask_view(workspace, agent)?,
+                    show_ask_next_step(store.paths(), agent, &entry.handle)?,
+                )
+            } else {
+                (None, None)
+            }
+        }
+        None => (None, None),
     };
     Ok((
         ShowReport {

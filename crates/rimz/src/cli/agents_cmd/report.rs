@@ -428,6 +428,12 @@ pub(super) fn build_entry(
         .filter(|tokens| tokens.display_total() > 0);
     let budget = budget_report(overrides.runtime, agent, overrides.budget_cost_usd);
 
+    let ask = if card.is_some_and(|card| card.delegated_wait.is_some()) {
+        None
+    } else {
+        agent.attention_ask(attention_now).map(AskReport::from)
+    };
+
     AgentReportEntry {
         id: agent.agent_id.clone(),
         kind: agent.kind.clone(),
@@ -452,7 +458,7 @@ pub(super) fn build_entry(
         background_shells: agent.background_shells.clone(),
         phase,
         turn_error,
-        ask: agent.attention_ask(attention_now).map(AskReport::from),
+        ask,
         unread: row.is_some_and(|row| row.unread),
         attention_score: row.map_or(0, |row| row.attention_score),
         description,

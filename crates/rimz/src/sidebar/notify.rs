@@ -323,13 +323,14 @@ impl NotificationState {
                 continue;
             }
             let key = AgentKey::new(opened.agent_kind.clone(), opened.agent_id.clone());
-            let overlay = snapshot
+            let card = snapshot
                 .rows()
                 .find(|row| row.id == opened.row_id)
-                .and_then(|row| row.as_agent())
-                .and_then(|agent| agent.overlay_raised_at)
-                .is_some();
-            if !overlay
+                .and_then(|row| row.as_agent());
+            let overlay = card.and_then(|agent| agent.overlay_raised_at).is_some();
+            let delegated_wait = card.and_then(|agent| agent.delegated_wait.as_ref());
+            let immediate = overlay || delegated_wait.is_some();
+            if !immediate
                 && self
                     .last_notified_at_ms
                     .get(&key)
@@ -337,13 +338,18 @@ impl NotificationState {
             {
                 continue;
             }
-            if overlay {
+            if immediate {
                 self.pending.retain(|pending| pending.key != key);
             } else if self.pending.iter().any(|pending| pending.key == key) {
                 continue;
             }
             let mut pending = pending_notification(opened, notification_kind);
-            if let Some(agent) = find_agent(&snapshot.agents, &opened.agent_kind, &opened.agent_id)
+            if let Some(wait) = delegated_wait {
+                pending.title = format!("RimZ: {} needs you", opened.label);
+                pending.body = wait.notification_body();
+                pending.agent.ask_id = None;
+            } else if let Some(agent) =
+                find_agent(&snapshot.agents, &opened.agent_kind, &opened.agent_id)
             {
                 pending.agent.ask_id = agent.open_ask.as_ref().map(|ask| ask.id.clone());
                 if overlay {

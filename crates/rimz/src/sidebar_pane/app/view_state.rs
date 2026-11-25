@@ -32,7 +32,7 @@ use super::selection::{
 };
 use super::state::{
     FetchDiagnostics, ReadClear, apply_manual_unread_guard, compute_next_state, fetch_diagnostics,
-    read_receipt_for_row, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
+    read_receipt_for_row, read_receipts_for_tab, read_row_ids_of_pane, session_focus_baseline,
     set_rows_unread,
 };
 use super::timing::frame_clock;
@@ -519,21 +519,25 @@ impl ViewContext {
             .focused_pane
             .as_ref()
             .is_some_and(|pane| self.current.viewed_panes.contains(pane));
-        let focused_row_id = focused_pane
+        let focused_row_ids = self
+            .current
+            .focused_pane
             .as_ref()
-            .filter(|pane| {
-                viewing_register_pane && self.current.focused_pane.as_ref() == Some(*pane)
-            })
-            .and_then(|pane| row_id_of_pane(&self.current, pane));
-        let mut clear = read_receipt_for_row(
-            &self.current,
-            focused_row_id.as_deref(),
-            UnreadClearCause::Focus,
-            marks,
-            now,
-        );
-        self.sweep_tab_read_receipts(ui, focused_row_id.as_deref(), context, &mut clear);
-        apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut clear);
+            .filter(|_| focused_pane.is_some() && viewing_register_pane)
+            .map(|pane| read_row_ids_of_pane(&self.current, pane))
+            .unwrap_or_default();
+        let mut clear = ReadClear::default();
+        for row_id in &focused_row_ids {
+            clear.merge(read_receipt_for_row(
+                &self.current,
+                Some(row_id),
+                UnreadClearCause::Focus,
+                marks,
+                now,
+            ));
+        }
+        self.sweep_tab_read_receipts(ui, &focused_row_ids, context, &mut clear);
+        apply_manual_unread_guard(ui, &focused_row_ids, &mut clear);
         set_rows_unread(&mut self.current, &clear.ids, false);
         (focused_pane, clear)
     }
@@ -541,7 +545,7 @@ impl ViewContext {
     pub(super) fn sweep_tab_read_receipts(
         &mut self,
         ui: &mut ViewState,
-        focused_row_id: Option<&str>,
+        focused_row_ids: &[String],
         context: &ReadContext<'_>,
         clear: &mut ReadClear,
     ) {
@@ -576,7 +580,7 @@ impl ViewContext {
             clear.merge(read_receipts_for_tab(
                 &self.current,
                 &view.working_pane_ids,
-                focused_row_id,
+                focused_row_ids,
                 marks,
                 now,
             ));

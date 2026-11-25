@@ -141,10 +141,11 @@ impl SidebarRow {
             .unwrap_or(&self.name)
     }
 
-    /// The status the row displays. A decision about attention (bucket counts,
-    /// the pane jump, a projection that overrides a row's status) reads
-    /// [`Self::attention_status`] instead: a current child's `?` lifts its parent
-    /// only there.
+    /// The status the row displays, including a current waiting subagent's
+    /// projection through the precedence ladder. A decision about attention
+    /// (bucket counts, ranking, the needs-you filter) reads
+    /// [`Self::attention_status`] instead: a provider-native child's `!` lifts
+    /// its parent only there.
     pub fn status(&self) -> Option<AgentStatus> {
         self.as_agent().map(|agent| agent.status)
     }
@@ -164,7 +165,8 @@ impl SidebarRow {
 
     /// The displayed idle origin. At rest it is the cache clock's last request, pings
     /// included, even when the turn's end came later: the age the cache has. In a turn or
-    /// an ask, and without a request stamp, it is own activity or a later request.
+    /// an ask, and without a request stamp, it is own activity or a later request. A
+    /// subagent's wait counts as the parent's own status, not as an ask of its own.
     pub fn idle_since(&self) -> Timestamp {
         let own = self.own_last_activity();
         let Some(agent) = self.as_agent() else {
@@ -173,25 +175,24 @@ impl SidebarRow {
         let Some(request) = agent.cache.and_then(|clock| clock.last_request_at) else {
             return own;
         };
-        match agent.status {
-            AgentStatus::Running | AgentStatus::Waiting => own.max(request),
-            _ => request,
-        }
+        let in_turn = match &agent.delegated_wait {
+            Some(wait) => wait.own_turn_running,
+            None => matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting),
+        };
+        if in_turn { own.max(request) } else { request }
     }
 
-    /// Status that determines row-level attention. A current child's waiting or a provider-native child's failure lifts the parent card without changing its displayed lifecycle status; the parent's own actionable status takes precedence.
+    /// Status that determines row-level attention. A current waiting child
+    /// already turns the parent's displayed status to `waiting` through the
+    /// precedence ladder; a provider-native child's failure lifts the parent
+    /// card here without changing its displayed lifecycle status, and the
+    /// parent's own actionable status takes precedence.
     pub fn attention_status(&self) -> Option<AgentStatus> {
         let status = self.status()?;
         if status.is_actionable() {
             return Some(status);
         }
         let agent = self.as_agent()?;
-        if agent
-            .current_sub_agents()
-            .any(|child| child.status == AgentStatus::Waiting)
-        {
-            return Some(AgentStatus::Waiting);
-        }
         if agent
             .current_sub_agents()
             .any(|child| child.provider_native && child.status == AgentStatus::Failed)
@@ -201,15 +202,12 @@ impl SidebarRow {
         Some(status)
     }
 
-    /// Pane for an attention jump: the first current waiting launched child's live pane when the parent is not itself actionable, otherwise the row's own pane. Ordinary card focus keeps using the row pane.
+    /// Pane for an attention jump, focus suppression, and answering-pane read
+    /// receipts: the marked waiting subagent's live pane when a pane-backed
+    /// child turned this parent row to `waiting`, otherwise the row's own pane.
+    /// Ordinary card focus keeps using the row pane.
     pub(crate) fn attention_pane(&self) -> Option<&PaneId> {
-        if let Some(agent) = self.as_agent()
-            && !agent.status.is_actionable()
-            && let Some(pane) = agent
-                .current_sub_agents()
-                .filter(|child| !child.provider_native && child.status == AgentStatus::Waiting)
-                .find_map(|child| child.pane.as_ref())
-        {
+        if let Some(pane) = self.delegated_wait().and_then(|wait| wait.pane.as_ref()) {
             return Some(pane);
         }
         self.pane.as_ref().map(|pane| &pane.pane_id)
@@ -234,6 +232,12 @@ impl SidebarRow {
     pub fn turn_error_label(&self) -> Option<&str> {
         self.as_agent()
             .and_then(|agent| agent.turn_error_label.as_deref())
+    }
+
+    /// The waiting subagent that turned this parent row to `waiting`, if any.
+    pub fn delegated_wait(&self) -> Option<&crate::agents::DelegatedWait> {
+        self.as_agent()
+            .and_then(|agent| agent.delegated_wait.as_ref())
     }
 
     pub fn sub_agents(&self) -> &[SidebarSubAgent] {
@@ -644,6 +648,11 @@ pub struct AgentCard {
     pub turn_error_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay_raised_at: Option<Timestamp>,
+    /// Set by `project_display` when a current waiting subagent turned this
+    /// parent card's displayed status to `waiting`; `None` for the parent's
+    /// own wait or any other status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_wait: Option<crate::agents::DelegatedWait>,
     /// The room's loop bookings this card owns, in draw order with their bands. Beside
     /// `sub_agents` and `pending_waits` and in neither: no status, attention, count or
     /// sort reads them.
@@ -751,6 +760,7 @@ impl Default for AgentCard {
             tool_repeat: None,
             turn_error_label: None,
             overlay_raised_at: None,
+            delegated_wait: None,
             bookings: Vec::new(),
             awaited: Vec::new(),
         }
@@ -1080,6 +1090,7 @@ impl AgentCard {
             tool_repeat: agent.tool_repeat.clone(),
             turn_error_label: None,
             overlay_raised_at: None,
+            delegated_wait: None,
             bookings: Vec::new(),
             awaited: Vec::new(),
         }
@@ -1093,16 +1104,20 @@ impl AgentCard {
         })
     }
 
-    /// The blocking ask's summary while the card is waiting for input.
+    /// The blocking ask's summary while the card is waiting on its own ask.
     pub fn open_ask(&self) -> Option<&str> {
-        if self.status != AgentStatus::Waiting {
+        if self.status != AgentStatus::Waiting || self.delegated_wait.is_some() {
             return None;
         }
         self.ask_detail.as_deref()
     }
 
-    /// Error reason, a resting turn's wait, activity, or no description, at the view's clock.
+    /// Waiting-subagent label, error reason, a resting turn's wait, activity,
+    /// or no description, at the view's clock.
     pub fn description(&self, now: Timestamp) -> CardDescription {
+        if let Some(wait) = &self.delegated_wait {
+            return CardDescription::Error(wait.label());
+        }
         if let Some(label) = self
             .turn_error_label
             .as_deref()

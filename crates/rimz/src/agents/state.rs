@@ -785,12 +785,93 @@ impl WaitingResolution {
     }
 }
 
+/// How a waiting subagent's start instant behaves across refreshes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "at", rename_all = "snake_case")]
+pub enum DelegatedWaitStart {
+    /// A stable wait-start instant (`permission_review_until`, `open_ask.since`,
+    /// or `waiting_since`). A later instant for the same child marks a new wait.
+    Fixed(Timestamp),
+    /// A provider wait instant that advances on refresh while one prompt stands
+    /// (for example Antigravity `NativeWait` `settle.at`). Reopens on entry and
+    /// does not reopen on refresh for the same child's wait.
+    Refreshed(Timestamp),
+    /// No wait-start instant could be read from the child.
+    #[default]
+    Unknown,
+}
+
+/// The waiting subagent that turned a parent card's displayed status to
+/// `waiting` through the precedence ladder. Written by `project_display` and
+/// nowhere else; every reader that distinguishes a subagent's wait from the
+/// parent's own reads this mark.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegatedWait {
+    /// The waiting child's session id (`AgentState::agent_id`).
+    pub child_id: String,
+    /// The waiting child's provider kind.
+    pub kind: AgentKind,
+    /// Display handle for the child: its petname when launched, else its type/name.
+    pub handle: String,
+    /// The child's live pane when it is a pane-backed launched child; `None`
+    /// for a provider-native or paneless child (answered in the parent's pane).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<crate::ids::PaneId>,
+    /// The child's wait-start reading, used only to open/reopen the parent's
+    /// unread episode and trigger a notification.
+    #[serde(default)]
+    pub start: DelegatedWaitStart,
+    /// One-line summary of the child's own open ask when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The parent's own projected status was `running` before the wait turned
+    /// it to `waiting`; `project_display` stamps it on the card's mark.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_turn_running: bool,
+}
+
+impl DelegatedWait {
+    /// One-line description for the card, CLI `description`, `needs_you.reason`,
+    /// and `agents show`'s `waiting:` summary.
+    pub fn label(&self) -> String {
+        match self.detail.as_deref() {
+            Some(detail) => format!("@{}: {detail}", self.handle),
+            None => format!("@{}: waiting for input", self.handle),
+        }
+    }
+
+    /// Notification body naming the waiting subagent.
+    pub fn notification_body(&self) -> String {
+        match self.detail.as_deref() {
+            Some(detail) => format!("@{}: {detail}", self.handle),
+            None => format!("@{} is waiting for input.", self.handle),
+        }
+    }
+
+    /// The child's wait-start timestamp when readable (`Fixed` or `Refreshed`).
+    pub const fn start_at(&self) -> Option<Timestamp> {
+        match self.start {
+            DelegatedWaitStart::Fixed(at) | DelegatedWaitStart::Refreshed(at) => Some(at),
+            DelegatedWaitStart::Unknown => None,
+        }
+    }
+
+    /// The stable wait-start timestamp when refreshes do not move it (`Fixed`).
+    pub const fn stable_since(&self) -> Option<Timestamp> {
+        match self.start {
+            DelegatedWaitStart::Fixed(at) => Some(at),
+            DelegatedWaitStart::Refreshed(_) | DelegatedWaitStart::Unknown => None,
+        }
+    }
+}
+
 /// Facts only a sidebar row carries into the rung walk: its tool-repeat run,
 /// its subagents, and the room's attention windows.
 struct RowEvidence<'a> {
     tool_repeat: Option<&'a ToolRepeat>,
     has_live_child: bool,
     delegated_park: Option<(AgentStatus, &'a str)>,
+    has_delegated_wait: bool,
     demotion: &'a super::ParkDemotion,
     stalled_after_secs: u32,
     tool_repeat_attention_after: u32,
@@ -895,7 +976,9 @@ fn walk_rungs<'a>(
     if let Some(row) = row
         && matches!(status, Idle | Success | Running)
     {
-        if let Some((status, label)) = row.delegated_park {
+        if !row.has_delegated_wait
+            && let Some((status, label)) = row.delegated_park
+        {
             return Rung::Decided(status, RungLabel::Delegated(label));
         }
         if row.has_live_child {
@@ -926,7 +1009,7 @@ fn walk_rungs<'a>(
     if let Some(repeat) = row.tool_repeat.filter(looping) {
         return Rung::Decided(Failed, RungLabel::Loop(repeat));
     }
-    if is_stalled(status, last_activity, now, row.stalled_after_secs) {
+    if !row.has_delegated_wait && is_stalled(status, last_activity, now, row.stalled_after_secs) {
         let spent = source.is_some_and(|agent| row.demotion.window_spent(&agent.login_key()));
         return keep(if spent { Paused } else { Failed });
     }
@@ -936,7 +1019,7 @@ fn walk_rungs<'a>(
 /// The refusal step of a card's projection, in place: a card `agent` rests on at
 /// `status` that the provider [refuses](super::ParkDemotion::refused) reads
 /// failed, with the refusal's sentence when it has one.
-pub(crate) fn project_refusal(
+fn project_refusal(
     agent: &AgentState,
     status: &mut AgentStatus,
     phase: &mut TurnPhase,
@@ -964,7 +1047,9 @@ pub(crate) fn project_refusal(
 /// come from `source`, and the fallback when no rung decides is the source's
 /// own `rested_status` on its own clock, so a parent kept fresh by a finished
 /// child does not stall on its own silence. The stall rung runs before the
-/// display-only lift of wait and shell work.
+/// display-only lift of wait and shell work. The model refusal reads
+/// `refusal_source`, the root source or a promoted launched child's own state,
+/// and decides before a waiting subagent can turn the card to `waiting`.
 #[expect(
     clippy::too_many_arguments,
     reason = "each slot is a card field the projection writes in place, and the row facts \
@@ -972,17 +1057,20 @@ pub(crate) fn project_refusal(
 )]
 pub(crate) fn project_display(
     source: Option<&AgentState>,
+    refusal_source: Option<&AgentState>,
     status: &mut AgentStatus,
     phase: &mut TurnPhase,
     turn_error_label: &mut Option<String>,
     overlay_raised_at: &mut Option<Timestamp>,
     ask_detail: &mut Option<String>,
     extra_questions: &mut usize,
+    delegated_wait_slot: &mut Option<DelegatedWait>,
     context: Option<&AgentContext>,
     last_activity: Timestamp,
     tool_repeat: Option<&ToolRepeat>,
     has_live_child: bool,
     delegated_park: Option<(AgentStatus, &str)>,
+    delegated_wait: Option<&DelegatedWait>,
     demotion: &super::ParkDemotion,
     now: Timestamp,
     stalled_after_secs: u32,
@@ -993,16 +1081,21 @@ pub(crate) fn project_display(
         tool_repeat,
         has_live_child,
         delegated_park,
+        has_delegated_wait: delegated_wait.is_some(),
         demotion,
         stalled_after_secs,
         tool_repeat_attention_after,
     });
     let mut open = *status;
     let decided = match walk_rungs(source, &mut open, phase, context, last_activity, row, now) {
-        Rung::Held => return,
+        Rung::Held => {
+            *delegated_wait_slot = None;
+            return;
+        }
         Rung::NativeWait => {
             *status = Waiting;
             *phase = TurnPhase::Idle;
+            *delegated_wait_slot = None;
             return;
         }
         Rung::Decided(status, label) => Some((status, label)),
@@ -1023,7 +1116,7 @@ pub(crate) fn project_display(
             *turn_error_label = Some(format!("loop: {} ×{}", repeat.tool, repeat.count));
         }
     }
-    if let Some(agent) = source {
+    if let Some(agent) = refusal_source {
         project_refusal(
             agent,
             &mut projected,
@@ -1052,6 +1145,22 @@ pub(crate) fn project_display(
             .map(|settle| settle.at);
         let rested_at = agent.turn_ended_at.max(marker);
         *overlay_raised_at = Some(opened_at.max(rested_at.unwrap_or(opened_at)));
+    }
+    if let Some(wait) = delegated_wait
+        && !projected.is_actionable()
+    {
+        let own_turn_running = projected == Running;
+        projected = Waiting;
+        *turn_error_label = None;
+        *ask_detail = None;
+        *extra_questions = 0;
+        *overlay_raised_at = None;
+        *delegated_wait_slot = Some(DelegatedWait {
+            own_turn_running,
+            ..wait.clone()
+        });
+    } else {
+        *delegated_wait_slot = None;
     }
     *status = projected;
     if projected != Running

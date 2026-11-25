@@ -331,6 +331,10 @@ impl SidebarSnapshot {
                             .sub_agents
                             .iter()
                             .any(|child| child.pane.as_ref() == Some(pane_id))
+                            || agent
+                                .delegated_wait
+                                .as_ref()
+                                .is_some_and(|wait| wait.pane.as_ref() == Some(pane_id))
                     })
             }) {
                 continue;
@@ -351,6 +355,10 @@ impl SidebarSnapshot {
                             .sub_agents
                             .iter()
                             .any(|child| child.pane.as_ref() == Some(pane_id))
+                            || agent
+                                .delegated_wait
+                                .as_ref()
+                                .is_some_and(|wait| wait.pane.as_ref() == Some(pane_id))
                     })
                 })
                 .filter_map(SidebarRow::as_agent_mut)
@@ -360,6 +368,12 @@ impl SidebarSnapshot {
                         child.pane = None;
                         changed = true;
                     }
+                }
+                if let Some(wait) = agent.delegated_wait.as_mut()
+                    && wait.pane.as_ref() == Some(pane_id)
+                {
+                    wait.pane = None;
+                    changed = true;
                 }
             }
             refresh_overlay_group(

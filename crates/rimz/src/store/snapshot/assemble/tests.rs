@@ -566,8 +566,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_in_turn_compaction_latch_contract_is_version_115() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 115);
+fn snapshot_delegated_wait_contract_is_version_116() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 116);
+}
+
+#[test]
+fn pre_116_unmarked_delegated_wait_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(115);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views built before delegated_wait projection must refold"
+    );
 }
 
 #[test]

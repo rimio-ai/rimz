@@ -119,7 +119,7 @@ fn tab_read_dwell_ignores_wall_steps() {
     let mut clear = ReadClear::default();
     let wall = clock.timestamp();
     rig.state.with_view_for_test(Route::READ, |pane, v| {
-        pane.sweep_tab_read_receipts(v, None, &marks, wall, &mut clear);
+        pane.sweep_tab_read_receipts(v, &[], &marks, wall, &mut clear);
     });
     assert_eq!(
         rig.view().ctx().tab_read_dwell_until,
@@ -128,7 +128,7 @@ fn tab_read_dwell_ignores_wall_steps() {
     rig.state.with_view_for_test(Route::READ, |pane, v| {
         pane.sweep_tab_read_receipts(
             v,
-            None,
+            &[],
             &marks,
             wall + Duration::from_secs(3_600),
             &mut clear,
@@ -142,7 +142,7 @@ fn tab_read_dwell_ignores_wall_steps() {
     rig.state.with_view_for_test(Route::READ, |pane, v| {
         pane.sweep_tab_read_receipts(
             v,
-            None,
+            &[],
             &marks,
             wall - Duration::from_secs(3_600),
             &mut clear,

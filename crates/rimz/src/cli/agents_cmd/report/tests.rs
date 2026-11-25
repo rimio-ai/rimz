@@ -453,6 +453,97 @@ fn delegated_park_reports_paused_without_parent_turn_error() {
 }
 
 #[test]
+fn delegated_wait_reports_waiting_with_subagent_reason_and_parent_clock() {
+    let parent_at = Timestamp::from_second(1_000).unwrap();
+    let wait_at = Timestamp::from_second(1_060).unwrap();
+    let mut parent = agent("parent");
+    parent.status = AgentStatus::Running;
+    parent.last_activity = parent_at;
+    let mut parent_pane =
+        rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+    parent_pane.command = Some("codex".to_owned());
+    parent.pane = Some(parent_pane.clone());
+
+    let mut child = agent("scout");
+    child.status = AgentStatus::Waiting;
+    child.name = Some("scout".to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.last_activity = parent_at - jiff::SignedDuration::from_secs(10);
+    child.waiting_since = Some(wait_at);
+    let mut child_pane =
+        rimz::pane::PaneRef::from_id(rimz::PaneId::from_parts(rimz::MuxName::Tmux, "%2"));
+    child_pane.command = Some("codex".to_owned());
+    child.pane = Some(child_pane.clone());
+
+    let snapshot = SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        vec![parent.clone(), child],
+        wait_at,
+    )
+    .with_live_panes(vec![parent_pane, child_pane], None);
+
+    let row = &snapshot.worktree_groups[0].rows[0];
+    let entry = build_entry(
+        &rimz::agents::ParkDemotion::default(),
+        &parent,
+        Some(row),
+        None,
+        rimz::address::agent_handle(&parent, &[&parent], false),
+        None,
+        wait_at,
+        ReportOverrides::default(),
+    );
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["status"], "waiting");
+    assert_eq!(json["phase"], "idle");
+    assert!(json["ask"].is_null());
+    assert!(json["turn_error"].is_null());
+    assert!(
+        entry
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("@scout")),
+        "description must name the subagent: {:?}",
+        entry.description
+    );
+    let needs_you = entry.needs_you.as_ref().expect("needs_you present");
+    assert_eq!(needs_you.status, AgentStatus::Waiting);
+    assert!(
+        needs_you
+            .reason
+            .as_deref()
+            .is_some_and(|text| text.contains("@scout")),
+        "needs_you.reason must name the subagent: {:?}",
+        needs_you.reason
+    );
+    assert_eq!(
+        needs_you.since, row.last_activity,
+        "needs_you.since must follow the parent row's last activity, not wait_at"
+    );
+    assert_ne!(needs_you.since, wait_at);
+
+    // --filter status=waiting matches the parent row too.
+    let query = rimz::address::selector::Query::parse(&["status=waiting".to_owned()]).unwrap();
+    let matched = rimz::address::selector::rows_in_scope(
+        &snapshot,
+        None,
+        rimz::address::selector::LaneScope::Room,
+        &query,
+        &rimz::agents::ParkDemotion::default(),
+        &crate::cli::CurrentChannel::Unscoped.address_context(),
+        wait_at,
+    );
+    assert!(
+        matched
+            .iter()
+            .any(|row| row.agent().agent_id == parent.agent_id),
+        "status=waiting filter must match a parent waiting on a subagent"
+    );
+}
+
+#[test]
 fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut state = agent("status");

@@ -71,7 +71,29 @@ pub(super) fn update_episodes<T>(
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadEpisodes {
     episodes: BTreeMap<String, i64>,
+    /// Per parent row, each subagent wait already announced, keyed by child id.
+    /// An entry stays while the row lists that child as a current waiting
+    /// subagent, so a wait hidden by the parent's own status or by another
+    /// child's mark is not announced again when the mark names it once more.
+    announced_waits: BTreeMap<String, BTreeMap<String, AnnouncedWait>>,
     absent_on_load: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+struct AnnouncedWait {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wait_since_ms: Option<i64>,
+    episode_ms: i64,
+}
+
+fn still_waiting(row: &SidebarRow, child_id: &str) -> bool {
+    row.delegated_wait()
+        .is_some_and(|wait| wait.child_id == child_id)
+        || row.as_agent().is_some_and(|agent| {
+            agent
+                .current_sub_agents()
+                .any(|child| child.id == child_id && child.status == AgentStatus::Waiting)
+        })
 }
 
 impl UnreadEpisodes {
@@ -82,6 +104,7 @@ impl UnreadEpisodes {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return Self {
                     episodes: BTreeMap::new(),
+                    announced_waits: BTreeMap::new(),
                     absent_on_load: true,
                 };
             }
@@ -107,6 +130,7 @@ impl UnreadEpisodes {
         }
         Self {
             episodes: file.episodes,
+            announced_waits: file.announced_waits,
             absent_on_load: false,
         }
     }
@@ -127,6 +151,7 @@ impl UnreadEpisodes {
         let file = UnreadEpisodesFile {
             v: UNREAD_EPISODES_VERSION.to_owned(),
             episodes: self.episodes.clone(),
+            announced_waits: self.announced_waits.clone(),
         };
         atomic::write_temp_then_rename_cache(&path, &file)?;
         self.absent_on_load = false;
@@ -207,12 +232,68 @@ impl UnreadEpisodes {
             self.episodes.remove(&row_id);
             changed = true;
         }
+        let prev_announced = self.announced_waits.clone();
+        self.announced_waits.retain(|row_id, waits| {
+            let Some(row) = rows.get(row_id) else {
+                return false;
+            };
+            waits.retain(|child_id, _| still_waiting(row, child_id));
+            !waits.is_empty()
+        });
+        if self.announced_waits != prev_announced {
+            changed = true;
+        }
 
         let mut opened = Vec::new();
         for row in rows.values() {
             let Some(status) = row.status() else {
                 continue;
             };
+            if let Some(wait) = row.delegated_wait() {
+                let stable_ms = wait.stable_since().map(jiff::Timestamp::as_millisecond);
+                let announced = self.announced_waits.get(&row.id);
+                if announced
+                    .and_then(|waits| waits.get(&wait.child_id))
+                    .is_some_and(|prev| prev.wait_since_ms == stable_ms)
+                {
+                    continue;
+                }
+                // A receipt never counts as having seen a wait this record has
+                // not announced: it may predate the mark, written while the
+                // parent's own actionable status hid it.
+                let after_receipt = marks
+                    .cleared_at_ms(&row.id)
+                    .map_or(i64::MIN, |receipt| receipt.saturating_add(1));
+                let after_announced = announced
+                    .and_then(|waits| waits.values().map(|prev| prev.episode_ms).max())
+                    .map_or(i64::MIN, |episode_ms| episode_ms.saturating_add(1));
+                let episode_ms = wait
+                    .start_at()
+                    .unwrap_or(row.last_activity)
+                    .as_millisecond()
+                    .max(snapshot.now.as_millisecond())
+                    .max(after_receipt)
+                    .max(after_announced)
+                    .max(self.episodes.get(&row.id).copied().unwrap_or(i64::MIN));
+                self.episodes.insert(row.id.clone(), episode_ms);
+                self.announced_waits
+                    .entry(row.id.clone())
+                    .or_default()
+                    .insert(
+                        wait.child_id.clone(),
+                        AnnouncedWait {
+                            wait_since_ms: stable_ms,
+                            episode_ms,
+                        },
+                    );
+                changed = true;
+                let mut unread = opened_unread(row, episode_ms, silent_opens);
+                unread.focused = row
+                    .attention_pane()
+                    .is_some_and(|pane| snapshot.viewed_panes.contains(pane));
+                opened.push(unread);
+                continue;
+            }
             let overlay = row.as_agent().and_then(|agent| agent.overlay_raised_at);
             if !status.needs_a_look()
                 || self.episodes.get(&row.id).is_some_and(|episode_ms| {
@@ -241,9 +322,8 @@ impl UnreadEpisodes {
             self.episodes.insert(row.id.clone(), episode_ms);
             changed = true;
             let mut unread = opened_unread(row, episode_ms, silent_opens);
-            unread.focused = unread
-                .pane_id
-                .as_ref()
+            unread.focused = row
+                .attention_pane()
                 .is_some_and(|pane| snapshot.viewed_panes.contains(pane));
             opened.push(unread);
         }
@@ -491,6 +571,8 @@ struct UnreadEpisodesFile {
     v: String,
     #[serde(default)]
     episodes: BTreeMap<String, i64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    announced_waits: BTreeMap<String, BTreeMap<String, AnnouncedWait>>,
 }
 
 #[cfg(test)]

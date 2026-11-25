@@ -507,3 +507,43 @@ fn launched_children_read_the_refusal_and_its_sentence_on_their_line_and_their_o
         "a promoted child's own row"
     );
 }
+
+#[test]
+fn promoted_launched_row_refusal_beats_waiting_child() {
+    use AgentStatus::{Failed, Success, Waiting};
+    let refused: BTreeMap<_, _> = provider_capacity("claude", Vec::new())
+        .into_iter()
+        .map(|(login, capacity)| (login, capacity.with_refusal(REFUSED, ago(5), SENTENCE)))
+        .collect();
+
+    let mut promoted = on_model(
+        agent("claude", "child-1", Success, 1_000)
+            .worktree("/repo/child")
+            .in_pane("%2")
+            .active_ago(60),
+        REFUSED,
+        None,
+    );
+    promoted.launch_depth = Some(1);
+    promoted.parent_agent_id = Some("parent-gone".into());
+    promoted.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+
+    let mut grandchild = child_state("child-1", "grandchild", Waiting, 5);
+    grandchild.waiting_since = Some(ago(5));
+
+    let snapshot = room(vec![promoted, grandchild]).with_live_panes_and_provider_capacities(
+        vec![pane("%2", "claude", "/repo/child")],
+        None,
+        &refused,
+    );
+    let promoted = row(&snapshot, "child-1");
+    assert_eq!(
+        (
+            promoted.status(),
+            promoted.turn_error_label(),
+            promoted.delegated_wait().is_none(),
+        ),
+        (Some(Failed), Some(SENTENCE), true),
+        "a promoted launched row resting on a refused model must keep Failed and carry no delegated wait"
+    );
+}

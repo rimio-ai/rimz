@@ -665,7 +665,12 @@ fn native_child_attention_keeps_merged_success_active_and_expanded() {
             .unwrap()
             .engaged_at = Some(ago(3601));
         assert_eq!(merged.rows.len(), 1);
-        assert_eq!(merged.rows[0].status(), Some(AgentStatus::Success));
+        let expected_display = if status == AgentStatus::Waiting {
+            AgentStatus::Waiting
+        } else {
+            AgentStatus::Success
+        };
+        assert_eq!(merged.rows[0].status(), Some(expected_display));
         assert_eq!(merged.rows[0].attention_status(), Some(status));
 
         snapshot.sort_groups_for_presentation();

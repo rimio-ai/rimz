@@ -498,6 +498,257 @@ fn dead_and_native_children_do_not_park_parent() {
     assert_eq!(row(&dead, "root").turn_error_label(), None);
 }
 
+fn launched_waiting_child(id: &str) -> AgentState {
+    let mut child = child_state("root", id, AgentStatus::Waiting, 5);
+    child.launch_depth = Some(1);
+    child.name = Some(id.to_owned());
+    child.registered_at = Some(ago(100));
+    child.waiting_since = Some(ago(5));
+    child
+}
+
+#[test]
+fn waiting_child_turns_non_actionable_parent_to_waiting_with_mark() {
+    let mut sleeping = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    sleeping.pending_waits.push(crate::agents::PendingWait {
+        name: "timer".to_owned(),
+        class: crate::agents::PendingWaitClass::Sleeping,
+        trigger: crate::agents::PendingWaitTrigger::Timer {
+            due: epoch() + jiff::SignedDuration::from_secs(60),
+            delay: None,
+        },
+        armed_at: Some(ago(10)),
+    });
+    let mut budget_parked = agent("claude", "root", AgentStatus::Running, 0).worktree("/repo/main");
+    budget_parked.budget_park = Some(crate::agents::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.5,
+        window: crate::agents::BudgetWindow::Session,
+        at: ago(10),
+        scope: crate::agents::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+        reset_window: None,
+    });
+    let parents: Vec<(&str, AgentState, AgentStatus)> = vec![
+        (
+            "idle",
+            agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main"),
+            AgentStatus::Idle,
+        ),
+        (
+            "success",
+            agent("claude", "root", AgentStatus::Success, 0).worktree("/repo/main"),
+            AgentStatus::Success,
+        ),
+        (
+            "running",
+            agent("claude", "root", AgentStatus::Running, 0).worktree("/repo/main"),
+            AgentStatus::Running,
+        ),
+        (
+            "paused_raw",
+            agent("claude", "root", AgentStatus::Paused, 0).worktree("/repo/main"),
+            AgentStatus::Paused,
+        ),
+        ("paused_budget", budget_parked, AgentStatus::Paused),
+        (
+            "paused_overload",
+            agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .overloaded_turn_error(0, "own overload"),
+            AgentStatus::Paused,
+        ),
+        (
+            "sleeping_raw",
+            agent("claude", "root", AgentStatus::Sleeping, 0).worktree("/repo/main"),
+            AgentStatus::Sleeping,
+        ),
+        ("sleeping_wait", sleeping, AgentStatus::Sleeping),
+    ];
+
+    for (label, parent, resting_status) in parents {
+        for (origin, child, expect_handle) in [
+            ("launched", launched_waiting_child("scout"), "scout"),
+            (
+                "native",
+                child_state("root", "native-1", AgentStatus::Waiting, 5),
+                "Explore",
+            ),
+        ] {
+            let raw_status = parent.status;
+            let snapshot = room_with_agent_panes(vec![parent.clone(), child.clone()]);
+            let parent_row = row(&snapshot, "root");
+            assert_eq!(
+                parent_row.status(),
+                Some(AgentStatus::Waiting),
+                "{label}/{origin}: waiting child turns parent to waiting"
+            );
+            assert_eq!(parent_row.phase(), TurnPhase::Idle, "{label}/{origin}");
+            let mark = parent_row
+                .delegated_wait()
+                .unwrap_or_else(|| panic!("{label}/{origin}: expected delegated_wait mark"));
+            assert_eq!(mark.handle, expect_handle, "{label}/{origin}");
+            assert_eq!(
+                mark.pane.is_some(),
+                origin == "launched",
+                "{label}/{origin}: launched carries child pane, native does not"
+            );
+            assert_eq!(snapshot.agents[0].status, raw_status, "{label}/{origin}");
+
+            // Once the last waiting child stops, the parent returns to its own ladder status
+            // without a delegated_wait mark.
+            let mut finished = child;
+            finished.status = AgentStatus::Success;
+            finished.waiting_since = None;
+            finished.ended_at = Some(epoch());
+            let settled = room_with_agent_panes(vec![parent.clone(), finished]);
+            let settled_row = row(&settled, "root");
+            assert_eq!(
+                settled_row.status(),
+                Some(resting_status),
+                "{label}/{origin}: returns to own status once waiting child stops"
+            );
+            assert_eq!(
+                settled_row.delegated_wait(),
+                None,
+                "{label}/{origin}: mark clears once waiting child stops"
+            );
+        }
+    }
+}
+
+#[test]
+fn parent_own_waiting_or_failed_outranks_waiting_child() {
+    let mut alert_parent = agent("claude", "root", AgentStatus::Idle, 0);
+    alert_parent.alert = Some(crate::agents::state::CardAlert {
+        text: "manual alert".to_owned(),
+        raised_at: ago(2),
+        raised_by: None,
+    });
+    let mut raised_parent = agent("claude", "root", AgentStatus::Idle, 0);
+    raised_parent.raised_ask = Some(crate::agents::state::RaisedAsk {
+        ask_id: crate::ids::AskId::new(),
+        state: crate::agents::state::RaisedAskState::Open,
+        raised_at: ago(2),
+        basis_at: ago(2),
+        opened_at: Some(ago(2)),
+        raised_by: None,
+        text: Some("Parent question?".to_owned()),
+        options: vec![],
+    });
+    let mut native_wait_parent = agent("claude", "root", AgentStatus::Running, 20);
+    let mut ctx = crate::agents::AgentContext::new("claude", ago(2));
+    ctx.settle = Some(crate::agents::TurnSettle::new(
+        ago(2),
+        crate::agents::TurnSettleOutcome::NativeWait,
+    ));
+    native_wait_parent.context = Some(ctx);
+
+    for (label, parent, expected) in [
+        (
+            "own_waiting",
+            agent("claude", "root", AgentStatus::Waiting, 0),
+            AgentStatus::Waiting,
+        ),
+        ("own_native_wait", native_wait_parent, AgentStatus::Waiting),
+        ("own_raised_ask", raised_parent, AgentStatus::Waiting),
+        (
+            "own_failed_raw",
+            agent("claude", "root", AgentStatus::Failed, 0),
+            AgentStatus::Failed,
+        ),
+        (
+            "own_failed_error",
+            agent("claude", "root", AgentStatus::Running, 0).turn_error(0, "own failure"),
+            AgentStatus::Failed,
+        ),
+        ("own_alert", alert_parent, AgentStatus::Failed),
+    ] {
+        let snapshot = room_with_agent_panes(vec![parent, launched_waiting_child("scout")]);
+        let parent_row = row(&snapshot, "root");
+        assert_eq!(parent_row.status(), Some(expected), "{label}");
+        assert_eq!(
+            parent_row.delegated_wait(),
+            None,
+            "{label}: own waiting/failed must carry no delegated_wait mark"
+        );
+    }
+}
+
+#[test]
+fn waiting_child_beats_delegated_park_including_spent_park() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
+    let paused_park = launched_parked_child("parked", "usage limit reached");
+    let mut waiting = launched_waiting_child("scout");
+    waiting.registered_at = Some(ago(50));
+
+    // Case 1: waiting child beats a paused delegated park.
+    let snapshot =
+        room_with_agent_panes(vec![parent.clone(), paused_park.clone(), waiting.clone()]);
+    let parent_row = row(&snapshot, "root");
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(parent_row.turn_error_label(), None);
+    assert_eq!(
+        parent_row.delegated_wait().map(|w| w.handle.as_str()),
+        Some("scout")
+    );
+
+    // Case 2: waiting child beats a spent (demoted to Failed) delegated park.
+    let exhausted = BTreeSet::from([(paused_park.kind.clone(), paused_park.agent_id.clone())]);
+    let demotion = crate::agents::ParkDemotion::new(&BTreeMap::new(), exhausted, epoch());
+    let snapshot = room(vec![parent.clone(), paused_park, waiting]);
+    let groups =
+        snapshot.build_worktree_groups(vec![row_from_agent(&parent, epoch())], &demotion, &[], &[]);
+    let parent_row = &groups[0].rows[0];
+    assert_eq!(
+        parent_row.sub_agents()[0].status,
+        AgentStatus::Failed,
+        "confirm the parked child itself demoted to Failed"
+    );
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(parent_row.turn_error_label(), None);
+    assert_eq!(
+        parent_row.delegated_wait().map(|w| w.handle.as_str()),
+        Some("scout")
+    );
+}
+
+#[test]
+fn several_waiting_children_mark_first_in_registration_order_then_hand_over() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 0);
+    let mut first = launched_waiting_child("alpha");
+    first.registered_at = Some(ago(100));
+    let mut second = launched_waiting_child("beta");
+    second.registered_at = Some(ago(50));
+
+    let snapshot = room_with_agent_panes(vec![parent.clone(), second.clone(), first.clone()]);
+    let parent_row = row(&snapshot, "root");
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(
+        parent_row.delegated_wait().map(|w| w.handle.as_str()),
+        Some("alpha")
+    );
+
+    first.status = AgentStatus::Running;
+    first.waiting_since = None;
+    let handed = room_with_agent_panes(vec![parent.clone(), second.clone(), first.clone()]);
+    let handed_row = row(&handed, "root");
+    assert_eq!(handed_row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(
+        handed_row.delegated_wait().map(|w| w.handle.as_str()),
+        Some("beta")
+    );
+
+    second.status = AgentStatus::Success;
+    second.waiting_since = None;
+    second.ended_at = Some(epoch());
+    let done = room_with_agent_panes(vec![parent, second, first]);
+    let done_row = row(&done, "root");
+    assert_eq!(done_row.status(), Some(AgentStatus::Running));
+    assert_eq!(done_row.delegated_wait(), None);
+}
+
 #[test]
 fn delegated_park_prefers_spawn_order_and_outranks_running_sibling() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0);

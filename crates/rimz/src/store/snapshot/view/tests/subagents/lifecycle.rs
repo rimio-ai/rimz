@@ -334,7 +334,8 @@ fn keyed_launched_child_keeps_parent_card_attention_after_activity() {
         parent_row.attention_pane(),
         parent_row.sub_agents()[0].pane.as_ref()
     );
-    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+    assert!(parent_row.delegated_wait().is_some());
 }
 
 #[test]
@@ -345,8 +346,9 @@ fn waiting_launched_child_lifts_parent_card_attention() {
     let snapshot = room_with_agent_panes(vec![parent, child]);
     let parent_row = row(&snapshot, "sess-root");
 
-    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
     assert_eq!(parent_row.attention_status(), Some(AgentStatus::Waiting));
+    assert!(parent_row.delegated_wait().is_some());
     assert!(parent_row.attention_score >= 600);
     assert!(!parent_row.sub_agents()[0].provider_native);
     assert!(!parent_row.sub_agents()[0].stalled);
@@ -362,12 +364,13 @@ fn waiting_launched_child_lifts_parent_card_attention() {
         serde_json::from_slice(&encoded).expect("snapshot deserializes");
     assert_eq!(
         row(&published, "sess-root").status(),
-        Some(AgentStatus::Idle)
+        Some(AgentStatus::Waiting)
     );
     assert_eq!(
         row(&published, "sess-root").attention_status(),
         Some(AgentStatus::Waiting)
     );
+    assert!(row(&published, "sess-root").delegated_wait().is_some());
     assert!(!row(&published, "sess-root").sub_agents()[0].provider_native);
     assert!(
         published.worktree_groups[0]
@@ -401,8 +404,9 @@ fn waiting_provider_child_lifts_parent_card_attention() {
     let snapshot = room_with_agent_panes(vec![parent, child]);
     let parent_row = row(&snapshot, "sess-root");
 
-    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
     assert_eq!(parent_row.attention_status(), Some(AgentStatus::Waiting));
+    assert!(parent_row.delegated_wait().is_some());
     assert!(parent_row.attention_score >= 600);
     assert!(
         snapshot.worktree_groups[0]
@@ -415,6 +419,10 @@ fn waiting_provider_child_lifts_parent_card_attention() {
     assert!(String::from_utf8_lossy(&encoded).contains("\"provider_native\":true"));
     let published: SidebarSnapshot =
         serde_json::from_slice(&encoded).expect("snapshot deserializes");
+    assert_eq!(
+        row(&published, "sess-root").status(),
+        Some(AgentStatus::Waiting)
+    );
     assert_eq!(
         row(&published, "sess-root").attention_status(),
         Some(AgentStatus::Waiting)

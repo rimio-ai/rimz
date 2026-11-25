@@ -60,6 +60,96 @@ fn raised_waiting_activity_shows_the_question_instead_of_the_old_task() {
 }
 
 #[test]
+fn delegated_wait_show_activity_names_subagent_and_focuses_answering_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::ResolvedWorkspace {
+        workspace_id: WorkspaceId::from_project_root(dir.path()),
+        project_root: dir.path().to_owned(),
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Directory,
+        worktree_root: dir.path().to_owned(),
+        worktree_branch: None,
+        session_name: "room".to_owned(),
+        mux_hint: None,
+    };
+    let paths =
+        rimz::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+            .unwrap();
+    let store = rimz::Store::open(paths, runtime.clone()).unwrap();
+    let now = jiff::Timestamp::from_second(1_000).unwrap();
+
+    for (launched, expect_handle, expect_focus) in [
+        (true, "@scout", "rimz agents focus @scout"),
+        (false, "@Explore", "rimz agents focus @parent"),
+    ] {
+        let mut parent = rimz::testkit::agent_state("claude", "parent", now);
+        parent.status = AgentStatus::Idle;
+        parent.name = Some("parent".into());
+        parent.name_explicit = true;
+        let mut parent_pane =
+            rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+        parent_pane.command = Some("claude".into());
+        parent.pane = Some(parent_pane.clone());
+
+        let mut child = rimz::testkit::agent_state("claude", "child-1", now);
+        child.status = AgentStatus::Waiting;
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.waiting_since = Some(now);
+        let mut panes = vec![parent_pane];
+        if launched {
+            child.launch_depth = Some(1);
+            child.name = Some("scout".into());
+            let mut child_pane =
+                rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%2"));
+            child_pane.command = Some("claude".into());
+            child.pane = Some(child_pane.clone());
+            panes.push(child_pane);
+        } else {
+            child.name = Some("Explore".into());
+            child.name_explicit = true;
+        }
+
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace.workspace_id.clone(),
+            vec![parent.clone(), child.clone()],
+            now,
+        )
+        .with_live_panes(panes, None);
+        let (report, error) =
+            collect_show_report(&store, &workspace, &runtime, &snapshot, "@parent", None).unwrap();
+        assert!(error.is_none());
+        assert_eq!(
+            report.ask_next_step.as_deref(),
+            Some(expect_focus),
+            "launched={launched}: collect_show_report must derive ask_next_step for the answering pane"
+        );
+        let entry = report.agent.as_ref().expect("parent report entry");
+        let text = strip(|w| {
+            render_activity_section(
+                w,
+                entry,
+                report.started.as_ref(),
+                report.ask.as_ref(),
+                report.ask_next_step.as_deref(),
+                false,
+                now,
+            )
+        });
+        assert!(
+            text.contains(&format!("  waiting: {expect_handle}")),
+            "launched={launched}: waiting line must name subagent: {text}"
+        );
+        assert!(
+            text.contains(&format!("→ {expect_focus}")),
+            "launched={launched}: focus step must target answering pane's agent: {text}"
+        );
+    }
+}
+
+#[test]
 fn context_cards_use_published_capacity_but_keep_usable_window_fill() {
     for (kind, window, capacity, used, label) in [
         ("opencode", 200_000, 400_000, 26_000, "400k"),

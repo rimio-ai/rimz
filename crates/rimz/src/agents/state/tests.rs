@@ -1703,7 +1703,9 @@ fn parked_launched_child_with_listed_shell_projects_running_parked_while_operati
     let mut overlay_raised_at = None;
     let mut ask_detail = None;
     let mut extra_questions = 0;
+    let mut delegated_wait = None;
     project_display(
+        Some(&child),
         Some(&child),
         &mut status,
         &mut phase,
@@ -1711,10 +1713,12 @@ fn parked_launched_child_with_listed_shell_projects_running_parked_while_operati
         &mut overlay_raised_at,
         &mut ask_detail,
         &mut extra_questions,
+        &mut delegated_wait,
         None,
         child.last_activity,
         None,
         false,
+        None,
         None,
         &ParkDemotion::default(),
         now,

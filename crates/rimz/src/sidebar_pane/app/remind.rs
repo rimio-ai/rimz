@@ -120,7 +120,8 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         let Some(pane) = row.pane.as_ref() else {
             continue;
         };
-        if !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id)) {
+        let answering = row.attention_pane().unwrap_or(&pane.pane_id);
+        if !focused.is_some_and(|viewed| viewed.contains(answering)) {
             scope.add_pane_row(&pane.pane_id);
         }
     }
@@ -370,5 +371,70 @@ mod tests {
         snapshot.worktree_groups = Default::default();
         assert!(state.evaluate(6_000, &snapshot, &prefs).is_none());
         assert!(!state.due(7_000, 1, 1));
+    }
+
+    #[test]
+    fn reminder_scope_counts_delegated_wait_and_suppresses_only_on_answering_pane() {
+        use crate::agents::{DelegatedWait, DelegatedWaitStart};
+
+        let child_pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
+        let mut launched_parent = row("terminal_1", AgentStatus::Waiting, true);
+        launched_parent.as_agent_mut().unwrap().delegated_wait = Some(DelegatedWait {
+            child_id: "scout".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "scout".to_owned(),
+            pane: Some(child_pane.clone()),
+            start: DelegatedWaitStart::Unknown,
+            detail: None,
+            own_turn_running: false,
+        });
+
+        // Focusing the parent pane does NOT suppress the reminder for a launched waiting child.
+        let parent_focused = snapshot_with(
+            vec![launched_parent.clone()],
+            Some("terminal_1"),
+            vec!["terminal_1", "terminal_child"],
+        );
+        let scope = unread_reminder_scope(&parent_focused, &NotificationsPrefs::default());
+        assert_eq!(scope.count, 1);
+        assert_eq!(
+            scope.panes,
+            vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")]
+        );
+
+        // Focusing the waiting child's pane DOES suppress the reminder.
+        let child_focused = snapshot_with(
+            vec![launched_parent],
+            Some("terminal_child"),
+            vec!["terminal_1", "terminal_child"],
+        );
+        let scope = unread_reminder_scope(&child_focused, &NotificationsPrefs::default());
+        assert_eq!(scope.count, 0);
+
+        // Provider-native waiting child has no pane of its own: answered in the parent pane.
+        let mut native_parent = row("terminal_2", AgentStatus::Waiting, true);
+        native_parent.as_agent_mut().unwrap().delegated_wait = Some(DelegatedWait {
+            child_id: "native".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            handle: "Explore".to_owned(),
+            pane: None,
+            start: DelegatedWaitStart::Unknown,
+            detail: None,
+            own_turn_running: false,
+        });
+        let native_focused = snapshot_with(
+            vec![native_parent.clone()],
+            Some("terminal_2"),
+            vec!["terminal_2"],
+        );
+        assert_eq!(
+            unread_reminder_scope(&native_focused, &NotificationsPrefs::default()).count,
+            0
+        );
+        let native_unfocused = snapshot_with(vec![native_parent], None, vec!["terminal_2"]);
+        assert_eq!(
+            unread_reminder_scope(&native_unfocused, &NotificationsPrefs::default()).count,
+            1
+        );
     }
 }

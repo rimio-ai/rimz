@@ -2,21 +2,27 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::state::{project_display, project_refusal};
-use crate::agents::{AgentStatus, ParkDemotion};
+use crate::agents::state::project_display;
+use crate::agents::{AgentStatus, DelegatedWait, ParkDemotion};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::{AgentKey, AgentProjectionIndex};
 
 /// Project each agent row's *displayed* status from its seeded card, its
-/// child-folded clock, its live subagents and delegated parks, and its source
-/// agent, through the rung order `agents::state::project_display` holds.
+/// child-folded clock, its live subagents, delegated parks, and waiting
+/// subagents, and its source agent, through the rung order
+/// `agents::state::project_display` holds.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection inputs stay explicit rather than adding a one-shot parameter struct"
+)]
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
     demotion: &ParkDemotion,
     delegated_parks: &BTreeMap<AgentKey, (AgentStatus, String)>,
+    delegated_waits: &BTreeMap<AgentKey, DelegatedWait>,
     now: Timestamp,
     stalled_after_secs: u32,
     tool_repeat_attention_after: u32,
@@ -38,37 +44,29 @@ pub(super) fn project_display_status(
         let delegated_park = delegated_parks
             .get(&key)
             .map(|(status, label)| (*status, label.as_str()));
+        let delegated_wait = delegated_waits.get(&key);
+        // A launched child rendered as its own row has no root source; only the refusal step
+        // reads its own state, and every other rung keeps what it sees without one.
         project_display(
             source_agent,
+            source_agent.or_else(|| index.launched(&key)),
             &mut agent.status,
             &mut agent.phase,
             &mut agent.turn_error_label,
             &mut agent.overlay_raised_at,
             &mut agent.ask_detail,
             &mut agent.extra_questions,
+            &mut agent.delegated_wait,
             agent.context.as_ref(),
             last_activity,
             agent.tool_repeat.as_ref(),
             has_live_child,
             delegated_park,
+            delegated_wait,
             demotion,
             now,
             stalled_after_secs,
             tool_repeat_attention_after,
         );
-        // A launched child rendered as its own row has no root source; only the refusal step
-        // reads its own row, and every other rung keeps what it sees without one.
-        if source_agent.is_none()
-            && let Some(child) = index.launched(&key)
-        {
-            project_refusal(
-                child,
-                &mut agent.status,
-                &mut agent.phase,
-                &mut agent.turn_error_label,
-                demotion,
-                now,
-            );
-        }
     }
 }
