@@ -142,6 +142,7 @@ kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
 - A logged-in check against an account home under `~/.rimz/accounts/codex/` is the user's to allow.
 - A live Codex turn needs a Codex login. A Claude agent's shell exports no `CODEX_HOME`, and `~/.codex` holds a login only while the user's default Codex account is signed in (a bare `codex exec` there answers `401 Unauthorized` otherwise). A plan that asks for a live Codex turn names a Codex agent to run it on its own login, or raises it with the user first.
 - A hand-built Claude transcript for a spend probe is written as compact JSON (no space after `:` or `,`) at a new path: an existing path is a rewrite merge that keeps no rows older than eight days, and spaced JSON fails the parser's byte pre-filter.
+- Before tearing down a probe's sandbox or scratch home, copy every provider transcript, raw hook payload, store event log, and the prompt of each case into the shared task directory, beside the log that cites them.
 
 ## Isolated homes
 
