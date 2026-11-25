@@ -1268,6 +1268,10 @@ impl<T: serde::de::DeserializeOwned + PartialEq> TuneOverride<T> {
 /// (`idle_agent_row`, `pane_agent_from_sessionless`, `empty_local_agent`,
 /// `ResumeCandidate::from_observation`): a field made mandatory is stamped on
 /// every one of these paths.
+///
+/// A new field bumps `SNAPSHOT_VERSION` (`store/snapshot/view.rs`) and
+/// `ROLLUP_CACHE_VERSION` (`store/snapshot/fold.rs`). A change to a field's
+/// serialized shape follows the rule on `EventCarryover` in the same `fold.rs`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]

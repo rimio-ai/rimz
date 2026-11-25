@@ -147,7 +147,12 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 }
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
-/// `latest.json` files read as stale instead of accreting one-off guards.
+/// `latest.json` files read as stale instead of accreting one-off guards. A
+/// field added to any struct the snapshot carries is such a change.
+///
+/// A bump renames the one `*_contract_is_version_<N>` test in
+/// `assemble/tests.rs` rather than adding a second, and its reason goes in its
+/// own `pre_<x>_..._is_not_a_fresh_view` test.
 pub const SNAPSHOT_VERSION: u32 = 112;
 
 /// The first rollup row matching an exact provider and session identity.

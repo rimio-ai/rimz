@@ -141,6 +141,10 @@ impl SidebarRow {
             .unwrap_or(&self.name)
     }
 
+    /// The status the row displays. A decision about attention (bucket counts,
+    /// the pane jump, a projection that overrides a row's status) reads
+    /// [`Self::attention_status`] instead: a current child's `?` lifts its parent
+    /// only there.
     pub fn status(&self) -> Option<AgentStatus> {
         self.as_agent().map(|agent| agent.status)
     }
@@ -499,6 +503,9 @@ pub struct CardScript {
     pub started_at: Timestamp,
 }
 
+/// A field here carries what the renderer reads (a bool or a short label), not
+/// the record behind it: the sidebar snapshot is persisted as `latest.json` and
+/// projected for every pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,

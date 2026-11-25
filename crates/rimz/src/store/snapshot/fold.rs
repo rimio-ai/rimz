@@ -33,6 +33,13 @@ use crate::store::runtime;
 
 /// Carryover state preserved across event-log rotation. Today this is the
 /// agent rollup and terminal resume-message outcomes.
+///
+/// The file is unversioned: neither `SNAPSHOT_VERSION` nor
+/// `ROLLUP_CACHE_VERSION` reaches it, and an older binary that cannot decode a
+/// carried `AgentState` field fails every fold until the file is replaced. A
+/// change to a carried field's serialized shape writes the new shape under a new
+/// serde key rather than reshaping the old one, and pins that with a decode of
+/// the new row through the old struct.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct EventCarryover {
     #[serde(default)]
@@ -406,6 +413,11 @@ const ROLLUP_CACHE_VERSION: u32 = 77;
 /// Cache-class — reconstructible from the event log and the carryover at any
 /// time, so it renames atomically without fsync and any read failure falls back
 /// to the full fold.
+///
+/// A change to what this cache or the carryover stores keeps
+/// `fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences` in
+/// `fold/tests/integrity.rs` passing (a warm fold over the cache equals a cold
+/// fold from empty): run it before any other fold test.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RollupCache {
     pub version: u32,

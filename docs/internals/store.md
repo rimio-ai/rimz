@@ -26,7 +26,7 @@ A listing drops deleted records, ignores temporary siblings, and skips files los
 
 Four boundaries decide where new code goes:
 
-- The store folds the agent model, so `store` imports `agents` and nothing under `agents` imports `store`.
+- The store folds the agent model, so `store` imports `agents` and nothing under `agents` imports `store`. `store` reaches nothing in `harness`, which is policy over store records (run, workflow, and signal transitions, each under the workspace lock) and reaches down.
 - `store::message` owns the durable message record, its codec, and FIFO/claim selection. Delivery in `message/` imports them ([messaging.md](./harness/messaging.md)).
 - `store::event` owns the persisted signal vocabulary (`SignalName`, `SignalSource`, `SignalEventPayload`). `Store::append_signal` takes that payload, and the harness converts its runtime `Signal` on the way down ([loops.md](./harness/loops.md#the-signal-vocabulary)).
 - `store::run` owns the supervised-run schema, its temp-file-plus-rename codec, and the terminal wake sender. `harness::run` owns creation and the status transitions, which take the workspace lock ([scripting.md](./harness/scripting.md#the-record)). Store reset is the one place the store writes a run record itself.
@@ -75,7 +75,7 @@ Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it co
 
 ## What is on disk
 
-Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. Each path is built under its class directory, never straight off a room root, and `cargo xtask invariants` rejects a `self.root.join(` there outside tests. State survives reboot, and runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. The figures below come from `disk/retention.rs`.
+Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. Each path is built under its class directory, never straight off a room root, and `cargo xtask invariants` rejects a `self.root.join(` there outside tests. State survives reboot, and runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. The figures below come from `disk/retention.rs`. A new class, or a change to what reset, teardown, or GC removes, updates the table below, [Reset](#reset), [What survives what](#what-survives-what), and reset's numbered steps in [maintenance.md](../reference/cli/maintenance.md#reset-a-wedged-room).
 
 | Class directory | Tier | Reclamation rule |
 | --- | --- | --- |
