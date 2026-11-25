@@ -17,7 +17,7 @@ rimz mcp serve --launch-env [--parent-env]
 
 ## Tools
 
-Each tool call but `guide`'s does the job of one `rimz` command, inside the server, as the agent that started the server, in that agent's home and room, and answers with what the job returns ([calls](#calls)). A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry that skill's usage knowledge for the options the tools expose: the `lsp` target forms and result cap, the `wait` triggers, what a `subagent` brief carries and how its result comes back, how to pick and brief an `agent` or a `team`, what a `workflow` start leaves to the user, what a `schedule` booking fires and who owns its name, which `message` mode fits and how to read and answer a prompt that opens with a `From:` header, the `tasks`, `join`, and `stop` id forms, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar, the `subagent` description to `rimz-subagents/delegating`, what to delegate and how to brief and read a subagent, the `agent` and `team` descriptions to `rimz-agents/launching` and `rimz-teams/launching`, what to launch, where it works, and how to brief it, the `workflow` description to `rimz-workflow/steering` and `rimz-workflow/debugging`, the `rimz workflow` commands that steer a run and what each waiting line and failure cause means, the `schedule` description to `rimz-wait/conditions`, which a launch serving `rimz-loop` loads without `rimz-wait`, and to `rimz-loop/targets`, `rimz-loop/signals`, and `rimz-loop/managing`, what each target does at a fire, the signal names, and the `rimz loop` commands that list, pause, test-fire, and debug a task, and the `self_molt` description to `rimz-control/fresh-eyes`, how to write the note for a fresh-eyes review. The server's `instructions` open with a short line saying what the served tools are for, which RimZ builds from the served tools and no file replaces; then one line per served capability says when to reach for it, then one line naming `tasks`, `join`, and `stop` when those tools are served and one naming `guide` when it is served, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
+Each tool call but `guide`'s does the job of one `rimz` command, inside the server, as the agent that started the server, in that agent's home and room, and answers with what the job returns ([calls](#calls)). A capability shares its name with the skill that teaches the same commands, a launch that serves the capability withholds that skill from the model, on Antigravity only under scoped isolation ([configuration](../../guide/configuration.md#rimz-tools-over-mcp)), and its tools' descriptions carry what spans fields for each tool: the `lsp` target forms and result cap, the `wait` triggers, when to use `subagent`, `agent`, or `team` and how their reports and follow-ups work, what a `workflow` start leaves to the user, what a `schedule` booking fires and who owns its name, which `message` mode fits and how to read and answer a prompt that opens with a `From:` header, what `tasks`, `join`, and `stop` answer and refuse, and when to book a stop. Material few calls need is a guide the agent loads on demand: the `wait` description points to `rimz-wait/conditions`, the `when` condition grammar, and `rimz-wait/traps`, edge cases for truncated logs, hanging checks, and bounding a `when`, the `subagent` description to `rimz-subagents/delegating`, what to delegate and how to brief and read a subagent, the `agent` and `team` descriptions to `rimz-agents/launching` and `rimz-teams/launching`, what to launch, where it works, and how to brief it, the `workflow` description to `rimz-workflow/steering` and `rimz-workflow/debugging`, the `rimz workflow` commands that steer a run and what each waiting line and failure cause means, the `schedule` description to `rimz-wait/conditions`, which a launch serving `rimz-loop` loads without `rimz-wait`, and to `rimz-loop/targets`, `rimz-loop/signals`, and `rimz-loop/managing`, what each target does at a fire, the signal names, and the `rimz loop` commands that list, pause, test-fire, and debug a task, and the `self_molt` description to `rimz-control/fresh-eyes`, how to write the note for a fresh-eyes review. The server's `instructions` open with a short line saying what the served tools are for, which RimZ builds from the served tools and no file replaces; then one line per served capability says when to reach for it, then one line stating what every start returns and naming `tasks`, `join`, and `stop` when those tools are served and one naming `guide` when it is served, then how a call runs. `rimz agents explain <profile> --mcps` prints all of that text as one launch is served it.
 
 `guide` belongs to no capability. The server lists it when it serves a capability that has a guide (`rimz-wait`, `rimz-subagents`, `rimz-agents`, `rimz-teams`, `rimz-workflow`, `rimz-loop`, and `rimz-control`), gives it no load mode of its own, and answers a call itself: the text of the named guide, or, for a name of a guide the launch does not serve, an error result whose `error` is `no guide "<name>"` and whose `hint` is `this launch has: <names>`.
 
@@ -55,23 +55,23 @@ rimz mcp tools [--only <capability>]... [--json]
 $ rimz mcp tools
 CAPABILITY      TOOL          TOKENS
 rimz-lsp        lsp            ~1223
-rimz-wait       wait           ~1107
-rimz-subagents  subagent        ~644
-rimz-agents     agent           ~819
-rimz-teams      team            ~611
-rimz-workflow   workflow       ~1103
-rimz-loop       schedule       ~1756
-rimz-message    message         ~808
--               tasks           ~371
--               join            ~417
--               stop            ~364
+rimz-wait       wait            ~925
+rimz-subagents  subagent        ~465
+rimz-agents     agent           ~590
+rimz-teams      team            ~435
+rimz-workflow   workflow        ~803
+rimz-loop       schedule       ~1740
+rimz-message    message         ~814
+-               tasks           ~304
+-               join            ~356
+-               stop            ~311
 rimz-control    self_stop       ~430
 rimz-control    self_compact    ~208
 rimz-control    self_tune       ~310
 rimz-control    self_molt       ~592
 rimz-notes      notes           ~464
 -               guide           ~120
-total: ~11347 tokens in 17 tools
+total: ~10090 tokens in 17 tools
 ```
 
 Every command a tool stands for is on the [routine list](../agent-support.md) an installed agent runs without asking, so a tool does nothing such an agent may not do unasked, with two exceptions, which run unasked all the same: a `stop` of a schedule removes its booking, and `schedule` makes one, in the caller's room, for an agent, team, or workflow, which `rimz loop add` does only with a permission prompt. The commands themselves are documented on their own pages: [Language servers](./lsp.md), [Wait](./wait.md), [Subagents](./subagents.md), [Workflow](./workflow.md), [Message](./message.md), [Agents](./agents.md), [Teams](./teams.md), and [Notes](./notes.md).
@@ -88,7 +88,7 @@ Each text the server sends is a Markdown file built into `rimz`, and a file at t
 | `<capability>/<tool>.md` | The tool's description (`rimz-wait/wait.md`) |
 | `<capability>/guides/<guide>.md` | A guide `guide` loads (`rimz-wait/guides/conditions.md`) |
 
-The built-in files are under `crates/rimz/src/mcp/tools/` in the source tree. The server reads the folder once, when it starts, so a running session keeps the text it started with and an agent launched afterwards gets the new file; a provider that restarts the server inside a session (a resume, a server it respawns) reads the folder again. An argument's description is part of the tool's schema and has no file.
+The built-in files are under `crates/rimz/src/mcp/tools/` in the source tree. The server reads the folder once, when it starts, so a running session keeps the text it started with and an agent launched afterwards gets the new file; a provider that restarts the server inside a session (a resume, a server it respawns) reads the folder again. An argument's description is part of the tool's schema and has no file. Per-field rules and defaults live in those argument descriptions rather than the tool's `.md` file, so a replacement file written before a rule moved into the schema can repeat what the schema already says.
 
 A replacement never switches a tool off. RimZ serves the built-in text in its place, and warns with the file's path and the reason, when the file cannot be read, is not UTF-8, is empty, or breaks a limit a provider keeps:
 

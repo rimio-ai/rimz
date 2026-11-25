@@ -1751,7 +1751,7 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
             failure,
             json!({
                 "error": format!("no guide {name:?}"),
-                "hint": "this launch has: rimz-wait/conditions",
+                "hint": "this launch has: rimz-wait/conditions, rimz-wait/traps",
             }),
         );
     }

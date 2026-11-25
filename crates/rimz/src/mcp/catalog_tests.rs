@@ -465,8 +465,15 @@ fn the_text_fits_what_providers_keep() {
             tool.name,
         );
     }
-    let wait = tool("wait").listing(&wording)["inputSchema"].to_string();
-    assert!(wait.len() < 5000, "{}", wait.len());
+    for tool in &TOOLS {
+        let schema = tool.listing(&wording)["inputSchema"].to_string();
+        assert!(
+            schema.len() < 5000,
+            "{} inputSchema is {} bytes, over the 5,000 Codex keeps",
+            tool.name,
+            schema.len(),
+        );
+    }
 }
 
 #[test]

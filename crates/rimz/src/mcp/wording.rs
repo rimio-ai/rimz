@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
-const BUILT_IN: [(&str, &str); 38] = [
+const BUILT_IN: [(&str, &str); 39] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
     ("tasks.md", include_str!("tools/tasks.md")),
@@ -33,6 +33,10 @@ const BUILT_IN: [(&str, &str); 38] = [
     (
         "rimz-wait/guides/conditions.md",
         include_str!("tools/rimz-wait/guides/conditions.md"),
+    ),
+    (
+        "rimz-wait/guides/traps.md",
+        include_str!("tools/rimz-wait/guides/traps.md"),
     ),
     (
         "rimz-subagents/instructions.md",
@@ -615,8 +619,9 @@ fn group_sentence(group: Capability) -> String {
     format!("{}/instructions.md", group.name())
 }
 
-const STARTED_SENTENCE: &str =
-    "Use `tasks`, `join`, and `stop` to list, await, or cancel what you started.";
+const STARTED_SENTENCE: &str = "Each start returns an `id` (`<kind>:<name>`), how its result \
+                                arrives in `report`, and any `warnings`; use `tasks`, `join`, and \
+                                `stop` to list, block on, or end what you started.";
 const GUIDE_SENTENCE: &str = "Use `guide` to load a usage guide a tool description names.";
 
 #[cfg(test)]

@@ -82,7 +82,9 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
     let wording = Wording::built_in();
     let sentence = |group: Capability| wording.file(&group_sentence(group)).text().to_owned();
     let shared = wording.file(SHARED).text().to_owned();
-    let started = "Use `tasks`, `join`, and `stop` to list, await, or cancel what you started.";
+    let started = "Each start returns an `id` (`<kind>:<name>`), how its result arrives in \
+                   `report`, and any `warnings`; use `tasks`, `join`, and `stop` to list, block \
+                   on, or end what you started.";
     let guide = "Use `guide` to load a usage guide a tool description names.";
     assert_eq!(
         wording.instructions(&[Capability::Notes, Capability::Lsp]),
@@ -366,8 +368,13 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         .guide(&[Capability::Wait], "rimz-wait/conditions")
         .expect("the conditions guide");
     assert!(conditions.contains("`pr.queue`"), "{conditions}");
+    let traps = wording
+        .guide(&[Capability::Wait], "rimz-wait/traps")
+        .expect("the wait traps guide");
+    assert!(traps.contains("`check_in`"), "{traps}");
     let served = vec![
         "rimz-wait/conditions".to_owned(),
+        "rimz-wait/traps".to_owned(),
         "rimz-subagents/delegating".to_owned(),
         "rimz-agents/launching".to_owned(),
         "rimz-teams/launching".to_owned(),
@@ -391,6 +398,12 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         wording.guide(&[Capability::Loop], "rimz-wait/conditions"),
         Ok(conditions),
         "a launch serving rimz-loop alone loads the one conditions guide"
+    );
+    assert!(
+        wording
+            .guide(&[Capability::Loop], "rimz-wait/traps")
+            .is_err(),
+        "rimz-wait/traps stays with rimz-wait and is not lent to rimz-loop"
     );
     let values = "`in`: a delay, one number and unit";
     for tool in ["wait", "schedule"] {

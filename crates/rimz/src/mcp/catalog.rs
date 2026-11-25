@@ -818,17 +818,21 @@ pub struct WaitArgs {
     pub trigger: WaitTrigger,
     /// The trigger's argument: a command, path, PID, expression, duration, or time.
     pub value: String,
-    /// `file` only: fire on a new line holding this literal text.
+    /// `file` only: fire on the first new complete line holding this literal, case-sensitive text.
     pub grep: Option<String>,
-    /// `check` only: the sleep between runs (default `1s`).
+    /// `check` only: sleep between runs (default `1s`; use `30s` when polling another host).
     pub every: Option<String>,
-    /// `run`: wake only on this outcome, not either. `check`: `fail` polls until it fails.
+    /// `run`: wake only on this outcome (default either; `fail` for a server left running).
+    /// `check`: `fail` polls until it fails.
     pub on: Option<WaitOn>,
-    /// What you will do on waking, 1 to 60 characters.
+    /// What you will do on waking, 1 to 60 characters; give one to `when`, `in`, or `at`, whose
+    /// wake carries only what fired.
     pub label: Option<String>,
-    /// `run`, `check`, `file`, or `pid`: one still-running notice after this long.
+    /// `run`, `check`, `file`, or `pid`: one still-running notice after this long, whatever `on`
+    /// says (never a stop); set one longer than the watch should take when it could hang.
     pub check_in: Option<String>,
-    /// Where to run; defaults to the session's start directory.
+    /// Checkout to arm in; defaults to the session's start directory. `run` and `check` run at
+    /// that checkout's root; a relative `file` resolves from `cwd`.
     pub cwd: Option<PathBuf>,
 }
 
@@ -837,22 +841,23 @@ impl ToolArgs for WaitArgs {}
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubagentArgs {
-    /// The subagent profile to launch.
+    /// Subagent profile from your Subagents reminder.
     pub profile: String,
-    /// The brief: the whole task, its scope, and the result to report.
+    /// The brief, the only context the child gets.
     pub prompt: String,
-    /// A label for `tasks` and the sidebar, a few words.
+    /// Short label for `tasks` and the sidebar.
     pub description: Option<String>,
-    /// Where the child works; defaults to your own checkout.
+    /// Checkout where the child works; defaults to yours.
     pub cwd: Option<PathBuf>,
-    /// End the child after this long (`90m`, `2h`); the profile's timeout when absent, 30m by
-    /// default.
+    /// Cut the child off after this long (`90m`, `2h`); defaults to the profile's timeout, else
+    /// `30m`.
     pub timeout: Option<String>,
-    /// Override the profile's model.
+    /// Override the profile's model; omit unless the user asks.
     pub model: Option<String>,
-    /// Override the profile's reasoning effort.
+    /// Override the profile's reasoning effort; omit unless the user asks.
     pub effort: Option<String>,
-    /// Inherit this profile (subagent or agent) or provider kind below the child profile.
+    /// Inherit this profile (subagent or agent) or provider kind below the child profile; omit
+    /// unless the user asks.
     pub agent: Option<String>,
 }
 
@@ -868,25 +873,27 @@ impl ToolArgs for SubagentArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentArgs {
-    /// The agent profile to launch, or a bare model; one seat, never a team.
+    /// Agent profile (from `rimz agents profiles`) or bare model; one seat, never a team.
     pub profile: String,
     /// The brief: the agent's first turn.
     pub prompt: String,
-    /// A label for `tasks` and the sidebar, a few words.
+    /// Label for `tasks` and the sidebar, 3 to 5 words.
     pub description: Option<String>,
-    /// A distinct handle, when the channel already holds this profile's.
+    /// Distinct handle when the channel already holds this profile's (including yours).
     pub name: Option<String>,
-    /// Inherit this profile or provider kind below the launched profile.
+    /// Inherit this profile or provider kind below the launched profile; omit unless the user
+    /// asks.
     pub agent: Option<String>,
-    /// Work in this worktree. A new one branches from `agents.worktree.base` when set, else from
-    /// the `HEAD` of your repository's main checkout; a `team.role` branches as its team does.
+    /// Kebab-case worktree name (at most two words); at most one of `worktree`, `from_pr`, and
+    /// `cwd`. A new one branches from `agents.worktree.base` when set, else from the `HEAD` of the
+    /// main checkout; a `team.role` branches as its team does.
     pub worktree: Option<String>,
-    /// Start a new session in an existing `worktree`.
+    /// `worktree` only: start a new session in a closed worktree (otherwise refused).
     #[serde(default)]
     pub fresh: bool,
-    /// Work in a worktree of this open pull request, by number or URL.
+    /// Worktree for this open pull request, by number or URL.
     pub from_pr: Option<String>,
-    /// Work in this existing directory.
+    /// Existing directory to work in.
     pub cwd: Option<PathBuf>,
 }
 
@@ -913,16 +920,17 @@ impl ToolArgs for AgentArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TeamArgs {
-    /// The configured team to launch.
+    /// Configured team to launch (from `rimz teams list`).
     pub team: String,
-    /// The brief, which goes to the team's leader.
+    /// The brief, delivered to the team's leader.
     pub prompt: String,
-    /// The team's worktree. A new one branches from `agents.worktree.base` when set, else from
-    /// origin's default branch, fetched at launch.
+    /// Kebab-case worktree name (at most two words); give exactly one of `worktree` and `from_pr`.
+    /// A new one branches from `agents.worktree.base` when set, else from origin's default branch
+    /// fetched at launch (or `HEAD` with no origin).
     pub worktree: Option<String>,
-    /// Work in a worktree of this open pull request, by number or URL.
+    /// Open pull request, by number or URL, to create or reuse a worktree for.
     pub from_pr: Option<String>,
-    /// A label each seat carries in the sidebar, a few words; `tasks` shows the team's goal.
+    /// Label each seat carries in the sidebar, a few words; `tasks` shows the team's goal.
     pub description: Option<String>,
 }
 
@@ -955,24 +963,25 @@ fn blank_place(worktree: Option<&str>, from_pr: Option<&str>) -> Option<String> 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowArgs {
-    /// The deployed workflow's name; a path is refused.
+    /// Deployed workflow name (not a path).
     pub name: String,
-    /// Run in this RimZ-owned worktree, created when missing; refused by a project-scoped
+    /// RimZ-owned worktree to run in, created when missing; refused by a `project`-scoped
     /// workflow.
     pub worktree: Option<String>,
     /// Text added to every agent and message step's prompt in this run.
     pub prompt: Option<String>,
-    /// The start node's input: an object with a string `outcome`, and a `key`, when given,
-    /// that is a string or an integer and becomes the run's key.
+    /// Start node input: an object with a string `outcome`, and optional string or integer `key`
+    /// (becomes the run's key).
     pub input: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Replace the definition's deadline: a duration, `HH:MM`, `<weekday> HH:MM`, or a date.
+    /// Replace the definition's deadline: a duration (`8h`), `HH:MM`, `<weekday> HH:MM`
+    /// (`fri 18:00`), or date (`2026-11-21`, midnight at its start).
     pub deadline: Option<String>,
-    /// Give up capacity waits at this time; takes what `deadline` takes.
+    /// When to give up capacity waits; accepts the same formats as `deadline`.
     pub give_up: Option<String>,
     /// Launch agent steps past every capacity hold.
     #[serde(default)]
     pub skip_capacity: bool,
-    /// Send no report when the run ends, for a run you will not be there for.
+    /// Send no report when the run ends and do not hold this session open.
     #[serde(default)]
     pub detach: bool,
 }
