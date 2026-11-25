@@ -8029,3 +8029,153 @@ fn room_roots_and_notes_write_rules_resolve_symlinks_and_keep_missing_paths() {
         })
     );
 }
+
+/// `allow_read_dirs` canonicalizes symlinked directories, deduplicates while keeping existing
+/// allow and deny rules intact, and merges into either inline `--settings` or a private artifact.
+#[cfg(unix)]
+#[test]
+fn allow_read_dirs_unions_canonical_rules_into_inline_and_file_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let real_git = root.join("repo/.git");
+    let link_git = root.join("git-link");
+    let other_git = root.join("other/.git");
+    std::fs::create_dir_all(&real_git).unwrap();
+    std::fs::create_dir_all(&other_git).unwrap();
+    std::os::unix::fs::symlink(&real_git, &link_git).unwrap();
+
+    let mut args = vec![
+        "--settings".to_owned(),
+        json!({
+            "queuedMessages": "queue",
+            "permissions": {
+                "allow": ["command(git status)", format!("read_file({})", real_git.display())],
+                "deny": ["command(rm)"]
+            }
+        })
+        .to_string(),
+    ];
+    let mut artifact = None;
+    permissions::allow_read_dirs(
+        [link_git.as_path(), other_git.as_path()],
+        (&root, &root),
+        &mut args,
+        &mut artifact,
+    )
+    .unwrap();
+    assert!(artifact.is_none());
+    let settings: Vec<Value> = args
+        .windows(2)
+        .filter(|pair| pair[0] == "--settings")
+        .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+        .collect();
+    assert_eq!(
+        settings,
+        [json!({
+            "queuedMessages": "queue",
+            "permissions": {
+                "allow": [
+                    "command(git status)",
+                    format!("read_file({})", real_git.display()),
+                    format!("read_file({})", other_git.display()),
+                ],
+                "deny": ["command(rm)"]
+            }
+        })]
+    );
+
+    // File-backed `--settings` merges read rules into the private artifact.
+    std::fs::write(
+        root.join("profile.json"),
+        r#"{"permissions":{"deny":["command(rm)"]}}"#,
+    )
+    .unwrap();
+    let mut args = vec!["--settings".to_owned(), "profile.json".to_owned()];
+    let mut artifact = None;
+    permissions::allow_read_dirs(
+        [link_git.as_path()],
+        (&root, &root),
+        &mut args,
+        &mut artifact,
+    )
+    .unwrap();
+    let (_, value, source) = artifact.expect("file source stays a private artifact");
+    assert_eq!(source, root.join("profile.json"));
+    assert_eq!(
+        value,
+        json!({
+            "permissions": {
+                "deny": ["command(rm)"],
+                "allow": [format!("read_file({})", real_git.display())]
+            }
+        })
+    );
+}
+
+/// `configure_sandbox_settings` adds one canonical `read_file` rule for the checkout's common
+/// Git directory at every isolation level and never adds a `write_file` rule on it.
+#[cfg(unix)]
+#[test]
+fn configure_sandbox_settings_adds_git_common_dir_read_rule_at_every_isolation() {
+    use crate::config::Isolation;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let primary_git = root.join("repo/.git");
+    let admin = primary_git.join("worktrees/wt");
+    let worktree = root.join("wt");
+    let link_wt = root.join("link-wt");
+    std::fs::create_dir_all(primary_git.join("objects")).unwrap();
+    std::fs::create_dir_all(primary_git.join("refs")).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(primary_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&worktree, &link_wt).unwrap();
+
+    let state = root.join("state");
+    let runtime = root.join("runtime");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    let roots = [state.clone(), runtime.clone(), shared.clone()];
+
+    let expected_read = format!("read_file({})", primary_git.display());
+    let mut actual_by_isolation = Vec::new();
+    for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+        let mut args = Vec::new();
+        let mut artifact = None;
+        AntigravityAdapter
+            .configure_sandbox_settings(
+                (&link_wt, &root),
+                &roots,
+                isolation,
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        let doc: Value = serde_json::from_str(&args[1]).unwrap();
+        actual_by_isolation.push((isolation, doc));
+    }
+    let expected_doc = json!({
+        "permissions": {
+            "allow": [
+                format!("write_file({})", state.display()),
+                format!("write_file({})", runtime.display()),
+                format!("write_file({})", shared.display()),
+                expected_read,
+            ]
+        }
+    });
+    let expected_by_isolation: Vec<_> = [Isolation::Host, Isolation::Scoped, Isolation::Sandbox]
+        .into_iter()
+        .map(|isolation| (isolation, expected_doc.clone()))
+        .collect();
+    assert_eq!(actual_by_isolation, expected_by_isolation);
+}

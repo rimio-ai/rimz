@@ -835,7 +835,11 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
             paths,
             extra_args,
             artifact,
-        )
+        )?;
+        if let Some(common_dir) = crate::worktree::common_git_dir(paths.0) {
+            permissions::allow_read_dirs([common_dir.as_path()], paths, extra_args, artifact)?;
+        }
+        Ok(())
     }
 
     fn allow_routine_rimz_args(

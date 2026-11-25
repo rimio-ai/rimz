@@ -1147,6 +1147,12 @@ fn antigravity_write_rule(path: &Path) -> String {
     format!("write_file({})", resolved.display())
 }
 
+/// The read-only allow rule Antigravity gets for a checkout's canonical common Git directory.
+fn antigravity_read_rule(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    format!("read_file({})", resolved.display())
+}
+
 /// The routine `command(<prefix>)` allow rules Antigravity gets when `allow-routine-rimz` is on.
 fn antigravity_routine_rules() -> Vec<String> {
     crate::agents::routine_rimz_prefixes()
@@ -2178,9 +2184,12 @@ fn antigravity_bridges_a_trusted_primarys_worktree_into_the_one_settings_documen
     let root = project.path().canonicalize().unwrap();
     let (primary, worktree) = (root.join("repo"), root.join("repo-worktrees/wt"));
     let admin = primary.join(".git/worktrees/wt");
+    std::fs::create_dir_all(primary.join(".git/objects")).unwrap();
+    std::fs::create_dir_all(primary.join(".git/refs")).unwrap();
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::create_dir_all(&worktree).unwrap();
     std::fs::write(primary.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
     std::fs::write(admin.join("commondir"), "../..\n").unwrap();
     std::fs::write(
         worktree.join(".git"),
@@ -2232,6 +2241,7 @@ fn antigravity_bridges_a_trusted_primarys_worktree_into_the_one_settings_documen
             antigravity_write_rule(&state.root),
             antigravity_write_rule(&runtime.root),
             antigravity_write_rule(&runtime.shared_root),
+            antigravity_read_rule(&primary.join(".git")),
             "mcp(rimz_tools/*)".to_owned(),
         ]);
         assert_eq!(
@@ -2520,6 +2530,578 @@ fn antigravity_grants_room_roots_note_store_and_saved_allows_on_every_launch() {
         .expect("malformed passthrough permissions must fail launch")
         .to_string();
         assert!(error.contains("permissions"), "{bad}: {error}");
+    }
+}
+
+/// Every Antigravity launch in a linked worktree carries exactly one `read_file` rule for the
+/// canonical common Git directory of the primary checkout, beside room-root, note-store, and
+/// saved-allow rules, across fresh launch, resume, and restart at every isolation level, and
+/// never emits a `write_file` rule at or under that directory; Claude's settings stay unchanged.
+#[cfg(unix)]
+#[test]
+fn antigravity_grants_common_git_dir_read_rule_across_launch_resume_restart_and_isolations() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let rimz_home = root.join("rimz-home");
+    let runtime_home = root.join("runtime-home");
+    let plain = root.join("plain");
+    let primary = root.join("repo");
+    let primary_git = primary.join(".git");
+    let admin = primary_git.join("worktrees/wt");
+    let worktree = root.join("repo-worktrees/wt");
+    for path in [
+        &home,
+        &rimz_home,
+        &runtime_home,
+        &plain,
+        &primary_git.join("objects"),
+        &primary_git.join("refs"),
+        &admin,
+        &worktree,
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(primary_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+
+    let id = crate::WorkspaceId::from_project_root(&primary);
+    let state = StatePaths::under(id.clone(), &rimz_home).unwrap();
+    let runtime = RuntimePaths::under(id, &runtime_home).unwrap();
+    let store = state.notes_store();
+    std::fs::create_dir_all(&store).unwrap();
+
+    let expected_read = antigravity_read_rule(&primary_git);
+    let settings_file = home.join(".gemini/antigravity-cli/settings.json");
+    std::fs::create_dir_all(settings_file.parent().unwrap()).unwrap();
+
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let routine_rules = antigravity_routine_rules();
+
+    let restarted_agent = crate::testkit::agent_state(
+        "antigravity",
+        "wt-agent",
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    let restart_posture = crate::harness::resume::ResumePosture::default();
+    let requests = [
+        (
+            "launch",
+            request("antigravity", action_with_args("launch", Vec::new())),
+        ),
+        (
+            "resume",
+            request("antigravity", action_with_args("resume", Vec::new())),
+        ),
+        (
+            "restart-resume",
+            crate::launcher::swap::relaunch_request(
+                &restarted_agent,
+                &restart_posture,
+                action_with_args("resume", Vec::new()),
+                None,
+                None,
+            ),
+        ),
+        (
+            "restart-fresh",
+            crate::launcher::swap::relaunch_request(
+                &restarted_agent,
+                &restart_posture,
+                action_with_args("launch", Vec::new()),
+                None,
+                None,
+            ),
+        ),
+    ];
+
+    for (saved_label, saved_allow) in [
+        ("distinct-saved", vec!["command(cargo test)".to_owned()]),
+        (
+            "duplicate-saved",
+            vec!["command(cargo test)".to_owned(), expected_read.clone()],
+        ),
+    ] {
+        std::fs::write(
+            &settings_file,
+            serde_json::json!({
+                "trustedWorkspaces": [primary],
+                "permissions": {"allow": saved_allow}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (req_label, req) in &requests {
+            for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+                let plan = compile(LaunchPlanInputs {
+                    recorded_system_prompt_digest: None,
+                    request: req,
+                    cwd: &worktree,
+                    project_root: &primary,
+                    rimz_bin: Path::new("/bin/rimz"),
+                    runtime: &runtime,
+                    state: &state,
+                    effective: None,
+                    machine: &machine,
+                    commands: &machine.agents.commands,
+                    accounts: &machine.accounts,
+                    isolation,
+                    bwrap: isolation.is_scoped().then_some(Path::new("/bin/bwrap")),
+                    agents: Ok(&[]),
+                    ambient_env: &ambient,
+                    agent_shell: None,
+                    hibernate: false,
+                })
+                .unwrap();
+                let case = format!("{saved_label} {req_label} {isolation:?}");
+                let argv = &plan.process().provider_argv;
+                let docs: Vec<serde_json::Value> = argv
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--settings")
+                    .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+                    .collect();
+                assert_eq!(docs.len(), 1, "{case}: {argv:?}");
+                let allow: Vec<String> = docs[0]["permissions"]["allow"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{case}: missing permissions.allow in {}", docs[0]))
+                    .iter()
+                    .map(|entry| entry.as_str().unwrap().to_owned())
+                    .collect();
+                let mut expected = routine_rules.clone();
+                expected.push("command(cargo test)".to_owned());
+                if saved_label == "duplicate-saved" {
+                    expected.push(expected_read.clone());
+                }
+                expected.extend([
+                    antigravity_write_rule(&store),
+                    antigravity_write_rule(&state.root),
+                    antigravity_write_rule(&runtime.root),
+                    antigravity_write_rule(&runtime.shared_root),
+                ]);
+                if saved_label != "duplicate-saved" {
+                    expected.push(expected_read.clone());
+                }
+                expected.push("mcp(rimz_tools/*)".to_owned());
+                assert_eq!(allow, expected, "{case}: {}", docs[0]);
+                assert_eq!(
+                    allow.iter().filter(|rule| *rule == &expected_read).count(),
+                    1,
+                    "{case}: expected exactly one common Git dir read rule in {allow:?}"
+                );
+                assert!(
+                    !allow.iter().any(|rule| {
+                        rule.strip_prefix("write_file(")
+                            .and_then(|rest| rest.strip_suffix(')'))
+                            .is_some_and(|target| Path::new(target).starts_with(&primary_git))
+                    }),
+                    "{case}: no write_file rule may target the common Git directory: {allow:?}"
+                );
+            }
+        }
+    }
+
+    // Claude's compiled settings are identical between the linked worktree and a plain directory.
+    let claude_req = request("claude", action_with_args("launch", Vec::new()));
+    let compile_claude_settings = |cwd: &Path, isolation: Isolation| {
+        let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &claude_req,
+            cwd,
+            project_root: &primary,
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation,
+            bwrap: isolation.is_scoped().then_some(Path::new("/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+        .unwrap();
+        let argv = &plan.process().provider_argv;
+        let docs: Vec<serde_json::Value> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(docs.len(), 1, "claude {isolation:?}: {argv:?}");
+        docs.into_iter().next().unwrap()
+    };
+    for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+        assert_eq!(
+            compile_claude_settings(&worktree, isolation),
+            compile_claude_settings(&plain, isolation),
+            "claude settings must be unchanged in a linked worktree ({isolation:?})"
+        );
+    }
+}
+
+/// Every checkout root shape (submodule with `..` in `gitdir:`, separate Git directory, primary
+/// checkout, symlinked linked worktree) receives its canonical common Git directory read rule
+/// with no `write_file` rule on it, while subdirectories, stray `.git` directories, and missing
+/// or non-Git metadata add no rule and still compile.
+#[cfg(unix)]
+#[test]
+fn antigravity_grants_common_git_dir_read_rule_for_every_checkout_shape_and_skips_broken_metadata()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let rimz_home = root.join("rimz-home");
+    let runtime_home = root.join("runtime-home");
+    for path in [&home, &rimz_home, &runtime_home] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+
+    let init_common_git = |git_dir: &Path| {
+        std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    };
+
+    // Primary checkout + subdirectory.
+    let primary = root.join("primary");
+    let primary_git = primary.join(".git");
+    let primary_sub = primary.join("crates/app");
+    init_common_git(&primary_git);
+    std::fs::create_dir_all(&primary_sub).unwrap();
+
+    // Submodule (relative `gitdir:` with `..`) + subdirectory.
+    let submodule = primary.join("vendor/sub");
+    let submodule_sub = submodule.join("src");
+    let submodule_git = primary_git.join("modules/vendor/sub");
+    std::fs::create_dir_all(&submodule_sub).unwrap();
+    init_common_git(&submodule_git);
+    std::fs::write(
+        submodule.join(".git"),
+        "gitdir: ../../.git/modules/vendor/sub\n",
+    )
+    .unwrap();
+
+    // Separate Git directory.
+    let separate = root.join("separate");
+    let separate_git = root.join("git-dirs/separate.git");
+    std::fs::create_dir_all(&separate).unwrap();
+    init_common_git(&separate_git);
+    std::fs::write(
+        separate.join(".git"),
+        format!("gitdir: {}\n", separate_git.display()),
+    )
+    .unwrap();
+
+    // Symlinked linked worktree + subdirectory holding a stray non-Git `.git` directory.
+    let admin = primary_git.join("worktrees/wt");
+    let worktree = root.join("wt");
+    let worktree_link = root.join("wt-link");
+    let worktree_stray_git = worktree.join("nested");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(worktree_stray_git.join(".git")).unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&worktree, &worktree_link).unwrap();
+
+    // Broken metadata cases + plain non-checkout directory.
+    let not_git = root.join("not-git");
+    std::fs::create_dir_all(&not_git).unwrap();
+
+    let admin_no_head = root.join("admin-no-head");
+    let admin_no_head_dir = primary_git.join("worktrees/no-head");
+    std::fs::create_dir_all(&admin_no_head).unwrap();
+    std::fs::create_dir_all(&admin_no_head_dir).unwrap();
+    std::fs::write(admin_no_head_dir.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin_no_head.join(".git"),
+        format!("gitdir: {}\n", admin_no_head_dir.display()),
+    )
+    .unwrap();
+
+    let head_only_common = root.join("head-only-common");
+    std::fs::create_dir_all(&head_only_common).unwrap();
+    std::fs::write(head_only_common.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let common_head_only = root.join("common-head-only");
+    let common_head_only_admin = root.join("common-head-only-admin");
+    std::fs::create_dir_all(&common_head_only).unwrap();
+    std::fs::create_dir_all(&common_head_only_admin).unwrap();
+    std::fs::write(common_head_only_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(
+        common_head_only_admin.join("commondir"),
+        format!("{}\n", head_only_common.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        common_head_only.join(".git"),
+        format!("gitdir: {}\n", common_head_only_admin.display()),
+    )
+    .unwrap();
+
+    let gitfile_missing = root.join("gitfile-missing");
+    std::fs::create_dir_all(&gitfile_missing).unwrap();
+    std::fs::write(gitfile_missing.join(".git"), "gitdir: ../missing-dir\n").unwrap();
+
+    let gitfile_non_git = root.join("gitfile-non-git");
+    std::fs::create_dir_all(&gitfile_non_git).unwrap();
+    std::fs::write(
+        gitfile_non_git.join(".git"),
+        format!("gitdir: {}\n", not_git.display()),
+    )
+    .unwrap();
+
+    let commondir_missing = root.join("commondir-missing");
+    let commondir_missing_admin = root.join("commondir-missing-admin");
+    std::fs::create_dir_all(&commondir_missing).unwrap();
+    std::fs::create_dir_all(&commondir_missing_admin).unwrap();
+    std::fs::write(commondir_missing_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(
+        commondir_missing_admin.join("commondir"),
+        "../missing-dir\n",
+    )
+    .unwrap();
+    std::fs::write(
+        commondir_missing.join(".git"),
+        format!("gitdir: {}\n", commondir_missing_admin.display()),
+    )
+    .unwrap();
+
+    let commondir_non_git = root.join("commondir-non-git");
+    let commondir_non_git_admin = root.join("commondir-non-git-admin");
+    std::fs::create_dir_all(&commondir_non_git).unwrap();
+    std::fs::create_dir_all(&commondir_non_git_admin).unwrap();
+    std::fs::write(commondir_non_git_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(
+        commondir_non_git_admin.join("commondir"),
+        format!("{}\n", not_git.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        commondir_non_git.join(".git"),
+        format!("gitdir: {}\n", commondir_non_git_admin.display()),
+    )
+    .unwrap();
+
+    let plain = root.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let id = crate::WorkspaceId::from_project_root(&primary);
+    let state = StatePaths::under(id.clone(), &rimz_home).unwrap();
+    let runtime = RuntimePaths::under(id, &runtime_home).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let req = request("antigravity", action_with_args("launch", Vec::new()));
+
+    let cases: [(&str, &Path, Option<&Path>); 14] = [
+        ("primary", &primary, Some(&primary_git)),
+        ("primary-sub", &primary_sub, None),
+        ("submodule", &submodule, Some(&submodule_git)),
+        ("submodule-sub", &submodule_sub, None),
+        ("separate-git-dir", &separate, Some(&separate_git)),
+        ("symlinked-worktree", &worktree_link, Some(&primary_git)),
+        ("stray-dot-git-in-worktree", &worktree_stray_git, None),
+        ("admin-no-head", &admin_no_head, None),
+        ("common-head-only", &common_head_only, None),
+        ("gitfile-missing", &gitfile_missing, None),
+        ("gitfile-non-git", &gitfile_non_git, None),
+        ("commondir-missing", &commondir_missing, None),
+        ("commondir-non-git", &commondir_non_git, None),
+        ("plain", &plain, None),
+    ];
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (label, cwd, expected_git) in cases {
+        let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &req,
+            cwd,
+            project_root: &primary,
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+        .unwrap_or_else(|err| panic!("{label}: launch must compile: {err}"));
+        let argv = &plan.process().provider_argv;
+        let docs: Vec<serde_json::Value> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(docs.len(), 1, "{label}: {argv:?}");
+        let allow: Vec<&str> = docs[0]["permissions"]["allow"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{label}: missing permissions.allow in {}", docs[0]))
+            .iter()
+            .map(|entry| entry.as_str().unwrap())
+            .collect();
+        let read_rules: Vec<String> = allow
+            .iter()
+            .filter(|rule| rule.starts_with("read_file("))
+            .map(|rule| (*rule).to_owned())
+            .collect();
+        let write_under_git = expected_git.is_some_and(|git| {
+            allow.iter().any(|rule| {
+                rule.strip_prefix("write_file(")
+                    .and_then(|rest| rest.strip_suffix(')'))
+                    .is_some_and(|target| Path::new(target).starts_with(git))
+            })
+        });
+        actual.push((label, read_rules, write_under_git));
+        expected.push((
+            label,
+            expected_git
+                .map(|git| vec![antigravity_read_rule(git)])
+                .unwrap_or_default(),
+            false,
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+/// An empty-directory Antigravity launch receives no Git read rule at host, scoped, or sandbox
+/// isolation, even when a repository encloses the empty-directory root or the home is symlinked.
+#[cfg(unix)]
+#[test]
+fn antigravity_empty_directory_launch_adds_no_git_read_rule_under_enclosing_repo() {
+    if std::env::var_os("RIMZ_TEST_ANTIGRAVITY_EMPTY_DIR_GIT").is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let enclosing = root.join("enclosing");
+        std::fs::create_dir_all(enclosing.join(".git/objects")).unwrap();
+        std::fs::create_dir_all(enclosing.join(".git/refs")).unwrap();
+        std::fs::write(enclosing.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let real_home = enclosing.join(".rimz");
+        std::fs::create_dir_all(real_home.join("empty/room/agent")).unwrap();
+        let link_home = root.join("rimz-link");
+        std::os::unix::fs::symlink(&real_home, &link_home).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch_plan::tests::antigravity_empty_directory_launch_adds_no_git_read_rule_under_enclosing_repo",
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &link_home)
+            .env("RIMZ_TEST_ANTIGRAVITY_EMPTY_DIR_GIT", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let rimz_home = crate::disk::paths::rimz_home();
+    let cwd_link = crate::disk::paths::empty_dir_root().join("room/agent");
+    let cwd_real = cwd_link.canonicalize().unwrap();
+    let enclosing_repo = rimz_home.canonicalize().unwrap();
+    let enclosing_repo = enclosing_repo.parent().unwrap();
+    assert_eq!(
+        crate::worktree::common_git_dir(enclosing_repo),
+        Some(enclosing_repo.join(".git")),
+        "fixture repository enclosing the empty-dir root must resolve"
+    );
+    assert_eq!(
+        crate::worktree::common_git_dir(&cwd_real),
+        None,
+        "empty-dir cwd holds no .git and must not resolve"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let runtime_home = dir.path().join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&runtime_home).unwrap();
+    let id = crate::WorkspaceId::from_project_root(&cwd_real);
+    let state = StatePaths::under(id.clone(), &rimz_home).unwrap();
+    let runtime = RuntimePaths::under(id, &runtime_home).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+    let req = request("antigravity", action_with_args("launch", Vec::new()));
+
+    let mut expected = antigravity_routine_rules();
+    expected.extend([
+        antigravity_write_rule(&state.root),
+        antigravity_write_rule(&runtime.root),
+        antigravity_write_rule(&runtime.shared_root),
+        "mcp(rimz_tools/*)".to_owned(),
+    ]);
+
+    for (label, cwd) in [
+        ("link", cwd_link.as_path()),
+        ("canonical", cwd_real.as_path()),
+    ] {
+        for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+            let plan = compile(LaunchPlanInputs {
+                recorded_system_prompt_digest: None,
+                request: &req,
+                cwd,
+                project_root: &cwd_real,
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: None,
+                machine: &machine,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                isolation,
+                bwrap: isolation.is_scoped().then_some(Path::new("/bin/bwrap")),
+                agents: Ok(&[]),
+                ambient_env: &ambient,
+                agent_shell: None,
+                hibernate: false,
+            })
+            .unwrap();
+            let argv = &plan.process().provider_argv;
+            let docs: Vec<serde_json::Value> = argv
+                .windows(2)
+                .filter(|pair| pair[0] == "--settings")
+                .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+                .collect();
+            assert_eq!(docs.len(), 1, "{label} {isolation:?}: {argv:?}");
+            let allow: Vec<String> = docs[0]["permissions"]["allow"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{label} {isolation:?}: missing permissions.allow in {}",
+                        docs[0]
+                    )
+                })
+                .iter()
+                .map(|entry| entry.as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(
+                allow, expected,
+                "{label} {isolation:?}: empty-dir launch must add no Git read rule"
+            );
+        }
     }
 }
 

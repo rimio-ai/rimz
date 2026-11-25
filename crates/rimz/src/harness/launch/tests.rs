@@ -4471,6 +4471,97 @@ fn antigravity_preflight_compile_keeps_saved_allows_without_room_roots() {
     );
 }
 
+/// A preflight compile at a Git checkout's root adds no common-Git-directory `read_file` rule,
+/// while a real launch compile (`permission_roots: Some(..)`) in the same linked worktree adds
+/// exactly one `read_file(<canonical common dir>)` rule and no `write_file` rule on it.
+#[test]
+fn antigravity_preflight_compile_in_checkout_adds_no_git_read_rule() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let primary_git = root.join("repo/.git");
+    let admin = primary_git.join("worktrees/wt");
+    let worktree = root.join("wt");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(primary_git.join("objects")).unwrap();
+    std::fs::create_dir_all(primary_git.join("refs")).unwrap();
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(primary_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/wt\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+
+    let invocation = request(
+        "antigravity",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let extra_env = BTreeMap::from([("HOME".to_owned(), home.display().to_string())]);
+    let compile_doc = |reminders: &LaunchReminders| {
+        let process = compile_agent_process_with_extra_env(
+            None,
+            &root,
+            &invocation,
+            &worktree,
+            &extra_env,
+            reminders,
+        )
+        .unwrap();
+        let docs: Vec<serde_json::Value> = process
+            .provider_argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect();
+        assert_eq!(docs.len(), 1, "{:?}", process.provider_argv);
+        docs.into_iter().next().unwrap()
+    };
+
+    // Preflight emits no Git read rule.
+    assert_eq!(
+        compile_doc(&LaunchReminders::default()),
+        serde_json::json!({"queuedMessages": "queue"})
+    );
+
+    // Real launch in the same worktree emits the Git read rule and no write rule on it.
+    let roots = [
+        root.join("state"),
+        root.join("runtime"),
+        root.join("shared"),
+    ];
+    let real_doc = compile_doc(&LaunchReminders {
+        permission_roots: Some(roots),
+        ..LaunchReminders::default()
+    });
+    let allow: Vec<&str> = real_doc["permissions"]["allow"]
+        .as_array()
+        .expect("real launch carries permissions.allow")
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    let expected_read = format!("read_file({})", primary_git.display());
+    assert_eq!(
+        allow.iter().filter(|rule| **rule == expected_read).count(),
+        1,
+        "expected one Git read rule in {allow:?}"
+    );
+    assert!(
+        !allow.iter().any(|rule| {
+            rule.strip_prefix("write_file(")
+                .and_then(|rest| rest.strip_suffix(')'))
+                .is_some_and(|target| Path::new(target).starts_with(&primary_git))
+        }),
+        "no write_file rule may target the common Git directory: {allow:?}"
+    );
+}
+
 #[test]
 fn preflight_agent_process_settles_seat_consensus_skill_on_host_runtime() {
     if std::env::var_os("RIMZ_TEST_PREFLIGHT_SEAT_SKILL").is_none() {
