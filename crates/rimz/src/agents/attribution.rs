@@ -235,6 +235,7 @@ enum Slot {
     Role { team: String, role: String },
     Cohort { group: String, ordinal: u32 },
     Name(String),
+    Launch(AgentSessionId),
     Pane(PaneId),
     Session(AgentSessionId),
     Orphan(Box<Slot>),
@@ -393,6 +394,9 @@ fn slot(agent: &AgentState) -> SlotKey {
 }
 
 fn fallback_slot(agent: &AgentState) -> Slot {
+    if let Some(launch) = &agent.launch_id {
+        return Slot::Launch(launch.clone());
+    }
     agent
         .pane
         .as_ref()
@@ -400,10 +404,57 @@ fn fallback_slot(agent: &AgentState) -> Slot {
         .unwrap_or_else(|| Slot::Session(agent.agent_id.clone()))
 }
 
+/// The record each launch takes its slot from: its earliest session. A swap can change the
+/// pane and the provider, and `/clear` drops an explicit name, so a later session's own
+/// slot can differ.
+struct LaunchRoots<'a> {
+    by_launch: HashMap<&'a AgentSessionId, &'a AgentState>,
+}
+
+impl<'a> LaunchRoots<'a> {
+    fn new(agents: &[&'a AgentState]) -> Self {
+        let mut by_launch = HashMap::<&AgentSessionId, &AgentState>::new();
+        for &agent in agents {
+            let Some(launch) = &agent.launch_id else {
+                continue;
+            };
+            let root = by_launch.entry(launch).or_insert(agent);
+            if (agent.epoch, agent.registered_at) < (root.epoch, root.registered_at) {
+                *root = agent;
+            }
+        }
+        // A launch with no session at epoch 0 can be a swap of a session that had no launch
+        // id, whose session id it took. At epoch 0 an equal id is another kind's session. A
+        // row that never stood is no session: a resume raises a launch past epoch 0 too.
+        for &agent in agents
+            .iter()
+            .filter(|agent| agent.launch_id.is_none() && agent.stands())
+        {
+            if let Some(root) = by_launch.get_mut(&agent.agent_id)
+                && root.epoch > 0
+            {
+                *root = agent;
+            }
+        }
+        Self { by_launch }
+    }
+
+    fn slot(&self, agent: &AgentState) -> SlotKey {
+        slot(
+            agent
+                .launch_id
+                .as_ref()
+                .and_then(|launch| self.by_launch.get(launch).copied())
+                .unwrap_or(agent),
+        )
+    }
+}
+
 fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
+    let roots = LaunchRoots::new(agents);
     let mut slots = HashMap::<SlotKey, Vec<&AgentState>>::new();
     for &agent in agents {
-        slots.entry(slot(agent)).or_default().push(agent);
+        slots.entry(roots.slot(agent)).or_default().push(agent);
     }
     let mut slots = slots.into_iter().collect::<Vec<_>>();
     for (_, records) in &mut slots {
@@ -423,23 +474,28 @@ fn fold_seats<'a>(
     let (children, parents): (Vec<_>, Vec<_>) = agents
         .iter()
         .copied()
-        .filter(|agent| lifetimes.admits(agent))
+        .filter(|agent| lifetimes.admits(agent) && !is_unstood_swap(agent))
         .filter(|agent| {
             agent.is_launched_child()
                 || branch.is_none_or(|branch| agent.worktree_branches.contains(branch))
         })
         .partition(|agent| agent.is_launched_child());
     let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
+    let parent_roots = LaunchRoots::new(&parents);
+    let child_roots = LaunchRoots::new(&children);
     for child in children {
         let parent = parents
             .iter()
             .copied()
             .find(|parent| is_launched_child_of(child, parent));
-        let key = parent.map(slot).unwrap_or_else(|| {
-            let mut key = slot(child);
-            key.slot = Slot::Orphan(Box::new(key.slot));
-            key
-        });
+        let key = match parent {
+            Some(parent) => parent_roots.slot(parent),
+            None => {
+                let mut key = child_roots.slot(child);
+                key.slot = Slot::Orphan(Box::new(key.slot));
+                key
+            }
+        };
         slots.entry(key).or_default().push(child);
     }
     let mut slots = slots.into_iter().collect::<Vec<_>>();
@@ -447,6 +503,11 @@ fn fold_seats<'a>(
         records.sort_by_key(|agent| (agent.registered_at, agent.last_activity));
     }
     slots
+}
+
+/// A swap's reservation before it binds, or after it failed unbound: no session of the launch.
+fn is_unstood_swap(agent: &AgentState) -> bool {
+    agent.epoch > 0 && !agent.stands()
 }
 
 fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
@@ -465,7 +526,12 @@ pub fn slot_groups<'a>(
 }
 
 fn representatives<'a>(peers: &[&'a AgentState]) -> Vec<&'a AgentState> {
-    fold(peers)
+    let peers = peers
+        .iter()
+        .copied()
+        .filter(|agent| !is_unstood_swap(agent))
+        .collect::<Vec<_>>();
+    fold(&peers)
         .into_iter()
         .filter_map(|(_, records)| newest(&records))
         .collect()
@@ -573,7 +639,7 @@ fn member(
             .unwrap_or_else(|| latest.kind.to_string()),
         model: latest.model.clone(),
         effort: latest.effort.clone(),
-        presence: if seat.identity.iter().any(|agent| agent.ended_at.is_none()) {
+        presence: if seat.identity.iter().any(|agent| !agent.session_over()) {
             Presence::Live
         } else {
             Presence::Exited
@@ -694,8 +760,8 @@ fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEn
         let (base, explicit_label) = from
             .split_once('#')
             .map_or((from, None), |(base, label)| (base, Some(label)));
-        // Seats can share a handle and lane (a molt that left its pane, a petname reused
-        // after an exit): the sender is the one registered last at or before the send.
+        // Seats can share a handle and lane (a petname reused after an exit): the sender is
+        // the one registered last at or before the send.
         let registered_by_send = |member: &FoldedMember| {
             member
                 .attribution
