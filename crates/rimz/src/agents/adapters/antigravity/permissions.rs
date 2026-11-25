@@ -1,11 +1,11 @@
-//! RimZ `allowed-tools`, routine RimZ command and MCP server rules, and room/notes write rules in
-//! agy's permission grammar, merged into the launch's one `--settings` document as
-//! `permissions.allow`. agy's matching was observed on agy 1.5.14 and 1.5.16: `command(P)`
-//! matches P word by word with any trailing arguments, a file target covers a directory's
-//! descendants on its resolved path and expands no glob or `~`, and a rule string agy cannot read
-//! is accepted and matches nothing, so an `allowed-tools` rule with no translation is left out,
-//! never passed on. The same document carries every launch's `queuedMessages` pin and an ask
-//! launch's `agentMode` pin (`pin_modes`).
+//! RimZ `allowed-tools`, routine RimZ command and MCP server rules, room/notes write rules, and
+//! checkout common-Git-directory read rules in agy's permission grammar, merged into the launch's
+//! one `--settings` document as `permissions.allow`. agy's matching was observed on agy 1.5.14,
+//! 1.5.16, and 1.5.17: `command(P)` matches P word by word with any trailing arguments, a file
+//! target covers a directory's descendants on its resolved path and expands no glob or `~`, and a
+//! rule string agy cannot read is accepted and matches nothing, so an `allowed-tools` rule with no
+//! translation is left out, never passed on. The same document carries every launch's
+//! `queuedMessages` pin and an ask launch's `agentMode` pin (`pin_modes`).
 
 use std::path::Path;
 
@@ -181,6 +181,28 @@ pub(super) fn render(
 /// path is canonicalized, falling back to the path as written when it does not exist yet.
 pub(super) fn allow_write_dirs<'a>(
     dirs: impl IntoIterator<Item = &'a Path>,
+    paths: (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    allow_file_dirs("write_file", dirs, paths, extra_args, artifact)
+}
+
+/// Union `read_file(<resolved path>)` allow rules into the launch's one settings document.
+/// agy matches file permission rules on the resolved path (observed on agy 1.5.16), so each
+/// path is canonicalized, falling back to the path as written when it does not exist yet.
+pub(super) fn allow_read_dirs<'a>(
+    dirs: impl IntoIterator<Item = &'a Path>,
+    paths: (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr> {
+    allow_file_dirs("read_file", dirs, paths, extra_args, artifact)
+}
+
+fn allow_file_dirs<'a>(
+    action: &str,
+    dirs: impl IntoIterator<Item = &'a Path>,
     (cwd, artifact_dir): (&Path, &Path),
     extra_args: &mut Vec<String>,
     artifact: &mut Option<LaunchSettingsArtifact>,
@@ -189,7 +211,7 @@ pub(super) fn allow_write_dirs<'a>(
         .into_iter()
         .map(|dir| {
             let resolved = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-            format!("write_file({})", resolved.display())
+            format!("{action}({})", resolved.display())
         })
         .collect();
     *artifact = merge_settings(

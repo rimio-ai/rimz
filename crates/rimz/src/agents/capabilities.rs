@@ -947,8 +947,9 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Grant an agent write access to its own room's roots (state, runtime, and shared runtime)
-    /// through its one settings document, covering both the provider's command sandbox and its
-    /// native file rules.
+    /// and any provider-specific sandbox read access (such as Antigravity's checkout common Git
+    /// directory) through its one settings document, covering both the provider's command sandbox
+    /// and its native file rules.
     fn configure_sandbox_settings(
         &self,
         _paths: (&Path, &Path),

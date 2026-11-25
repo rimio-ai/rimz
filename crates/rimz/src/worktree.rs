@@ -2182,6 +2182,46 @@ pub(crate) fn discover_checkout(
     Ok(None)
 }
 
+/// Resolve the canonical common Git directory from `checkout`'s own `.git` entry without
+/// spawning Git. Returns `None` when `checkout` is not a checkout root or when its Git
+/// metadata does not resolve to an existing Git directory (an admin directory with a `HEAD`
+/// file and a common directory with `objects` and `refs` directories).
+pub(crate) fn common_git_dir(checkout: &Path) -> Option<PathBuf> {
+    let checkout = checkout.canonicalize().ok()?;
+    let git_dir = match git_admin_dir_from_checkout_metadata(&checkout) {
+        Ok(Some(path)) => path.canonicalize().ok()?,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::debug!(%error, "git metadata unavailable");
+            return None;
+        }
+    };
+    if !git_dir.is_dir() || !git_dir.join("HEAD").is_file() {
+        return None;
+    }
+    let common_dir = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(text) => {
+            let raw = text.trim();
+            if raw.is_empty() {
+                return None;
+            }
+            let common = Path::new(raw);
+            if common.is_absolute() {
+                common.to_path_buf()
+            } else {
+                git_dir.join(common)
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => git_dir,
+        Err(error) => {
+            tracing::debug!(%error, "git commondir unavailable");
+            return None;
+        }
+    };
+    let canonical = common_dir.canonicalize().ok()?;
+    (canonical.join("objects").is_dir() && canonical.join("refs").is_dir()).then_some(canonical)
+}
+
 /// Resolve a checkout's Git admin directory without spawning Git.
 ///
 /// This does not validate repository contents: even an empty `.git` directory passes.

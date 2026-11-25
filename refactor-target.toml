@@ -5278,7 +5278,8 @@ path = "crates/rimz/src/worktree"
 # admit_fresh_name gives the launcher, CLI and palette the create branch's `main` refusal (+1).
 # own_lane moves here from harness::lanes as the one checkout classifier, so the sidebar producer can fill its own-lane table (+1).
 # stamp_loop_fire stamps the fire on the marker of a tree a fire's launch created (+1).
-surface-budget = 92
+# common_git_dir resolves a checkout's canonical common Git directory for Antigravity's sandbox read rule (+1).
+surface-budget = 93
 
 [[verdict]]
 kind = "item"
@@ -5309,6 +5310,11 @@ reason = "Host condition probes and task firing share stat-gated, 60-second-boun
 kind = "item"
 key = "worktree::worktree_paths"
 reason = "The one lossless `git worktree list` decoder (NUL fields, newline form only on git's usage error) serves the sidebar's group roots, so no path is trimmed or lossily decoded there."
+
+[[verdict]]
+kind = "item"
+key = "worktree::common_git_dir"
+reason = "Antigravity's launch settings resolve a checkout root's canonical common Git directory without spawning Git so sandboxed commands can read Git metadata."
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]

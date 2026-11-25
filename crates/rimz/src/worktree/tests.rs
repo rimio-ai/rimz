@@ -1752,6 +1752,255 @@ fn linked_worktree_omits_submodule_checkout() {
     assert_eq!(linked_worktree(&submodule), None);
 }
 
+#[cfg(unix)]
+#[test]
+fn common_git_dir_resolves_every_checkout_shape_and_skips_invalid_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let init_common_git = |git_dir: &Path| {
+        std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    };
+
+    // Primary checkout + nested subdirectory (not a checkout root).
+    let primary = root.join("primary");
+    let primary_git = primary.join(".git");
+    let primary_sub = primary.join("a/b");
+    init_common_git(&primary_git);
+    std::fs::create_dir_all(&primary_sub).unwrap();
+
+    // Linked worktree (absolute gitdir + relative commondir) + subdirectory + symlinked root
+    // + stray non-Git `.git` directory inside a subdirectory.
+    let wt_abs = root.join("wt-abs");
+    let wt_abs_sub = wt_abs.join("nested/dir");
+    let wt_abs_admin = primary_git.join("worktrees/abs");
+    std::fs::create_dir_all(&wt_abs_sub).unwrap();
+    std::fs::create_dir_all(&wt_abs_admin).unwrap();
+    std::fs::write(wt_abs_admin.join("HEAD"), "ref: refs/heads/feat\n").unwrap();
+    std::fs::write(wt_abs_admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        wt_abs.join(".git"),
+        format!("gitdir: {}\n", wt_abs_admin.display()),
+    )
+    .unwrap();
+    let wt_abs_link = root.join("link-wt-abs");
+    std::os::unix::fs::symlink(&wt_abs, &wt_abs_link).unwrap();
+
+    let wt_stray_empty = wt_abs.join("with-stray-empty");
+    std::fs::create_dir_all(wt_stray_empty.join(".git")).unwrap();
+
+    // Linked worktree (relative gitdir + symlinked commondir target).
+    let wt_rel = root.join("wt-rel");
+    let wt_rel_admin = primary_git.join("worktrees/rel");
+    let git_symlink = root.join("primary-git-link");
+    std::fs::create_dir_all(&wt_rel).unwrap();
+    std::fs::create_dir_all(&wt_rel_admin).unwrap();
+    std::fs::write(wt_rel_admin.join("HEAD"), "ref: refs/heads/rel\n").unwrap();
+    std::os::unix::fs::symlink(&primary_git, &git_symlink).unwrap();
+    std::fs::write(
+        wt_rel_admin.join("commondir"),
+        format!("{}\n", git_symlink.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        wt_rel.join(".git"),
+        "gitdir: ../primary/.git/worktrees/rel\n",
+    )
+    .unwrap();
+
+    // Submodule inside primary (relative gitdir containing `..`) + subdirectory.
+    let submodule = primary.join("vendor/sub");
+    let submodule_sub = submodule.join("src");
+    let submodule_git = primary_git.join("modules/vendor/sub");
+    std::fs::create_dir_all(&submodule_sub).unwrap();
+    init_common_git(&submodule_git);
+    std::fs::write(
+        submodule.join(".git"),
+        "gitdir: ../../.git/modules/vendor/sub\n",
+    )
+    .unwrap();
+
+    // Separate Git directory.
+    let sep_checkout = root.join("sep-checkout");
+    let sep_git = root.join("external/sep.git");
+    std::fs::create_dir_all(&sep_checkout).unwrap();
+    init_common_git(&sep_git);
+    std::fs::write(
+        sep_checkout.join(".git"),
+        format!("gitdir: {}\n", sep_git.display()),
+    )
+    .unwrap();
+
+    // Bare repository linked worktree.
+    let bare = root.join("bare.git");
+    let bare_admin = bare.join("worktrees/bwt");
+    let bare_wt = root.join("bare-wt");
+    init_common_git(&bare);
+    std::fs::create_dir_all(&bare_admin).unwrap();
+    std::fs::create_dir_all(&bare_wt).unwrap();
+    std::fs::write(bare_admin.join("HEAD"), "ref: refs/heads/bwt\n").unwrap();
+    std::fs::write(bare_admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        bare_wt.join(".git"),
+        format!("gitdir: {}\n", bare_admin.display()),
+    )
+    .unwrap();
+
+    // Invalid cases: plain dir, empty .git dir, .git file pointing to missing/non-git dir,
+    // admin dir missing HEAD, common dir with HEAD but missing objects or refs, commondir
+    // pointing to missing/non-git/empty dir, dangling .git symlink.
+    let plain = root.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let empty_dot_git = root.join("empty-dot-git");
+    std::fs::create_dir_all(empty_dot_git.join(".git")).unwrap();
+
+    let not_a_git_dir = root.join("not-a-git-dir");
+    std::fs::create_dir_all(&not_a_git_dir).unwrap();
+
+    let missing_gitdir = root.join("missing-gitdir");
+    std::fs::create_dir_all(&missing_gitdir).unwrap();
+    std::fs::write(missing_gitdir.join(".git"), "gitdir: ../does-not-exist\n").unwrap();
+
+    let non_git_gitdir = root.join("non-git-gitdir");
+    std::fs::create_dir_all(&non_git_gitdir).unwrap();
+    std::fs::write(
+        non_git_gitdir.join(".git"),
+        format!("gitdir: {}\n", not_a_git_dir.display()),
+    )
+    .unwrap();
+
+    let admin_no_head = root.join("admin-no-head");
+    let admin_no_head_dir = primary_git.join("worktrees/no-head");
+    std::fs::create_dir_all(&admin_no_head).unwrap();
+    std::fs::create_dir_all(&admin_no_head_dir).unwrap();
+    std::fs::write(admin_no_head_dir.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin_no_head.join(".git"),
+        format!("gitdir: {}\n", admin_no_head_dir.display()),
+    )
+    .unwrap();
+
+    let common_no_objects = root.join("common-no-objects");
+    std::fs::create_dir_all(common_no_objects.join(".git/refs")).unwrap();
+    std::fs::write(
+        common_no_objects.join(".git/HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .unwrap();
+
+    let common_no_refs = root.join("common-no-refs");
+    std::fs::create_dir_all(common_no_refs.join(".git/objects")).unwrap();
+    std::fs::write(common_no_refs.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+
+    let head_only_common = root.join("head-only-common");
+    std::fs::create_dir_all(&head_only_common).unwrap();
+    std::fs::write(head_only_common.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let wt_common_head_only = root.join("wt-common-head-only");
+    let wt_common_head_only_admin = root.join("wt-common-head-only-admin");
+    std::fs::create_dir_all(&wt_common_head_only).unwrap();
+    std::fs::create_dir_all(&wt_common_head_only_admin).unwrap();
+    std::fs::write(
+        wt_common_head_only_admin.join("HEAD"),
+        "ref: refs/heads/x\n",
+    )
+    .unwrap();
+    std::fs::write(
+        wt_common_head_only_admin.join("commondir"),
+        format!("{}\n", head_only_common.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        wt_common_head_only.join(".git"),
+        format!("gitdir: {}\n", wt_common_head_only_admin.display()),
+    )
+    .unwrap();
+
+    let missing_commondir = root.join("missing-commondir");
+    let missing_commondir_admin = root.join("missing-commondir-admin");
+    std::fs::create_dir_all(&missing_commondir).unwrap();
+    std::fs::create_dir_all(&missing_commondir_admin).unwrap();
+    std::fs::write(missing_commondir_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(
+        missing_commondir_admin.join("commondir"),
+        "../no-such-dir\n",
+    )
+    .unwrap();
+    std::fs::write(
+        missing_commondir.join(".git"),
+        format!("gitdir: {}\n", missing_commondir_admin.display()),
+    )
+    .unwrap();
+
+    let non_git_commondir = root.join("non-git-commondir");
+    let non_git_commondir_admin = root.join("non-git-commondir-admin");
+    std::fs::create_dir_all(&non_git_commondir).unwrap();
+    std::fs::create_dir_all(&non_git_commondir_admin).unwrap();
+    std::fs::write(non_git_commondir_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(
+        non_git_commondir_admin.join("commondir"),
+        format!("{}\n", not_a_git_dir.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        non_git_commondir.join(".git"),
+        format!("gitdir: {}\n", non_git_commondir_admin.display()),
+    )
+    .unwrap();
+
+    let empty_commondir = root.join("empty-commondir");
+    let empty_commondir_admin = root.join("empty-commondir-admin");
+    std::fs::create_dir_all(&empty_commondir).unwrap();
+    std::fs::create_dir_all(&empty_commondir_admin).unwrap();
+    std::fs::write(empty_commondir_admin.join("HEAD"), "ref: refs/heads/x\n").unwrap();
+    std::fs::write(empty_commondir_admin.join("commondir"), "   \n").unwrap();
+    std::fs::write(
+        empty_commondir.join(".git"),
+        format!("gitdir: {}\n", empty_commondir_admin.display()),
+    )
+    .unwrap();
+
+    let dangling_dot_git = root.join("dangling-dot-git");
+    std::fs::create_dir_all(&dangling_dot_git).unwrap();
+    std::os::unix::fs::symlink("missing-target", dangling_dot_git.join(".git")).unwrap();
+
+    let cases: [(&str, &Path, Option<&Path>); 23] = [
+        ("primary", &primary, Some(&primary_git)),
+        ("primary-sub", &primary_sub, None),
+        ("wt-abs", &wt_abs, Some(&primary_git)),
+        ("wt-abs-sub", &wt_abs_sub, None),
+        ("wt-abs-link", &wt_abs_link, Some(&primary_git)),
+        ("wt-stray-empty", &wt_stray_empty, None),
+        ("wt-rel-symlink-common", &wt_rel, Some(&primary_git)),
+        ("submodule", &submodule, Some(&submodule_git)),
+        ("submodule-sub", &submodule_sub, None),
+        ("separate-git-dir", &sep_checkout, Some(&sep_git)),
+        ("bare-wt", &bare_wt, Some(&bare)),
+        ("plain", &plain, None),
+        ("empty-dot-git", &empty_dot_git, None),
+        ("missing-gitdir", &missing_gitdir, None),
+        ("non-git-gitdir", &non_git_gitdir, None),
+        ("admin-no-head", &admin_no_head, None),
+        ("common-no-objects", &common_no_objects, None),
+        ("common-no-refs", &common_no_refs, None),
+        ("wt-common-head-only", &wt_common_head_only, None),
+        ("missing-commondir", &missing_commondir, None),
+        ("non-git-commondir", &non_git_commondir, None),
+        ("empty-commondir", &empty_commondir, None),
+        ("dangling-dot-git", &dangling_dot_git, None),
+    ];
+    let actual: Vec<(&str, Option<PathBuf>)> = cases
+        .iter()
+        .map(|(label, path, _)| (*label, common_git_dir(path)))
+        .collect();
+    let expected: Vec<(&str, Option<PathBuf>)> = cases
+        .iter()
+        .map(|(label, _, expected)| (*label, expected.map(Path::to_path_buf)))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn marker_v3_json_parses_without_pr_provenance() {
     let raw = r#"{
