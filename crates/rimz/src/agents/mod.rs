@@ -167,9 +167,9 @@ pub(crate) use state::usable_description;
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
     BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, DelegatedWait,
-    DelegatedWaitStart, IdleStop, OpenAsk, PendingIdleStop, PendingWait, PendingWaitClass,
-    PendingWaitTarget, PendingWaitTrigger, QueuedAsk, TurnCompletion, is_turn_dead,
-    settled_outcome, single_line_description,
+    DelegatedWaitStart, IdleStop, KeptVerdict, OpenAsk, PendingIdleStop, PendingWait,
+    PendingWaitClass, PendingWaitTarget, PendingWaitTrigger, QueuedAsk, TurnCompletion,
+    is_turn_dead, settled_outcome, single_line_description,
 };
 use tools::ToolErr;
 pub(crate) use tools::keeps_model;

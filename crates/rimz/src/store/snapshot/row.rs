@@ -1386,6 +1386,11 @@ pub struct SidebarSubAgent {
     /// Finished child from before the parent's current user-authored turn; never `Running`.
     #[serde(default)]
     pub prior_turn: bool,
+    /// Whether this entry can be reopened through `rimz agents resume`: true
+    /// for a launched child whose provider kind answers a resume command, false
+    /// for provider-native entries and non-resumable kinds.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reopenable: bool,
     /// The subagent's type (`Explore`, `review`, …). A launched child's type is
     /// its launch profile, or its agent kind for a bare-kind launch, never its
     /// petname. A provider-native child falls back to a short degraded id when
@@ -1454,6 +1459,10 @@ pub struct SidebarSubAgent {
     pub started_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<Timestamp>,
+    /// When the child entered rest, used by the round rule and prior-round
+    /// newest-first ordering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rested_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     /// The child's registration instant, copied from `AgentState.registered_at`.
     /// This is the spawn-order sort key: present from first observation and

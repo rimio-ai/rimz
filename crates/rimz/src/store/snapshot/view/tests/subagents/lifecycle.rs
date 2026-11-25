@@ -268,6 +268,196 @@ fn prior_children_do_not_lift_parent_attention() {
 }
 
 #[test]
+fn reopened_child_whose_turn_had_started_is_not_reported_silent() {
+    let at = |secs: u64| epoch() + std::time::Duration::from_secs(secs);
+    let event = |secs: u64, event_type: &str, params: serde_json::Value| {
+        let mut envelope = EventEnvelope::new(
+            workspace(),
+            "session",
+            "codex",
+            "agent-hook",
+            event_type,
+            params,
+        );
+        envelope.timestamp = at(secs);
+        envelope
+    };
+    let parent_events = [
+        event(
+            0,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "pane_id": "tmux:%1",
+                "worktree_path": "/repo/main",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        event(
+            5,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "root",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+    ];
+    let launch_and_register = |child_id: &str| {
+        vec![
+            event(
+                10,
+                "agent.launched",
+                serde_json::json!({
+                    "agent_id": child_id,
+                    "agent_name": child_id,
+                    "state": "bound",
+                    "pane_id": "tmux:%2",
+                    "worktree_path": "/repo/main",
+                    "parent_agent_id": "root",
+                    "parent_agent_kind": "codex",
+                    "launch_depth": 1,
+                    "prompt": "investigate",
+                }),
+            ),
+            event(
+                11,
+                "agent.lifecycle",
+                serde_json::json!({
+                    "agent_id": child_id,
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+        ]
+    };
+    let project_child = |events: &[EventEnvelope], child_id: &str, now: jiff::Timestamp| {
+        let states = reduce_agent_states(events);
+        let parent = states
+            .iter()
+            .find(|agent| agent.agent_id == "root")
+            .expect("parent state")
+            .clone();
+        let child = states
+            .iter()
+            .find(|agent| agent.agent_id == child_id)
+            .expect("child state")
+            .clone();
+        let mut rows = vec![row_from_agent(&parent, now)];
+        attach_sub_agents(&mut rows, &states, now);
+        let entry = rows[0]
+            .sub_agents()
+            .iter()
+            .find(|entry| entry.id == child_id)
+            .expect("projected child")
+            .clone();
+        (child, entry)
+    };
+
+    // A prompted child that only launched and registered has `turn_started_at`
+    // stamped by launch/registration, `last_prompt_at` unset, and still stalls
+    // as never started.
+    let mut never_started_events = parent_events.to_vec();
+    never_started_events.extend(launch_and_register("never-started"));
+    let (never_started, never_started_entry) =
+        project_child(&never_started_events, "never-started", at(3_611));
+    assert_eq!(never_started.status, AgentStatus::Idle);
+    assert_eq!(never_started.turn_started_at, Some(at(11)));
+    assert_eq!(never_started.last_prompt_at, None);
+    assert_eq!(
+        never_started.silent_child_for(at(3_611), 1_800),
+        Some((3_600, crate::agents::state::ChildStall::NeverStarted)),
+        "a prompted child resting before its first turn must report never-started silent"
+    );
+    assert!(never_started_entry.stalled);
+
+    // Once a prompt opened a turn, reopening after a mid-turn stop, mid-turn
+    // reap, or finished idle close leaves `last_prompt_at` set, so the child is
+    // never reported as silent however long it rests.
+    for (child_id, finish_events) in [
+        (
+            "reopened-stopped",
+            vec![event(
+                20,
+                "agent.lifecycle",
+                serde_json::json!({
+                    "event_name": "rimz.agent-ended",
+                    "agent_id": "reopened-stopped",
+                    "signal": { "signal": "ended" },
+                }),
+            )],
+        ),
+        (
+            "reopened-reaped",
+            vec![event(
+                20,
+                "agent.lifecycle",
+                serde_json::json!({
+                    "event_name": "ReapedDead",
+                    "agent_id": "reopened-reaped",
+                    "signal": { "signal": "ended" },
+                }),
+            )],
+        ),
+        (
+            "reopened-finished",
+            vec![
+                event(
+                    20,
+                    "agent.lifecycle",
+                    serde_json::json!({
+                        "agent_id": "reopened-finished",
+                        "signal": {
+                            "signal": "turn_ended",
+                            "errored": false,
+                            "parked_on_background": false,
+                        },
+                    }),
+                ),
+                event(
+                    30,
+                    "agent.lifecycle",
+                    serde_json::json!({
+                        "event_name": "rimz.agent-ended",
+                        "agent_id": "reopened-finished",
+                        "signal": { "signal": "ended" },
+                    }),
+                ),
+            ],
+        ),
+    ] {
+        let mut events = parent_events.to_vec();
+        events.extend(launch_and_register(child_id));
+        events.push(event(
+            12,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": child_id,
+                "signal": { "signal": "turn_started" },
+            }),
+        ));
+        events.extend(finish_events);
+        events.push(event(
+            50,
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-resumed",
+                "agent_id": child_id,
+                "pane_id": "tmux:%3",
+                "signal": { "signal": "registered" },
+            }),
+        ));
+        let (child, entry) = project_child(&events, child_id, at(5_050));
+        assert_eq!(child.status, AgentStatus::Idle, "{child_id}");
+        assert_eq!(child.last_prompt_at, Some(at(12)), "{child_id}");
+        assert_eq!(
+            child.silent_child_for(at(5_050), 1_800),
+            None,
+            "{child_id}: reopened child whose turn had started must not report silent"
+        );
+        assert!(!entry.stalled, "{child_id}");
+    }
+}
+
+#[test]
 fn silent_launched_child_frees_parent_without_lifting_attention() {
     for status in [AgentStatus::Idle, AgentStatus::Running] {
         let parent = agent("claude", "root", status, 0)

@@ -788,6 +788,7 @@ fn displayed_child_attention_and_missing_birth_use_the_snapshot_clock() {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             pane: None,
             prior_turn: false,
+            reopenable: false,
             name: "child".into(),
             petname: None,
             provider_native: true,
@@ -811,6 +812,7 @@ fn displayed_child_attention_and_missing_birth_use_the_snapshot_clock() {
             elapsed_secs: None,
             started_at: None,
             finished_at: None,
+            rested_at: None,
             last_activity: at(12_000),
             registered_at: Some(at(12_000)),
         });

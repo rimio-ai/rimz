@@ -1926,9 +1926,98 @@ fn owned_fuse_fixture() -> FuseFixture {
     }
 }
 
+const PRIOR_SUBAGENTS_PER_AGENT: usize = 4;
+
+fn seed_prior_subagents(paths: &rimz::StatePaths, fleet: usize) {
+    let now = jiff::Timestamp::now();
+    let base = now
+        .checked_sub(jiff::SignedDuration::from_secs(120))
+        .expect("bench timestamp");
+    let finished_at = now
+        .checked_sub(jiff::SignedDuration::from_secs(60))
+        .expect("bench timestamp");
+    let parent_prompt = now
+        .checked_add(jiff::SignedDuration::from_secs(1))
+        .expect("bench timestamp");
+    for parent_slot in 0..fleet {
+        let parent_kind = "claude";
+        let parent_id = format!("agent-{parent_slot}");
+        let session = format!("sess-{parent_slot}");
+        for child_idx in 0..PRIOR_SUBAGENTS_PER_AGENT {
+            let child_id = format!("bench-prior-{parent_slot:02}-{child_idx:02}");
+            let mut reg = rimz::agents::AgentLifecycleObservation::new(
+                Some(child_id.as_str().into()),
+                rimz::agents::LifecycleSignal::Registered,
+            );
+            reg.launch.parent_agent_id = Some(parent_id.as_str().into());
+            reg.launch.parent_agent_kind = Some(rimz::ids::AgentKind::new_unchecked(parent_kind));
+            reg.launch.launch_depth = Some(1);
+            reg.launch.profile = Some("explorer".to_owned());
+            let mut reg_ev = rimz::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                &session,
+                "claude",
+                "SessionStart",
+                &reg,
+            );
+            reg_ev.timestamp = base;
+            rimz::store::event_log::append(&paths.events_log, &reg_ev).expect("append child reg");
+
+            let done = rimz::agents::AgentLifecycleObservation::new(
+                Some(child_id.as_str().into()),
+                rimz::agents::LifecycleSignal::TurnEnded {
+                    errored: child_idx % 2 == 1,
+                    turn_id: None,
+                    parked_on_background: false,
+                },
+            );
+            let mut done_ev = rimz::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                &session,
+                "claude",
+                "Stop",
+                &done,
+            );
+            done_ev.timestamp = finished_at;
+            rimz::store::event_log::append(&paths.events_log, &done_ev)
+                .expect("append child finish");
+
+            let ended = rimz::agents::AgentLifecycleObservation::new(
+                Some(child_id.as_str().into()),
+                rimz::agents::LifecycleSignal::Ended,
+            );
+            let mut end_ev = rimz::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                &session,
+                "claude",
+                "SessionEnd",
+                &ended,
+            );
+            end_ev.timestamp = finished_at;
+            rimz::store::event_log::append(&paths.events_log, &end_ev).expect("append child end");
+        }
+        let mut prompt = rimz::agents::AgentLifecycleObservation::new(
+            Some(parent_id.as_str().into()),
+            rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        prompt.prompt = rimz::agents::SanitizedPrompt::new(Some("next user prompt"));
+        let mut prompt_ev = rimz::EventEnvelope::agent_lifecycle(
+            paths.workspace_id.clone(),
+            &session,
+            parent_kind,
+            "UserPromptSubmit",
+            &prompt,
+        );
+        prompt_ev.timestamp = parent_prompt;
+        rimz::store::event_log::append(&paths.events_log, &prompt_ev)
+            .expect("append parent prompt");
+    }
+}
+
 fn enrich_fixture() -> EnrichFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
+    seed_prior_subagents(&workspace.paths, FLEET);
     workspace.publish_inputs(FLEET);
     let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     let snapshot =

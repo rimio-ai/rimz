@@ -67,6 +67,77 @@ fn rotation_commits_reborn_ordinals_before_the_next_registration() {
 }
 
 #[test]
+fn a_kept_verdict_crosses_rotation_and_reads_through_a_row_without_it() {
+    use crate::agents::KeptVerdict;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let append = |event_name: &str, signal| {
+        let event = lifecycle_at(&workspace, "claude", event_name, "child", signal);
+        event_log::append(&paths.events_log, &event).unwrap();
+        event.timestamp
+    };
+    append("SessionStart", lifecycle::LifecycleSignal::Registered);
+    append(
+        "UserPromptSubmit",
+        lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    let finished_at = append(
+        "Stop",
+        lifecycle::LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    append("rimz.agent-ended", lifecycle::LifecycleSignal::Ended);
+    append("rimz.agent-resumed", lifecycle::LifecycleSignal::Registered);
+    let kept = Some(KeptVerdict {
+        status: AgentStatus::Success,
+        finished_at: Some(finished_at),
+    });
+    let folded = || {
+        let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+        (agents[0].status, agents[0].kept_verdict)
+    };
+    assert_eq!(folded(), (AgentStatus::Idle, kept));
+
+    rotate(&paths);
+    let carried = read_carryover(&paths.agents_carryover).unwrap();
+    assert_eq!(carried.agents[0].kept_verdict, kept);
+    assert_eq!(folded(), (AgentStatus::Idle, kept));
+    append("rimz.agent-ended", lifecycle::LifecycleSignal::Ended);
+    assert_eq!(folded(), (AgentStatus::Idle, kept));
+
+    // A binary older than the field reads the row, and a row it writes back reads without it.
+    #[derive(serde::Deserialize)]
+    struct OldRow {
+        agent_id: AgentSessionId,
+        status: AgentStatus,
+        #[serde(default)]
+        finished_at: Option<Timestamp>,
+    }
+    let mut wire = serde_json::to_value(&carried.agents[0]).unwrap();
+    let old: OldRow = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(
+        (old.agent_id.as_str(), old.status, old.finished_at),
+        ("child", AgentStatus::Idle, None)
+    );
+    assert!(
+        wire.as_object_mut()
+            .unwrap()
+            .remove("kept_verdict")
+            .is_some()
+    );
+    let mut without = carried.agents[0].clone();
+    without.kept_verdict = None;
+    assert_eq!(serde_json::to_value(&without).unwrap(), wire);
+    assert_eq!(serde_json::from_value::<AgentState>(wire).unwrap(), without);
+}
+
+#[test]
 fn legacy_ended_carryover_folds_and_stages_only_labels() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

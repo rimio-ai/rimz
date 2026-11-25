@@ -1397,6 +1397,7 @@ fn prior_turn_child_snapshot(parent_status: AgentStatus) -> SidebarSnapshot {
     child.launch_depth = Some(1);
     child.last_activity = fixed_now() - Duration::from_secs(60);
     child.last_seen = child.last_activity;
+    child.finished_at = Some(child.last_activity);
     child.ended_at = Some(child.last_activity);
     let mut context = crate::agents::AgentContext::new("codex", fixed_now());
     context.cost = Some(crate::agents::AgentCost {

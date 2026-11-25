@@ -712,6 +712,12 @@ pub trait LaunchCapability: CoreCapability {
         })
     }
 
+    /// Whether this provider kind answers a resume command without performing
+    /// any binary or filesystem probe.
+    fn supports_resume(&self) -> bool {
+        self.spec().launch.resume.is_some()
+    }
+
     /// The argv that resumes a prior session of this agent by `session_id`,
     /// launched fresh in `cwd` (the agent's worktree). The launcher seeds a
     /// reborn pane with it so a rebirth restores the conversation idle rather

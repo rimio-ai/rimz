@@ -92,25 +92,17 @@ pub(super) fn attach_sub_agents_indexed(
                     child_cost_usd(child),
                 );
             }
-            let prior_turn = !child_is_current(child, parent_user_turn_started_at, now);
-            if prior_turn
-                && !matches!(
-                    child.display_rest_status(child.status),
-                    AgentStatus::Success | AgentStatus::Failed
-                )
-            {
-                continue;
-            }
-            let park = launched_child_park(child, demotion, now);
-            let entry = project_sub_agent(
+            let Some(entry) = project_sub_agent_for_parent(
                 child,
                 live_pane(child),
+                parent_user_turn_started_at,
                 now,
-                prior_turn,
                 demotion,
                 stalled_after_secs,
-            );
-            if !prior_turn
+            ) else {
+                continue;
+            };
+            if !entry.prior_turn
                 && entry.status == AgentStatus::Waiting
                 && !delegated_waits.contains_key(parent_key)
             {
@@ -133,6 +125,9 @@ pub(super) fn attach_sub_agents_indexed(
                     },
                 );
             }
+            let park = (!entry.prior_turn)
+                .then(|| launched_child_park(child, demotion, now))
+                .flatten();
             if let Some((status, label)) = park
                 && delegated_parks.get(parent_key).is_none_or(|(current, _)| {
                     *current == AgentStatus::Paused && status == AgentStatus::Failed
@@ -217,14 +212,37 @@ fn newest_by_id<'a>(
     newest
 }
 
-fn child_is_current(
+fn child_rest_instant(child: &AgentState) -> Option<Timestamp> {
+    if let Some(finished) = child.finished_at {
+        return Some(finished);
+    }
+    // A row that ended while the turn its last prompt opened was still open and
+    // has not registered at rest since (the reaper's end that rests a working
+    // child at Idle) rests at `ended_at`. A later registration at rest moves
+    // `turn_started_at` past `last_prompt_at`, distinguishing a reopened
+    // child's subsequent idle close from a reaped turn.
+    let ended_mid_prompted_turn = child.last_prompt_at.is_some_and(|prompted| {
+        child.turn_ended_at.is_none_or(|ended| ended < prompted)
+            && child
+                .turn_started_at
+                .is_none_or(|started| started <= prompted)
+    });
+    if ended_mid_prompted_turn && let Some(ended) = child.ended_at {
+        return Some(ended);
+    }
+    match (child.turn_ended_at, child.last_prompt_at) {
+        (Some(ended), Some(prompted)) => Some(ended.max(prompted)),
+        (Some(ended), None) => Some(ended),
+        (None, Some(prompted)) => Some(prompted),
+        (None, None) => child.registered_at,
+    }
+}
+
+fn provider_child_is_current(
     child: &AgentState,
     parent_user_turn_started_at: Option<Timestamp>,
     now: Timestamp,
 ) -> bool {
-    if child.is_launched_child() && child.ended_at.is_none() {
-        return true;
-    }
     let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
     let superseded =
         parent_user_turn_started_at.is_some_and(|started| started > child.last_activity);
@@ -256,6 +274,12 @@ fn child_is_current(
     !superseded
         && (parent_user_turn_started_at.is_some()
             || now.duration_since(child.last_activity).as_secs() < GHOST_SESSION_TTL_SECS)
+}
+
+fn child_reopenable(child: &AgentState) -> bool {
+    child.is_launched_child()
+        && crate::agents::find_definition(child.kind.as_str())
+            .is_some_and(|adapter| adapter.supports_resume())
 }
 
 #[cfg(test)]
@@ -318,6 +342,54 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
     }
 }
 
+/// Project a child under its parent, applying the launched-child round rule
+/// or the provider-native retention rule, and returning `None` when a
+/// provider-native prior child is dropped.
+fn project_sub_agent_for_parent(
+    child: &AgentState,
+    pane: Option<PaneId>,
+    parent_user_turn_started_at: Option<Timestamp>,
+    now: Timestamp,
+    demotion: &ParkDemotion,
+    stalled_after_secs: u32,
+) -> Option<SidebarSubAgent> {
+    if !child.is_launched_child() {
+        let prior_turn = !provider_child_is_current(child, parent_user_turn_started_at, now);
+        if prior_turn
+            && !matches!(
+                child.display_rest_status(child.status),
+                AgentStatus::Success | AgentStatus::Failed
+            )
+        {
+            return None;
+        }
+        return Some(project_sub_agent(
+            child,
+            pane,
+            now,
+            prior_turn,
+            demotion,
+            stalled_after_secs,
+        ));
+    }
+    let mut entry = project_sub_agent(child, pane, now, false, demotion, stalled_after_secs);
+    let live_never_started = child.ended_at.is_none()
+        && child.last_prompt_at.is_none()
+        && child.turn_ended_at.is_none()
+        && entry.finished_at.is_none();
+    let at_rest = !matches!(
+        entry.status,
+        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused | AgentStatus::Sleeping
+    ) && entry.phase != TurnPhase::Parked
+        && !entry.compacting
+        && !entry.stalled
+        && !live_never_started;
+    entry.prior_turn = at_rest
+        && parent_user_turn_started_at
+            .is_some_and(|started| entry.rested_at.is_some_and(|rest| started > rest));
+    Some(entry)
+}
+
 /// A child `AgentState` projected to the compact summary the parent's expanded
 /// card paints.
 fn project_sub_agent(
@@ -373,14 +445,34 @@ fn project_sub_agent(
         )
     } else if child.is_launched_child() && child.ended_at.is_none() {
         child.rowless_card(demotion, now)
+    } else if child.is_launched_child() {
+        // Ended launched children keep their recorded rest status and are never
+        // lifted to Running or Sleeping by an attached wait.
+        (child.status, child.phase, None)
     } else {
         (child.display_rest_status(child.status), child.phase, None)
+    };
+    let kept = child.kept_verdict.filter(|_| {
+        child.is_launched_child()
+            && child.status == AgentStatus::Idle
+            && status == AgentStatus::Idle
+    });
+    let (status, finished_at) = kept.map_or((status, child.finished_at), |kept| {
+        (kept.status, kept.finished_at)
+    });
+    let rested_at = if child.is_launched_child() {
+        kept.and_then(|kept| kept.finished_at)
+            .or_else(|| child_rest_instant(child))
+    } else {
+        child_rest_instant(child).or(Some(child.last_activity))
     };
     let elapsed_secs = started_at.map(|started| {
         let until = if child.status == AgentStatus::Running
             && !matches!(status, AgentStatus::Success | AgentStatus::Failed)
         {
             now
+        } else if child.is_launched_child() && child.status == AgentStatus::Idle {
+            rested_at.unwrap_or(child.last_activity)
         } else {
             child.finished_at.unwrap_or(child.last_activity)
         };
@@ -391,6 +483,7 @@ fn project_sub_agent(
         kind: child.kind.clone(),
         pane: child.is_launched_child().then_some(pane).flatten(),
         prior_turn,
+        reopenable: child_reopenable(child),
         name,
         petname: child
             .is_launched_child()
@@ -424,7 +517,8 @@ fn project_sub_agent(
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,
-        finished_at: child.finished_at,
+        finished_at,
+        rested_at,
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }

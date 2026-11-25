@@ -899,6 +899,10 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         None
     }
 
+    fn supports_resume(&self) -> bool {
+        true
+    }
+
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         session::valid_conversation_id(session_id).then(|| {
             vec![

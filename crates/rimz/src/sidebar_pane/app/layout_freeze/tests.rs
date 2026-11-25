@@ -389,6 +389,7 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             pane: None,
             prior_turn: false,
+            reopenable: false,
             name: "child".into(),
             petname: None,
             provider_native: true,
@@ -412,6 +413,7 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
             elapsed_secs: None,
             started_at: None,
             finished_at: None,
+            rested_at: None,
             last_activity: now,
             registered_at: Some(now),
         });
