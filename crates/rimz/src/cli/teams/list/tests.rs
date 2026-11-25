@@ -92,7 +92,7 @@ fn tier_role_reports_keep_concrete_models_and_show_fallback() {
         tier: rimz::config::tiers::ModelTier::Senior,
         fell_back: true,
     });
-    let profiles = ProfilesConfig(BTreeMap::from([("planner".into(), profile)]));
+    let profiles = ProfilesConfig::from(BTreeMap::from([("planner".into(), profile)]));
     let mut team = team();
     team.roles[0].profile = "planner".into();
     team.roles[0].model = None;
@@ -127,7 +127,7 @@ fn unresolved_role_reports_the_profile_fast_field() {
     // A second role on a missing profile keeps the layout from compiling, so
     // the report falls back to resolving each role's profile on its own.
     let profile: rimz::config::Profile = toml::from_str("agent = 'codex'\nfast = true").unwrap();
-    let profiles = ProfilesConfig(BTreeMap::from([("coder".into(), profile)]));
+    let profiles = ProfilesConfig::from(BTreeMap::from([("coder".into(), profile)]));
     let mut team = team();
     team.roles[0].profile = "coder".into();
     let mut broken = team.roles[0].clone();

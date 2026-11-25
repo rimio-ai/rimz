@@ -990,11 +990,24 @@ fn bare_kind_with_recorded_agent_loads_seat_smart_compact() {
         ..Default::default()
     }));
     assert!(has_seat_config(&bare));
-    let profiles: ProfilesConfig =
-        toml::from_str("[astra]\nagent = 'codex'\nsmart-compact = '80k'\n").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex house.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/astra.md"),
+        "---\ndescription: Astra\nagent: codex\nsmart-compact: 80k\n---\n",
+    )
+    .unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
     let line = SmartCompactSeat::from(&bare).resolve(
         &TeamsConfig::default(),
-        &profiles,
+        &machine.agents.profiles,
         &ProfilesConfig::default(),
         &HarnessConfig::default(),
     );

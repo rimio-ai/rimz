@@ -1034,7 +1034,7 @@ impl MachineConfig {
         let mut next = 0;
         while let Some(notice) = chain.get(next).copied() {
             next += 1;
-            let definitions::DefinitionCause::DependsOnFailed { name } = &notice.cause else {
+            let definitions::DefinitionCause::DependsOnFailed { name, .. } = &notice.cause else {
                 continue;
             };
             let Some(paths) = failed.get(name) else {
@@ -1052,6 +1052,18 @@ impl MachineConfig {
             seen.extend(unseen);
         }
         Some(detail)
+    }
+
+    /// Formatted failure details for every unloaded machine definition name.
+    pub(crate) fn failed_definition_details(&self) -> BTreeMap<String, String> {
+        self.notices
+            .failed_definitions
+            .keys()
+            .filter_map(|name| {
+                self.definition_failure_for(name)
+                    .map(|detail| (name.clone(), detail))
+            })
+            .collect()
     }
 
     /// Unowned definition-set failures (a namespace collision, an unreadable home tree)

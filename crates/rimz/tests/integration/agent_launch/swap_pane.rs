@@ -290,12 +290,6 @@ fn restart_of_a_session_whose_launch_another_session_holds_refuses() {
     assert!(!replacement_recorded(&env));
 }
 
-/// The refusal a fresh Antigravity launch with no system prompt gives a limiting `mcps` list,
-/// which only the agent file the prompt rides could apply.
-const AGY_MCPS_REFUSAL: &str = "error: antigravity applies a `mcps` list only through the agent \
-     file its system prompt rides, and this launch has no system prompt; add the kind base \
-     `agents/antigravity.md` or another prompt source, or remove `mcps`";
-
 /// Installs Antigravity's hooks and writes the trusted project TOML profile `seat` with
 /// `mcps = []`, which carries no prompt onto Antigravity, and Antigravity's kind base, a prompt
 /// source there, when `prompted`.
@@ -303,11 +297,17 @@ fn write_seat(env: &Env, prompted: bool) {
     env.install_agent_hooks("antigravity");
     env.write_config(
         &env.project_root,
-        "[profiles.seat]\nagent = \"amp\"\nmcps = []\n",
+        "[profiles.seat]\ndescription = \"Seat.\"\nagent = \"amp\"\nmcps = []\n",
     );
     env.rimz().args(["trust", "grant"]).assert().success();
     if prompted {
-        crate::common::write_kind_base(env, "antigravity");
+        crate::common::write_definition(
+            env,
+            "agents",
+            "antigravity",
+            "description: antigravity base\ntools: [Read]",
+            "antigravity base.",
+        );
     }
 }
 
@@ -318,11 +318,10 @@ fn seat_launch() -> LaunchParams {
     }
 }
 
-/// A molt of the `seat` agent onto Antigravity, whose `mcps: []` then needs an agent file, is
-/// refused before it reserves the swap or opens a pane; with the kind base as its prompt it is
-/// not refused on that rule.
+/// A molt of the `seat` agent onto Antigravity without `agents/antigravity.md` is refused before
+/// it reserves the swap or opens a pane; with the kind base it succeeds and records the swap.
 #[test]
-fn molt_onto_antigravity_without_a_prompt_refuses_a_limiting_mcps_list() {
+fn molt_onto_antigravity_without_a_base_refuses_before_swap() {
     let molt = |prompted: bool| {
         molt_over(
             &[1],
@@ -337,7 +336,10 @@ fn molt_onto_antigravity_without_a_prompt_refuses_a_limiting_mcps_list() {
     let (env, output) = molt(false);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{output:?}");
-    assert!(stderr.contains(AGY_MCPS_REFUSAL), "{stderr}");
+    assert!(
+        stderr.contains("whose kind base is missing") && stderr.contains("agents/antigravity.md"),
+        "{stderr}"
+    );
     let log = mux_log(&env);
     assert!(!log.contains("new-pane"), "{log}");
     assert!(!replacement_recorded(&env));
@@ -401,20 +403,22 @@ fn agy_seat_restart(env: &Env, resumed: bool) -> std::process::Output {
         .unwrap()
 }
 
-/// A restart of an Antigravity seat with no prompt and a limiting `mcps` list whose conversation
-/// is gone launches fresh, so it is refused before it reserves the swap or opens a pane; the same
-/// seat whose conversation resumes keeps the servers it started with and is not refused.
+/// A restart of an Antigravity seat whose profile cannot build without `agents/antigravity.md`
+/// degrades to bare Antigravity (matching a broken Markdown definition) rather than failing the
+/// restart, whether fresh or resuming a conversation.
 #[test]
-fn fresh_restart_of_antigravity_without_a_prompt_refuses_a_limiting_mcps_list() {
+fn restart_of_antigravity_without_a_base_degrades_to_bare() {
     let env = Env::new();
     write_seat(&env, false);
     let output = agy_seat_restart(&env, false);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(stderr.contains(AGY_MCPS_REFUSAL), "{stderr}");
-    let log = mux_log(&env);
-    assert!(!log.contains("new-pane"), "{log}");
-    assert!(!replacement_recorded(&env));
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stderr.contains("whose kind base is missing")
+            && stderr.contains("launching as bare antigravity"),
+        "{stderr}"
+    );
+    assert!(replacement_recorded(&env));
 
     let env = Env::new();
     write_seat(&env, false);

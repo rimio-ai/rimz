@@ -16,7 +16,10 @@ use super::{
     Namespace, SkillCatalog, SkillCheck, SubagentCheck, frontmatter, traits,
 };
 
-/// Chain member names that wrote each tuning field on a Markdown definition.
+/// Maximum inheritance chain length for project TOML profiles.
+const MAX_PROFILE_DEPTH: usize = 16;
+
+/// Chain member names that wrote each tuning field on a definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TuningWriters {
     pub effort: Option<String>,
@@ -55,7 +58,7 @@ impl TuningWriters {
     }
 }
 
-/// Retained Markdown definition state for rebuilding a stored profile row under an override,
+/// Retained definition state for rebuilding a stored profile row under an override,
 /// target kind, or model without rereading disk.
 #[derive(Clone, Debug)]
 pub struct DefinitionSource {
@@ -77,12 +80,14 @@ impl PartialEq for DefinitionSource {
             && a.crafts == b.crafts
             && a.system_prompt_file == b.system_prompt_file
             && a.args == b.args
+            && a.original_kind == b.original_kind
             && a.natural_kind == b.natural_kind
             && a.natural_variant == b.natural_variant
             && a.preference == b.preference
             && a.runtime_kind == b.runtime_kind
             && a.built_under == b.built_under
             && a.seat == b.seat
+            && a.is_project == b.is_project
             && a.context == b.context
     }
 }
@@ -91,17 +96,16 @@ impl Eq for DefinitionSource {}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MemoBase {
-    Runtime(String, Option<&'static str>, Option<String>),
+    Runtime(String, Option<&'static str>),
     Definition(String, PathBuf),
 }
 
 impl MemoBase {
     fn from_build_base(base: BuildBase<'_>) -> Option<Self> {
         match base {
-            BuildBase::Runtime(rt, model) => Some(Self::Runtime(
+            BuildBase::Runtime(rt) => Some(Self::Runtime(
                 rt.kind().to_owned(),
                 rt.variant.map(|v| v.name),
-                model.map(str::to_owned),
             )),
             BuildBase::Profile(profile) => profile
                 .definition
@@ -140,6 +144,14 @@ struct PromptLayer {
     source: PromptSource,
 }
 
+/// Splits subagent validation when a definition inherits from an override (`+` list): names in
+/// `own_names` check against `own`, while inherited names check against `inherited`.
+struct SubagentValidator<'a> {
+    own: Option<(&'a SubagentCheck, bool)>,
+    inherited: Option<(&'a SubagentCheck, bool)>,
+    own_names: Option<BTreeSet<String>>,
+}
+
 fn args_for_kind(layers: &[KindArgs], kind: &str) -> Option<String> {
     layers
         .iter()
@@ -158,12 +170,15 @@ struct DefinitionSourceInner {
     crafts: Vec<PromptLayer>,
     system_prompt_file: Option<PromptSource>,
     args: Vec<KindArgs>,
+    /// The kind this definition resolved to at load, preserved across on-demand rebuilds.
+    original_kind: String,
     natural_kind: String,
     natural_variant: Option<&'static agents::Variant>,
     preference: TierPreference,
     runtime_kind: Option<String>,
     built_under: Option<MemoBase>,
     seat: Option<SeatInfo>,
+    is_project: bool,
     context: Arc<LoadContext>,
     memo: Mutex<BTreeMap<MemoKey, Result<Profile, DefinitionErr>>>,
 }
@@ -247,8 +262,8 @@ impl DefinitionSource {
         &self.inner.chain
     }
 
-    pub(crate) fn natural_kind(&self) -> &str {
-        &self.inner.natural_kind
+    pub(crate) fn original_kind(&self) -> &str {
+        &self.inner.original_kind
     }
 
     pub(crate) fn written_model(&self) -> Option<&str> {
@@ -293,6 +308,23 @@ impl DefinitionSource {
             && base.is_some_and(|base| self.is_built_under(base))
         {
             return Ok(current.clone());
+        }
+        let skip_memo = matches!(
+            base,
+            Some(BuildBase::Profile(profile))
+                if profile
+                    .definition
+                    .as_ref()
+                    .is_some_and(|def| def.inner.is_project)
+        );
+        if skip_memo {
+            return self.inner.build_with_craft(
+                base,
+                target_kind,
+                model,
+                &mut CraftState::Rendered,
+                true,
+            );
         }
         let key = MemoKey::new(base, target_kind, model);
         {
@@ -434,6 +466,7 @@ impl DefinitionSourceInner {
         built: &Profile,
         preference: TierPreference,
         runtime_kind: Option<String>,
+        context: Arc<LoadContext>,
     ) -> DefinitionSource {
         let mut chain = self.chain.clone();
         let mut writers = self.writers.clone();
@@ -456,13 +489,15 @@ impl DefinitionSourceInner {
                 crafts,
                 system_prompt_file,
                 args,
+                original_kind: self.original_kind.clone(),
                 natural_kind: built.agent.clone(),
                 natural_variant: built.variant,
                 preference,
                 runtime_kind,
                 built_under: built_under.or_else(|| self.built_under.clone()),
                 seat: self.seat.clone(),
-                context: Arc::clone(&self.context),
+                is_project: self.is_project || x_def.is_some_and(|x| x.is_project),
+                context,
                 memo: Mutex::default(),
             }),
         }
@@ -477,33 +512,24 @@ impl DefinitionSourceInner {
         attach_definition: bool,
     ) -> Result<Profile, DefinitionErr> {
         let mut built_under = base.and_then(MemoBase::from_build_base);
-        let (has_base, x_def, base_kind, base_variant, base_writes_engine, base_model_override) =
-            match base {
-                Some(BuildBase::Runtime(rt, model_override)) => (
+        let (has_base, x_def, base_kind, base_variant, base_writes_engine) = match base {
+            Some(BuildBase::Runtime(rt)) => (true, None, Some(rt.kind()), rt.variant, false),
+            Some(BuildBase::Profile(profile)) => match &profile.definition {
+                Some(other) => (
                     true,
-                    None,
-                    Some(rt.kind()),
-                    rt.variant,
-                    model_override.is_some(),
-                    model_override,
+                    Some(other.inner.as_ref()),
+                    (!other.inner.natural_kind.is_empty())
+                        .then_some(other.inner.natural_kind.as_str()),
+                    other.inner.natural_variant,
+                    other.writes_engine(),
                 ),
-                Some(BuildBase::Profile(profile)) => match &profile.definition {
-                    Some(other) => (
-                        true,
-                        Some(other.inner.as_ref()),
-                        (!other.inner.natural_kind.is_empty())
-                            .then_some(other.inner.natural_kind.as_str()),
-                        other.inner.natural_variant,
-                        other.writes_engine(),
-                        None,
-                    ),
-                    _ => {
-                        built_under = None;
-                        (false, None, None, None, false, None)
-                    }
-                },
-                None => (false, None, None, None, false, None),
-            };
+                _ => {
+                    built_under = None;
+                    (false, None, None, None, false)
+                }
+            },
+            None => (false, None, None, None, false),
+        };
 
         let mut fm = self.frontmatter.clone();
         if let Some(explicit_model) = model {
@@ -512,10 +538,17 @@ impl DefinitionSourceInner {
         } else if base_writes_engine {
             fm.model = None;
             fm.tier = None;
-            if let Some(override_model) = base_model_override {
-                fm.model = Some(override_model.to_owned());
-            }
         }
+        let mut subagent_validator = SubagentValidator {
+            own: self
+                .context
+                .subagents
+                .as_deref()
+                .map(|check| (check, !self.is_project)),
+            inherited: None,
+            own_names: None,
+        };
+        let mut retained_context = Arc::clone(&self.context);
         let x_in_chain = x_def.is_some_and(|x| self.chain.iter().any(|entry| entry == &x.name));
         if let Some(x) = x_def {
             if x_in_chain {
@@ -529,6 +562,36 @@ impl DefinitionSourceInner {
                 let mut x_fm = x.frontmatter.clone().for_namespace(self.namespace);
                 if lists_agent_tool(&fm) {
                     x_fm.subagents = None;
+                }
+                if x_fm.subagents.is_some() {
+                    if self.frontmatter.subagents.is_none() {
+                        subagent_validator.own = x
+                            .context
+                            .subagents
+                            .as_deref()
+                            .map(|check| (check, !x.is_project));
+                        if x.is_project {
+                            retained_context = Arc::clone(&x.context);
+                        }
+                    } else if let Some(own_list) = self.frontmatter.subagents.as_deref()
+                        && own_list.iter().any(|entry| frontmatter::is_plus(entry))
+                    {
+                        subagent_validator.inherited = x
+                            .context
+                            .subagents
+                            .as_deref()
+                            .map(|check| (check, !x.is_project));
+                        subagent_validator.own_names = Some(
+                            own_list
+                                .iter()
+                                .filter(|entry| !frontmatter::is_plus(entry))
+                                .map(|entry| entry.trim().to_owned())
+                                .collect(),
+                        );
+                        if x.is_project {
+                            retained_context = Arc::clone(&x.context);
+                        }
+                    }
                 }
                 fm.inherit(&x_fm);
             }
@@ -617,11 +680,14 @@ impl DefinitionSourceInner {
                     finish_profile(
                         &self.context,
                         &self.path,
+                        &self.name,
                         self.namespace,
                         self.seat.as_ref(),
                         kind,
                         variant,
                         false,
+                        self.is_project,
+                        &subagent_validator,
                         candidate_fm,
                         craft_sources.clone(),
                         system_prompt_file.clone(),
@@ -693,11 +759,14 @@ impl DefinitionSourceInner {
             let built = finish_profile(
                 &self.context,
                 &self.path,
+                &self.name,
                 self.namespace,
                 self.seat.as_ref(),
                 kind,
                 variant,
                 false,
+                self.is_project,
+                &subagent_validator,
                 fm,
                 craft_sources,
                 system_prompt_file.clone(),
@@ -717,6 +786,7 @@ impl DefinitionSourceInner {
                 &built,
                 effective_preference,
                 effective_runtime_kind,
+                retained_context,
             ));
         }
         Ok(built)
@@ -865,6 +935,32 @@ pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedD
     }
 }
 
+/// Resolves every project row of one namespace, returning loaded rows, per-name errors, and
+/// any per-name errors discovered in the foreign namespace (e.g. an agent parent resolved on
+/// behalf of a subagent child) without deduplicating across rows that share `.rimz/config.toml`.
+pub(super) fn resolve_project_namespace(
+    mut resolver: Resolver<'_>,
+) -> (
+    BTreeMap<String, Profile>,
+    BTreeMap<String, DefinitionErr>,
+    BTreeMap<String, DefinitionErr>,
+) {
+    let names: Vec<String> = resolver.tree.definitions.keys().cloned().collect();
+    for name in names {
+        resolver.resolve(&name);
+    }
+    let profiles = resolver
+        .resolved
+        .into_iter()
+        .filter_map(|(name, resolved)| Some((name, resolved?.profile)))
+        .collect();
+    let foreign_errors = resolver
+        .foreign_resolver
+        .map(|foreign| foreign.row_errors)
+        .unwrap_or_default();
+    (profiles, resolver.row_errors, foreign_errors)
+}
+
 impl<'a> Resolver<'a> {
     pub(super) fn new(
         scope: LoadScope<'a>,
@@ -877,6 +973,7 @@ impl<'a> Resolver<'a> {
             tree,
             foreign,
             skip_subagents: false,
+            is_project: false,
             foreign_resolver: None,
             seat: None,
             seat_ancestors: Vec::new(),
@@ -885,7 +982,13 @@ impl<'a> Resolver<'a> {
             resolved: BTreeMap::new(),
             trail: Vec::new(),
             errors: Vec::new(),
+            row_errors: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn with_project(mut self) -> Self {
+        self.is_project = true;
+        self
     }
 
     pub(super) fn with_seat(
@@ -1000,6 +1103,8 @@ pub(super) struct Resolver<'a> {
     /// When resolving an `agents/` parent on behalf of a `subagents/` child, the parent's own
     /// `subagents:` list is dropped and never validated for the child.
     skip_subagents: bool,
+    /// Whether this tree holds project TOML rows sharing `.rimz/config.toml`.
+    is_project: bool,
     foreign_resolver: Option<Box<Resolver<'a>>>,
     seat: Option<SeatInfo>,
     seat_ancestors: Vec<String>,
@@ -1008,6 +1113,7 @@ pub(super) struct Resolver<'a> {
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
+    row_errors: BTreeMap<String, DefinitionErr>,
 }
 
 /// The names of `resolver`'s tree that load and the errors of the rest, recording neither.
@@ -1040,10 +1146,16 @@ impl Resolver<'_> {
         if self.trail.iter().any(|entry| entry == name) {
             let mut trail = self.trail.clone();
             trail.push(name.to_owned());
-            self.errors.push(DefinitionErr::new(
+            let error = DefinitionErr::new(
                 &self.tree.definitions[name].path,
                 format!("follows itself through `agent:` ({})", trail.join(" -> ")),
-            ));
+            );
+            if self.is_project {
+                self.row_errors
+                    .entry(name.to_owned())
+                    .or_insert_with(|| error.clone());
+            }
+            self.errors.push(error);
             return None;
         }
         self.trail.push(name.to_owned());
@@ -1052,7 +1164,9 @@ impl Resolver<'_> {
         let resolved = match result {
             Ok(resolved) => Some(resolved),
             Err(error) => {
-                if !self
+                if self.is_project {
+                    self.row_errors.entry(name.to_owned()).or_insert(error);
+                } else if !self
                     .errors
                     .iter()
                     .any(|previous| previous.path == error.path)
@@ -1070,10 +1184,12 @@ impl Resolver<'_> {
         let scope = self.scope;
         let tree = self.foreign;
         let foreign = self.tree;
+        let is_project = self.is_project;
         self.foreign_resolver
             .get_or_insert_with(|| {
                 let mut resolver = Resolver::new(scope, "agents", [tree, foreign]);
                 resolver.skip_subagents = true;
+                resolver.is_project = is_project;
                 Box::new(resolver)
             })
             .resolve(name)
@@ -1219,6 +1335,7 @@ impl Resolver<'_> {
                     )
                     .with_cause(DefinitionCause::DependsOnFailed {
                         name: parent_name.clone(),
+                        subagent: false,
                     })
                 })?;
                 if in_foreign {
@@ -1232,6 +1349,14 @@ impl Resolver<'_> {
                     if !chain.contains(ancestor) {
                         chain.push(ancestor.clone());
                     }
+                }
+                if self.is_project && chain.len() > MAX_PROFILE_DEPTH {
+                    return Err(DefinitionErr::new(
+                        path,
+                        format!(
+                            "profile `{name}` inheritance chain is deeper than {MAX_PROFILE_DEPTH}"
+                        ),
+                    ));
                 }
                 if runtime_kind.is_none() {
                     runtime_kind = parent.runtime_kind;
@@ -1338,12 +1463,14 @@ impl Resolver<'_> {
             crafts,
             system_prompt_file: system_prompt_file.clone(),
             args: args.clone(),
+            original_kind: profile.agent.clone(),
             natural_kind: profile.agent.clone(),
             natural_variant: profile.variant,
             preference: preference.clone(),
             runtime_kind: runtime_kind.clone(),
             built_under: None,
             seat: self.seat.clone(),
+            is_project: self.is_project,
             context: Arc::clone(self.scope.context),
             memo: Mutex::default(),
         };
@@ -1389,11 +1516,13 @@ impl Resolver<'_> {
             source
                 .build_with_craft(None, None, None, &mut craft_state, false)
                 .map_err(|mut error| {
-                    if let Some(tier) = fm.model.as_deref().and_then(|model| {
-                        agents::definition_model_kind(model).and_then(|kind| {
-                            self.scope.context.shared.tiers.tier_for_model(kind, model)
+                    if !self.is_project
+                        && let Some(tier) = fm.model.as_deref().and_then(|model| {
+                            agents::definition_model_kind(model).and_then(|kind| {
+                                self.scope.context.shared.tiers.tier_for_model(kind, model)
+                            })
                         })
-                    }) {
+                    {
                         error.message.push_str(&format!(
                             "; use `tier: {tier}` to allow another model or family"
                         ));
@@ -1408,6 +1537,7 @@ impl Resolver<'_> {
             });
         }
         let resolved_crafts = source.crafts.clone();
+        source.original_kind = profile.agent.clone();
         source.natural_kind = profile.agent.clone();
         source.natural_variant = profile.variant;
         let def_source = DefinitionSource {
@@ -1481,14 +1611,27 @@ impl Resolver<'_> {
             trait_names: definition.frontmatter.traits.as_deref().unwrap_or_default(),
             cached: None,
         };
+        let subagent_validator = SubagentValidator {
+            own: self
+                .scope
+                .context
+                .subagents
+                .as_deref()
+                .map(|check| (check, true)),
+            inherited: None,
+            own_names: None,
+        };
         let mut profile = finish_profile(
             self.scope.context,
             &definition.path,
+            name,
             self.namespace,
             None,
             name,
             None,
             true,
+            false,
+            &subagent_validator,
             fm,
             Vec::new(),
             None,
@@ -1516,11 +1659,14 @@ impl Resolver<'_> {
 fn finish_profile(
     context: &LoadContext,
     path: &Path,
+    name: &str,
     namespace: &str,
     seat: Option<&SeatInfo>,
     kind: &str,
     variant: Option<&'static agents::Variant>,
     kind_base: bool,
+    is_project: bool,
+    subagent_validator: &SubagentValidator<'_>,
     mut fm: AgentFrontmatter,
     crafts: Vec<PromptSource>,
     system_prompt_file: Option<PromptSource>,
@@ -1551,6 +1697,7 @@ fn finish_profile(
         return Err(DefinitionErr::new(path, message).with_cause(
             DefinitionCause::DependsOnFailed {
                 name: kind.to_owned(),
+                subagent: false,
             },
         ));
     }
@@ -1636,12 +1783,36 @@ fn finish_profile(
         }
         None => None,
     };
+    // Prompt-taking kinds need their base even when the definition adds no craft.
+    let missing_base = (takes_system_prompt && !shared.bases.contains_key(kind)).then(|| {
+        DefinitionErr::new(
+            path,
+            format!(
+                "runs on {kind}, {}",
+                super::missing_kind_base(&shared.home, kind)
+            ),
+        )
+    });
     if lowered.is_none() && fm.tools.is_none() && agents::tools_required(kind) && !profile.kind_base
     {
-        return Err(DefinitionErr::new(
-            path,
-            format!("lists neither `capabilities` nor `tools`, which {kind} needs; write one"),
-        ));
+        // A project row takes its tools from the base alone.
+        if is_project && let Some(error) = missing_base {
+            return Err(error);
+        }
+        let message = if is_project {
+            format!(
+                "runs on {kind}, which requires a tools list; add `capabilities:` or `tools:` to \
+                 the machine kind base {}",
+                shared
+                    .home
+                    .join("agents")
+                    .join(format!("{kind}.md"))
+                    .display()
+            )
+        } else {
+            format!("lists neither `capabilities` nor `tools`, which {kind} needs; write one")
+        };
+        return Err(DefinitionErr::new(path, message));
     }
     let tools = match lowered {
         Some(lowered) => Some(lowered),
@@ -1685,8 +1856,26 @@ fn finish_profile(
             // A kind base's names check once the subagents tree has resolved.
             profile.subagents = Some(if profile.kind_base {
                 names(path, "subagents", listed)?
-            } else if let Some(subagents) = context.subagents.as_deref() {
-                subagent_names(path, listed, subagents)?
+            } else if let (Some(own_names), Some((inh_check, inh_implicit))) =
+                (&subagent_validator.own_names, subagent_validator.inherited)
+            {
+                let (own_listed, inh_listed): (Vec<_>, Vec<_>) = listed
+                    .iter()
+                    .cloned()
+                    .partition(|entry| own_names.contains(entry.trim()));
+                if !own_listed.is_empty() {
+                    if let Some((own_check, own_implicit)) = subagent_validator.own {
+                        subagent_names(path, &own_listed, own_check, own_implicit)?;
+                    } else {
+                        names(path, "subagents", &own_listed)?;
+                    }
+                }
+                if !inh_listed.is_empty() {
+                    subagent_names(path, &inh_listed, inh_check, inh_implicit)?;
+                }
+                names(path, "subagents", listed)?
+            } else if let Some((subagents, allow_implicit_general)) = subagent_validator.own {
+                subagent_names(path, listed, subagents, allow_implicit_general)?
             } else {
                 names(path, "subagents", listed)?
             });
@@ -1784,8 +1973,7 @@ fn finish_profile(
         return Err(DefinitionErr::new(
             path,
             format!(
-                "profile '{}' keep-warm while `{clause}`: a solo definition has no board; remove `while` and use `max` only",
-                path.file_stem().unwrap_or_default().to_string_lossy()
+                "profile '{name}' keep-warm while `{clause}`: a solo definition has no board; remove `while` and use `max` only",
             ),
         ));
     }
@@ -1868,17 +2056,10 @@ fn finish_profile(
         };
         return Err(DefinitionErr::new(path, message));
     }
-    // Prompt-taking kinds need their base even when the definition adds no craft.
-    if takes_system_prompt && !shared.bases.contains_key(kind) {
-        return Err(DefinitionErr::new(
-            path,
-            format!(
-                "runs on {kind}, {}",
-                super::missing_kind_base(&shared.home, kind)
-            ),
-        ));
+    match missing_base {
+        Some(error) => Err(error),
+        None => Ok(profile),
     }
-    Ok(profile)
 }
 
 /// A `subagents:` list's names, each a subagent in `subagents.allowed` (those that loaded, and
@@ -1887,6 +2068,7 @@ pub(super) fn subagent_names(
     path: &Path,
     listed: &[String],
     subagents: &SubagentCheck,
+    allow_implicit_general: bool,
 ) -> Result<Vec<String>, DefinitionErr> {
     let names = names(path, "subagents", listed)?;
     for name in &names {
@@ -1902,12 +2084,13 @@ pub(super) fn subagent_names(
         )
         .with_cause(DefinitionCause::DependsOnFailed {
             name: failed.clone(),
+            subagent: true,
         }));
     }
     let unknown: Vec<_> = names
         .iter()
         .filter(|name| {
-            name.as_str() != "general"
+            !(allow_implicit_general && name.as_str() == "general")
                 && agents::find_definition(name).is_none()
                 && !subagents.allowed.contains(*name)
         })

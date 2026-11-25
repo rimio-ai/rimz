@@ -14970,7 +14970,7 @@ fn message_stores_the_recipients_smart_compact_line() {
     let actual: Vec<_> = [
         ("worker", None, false, None),
         ("worker", Some("lead"), false, None),
-        ("worker", None, true, None),
+        ("sub-worker", None, true, None),
         ("worker", Some("lead"), false, Some("90%")),
         ("off", None, false, None),
     ]
@@ -14978,13 +14978,20 @@ fn message_stores_the_recipients_smart_compact_line() {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "claude",
+            "description: Claude base\ntools: [Read]",
+            "Claude base.",
+        );
         env.write_config(
             &env.project_root,
-            "[profiles.base]\nagent = 'claude'\nsmart-compact = '200k'\n\
-             [profiles.worker]\nagent = 'base'\n\
-             [profiles.off]\nagent = 'worker'\nsmart-compact = 'off'\n\
-             [subagents.profiles.base]\nagent = 'claude'\nsmart-compact = '50k'\n\
-             [subagents.profiles.worker]\nagent = 'base'\n\
+            "[profiles.base]\ndescription = 'Base'\nagent = 'claude'\nsmart-compact = '200k'\n\
+             [profiles.worker]\ndescription = 'Worker'\nagent = 'base'\n\
+             [profiles.off]\ndescription = 'Off'\nagent = 'worker'\nsmart-compact = 'off'\n\
+             [subagents.profiles.sub-base]\ndescription = 'Sub base'\nagent = 'claude'\nsmart-compact = '50k'\n\
+             [subagents.profiles.sub-worker]\ndescription = 'Sub worker'\nagent = 'sub-base'\n\
              [agents.teams.forge]\nroles = [{role = 'lead', profile = 'worker', \
              smart-compact = '80%'}]",
         );

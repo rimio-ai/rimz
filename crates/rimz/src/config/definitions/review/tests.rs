@@ -24,7 +24,8 @@ fn profile(
 }
 
 fn grants(profile: Profile, machine: Isolation) -> EffectiveGrants {
-    let profiles = super::super::ProfilesConfig(BTreeMap::from([("probe".to_owned(), profile)]));
+    let profiles =
+        super::super::ProfilesConfig::from(BTreeMap::from([("probe".to_owned(), profile)]));
     EffectiveGrants::of(
         &crate::harness::spec::resolve_profile("probe", &profiles).unwrap(),
         machine,

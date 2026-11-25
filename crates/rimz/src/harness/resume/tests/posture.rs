@@ -5,8 +5,10 @@ use super::*;
 
 #[test]
 fn mini_relaunch_replays_each_name_source_and_current_definition() {
-    let mut profiles: ProfilesConfig =
-        toml::from_str("[worker]\nagent = 'opencode-mini'\n[plain]\nagent = 'opencode'").unwrap();
+    let profiles = project_profiles(
+        "[profiles.worker]\ndescription = 'Mini worker'\nagent = 'opencode-mini'\n\
+         [profiles.plain]\ndescription = 'Plain opencode'\nagent = 'opencode'\n",
+    );
     let actual = [
         (Some("worker"), None, true),
         (Some("opencode-mini"), None, true),
@@ -44,11 +46,12 @@ fn mini_relaunch_replays_each_name_source_and_current_definition() {
             (true, false, false)
         ]
     );
-    profiles.0.get_mut("worker").unwrap().agent = "opencode".into();
+    let mut profiles =
+        project_profiles("[profiles.worker]\ndescription = 'Plain worker'\nagent = 'opencode'\n");
     let posture = posture_for("opencode", Some("worker"), None, &profiles);
     assert!(posture.degraded.is_none());
     assert!(!posture.launch.args.iter().any(|arg| arg == "mini"));
-    profiles.0.get_mut("worker").unwrap().agent = "missing".into();
+    profiles.0.remove("worker");
     let posture = posture_for("opencode", Some("worker"), None, &profiles);
     assert!(posture.degraded.is_some());
     assert!(!posture.launch.args.iter().any(|arg| arg == "mini"));
@@ -725,40 +728,34 @@ fn record_without_model_keeps_a_raw_profile_model_argument() {
 
 #[test]
 fn record_without_model_ignores_a_model_a_base_layer_gained() {
-    let base = |args: Option<&str>| Profile {
-        model: Some("sonnet".into()),
-        args: args.map(str::to_owned),
-        ..profile("claude")
-    };
-    let chained = Profile {
-        kind_defaults: true,
-        ..profile("base")
-    };
-    for (writer, base_name, args, expected) in [
-        (
-            definition_profile(None, Some("haiku"), None),
-            "claude",
-            None,
-            vec![],
-        ),
-        (chained.clone(), "base", None, vec![]),
-        (
-            chained,
-            "base",
-            Some("--model opus"),
-            vec!["opus".to_owned()],
-        ),
+    for (args, expected) in [
+        (None, vec![]),
+        (Some("--model opus"), vec!["opus".to_owned()]),
     ] {
-        let mut table = profiles("writer", writer);
-        table.0.insert(base_name.into(), base(args));
+        let args_line = args.map_or(String::new(), |a| format!("args = '{a}'\n"));
+        let table = project_profiles(&format!(
+            "[profiles.base]\ndescription = 'Base'\nagent = 'claude'\nmodel = 'sonnet'\n{args_line}\
+             [profiles.writer]\ndescription = 'Writer'\nagent = 'base'\n"
+        ));
         let launch = modelless_posture_in(&table, None);
         assert_eq!(
             preset_values(&launch.args, crate::agents::PresetField::Model),
             expected,
-            "base {base_name:?} args {args:?}"
+            "args {args:?}"
         );
         assert!(launch.model.is_none());
     }
+    let mut table = profiles("writer", definition_profile(None, Some("haiku"), None));
+    let mut kind_base = profile("claude");
+    kind_base.kind_base = true;
+    kind_base.model = Some("sonnet".into());
+    table.0.insert("claude".into(), kind_base);
+    let launch = modelless_posture_in(&table, None);
+    assert_eq!(
+        preset_values(&launch.args, crate::agents::PresetField::Model),
+        Vec::<String>::new()
+    );
+    assert!(launch.model.is_none());
 }
 
 #[test]
@@ -822,9 +819,8 @@ fn recorded_mode_beats_the_profile_default() {
 
 #[test]
 fn absent_record_effort_adopts_kind_default_and_replays_it() {
-    let mut worker = profile("claude");
-    worker.kind_defaults = true;
-    let profiles = profiles("worker", worker);
+    let profiles =
+        project_profiles("[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n");
     let matcher = find_definition("claude")
         .unwrap()
         .spec()
@@ -947,12 +943,11 @@ fn absent_record_effort_preserves_raw_profile_args() {
 
 #[test]
 fn recorded_base_replays_and_missing_base_degrades() {
-    let mut profiles = profiles("planner", profile("claude"));
-    let mut reviewer = profile("claude");
-    reviewer.model = Some("sonnet".into());
-    reviewer.effort = Some("high".into());
-    reviewer.args = Some("--verbose".into());
-    profiles.0.insert("reviewer".into(), reviewer);
+    let mut profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         [profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\n\
+         model = 'sonnet'\neffort = 'high'\nargs = '--verbose'\n",
+    );
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("medium".into()),
@@ -1968,15 +1963,16 @@ fn replay_rebuilds_tier_fallback_unversioned_model_and_team_seats_under_one_chai
 #[test]
 fn replay_rebuilds_bare_kind_and_toml_profiles_under_override_without_returning_dropped_models() {
     let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     std::fs::write(
         root.path().join("agents/claude.md"),
-        "---\ndescription: Claude base\n---\nClaude house.\n",
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
     )
     .unwrap();
     std::fs::write(
         root.path().join("agents/codex.md"),
-        "---\ndescription: Codex base\n---\nCodex house.\n",
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex house.\n",
     )
     .unwrap();
     std::fs::write(
@@ -1992,15 +1988,16 @@ fn replay_rebuilds_bare_kind_and_toml_profiles_under_override_without_returning_
     // claude at load time.
     assert_eq!(machine.agents.profiles.0["tiered_x"].agent, "claude");
 
-    let mut profiles = machine.agents.profiles.clone();
-    profiles.0.insert(
-        "toml_l".into(),
-        Profile {
-            effort: Some("high".into()),
-            model: Some("opus".into()),
-            ..profile("claude")
-        },
-    );
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.toml_l]\ndescription = 'TOML L'\nagent = 'claude'\neffort = 'high'\nmodel = 'opus'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let profiles = crate::config::effective::load_with_roots(&machine, project.path(), root.path())
+        .unwrap()
+        .profiles;
 
     let fallback_stamp = crate::agents::TierStamp {
         tier: crate::config::tiers::ModelTier::Senior,
@@ -2127,25 +2124,31 @@ fn replay_rebuilds_bare_kind_and_toml_profiles_under_override_without_returning_
 #[test]
 fn kind_base_under_non_markdown_override_replays_after_tier_fallback() {
     let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     std::fs::write(
         root.path().join("agents/claude.md"),
-        "---\ndescription: Claude base\n---\nClaude house.\n",
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.\n",
     )
     .unwrap();
     std::fs::write(
         root.path().join("agents/codex.md"),
-        "---\ndescription: Codex base\n---\nCodex house.\n",
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex house.\n",
     )
     .unwrap();
     let machine =
         crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
             .unwrap();
-    let mut profiles = machine.agents.profiles.clone();
-    profiles.0.insert(
-        "toml_codex".into(),
-        toml::from_str("agent = 'codex'\nmodel = 'sol'\n").unwrap(),
-    );
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.toml_codex]\ndescription = 'TOML codex'\nagent = 'codex'\nmodel = 'sol'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let profiles = crate::config::effective::load_with_roots(&machine, project.path(), root.path())
+        .unwrap()
+        .profiles;
     let stamp = crate::agents::TierStamp {
         tier: crate::config::tiers::ModelTier::Senior,
         model: "opus".into(),
@@ -2241,13 +2244,13 @@ fn kind_base_routed_by_model_to_non_tier_kind_replays_without_degrade() {
 }
 
 #[test]
-fn kind_base_routed_by_model_onto_a_project_toml_base_runs_and_replays_there() {
+fn project_kind_named_rows_never_stand_in_for_machine_kind_bases() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
-    for (kind, tools) in [("claude", "tools: [Read]\n"), ("codex", "effort: high\n")] {
+    for (kind, extra) in [("claude", "tools: [Read]\n"), ("codex", "effort: high\n")] {
         std::fs::write(
             root.path().join(format!("agents/{kind}.md")),
-            format!("---\ndescription: Base\n{tools}---\n{kind} house.\n"),
+            format!("---\ndescription: Base\n{extra}---\n{kind} house.\n"),
         )
         .unwrap();
     }
@@ -2255,8 +2258,8 @@ fn kind_base_routed_by_model_onto_a_project_toml_base_runs_and_replays_there() {
     std::fs::create_dir(project.path().join(".rimz")).unwrap();
     std::fs::write(
         project.path().join(".rimz/config.toml"),
-        "[profiles.codex]\nagent = \"codex\"\neffort = \"low\"\n\
-         [profiles.antigravity]\nagent = \"antigravity\"\neffort = \"low\"\n",
+        "[profiles.codex]\ndescription = 'Shadow codex'\nagent = \"codex\"\neffort = \"low\"\n\
+         [profiles.antigravity]\ndescription = 'Shadow agy'\nagent = \"antigravity\"\neffort = \"low\"\n",
     )
     .unwrap();
     crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
@@ -2283,44 +2286,51 @@ fn kind_base_routed_by_model_onto_a_project_toml_base_runs_and_replays_there() {
             .map(|()| (launch, stored))
             .map_err(|error| error.to_string())
     };
-    // `antigravity.md` is absent: the TOML row alone is that kind's base.
-    for (model, kind) in [("sol", "codex"), ("neon", "antigravity")] {
-        let (launch, (stored, _)) =
-            route(ProfileScope::Agents, model).expect("routes onto the TOML base");
-        let fresh = crate::harness::spec::resolve_profile("claude", &launch.profiles).unwrap();
-        assert_eq!(fresh.kind.as_str(), kind);
-        assert_eq!(fresh.launch.model.as_deref(), Some(model));
-        assert_eq!(fresh.launch.effort.as_deref(), Some("low"));
-        assert_eq!(fresh.clone().into_chain(), ["claude", kind]);
+    // Machine `agents/codex.md` stays the codex kind base (`effort: high`), unaffected by the
+    // failed `[profiles.codex]` row; routing onto missing `antigravity.md` refuses.
+    let (launch, (stored, _)) =
+        route(ProfileScope::Agents, "sol").expect("routes onto machine codex.md");
+    let fresh = crate::harness::spec::resolve_profile("claude", &launch.profiles).unwrap();
+    assert_eq!(fresh.kind.as_str(), "codex");
+    assert_eq!(fresh.launch.model.as_deref(), Some("sol"));
+    assert_eq!(fresh.launch.effort.as_deref(), Some("high"));
+    assert_eq!(fresh.clone().into_chain(), ["claude", "codex"]);
 
-        let record = crate::agents::LaunchRecord {
-            model: Some(model.into()),
-            effort: Some("low".into()),
-            ..Default::default()
-        };
-        let posture = resolve_posture(
-            PostureRequest {
-                record: Some(&record),
-                profile: Some("claude"),
-                kind: &AgentKind::new_unchecked(kind),
-                stamped_mode: None,
-                stamped_tier: None,
-            },
-            &stored,
-            None,
-        );
-        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
-        assert_eq!(posture.launch.model.as_deref(), Some(model));
-        assert_eq!(posture.launch.effort.as_deref(), Some("low"));
-        assert_eq!(
-            posture.launch.system_prompt_file, fresh.system_prompt_file,
-            "{kind}"
+    let record = crate::agents::LaunchRecord {
+        model: Some("sol".into()),
+        effort: Some("high".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("claude"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &stored,
+        None,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert_eq!(posture.launch.effort.as_deref(), Some("high"));
+    assert_eq!(posture.launch.system_prompt_file, fresh.system_prompt_file);
+
+    let missing_agy = route(ProfileScope::Agents, "neon").map(|_| ()).unwrap_err();
+    assert!(missing_agy.contains("antigravity.md"), "{missing_agy}");
+
+    // Direct launches of the failed kind-named project rows refuse with the rename fix.
+    for kind in ["codex", "antigravity"] {
+        let err = launch
+            .block_failed_profile(kind, &launch.profiles)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!("[profiles.{kind}]"))
+                && err.contains("takes the name of an agent runtime"),
+            "{err}"
         );
     }
-
-    // The subagents doorway reads the agents table's base, as the launch chain does.
-    let (launch, _) = route(ProfileScope::Subagents, "neon").unwrap();
-    assert_eq!(launch.subagent_profiles.0["claude"].agent, "antigravity");
 
     // A definition that failed to load keeps its refusal, whatever the project writes.
     for (model, kind) in [("sol", "codex"), ("neon", "antigravity")] {

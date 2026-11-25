@@ -5877,7 +5877,7 @@ fn explain_names_where_each_tuning_value_came_from() {
     .unwrap();
     env.write_config(
         &env.project_root,
-        "[profiles.hand]\nagent = 'claude'\n\
+        "[profiles.hand]\ndescription = 'Hand'\nagent = 'claude'\n\
          [agents.teams.crew]\nroles = [\
          {role = 'lead', profile = 'hand', fast = 'off', auto-compact = '400k'}, \
          {role = 'mate', profile = 'hand'}]\n",
@@ -5887,14 +5887,14 @@ fn explain_names_where_each_tuning_value_came_from() {
         &env,
         "agents",
         "claude",
-        "description: Claude base\nfast: on\ncode-mode: on\neffort: high\nauto-compact: 300k",
+        "description: Claude base\ntools: [Read]\nfast: on\ncode-mode: on\neffort: high\nauto-compact: 300k",
         "Claude base.",
     );
     crate::common::write_definition(
         &env,
         "agents",
         "codex",
-        "description: Codex base\neffort: medium\nfast: on",
+        "description: Codex base\ntools: [Read]\neffort: medium\nfast: on",
         "Codex base.",
     );
     for (name, extra) in [
@@ -12007,11 +12007,18 @@ fn seed_launch(env: &Env, launch_id: &str, agent_name: &str, launch: LaunchParam
 fn host_skill_errors_refuse_before_launch_without_writes() {
     let env = Env::new();
     env.record(&env.project_root);
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\ntools: [Read, Skill]",
+        "Claude base.",
+    );
     let config = env.project_root.join(".rimz");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
         config.join("config.toml"),
-        "[profiles.worker]\nagent = \"claude\"\nskills = [\"not-installed\"]\n",
+        "[profiles.worker]\ndescription = \"Worker\"\nagent = \"claude\"\nskills = [\"not-installed\"]\n",
     )
     .unwrap();
     env.rimz().args(["trust", "grant"]).assert().success();
@@ -12024,7 +12031,8 @@ fn host_skill_errors_refuse_before_launch_without_writes() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
-    assert!(stderr.contains("unknown skill 'not-installed'"), "{stderr}");
+    assert!(stderr.contains("lists skill 'not-installed'"), "{stderr}");
+    assert!(stderr.contains("[profiles.worker]"), "{stderr}");
     assert_eq!(env.store().read_events().unwrap().len(), before.len());
     assert!(!env.runtime_paths().prompt_dir().exists());
 }
@@ -12454,13 +12462,13 @@ fn explain_preserves_override_lines_tuning_sources_and_toml_chains_across_routin
         (
             "agents",
             "claude",
-            "description: Claude base\neffort: medium",
+            "description: Claude base\ntools: [Read]\neffort: medium",
             "Claude house.",
         ),
         (
             "agents",
             "codex",
-            "description: Codex base\neffort: medium\nfast: off",
+            "description: Codex base\ntools: [Read]\neffort: medium\nfast: off",
             "Codex house.",
         ),
         (
@@ -12481,9 +12489,9 @@ fn explain_preserves_override_lines_tuning_sources_and_toml_chains_across_routin
     }
     env.write_config(
         &env.project_root,
-        "[profiles.tl]\nagent = 'claude'\neffort = 'high'\n\
-         [profiles.tk]\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
-         [subagents.profiles.tsub]\nagent = 'claude'\neffort = 'high'\n",
+        "[profiles.tl]\ndescription = 'Tl'\nagent = 'claude'\neffort = 'high'\n\
+         [profiles.tk]\ndescription = 'Tk'\nagent = 'codex'\neffort = 'low'\nfast = 'off'\n\
+         [subagents.profiles.tsub]\ndescription = 'Tsub'\nagent = 'claude'\neffort = 'high'\n",
     );
     env.rimz().args(["trust", "grant"]).assert().success();
 

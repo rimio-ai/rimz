@@ -3015,7 +3015,9 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
             );
             unavailable(tally, Severity::Problem, error, fix)
         }
-        Probe::Ready(Trust { state, granted_at }) => match state {
+        Probe::Ready(Trust {
+            state, granted_at, ..
+        }) => match state {
             TrustState::Trusted => verdict(
                 Health::Ok,
                 format!(
@@ -3039,7 +3041,24 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
         },
     };
     kv.push("trust", value);
-    kv.render(w)
+    kv.render(w)?;
+    if let Probe::Ready(Trust {
+        definition_errors, ..
+    }) = trust
+    {
+        for detail in definition_errors {
+            let fix = "repair the reported row in .rimz/config.toml; launches selecting these definitions are refused until they pass";
+            tally.record_subject(
+                Severity::Warning,
+                detail.clone(),
+                fix,
+                ".rimz/config.toml".to_owned(),
+            );
+            let (glyph, style) = Severity::Warning.parts();
+            writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
+        }
+    }
+    Ok(())
 }
 
 fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {

@@ -97,6 +97,8 @@ struct RepoConfig {
     lsp_servers: BTreeMap<String, super::LspServerConfig>,
     profiles: ProfilesConfig,
     subagent_profiles: ProfilesConfig,
+    profile_unknown_keys: BTreeMap<String, Vec<String>>,
+    subagent_unknown_keys: BTreeMap<String, Vec<String>>,
     teams: TeamsConfig,
 }
 
@@ -123,6 +125,8 @@ pub struct LaunchAgents {
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
     failed_definitions: BTreeMap<String, String>,
+    failed_project_teams: BTreeMap<String, String>,
+    project_definition_errors: Vec<String>,
     set_failure: Option<String>,
     repo_sources: AgentSpecSources,
     state: TrustState,
@@ -353,19 +357,43 @@ impl LaunchAgents {
         if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
             return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
         }
+        let team_target = launched_profile
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .and_then(|raw| {
+                let role = self.teams.role_spec(raw);
+                if self.teams.0.contains_key(raw) {
+                    Some((raw.to_owned(), None))
+                } else {
+                    role.map(|(team, role)| (team.to_owned(), Some(role.to_owned())))
+                }
+            });
         let updates = {
             let fallback = (scope == ProfileScope::Subagents).then_some(&self.profiles);
             let x = if let Some(family_str) = family {
-                let Ok(Some(ov)) = agents_spec::resolve_agent_override(
+                match agents_spec::resolve_agent_override(
                     Some(family_str),
                     self.profiles_for(scope),
                     fallback,
-                ) else {
-                    // Unresolved `--agent` names flow into `resolve_launch` so its failure ladder
-                    // reports failed definitions, wrong doorway, and unknown overrides in order.
-                    return Ok(());
-                };
-                Some(ov)
+                ) {
+                    Ok(ov) => ov,
+                    Err(err) => {
+                        if tier.is_some() {
+                            if let LayoutErr::FailedProfile(detail) = err {
+                                return Err(super::tiers::TierError(detail));
+                            }
+                            self.block_failed_override(
+                                family_str,
+                                self.profiles_for(scope),
+                                fallback,
+                            )
+                            .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                        }
+                        // Unresolved `--agent` names flow into `resolve_launch` so its failure ladder
+                        // reports failed definitions, wrong doorway, and unknown overrides in order.
+                        return Ok(());
+                    }
+                }
             } else {
                 None
             };
@@ -426,9 +454,36 @@ impl LaunchAgents {
                 )
             };
             if tier.is_some() {
+                self.block_set_failure()
+                    .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                if let Some(raw) = launched_profile {
+                    self.block_failed_team(raw)
+                        .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                    self.block_failed_profile(raw, self.profiles_for(scope))
+                        .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                }
+                self.block_failed_reference(launched_profile, family)
+                    .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                for (target_scope, name, _) in &targets {
+                    self.block_failed_profile(name, self.profiles_for(*target_scope))
+                        .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                }
+                if let Some((team_name, None)) = &team_target
+                    && let Some(team) = self.teams.0.get(team_name)
+                    && let Some(layout) = team.layout.as_deref()
+                {
+                    for (name, _) in
+                        agents_spec::inline_layout_profile_targets(layout, &self.profiles)
+                    {
+                        if !team.roles.iter().any(|binding| binding.role == name) {
+                            self.block_failed_profile(&name, &self.profiles)
+                                .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                        }
+                    }
+                }
                 if targets.is_empty() {
                     return Err(super::tiers::TierError(
-                        "--tier needs Markdown definitions; model tiers resolve in Markdown definitions"
+                        "--tier needs a profile definition; model tiers resolve in definitions"
                             .to_owned(),
                     ));
                 }
@@ -443,22 +498,15 @@ impl LaunchAgents {
                             || (x_markdown.is_some() && is_bare_or_base(*target_scope, name));
                     if !eligible {
                         return Err(super::tiers::TierError(format!(
-                            "{role}: --tier needs Markdown definitions; model tiers resolve in Markdown definitions"
+                            "{role}: --tier needs a profile definition; model tiers resolve in definitions"
                         )));
                     }
                 }
             }
-            let is_toml_target = |target_scope: ProfileScope, name: &str| {
-                self.profiles_for(target_scope)
-                    .0
-                    .get(name)
-                    .is_some_and(|profile| profile.definition.is_none() && !profile.kind_base)
-            };
             let x_routed_by_target = x_markdown.is_some()
-                && targets.iter().any(|(target_scope, name, _)| {
-                    is_bare_or_base(*target_scope, name)
-                        || (model.is_some() && is_toml_target(*target_scope, name))
-                });
+                && targets
+                    .iter()
+                    .any(|(target_scope, name, _)| is_bare_or_base(*target_scope, name));
             let mut updates: BTreeMap<(ProfileScope, String), Profile> = BTreeMap::new();
             for (profile_scope, profiles) in [
                 (ProfileScope::Agents, &self.profiles),
@@ -518,23 +566,6 @@ impl LaunchAgents {
                     };
                 let dest_table = self.profiles_for(dest_scope);
                 if let Some(model_str) = model {
-                    if !routed_x
-                        && is_toml_target(*target_scope, name)
-                        && let Some((x_scope, x_name, x_profile)) = x_markdown
-                    {
-                        let selected_x = route_model(
-                            x_profile,
-                            None,
-                            Some(x_profile.agent.as_str()),
-                            model_str,
-                            role,
-                            self.profiles_for(x_scope),
-                            (x_scope == ProfileScope::Subagents).then_some(&self.profiles),
-                            &self.failed_definitions,
-                            &self.agents_home,
-                        )?;
-                        updates.insert((x_scope, x_name.to_owned()), selected_x);
-                    }
                     let selected = route_model(
                         profile,
                         build_base,
@@ -603,6 +634,19 @@ impl LaunchAgents {
         for ((profile_scope, name), profile) in updates {
             self.profiles_for_mut(profile_scope).0.insert(name, profile);
         }
+        if tier.is_some()
+            && let Some((team_name, role_filter)) = team_target
+            && let Some(team) = self.teams.0.get_mut(&team_name)
+        {
+            for binding in &mut team.roles {
+                if role_filter
+                    .as_deref()
+                    .is_none_or(|role| binding.role == role)
+                {
+                    binding.model = None;
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -633,16 +677,8 @@ pub fn load_with_roots(
     project_root: &Path,
     config_root: &Path,
 ) -> Result<LaunchAgents> {
-    let failed_definitions = machine
-        .notices
-        .failed_definitions
-        .keys()
-        .filter_map(|name| {
-            machine
-                .definition_failure_for(name)
-                .map(|detail| (name.clone(), detail))
-        })
-        .collect();
+    let machine_config = machine;
+    let failed_definitions = machine.failed_definition_details();
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
     let mut lsp_servers = machine.lsp.servers.clone();
@@ -692,6 +728,8 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
+            failed_project_teams: BTreeMap::new(),
+            project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
             state: report.state,
@@ -711,6 +749,8 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
+            failed_project_teams: BTreeMap::new(),
+            project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
             state: report.state,
@@ -738,24 +778,19 @@ pub fn load_with_roots(
         })?;
     }
     agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
-    for profiles in [&mut repo.profiles, &mut repo.subagent_profiles] {
-        // A profile chained to another repo profile inherits through `fill_missing`.
-        let chained: BTreeSet<String> = profiles
+    let is_machine_profile = |base: &str| {
+        machine
+            .profiles
             .0
-            .iter()
-            .filter(|(name, profile)| {
-                profile.agent != **name && profiles.0.contains_key(&profile.agent)
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        for (name, profile) in &mut profiles.0 {
-            if profile.auto_compact.is_none() && !chained.contains(name) {
-                profile.auto_compact_default = auto_compact_default;
-            }
-        }
-    }
-    for name in repo.profiles.0.keys() {
-        if repo.profiles.0[name].isolation.is_some() {
+            .get(base)
+            .is_some_and(|row| !row.kind_base)
+            || machine_subagent_profiles
+                .0
+                .get(base)
+                .is_some_and(|row| !row.kind_base)
+    };
+    for (name, profile) in &repo.profiles.0 {
+        if profile.isolation.is_some() {
             return Err(EffectiveConfigErr::Agents {
                 path: config_path.clone(),
                 source: LayoutErr::RepoProfileSetsIsolation {
@@ -763,23 +798,22 @@ pub fn load_with_roots(
                 },
             });
         }
-        agents_spec::resolve_profile(name, &repo.profiles).map_err(|source| {
-            let source = match source {
-                LayoutErr::UnknownProfileBase { profile, base }
-                    if machine.profiles.0.contains_key(&base) =>
-                {
-                    LayoutErr::RepoProfileEscapesTrust { profile, base }
-                }
-                other => other,
-            };
-            EffectiveConfigErr::Agents {
+        let base = profile.agent.as_str();
+        if crate::agents::find_runtime(base).is_none()
+            && !repo.profiles.0.contains_key(base)
+            && is_machine_profile(base)
+        {
+            return Err(EffectiveConfigErr::Agents {
                 path: config_path.clone(),
-                source,
-            }
-        })?;
+                source: LayoutErr::RepoProfileEscapesTrust {
+                    profile: name.clone(),
+                    base: base.to_owned(),
+                },
+            });
+        }
     }
-    for name in repo.subagent_profiles.0.keys() {
-        if repo.subagent_profiles.0[name].isolation.is_some() {
+    for (name, profile) in &repo.subagent_profiles.0 {
+        if profile.isolation.is_some() {
             return Err(EffectiveConfigErr::Agents {
                 path: config_path.clone(),
                 source: LayoutErr::RepoProfileSetsIsolation {
@@ -787,40 +821,72 @@ pub fn load_with_roots(
                 },
             });
         }
-        agents_spec::resolve_profile(name, &repo.subagent_profiles).map_err(|source| {
-            let source = match source {
-                LayoutErr::UnknownProfileBase { profile, base }
-                    if machine_subagent_profiles.0.contains_key(&base) =>
-                {
-                    LayoutErr::RepoProfileEscapesTrust { profile, base }
-                }
-                other => other,
-            };
-            EffectiveConfigErr::Agents {
+        let base = profile.agent.as_str();
+        if crate::agents::find_runtime(base).is_none()
+            && !repo.subagent_profiles.0.contains_key(base)
+            && !repo.profiles.0.contains_key(base)
+            && is_machine_profile(base)
+        {
+            return Err(EffectiveConfigErr::Agents {
                 path: config_path.clone(),
-                source,
-            }
-        })?;
+                source: LayoutErr::RepoProfileEscapesTrust {
+                    profile: name.clone(),
+                    base: base.to_owned(),
+                },
+            });
+        }
     }
-    agents_spec::validate_subagent_profile_namespace(
-        &repo.subagent_profiles,
-        &CommandsConfig::default(),
-        &TeamsConfig::default(),
-    )
-    .map_err(|source| EffectiveConfigErr::Agents {
-        path: config_path.clone(),
-        source,
-    })?;
     validate_repo_team_profile_closure(&repo).map_err(|source| EffectiveConfigErr::Agents {
         path: config_path.clone(),
         source,
     })?;
-    agents_spec::validate_config(&repo.profiles, &CommandsConfig::default(), &repo.teams).map_err(
-        |source| EffectiveConfigErr::Agents {
+    for (team_name, team) in &repo.teams.0 {
+        agents_spec::validate_team_structure(
+            team_name,
+            team,
+            &repo.profiles,
+            &CommandsConfig::default(),
+        )
+        .map_err(|source| EffectiveConfigErr::Agents {
             path: config_path.clone(),
             source,
+        })?;
+    }
+
+    let mut profile_unknown_keys = std::mem::take(&mut repo.profile_unknown_keys);
+    let mut subagent_unknown_keys = std::mem::take(&mut repo.subagent_unknown_keys);
+    let agents_input = repo
+        .profiles
+        .0
+        .into_iter()
+        .map(|(name, profile)| {
+            let unknown = profile_unknown_keys.remove(&name).unwrap_or_default();
+            (name, (profile, unknown))
+        })
+        .collect();
+    let subagents_input = repo
+        .subagent_profiles
+        .0
+        .into_iter()
+        .map(|(name, profile)| {
+            let unknown = subagent_unknown_keys.remove(&name).unwrap_or_default();
+            (name, (profile, unknown))
+        })
+        .collect();
+    let resolved = super::definitions::resolve_project_profiles(
+        super::definitions::ProjectProfilesInput {
+            config_path: &config_path,
+            contexts: machine_config.definition_contexts.as_ref(),
+            agents_home: config_root,
+            tiers: &machine_config.tiers,
+            auto_compact_default,
+            commands: &machine.commands,
+            machine_subagent_profiles,
+            agents: agents_input,
+            subagents: subagents_input,
         },
-    )?;
+        |name| failed_definitions.get(name).cloned(),
+    );
 
     let project_source = ProfileSource {
         path: config_path.clone(),
@@ -828,32 +894,72 @@ pub fn load_with_roots(
     };
     let repo_sources = AgentSpecSources {
         teams: Default::default(),
-        agent_profiles: repo
-            .profiles
-            .0
+        agent_profiles: resolved
+            .agents
             .keys()
             .map(|name| (name.clone(), project_source.clone()))
             .collect(),
-        subagent_profiles: repo
-            .subagent_profiles
-            .0
+        subagent_profiles: resolved
+            .subagents
             .keys()
             .map(|name| (name.clone(), project_source.clone()))
             .collect(),
         commands: Default::default(),
     };
 
+    let mut loaded_repo_profiles = ProfilesConfig::from(resolved.agents);
+    loaded_repo_profiles.set_failed_project_rows(resolved.failed_agents.clone());
     let mut profiles = machine.profiles.clone();
-    profiles.0.extend(repo.profiles.0);
+    profiles.0.extend(loaded_repo_profiles.0.clone());
+    for failed_name in resolved.failed_agents.keys() {
+        if profiles
+            .0
+            .get(failed_name)
+            .is_some_and(|row| !row.kind_base)
+        {
+            profiles.0.remove(failed_name);
+        }
+    }
+    profiles.set_failed_project_rows(resolved.failed_agents);
     let mut subagent_profiles = machine_subagent_profiles.clone();
-    subagent_profiles.0.extend(repo.subagent_profiles.0);
+    subagent_profiles.0.extend(resolved.subagents);
+    for failed_name in resolved.failed_subagents.keys() {
+        if subagent_profiles
+            .0
+            .get(failed_name)
+            .is_some_and(|row| !row.kind_base)
+        {
+            subagent_profiles.0.remove(failed_name);
+        }
+    }
+    subagent_profiles.set_failed_project_rows(resolved.failed_subagents);
+
     let mut teams = machine.teams.clone();
-    teams.0.extend(repo.teams.0);
-    agents_spec::validate_subagent_allowlists(&profiles, &subagent_profiles, &machine.commands)
-        .map_err(|source| EffectiveConfigErr::Agents {
-            path: config_path.clone(),
-            source,
-        })?;
+    let mut failed_project_teams = BTreeMap::new();
+    for (team_name, team) in repo.teams.0 {
+        match agents_spec::validate_team(
+            &team_name,
+            &team,
+            &loaded_repo_profiles,
+            &CommandsConfig::default(),
+        ) {
+            Ok(()) => {
+                teams.0.insert(team_name, team);
+            }
+            Err(LayoutErr::FailedProfile(detail)) => {
+                teams.0.remove(&team_name);
+                failed_project_teams.insert(team_name, detail);
+            }
+            Err(source) => {
+                return Err(EffectiveConfigErr::Agents {
+                    path: config_path.clone(),
+                    source,
+                });
+            }
+        }
+    }
+
+    let project_definition_errors = resolved.errors.iter().map(ToString::to_string).collect();
     Ok(LaunchAgents {
         env_reminder: repo.env_reminder.unwrap_or(machine.env_reminder),
         runtime_env: machine.runtime_env,
@@ -864,6 +970,8 @@ pub fn load_with_roots(
         subagent_profiles,
         teams,
         failed_definitions,
+        failed_project_teams,
+        project_definition_errors,
         set_failure,
         repo_sources,
         state: report.state,
@@ -948,6 +1056,30 @@ pub fn project_tasks_from_value(
 }
 
 impl LaunchAgents {
+    /// Formatted failure detail for a failed project team, project profile, or machine definition.
+    pub fn definition_failure_for(&self, name: &str) -> Option<String> {
+        self.failed_project_teams
+            .get(name)
+            .or_else(|| self.profiles.failed_project_rows().get(name))
+            .or_else(|| self.subagent_profiles.failed_project_rows().get(name))
+            .or_else(|| self.failed_definitions.get(name))
+            .cloned()
+    }
+
+    /// Ordered failure messages for trusted project definition rows that did not load.
+    pub fn project_definition_errors(&self) -> &[String] {
+        &self.project_definition_errors
+    }
+
+    /// Combined machine and project definition failures, with project rows winning collisions.
+    pub(crate) fn all_failed_definitions(&self) -> BTreeMap<String, String> {
+        let mut map = self.failed_definitions.clone();
+        map.extend(self.subagent_profiles.failed_project_rows().clone());
+        map.extend(self.profiles.failed_project_rows().clone());
+        map.extend(self.failed_project_teams.clone());
+        map
+    }
+
     /// Refuse every launch while a definition failure no single name owns stands.
     pub fn block_set_failure(&self) -> Result<()> {
         match &self.set_failure {
@@ -956,19 +1088,46 @@ impl LaunchAgents {
         }
     }
 
-    /// Refuse a name or its unshadowed terminal kind when its definition failed to load.
+    /// Refuse a bare team or `team.role` spec naming a failed project team ahead of any profile.
+    pub(crate) fn block_failed_team(&self, spec: &str) -> Result<()> {
+        let spec = spec.trim();
+        if let Some(detail) = self.failed_project_teams.get(spec).or_else(|| {
+            spec.split_once('.')
+                .and_then(|(team, _)| self.failed_project_teams.get(team))
+        }) {
+            return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
+        }
+        Ok(())
+    }
+
+    /// Refuse a name, team seat prefix, or unshadowed terminal kind when its definition failed.
     pub(crate) fn block_failed_profile(&self, name: &str, profiles: &ProfilesConfig) -> Result<()> {
         let name = name.trim();
+        if let Some(detail) = profiles.failed(name) {
+            return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
+        }
+        self.block_failed_team(name)?;
         if !profiles.0.contains_key(name) {
-            let kind = crate::agents::find_runtime(name)
+            if let Some(detail) = self.failed_definitions.get(name).or_else(|| {
+                name.split_once('.')
+                    .and_then(|(team, _)| self.failed_definitions.get(team))
+            }) {
+                return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
+            }
+            if let Some(kind) = crate::agents::find_runtime(name)
                 .map(crate::agents::Runtime::kind)
-                .filter(|kind| !profiles.0.contains_key(*kind));
-            return self.block_failed_reference(Some(name), kind);
+                .filter(|kind| !profiles.0.contains_key(*kind))
+                && let Some(detail) = self.failed_definitions.get(kind)
+            {
+                return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
+            }
+            return Ok(());
         }
         if let Ok(profile) = agents_spec::resolve_profile(name, profiles)
             && !profiles.0.contains_key(profile.kind.as_str())
+            && let Some(detail) = self.failed_definitions.get(profile.kind.as_str())
         {
-            self.block_failed_reference(Some(profile.kind.as_str()), None)?;
+            return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
         }
         Ok(())
     }
@@ -981,12 +1140,20 @@ impl LaunchAgents {
         fallback: Option<&ProfilesConfig>,
     ) -> Result<()> {
         let name = name.trim();
+        if let Some(detail) = own.failed(name) {
+            return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
+        }
         let table = if own.0.contains_key(own.key(name)) {
             own
-        } else if let Some(fb) = fallback
-            && fb.0.contains_key(fb.key(name))
-        {
-            fb
+        } else if let Some(fb) = fallback {
+            if let Some(detail) = fb.failed(name) {
+                return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
+            }
+            if fb.0.contains_key(fb.key(name)) {
+                fb
+            } else {
+                own
+            }
         } else {
             own
         };
@@ -1011,15 +1178,22 @@ impl LaunchAgents {
         Ok(())
     }
 
-    /// Refuse unresolved names whose Markdown definitions failed to load.
+    /// Refuse unresolved names whose definitions failed to load.
     pub fn block_failed_reference(
         &self,
         spec: Option<&str>,
         agent_override: Option<&str>,
     ) -> Result<()> {
         let spec = spec.map(str::trim);
+        let spec_cell = spec.and_then(|spec| spec.split_once(':').map(|(cell, _)| cell));
+        let spec_fast = spec_cell
+            .or(spec)
+            .and_then(|name| name.strip_suffix("-fast"))
+            .filter(|base| !base.is_empty());
         for name in [
             spec,
+            spec_cell,
+            spec_fast,
             agent_override.map(str::trim),
             spec.and_then(|spec| spec.split_once('.').map(|(team, _)| team)),
         ]
@@ -1027,8 +1201,8 @@ impl LaunchAgents {
         .flatten()
         .filter(|name| !name.is_empty())
         {
-            if let Some(detail) = self.failed_definitions.get(name) {
-                return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
+            if let Some(detail) = self.definition_failure_for(name) {
+                return Err(EffectiveConfigErr::FailedDefinition(detail));
             }
         }
         Ok(())
@@ -1115,7 +1289,7 @@ pub enum ProfileScope {
 /// Resolve a profile-level setting in launch chain order (L -> X -> final kind base) from
 /// in-memory tables without reading disk. An `agent_override` that no longer resolves reads
 /// as absent. When `direct_when_unchanged` is set and neither `--agent` nor a kind switch
-/// moved the profile, reads the profile row directly without walking TOML parents or kind bases.
+/// moved the profile, reads the profile row directly without walking parents or kind bases.
 #[expect(
     clippy::too_many_arguments,
     reason = "caller identity, launch scope, both profile tables, and unchanged-read mode are passed explicitly"
@@ -1373,7 +1547,8 @@ impl ProfileScope {
         recorded.unwrap_or(if child { Self::Subagents } else { Self::Agents })
     }
 
-    /// Select the scope and table, keeping agents-only team-role profiles on their table.
+    /// Select the scope and table, keeping agents-only team-role profiles on their table without
+    /// letting a failed project subagent row fall through to a same-named agents profile.
     pub fn resolve_launch<'a>(
         self,
         profile: Option<&str>,
@@ -1381,7 +1556,9 @@ impl ProfileScope {
         subagent_profiles: &'a ProfilesConfig,
     ) -> (Self, &'a ProfilesConfig) {
         let agents_only = profile.is_some_and(|name| {
-            !subagent_profiles.0.contains_key(name) && profiles.0.contains_key(name)
+            subagent_profiles.failed(name).is_none()
+                && !subagent_profiles.0.contains_key(name)
+                && profiles.0.contains_key(name)
         });
         if self == Self::Subagents && !agents_only {
             (Self::Subagents, subagent_profiles)
@@ -1523,20 +1700,13 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .map(toml::Value::try_into)
         .transpose()?
         .unwrap_or_default();
-    let profiles = value
-        .get("profiles")
-        .cloned()
-        .map(toml::Value::try_into)
-        .transpose()?
-        .unwrap_or_default();
-    let subagent_profiles = value
-        .get("subagents")
-        .and_then(toml::Value::as_table)
-        .and_then(|subagents| subagents.get("profiles"))
-        .cloned()
-        .map(toml::Value::try_into)
-        .transpose()?
-        .unwrap_or_default();
+    let (profiles, profile_unknown_keys) = parse_repo_profiles(value.get("profiles"))?;
+    let (subagent_profiles, subagent_unknown_keys) = parse_repo_profiles(
+        value
+            .get("subagents")
+            .and_then(toml::Value::as_table)
+            .and_then(|subagents| subagents.get("profiles")),
+    )?;
     let teams = value
         .get("agents")
         .and_then(toml::Value::as_table)
@@ -1550,6 +1720,8 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         lsp_servers,
         profiles,
         subagent_profiles,
+        profile_unknown_keys,
+        subagent_unknown_keys,
         teams,
     };
     for (scope, profiles) in [
@@ -1569,6 +1741,34 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         }
     }
     Ok(config)
+}
+
+fn parse_repo_profiles(
+    value: Option<&toml::Value>,
+) -> std::result::Result<(ProfilesConfig, BTreeMap<String, Vec<String>>), toml::de::Error> {
+    let Some(value) = value else {
+        return Ok((ProfilesConfig::default(), BTreeMap::new()));
+    };
+    let Some(table) = value.as_table() else {
+        let profiles: ProfilesConfig = value.clone().try_into()?;
+        return Ok((profiles, BTreeMap::new()));
+    };
+    let mut profiles = BTreeMap::new();
+    let mut unknown_keys = BTreeMap::new();
+    for (name, row_value) in table {
+        let mut ignored = Vec::new();
+        let profile: Profile = serde_ignored::deserialize(row_value.clone(), |path| {
+            let key = path.to_string();
+            if !ignored.contains(&key) {
+                ignored.push(key);
+            }
+        })?;
+        if !ignored.is_empty() {
+            unknown_keys.insert(name.clone(), ignored);
+        }
+        profiles.insert(name.clone(), profile);
+    }
+    Ok((ProfilesConfig::from(profiles), unknown_keys))
 }
 
 fn reject_project_tier(key: &str, model: Option<&str>) -> std::result::Result<(), toml::de::Error> {

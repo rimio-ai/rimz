@@ -56,13 +56,27 @@ fn long_cache_env(
 
 #[test]
 fn long_cache_follows_the_declared_seat_horizon() {
+    let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
-    let mut machine = crate::config::MachineConfig::default();
-    machine.agents.profiles = toml::from_str(
-        "[warm]\nagent = 'pi'\nkeep-warm = '2h'\n\
-         [cold]\nagent = 'warm'\nkeep-warm = 'off'",
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/pi.md"),
+        "---\ndescription: Pi base\n---\nPi house.\n",
     )
     .unwrap();
+    std::fs::write(
+        home.path().join("agents/warm.md"),
+        "---\ndescription: Warm pi\nagent: pi\nkeep-warm: 2h\n---\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("agents/cold.md"),
+        "---\ndescription: Cold pi\nagent: warm\nkeep-warm: off\n---\n",
+    )
+    .unwrap();
+    let mut machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
     machine.agents.teams = toml::from_str(
         "[forge]\nkeep-warm = 'off'\nroles = [\
          {role = 'warm', profile = 'cold', keep-warm = '2h'}]\n\
@@ -3270,7 +3284,7 @@ fn broken_effective_config_skips_launch_reminder() {
     std::fs::create_dir_all(&project_config).expect("create project config dir");
     std::fs::write(
         project_config.join("config.toml"),
-        "[profiles.child]\nagent = \"unknown-base\"\n",
+        "[profiles.child]\nagent = \"claude\"\nisolation = \"host\"\n",
     )
     .expect("write broken project config");
     crate::trust::grant_with_roots(project.path(), config.path()).expect("trust project");
@@ -6071,11 +6085,11 @@ fn unchanged_profile_reads_model_reminder_directly_and_changed_kind_uses_recorde
     for (rel, content) in [
         (
             "agents/claude.md",
-            "---\ndescription: Claude base\nmodel-reminder: true\n---\nClaude.",
+            "---\ndescription: Claude base\ntools: [Read]\nmodel-reminder: true\n---\nClaude.",
         ),
         (
             "agents/codex.md",
-            "---\ndescription: Codex base\nmodel-reminder: false\n---\nCodex.",
+            "---\ndescription: Codex base\ntools: [Read]\nmodel-reminder: false\n---\nCodex.",
         ),
         (
             "agents/reviewer.md",
@@ -6086,8 +6100,8 @@ fn unchanged_profile_reads_model_reminder_directly_and_changed_kind_uses_recorde
     }
     std::fs::write(
         project.join(".rimz/config.toml"),
-        "[profiles.parent]\nagent = 'claude'\nmodel-reminder = false\n\
-         [profiles.child]\nagent = 'parent'\n",
+        "[profiles.parent]\ndescription = 'Parent'\nagent = 'claude'\nmodel-reminder = false\n\
+         [profiles.child]\ndescription = 'Child'\nagent = 'parent'\n",
     )
     .unwrap();
     crate::trust::grant_with_roots(&project, root.path()).unwrap();
@@ -6129,9 +6143,9 @@ fn unchanged_profile_reads_model_reminder_directly_and_changed_kind_uses_recorde
             .contains(&format!("You are @{profile}, running on"))
     };
 
-    // Unchanged TOML child on claude with no override reads its own row directly (unset -> true),
-    // without walking to `parent` (`model-reminder = false`).
-    assert!(check_model_reminder("claude", "child"));
+    // Project TOML `child` inherits `model-reminder = false` from `parent` through the shared
+    // definition loader, matching Markdown inheritance.
+    assert!(!check_model_reminder("claude", "child"));
     assert!(!check_model_reminder("claude", "parent"));
     // Unchanged Markdown reviewer on claude gets claude base's true; when moved to codex with no
     // override (e.g. via `--model`), it reads under codex's base (false), not claude's.

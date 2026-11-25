@@ -30,17 +30,12 @@ fn team_roles_accept_bare_mini_runtime() {
 
 #[test]
 fn mini_runtime_is_explicit_and_rebases_with_the_engine() {
-    let mut profiles: ProfilesConfig = toml::from_str(
-        "[mini]\nagent = 'opencode-mini'\nmode = 'yolo'\nargs = '--keep'\n\
-         [child]\nagent = 'mini'\n[plain]\nagent = 'opencode'\n\
-         [writer]\nagent = 'claude'",
-    )
-    .unwrap();
-    profiles.0.get_mut("writer").unwrap().system_prompt_file =
-        Some(crate::config::PromptSource::Text {
-            origin: "writer.md".into(),
-            text: "Keep the job.".into(),
-        });
+    let profiles = toml_defs(
+        "[profiles.mini]\ndescription = 'Mini'\nagent = 'opencode-mini'\nmode = 'yolo'\nargs = '--keep'\n\
+         [profiles.child]\ndescription = 'Child'\nagent = 'mini'\n\
+         [profiles.plain]\ndescription = 'Plain'\nagent = 'opencode'\n\
+         [profiles.writer]\ndescription = 'Writer'\nagent = 'claude'\nsystem-prompt-file = '/prompts/writer.md'\n",
+    );
     let actual: Vec<_> = [
         ("mini", None),
         ("child", None),
@@ -85,7 +80,7 @@ fn mini_runtime_is_explicit_and_rebases_with_the_engine() {
         ("opencode", false, Some("writer")),
         ("opencode", true, Some("plain")),
         ("opencode", true, Some("opencode-mini")),
-        ("opencode", false, None),
+        ("opencode", false, Some("opencode")),
     ]
     .map(|(kind, mini, profile)| {
         Ok((
@@ -127,25 +122,48 @@ fn mini_runtime_is_listed_without_permission_or_fast_suffixes() {
 }
 
 #[test]
-fn mini_uses_the_canonical_base_and_toml_can_shadow_its_name() {
-    let profiles: ProfilesConfig = toml::from_str(
-        "[opencode]\nagent = 'opencode'\nsystem-prompt-file = 'base.md'\n\
-         [mini]\nagent = 'opencode-mini'",
-    )
-    .unwrap();
+fn mini_uses_the_canonical_base_and_project_cannot_shadow_its_name() {
+    let profiles = toml_defs("[profiles.mini]\ndescription = 'Mini'\nagent = 'opencode-mini'\n");
     for name in ["mini", "opencode-mini"] {
-        let actual = resolve_profile(name, &profiles)
-            .map(|resolved| (resolved.kind.to_string(), resolved.system_prompt_file))
-            .map_err(|error| error.to_string());
-        assert_eq!(
-            actual,
-            Ok(("opencode".into(), Some(PathBuf::from("base.md").into())))
+        let resolved = resolve_profile(name, &profiles).unwrap();
+        assert_eq!(resolved.kind.as_str(), "opencode");
+        assert!(
+            resolved
+                .system_prompt_file
+                .as_ref()
+                .is_some_and(|s| s.origin().ends_with("agents/opencode.md")),
+            "{name}: {:?}",
+            resolved.system_prompt_file
         );
     }
-    let profiles: ProfilesConfig = toml::from_str("[opencode-mini]\nagent = 'claude'").unwrap();
-    let cell = parse_cell("opencode-mini", &profiles, &CommandsConfig::default(), None).unwrap();
-    assert!(matches!(cell, Cell::Agent(cell)
-            if cell.kind == "claude" && !cell.args.iter().any(|arg| arg == "mini")));
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.opencode-mini]\ndescription = 'Shadow'\nagent = 'claude'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
+    let err = launch
+        .definition_failure_for("opencode-mini")
+        .expect("project row named opencode-mini must fail");
+    assert!(
+        err.contains("[profiles.opencode-mini]")
+            && err.contains("takes the name of an agent runtime"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -182,20 +200,18 @@ fn a_toml_plus_subagent_entry_is_refused_as_markdown_only() {
 
 #[test]
 fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
-    let profiles = profiles([
-        ("perf", profile("claude")),
-        ("assistant", profile("perf")),
-        ("forge.coder", profile("codex")),
+    let mut profiles = md_defs_raw(&[
         (
             "claude",
-            Profile {
-                kind_base: true,
-                effort: Some("low".into()),
-                fast: Some(crate::agents::Toggle::On),
-                ..profile("claude")
-            },
+            "---\ndescription: Claude base\ntools: [Read]\neffort: low\nfast: on\n---\nClaude.\n",
+        ),
+        ("perf", "---\ndescription: Perf\nagent: claude\n---\n"),
+        (
+            "assistant",
+            "---\ndescription: Assistant\nagent: perf\n---\n",
         ),
     ]);
+    profiles.0.insert("forge.coder".into(), profile("codex"));
     let commands = commands([("build", "printf ready")]);
     let teams = TeamsConfig(BTreeMap::from([
         ("forge".into(), team(vec![role("coder", "assistant")])),
@@ -255,10 +271,13 @@ fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
 
 #[test]
 fn team_summaries_follow_layout_or_distinct_role_kinds() {
-    let profiles = profiles([
-        ("worker", profile("claude")),
-        ("reviewer", profile("codex")),
-        ("alias", profile("worker")),
+    let profiles = md_defs(&[
+        ("worker", "---\ndescription: Worker\nagent: claude\n---\n"),
+        (
+            "reviewer",
+            "---\ndescription: Reviewer\nagent: codex\n---\n",
+        ),
+        ("alias", "---\ndescription: Alias\nagent: worker\n---\n"),
     ]);
     let mut configured = team(vec![
         role("plan", "alias"),
@@ -389,6 +408,121 @@ fn profile(agent: &str) -> Profile {
     }
 }
 
+fn md_defs_raw(files: &[(&str, &str)]) -> ProfilesConfig {
+    let home = tempfile::tempdir().expect("md_defs_raw home");
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for (name, content) in files {
+        std::fs::write(home.path().join(format!("agents/{name}.md")), content).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        home.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(
+        loaded.errors.is_empty(),
+        "md_defs_raw errors: {:?}",
+        loaded.errors
+    );
+    loaded.agent_profiles
+}
+
+fn md_defs(files: &[(&str, &str)]) -> ProfilesConfig {
+    let home = tempfile::tempdir().expect("md_defs home");
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for kind in [
+        "claude",
+        "codex",
+        "pi",
+        "opencode",
+        "antigravity",
+        "omp",
+        "qwen",
+        "minimax",
+    ] {
+        let tools = if matches!(kind, "claude" | "codex" | "antigravity") {
+            "tools: [Read, Skill]\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            home.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\n{tools}---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    for (name, content) in files {
+        std::fs::write(home.path().join(format!("agents/{name}.md")), content).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        home.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(
+        loaded.errors.is_empty(),
+        "md_defs errors: {:?}",
+        loaded.errors
+    );
+    loaded.agent_profiles
+}
+
+fn toml_defs_with_bases(bases: &[(&str, &str)], project_toml: &str) -> ProfilesConfig {
+    let home = tempfile::tempdir().expect("toml_defs home");
+    let project = tempfile::tempdir().expect("toml_defs project");
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for kind in [
+        "claude",
+        "codex",
+        "pi",
+        "opencode",
+        "antigravity",
+        "omp",
+        "qwen",
+        "minimax",
+    ] {
+        let tools = if matches!(kind, "claude" | "codex" | "antigravity") {
+            "tools: [Read, Skill]\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            home.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\n{tools}---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    for (name, content) in bases {
+        std::fs::write(home.path().join(format!("agents/{name}.md")), content).unwrap();
+    }
+    let cfg_path = home.path().join("config.toml");
+    let machine_toml = "[harness]\nauto_compact = 'off'\n";
+    std::fs::write(&cfg_path, machine_toml).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&cfg_path, machine_toml, home.path()).unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(project.path().join(".rimz/config.toml"), project_toml).unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
+    assert!(
+        launch.project_definition_errors().is_empty(),
+        "toml_defs errors: {:?}",
+        launch.project_definition_errors()
+    );
+    launch.profiles
+}
+
+fn toml_defs(project_toml: &str) -> ProfilesConfig {
+    toml_defs_with_bases(&[], project_toml)
+}
+
 #[test]
 fn tools_determine_skill_callability_after_layering_and_rebase() {
     let mut actual = Vec::new();
@@ -400,31 +534,26 @@ fn tools_determine_skill_callability_after_layering_and_rebase() {
         ("claude", Some(vec!["Skill", "Read"]), None, false),
         ("codex", Some(vec!["Skill", "Read"]), None, false),
         ("pi", Some(vec!["Skill", "Read"]), None, false),
-        ("claude", None, None, false),
-        ("codex", None, None, false),
         ("pi", None, None, false),
         ("claude", Some(vec!["Bash"]), Some("opencode"), false),
         ("omp", Some(vec!["Read"]), None, false),
     ] {
-        let mut parent = profile(kind);
-        parent.tools = tools.map(|tools| {
-            crate::agents::ToolSet::parse(&tools.into_iter().map(str::to_owned).collect::<Vec<_>>())
-                .unwrap()
-        });
-        let profiles = profiles([
-            ("parent", parent),
-            (
-                "child",
-                Profile {
-                    skills: Some(
-                        ["rimz-lsp", "rimz-subagents"]
-                            .map(|name| name.parse().unwrap())
-                            .to_vec(),
-                    ),
-                    ..profile("parent")
-                },
-            ),
-        ]);
+        let tools_line = tools.map_or(String::new(), |t| format!("tools: [{}]\n", t.join(", ")));
+        let base_file = format!("---\ndescription: {kind} base\n---\n{kind} house.\n");
+        let target_base =
+            target.map(|t| (t, format!("---\ndescription: {t} base\n---\n{t} house.\n")));
+        let parent_file = format!("---\ndescription: Parent\nagent: {kind}\n{tools_line}---\n");
+        let child_file = "---\ndescription: Child\nagent: parent\n---\n";
+        let mut files: Vec<(&str, String)> = vec![
+            (kind, base_file),
+            ("parent", parent_file),
+            ("child", child_file.to_owned()),
+        ];
+        if let Some((t, body)) = target_base {
+            files.push((t, body));
+        }
+        let file_refs: Vec<(&str, &str)> = files.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let profiles = md_defs_raw(&file_refs);
         for spec in ["parent", "child"] {
             let layout = resolve_spec_with_agent_override(
                 Some(spec),
@@ -438,7 +567,6 @@ fn tools_determine_skill_callability_after_layering_and_rebase() {
             let cell = layout.agent_cells().next().unwrap();
             let request =
                 crate::harness::launch::ExecRequest::fresh(cell, Default::default(), None, false);
-            assert_eq!(cell.skills, profiles.0[spec].skills);
             let case = format!("{kind} {spec} on {target:?}");
             actual.push((case.clone(), cell.no_skill_tool, request.no_skill_tool));
             expected.push((case, no_skill_tool, no_skill_tool));
@@ -449,11 +577,14 @@ fn tools_determine_skill_callability_after_layering_and_rebase() {
 
 #[test]
 fn pi_native_tools_render_portably_after_an_engine_switch() {
-    let worker = Profile {
-        tools: Some(crate::agents::ToolSet::parse(&["read".into(), "bash".into()]).unwrap()),
-        ..profile("pi")
-    };
-    let profiles = profiles([("worker", worker)]);
+    let profiles = md_defs_raw(&[
+        ("claude", "---\ndescription: Claude base\n---\nClaude.\n"),
+        ("pi", "---\ndescription: Pi base\n---\nPi.\n"),
+        (
+            "worker",
+            "---\ndescription: Worker\nagent: pi\ntools: [read, bash]\n---\n",
+        ),
+    ]);
     let layout = resolve_spec_with_agent_override(
         Some("worker"),
         &profiles,
@@ -465,43 +596,55 @@ fn pi_native_tools_render_portably_after_an_engine_switch() {
     .unwrap();
     let cell = layout.agent_cells().next().unwrap();
     assert_eq!(cell.kind, "claude");
-    assert_eq!(cell.args, ["--tools", "Read,Bash"]);
+    assert!(
+        cell.args.windows(2).any(|w| w == ["--tools", "Read,Bash"]),
+        "{:?}",
+        cell.args
+    );
 }
 
 #[test]
 fn tools_follow_nearest_role_value_with_explicit_empty_and_base_fallback() {
-    let mut parent = profile("claude");
-    parent.tools = Some(crate::agents::ToolSet::parse(&["Read".into()]).unwrap());
-    let child = profile("parent");
-    let empty = Profile {
-        tools: Some(crate::agents::ToolSet::parse(&[]).unwrap()),
-        ..profile("parent")
-    };
-    let base = Profile {
-        tools: Some(crate::agents::ToolSet::parse(&["Bash".into()]).unwrap()),
-        ..profile("pi")
-    };
-    let profiles = profiles([
-        ("parent", parent),
-        ("child", child),
-        ("empty", empty),
-        ("replacement", base),
-        ("bare", profile("claude")),
+    let profiles = md_defs_raw(&[
+        ("claude", "---\ndescription: Claude base\n---\nClaude.\n"),
+        ("pi", "---\ndescription: Pi base\n---\nPi.\n"),
+        (
+            "parent",
+            "---\ndescription: Parent\nagent: claude\ntools: [Read]\n---\n",
+        ),
+        ("child", "---\ndescription: Child\nagent: parent\n---\n"),
+        (
+            "empty",
+            "---\ndescription: Empty\nagent: parent\ntools: []\n---\n",
+        ),
+        (
+            "replacement",
+            "---\ndescription: Replacement\nagent: pi\ntools: [Bash]\n---\n",
+        ),
+        ("bare", "---\ndescription: Bare\nagent: pi\n---\n"),
     ]);
     for (spec, target, expected) in [
         (
             "child",
             "replacement",
-            vec!["--tools", "read", "--no-skills"],
+            vec!["--thinking", "xhigh", "--tools", "read", "--no-skills"],
         ),
-        ("empty", "replacement", vec!["--no-tools", "--no-skills"]),
+        (
+            "empty",
+            "replacement",
+            vec!["--thinking", "xhigh", "--no-tools", "--no-skills"],
+        ),
         (
             "bare",
             "replacement",
-            vec!["--tools", "bash", "--no-skills"],
+            vec!["--thinking", "xhigh", "--tools", "bash", "--no-skills"],
         ),
-        ("amp", "replacement", vec!["--tools", "bash", "--no-skills"]),
-        ("bare", "pi", vec![]),
+        (
+            "amp",
+            "replacement",
+            vec!["--thinking", "xhigh", "--tools", "bash", "--no-skills"],
+        ),
+        ("bare", "pi", vec!["--thinking", "xhigh"]),
     ] {
         let layout = resolve_spec_with_agent_override(
             Some(spec),
@@ -522,22 +665,24 @@ fn tools_follow_nearest_role_value_with_explicit_empty_and_base_fallback() {
 
 #[test]
 fn allowed_tools_survive_profile_cells_and_fresh_requests() {
-    let parent = Profile {
-        allowed_tools: Some(vec!["Bash(git *)".parse().unwrap()]),
-        ..profile("claude")
-    };
-    for child_rules in [None, Some(Vec::new()), Some(vec!["Read".parse().unwrap()])] {
-        let expected = child_rules.clone().or_else(|| parent.allowed_tools.clone());
-        let profiles = ProfilesConfig(BTreeMap::from([
-            ("parent".to_owned(), parent.clone()),
+    let parent_rules = vec!["Bash(git *)".parse().unwrap()];
+    for (child_yaml, child_rules) in [
+        ("", None),
+        ("allowed-tools: []\n", Some(Vec::new())),
+        (
+            "allowed-tools: [Read]\n",
+            Some(vec!["Read".parse().unwrap()]),
+        ),
+    ] {
+        let expected = child_rules.clone().or_else(|| Some(parent_rules.clone()));
+        let child_md = format!("---\ndescription: Child\nagent: parent\n{child_yaml}---\n");
+        let profiles = md_defs(&[
             (
-                "child".to_owned(),
-                Profile {
-                    allowed_tools: child_rules,
-                    ..profile("parent")
-                },
+                "parent",
+                "---\ndescription: Parent\nagent: claude\nallowed-tools: ['Bash(git *)']\n---\n",
             ),
-        ]));
+            ("child", &child_md),
+        ]);
         let resolved = resolve_profile("child", &profiles).unwrap();
         assert_eq!(resolved.allowed_tools, expected);
         let cell = agent_cell("child", &profiles, &CommandsConfig::default());
@@ -566,7 +711,7 @@ fn tools_survive_profile_cells_fresh_requests_and_the_exec_wire() {
         });
         let expected =
             expected.map(|names: Vec<&str>| names.iter().map(|s| (*s).to_owned()).collect());
-        let profiles = ProfilesConfig(BTreeMap::from([(
+        let profiles = ProfilesConfig::from(BTreeMap::from([(
             "worker".to_owned(),
             Profile {
                 tools,
@@ -590,22 +735,21 @@ fn tools_survive_profile_cells_fresh_requests_and_the_exec_wire() {
 #[test]
 fn allowed_tools_override_preserves_explicit_empty() {
     let base_rules = Some(vec!["Read".parse().unwrap()]);
-    for rules in [None, Some(Vec::new()), Some(vec!["Write".parse().unwrap()])] {
-        let profiles = profiles([
+    for (yaml, rules) in [
+        ("", None),
+        ("allowed-tools: []\n", Some(Vec::new())),
+        (
+            "allowed-tools: [Write]\n",
+            Some(vec!["Write".parse().unwrap()]),
+        ),
+    ] {
+        let worker_md = format!("---\ndescription: Worker\nagent: claude\n{yaml}---\n");
+        let profiles = md_defs(&[
             (
                 "target",
-                Profile {
-                    allowed_tools: base_rules.clone(),
-                    ..profile("codex")
-                },
+                "---\ndescription: Target\nagent: codex\nallowed-tools: [Read]\n---\n",
             ),
-            (
-                "worker",
-                Profile {
-                    allowed_tools: rules.clone(),
-                    ..profile("claude")
-                },
-            ),
+            ("worker", &worker_md),
         ]);
         assert_eq!(
             resolve_profile_under("worker", Some("target"), &profiles, None)
@@ -627,26 +771,21 @@ fn profile_skills_inherit_replace_and_clear() {
         .skills,
         None
     );
-    let parent = Profile {
-        skills: Some(vec!["merge".parse().unwrap()]),
-        ..profile("claude")
-    };
-    for child_skills in [
-        None,
-        Some(Vec::new()),
-        Some(vec!["rebase".parse().unwrap()]),
+    let parent_skills = Some(vec!["merge".parse().unwrap()]);
+    for (yaml, child_skills) in [
+        ("", None),
+        ("skills: []\n", Some(Vec::new())),
+        ("skills: [rebase]\n", Some(vec!["rebase".parse().unwrap()])),
     ] {
-        let expected = child_skills.clone().or_else(|| parent.skills.clone());
-        let profiles = ProfilesConfig(BTreeMap::from([
-            ("parent".to_owned(), parent.clone()),
+        let expected = child_skills.clone().or_else(|| parent_skills.clone());
+        let child_md = format!("---\ndescription: Child\nagent: parent\n{yaml}---\n");
+        let profiles = md_defs(&[
             (
-                "child".to_owned(),
-                Profile {
-                    skills: child_skills,
-                    ..profile("parent")
-                },
+                "parent",
+                "---\ndescription: Parent\nagent: claude\nskills: [merge]\n---\n",
             ),
-        ]));
+            ("child", &child_md),
+        ]);
         let resolved = resolve_profile("child", &profiles).unwrap();
         assert_eq!(resolved.skills, expected);
         assert_eq!(
@@ -658,17 +797,15 @@ fn profile_skills_inherit_replace_and_clear() {
 
 #[test]
 fn profile_isolation_inherits_without_becoming_a_launch_override() {
-    for (child, expected) in [("", "host"), ("isolation = 'scoped'", "scoped")] {
-        let profiles = ProfilesConfig(BTreeMap::from([
+    for (child, expected) in [("", "host"), ("isolation: scoped\n", "scoped")] {
+        let child_md = format!("---\ndescription: Child\nagent: parent\n{child}---\n");
+        let profiles = md_defs(&[
             (
-                "parent".to_owned(),
-                toml::from_str("agent = 'claude'\nisolation = 'host'").unwrap(),
+                "parent",
+                "---\ndescription: Parent\nagent: claude\nisolation: host\n---\n",
             ),
-            (
-                "child".to_owned(),
-                toml::from_str(&format!("agent = 'parent'\n{child}")).unwrap(),
-            ),
-        ]));
+            ("child", &child_md),
+        ]);
         let cell = agent_cell("child", &profiles, &CommandsConfig::default());
         let request =
             crate::harness::launch::ExecRequest::fresh(&cell, Default::default(), None, false);
@@ -681,21 +818,15 @@ fn profile_isolation_inherits_without_becoming_a_launch_override() {
 #[test]
 fn overridden_profile_skills_preserve_explicit_empty() {
     let base_skills = Some(vec!["merge".parse().unwrap()]);
-    let profiles = profiles([
+    let profiles = md_defs(&[
         (
             "target",
-            Profile {
-                skills: base_skills.clone(),
-                ..profile("codex")
-            },
+            "---\ndescription: Target\nagent: codex\nskills: [merge]\n---\n",
         ),
-        ("worker", profile("claude")),
+        ("worker", "---\ndescription: Worker\nagent: claude\n---\n"),
         (
             "cleared",
-            Profile {
-                skills: Some(Vec::new()),
-                ..profile("claude")
-            },
+            "---\ndescription: Cleared\nagent: claude\nskills: []\n---\n",
         ),
     ]);
     assert_eq!(
@@ -714,40 +845,27 @@ fn overridden_profile_skills_preserve_explicit_empty() {
 
 #[test]
 fn profile_mcps_inherit_replace_clear_and_survive_override() {
-    let parent = Profile {
-        mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
-        ..profile("claude")
-    };
-    for child_mcps in [
-        None,
-        Some(Vec::new()),
-        Some(vec!["github".parse().unwrap()]),
+    let parent_mcps = Some(vec!["rimz-lsp".parse().unwrap()]);
+    for (yaml, child_mcps) in [
+        ("", None),
+        ("mcps: []\n", Some(Vec::new())),
+        ("mcps: [github]\n", Some(vec!["github".parse().unwrap()])),
     ] {
-        let expected = child_mcps.clone().or_else(|| parent.mcps.clone());
-        let profiles = ProfilesConfig(BTreeMap::from([
-            ("parent".to_owned(), parent.clone()),
+        let expected = child_mcps.clone().or_else(|| parent_mcps.clone());
+        let child_md = format!("---\ndescription: Child\nagent: parent\n{yaml}---\n");
+        let leaf_md = format!("---\ndescription: Leaf\nagent: claude\n{yaml}---\n");
+        let profiles = md_defs(&[
             (
-                "child".to_owned(),
-                Profile {
-                    mcps: child_mcps.clone(),
-                    ..profile("parent")
-                },
+                "parent",
+                "---\ndescription: Parent\nagent: claude\nmcps: [rimz-lsp]\n---\n",
             ),
+            ("child", &child_md),
             (
-                "target".to_owned(),
-                Profile {
-                    mcps: parent.mcps.clone(),
-                    ..profile("codex")
-                },
+                "target",
+                "---\ndescription: Target\nagent: codex\nmcps: [rimz-lsp]\n---\n",
             ),
-            (
-                "leaf".to_owned(),
-                Profile {
-                    mcps: child_mcps,
-                    ..profile("claude")
-                },
-            ),
-        ]));
+            ("leaf", &leaf_md),
+        ]);
         assert_eq!(resolve_profile("child", &profiles).unwrap().mcps, expected);
         assert_eq!(
             agent_cell("child", &profiles, &CommandsConfig::default()).mcps,
@@ -765,21 +883,15 @@ fn profile_mcps_inherit_replace_clear_and_survive_override() {
 #[test]
 fn overridden_profile_isolation_keeps_the_job_default() {
     use crate::config::Isolation::{Host, Scoped};
-    let profiles = profiles([
+    let profiles = md_defs(&[
         (
             "target",
-            Profile {
-                isolation: Some(Scoped),
-                ..profile("codex")
-            },
+            "---\ndescription: Target\nagent: codex\nisolation: scoped\n---\n",
         ),
-        ("unset", profile("claude")),
+        ("unset", "---\ndescription: Unset\nagent: claude\n---\n"),
         (
             "host_job",
-            Profile {
-                isolation: Some(Host),
-                ..profile("claude")
-            },
+            "---\ndescription: Host job\nagent: claude\nisolation: host\n---\n",
         ),
     ]);
     assert_eq!(
@@ -797,11 +909,11 @@ fn overridden_profile_isolation_keeps_the_job_default() {
 }
 
 fn profiles(entries: impl IntoIterator<Item = (&'static str, Profile)>) -> ProfilesConfig {
-    ProfilesConfig(
+    ProfilesConfig::from(
         entries
             .into_iter()
             .map(|(name, profile)| (name.to_owned(), profile))
-            .collect(),
+            .collect::<BTreeMap<_, _>>(),
     )
 }
 
@@ -1419,46 +1531,19 @@ fn unknown_role_suggests_a_declared_role() {
 
 #[test]
 fn profile_inheritance_and_builtin_overrides_resolve() {
-    let profiles = profiles([
-        (
-            "base",
-            Profile {
-                agent: "codex".to_owned(),
-                model: Some("base-model".to_owned()),
-                auto_compact: Some("1m".to_owned()),
-                effort: Some("medium".to_owned()),
-                args: Some("--base".to_owned()),
-                ..profile("codex")
-            },
-        ),
-        (
-            "child",
-            Profile {
-                agent: "base".to_owned(),
-                effort: Some("high".to_owned()),
-                args: Some("--child".to_owned()),
-                auto_compact: Some("200k".to_owned()),
-                ..profile("base")
-            },
-        ),
-        (
-            "inherits-args",
-            Profile {
-                agent: "base".to_owned(),
-                model: Some("child-model".to_owned()),
-                ..profile("base")
-            },
-        ),
-        (
+    let profiles = toml_defs_with_bases(
+        &[(
             "claude",
-            Profile {
-                agent: "claude".to_owned(),
-                effort: Some("high".to_owned()),
-                ..profile("claude")
-            },
-        ),
-        ("claude-child", profile("claude")),
-    ]);
+            "---\ndescription: Claude base\ntools: [Read]\neffort: high\n---\nClaude.\n",
+        )],
+        "[profiles.base]\ndescription = 'Base'\nagent = 'codex'\nmodel = 'base-model'\n\
+         auto-compact = '1m'\neffort = 'medium'\nargs = '--base'\n\
+         [profiles.child]\ndescription = 'Child'\nagent = 'base'\neffort = 'high'\n\
+         args = '--child'\nauto-compact = '200k'\n\
+         [profiles.inherits-args]\ndescription = 'Inherits args'\nagent = 'base'\n\
+         model = 'child-model'\n\
+         [profiles.claude-child]\ndescription = 'Claude child'\nagent = 'claude'\n",
+    );
 
     let bare = resolve_profile("claude", &no_profiles()).expect("built-in");
     assert_eq!(bare.kind.as_str(), "claude");
@@ -1469,7 +1554,6 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
     );
     let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
-    assert_eq!(child.layers, ["child", "base"]);
     assert_eq!(child.launch.model.as_deref(), Some("base-model"));
     assert_eq!(child.launch.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
@@ -1490,38 +1574,16 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
 
 #[test]
 fn profile_cells_render_preset_args_and_carry_prompt_sources() {
-    let profiles = profiles([
-        (
-            "codex-deep",
-            Profile {
-                agent: "codex".to_owned(),
-                mode: Some(PermissionMode::Auto),
-                model: Some("gpt-5-codex".to_owned()),
-                auto_compact: Some("200k".to_owned()),
-                effort: Some("high".to_owned()),
-                args: Some("--profile reviewer".to_owned()),
-                ..profile("codex")
-            },
-        ),
-        (
-            "prompt-base",
-            Profile {
-                agent: "claude".to_owned(),
-                system_prompt_file: Some("/prompts/base.md".into()),
-                auto_compact: Some("200000".to_owned()),
-                append_system_prompt_files: vec!["/prompts/base-fragment.md".into()],
-                ..profile("claude")
-            },
-        ),
-        (
-            "prompt-child",
-            Profile {
-                agent: "prompt-base".to_owned(),
-                append_system_prompt_files: vec!["/prompts/child-fragment.md".into()],
-                ..profile("prompt-base")
-            },
-        ),
-    ]);
+    let profiles = toml_defs(
+        "[profiles.codex-deep]\ndescription = 'Codex deep'\nagent = 'codex'\nmode = 'auto'\n\
+         model = 'gpt-5-codex'\nauto-compact = '200k'\neffort = 'high'\n\
+         args = '--profile reviewer'\n\
+         [profiles.prompt-base]\ndescription = 'Prompt base'\nagent = 'claude'\n\
+         system-prompt-file = '/prompts/base.md'\nauto-compact = '200000'\n\
+         append-system-prompt-files = ['/prompts/base-fragment.md']\n\
+         [profiles.prompt-child]\ndescription = 'Prompt child'\nagent = 'prompt-base'\n\
+         append-system-prompt-files = ['/prompts/child-fragment.md']\n",
+    );
     let spec =
         parse_layout_spec("codex-deep,prompt-child", &profiles, &no_commands()).expect("profiles");
 
@@ -1541,6 +1603,15 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
             .launch
             .permission_args(PermissionMode::Auto),
     );
+    let base_tools =
+        crate::agents::ToolSet::parse(&["Read".into(), "Skill".into()]).expect("tools");
+    let (tool_args, _) = crate::agents::render_launch_tool_args(
+        &AgentKind::new_unchecked("codex"),
+        Some(&base_tools),
+        None,
+    )
+    .expect("codex tools");
+    expected.extend(tool_args);
     expected.extend(["--profile".to_owned(), "reviewer".to_owned()]);
     assert_eq!(codex.args, expected);
     assert_eq!(codex.launch.mode, Some(PermissionMode::Auto));
@@ -1564,55 +1635,31 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
             PathBuf::from("/prompts/child-fragment.md").into()
         ]
     );
-    assert_eq!(prompt.args, ["--autocompact", "200000"]);
+    assert!(
+        prompt
+            .args
+            .windows(2)
+            .any(|w| w == ["--autocompact", "200000"]),
+        "{:?}",
+        prompt.args
+    );
 }
 
 #[test]
 fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            empty_dir: None,
-            allowed_tools: None,
-            variant: None,
-            definition_renders: None,
-            definition: None,
-            kind_defaults: false,
-            kind_base: false,
-            tools: None,
-            auto_compact_default: None,
-            model_tier: None,
-            tier_stamp: Some(Box::new(crate::agents::TierStamp {
-                tier: crate::config::tiers::ModelTier::Senior,
-                model: "claude-model".to_owned(),
-                used_tier: None,
-                unbuildable: Vec::new(),
-                skipped: Vec::new(),
-            })),
-            agent: "claude".to_owned(),
-            isolation: None,
-            description: None,
-            subagents: None,
-            model_reminder: None,
-            keep_warm: None,
-            idle_compact: None,
-            smart_compact: None,
-            mode: Some(PermissionMode::Auto),
-            model: Some("claude-model".to_owned()),
-            effort: Some("high".to_owned()),
-            fast: None,
-            code_mode: None,
-            budget: Some("$4".to_owned()),
-            timeout: None,
-            auto_compact: Some("200k".to_owned()),
-            system_prompt_file: Some("/prompts/system.md".into()),
-            append_system_prompt_files: vec!["/prompts/fragment.md".into()],
-            skills: None,
-            seat_consensus_skill: false,
-            mcps: None,
-            args: Some("--strict-mcp-config".to_owned()),
-        },
-    )]);
+    let mut profiles = toml_defs(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\nmode = 'auto'\n\
+         model = 'claude-model'\neffort = 'high'\nbudget = '$4'\nauto-compact = '200k'\n\
+         system-prompt-file = '/prompts/system.md'\n\
+         append-system-prompt-files = ['/prompts/fragment.md']\nargs = '--strict-mcp-config'\n",
+    );
+    profiles.0.get_mut("planner").unwrap().tier_stamp = Some(Box::new(crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: "claude-model".to_owned(),
+        used_tier: None,
+        unbuildable: Vec::new(),
+        skipped: Vec::new(),
+    }));
     let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
@@ -1741,34 +1788,19 @@ fn auto_compact_validates_portable_token_range() {
 
 #[test]
 fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
-    let profiles = profiles([
-        (
-            "planner",
-            Profile {
-                agent: "claude".to_owned(),
-                effort: Some("high".to_owned()),
-                append_system_prompt_files: vec!["/prompts/planner.md".into()],
-                ..profile("claude")
-            },
-        ),
-        (
-            "codex",
-            Profile {
-                agent: "codex".to_owned(),
-                model: Some("codex-model".to_owned()),
-                append_system_prompt_files: vec!["/prompts/codex.md".into()],
-                args: Some("--base-only".to_owned()),
-                ..profile("codex")
-            },
-        ),
-    ]);
+    let profiles = toml_defs(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\neffort = 'high'\n\
+         append-system-prompt-files = ['/prompts/planner.md']\n\
+         [profiles.codex-x]\ndescription = 'Codex X'\nagent = 'codex'\nmodel = 'codex-model'\n\
+         append-system-prompt-files = ['/prompts/codex.md']\nargs = '--base-only'\n",
+    );
     let spec = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
-        Some("codex"),
+        Some("codex-x"),
     )
     .expect("profile base");
 
@@ -1788,75 +1820,60 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
 
 #[test]
 fn same_kind_and_chained_overrides_resolve_without_drops() {
-    let self_named = profiles([("codex", profile("codex"))]);
+    let self_named = md_defs_raw(&[(
+        "codex",
+        "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.\n",
+    )]);
     let resolved = resolve_profile("codex", &self_named).unwrap();
     assert_eq!(resolved.layers, ["codex"]);
     assert_eq!(resolved.kind, "codex");
     assert_eq!(resolved.into_chain(), ["codex"]);
     let rebased = resolve_profile_under("codex", Some("claude"), &self_named, None).unwrap();
-    assert_eq!(rebased.layers, ["codex"]);
     assert_eq!(rebased.kind, "claude");
     assert_eq!(rebased.into_chain(), ["codex", "claude"]);
 
-    let mut writer_profiles = profiles([("writer", profile("claude")), ("fast", profile("codex"))]);
-    for (name, agent_override, layers, kind, chain) in [
-        (
-            "writer",
-            Some("writer"),
-            vec!["writer"],
-            "claude",
-            vec!["writer", "claude"],
-        ),
+    let writer_profiles = md_defs(&[
+        ("writer", "---\ndescription: Writer\nagent: claude\n---\n"),
+        ("fast", "---\ndescription: Fast\nagent: codex\n---\n"),
+    ]);
+    for (name, agent_override, kind, chain) in [
+        ("writer", Some("writer"), "claude", vec!["writer", "claude"]),
         (
             "writer",
             Some("fast"),
-            vec!["writer", "fast"],
             "codex",
             vec!["writer", "fast", "codex"],
         ),
-        ("claude", None, Vec::new(), "claude", vec!["claude"]),
+        ("claude", None, "claude", vec!["claude"]),
     ] {
         let resolved = resolve_profile_under(name, agent_override, &writer_profiles, None).unwrap();
-        assert_eq!(resolved.layers, layers);
         assert_eq!(resolved.kind, kind);
         assert_eq!(resolved.into_chain(), chain);
     }
-    writer_profiles
-        .0
-        .insert("claude".to_owned(), profile("claude"));
     let original = resolve_profile("writer", &writer_profiles).unwrap();
     let rebased = resolve_profile_under("writer", Some("writer"), &writer_profiles, None).unwrap();
-    assert_eq!(original.layers, ["writer", "claude"]);
-    assert_eq!(rebased.layers, original.layers);
     assert_eq!(rebased.kind, original.kind);
     assert_eq!(rebased.into_chain(), original.into_chain());
 
-    let profiles = profiles([
-        (
-            "planner",
-            Profile {
-                agent: "claude".to_owned(),
-                model: Some("claude-model".to_owned()),
-                args: Some("--profile planner".to_owned()),
-                ..profile("claude")
-            },
-        ),
-        ("switch", profile("switch-base")),
-        ("switch-base", profile("codex")),
-    ]);
-    for (agent_override, layers, kind) in [
-        (None, vec!["planner"], "claude"),
-        (Some("claude"), vec!["planner"], "claude"),
-        (Some(" codex "), vec!["planner"], "codex"),
+    let profiles = toml_defs(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         model = 'claude-model'\nargs = '--profile planner'\n\
+         [profiles.switch-base]\ndescription = 'Switch base'\nagent = 'codex'\n\
+         [profiles.switch]\ndescription = 'Switch'\nagent = 'switch-base'\n",
+    );
+    for (agent_override, kind, expected_chain) in [
+        (None, "claude", vec!["planner", "claude"]),
+        (Some("claude"), "claude", vec!["planner", "claude"]),
+        (Some(" codex "), "codex", vec!["planner", "codex"]),
         (
             Some("switch"),
-            vec!["planner", "switch", "switch-base"],
             "codex",
+            vec!["planner", "switch", "switch-base", "codex"],
         ),
     ] {
         let resolved = resolve_profile_under("planner", agent_override, &profiles, None).unwrap();
-        assert_eq!(resolved.layers, layers);
         assert_eq!(resolved.kind, kind);
+        assert_eq!(resolved.into_chain(), expected_chain);
     }
     let same = resolve_spec_with_agent_override(
         Some("planner"),
@@ -1904,56 +1921,31 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
 
 #[test]
 fn kind_defaults_follow_the_final_kind_and_model() {
-    use PermissionMode::{Plan, Yolo};
+    use PermissionMode::Plan;
 
-    let profiles = profiles([
+    let profiles = md_defs(&[
         (
             "markdown",
-            Profile {
-                kind_defaults: true,
-                ..profile("claude")
-            },
+            "---\ndescription: Markdown\nagent: claude\n---\n",
         ),
-        ("inherited", profile("markdown")),
         (
-            "qwen-job",
-            Profile {
-                kind_defaults: true,
-                ..profile("qwen")
-            },
+            "inherited",
+            "---\ndescription: Inherited\nagent: markdown\n---\n",
         ),
-        ("toml", profile("claude")),
-        (
-            "codex-base",
-            Profile {
-                kind_defaults: true,
-                ..profile("codex")
-            },
-        ),
+        ("qwen-job", "---\ndescription: Qwen\nagent: qwen\n---\n"),
+        ("toml", "---\ndescription: Toml\nagent: claude\n---\n"),
+        ("codex-base", "---\ndescription: Codex\nagent: codex\n---\n"),
         (
             "fable-base",
-            Profile {
-                model: Some("fable".into()),
-                ..profile("claude")
-            },
+            "---\ndescription: Fable\nagent: claude\nmodel: fable\n---\n",
         ),
         (
             "written",
-            Profile {
-                kind_defaults: true,
-                mode: Some(Plan),
-                effort: Some("high".into()),
-                ..profile("claude")
-            },
+            "---\ndescription: Written\nagent: claude\nmode: plan\neffort: high\n---\n",
         ),
         (
             "written-base",
-            Profile {
-                kind_defaults: true,
-                mode: Some(Yolo),
-                effort: Some("low".into()),
-                ..profile("codex")
-            },
+            "---\ndescription: Written base\nagent: codex\nmode: yolo\neffort: low\n---\n",
         ),
     ]);
     let mut actual = Vec::new();
@@ -1979,7 +1971,7 @@ fn kind_defaults_follow_the_final_kind_and_model() {
             None,
             Some("xhigh"),
         ),
-        ("toml", Some("codex"), "codex", None, None, None),
+        ("toml", Some("codex"), "codex", None, None, Some("xhigh")),
         (
             "toml",
             Some("codex-base"),
@@ -2067,27 +2059,15 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
     use crate::agents::Toggle;
     use PermissionMode::{Auto, Plan};
 
-    let profiles = profiles([
-        (
-            "worker",
-            Profile {
-                kind_defaults: true,
-                ..profile("claude")
-            },
-        ),
+    let profiles = md_defs(&[
+        ("worker", "---\ndescription: Worker\nagent: claude\n---\n"),
         (
             "fable",
-            Profile {
-                model: Some("fable".into()),
-                ..profile("claude")
-            },
+            "---\ndescription: Fable\nagent: claude\nmodel: fable\n---\n",
         ),
         (
             "fast-codex",
-            Profile {
-                fast: Some(Toggle::On),
-                ..profile("codex")
-            },
+            "---\ndescription: Fast codex\nagent: codex\nfast: on\n---\n",
         ),
     ]);
     let mut actual = Vec::new();
@@ -2230,25 +2210,14 @@ fn virtual_cells_render_only_their_own_permission_posture_with_kind_defaults() {
 
 #[test]
 fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
-    let engine = |agent: &str, model: Option<&str>, effort: Option<&str>| Profile {
-        model: model.map(str::to_owned),
-        effort: effort.map(str::to_owned),
-        ..profile(agent)
-    };
-    let profiles = profiles([
-        (
-            "fixer",
-            Profile {
-                system_prompt_file: Some("/prompts/fixer.md".into()),
-                ..engine("claude", Some("fable"), Some("medium"))
-            },
-        ),
-        ("opus", engine("claude", Some("opus[1m]"), Some("high"))),
-        ("plain", profile("claude")),
-        ("luna", engine("codex", None, Some("xhigh"))),
-        ("pi", engine("pi", None, None)),
-        ("pi-model", engine("pi", Some("replacement"), None)),
-    ]);
+    let profiles = toml_defs(
+        "[profiles.fixer]\ndescription = 'Fixer'\nagent = 'claude'\nmodel = 'fable'\n\
+         effort = 'medium'\nsystem-prompt-file = '/prompts/fixer.md'\n\
+         [profiles.opus]\ndescription = 'Opus'\nagent = 'claude'\nmodel = 'opus[1m]'\neffort = 'high'\n\
+         [profiles.plain]\ndescription = 'Plain'\nagent = 'claude'\n\
+         [profiles.luna]\ndescription = 'Luna'\nagent = 'codex'\neffort = 'xhigh'\n\
+         [profiles.pi-model]\ndescription = 'Pi model'\nagent = 'pi'\nmodel = 'replacement'\n",
+    );
     for (agent_override, kind, model, effort, chain) in [
         ("pi", "pi", Some("fable"), "medium", vec!["fixer", "pi"]),
         (
@@ -2302,27 +2271,12 @@ fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
 
 #[test]
 fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
-    let profiles = profiles([
-        (
-            "planner",
-            Profile {
-                agent: "claude".to_owned(),
-                model: Some("profile-model".to_owned()),
-                auto_compact: Some("200k".to_owned()),
-                ..profile("claude")
-            },
-        ),
-        (
-            "codex",
-            Profile {
-                agent: "codex".to_owned(),
-                model: Some("codex-model".to_owned()),
-                effort: Some("high".to_owned()),
-                args: Some("--base-only".to_owned()),
-                ..profile("codex")
-            },
-        ),
-    ]);
+    let profiles = toml_defs(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         model = 'profile-model'\nauto-compact = '200k'\n\
+         [profiles.codex-x]\ndescription = 'Codex X'\nagent = 'codex'\n\
+         model = 'codex-model'\neffort = 'high'\nargs = '--base-only'\n",
+    );
     let mut planner = role("planner", "planner");
     planner.args = Some("--role-arg".to_owned());
     planner.auto_compact = Some("300K".to_owned());
@@ -2338,7 +2292,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
         &profiles,
         &no_commands(),
         &teams,
-        Some("codex"),
+        Some("codex-x"),
     )
     .expect("team rebase");
     let cell = agent_at(&team_spec, 0, 0);
@@ -2362,7 +2316,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
         &profiles,
         &no_commands(),
         &teams,
-        Some("codex"),
+        Some("codex-x"),
     )
     .expect("single role rebase");
     assert_eq!(
@@ -2376,7 +2330,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
         &profiles,
         &no_commands(),
         &TeamsConfig::default(),
-        Some("codex"),
+        Some("codex-x"),
     )
     .expect("virtual rebase");
     let virtual_cell = agent_at(&virtual_spec, 0, 0);
@@ -2393,7 +2347,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
         virtual_cell
             .args
             .windows(2)
-            .any(|args| { args == ["-c".to_owned(), "model_reasoning_effort=high".to_owned(),] })
+            .any(|args| { args == ["-c".to_owned(), "model_reasoning_effort=high".to_owned()] })
     );
     assert!(virtual_cell.args.iter().any(|arg| arg == "--base-only"));
     let posture = crate::agents::find_definition("codex")
@@ -2407,55 +2361,73 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
 #[test]
 fn profile_resolution_rejects_invalid_chains_and_fields() {
     assert_eq!(
-        resolve_profile("planner", &profiles([("planner", profile("ghost"))])),
+        resolve_profile("ghost", &no_profiles()),
         Err(LayoutErr::UnknownProfileBase {
-            profile: "planner".to_owned(),
+            profile: "ghost".to_owned(),
             base: "ghost".to_owned(),
         })
     );
-    let cycle = profiles([
-        ("a", profile("b")),
-        ("b", profile("c")),
-        ("c", profile("a")),
-    ]);
-    assert!(matches!(
-        resolve_profile("a", &cycle),
-        Err(LayoutErr::ProfileCycle { chain }) if chain == "a -> b -> c -> a"
-    ));
-
-    let mut chain = BTreeMap::new();
-    for i in 0..=MAX_PROFILE_DEPTH {
-        chain.insert(format!("p{i}"), profile(&format!("p{}", i + 1)));
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::write(
+        home.path().join("agents/claude.md"),
+        "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+    )
+    .unwrap();
+    let mut deep = String::new();
+    deep.push_str("[profiles.d0]\ndescription = 'd0'\nagent = 'claude'\n");
+    for i in 1..=16 {
+        deep.push_str(&format!(
+            "[profiles.d{i}]\ndescription = 'd{i}'\nagent = 'd{}'\n",
+            i - 1
+        ));
     }
-    assert_eq!(
-        resolve_profile("p0", &ProfilesConfig(chain)),
-        Err(LayoutErr::ProfileChainTooDeep {
-            profile: "p0".to_owned(),
-        })
+    let toml_text = format!(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'ghost'\n\
+         [profiles.a]\ndescription = 'A'\nagent = 'b'\n\
+         [profiles.b]\ndescription = 'B'\nagent = 'c'\n\
+         [profiles.c]\ndescription = 'C'\nagent = 'a'\n\
+         [profiles.bad-args]\ndescription = 'Bad args'\nagent = 'claude'\nargs = \"'unterminated\"\n\
+         {deep}"
+    );
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(project.path().join(".rimz/config.toml"), toml_text).unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
+    assert!(
+        launch
+            .definition_failure_for("planner")
+            .unwrap()
+            .contains("follows unknown profile 'ghost'")
+    );
+    assert!(
+        launch
+            .definition_failure_for("a")
+            .unwrap()
+            .contains("follows itself")
+    );
+    assert!(
+        launch
+            .definition_failure_for("d16")
+            .unwrap()
+            .contains("deeper than 16")
+    );
+    assert!(
+        launch
+            .definition_failure_for("bad-args")
+            .unwrap()
+            .contains("shell quoting")
     );
 
-    let bad_args = profiles([(
-        "bad-args",
-        Profile {
-            agent: "claude".to_owned(),
-            args: Some("'unterminated".to_owned()),
-            ..profile("claude")
-        },
-    )]);
-    assert!(matches!(
-        parse_layout_spec("bad-args", &bad_args, &no_commands()),
-        Err(LayoutErr::InvalidProfile { profile, reason })
-            if profile == "bad-args" && reason.contains("shell quoting")
-    ));
-
-    let unsupported = profiles([(
-        "pi-deep",
-        Profile {
-            agent: "pi".to_owned(),
-            system_prompt_file: Some(PathBuf::from("/abs/prompt.md").into()),
-            ..profile("pi")
-        },
-    )]);
+    let unsupported = toml_defs(
+        "[profiles.pi-deep]\ndescription = 'Pi deep'\nagent = 'pi'\n\
+         system-prompt-file = '/abs/prompt.md'\n",
+    );
     let unsupported =
         parse_layout_spec("pi-deep", &unsupported, &no_commands()).expect("prompt stays typed");
     assert_eq!(
@@ -2470,19 +2442,15 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
 #[test]
 fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
     use crate::agents::Toggle;
-    let fast = |agent: &str, fast: Option<Toggle>| Profile {
-        fast,
-        ..profile(agent)
-    };
-    let profiles = ProfilesConfig(BTreeMap::from([
-        ("swift".to_owned(), fast("codex", Some(Toggle::On))),
-        ("steady".to_owned(), fast("swift", Some(Toggle::Off))),
-        ("heir".to_owned(), fast("swift", None)),
-        ("cleared".to_owned(), fast("swift", Some(Toggle::Unset))),
-        ("plain".to_owned(), fast("codex", None)),
-        ("quick".to_owned(), fast("cursor", Some(Toggle::On))),
-        ("calm".to_owned(), fast("cursor", Some(Toggle::Off))),
-    ]));
+    let profiles = toml_defs(
+        "[profiles.swift]\ndescription = 'Swift'\nagent = 'codex'\nfast = 'on'\n\
+         [profiles.steady]\ndescription = 'Steady'\nagent = 'swift'\nfast = 'off'\n\
+         [profiles.heir]\ndescription = 'Heir'\nagent = 'swift'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'swift'\nfast = 'unset'\n\
+         [profiles.plain]\ndescription = 'Plain'\nagent = 'codex'\n\
+         [profiles.quick]\ndescription = 'Quick'\nagent = 'cursor'\nfast = 'on'\n\
+         [profiles.calm]\ndescription = 'Calm'\nagent = 'cursor'\nfast = 'off'\n",
+    );
     let on = ["-c", "service_tier=fast", "-c", "features.fast_mode=true"];
     let off = ["-c", "service_tier=default"];
     let has =
@@ -2543,52 +2511,24 @@ fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
 
 #[test]
 fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
-    use crate::agents::Toggle;
-    let code_mode = |agent: &str, code_mode: Option<Toggle>| Profile {
-        code_mode,
-        ..profile(agent)
-    };
-    let profiles = ProfilesConfig(BTreeMap::from([
-        (
-            "coder".to_owned(),
-            Profile {
-                args: Some("--raw".to_owned()),
-                ..code_mode("pi", Some(Toggle::On))
-            },
-        ),
-        ("plain".to_owned(), code_mode("coder", Some(Toggle::Off))),
-        ("heir".to_owned(), code_mode("coder", None)),
-        (
-            "cleared".to_owned(),
-            code_mode("coder", Some(Toggle::Unset)),
-        ),
-        (
-            "excluding".to_owned(),
-            Profile {
-                args: Some("--exclude-tools read,grep".to_owned()),
-                ..code_mode("pi", Some(Toggle::Off))
-            },
-        ),
-        ("tooled".to_owned(), code_mode("claude", Some(Toggle::On))),
-        ("muted".to_owned(), code_mode("claude", Some(Toggle::Off))),
-        ("pilot".to_owned(), code_mode("copilot", Some(Toggle::On))),
-        ("base".to_owned(), code_mode("pi", None)),
-        (
-            "cdx".to_owned(),
-            Profile {
-                args: Some("--raw".to_owned()),
-                ..code_mode("codex", Some(Toggle::On))
-            },
-        ),
-        ("cdx-off".to_owned(), code_mode("cdx", Some(Toggle::Off))),
-        ("cdx-heir".to_owned(), code_mode("cdx", None)),
-        (
-            "cdx-unset".to_owned(),
-            code_mode("cdx", Some(Toggle::Unset)),
-        ),
-        ("cdx-base".to_owned(), code_mode("codex", Some(Toggle::Off))),
-        ("cdx-bare".to_owned(), code_mode("codex", None)),
-    ]));
+    let profiles = toml_defs(
+        "[profiles.coder]\ndescription = 'Coder'\nagent = 'pi'\ncode-mode = 'on'\nargs = '--raw'\n\
+         [profiles.plain]\ndescription = 'Plain'\nagent = 'coder'\ncode-mode = 'off'\n\
+         [profiles.heir]\ndescription = 'Heir'\nagent = 'coder'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'coder'\ncode-mode = 'unset'\n\
+         [profiles.excluding]\ndescription = 'Excluding'\nagent = 'pi'\ncode-mode = 'off'\n\
+         args = '--exclude-tools read,grep'\n\
+         [profiles.tooled]\ndescription = 'Tooled'\nagent = 'claude'\ncode-mode = 'on'\n\
+         [profiles.muted]\ndescription = 'Muted'\nagent = 'claude'\ncode-mode = 'off'\n\
+         [profiles.pilot]\ndescription = 'Pilot'\nagent = 'copilot'\ncode-mode = 'on'\n\
+         [profiles.base]\ndescription = 'Base'\nagent = 'pi'\n\
+         [profiles.cdx]\ndescription = 'Cdx'\nagent = 'codex'\ncode-mode = 'on'\nargs = '--raw'\n\
+         [profiles.cdx-off]\ndescription = 'Cdx off'\nagent = 'cdx'\ncode-mode = 'off'\n\
+         [profiles.cdx-heir]\ndescription = 'Cdx heir'\nagent = 'cdx'\n\
+         [profiles.cdx-unset]\ndescription = 'Cdx unset'\nagent = 'cdx'\ncode-mode = 'unset'\n\
+         [profiles.cdx-base]\ndescription = 'Cdx base'\nagent = 'codex'\ncode-mode = 'off'\n\
+         [profiles.cdx-bare]\ndescription = 'Cdx bare'\nagent = 'codex'\n",
+    );
     // Codex renders exactly one of on and off, before the raw args, wherever the setting
     // came from.
     let codex_switch = |args: &[String]| {
@@ -2668,22 +2608,25 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
         excluding.args
     );
 
-    // Claude without a tools list carries code mode on the cell for the env alone.
+    // Claude project profiles inherit the kind base's tools list, so code-mode appends REPL,Poll
+    // while off renders the kind base's tools alone and carries off on the cell for the env.
     let claude = profile_cell("tooled", &profiles).unwrap();
     assert_eq!(claude.launch.code_mode, Some(true));
     assert!(
-        !claude.args.iter().any(|arg| arg == "--tools"),
+        claude
+            .args
+            .windows(2)
+            .any(|part| part == ["--tools", "Read,Skill,REPL,Poll"]),
         "{:?}",
         claude.args
     );
-    assert_eq!(
-        claude.args,
-        profile_cell("claude", &profiles).unwrap().args,
-        "on renders the argv unset renders"
-    );
     let muted = profile_cell("muted", &profiles).unwrap();
     assert_eq!(muted.launch.code_mode, Some(false));
-    assert_eq!(muted.args, claude.args, "Claude's off rides the env alone");
+    assert_eq!(
+        muted.args,
+        ["--effort", "xhigh", "--tools", "Read,Skill"],
+        "Claude's off leaves REPL/Poll out and rides the env alone"
+    );
 
     let pilot = profile_cell("pilot", &profiles).expect("unsupported code mode renders nothing");
     assert_eq!(
@@ -2792,25 +2735,17 @@ fn mapped_permission_cells_accept_empty_vectors_without_widening_other_kinds() {
 #[test]
 fn alias_words_read_their_kinds_base_as_the_kind_spelling_does() {
     let pairs = [("agy", "antigravity"), ("mcode", "minimax")];
-    let profiles = profiles(pairs.iter().flat_map(|&(alias, kind)| {
-        [
+    let profiles = toml_defs_with_bases(
+        &[
             (
-                kind,
-                Profile {
-                    kind_base: true,
-                    ..profile(kind)
-                },
+                "antigravity",
+                "---\ndescription: Antigravity base\ntools: [Read]\n---\nAntigravity.\n",
             ),
-            (
-                if alias == "agy" {
-                    "worker-agy"
-                } else {
-                    "worker-mcode"
-                },
-                profile(alias),
-            ),
-        ]
-    }));
+            ("minimax", "---\ndescription: MiniMax base\n---\nMiniMax.\n"),
+        ],
+        "[profiles.worker-agy]\ndescription = 'Agy worker'\nagent = 'agy'\n\
+         [profiles.worker-mcode]\ndescription = 'Mcode worker'\nagent = 'mcode'\n",
+    );
     let cell = |raw: &str| {
         parse_layout_spec(raw, &profiles, &no_commands())
             .ok()
@@ -3476,13 +3411,16 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
 
 #[test]
 fn team_prompt_base_checks_wait_for_resolution_after_agent_rebase() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            system_prompt_file: Some("/prompts/planner.md".into()),
-            ..profile("claude")
-        },
-    )]);
+    let profiles = md_defs_raw(&[
+        (
+            "claude",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+        ),
+        (
+            "planner",
+            "---\ndescription: Planner\nagent: claude\n---\nPlanner craft.\n",
+        ),
+    ]);
     let mut actual = Vec::new();
     for layout in [None, Some("worker".to_owned())] {
         let mut candidate = team(vec![role("worker", "codex")]);
@@ -3579,46 +3517,17 @@ fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
 }
 
 #[test]
-fn team_prompt_without_base_names_the_shadowing_profile() {
-    let mut profiles = profiles([
-        ("worker", profile("claude")),
+fn staged_team_roles_with_a_base_prompt_carry_the_team_layer() {
+    let profiles = md_defs_raw(&[
         (
             "claude",
-            Profile {
-                system_prompt_file: Some("/prompts/claude.md".into()),
-                ..profile("claude")
-            },
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+        ),
+        (
+            "planner",
+            "---\ndescription: Planner\nagent: claude\n---\nPlanner craft.\n",
         ),
     ]);
-    let mut candidate = team(vec![role("worker", "worker")]);
-    candidate.roles[0].owns = vec!["Plan".into()];
-    candidate.consensus_file = Some("/prompts/consensus.md".into());
-    let teams = TeamsConfig(BTreeMap::from([("crew".into(), candidate)]));
-    resolve_team("crew", &teams, &profiles, &no_commands()).expect("loaded kind base");
-
-    profiles.0.insert("claude".into(), profile("claude"));
-    let actual = ["crew", "crew.worker"].map(|spec| {
-        resolve_spec(Some(spec), &profiles, &no_commands(), &teams)
-            .unwrap_err()
-            .to_string()
-    });
-    let expected = "team `crew` sets consensus-file, consensus, or \
-                    append-system-prompt-files but role \
-                    `worker` (claude) has no base system prompt to compose them onto; add \
-                    system-prompt-file to role worker or its profile, or add system-prompt-file \
-                    to profile `claude`, which replaces the claude kind base, or remove that profile";
-    assert_eq!(actual, [expected, expected]);
-}
-
-#[test]
-fn staged_team_roles_with_a_base_prompt_carry_the_team_layer() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            system_prompt_file: Some("/prompts/planner.md".into()),
-            ..profile("claude")
-        },
-    )]);
     let resolve = |team: &Team, spec: &str, agent: Option<&str>| {
         resolve_spec_with_agent_override(
             Some(spec),
@@ -3778,22 +3687,10 @@ fn team_roles_accept_implicit_builtin_profiles() {
 
 #[test]
 fn team_roles_allow_clearing_inherited_empty_dir() {
-    let profiles = profiles([
-        (
-            "searcher",
-            Profile {
-                empty_dir: Some(true),
-                ..profile("claude")
-            },
-        ),
-        (
-            "local",
-            Profile {
-                empty_dir: Some(false),
-                ..profile("searcher")
-            },
-        ),
-    ]);
+    let profiles = toml_defs(
+        "[profiles.searcher]\ndescription = 'Searcher'\nagent = 'claude'\nempty-dir = true\n\
+         [profiles.local]\ndescription = 'Local'\nagent = 'searcher'\nempty-dir = false\n",
+    );
     let teams = TeamsConfig(BTreeMap::from([(
         "forge".to_owned(),
         team(vec![role("planner", "local")]),
@@ -4076,67 +3973,27 @@ fn antigravity_layouts_render_catalog_effort_and_the_max_fallback() {
 fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
     use crate::agents::Toggle::{Off, On, Unset};
 
-    let base =
-        |agent: &str, fast, code_mode, effort: Option<&str>, auto_compact: Option<&str>| Profile {
-            kind_base: true,
-            fast,
-            code_mode,
-            effort: effort.map(str::to_owned),
-            auto_compact: auto_compact.map(str::to_owned),
-            system_prompt_file: Some("/prompts/base.md".into()),
-            ..profile(agent)
-        };
-    let profiles = profiles([
-        (
-            "claude",
-            base("claude", Some(On), Some(On), Some("low"), Some("300k")),
-        ),
-        (
-            "codex",
-            base("codex", Some(Off), None, Some("medium"), None),
-        ),
-        (
-            "markdown",
-            Profile {
-                kind_defaults: true,
-                ..profile("claude")
-            },
-        ),
-        ("toml", profile("claude")),
-        (
-            "cleared",
-            Profile {
-                fast: Some(Unset),
-                code_mode: Some(Unset),
-                ..profile("claude")
-            },
-        ),
-        ("heir", profile("cleared")),
-        (
-            "eager",
-            Profile {
-                fast: Some(On),
-                ..profile("claude")
-            },
-        ),
-        (
-            "eager-heir",
-            Profile {
-                fast: Some(Unset),
-                ..profile("eager")
-            },
-        ),
-        (
-            "written",
-            Profile {
-                fast: Some(Off),
-                code_mode: Some(Off),
-                effort: Some("high".into()),
-                auto_compact: Some("200k".into()),
-                ..profile("claude")
-            },
-        ),
-    ]);
+    let profiles = toml_defs_with_bases(
+        &[
+            (
+                "claude",
+                "---\ndescription: Claude base\ntools: [Read]\nfast: on\ncode-mode: on\n\
+                 effort: low\nauto-compact: 300k\n---\nClaude.\n",
+            ),
+            (
+                "codex",
+                "---\ndescription: Codex base\ntools: [Read]\nfast: off\neffort: medium\n---\nCodex.\n",
+            ),
+        ],
+        "[profiles.markdown]\ndescription = 'Markdown'\nagent = 'claude'\n\
+         [profiles.toml]\ndescription = 'Toml'\nagent = 'claude'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'claude'\nfast = 'unset'\ncode-mode = 'unset'\n\
+         [profiles.heir]\ndescription = 'Heir'\nagent = 'cleared'\n\
+         [profiles.eager]\ndescription = 'Eager'\nagent = 'claude'\nfast = 'on'\n\
+         [profiles.eager-heir]\ndescription = 'Eager heir'\nagent = 'eager'\nfast = 'unset'\n\
+         [profiles.written]\ndescription = 'Written'\nagent = 'claude'\nfast = 'off'\ncode-mode = 'off'\n\
+         effort = 'high'\nauto-compact = '200k'\n",
+    );
     let tuning = |resolved: ResolvedProfile| {
         (
             resolved.kind.to_string(),
@@ -4338,60 +4195,51 @@ fn markdown_kind_base_fields_reach_bare_kind_launches() {
 
 #[test]
 fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_user_lists() {
-    let granted = |name: &str| {
-        crate::agents::ToolSet::parse(&["Bash".into(), "Skill".into()])
-            .unwrap()
-            .with_rimz(vec![name.parse().unwrap()])
-    };
-    let profiles = profiles([
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    std::fs::create_dir_all(home.path().join("skills/rimz")).unwrap();
+    std::fs::create_dir_all(home.path().join("skills/work")).unwrap();
+    std::fs::create_dir_all(home.path().join("skills/rimz-reflect")).unwrap();
+    for skill in ["rimz", "work", "rimz-reflect"] {
+        std::fs::write(
+            home.path().join(format!("skills/{skill}/SKILL.md")),
+            format!("---\nname: {skill}\ndescription: {skill}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+    for (name, body) in [
         (
             "claude",
-            Profile {
-                kind_base: true,
-                tools: Some(granted("rimz-lsp")),
-                ..profile("claude")
-            },
-        ),
-        ("child", profile("claude")),
-        (
-            "own",
-            Profile {
-                skills: Some(vec!["rimz".parse().unwrap()]),
-                ..profile("claude")
-            },
+            "---\ndescription: Claude base\ncapabilities: [bash, rimz-lsp]\n---\nClaude.\n",
         ),
         (
-            "served",
-            Profile {
-                mcps: Some(vec!["rimz".parse().unwrap()]),
-                ..profile("claude")
-            },
-        ),
-        (
-            "listed",
-            Profile {
-                skills: Some(vec!["work".parse().unwrap(), "rimz-wait".parse().unwrap()]),
-                ..profile("claude")
-            },
-        ),
-        (
-            "reflects",
-            Profile {
-                skills: Some(vec![
-                    "work".parse().unwrap(),
-                    "rimz-reflect".parse().unwrap(),
-                ]),
-                ..profile("claude")
-            },
+            "codex",
+            "---\ndescription: Codex base\ncapabilities: [bash, rimz-wait]\n---\nCodex.\n",
         ),
         (
             "switched",
-            Profile {
-                tools: Some(granted("rimz-wait")),
-                ..profile("codex")
-            },
+            "---\ndescription: Switched\nagent: codex\ncapabilities: [bash, rimz-wait]\n---\n",
         ),
-    ]);
+    ] {
+        std::fs::write(home.path().join(format!("agents/{name}.md")), body).unwrap();
+    }
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.child]\ndescription = 'Child'\nagent = 'claude'\n\
+         [profiles.own]\ndescription = 'Own'\nagent = 'claude'\nskills = ['rimz']\n\
+         [profiles.served]\ndescription = 'Served'\nagent = 'claude'\nmcps = ['rimz']\n\
+         [profiles.listed]\ndescription = 'Listed'\nagent = 'claude'\nskills = ['work', 'rimz-wait']\n\
+         [profiles.reflects]\ndescription = 'Reflects'\nagent = 'claude'\nskills = ['work', 'rimz-reflect']\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&home.path().join("config.toml"), "", home.path())
+            .unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
     let grant = |resolved: ResolvedProfile| {
         resolved
             .tools
@@ -4400,49 +4248,54 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
             .map(|grant| grant.iter().map(ToString::to_string).collect::<Vec<_>>())
     };
     let lsp = Some(vec!["rimz-lsp".to_owned()]);
-    assert_eq!(grant(resolve_profile("child", &profiles).unwrap()), lsp);
     assert_eq!(
-        grant(resolve_profile_under("switched", Some("claude"), &profiles, None).unwrap()),
+        grant(resolve_profile("child", &launch.profiles).unwrap()),
+        lsp
+    );
+    assert_eq!(
+        grant(resolve_profile_under("switched", Some("claude"), &launch.profiles, None).unwrap()),
         Some(vec!["rimz-wait".to_owned()])
     );
     // A skill named exactly `rimz` is the user's own, as is a `rimz-*` skill alone; in `mcps`,
     // `rimz` is RimZ's server.
-    assert_eq!(grant(resolve_profile("own", &profiles).unwrap()), lsp);
-    assert_eq!(grant(resolve_profile("reflects", &profiles).unwrap()), lsp);
-    let error = resolve_profile("served", &profiles)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains(
-            "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz`;"
-        ),
-        "{error}"
+    assert_eq!(
+        grant(resolve_profile("own", &launch.profiles).unwrap()),
+        lsp
     );
-    let error = resolve_profile("listed", &profiles)
-        .unwrap_err()
-        .to_string();
+    assert_eq!(
+        grant(resolve_profile("reflects", &launch.profiles).unwrap()),
+        lsp
+    );
+    let served_err = launch
+        .definition_failure_for("served")
+        .expect("served refuses at build time");
     assert!(
-        error.contains(
-            "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz-wait`; \
-             beside `capabilities:` RimZ's MCP capabilities go only in the kind base's"
-        ),
-        "{error}"
+        served_err.contains("[profiles.served]") && served_err.contains("capabilities"),
+        "{served_err}"
+    );
+    let listed_err = launch
+        .definition_failure_for("listed")
+        .expect("listed refuses at build time");
+    assert!(
+        listed_err.contains("[profiles.listed]") && listed_err.contains("rimz-wait"),
+        "{listed_err}"
     );
 }
 
 #[test]
 fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_replay() {
     let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     std::fs::create_dir(root.path().join("teams")).unwrap();
     for (rel, content) in [
         (
             "agents/claude.md",
-            "---\ndescription: Claude base\n---\nClaude house.",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude house.",
         ),
         (
             "agents/codex.md",
-            "---\ndescription: Codex base\n---\nCodex house.",
+            "---\ndescription: Codex base\ntools: [Read]\n---\nCodex house.",
         ),
         (
             "agents/parent.md",
@@ -4468,46 +4321,37 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
     ] {
         std::fs::write(root.path().join(rel), content).unwrap();
     }
-    let loaded = crate::config::definitions::load(
-        root.path(),
-        crate::config::definitions::SkillCheck::Skip,
-        &CommandsConfig::default(),
-        &root.path().join("config.toml"),
-        &crate::config::tiers::TierConfig::default(),
-        None,
+    let machine =
+        crate::config::MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path())
+            .unwrap();
+    assert!(machine.notices.definition_errors.is_empty());
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.toml_l]\ndescription = 'TOML L'\nagent = 'claude'\nmodel = 'opus'\n\
+         effort = 'low'\nargs = '--claude-only'\n\
+         [profiles.toml_x_base]\ndescription = 'TOML X base'\nagent = 'codex'\n\
+         model = 'sol'\neffort = 'high'\n\
+         [profiles.toml_x]\ndescription = 'TOML X'\nagent = 'toml_x_base'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), root.path()).unwrap();
+    assert!(
+        launch.project_definition_errors().is_empty(),
+        "{:?}",
+        launch.project_definition_errors()
     );
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let mut profiles = loaded.agent_profiles;
-    profiles.0.insert(
-        "toml_l".into(),
-        Profile {
-            model: Some("opus".into()),
-            effort: Some("low".into()),
-            args: Some("--claude-only".into()),
-            ..profile("claude")
-        },
-    );
-    profiles.0.insert(
-        "toml_x_base".into(),
-        Profile {
-            model: Some("sol".into()),
-            effort: Some("high".into()),
-            ..profile("codex")
-        },
-    );
-    profiles.0.insert("toml_x".into(), profile("toml_x_base"));
-
-    // Markdown team seat: role writes model: sonnet and effort: low; X (astra) writes model: astra
-    // and effort: high. X replaces the role's model, while the role's effort beats X's, and fresh
-    // launch equals replay.
-    let forge = &loaded.teams.0["forge"];
+    let profiles = launch.profiles;
+    let forge = &launch.teams.0["forge"];
     let lead_binding = &forge.roles[0];
     let fresh_layout = resolve_spec_with_agent_override(
         Some("forge"),
         &profiles,
         &profiles,
         &CommandsConfig::default(),
-        &loaded.teams,
+        &launch.teams,
         Some("astra"),
     )
     .expect("fresh forge --agent astra");
@@ -4617,15 +4461,17 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
     use crate::config::AutoCompactDefault;
 
     let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("agents")).unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
     for (rel, content) in [
         (
             "agents/claude.md",
-            "---\ndescription: Claude base\n---\nClaude.",
+            "---\ndescription: Claude base\ntools: [Bash]\n---\nClaude.",
         ),
         (
             "agents/antigravity.md",
-            "---\ndescription: Agy base\n---\nAgy.",
+            "---\ndescription: Agy base\ntools: [Bash]\n---\nAgy.",
         ),
         ("agents/pi.md", "---\ndescription: Pi base\n---\nPi."),
         (
@@ -4643,6 +4489,13 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
     ] {
         std::fs::write(root.path().join(rel), content).unwrap();
     }
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[profiles.toml_claude]\ndescription = 'TOML Claude'\nagent = 'claude'\n\
+         [profiles.toml_agy]\ndescription = 'TOML Agy'\nagent = 'antigravity'\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
 
     let cases = [
         (
@@ -4722,30 +4575,30 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (default, target, agent_override, want) in cases {
-        let loaded = crate::config::definitions::load(
-            root.path(),
-            crate::config::definitions::SkillCheck::Skip,
-            &CommandsConfig::default(),
-            &root.path().join("config.toml"),
-            &crate::config::tiers::TierConfig::default(),
-            default,
+        let machine_toml = match default {
+            Some(AutoCompactDefault::BuiltIn) => String::new(),
+            Some(AutoCompactDefault::Tokens(n)) => format!("[harness]\nauto_compact = '{n}'\n"),
+            None => "[harness]\nauto_compact = 'off'\n".to_owned(),
+        };
+        let cfg_path = root.path().join("config.toml");
+        std::fs::write(&cfg_path, &machine_toml).unwrap();
+        let machine =
+            crate::config::MachineConfig::parse_text(&cfg_path, &machine_toml, root.path())
+                .unwrap();
+        assert!(
+            machine.notices.definition_errors.is_empty(),
+            "{:?}",
+            machine.notices.definition_errors
         );
-        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let mut profiles = loaded.agent_profiles;
-        profiles.0.insert(
-            "toml_claude".into(),
-            Profile {
-                auto_compact_default: default,
-                ..profile("claude")
-            },
+        let launch =
+            crate::config::effective::load_with_roots(&machine, project.path(), root.path())
+                .unwrap();
+        assert!(
+            launch.project_definition_errors().is_empty(),
+            "{:?}",
+            launch.project_definition_errors()
         );
-        profiles.0.insert(
-            "toml_agy".into(),
-            Profile {
-                auto_compact_default: default,
-                ..profile("antigravity")
-            },
-        );
+        let profiles = launch.profiles;
         let base = resolve_agent_override(agent_override, &profiles, None).unwrap();
         let cell = profile_cell_with_base_override(target, &profiles, base.as_ref(), None).unwrap();
         actual.push((

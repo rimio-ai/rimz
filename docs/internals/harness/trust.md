@@ -52,7 +52,7 @@ A profile's and a role's `append-system-prompt-files` serialize under the singul
 
 ### What stays outside the hash
 
-Every other key deserializes leniently and never touches the hash. `trust::ProjectConfig` ignores unknown keys, so display keys such as `display_name` and `sidebar_width` pass through. The project loaders accept these keys, and the hash leaves them out because they shape RimZ's own policy, display, or scheduling, not the command that runs:
+Every other key deserializes leniently in `trust::ProjectConfig` and never touches the hash, so display keys such as `display_name` and `sidebar_width` pass through trust reads. On a trusted launch load, each `[profiles.<name>]` and `[subagents.profiles.<name>]` row resolves through the shared definition loader, so unknown keys inside a profile row refuse that row without invalidating the trust hash or breaking sibling rows. The project loaders accept the keys below, and the hash leaves them out because they shape RimZ's own policy, display, or scheduling, not the command that runs:
 
 | Table | Unhashed keys |
 | --- | --- |

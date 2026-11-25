@@ -883,7 +883,7 @@ fn plan_settlement(
     }
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
-    let (teams, profiles, subagent_profiles, warning) =
+    let (teams, profiles, subagent_profiles, failed_definitions, warning) =
         effective_teams_and_profiles(machine, project_root, &availability);
     let mut planned = plan_recovery(
         projection,
@@ -893,6 +893,7 @@ fn plan_settlement(
         project_root,
         machine,
         &(teams, profiles, subagent_profiles),
+        &failed_definitions,
         logins,
         agent_shell,
         ambient,
@@ -938,7 +939,13 @@ fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
     availability: &crate::harness::plan::LaunchAvailability,
-) -> (TeamsConfig, ProfilesConfig, ProfilesConfig, Option<String>) {
+) -> (
+    TeamsConfig,
+    ProfilesConfig,
+    ProfilesConfig,
+    BTreeMap<String, String>,
+    Option<String>,
+) {
     let launch = crate::config::effective::load(machine, project_root)
         .map_err(|error| error.to_string())
         .and_then(|mut launch| {
@@ -956,21 +963,29 @@ fn effective_teams_and_profiles(
             Ok(launch)
         });
     match launch {
-        Ok(launch) => (
-            launch.teams,
-            launch.profiles,
-            launch.subagent_profiles,
-            None,
-        ),
-        Err(error) => (
-            TeamsConfig::default(),
-            machine.agents.profiles.clone(),
-            machine.subagents.profiles.clone(),
-            Some(format!(
-                "effective agent config unavailable: {error}; \
-                 recovery ran with machine profiles and no team definitions"
-            )),
-        ),
+        Ok(launch) => {
+            let failed_definitions = launch.all_failed_definitions();
+            (
+                launch.teams,
+                launch.profiles,
+                launch.subagent_profiles,
+                failed_definitions,
+                None,
+            )
+        }
+        Err(error) => {
+            let failed_definitions = machine.failed_definition_details();
+            (
+                TeamsConfig::default(),
+                machine.agents.profiles.clone(),
+                machine.subagents.profiles.clone(),
+                failed_definitions,
+                Some(format!(
+                    "effective agent config unavailable: {error}; \
+                     recovery ran with machine profiles and no team definitions"
+                )),
+            )
+        }
     }
 }
 
@@ -986,6 +1001,7 @@ fn plan_recovery(
     project_root: &Path,
     machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig, ProfilesConfig),
+    failed_definitions: &BTreeMap<String, String>,
     logins: Option<&crate::agents::RoomAccounts>,
     agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
     ambient: &BTreeMap<String, String>,
@@ -1014,7 +1030,7 @@ fn plan_recovery(
         false,
         &projection.agents,
         agent_liveness,
-        |name| machine.definition_failure_for(name),
+        |name| failed_definitions.get(name).cloned(),
     );
     let mut health = BTreeMap::new();
     let mut sandbox = None;

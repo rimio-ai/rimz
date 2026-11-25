@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn tier_profiles_show_concrete_models_and_fallback_in_cards_and_json() {
-        let profiles = rimz::config::ProfilesConfig(std::collections::BTreeMap::from([(
+        let profiles = rimz::config::ProfilesConfig::from(std::collections::BTreeMap::from([(
             "planner".into(),
             rimz::config::Profile {
                 agent: "claude".into(),
@@ -585,17 +585,15 @@ mod tests {
             let shown = allowed_tools
                 .as_ref()
                 .is_some_and(|rules| !rules.is_empty());
-            let profiles = rimz::config::ProfilesConfig(
-                [(
-                    "fixer".into(),
+            let profiles =
+                rimz::config::ProfilesConfig::from(std::collections::BTreeMap::from([(
+                    "fixer".to_owned(),
                     rimz::config::Profile {
                         allowed_tools,
                         description: Some("Keeps branch current".into()),
                         ..profile("claude")
                     },
-                )]
-                .into(),
-            );
+                )]));
             let commands = rimz::config::CommandsConfig::default();
             let sources = rimz::config::AgentSpecSources::default();
             let catalog = rimz::harness::subagent_policy::catalog(
@@ -644,17 +642,32 @@ mod tests {
 
     #[test]
     fn chained_profiles_resolve_the_provider_for_brand_tint() {
-        let profiles = rimz::config::ProfilesConfig(
-            [
-                ("deep".to_owned(), profile("planner")),
-                ("planner".to_owned(), profile("claude")),
-                ("claude".to_owned(), profile("claude")),
-            ]
-            .into(),
-        );
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join("agents")).expect("agents dir");
+        std::fs::write(
+            home.path().join("agents/claude.md"),
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+        )
+        .expect("write claude base");
+        std::fs::write(
+            home.path().join("agents/planner.md"),
+            "---\ndescription: Planner\nagent: claude\n---\n",
+        )
+        .expect("write planner");
+        std::fs::write(
+            home.path().join("agents/deep.md"),
+            "---\ndescription: Deep\nagent: planner\n---\n",
+        )
+        .expect("write deep");
+        let machine = rimz::config::MachineConfig::parse_text(
+            &home.path().join("config.toml"),
+            "",
+            home.path(),
+        )
+        .expect("load machine config");
 
         let reports = available_profiles(
-            &profiles,
+            &machine.agents.profiles,
             &rimz::config::CommandsConfig::default(),
             &rimz::config::AgentSpecSources::default(),
             ProfileScope::Agents,
@@ -663,7 +676,7 @@ mod tests {
             .iter()
             .find(|report| report.name == "deep")
             .expect("deep profile");
-        assert_eq!(deep.agent.as_deref(), Some("planner"));
+        assert_eq!(deep.agent.as_deref(), Some("claude"));
         assert_eq!(deep.brand_kind.as_deref(), Some("claude"));
         assert!(
             serde_json::to_value(deep)
@@ -671,18 +684,22 @@ mod tests {
                 .get("brand_kind")
                 .is_none()
         );
+
+        let chained = rimz::config::ProfilesConfig::from(std::collections::BTreeMap::from([
+            ("deep".to_owned(), profile("planner")),
+            ("planner".to_owned(), profile("claude")),
+            ("claude".to_owned(), profile("claude")),
+        ]));
+        assert_eq!(provider_brand_kind("planner", &chained), "claude");
     }
 
     #[test]
     fn team_role_profiles_split_from_standalone_profiles() {
-        let profiles = rimz::config::ProfilesConfig(
-            [
-                ("forge.coder".to_owned(), profile("claude")),
-                ("gone.coder".to_owned(), profile("claude")),
-                ("coder".to_owned(), profile("claude")),
-            ]
-            .into(),
-        );
+        let profiles = rimz::config::ProfilesConfig::from(std::collections::BTreeMap::from([
+            ("forge.coder".to_owned(), profile("claude")),
+            ("gone.coder".to_owned(), profile("claude")),
+            ("coder".to_owned(), profile("claude")),
+        ]));
         let commands =
             rimz::config::CommandsConfig([("forge.lint".to_owned(), "lint".to_owned())].into());
         let teams =
@@ -708,13 +725,10 @@ mod tests {
 
     #[test]
     fn cyclic_profile_brand_falls_back_to_the_raw_agent() {
-        let profiles = rimz::config::ProfilesConfig(
-            [
-                ("planner".to_owned(), profile("reviewer")),
-                ("reviewer".to_owned(), profile("planner")),
-            ]
-            .into(),
-        );
+        let profiles = rimz::config::ProfilesConfig::from(std::collections::BTreeMap::from([
+            ("planner".to_owned(), profile("reviewer")),
+            ("reviewer".to_owned(), profile("planner")),
+        ]));
 
         assert_eq!(provider_brand_kind("reviewer", &profiles), "reviewer");
     }

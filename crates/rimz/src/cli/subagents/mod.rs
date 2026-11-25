@@ -984,6 +984,7 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
             .project_root
     };
     let effective = rimz::config::effective::load(&config, &project_root)?;
+    crate::cli::report_project_definition_errors(&effective)?;
     effective.overlay_profile_sources(&mut sources);
     let catalog = rimz::harness::subagent_policy::catalog(
         caller.as_ref().and_then(|caller| caller.profile.as_deref()),

@@ -231,13 +231,18 @@ fn resolve_targets(
     worktree: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<Vec<Target>> {
-    let (teams, profiles) = super::list::effective_catalog(globals)?;
+    let effective = super::list::effective_catalog(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     references
         .into_iter()
         .map(|reference| {
             let (team, lane) = super::team_lane(reference, worktree.clone())?;
-            super::validate_team_name(&team, &teams, &profiles)?;
+            if !effective.teams.0.contains_key(&team)
+                && let Some(detail) = effective.definition_failure_for(&team)
+            {
+                bail!("{detail}");
+            }
+            super::validate_team_name(&team, &effective.teams, &effective.profiles)?;
             let target = super::cohort::Target::Team {
                 team: &team,
                 lane: lane.as_deref(),

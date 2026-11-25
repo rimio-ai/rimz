@@ -705,6 +705,8 @@ fn restart_posture_refuses_failed_kind_chains_before_degrading() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("agents")).unwrap();
     std::fs::write(dir.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+    std::fs::create_dir(dir.path().join("teams")).unwrap();
+    std::fs::write(dir.path().join("teams/crew.md"), "invalid frontmatter").unwrap();
     let workspace =
         crate::WorkspaceResolver::resolve_under(dir.path(), None, &dir.path().join("rimz-home"))
             .unwrap();
@@ -758,6 +760,17 @@ fn restart_posture_refuses_failed_kind_chains_before_degrading() {
     assert_eq!(
         Vec::from(actual),
         vec![machine.definition_failure_for("claude"); 5]
+    );
+    let mut team_seat =
+        crate::testkit::agent_state("codex", "team-seat", jiff::Timestamp::UNIX_EPOCH);
+    team_seat.profile = Some("crew.lead".into());
+    team_seat.team = Some("crew".into());
+    team_seat.role = Some("lead".into());
+    assert_eq!(
+        restart_posture(&team_seat, &workspace, &machine)
+            .err()
+            .map(|error| error.to_string()),
+        machine.definition_failure_for("crew")
     );
 }
 

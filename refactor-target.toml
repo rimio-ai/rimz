@@ -1270,7 +1270,9 @@ upward-dependencies = [
 # AutoCompactWindow and AutoCompactDefault carry `[harness] auto_compact`'s tri-state machine
 # setting and per-enforcer default through definitions, launch resolution, and CLI config (+2).
 # LoadContexts retains both namespace load contexts on MachineConfig for disk-free project builds (+1).
-surface-budget = 316
+# LaunchAgents::{definition_failure_for, project_definition_errors, all_failed_definitions, block_failed_team} and ProfilesConfig::failed carry per-row and per-team project failures across the CLI, room, doctor, harness, resume, and rebirth seams (+4 net with private failed map on ProfilesConfig).
+# MachineConfig::failed_definition_details shares the machine failure map across effective::load_with_roots and rebirth (+1).
+surface-budget = 321
 
 [[verdict]]
 kind = "item"
@@ -2210,7 +2212,7 @@ reason = "Typed durable role enforces a required subagent profile at the hook-to
 [[verdict]]
 kind = "item"
 key = "agents::spending::session_roles::AgentSeat"
-reason = "The hook records explicit solo or team/role provenance; profile dots alone cannot identify TOML seats or dotted solo profiles."
+reason = "The hook records explicit solo or team/role provenance; profile names alone cannot identify TOML seats."
 
 [[verdict]]
 kind = "item"
@@ -2603,7 +2605,8 @@ path = "crates/rimz/src/harness"
 # `run::fail_step_refusal` and `run::wake_workflow` split in-pane step refusal writes from host-side wakes (+2).
 # `soft_compact::{CeilingCompactRequest, ceiling_due, enforce_ceiling_agents}` share the RimZ-enforced auto-compact ceiling watch across sidebar refresh and CLI helper (+3).
 # `idle_stop::rested_since` shares the rest clock with the subagent wrapper's idle-close duty (+1).
-surface-budget = 1379
+# `spec::validate_team_structure` shares file-level team shape checks with `config::effective` (+1).
+surface-budget = 1380
 
 [[verdict]]
 kind = "item"

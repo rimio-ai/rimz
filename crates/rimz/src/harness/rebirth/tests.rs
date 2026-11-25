@@ -738,7 +738,7 @@ fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
         &machine,
         Timestamp::UNIX_EPOCH,
     );
-    let (teams, profiles, _, _) =
+    let (teams, profiles, _, _, _) =
         effective_teams_and_profiles(&machine, &fixture.project, &availability);
     assert!(
         teams.0.is_empty(),

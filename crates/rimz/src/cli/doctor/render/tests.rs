@@ -4037,3 +4037,19 @@ fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
         "{pending}"
     );
 }
+
+#[test]
+fn trust_section_renders_failed_project_definition_rows_as_warnings() {
+    let trust = Probe::Ready(Trust {
+        state: TrustState::Trusted,
+        granted_at: Some("2026-01-01T00:00:00Z".to_owned()),
+        definition_errors: vec![
+            "/repo/.rimz/config.toml: [profiles.broken]: missing `description`".to_owned(),
+        ],
+    });
+    let mut tally = Tally::default();
+    let text = strip(|w| render_trust(w, &trust, &mut tally));
+    assert!(text.contains("[profiles.broken]"), "{text}");
+    assert_eq!(tally.warns.len(), 1, "{text}");
+    assert_eq!(tally.warns[0].subject, ".rimz/config.toml");
+}

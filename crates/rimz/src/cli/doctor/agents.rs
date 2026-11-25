@@ -1115,10 +1115,22 @@ pub(super) fn collect_plugins() -> Vec<PluginRow> {
 /// `rimz trust grant` runs again.
 pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
     match trust::status(&ws.project_root) {
-        Ok(report) => Probe::Ready(Trust {
-            state: report.state,
-            granted_at: report.granted_at.map(|at| at.to_string()),
-        }),
+        Ok(report) => {
+            let definition_errors = if report.state == trust::TrustState::Trusted {
+                let machine = rimz::config::MachineConfig::load_lenient();
+                match rimz::config::effective::load(&machine, &ws.project_root) {
+                    Ok(effective) => effective.project_definition_errors().to_vec(),
+                    Err(error) => vec![error.to_string()],
+                }
+            } else {
+                Vec::new()
+            };
+            Probe::Ready(Trust {
+                state: report.state,
+                granted_at: report.granted_at.map(|at| at.to_string()),
+                definition_errors,
+            })
+        }
         Err(err) => Probe::Unavailable {
             diagnosis: err.diagnosis().cloned(),
             error: super::config_file_error_detail(&err, err.diagnosis()),

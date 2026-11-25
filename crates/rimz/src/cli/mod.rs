@@ -1098,6 +1098,16 @@ pub(crate) fn report_definition_errors(config: &rimz::config::MachineConfig) -> 
     Ok(())
 }
 
+pub(crate) fn report_project_definition_errors(
+    effective: &rimz::config::effective::LaunchAgents,
+) -> Result<()> {
+    let mut err = render::err();
+    for error in effective.project_definition_errors() {
+        writeln!(err, "rimz: {error}")?;
+    }
+    Ok(())
+}
+
 pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
     let paths =
         StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;

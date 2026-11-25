@@ -317,7 +317,7 @@ fn profile(agent: &str) -> Profile {
 
 /// One machine profile, so a resume candidate has posture to replay.
 fn profiles(name: &str, profile: Profile) -> ProfilesConfig {
-    ProfilesConfig(BTreeMap::from([(name.to_owned(), profile)]))
+    ProfilesConfig::from(BTreeMap::from([(name.to_owned(), profile)]))
 }
 
 /// The argv of the one pane a single-candidate plan seeds.
@@ -699,6 +699,40 @@ impl<'a> LaneCase<'a> {
             self.restore,
         )
     }
+}
+
+fn project_profiles(project_toml: &str) -> ProfilesConfig {
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(home.path().join("agents")).unwrap();
+    for kind in ["claude", "codex", "opencode", "pi"] {
+        let tools = if matches!(kind, "claude" | "codex") {
+            "tools: [Read]\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            home.path().join(format!("agents/{kind}.md")),
+            format!("---\ndescription: {kind} base\n{tools}---\n{kind} house.\n"),
+        )
+        .unwrap();
+    }
+    let cfg_path = home.path().join("config.toml");
+    let machine_toml = "[harness]\nauto_compact = 'off'\n";
+    std::fs::write(&cfg_path, machine_toml).unwrap();
+    let machine =
+        crate::config::MachineConfig::parse_text(&cfg_path, machine_toml, home.path()).unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(project.path().join(".rimz/config.toml"), project_toml).unwrap();
+    crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
+    let launch =
+        crate::config::effective::load_with_roots(&machine, project.path(), home.path()).unwrap();
+    assert!(
+        launch.project_definition_errors().is_empty(),
+        "project_profiles fixture had errors: {:?}",
+        launch.project_definition_errors()
+    );
+    launch.profiles
 }
 
 mod cohort;

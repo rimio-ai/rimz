@@ -738,3 +738,27 @@ fn account_rows_flag_an_exported_home_outside_the_room_born_on_it() {
     let inside = problem(Some(&room)).unwrap_or_default();
     assert!(!inside.contains("CODEX_HOME"), "{inside}");
 }
+
+#[test]
+fn collect_trust_surfaces_project_effective_load_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".rimz")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/config.toml"),
+        "[tiers]\nsenior = [\"claude\"]\n",
+    )
+    .unwrap();
+    rimz::trust::grant(dir.path()).unwrap();
+    let ws = rimz::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let Probe::Ready(trust) = collect_trust(&ws) else {
+        panic!("expected Ready trust probe");
+    };
+    assert!(
+        trust
+            .definition_errors
+            .iter()
+            .any(|err| err.contains("tiers")),
+        "trusted project load error must surface in doctor trust definition_errors: {:?}",
+        trust.definition_errors
+    );
+}

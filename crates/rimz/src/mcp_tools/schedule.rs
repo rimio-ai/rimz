@@ -311,6 +311,9 @@ fn launch(
             })?;
             let effective = effective::load(&strict, root).map_err(anyhow::Error::from)?;
             if !effective.teams.0.contains_key(team_name) {
+                if let Some(detail) = effective.definition_failure_for(team_name) {
+                    return Err(Failure::new(detail));
+                }
                 return Err(Failure::new(format!("unknown team `{team_name}`")));
             }
             let from_pr = parse_pr_flag(team.from_pr.as_deref())?;
