@@ -88,6 +88,10 @@ pub(crate) fn master_invocation_count(log: &Path) -> usize {
         .count()
 }
 
+/// Generous `ssh -O check` timeout for ssh-trace tests so a slow shim spawn
+/// under CI load does not misread a live ControlMaster as gone.
+pub(crate) const SSH_TRACE_CONTROL_CHECK_MS: &str = "10000";
+
 pub(crate) fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut cmd);
@@ -100,6 +104,7 @@ pub(crate) fn remote_connect_pty_command(env: &Env, log: &Path) -> CommandBuilde
     cmd.env("RIMZ_REMOTE_INTERNET_PROBE", "0");
     cmd.env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1");
     cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "0");
+    cmd.env("RIMZ_REMOTE_CONTROL_CHECK_MS", SSH_TRACE_CONTROL_CHECK_MS);
     cmd.env("TERM", "xterm-256color");
     cmd
 }

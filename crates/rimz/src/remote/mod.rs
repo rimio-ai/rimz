@@ -758,6 +758,8 @@ pub struct ReconnectPolicy {
     pub master_connect_timeout: Duration,
     /// Maximum lifetime of one background ControlMaster connection attempt.
     pub master_deadline: Duration,
+    /// Timeout for each `ssh -O check` ControlMaster liveness probe.
+    pub control_check_timeout: Duration,
 }
 
 impl Default for ReconnectPolicy {
@@ -769,6 +771,7 @@ impl Default for ReconnectPolicy {
             flat_window: Duration::from_secs(3 * 60),
             master_connect_timeout: Duration::from_secs(5),
             master_deadline: Duration::from_secs(30),
+            control_check_timeout: Duration::from_millis(500),
         }
     }
 }
@@ -777,8 +780,14 @@ impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
     /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS`,
     /// `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`,
-    /// `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS`).
+    /// `RIMZ_REMOTE_MASTER_CONNECT_MS`, `RIMZ_REMOTE_MASTER_TIMEOUT_MS`,
+    /// `RIMZ_REMOTE_CONTROL_CHECK_MS`).
     pub fn from_env() -> Self {
+        Self::from_env_with(|key| std::env::var(key).ok())
+    }
+
+    fn from_env_with(get: impl Fn(&str) -> Option<String>) -> Self {
+        let env_ms = |key: &str| parse_ms(&get(key)?);
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
             policy.gatetime = gatetime;
@@ -797,6 +806,9 @@ impl ReconnectPolicy {
         }
         if let Some(deadline) = env_ms("RIMZ_REMOTE_MASTER_TIMEOUT_MS") {
             policy.master_deadline = deadline;
+        }
+        if let Some(check_timeout) = env_ms("RIMZ_REMOTE_CONTROL_CHECK_MS") {
+            policy.control_check_timeout = check_timeout;
         }
         policy
     }
@@ -911,12 +923,12 @@ fn summarize_ssh_line(line: &str) -> String {
     summary
 }
 
+fn parse_ms(raw: &str) -> Option<Duration> {
+    raw.parse::<u64>().ok().map(Duration::from_millis)
+}
+
 fn env_ms(key: &str) -> Option<Duration> {
-    std::env::var(key)
-        .ok()?
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_millis)
+    parse_ms(&std::env::var(key).ok()?)
 }
 
 /// What the supervisor does with a finished ssh session.
