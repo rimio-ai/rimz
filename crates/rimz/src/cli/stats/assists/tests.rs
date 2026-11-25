@@ -1412,4 +1412,57 @@ mod repeats {
         let (lines, _) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
         assert!(lines[0].contains(error), "{lines:?}");
     }
+
+    #[test]
+    fn ceiling_compaction_folds_under_auto_compact_and_preserves_held_attempts() {
+        let records = [true, false]
+            .into_iter()
+            .map(|delivered| AssistRecord {
+                at: Timestamp::from_second(if delivered { 0 } else { 60 }).expect("timestamp"),
+                assist: Assist::CeilingCompact {
+                    kind: AgentKind::new_unchecked("antigravity"),
+                    agent_id: AgentSessionId::from("agy-1"),
+                    label: Some("@worker".to_owned()),
+                    threshold: AutoCompact::Tokens(372_000),
+                    occupied_tokens: Some(380_000),
+                    message_id: if delivered { "msg_1" } else { "msg_2" }.to_owned(),
+                    delivered,
+                    error: (!delivered).then(|| "someone is using the receiver's pane".to_owned()),
+                },
+            })
+            .collect::<Vec<_>>();
+        for record in &records {
+            let json = serde_json::to_string(record).expect("serialize");
+            let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(&decoded, record);
+        }
+
+        let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
+        assert_eq!(stats.rollup.compacts, 1);
+        assert_eq!(stats.rollup.held.get("compacts"), Some(&1));
+        assert!(
+            category_entries(&stats.rollup, CategoryMode::Dashboard)
+                .iter()
+                .any(|(label, value)| *label == "Auto-compact:" && value == "2"),
+            "dashboard counts both delivered and held ceiling compactions under Auto-compact"
+        );
+        assert!(
+            category_rows(&stats.rollup, CategoryMode::Timeline)
+                .join("\n")
+                .contains("1 (1 held)")
+        );
+        let (effective, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(effective.len(), 1);
+        assert!(
+            effective[0].contains("@worker") && effective[0].contains("auto-compact"),
+            "{effective:?}"
+        );
+        let (all, _) = timeline_lines(&stats, 0, true, &jiff::tz::TimeZone::UTC);
+        assert_eq!(all.len(), 2);
+        assert!(
+            all[0].contains("held") && all[0].contains("someone is using the receiver's pane"),
+            "{all:?}"
+        );
+    }
 }

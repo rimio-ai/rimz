@@ -953,3 +953,187 @@ fn guard_cache_or_diag_failures_leave_verdict_unchanged_without_panicking() {
         .is_empty()
     );
 }
+
+#[test]
+fn ceiling_due_checks_every_condition_and_excludes_native_and_unsupported_kinds() {
+    let now = ts(10_000);
+    let mut candidate = agent();
+    candidate.kind = AgentKind::new_unchecked("antigravity");
+    candidate.record = Some(Box::new(crate::agents::LaunchRecord {
+        auto_compact: Some(372_000),
+        ..Default::default()
+    }));
+    candidate.usage.total_tokens = Some(372_000);
+
+    let check = |row: &AgentState| ceiling_due(&snapshot(row), row, "continue", now, || false);
+
+    assert_eq!(check(&candidate), Some(372_000));
+
+    for (name, changed) in [
+        ("below ceiling", {
+            let mut a = candidate.clone();
+            a.usage.total_tokens = Some(371_999);
+            a
+        }),
+        ("no launch record", {
+            let mut a = candidate.clone();
+            a.record = None;
+            a
+        }),
+        ("launch record without auto_compact", {
+            let mut a = candidate.clone();
+            a.record = Some(Box::new(crate::agents::LaunchRecord::default()));
+            a
+        }),
+        ("ended", {
+            let mut a = candidate.clone();
+            a.ended_at = Some(ts(9_000));
+            a
+        }),
+        ("resting", {
+            let mut a = candidate.clone();
+            a.status = AgentStatus::Success;
+            a
+        }),
+        ("parked", {
+            let mut a = candidate.clone();
+            a.phase = crate::agents::TurnPhase::Parked;
+            a
+        }),
+        ("waiting", {
+            let mut a = candidate.clone();
+            a.status = AgentStatus::Waiting;
+            a.waiting_since = Some(a.last_activity);
+            a
+        }),
+        ("compacting", {
+            let mut a = candidate.clone();
+            a.compacting_since = Some(ts(9_990));
+            a
+        }),
+        ("unprompted compaction", {
+            let mut a = candidate.clone();
+            a.compacted_awaiting_prompt = Some(ts(9_000));
+            a
+        }),
+        ("provider subagent", {
+            let mut a = candidate.clone();
+            a.parent_agent_id = Some("parent".into());
+            a
+        }),
+        ("inside 10m cooldown", {
+            let mut a = candidate.clone();
+            a.compacted_at = Some(ts(10_000 - CEILING_COOLDOWN.as_secs() as i64 + 1));
+            a
+        }),
+        ("native-enforced claude", {
+            let mut a = candidate.clone();
+            a.kind = AgentKind::new_unchecked("claude");
+            a
+        }),
+        ("unsupported pi", {
+            let mut a = candidate.clone();
+            a.kind = AgentKind::new_unchecked("pi");
+            a
+        }),
+    ] {
+        assert_eq!(check(&changed), None, "{name}");
+    }
+
+    let mut at_cooldown = candidate.clone();
+    at_cooldown.compacted_at = Some(ts(10_000 - CEILING_COOLDOWN.as_secs() as i64));
+    assert_eq!(
+        check(&at_cooldown),
+        Some(372_000),
+        "exact cool-down boundary re-arms"
+    );
+
+    let mut spent_without_low_water = candidate.clone();
+    spent_without_low_water.compaction_count = 1;
+    spent_without_low_water.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        low_water_tokens: None,
+        low_water_pct: None,
+        continue_owed: None,
+    });
+    assert_eq!(
+        check(&spent_without_low_water),
+        Some(372_000),
+        "ceiling watch does not read the reminder's low-water mark"
+    );
+
+    let mut without_pane = snapshot(&candidate);
+    std::sync::Arc::make_mut(&mut without_pane.agent_panes).clear();
+    assert_eq!(
+        ceiling_due(&without_pane, &candidate, "continue", now, || false),
+        None
+    );
+    assert_eq!(
+        ceiling_due(&snapshot(&candidate), &candidate, " \n ", now, || false),
+        None,
+        "blank continue text withholds ceiling enforcement"
+    );
+    assert_eq!(
+        ceiling_due(&snapshot(&candidate), &candidate, "continue", now, || true),
+        None,
+        "blocked login withholds ceiling enforcement"
+    );
+
+    let mut child = candidate.clone();
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    assert_eq!(
+        check(&child),
+        Some(372_000),
+        "pane-backed launched child qualifies"
+    );
+
+    // Host pass pacing: spawns once, throttles inside RESPAWN_THROTTLE, respawns on new epoch.
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let config = MachineConfig::default();
+    let mut fired = Vec::new();
+    let mut snap = snapshot(&candidate);
+    snap.now = now;
+    enforce_ceiling_agents_with(
+        &snap,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        || now,
+        |req| {
+            fired.push(req.clone());
+            true
+        },
+    );
+    assert_eq!(fired.len(), 1);
+    enforce_ceiling_agents_with(
+        &snap,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        || now + jiff::SignedDuration::from_secs(30),
+        |req| {
+            fired.push(req.clone());
+            true
+        },
+    );
+    assert_eq!(fired.len(), 1, "pacing throttles within 60s");
+    let mut next_epoch = candidate.clone();
+    next_epoch.compaction_count = 1;
+    let mut next_snap = snapshot(&next_epoch);
+    next_snap.now = now + jiff::SignedDuration::from_secs(30);
+    enforce_ceiling_agents_with(
+        &next_snap,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        || now + jiff::SignedDuration::from_secs(30),
+        |req| {
+            fired.push(req.clone());
+            true
+        },
+    );
+    assert_eq!(fired.len(), 2, "new compaction epoch bypasses prior pacing");
+}

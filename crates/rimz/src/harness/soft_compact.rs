@@ -24,6 +24,10 @@ use crate::store::snapshot::SidebarSnapshot;
 // the helper's fresh reminder_due recheck, not this cache, guards durable state.
 const RESPAWN_THROTTLE: Duration = Duration::from_secs(60);
 
+/// Cool-down after a row's last compaction before RimZ's ceiling watch may fire again on a
+/// reading still at or over the ceiling.
+const CEILING_COOLDOWN: Duration = Duration::from_secs(600);
+
 #[derive(Serialize, Deserialize)]
 struct FireRecord {
     fired_at: Timestamp,
@@ -33,6 +37,15 @@ struct FireRecord {
 #[derive(Serialize, Deserialize)]
 struct WithheldRecord {
     compactions: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CeilingCompactRequest {
+    pub workspace_id: WorkspaceId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +315,149 @@ fn compact_agents_with(
                 tags.operation = "soft_compact.write_fire_record",
                 %error,
                 "sidebar: failed to record soft-compaction pacing",
+            );
+        }
+    }
+}
+
+/// Whether RimZ's auto-compact ceiling watch is due for `agent`, returning the recorded ceiling
+/// token count. The helper rechecks this plus `message::compact::refuse_repeat` on fresh state
+/// before queueing.
+pub fn ceiling_due(
+    snapshot: &SidebarSnapshot,
+    agent: &AgentState,
+    continue_text: &str,
+    now: Timestamp,
+    compaction_blocked: impl FnOnce() -> bool,
+) -> Option<u64> {
+    if continue_text.trim().is_empty()
+        || agent.ended_at.is_some()
+        || agent.is_provider_subagent()
+        || agent.is_awaiting_input()
+        || snapshot
+            .live_agent_pane(&agent.kind, &agent.agent_id)
+            .is_none()
+    {
+        return None;
+    }
+    let definition = crate::agents::definition_by_kind(agent.kind.as_str()).ok()?;
+    if crate::agents::auto_compact_enforcer(definition)
+        != Some(crate::agents::AutoCompactEnforcer::Rimz)
+    {
+        return None;
+    }
+    let ceiling = agent
+        .record
+        .as_ref()
+        .and_then(|record| record.auto_compact)?;
+    if !agent
+        .occupied_context_tokens()
+        .is_some_and(|tokens| tokens >= ceiling)
+        || !agent.holds_open_turn()
+        || agent.is_compacting(now)
+        || agent.compaction_unprompted(now)
+        || agent
+            .compacted_at
+            .is_some_and(|at| now.duration_since(at).as_secs() < CEILING_COOLDOWN.as_secs() as i64)
+    {
+        return None;
+    }
+    (!compaction_blocked()).then_some(ceiling)
+}
+
+fn spawn_ceiling_compact(runtime: &RuntimePaths, request: &CeilingCompactRequest) -> bool {
+    let args = crate::child_process::agent_helper_argv("ceiling-compact", request);
+    if let Err(error) =
+        crate::child_process::spawn_detached_rimz(runtime, args, "agent-ceiling-compact")
+    {
+        tracing::debug!(
+            workspace = %runtime.workspace_id,
+            tags.operation = "ceiling_compact.spawn",
+            %error,
+            "sidebar: failed to spawn ceiling-compaction helper",
+        );
+        return false;
+    }
+    true
+}
+
+pub(crate) fn enforce_ceiling_agents(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
+    config: &MachineConfig,
+) {
+    enforce_ceiling_agents_with(
+        snapshot,
+        runtime,
+        capacities,
+        config,
+        Timestamp::now,
+        |request| spawn_ceiling_compact(runtime, request),
+    );
+}
+
+fn enforce_ceiling_agents_with(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
+    config: &MachineConfig,
+    mut now: impl FnMut() -> Timestamp,
+    mut spawn: impl FnMut(&CeilingCompactRequest) -> bool,
+) {
+    for agent in snapshot.agents.iter() {
+        if ceiling_due(
+            snapshot,
+            agent,
+            &config.resume.auto_continue_text,
+            snapshot.now,
+            || capacities.compaction_blocked(agent, snapshot.now),
+        )
+        .is_none()
+        {
+            continue;
+        }
+        // One replaceable pacing file per card, keyed by compaction_count like the reminder.
+        let path = runtime.live_path("ceiling-compact").join(format!(
+            "{}.json",
+            crate::store::sidecar::digest(agent.kind.as_str(), agent.agent_id.as_str())
+        ));
+        let record = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<FireRecord>(&bytes).ok());
+        let fired_at = now();
+        if record.is_some_and(|record| {
+            record.compactions == agent.compaction_count
+                && fired_at.duration_since(record.fired_at).as_secs()
+                    < RESPAWN_THROTTLE.as_secs() as i64
+        }) {
+            continue;
+        }
+        let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
+            continue;
+        };
+        let peers = crate::address::addressable_agents(snapshot);
+        let request = CeilingCompactRequest {
+            workspace_id: runtime.workspace_id.clone(),
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            pane_id,
+            label: crate::address::agent_handle(agent, &peers, false),
+        };
+        if !spawn(&request) {
+            continue;
+        }
+        if let Err(error) = write_temp_then_rename_cache(
+            &path,
+            &FireRecord {
+                fired_at,
+                compactions: agent.compaction_count,
+            },
+        ) {
+            tracing::warn!(
+                tags.operation = "ceiling_compact.write_fire_record",
+                %error,
+                "sidebar: failed to record ceiling-compaction pacing",
             );
         }
     }
