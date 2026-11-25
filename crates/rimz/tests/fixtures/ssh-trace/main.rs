@@ -549,7 +549,12 @@ fn pop_plan_line(key: &str) -> Option<String> {
     let mut lines = plan.lines();
     let line = lines.next().unwrap_or_default().trim().to_owned();
     let rest = lines.collect::<Vec<_>>().join("\n");
-    std::fs::write(&plan_path, rest).expect("rewrite plan");
+    // Published by rename: a SIGKILL at a deadline cannot leave the plan
+    // truncated and empty for the replacement attempt.
+    let mut staged = plan_path.clone();
+    staged.push(format!(".partial.{}", std::process::id()));
+    std::fs::write(&staged, rest).expect("rewrite plan");
+    std::fs::rename(&staged, &plan_path).expect("publish plan");
     Some(line)
 }
 
