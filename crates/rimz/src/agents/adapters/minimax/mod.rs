@@ -196,6 +196,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
         compact_command: Some(CompactCommand {
             command: "/compact",
             instruction: CompactInstruction::Trailing,
+            steer_checked: false,
         }),
         presets: PresetMatchers {
             code_mode: CodeModeSwitch::Unsupported,

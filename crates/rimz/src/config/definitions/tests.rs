@@ -262,7 +262,7 @@ fn unknown_model_cannot_invent_a_family_from_a_tier_only_parent() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.iter().any(|error| error.path.ends_with("child.md") && error.message.contains("set `agent:`")), "{:?}", loaded.errors);
 }
@@ -295,7 +295,7 @@ fn tier_frontmatter_refusals_explain_the_fix() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         let message = loaded
             .errors
@@ -328,7 +328,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert_eq!(loaded.agent_profiles.0["probe"].agent, "claude");
@@ -339,7 +339,7 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.agent_profiles.0.contains_key("probe"));
     let message = loaded
@@ -373,7 +373,7 @@ fn listed_concrete_model_refuses_its_unbuildable_family_with_a_tier_hint() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.agent_profiles.0.contains_key("exact"));
     let error = loaded
@@ -433,7 +433,7 @@ fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         assert!(loaded.errors.is_empty(), "{child}: {:?}", loaded.errors);
         let profile = &loaded.agent_profiles.0["child"];
@@ -531,7 +531,7 @@ fn allowed_tools_refuse_malformed_rules_with_shape_and_rule() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         let error = loaded
             .errors
@@ -1198,7 +1198,7 @@ fn keep_warm_blocks_resolve_team_fields_and_yaml_off() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(
         loaded.errors.is_empty(),
@@ -1223,7 +1223,7 @@ fn keep_warm_blocks_resolve_team_fields_and_yaml_off() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         assert!(
             loaded.errors.is_empty(),
@@ -1272,7 +1272,7 @@ fn keep_warm_while_is_refused_on_standalone_definitions_in_both_namespaces() {
                 &CommandsConfig::default(),
                 &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
-                Some(272_000),
+                Some(crate::config::AutoCompactDefault::BuiltIn),
             );
             let errors = loaded
                 .errors
@@ -1342,7 +1342,10 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
         let profile = &loaded.agent_profiles.0[&role.profile];
         assert_eq!(profile.agent, "claude");
         assert_eq!(profile.model.as_deref(), Some("opus"));
-        assert_eq!(profile.auto_compact_default.as_deref(), Some("272000"));
+        assert_eq!(
+            profile.auto_compact_default,
+            Some(crate::config::AutoCompactDefault::BuiltIn)
+        );
         assert_eq!(
             profile
                 .skills
@@ -1525,7 +1528,7 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         assert_eq!(
             loaded
@@ -1554,7 +1557,7 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert_eq!(
         loaded
@@ -1640,7 +1643,7 @@ fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
                 &CommandsConfig::default(),
                 &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
-                Some(272_000),
+                Some(crate::config::AutoCompactDefault::BuiltIn),
             );
             assert!(
                 loaded
@@ -1811,7 +1814,7 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         assert!(loaded.teams.0.is_empty(), "{needle}");
         assert!(
@@ -1869,7 +1872,7 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 &CommandsConfig::default(),
                 &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
-                Some(272_000),
+                Some(crate::config::AutoCompactDefault::BuiltIn),
             )
             .errors
             .iter()
@@ -1882,7 +1885,7 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
                 &CommandsConfig::default(),
                 &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
-                Some(272_000),
+                Some(crate::config::AutoCompactDefault::BuiltIn),
             )
             .teams
             .0
@@ -1940,7 +1943,7 @@ fn unsupported_preset_fields_fail_at_the_definition() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     let expected = crate::agents::PresetErr::UnsupportedField {
         agent: "droid",
@@ -2036,7 +2039,7 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     for kind in ["amp", "opencode"] {
@@ -2139,7 +2142,7 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.sources.team("probe").is_none());
@@ -2181,7 +2184,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     let path = root.path().join("teams/probe.md");
     for name in ["renamed", "renamed.lead", "renamed.judge"] {
@@ -2201,7 +2204,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert_eq!(loaded.failed["probe"], BTreeSet::from([path]));
 }
@@ -2217,7 +2220,7 @@ fn team_roles_distinguish_failed_agents_from_unknown_agents() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     let errors: Vec<_> = loaded
         .errors
@@ -2253,7 +2256,7 @@ fn duplicate_agent_names_record_both_sources_in_one_namespace() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.agent_profiles.0.contains_key("duplicate"));
     assert_eq!(
@@ -2450,7 +2453,7 @@ fn team_consensus_pieces_refuse_the_team_with_the_trait_wording() {
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         );
         assert!(!loaded.teams.0.contains_key("probe"));
         assert_eq!(loaded.errors.len(), 1, "{:#?}", loaded.errors);
@@ -2506,7 +2509,7 @@ fn a_conflicting_consensus_piece_claim_refuses_the_team() {
         &CommandsConfig::default(),
         &home.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.teams.0.contains_key("probe"));
     let conflict = loaded
@@ -2538,7 +2541,7 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
@@ -2574,7 +2577,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         &CommandsConfig::default(),
         &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     )
 }
 
@@ -2599,7 +2602,7 @@ fn clean(root: &Path) -> LoadedDefinitions {
         &CommandsConfig::default(),
         &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     loaded
@@ -2612,7 +2615,7 @@ fn error(root: &Path, needle: &str) {
         &CommandsConfig::default(),
         &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(
         loaded
@@ -2836,8 +2839,14 @@ fn runtime_resolution_aliases_and_defaults() {
             Some(effort.to_owned()),
         ));
         assert_eq!(
-            profile.auto_compact_default.as_deref(),
-            if kind == "pi" { None } else { Some("272000") }
+            profile.auto_compact_default,
+            Some(crate::config::AutoCompactDefault::BuiltIn)
+        );
+        assert_eq!(
+            resolved
+                .auto_compact_default
+                .and_then(|default| default.resolve_for_kind(kind)),
+            if kind == "pi" { None } else { Some(272_000) }
         );
         assert!(profile.append_system_prompt_files.is_empty());
     }
@@ -2979,7 +2988,7 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert_eq!(loaded.errors.len(), 2);
     assert!(loaded.errors.iter().any(|error| error.message
@@ -3086,7 +3095,7 @@ fn names_and_kind_bases_are_validated() {
                 &CommandsConfig::default(),
                 &root.path().join("config.toml"),
                 &crate::config::tiers::TierConfig::default(),
-                Some(272_000),
+                Some(crate::config::AutoCompactDefault::BuiltIn),
             )
             .errors
             .is_empty()
@@ -3110,7 +3119,7 @@ fn names_and_kind_bases_are_validated() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(
         loaded
@@ -3145,7 +3154,7 @@ fn names_and_kind_bases_are_validated() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert_eq!(
         loaded.failed["claude"],
@@ -3674,7 +3683,7 @@ fn agents_and_seats_allow_loaded_subagents_and_commands() {
         &commands,
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("worker"));
@@ -3698,7 +3707,7 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(!loaded.agent_profiles.0.contains_key("planner"));
     assert!(loaded.errors.iter().any(|error| {
@@ -3763,9 +3772,13 @@ fn traits_deduplicate_and_preserve_unrelated_placeholders() {
 
 #[test]
 fn native_compaction_default_is_configurable_and_preserves_inheritance() {
+    use crate::config::AutoCompactDefault;
+
     let root = fixture();
-    for kind in ["claude", "codex", "pi", "amp", "kiro"] {
-        let tools = if matches!(kind, "claude" | "codex") {
+    definition(root.path(), "agents/antigravity.md", "", "Agy base.");
+    definition(root.path(), "agents/pi.md", "", "Pi base.");
+    for kind in ["claude", "codex", "antigravity", "pi", "amp", "kiro"] {
+        let tools = if matches!(kind, "claude" | "codex" | "antigravity") {
             "\ntools: []"
         } else {
             ""
@@ -3784,27 +3797,47 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
         "",
     );
     definition(root.path(), "agents/child.md", "agent: parent", "");
-    for window in [Some(272_000), Some(300_000), None] {
+    for default in [
+        Some(AutoCompactDefault::BuiltIn),
+        Some(AutoCompactDefault::Tokens(300_000)),
+        None,
+    ] {
         let loaded = load(
             root.path(),
             SkillCheck::Skip,
             &CommandsConfig::default(),
             &root.path().join("config.toml"),
             &crate::config::tiers::TierConfig::default(),
-            window,
+            default,
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        for kind in ["claude", "codex", "pi", "amp", "kiro"] {
-            let expected = if matches!(kind, "claude" | "codex") {
-                window.map(|n| n.to_string())
-            } else {
-                None
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for kind in ["claude", "codex", "antigravity", "pi", "amp", "kiro"] {
+            let profile = &loaded.agent_profiles.0[&format!("{kind}-worker")];
+            assert_eq!(profile.auto_compact_default, default, "{kind}");
+            let resolved = crate::harness::spec::resolve_profile(
+                &format!("{kind}-worker"),
+                &loaded.agent_profiles,
+            )
+            .unwrap();
+            let want = match (kind, default) {
+                ("claude" | "codex", Some(AutoCompactDefault::BuiltIn)) => Some(272_000),
+                ("antigravity", Some(AutoCompactDefault::BuiltIn)) => Some(372_000),
+                ("claude" | "codex" | "antigravity", Some(AutoCompactDefault::Tokens(n))) => {
+                    Some(n)
+                }
+                _ => None,
             };
-            assert_eq!(
-                loaded.agent_profiles.0[&format!("{kind}-worker")].auto_compact_default,
-                expected
-            );
+            actual.push((
+                kind,
+                resolved
+                    .auto_compact_default
+                    .and_then(|d| d.resolve_for_kind(&resolved.kind)),
+            ));
+            expected.push((kind, want));
         }
+        assert_eq!(actual, expected, "{default:?}");
         assert_eq!(
             loaded.agent_profiles.0["child"].auto_compact.as_deref(),
             Some("200k")
@@ -5085,7 +5118,7 @@ fn clean_but(root: &Path, expected: &Path) -> LoadedDefinitions {
         &CommandsConfig::default(),
         &root.join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     loaded.errors.retain(|error| error.path != expected);
     loaded
@@ -5325,7 +5358,7 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert_eq!(
         loaded
@@ -5499,7 +5532,7 @@ fn plus_lists_refuse_a_mix_a_bare_plus_and_nothing_below_a_required_list() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &crate::config::tiers::TierConfig::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     let probe = &loaded.agent_profiles.0["probe"];
     assert_eq!(
@@ -7686,7 +7719,7 @@ fn precomputed_renders_preserve_models_for_multi_provider_and_native_kinds() {
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
         &tiers,
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
 

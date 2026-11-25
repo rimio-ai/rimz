@@ -393,6 +393,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     super::CompactCommand {
                         command: leak_string(command.clone()),
                         instruction: super::CompactInstruction::Unsupported,
+                        steer_checked: false,
                     }
                 }),
                 presets: PresetMatchers {
@@ -957,7 +958,16 @@ setup-doc = "README.md"
             manifest.emits = emits.into_iter().map(str::to_owned).collect();
             manifest.launch.as_mut().unwrap().compact_command = command.map(str::to_owned);
             let plugin = build_adapter(manifest, adapter.plugin_dir.to_path_buf());
-            assert_eq!(soft_compact_skip(&AgentDefinition::new(plugin)), expected);
+            let def = AgentDefinition::new(plugin);
+            assert_eq!(soft_compact_skip(&def), expected);
+            assert_eq!(crate::agents::auto_compact_enforcer(&def), None);
+            if let Some(compact) = def.spec().launch.compact_command {
+                assert_eq!(
+                    compact.instruction,
+                    crate::agents::CompactInstruction::Unsupported
+                );
+                assert!(!compact.steer_checked);
+            }
         }
     }
 

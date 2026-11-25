@@ -234,10 +234,14 @@ impl<'a> LaunchCompactPolicy<'a> {
             return;
         };
         if tokens >= window {
+            let enforcer = crate::agents::find_definition(&cell.kind)
+                .and_then(crate::agents::auto_compact_enforcer)
+                .unwrap_or(crate::agents::AutoCompactEnforcer::Native);
             warnings.push(LaunchFinalizeWarning::SmartCompactNativeWindow {
                 profile: profile.to_owned(),
                 line,
                 window: AutoCompact::Tokens(window),
+                enforcer,
             });
         }
     }
@@ -1229,6 +1233,7 @@ pub enum LaunchFinalizeWarning {
         profile: String,
         line: AutoCompact,
         window: AutoCompact,
+        enforcer: crate::agents::AutoCompactEnforcer,
     },
     TierMoved {
         profile: String,
@@ -1363,10 +1368,17 @@ impl fmt::Display for LaunchFinalizeWarning {
                 profile,
                 line,
                 window,
-            } => write!(
-                formatter,
-                "warning: `{profile}` smart-compact {line} is at or above its auto-compact {window}; the provider compacts first"
-            ),
+                enforcer,
+            } => {
+                let actor = match enforcer {
+                    crate::agents::AutoCompactEnforcer::Native => "the provider",
+                    crate::agents::AutoCompactEnforcer::Rimz => "RimZ",
+                };
+                write!(
+                    formatter,
+                    "warning: `{profile}` smart-compact {line} is at or above its auto-compact {window}; {actor} compacts first"
+                )
+            }
             Self::TierMoved { profile, stamp } => {
                 let passes = stamp
                     .passes()
@@ -1481,6 +1493,8 @@ pub fn validate_launch_preset(
             kind: kind.to_owned(),
         }
     })?;
+    let rimz_enforced = crate::agents::auto_compact_enforcer(adapter)
+        == Some(crate::agents::AutoCompactEnforcer::Rimz);
     let (preset, skipped) = adapter.spec().launch.normalize_preset(preset.clone());
     adapter
         .spec()
@@ -1488,6 +1502,13 @@ pub fn validate_launch_preset(
         .map_err(unsupported_preset_error)?;
     Ok(skipped
         .into_iter()
+        .filter(|field| {
+            !(rimz_enforced
+                && matches!(
+                    field,
+                    crate::agents::definition::SkippedPresetField::AutoCompact(_)
+                ))
+        })
         .map(|field| LaunchFinalizeWarning::SkippedField {
             profile: kind.to_owned(),
             agent: adapter.spec().kind,
@@ -1726,6 +1747,9 @@ pub(super) fn normalize_cell_preset(
     model: Option<&str>,
 ) -> Vec<crate::agents::definition::SkippedPresetField> {
     let launch = adapter.spec().launch;
+    let rimz_enforced = crate::agents::auto_compact_enforcer(adapter)
+        == Some(crate::agents::AutoCompactEnforcer::Rimz);
+    let enforced_auto_compact = rimz_enforced.then(|| cell.auto_compact.take()).flatten();
     let mut preset = crate::agents::LaunchPreset {
         model: model.map(str::to_owned),
         auto_compact: cell.auto_compact.take(),
@@ -1749,7 +1773,7 @@ pub(super) fn normalize_cell_preset(
     {
         skipped.push(crate::agents::definition::SkippedPresetField::CodeMode);
     }
-    cell.auto_compact = preset.auto_compact;
+    cell.auto_compact = enforced_auto_compact.or(preset.auto_compact);
     cell.launch.effort = preset.effort;
     cell.launch.fast = preset.fast;
     if let Some(record) = &mut cell.launch.record {

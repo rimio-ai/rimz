@@ -125,7 +125,7 @@ pub fn compare(
             &machine.agents.commands,
             &MachineConfig::config_path(),
             &machine.tiers,
-            machine.harness.auto_compact,
+            machine.harness.auto_compact_default(),
             packs,
         )
     };

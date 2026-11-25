@@ -1621,7 +1621,7 @@ fn seat_added_rimz_message_is_settled_at_launch() {
             &base_machine.agents.commands,
             &agents_home.join("config.toml"),
             &base_machine.tiers,
-            base_machine.harness.auto_compact,
+            base_machine.harness.auto_compact_default(),
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         loaded
@@ -2081,7 +2081,7 @@ fn seat_added_rimz_message_reads_trusted_project_env() {
         &base_machine.agents.commands,
         &agents_home.join("config.toml"),
         &base_machine.tiers,
-        base_machine.harness.auto_compact,
+        base_machine.harness.auto_compact_default(),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let layout = crate::harness::spec::resolve_spec_with_agent_override(

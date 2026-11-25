@@ -269,7 +269,7 @@ pub struct ResolvedProfile {
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
-    pub auto_compact_default: Option<String>,
+    pub auto_compact_default: Option<crate::config::AutoCompactDefault>,
     /// Fast mode as the chain set it. A nearer layer's off or `unset` wins
     /// over a farther on; on forces the switch, off forces it off, and unset
     /// or absent leaves the provider's default.
@@ -373,8 +373,7 @@ impl ResolvedProfile {
             self.sources.auto_compact = source(writers.and_then(|w| w.auto_compact.as_ref()));
         }
         if self.auto_compact_default.is_none() {
-            self.auto_compact_default
-                .clone_from(&layer.auto_compact_default);
+            self.auto_compact_default = layer.auto_compact_default;
         }
         if written && self.fast.is_none() && layer.fast.is_some() {
             self.fast = layer.fast;
@@ -457,11 +456,9 @@ impl ResolvedProfile {
 
     fn effective_auto_compact(&self) -> Option<String> {
         self.auto_compact.clone().or_else(|| {
-            crate::agents::find_definition(&self.kind)?
-                .spec()
-                .launch
-                .preset_arg_matcher(crate::agents::PresetField::AutoCompact)?;
-            self.auto_compact_default.clone()
+            self.auto_compact_default?
+                .resolve_for_kind(&self.kind)
+                .map(|tokens| tokens.to_string())
         })
     }
 

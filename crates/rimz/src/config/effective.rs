@@ -646,7 +646,7 @@ pub fn load_with_roots(
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
     let mut lsp_servers = machine.lsp.servers.clone();
-    let native_auto_compact = machine.harness.auto_compact;
+    let auto_compact_default = machine.harness.auto_compact_default();
     let consensus_pieces = &machine.consensus_pieces;
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
@@ -750,8 +750,7 @@ pub fn load_with_roots(
             .collect();
         for (name, profile) in &mut profiles.0 {
             if profile.auto_compact.is_none() && !chained.contains(name) {
-                profile.auto_compact_default =
-                    super::agents::native_auto_compact(native_auto_compact, &profile.agent);
+                profile.auto_compact_default = auto_compact_default;
             }
         }
     }

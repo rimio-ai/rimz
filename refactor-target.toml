@@ -493,7 +493,9 @@ upward-dependencies = [
 # account_history_shareable (-1).
 # HookOutput::provider_rest_ends_parked_turn and AgentState::rest_ends_parked_turn gate ending a
 # parked turn on a provider rest report across the adapter/CLI hook seam (+2).
-surface-budget = 1368
+# AutoCompactEnforcer, auto_compact_enforcer, and their facade re-exports derive whether the
+# provider or RimZ enforces a kind's `auto-compact` ceiling (+4).
+surface-budget = 1372
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1251,7 +1253,9 @@ upward-dependencies = [
 # BuildBase, DefinitionSource, Profile::build_under, and keeps_inherited_model rebuild Markdown definitions on demand (+3).
 # LaunchAgents::block_failed_override shares failed-override checks with the launch planner (+1).
 # resolve_seat_setting resolves after-launch profile settings in launch chain order (+1).
-surface-budget = 313
+# AutoCompactWindow and AutoCompactDefault carry `[harness] auto_compact`'s tri-state machine
+# setting and per-enforcer default through definitions, launch resolution, and CLI config (+2).
+surface-budget = 315
 
 [[verdict]]
 kind = "item"

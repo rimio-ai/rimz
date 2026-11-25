@@ -533,3 +533,30 @@ fn compaction_wall_role_is_configurable_in_both_glyph_sets() {
         );
     }
 }
+
+#[test]
+fn rimz_enforced_antigravity_card_renders_compaction_wall_and_scales_fill() {
+    let mut snapshot = compaction_snapshot();
+    let row = snapshot.rows_mut().next().unwrap();
+    row.name = "antigravity".into();
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 58);
+    let meter = lines
+        .iter()
+        .find(|line| line.to_string().contains('┤'))
+        .expect("antigravity card with recorded auto_compact renders compaction wall");
+    assert!(
+        meter.to_string().contains("75.0%"),
+        "fill scales against the 372k RimZ ceiling: {}",
+        meter
+    );
+    let identity = lines
+        .iter()
+        .find(|line| line.to_string().contains("antigravity"))
+        .expect("antigravity identity line");
+    assert!(
+        identity.to_string().contains("372k/1M"),
+        "identity line carries 372k/1M: {}",
+        identity
+    );
+}

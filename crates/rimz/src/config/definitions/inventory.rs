@@ -63,7 +63,7 @@ impl PackInventory {
         commands: &CommandsConfig,
         config_path: &Path,
         tiers: &crate::config::tiers::TierConfig,
-        native_auto_compact: Option<u64>,
+        auto_compact_default: Option<crate::config::AutoCompactDefault>,
     ) -> Self {
         let resolved = packs::resolve(home);
         let loaded = super::load_resolved(
@@ -72,7 +72,7 @@ impl PackInventory {
             commands,
             config_path,
             tiers,
-            native_auto_compact,
+            auto_compact_default,
             &resolved,
         );
         Self::from_loaded(home, &resolved, loaded)

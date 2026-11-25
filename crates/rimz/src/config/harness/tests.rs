@@ -435,7 +435,13 @@ fn narrow_smart_compact_matches_full_lenient_config() {
 #[test]
 fn compaction_defaults_apply_when_unset() {
     for config in [HarnessConfig::default(), toml::from_str("").unwrap()] {
-        assert_eq!(config.auto_compact, Some(272_000));
+        assert_eq!(config.auto_compact, None);
+        assert_eq!(
+            config.auto_compact_default(),
+            Some(AutoCompactDefault::BuiltIn)
+        );
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(!encoded.contains("auto_compact"), "{encoded}");
         assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(258 * 1_000)));
     }
 }
@@ -443,17 +449,17 @@ fn compaction_defaults_apply_when_unset() {
 #[test]
 fn native_compaction_takes_off_or_a_window_and_round_trips() {
     for (raw, expected, rendered) in [
-        ("off", None, "off"),
-        ("100k", Some(100_000), "100k"),
-        ("272k", Some(272_000), "272k"),
-        ("272000", Some(272_000), "272k"),
-        ("272001", Some(272_001), "272001"),
-        ("1m", Some(1_000_000), "1000k"),
+        ("off", AutoCompactWindow::Off, "off"),
+        ("100k", AutoCompactWindow::Tokens(100_000), "100k"),
+        ("272k", AutoCompactWindow::Tokens(272_000), "272k"),
+        ("272000", AutoCompactWindow::Tokens(272_000), "272k"),
+        ("272001", AutoCompactWindow::Tokens(272_001), "272001"),
+        ("1m", AutoCompactWindow::Tokens(1_000_000), "1000k"),
     ] {
         let parsed = toml::from_str::<HarnessConfig>(&format!("auto_compact = {raw:?}"));
         assert!(parsed.is_ok(), "{raw}: {parsed:?}");
         let config = parsed.unwrap();
-        assert_eq!(config.auto_compact, expected);
+        assert_eq!(config.auto_compact, Some(expected));
         let encoded = toml::to_string(&config).unwrap();
         assert!(
             encoded.contains(&format!("auto_compact = {rendered:?}")),

@@ -117,7 +117,7 @@ fn load(
         &machine.agents.commands,
         &rimz::config::MachineConfig::config_path(),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     for error in &machine.notices.definition_errors {
         if !loaded

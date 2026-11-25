@@ -92,6 +92,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(crate::agents::CompactCommand {
             command: "/compact",
             instruction: crate::agents::CompactInstruction::Unsupported,
+            steer_checked: false,
         }),
         presets: crate::agents::PresetMatchers {
             code_mode: crate::agents::CodeModeSwitch::Unsupported,

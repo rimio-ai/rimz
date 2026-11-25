@@ -306,6 +306,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
+            steer_checked: false,
         }),
         presets: super::PresetMatchers {
             // `features.code_mode` adds the JavaScript cell tools beside the

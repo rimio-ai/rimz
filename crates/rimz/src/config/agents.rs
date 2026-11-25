@@ -630,9 +630,9 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_compact: Option<String>,
-    /// Load-injected native window, applied only when the final adapter supports it.
+    /// Load-injected machine ceiling default, mapped when the final adapter is known.
     #[serde(skip)]
-    pub auto_compact_default: Option<String>,
+    pub auto_compact_default: Option<super::AutoCompactDefault>,
     /// A file whose contents replace the agent's base system prompt, giving the
     /// profile its own voice. Resolved relative to the config file and
     /// existence-checked when the profile launches.
@@ -669,15 +669,6 @@ impl Profile {
         let source = self.definition.as_ref()?;
         Some(source.build(self, base, target_kind, model))
     }
-}
-
-pub(super) fn native_auto_compact(window: Option<u64>, kind: &str) -> Option<String> {
-    let tokens = window?;
-    crate::agents::find_definition(kind)?
-        .spec()
-        .launch
-        .preset_arg_matcher(crate::agents::PresetField::AutoCompact)?;
-    Some(tokens.to_string())
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

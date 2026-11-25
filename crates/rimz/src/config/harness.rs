@@ -16,6 +16,87 @@ const DEFAULT_PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
 const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
 const TEAM_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags so a new context window continues without redoing work. This seat is a team member: on resume I reread the board, the stage files, and git, so point at them by path and section and copy nothing they hold. Keep only what this window alone knows: (1) facts, decisions, and drafts not yet filed, and the words of the user and teammates that shaped them, each tagged with the file and section it belongs in, so my first act on resume writes it there; (2) what is in flight: replies I wait on, messages I owe.";
 
+/// Default native auto-compaction window when `[harness] auto_compact` is unset.
+pub(crate) const NATIVE_AUTO_COMPACT_DEFAULT: u64 = 272_000;
+/// Default RimZ-enforced context ceiling when `[harness] auto_compact` is unset.
+pub(crate) const RIMZ_AUTO_COMPACT_DEFAULT: u64 = 372_000;
+
+/// Explicit machine-level `[harness] auto_compact` setting.
+///
+/// Unset (`None` on [`HarnessConfig`]) resolves per enforcer: 272k for provider-native kinds and
+/// 372k for RimZ-enforced kinds. `Off` disables the machine default on both, and `Tokens` pins
+/// both to the configured count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoCompactWindow {
+    Off,
+    Tokens(u64),
+}
+
+impl fmt::Display for AutoCompactWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::Tokens(tokens) if tokens.is_multiple_of(1_000) => {
+                write!(f, "{}k", tokens / 1_000)
+            }
+            Self::Tokens(tokens) => write!(f, "{tokens}"),
+        }
+    }
+}
+
+impl Serialize for AutoCompactWindow {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for AutoCompactWindow {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        const WINDOW_ERROR: &str =
+            "harness.auto_compact must be off or a token count from 100k through 1M, such as 272k";
+        let raw = String::deserialize(deserializer)
+            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))?;
+        if raw == "off" {
+            return Ok(Self::Off);
+        }
+        AutoCompact::parse_native_window(&raw)
+            .map(Self::Tokens)
+            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))
+    }
+}
+
+/// Machine-level `auto_compact` default carried onto non-kind-base profiles until the launch's
+/// final kind is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoCompactDefault {
+    /// `[harness] auto_compact` is unset: 272k Native, 372k RimZ.
+    BuiltIn,
+    /// `[harness] auto_compact` is explicitly pinned to a token count for both enforcers.
+    Tokens(u64),
+}
+
+impl AutoCompactDefault {
+    pub const fn from_setting(setting: Option<AutoCompactWindow>) -> Option<Self> {
+        match setting {
+            None => Some(Self::BuiltIn),
+            Some(AutoCompactWindow::Tokens(tokens)) => Some(Self::Tokens(tokens)),
+            Some(AutoCompactWindow::Off) => None,
+        }
+    }
+
+    pub fn resolve_for_kind(self, kind: &str) -> Option<u64> {
+        let definition = crate::agents::find_definition(kind)?;
+        let enforcer = crate::agents::auto_compact_enforcer(definition)?;
+        Some(match (self, enforcer) {
+            (Self::BuiltIn, crate::agents::AutoCompactEnforcer::Native) => {
+                NATIVE_AUTO_COMPACT_DEFAULT
+            }
+            (Self::BuiltIn, crate::agents::AutoCompactEnforcer::Rimz) => RIMZ_AUTO_COMPACT_DEFAULT,
+            (Self::Tokens(tokens), _) => tokens,
+        })
+    }
+}
+
 /// The seat an agent holds, which selects RimZ's built-in compaction brief.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompactSeat {
@@ -446,10 +527,11 @@ pub struct HarnessConfig {
     /// Default per-turn dollar cap for every agent in the room.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_budget: Option<TurnCap>,
-    /// Native auto-compaction window for capable profiles whose chain and kind base set no
-    /// `auto-compact`; unset means 272k tokens, `off` passes no window.
-    #[serde(with = "auto_compact_serde")]
-    pub auto_compact: Option<u64>,
+    /// Context ceiling for profiles whose chain and kind base set no `auto-compact`; unset
+    /// resolves to 272k on provider-native kinds and 372k on RimZ-enforced kinds, a count covers
+    /// both, and `off` disables the machine default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact: Option<AutoCompactWindow>,
     /// Remind a filling turn to compact itself, or compact before a message or
     /// scheduled wait. The fallback line is 258,000 tokens; `off` disables it.
     #[serde(with = "smart_compact_serde")]
@@ -492,7 +574,7 @@ impl Default for HarnessConfig {
             prompt_cache_ttl: BTreeMap::new(),
             budget: None,
             turn_budget: None,
-            auto_compact: Some(272_000),
+            auto_compact: None,
             smart_compact: Some(AutoCompact::Tokens(258_000)),
             compact_instruction: None,
             idle_compact: IdleCompact::default(),
@@ -506,6 +588,12 @@ impl Default for HarnessConfig {
 }
 
 impl HarnessConfig {
+    /// The machine-level `auto_compact` default to carry onto non-kind-base profiles, or `None`
+    /// when `[harness] auto_compact = "off"`.
+    pub const fn auto_compact_default(&self) -> Option<AutoCompactDefault> {
+        AutoCompactDefault::from_setting(self.auto_compact)
+    }
+
     /// Read the smart-compaction default from the typed core file alone.
     /// Missing or broken files use the full lenient load's defaults and stable-file guard.
     pub(crate) fn load_smart_compact_lenient() -> Option<AutoCompact> {
@@ -873,40 +961,6 @@ mod keep_warm_min_ttl_serde {
         S: Serializer,
     {
         serializer.collect_str(&floor.map_or(KeepWarm::Off, KeepWarm::For))
-    }
-}
-
-mod auto_compact_serde {
-    use super::*;
-
-    const WINDOW_ERROR: &str =
-        "harness.auto_compact must be off or a token count from 100k through 1M, such as 272k";
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)
-            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))?;
-        if raw == "off" {
-            return Ok(None);
-        }
-        AutoCompact::parse_native_window(&raw)
-            .map(Some)
-            .map_err(|_| serde::de::Error::custom(WINDOW_ERROR))
-    }
-
-    pub fn serialize<S>(window: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match window {
-            Some(tokens) if tokens.is_multiple_of(1_000) => {
-                serializer.serialize_str(&format!("{}k", tokens / 1_000))
-            }
-            Some(tokens) => serializer.collect_str(tokens),
-            None => serializer.serialize_str("off"),
-        }
     }
 }
 

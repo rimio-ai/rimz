@@ -978,7 +978,7 @@ fn compaction_default_follows_the_engine_but_declared_values_warn() {
         &Default::default(),
         &root.path().join("config.toml"),
         &Default::default(),
-        Some(272_000),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     for (name, kind, warnings, value) in [
@@ -2365,6 +2365,19 @@ fn finalized_smart_compact_compares_only_effective_token_windows() {
             "line {line:?}, native {native:?}"
         );
     }
+}
+
+#[test]
+fn finalized_smart_compact_names_rimz_when_ceiling_is_rimz_enforced() {
+    use crate::config::effective::ProfileScope::Agents;
+
+    let config = "[harness]\nauto_compact = 'off'\n[agents.profiles.coder]\nagent = 'antigravity'\nsmart-compact = '300k'\nauto-compact = '250k'\n";
+    assert_eq!(
+        finalized_smart_compact_warnings(config, "coder", Agents, None),
+        vec![
+            "warning: `coder` smart-compact 300000 tokens is at or above its auto-compact 250000 tokens; RimZ compacts first",
+        ]
+    );
 }
 
 #[test]
@@ -4491,19 +4504,21 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
 }
 
 #[test]
-fn finalized_launch_records_only_the_configured_native_auto_compact_count() {
+fn finalized_launch_records_only_the_configured_enforced_auto_compact_count() {
     let cases = [
-        ("claude", Some("372k"), "", "", Some(372_000)),
-        ("codex", Some("1M"), "", "", Some(1_000_000)),
-        ("copilot", Some("200k"), "", "", None),
-        ("claude", Some("off"), "", "", None),
-        ("claude", None, "--autocompact 100000", "", None),
+        ("claude", Some("372k"), "", "", Some(372_000), 0),
+        ("codex", Some("1M"), "", "", Some(1_000_000), 0),
+        ("antigravity", Some("372k"), "", "", Some(372_000), 0),
+        ("copilot", Some("200k"), "", "", None, 1),
+        ("claude", Some("off"), "", "", None, 0),
+        ("claude", None, "--autocompact 100000", "", None, 0),
         (
             "claude",
             Some("200k"),
             "--autocompact 100000",
             "--autocompact 300000",
             Some(200_000),
+            2,
         ),
         (
             "codex",
@@ -4511,13 +4526,17 @@ fn finalized_launch_records_only_the_configured_native_auto_compact_count() {
             "-c model_auto_compact_token_limit=100000",
             "-c model_auto_compact_token_limit=300000",
             Some(200_000),
+            2,
         ),
     ];
-    let actual = cases.map(|(kind, configured, raw, passthrough, _)| {
+    let actual = cases.map(|(kind, configured, raw, passthrough, _, _)| {
         let configured = if configured == Some("off") {
             let harness: crate::config::HarnessConfig =
                 toml::from_str("auto_compact = 'off'").unwrap();
-            harness.auto_compact.map(|tokens| tokens.to_string())
+            harness
+                .auto_compact_default()
+                .and_then(|default| default.resolve_for_kind(kind))
+                .map(|tokens| tokens.to_string())
         } else {
             configured.map(str::to_owned)
         };
@@ -4531,16 +4550,30 @@ fn finalized_launch_records_only_the_configured_native_auto_compact_count() {
         )]));
         let cell = crate::harness::spec::profile_cell("compact", &profiles).unwrap();
         let mut layout = LayoutSpec::single(Cell::Agent(cell));
-        finalize(
+        let warnings = finalize(
             &mut layout,
             &Default::default(),
             &shlex::split(passthrough).unwrap(),
         )
         .unwrap();
         let cell = layout.agent_cells().next().unwrap();
-        serde_json::to_value(cell.launch.record.as_ref().unwrap()).unwrap()["auto_compact"].as_u64()
+        if kind == "antigravity" {
+            assert!(
+                cell.args.is_empty(),
+                "agy renders no argv for auto-compact: {:?}",
+                cell.args
+            );
+        }
+        (
+            serde_json::to_value(cell.launch.record.as_ref().unwrap()).unwrap()["auto_compact"]
+                .as_u64(),
+            warnings.len(),
+        )
     });
-    assert_eq!(actual, cases.map(|(_, _, _, _, expected)| expected));
+    assert_eq!(
+        actual,
+        cases.map(|(_, _, _, _, expected, warnings)| (expected, warnings))
+    );
 }
 
 #[test]
@@ -5881,7 +5914,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
         &machine.agents.commands,
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
@@ -5920,7 +5953,7 @@ fn definition_timeout_survives_agent_tier_and_model_overrides() {
         &machine.agents.commands,
         &root.path().join("config.toml"),
         &machine.tiers,
-        machine.harness.auto_compact,
+        machine.harness.auto_compact_default(),
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.subagents.profiles = definitions.subagent_profiles;

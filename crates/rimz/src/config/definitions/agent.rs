@@ -1616,8 +1616,7 @@ fn finish_profile(
         .clone()
         .map(|value| auto_compact(path, &value))
         .transpose()?;
-    profile.auto_compact_default =
-        super::super::agents::native_auto_compact(shared.native_auto_compact, kind);
+    profile.auto_compact_default = shared.auto_compact_default;
     profile.fast = fm.fast;
     profile.code_mode = fm.code_mode;
     if let Some(raw) = fm.budget.as_deref() {

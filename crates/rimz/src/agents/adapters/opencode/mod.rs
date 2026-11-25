@@ -149,6 +149,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
+            steer_checked: false,
         }),
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Config {

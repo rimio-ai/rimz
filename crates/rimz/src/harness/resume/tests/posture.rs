@@ -429,38 +429,41 @@ fn resume_posture_reresolves_the_native_auto_compact_count() {
         "model": null, "effort": null, "agent": null, "auto_compact": 372_000
     }))
     .unwrap();
-    let actual = [Some("200k"), None].map(|configured| {
-        let profiles = profiles(
-            "worker",
-            Profile {
-                auto_compact: configured.map(str::to_owned),
-                ..profile("claude")
-            },
+    for kind in ["claude", "antigravity"] {
+        let actual = [Some("200k"), None].map(|configured| {
+            let profiles = profiles(
+                "worker",
+                Profile {
+                    auto_compact: configured.map(str::to_owned),
+                    ..profile(kind)
+                },
+            );
+            let posture = resolve_posture(
+                PostureRequest {
+                    record: Some(&record),
+                    profile: Some("worker"),
+                    kind: &AgentKind::new_unchecked(kind),
+                    stamped_mode: None,
+                    stamped_tier: None,
+                },
+                &profiles,
+                None,
+            );
+            assert!(posture.degraded.is_none(), "{kind}: {:?}", posture.degraded);
+            let cell = posture
+                .launch
+                .into_cell(AgentKind::new_unchecked(kind), Some("worker".into()));
+            (
+                cell.auto_compact,
+                serde_json::to_value(cell.launch.record.unwrap()).unwrap()["auto_compact"].as_u64(),
+            )
+        });
+        assert_eq!(
+            actual,
+            [(Some("200000".into()), Some(200_000)), (None, None)],
+            "{kind}"
         );
-        let posture = resolve_posture(
-            PostureRequest {
-                record: Some(&record),
-                profile: Some("worker"),
-                kind: &AgentKind::new_unchecked("claude"),
-                stamped_mode: None,
-                stamped_tier: None,
-            },
-            &profiles,
-            None,
-        );
-        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
-        let cell = posture
-            .launch
-            .into_cell(AgentKind::new_unchecked("claude"), Some("worker".into()));
-        (
-            cell.auto_compact,
-            serde_json::to_value(cell.launch.record.unwrap()).unwrap()["auto_compact"].as_u64(),
-        )
-    });
-    assert_eq!(
-        actual,
-        [(Some("200000".into()), Some(200_000)), (None, None)]
-    );
+    }
 }
 
 #[test]
@@ -1076,7 +1079,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
             &crate::config::CommandsConfig::default(),
             &path,
             tiers,
-            Some(272_000),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
         )
     };
     let initial = load(&crate::config::tiers::TierConfig::default());

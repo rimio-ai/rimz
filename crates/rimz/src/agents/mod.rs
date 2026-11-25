@@ -152,14 +152,14 @@ pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::PriceBook;
 use pricing::TokenSplit;
 pub(crate) use provider_file::create_empty_if_absent as create_empty_provider_file;
+pub use registry::{
+    AutoCompactEnforcer, Runtime, SoftCompactSkip, all_definitions, auto_compact_enforcer,
+    compact_command, compact_reminder, definition_by_kind, find_definition, find_runtime,
+    known_kinds, message_keys, runtime_names, soft_compact_skip, spec_by_kind,
+};
 pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,
     usage_limit_fallback_grace,
-};
-pub use registry::{
-    Runtime, SoftCompactSkip, all_definitions, compact_command, compact_reminder,
-    definition_by_kind, find_definition, find_runtime, known_kinds, message_keys, runtime_names,
-    soft_compact_skip, spec_by_kind,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};
 pub(crate) use state::usable_description;

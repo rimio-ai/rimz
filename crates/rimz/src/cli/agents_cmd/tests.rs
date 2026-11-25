@@ -1742,7 +1742,7 @@ mod launch_options {
             &machine.agents.commands,
             &root.path().join("config.toml"),
             &machine.tiers,
-            machine.harness.auto_compact,
+            machine.harness.auto_compact_default(),
         );
         assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
         machine.agents.profiles = definitions.agent_profiles;
