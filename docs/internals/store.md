@@ -241,6 +241,7 @@ live/agent-telemetry/copilot-otel.jsonl       metadata-only Copilot export
 live/idle-compact/<digest>.json               idle-compaction fire records
 live/idle-stop/<digest>.json                  idle-stop helper pacing records
 live/soft-compact/<digest>-wrap-up.json smart-compaction reminder fire records
+live/ceiling-compact/<digest>.json            ceiling-compaction fire records
 live/cache-keepalive/<digest>{,.forced}.json, live/cache-keepalive.lock prompt-cache ping records (polite and forced claims)
 live/stall-nudge/<digest>.json                stuck-team nudge records
 live/runtime-env/                             prompt-submit environment sample claims
