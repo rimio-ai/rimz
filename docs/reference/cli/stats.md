@@ -222,7 +222,7 @@ In the timeline header, `N held` joins the detail. A line's mark names its kind:
 | `↶` | Idle stop withdrawn: a prompt from the user kept the session, with the withdrawn threshold and who asked for the stop. |
 | `⤳` | Molt: the agent moved into a fresh session under the same handle. |
 | `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
-| `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`, with a duration range for repeats), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
+| `⌁` | Compaction: before a delivery (`auto-compact`), at a RimZ-enforced ceiling (`auto-compact` / `auto-compact held`), after an idle gap (`idle compacted`, with a duration range for repeats), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `⌁` | Smart-compaction reminder: a mid-turn steer asking the agent to compact itself (`compact reminder`), or `compact reminder held` when it missed. A compaction the agent then runs is its own `rimz agents compact` command, not an assist. |
 | `↻` | Credit redemption for a provider account, with its rule and outcome. |
 | `⟲` | Room restore after a crash or reboot (`rebirth recovery`), with the agents it brought back. |
@@ -254,7 +254,7 @@ Counts are of assists that took effect, in the order they print. The five `workf
 | `redeems`, `resets` | Successful window-reset redemptions, and those whose outcome is `reset`. |
 | `manual_redeems`, `manual_resets` | The user-initiated subset, excluded from the `Auto-redeem:` text row. |
 | `resumes`, `recovered_secs` | Delivered auto-continues, and the time spent parked before those resumes. |
-| `compacts` | Delivered `auto_compact`, `idle_compact`, and `flip_compact` events. |
+| `compacts` | Delivered `auto_compact`, `ceiling_compact`, `idle_compact`, and `flip_compact` events. |
 | `soft_compacts` | Delivered mid-turn compaction reminders. |
 | `keepalives` | Delivered prompt-cache pings. |
 | `idle_stops` | `stop --when-idle` requests that stopped their agent. |
@@ -295,6 +295,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 | `auto_continue` | Auto-continue | `kind`, `agent_id`, `label?`, `park`, `parked_since?`, `delivered`, `message_id` |
 | `auto_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id` |
 | `soft_compact` | Smart-compaction reminder | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id`, `delivered`, `error?` |
+| `ceiling_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id`, `delivered`, `error?` |
 | `cache_keepalive` | Keepalive | `kind`, `agent_id`, `label?`, `idle_secs`, `waits`, `horizon_secs?`, `message_id`, `delivered`, `error?`, `capped`, `forced` |
 | `idle_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `idle_secs`, `idle_after_secs?`, `occupied_tokens`, `message_id`, `delivered`, `error?` |
 | `idle_stop` | Idle stop | `kind`, `agent_id`, `label`, `idle_secs`, `idle_after_secs`, `requested_by?`, `stopped`, `error?` |

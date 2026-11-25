@@ -167,7 +167,7 @@ Sidebar render code writes no shipped glyph by hand, with two exceptions. The sp
 
 Three roles carry rules of their own, in two entries:
 
-- `meter.compaction_wall` (`┤`) is the native-compaction end-stop in both sets, with no Nerd Font icon. Pixel meters draw the same end-stop in the `CompactionPoint` tone and include its presence and color in `MeterRaster`'s content key.
+- `meter.compaction_wall` (`┤`) is the auto-compaction end-stop (provider-native or RimZ-enforced) in both sets, with no Nerd Font icon. Pixel meters draw the same end-stop in the `CompactionPoint` tone and include its presence and color in `MeterRaster`'s content key.
 - `card.message_queued` and `card.typing` resolve to `↧` and `✎`, or Nerd Font v3 U+F10DA and U+F03EB. The card measures each resolved glyph's width, user overrides included, before it admits the message cluster.
 
 Tab and window names are the exception to configured glyphs. `crates/rimz/src/sidebar/produce/tab_status.rs::TabStatus::glyph` appends a fixed status suffix (`!`, `?`, `⏸`, `⢿`, `✓`) to a Zellij tab or tmux window name, whatever the glyph set. `strip_status_glyph_suffix` removes a waiting, attention, paused, working, or done glyph from any built-in or configured set off the end of a name, so the mux backends can match a room tab by its base name.
