@@ -71,6 +71,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: Some(HookContextReply::TopLevel {
+            event: "postToolUse",
             key: "additional_context",
         }),
         prompt_context: false,
