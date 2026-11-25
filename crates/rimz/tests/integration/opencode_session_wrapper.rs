@@ -1,6 +1,7 @@
 use super::*;
 use rimz::store::run::{RunRecord, RunStatus};
 
+const UNKNOWN_REASON: &str = "OpenCode model check refused \"unrelated\": unknown model; run `opencode models` to list configured models";
 const UNKNOWN: &str = "rimz: OpenCode model check refused \"unrelated\": unknown model; run `opencode models` to list configured models";
 
 fn wrapper_request(env: &Env, model: Option<&str>, subagent: bool) -> (ExecRequest, RunRecord) {
@@ -424,18 +425,12 @@ fn wrapper_model_refusals_do_not_retry_or_report_a_startup_crash() {
         let run =
             rimz::harness::run::load(&env.state_path_for(&env.project_root), &run.run_id).unwrap();
         assert_eq!(run.status, RunStatus::Failed);
-        assert_eq!(
-            run.failure_tail
-                .as_deref()
-                .and_then(|tail| tail.lines().rev().find(|line| !line.trim().is_empty()))
-                .map(str::trim),
-            Some(UNKNOWN)
-        );
+        assert_eq!(run.failure_tail.as_deref(), Some(UNKNOWN_REASON));
     }
 }
 
 #[test]
-fn wrapper_floor_refusals_fail_the_run_from_the_pane_without_a_retry() {
+fn wrapper_floor_refusals_fail_the_run_without_a_retry() {
     let env = Env::new();
     let (request, run) = wrapper_request(&env, None, false);
     let mut command = wrapper_command(&env, &request, "http://127.0.0.1:9");
@@ -447,7 +442,7 @@ fn wrapper_floor_refusals_fail_the_run_from_the_pane_without_a_retry() {
     let output = command.bounded_output().unwrap();
     let tail = pane_tail(&env);
     let refusal = format!(
-        "rimz: opencode 1.9.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
+        "opencode 1.9.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
         shim.display()
     );
     assert_eq!(output.status.code(), Some(78), "{tail}");
@@ -469,11 +464,99 @@ fn wrapper_floor_refusals_fail_the_run_from_the_pane_without_a_retry() {
         rimz::harness::run::load(&env.state_path_for(&env.project_root), &run.run_id).unwrap();
     assert_eq!(run.status, RunStatus::Failed);
     assert_eq!(
-        run.failure_tail
-            .as_deref()
-            .and_then(|tail| tail.lines().rev().find(|line| !line.trim().is_empty()))
-            .map(str::trim),
+        run.failure_tail.as_deref(),
         Some(refusal.as_str()),
         "{tail}"
     );
+}
+
+#[test]
+fn wrapper_refused_step_fails_its_run_without_reading_the_pane() {
+    for case in [
+        "capture_fails",
+        "capture_prints_other_text",
+        "registered_session_at_rest",
+    ] {
+        let env = Env::new();
+        let (origin, server) = crate::oauth_usage::serve_http_routes(
+            vec![("GET /api/model?", 200, CATALOG.into())],
+            usize::from(case != "registered_session_at_rest"),
+        );
+        let model = (case != "registered_session_at_rest").then_some("unrelated");
+        let (request, mut run) = wrapper_request(&env, model, false);
+        if case == "registered_session_at_rest" {
+            run.lifecycle = rimz::store::run::RunLifecycle::Session;
+            run.status = RunStatus::Running;
+            run.agent_id = Some("ses_registered".into());
+            rimz::harness::run::create(&env.state_path_for(&env.project_root), &run).unwrap();
+        }
+        let mut command = wrapper_command(&env, &request, &origin);
+        let dir = env.home_root.join("opencode-bin");
+        let capture_body = if case == "capture_fails" {
+            "printf 'capture\\n' >> \"$CHECK_LOG/capture-pane-calls\"; exit 1"
+        } else {
+            "printf 'capture\\n' >> \"$CHECK_LOG/capture-pane-calls\"; echo 'unrelated pane noise'; exit 0"
+        };
+        crate::common::write_path_shim(
+            &dir,
+            "tmux",
+            &format!(
+                r#"
+for arg in "$@"; do
+  if [ "$arg" = -V ]; then echo 'tmux 3.5'; exit 0; fi
+  if [ "$arg" = capture-pane ]; then {capture_body}; fi
+done
+exit 0
+"#
+            ),
+        );
+        let expected_reason = if case == "registered_session_at_rest" {
+            let shim = crate::common::write_path_shim(
+                &dir,
+                "opencode",
+                "if [ \"${1:-}\" = --version ]; then echo 1.9.0; exit 0; fi\nprintf ran > \"$CHECK_LOG/final-argv\"",
+            );
+            format!(
+                "opencode 1.9.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
+                shim.display()
+            )
+        } else {
+            UNKNOWN_REASON.to_owned()
+        };
+
+        let output = command.bounded_output().unwrap();
+        let tail = pane_tail(&env);
+        assert_eq!(output.status.code(), Some(78), "{case}: {tail}");
+        assert_eq!(
+            server.join().unwrap().len(),
+            usize::from(case != "registered_session_at_rest"),
+            "{case}"
+        );
+        for absent in ["failed to start", "relaunching", "died at startup"] {
+            assert!(!tail.contains(absent), "{case}: {tail}");
+        }
+        assert!(launch_retries(&env).is_empty(), "{case}");
+        let workspace = env.resolve_workspace(&env.project_root);
+        assert!(
+            !env.diag_records(&workspace.session_name)
+                .iter()
+                .any(|entry| matches!(
+                    &entry.event,
+                    rimz::diag::record::DiagEvent::ProviderStartupExit { .. }
+                )),
+            "{case}"
+        );
+        assert!(
+            !env.home_root.join("capture-pane-calls").exists(),
+            "{case}: wrapper must not capture the pane for a run the step already failed"
+        );
+        let settled =
+            rimz::harness::run::load(&env.state_path_for(&env.project_root), &run.run_id).unwrap();
+        assert_eq!(settled.status, RunStatus::Failed, "{case}: {tail}");
+        assert_eq!(
+            settled.failure_tail.as_deref(),
+            Some(expected_reason.as_str()),
+            "{case}: {tail}"
+        );
+    }
 }

@@ -1,6 +1,8 @@
 //! Process edge for the in-pane step every launch runs between its shell and its provider:
 //! find the provider program on the pane's own PATH, hold it to the version floor, add the
-//! arguments that depend on its version, prepare the model session, and exec it.
+//! arguments that depend on its version, prepare the model session, and exec it. On refusal
+//! (including a failed exec), fail the explicitly named supervised run with the cleaned reason
+//! before printing `rimz: <reason>` and exiting 78.
 
 use rimz::agents::capabilities::{SESSION_STEP_REFUSED, SessionStepOutput, SessionStepRequest};
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -20,6 +22,9 @@ pub(super) struct Args {
     /// The launch resumes or forks a session whose configured system prompt changed.
     #[arg(long)]
     changed_system_prompt: bool,
+    /// Supervised run id this step belongs to.
+    #[arg(long)]
+    run_id: Option<rimz::ids::RunId>,
     #[arg(last = true, required = true)]
     provider_argv: Vec<String>,
 }
@@ -60,10 +65,13 @@ pub(super) fn run(args: Args) -> anyhow::Result<()> {
     };
     let (path, output) = match prepare() {
         Ok(prepared) => prepared,
-        Err(reason) => return refuse(reason),
+        Err(reason) => return refuse(args.run_id.as_ref(), reason),
     };
     let Some((program, argv)) = output.argv.split_first() else {
-        return refuse("session preparation returned an empty command".into());
+        return refuse(
+            args.run_id.as_ref(),
+            "session preparation returned an empty command".into(),
+        );
     };
     let notices: Vec<String> = output
         .notices
@@ -96,7 +104,10 @@ pub(super) fn run(args: Args) -> anyhow::Result<()> {
         std::io::ErrorKind::Unsupported,
         "session preparation requires Unix exec",
     );
-    refuse(format!("could not exec provider `{program}`: {error}"))
+    refuse(
+        args.run_id.as_ref(),
+        format!("could not exec provider `{program}`: {error}"),
+    )
 }
 
 fn record_notices(args: &Args, notices: Vec<String>) -> anyhow::Result<()> {
@@ -133,11 +144,29 @@ fn record_notices(args: &Args, notices: Vec<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn refuse(reason: String) -> anyhow::Result<()> {
+fn fail_refused_run(run_id: &rimz::ids::RunId, reason: &str) -> anyhow::Result<()> {
+    let workspace = rimz::WorkspaceResolver::resolve_participant(".", None)?;
+    let store = crate::cli::require_existing_store(&workspace)?;
+    rimz::harness::run::fail_step_refusal(
+        store.paths(),
+        store.runtime_paths(),
+        run_id,
+        rimz::mux::ambient_pane_id().as_ref(),
+        reason,
+    )?;
+    Ok(())
+}
+
+fn refuse(run_id: Option<&rimz::ids::RunId>, reason: String) -> anyhow::Result<()> {
     let reason: String = reason
         .chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect();
+    if let Some(run_id) = run_id
+        && let Err(error) = fail_refused_run(run_id, &reason)
+    {
+        tracing::debug!(%run_id, %error, "could not record session-step refusal on run");
+    }
     writeln!(crate::cli::render::err(), "rimz: {reason}")?;
     Err(
         anyhow::Error::new(crate::cli::render::AlreadyReported).context(

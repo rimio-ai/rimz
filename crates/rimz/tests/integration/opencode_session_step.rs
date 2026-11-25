@@ -544,3 +544,153 @@ fn hidden_step_adds_the_changed_prompt_switch_by_the_resolved_claude_version() {
         );
     }
 }
+
+#[test]
+fn hidden_step_records_refusal_only_for_its_explicit_owned_run() {
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let missing = "rimz-test-no-such-provider";
+
+    // 1. No --run-id argument: even with RIMZ_RUN_ID set to a live run, the step writes nothing.
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let live_run = RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("opencode"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    rimz::harness::run::create(&env.state_path_for(&env.project_root), &live_run).unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "session-step", "opencode", "--", missing])
+        .env("RIMZ_RUN_ID", live_run.run_id.as_str())
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(78), "{stderr}");
+    assert_eq!(
+        stderr.trim_end(),
+        format!("rimz: cannot find `{missing}` on PATH"),
+        "{stderr}"
+    );
+    let untouched =
+        rimz::harness::run::load(&env.state_path_for(&env.project_root), &live_run.run_id).unwrap();
+    assert_eq!(
+        (untouched.status, untouched.failure_tail),
+        (RunStatus::Pending, None),
+        "no --run-id must never touch RIMZ_RUN_ID"
+    );
+
+    // 2. Explicit --run-id for a run handed over from this pane: left alone, still exits 78.
+    let mut handed_over = RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("opencode"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    handed_over.handed_over_from = Some(rimz::ids::PaneId::parse("tmux:%7").unwrap());
+    rimz::harness::run::create(&env.state_path_for(&env.project_root), &handed_over).unwrap();
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "session-step",
+            "opencode",
+            "--run-id",
+            handed_over.run_id.as_str(),
+            "--",
+            missing,
+        ])
+        .env("TMUX_PANE", "%7")
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(78), "{stderr}");
+    let kept =
+        rimz::harness::run::load(&env.state_path_for(&env.project_root), &handed_over.run_id)
+            .unwrap();
+    assert_eq!(
+        (kept.status, kept.failure_tail),
+        (RunStatus::Pending, None),
+        "superseded pane must leave handed-over run alone"
+    );
+
+    // 3. Exec failure with --run-id fails the run through the same refuse path.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let exec_run = RunRecord::new(
+            workspace.workspace_id.clone(),
+            AgentKind::new_unchecked("opencode"),
+            rimz::agents::PermissionMode::Auto,
+            "task".into(),
+            env.project_root.clone(),
+        );
+        rimz::harness::run::create(&env.state_path_for(&env.project_root), &exec_run).unwrap();
+        let bad_dir = env.home_root.join("bad-exec");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        let bad_bin = bad_dir.join("opencode");
+        std::fs::write(&bad_bin, "#!/no/such/rimz-test-interpreter\n").unwrap();
+        std::fs::set_permissions(&bad_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = env
+            .rimz()
+            .args([
+                "agents",
+                "session-step",
+                "opencode",
+                "--run-id",
+                exec_run.run_id.as_str(),
+                "--",
+                "opencode",
+            ])
+            .env("PATH", path_with_front(&bad_dir))
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(78), "{stderr}");
+        assert!(
+            stderr
+                .trim_end()
+                .starts_with("rimz: could not exec provider `opencode`: "),
+            "{stderr}"
+        );
+        let failed =
+            rimz::harness::run::load(&env.state_path_for(&env.project_root), &exec_run.run_id)
+                .unwrap();
+        assert_eq!(failed.status, RunStatus::Failed, "{stderr}");
+        assert_eq!(
+            failed.failure_tail.as_deref(),
+            stderr.trim_end().strip_prefix("rimz: "),
+            "{stderr}"
+        );
+    }
+
+    // 4. Unopenable store with --run-id: still prints only the refusal last and exits 78.
+    let no_room = Env::new();
+    let orphan_id = rimz::ids::RunId::new();
+    let output = no_room
+        .rimz()
+        .args([
+            "agents",
+            "session-step",
+            "opencode",
+            "--run-id",
+            orphan_id.as_str(),
+            "--",
+            missing,
+        ])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(78), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!("rimz: cannot find `{missing}` on PATH\n"),
+        "store write error must not print to stderr"
+    );
+}

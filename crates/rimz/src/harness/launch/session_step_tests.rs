@@ -69,3 +69,32 @@ fn finalized_stages_keep_the_step_and_provider_identity_across_rebuilds() {
     expected.push("--later-provider-arg".into());
     assert_eq!(process.argv, expected);
 }
+
+#[test]
+fn session_step_argv_passes_run_id_only_when_the_launch_has_a_run() {
+    let run_id = crate::ids::RunId::new();
+    let mut without_run = request(
+        "opencode",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    without_run.identity.params.model = Some("provider/model".into());
+    let plain_argv = session_step_argv(&without_run, Path::new("/bin/rimz"));
+
+    let mut with_run = without_run;
+    with_run.run_id = Some(run_id.clone());
+    let run_argv = session_step_argv(&with_run, Path::new("/bin/rimz"));
+
+    assert_eq!(
+        (
+            plain_argv.iter().any(|arg| arg == "--run-id"),
+            run_argv
+                .windows(3)
+                .any(|args| args == ["--run-id", run_id.as_str(), "--"]),
+        ),
+        (false, true),
+        "plain={plain_argv:?}\nwith_run={run_argv:?}"
+    );
+}

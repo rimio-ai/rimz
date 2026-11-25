@@ -269,7 +269,7 @@ Each step names the section that owns it.
 
 A parent that is gone ends the child through the [backstops](#backstops), whatever step it is at.
 
-A failed child's diagnostic tail is the pane capture that [scripting.md § Completion](./scripting.md#completion-folding-lifecycle-observations) sizes and caps. It reaches into scrollback, so a collapsed stack member keeps earlier output rather than only its visible row. Capture happens only after the last startup attempt and is not fenced to it, so recent output from earlier attempts can appear too.
+A failed child's diagnostic tail is the launch error or launch-step refusal stored directly on the run, or else the pane capture that [scripting.md § Completion](./scripting.md#completion-folding-lifecycle-observations) sizes and caps. A pane capture reaches into scrollback, so a collapsed stack member keeps earlier output rather than only its visible row. Capture happens only after the last startup attempt and is not fenced to it, so recent output from earlier attempts can appear too.
 
 ## Response files
 

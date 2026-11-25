@@ -1373,7 +1373,7 @@ mod runs {
             record.status = status;
             rimz::harness::run::create(context.store.paths(), &record).unwrap();
             let start = Instant::now();
-            fail_run_if_child_exited_first(&context, &globals, grace, None);
+            fail_run_if_child_exited_first(&context, &globals, grace, None, None);
             let stored = rimz::harness::run::load(context.store.paths(), &record.run_id).unwrap();
             outcomes.push((stored.status, start.elapsed() < grace));
         }
@@ -1490,7 +1490,7 @@ mod runs {
                     let _ = stream.write_all(b"{\"applied\":0,\"reply\":null}\n");
                 });
             }
-            fail_run_if_child_exited_first(&context, &globals, RUN_EXIT_TERMINAL_GRACE, None);
+            fail_run_if_child_exited_first(&context, &globals, RUN_EXIT_TERMINAL_GRACE, None, None);
             let completed =
                 rimz::harness::run::load(context.store.paths(), &context.run_id).unwrap();
             assert_eq!(
@@ -1601,7 +1601,7 @@ mod runs {
             color: crate::cli::ColorWhen::Auto,
         };
 
-        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None, None);
 
         let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
         assert_eq!(failed.status, RunStatus::Failed);
@@ -1633,7 +1633,7 @@ mod runs {
                         .expect("probe waiter")
                 );
 
-                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None, None);
 
                 let captured = rimz::harness::run::load(&paths, &run_id).expect("captured run");
                 assert_eq!(captured.status, status);
@@ -1641,7 +1641,7 @@ mod runs {
                     captured.failure_tail.as_deref(),
                     (status != RunStatus::Completed).then_some("provider failure evidence")
                 );
-                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None);
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, None, None);
             }
         }
     }
@@ -1693,7 +1693,7 @@ mod runs {
         };
         let reported = std::cell::Cell::new(false);
 
-        settle_exited_run(&context, &globals, Duration::ZERO, Some(&old), || {
+        settle_exited_run(&context, &globals, Duration::ZERO, Some(&old), None, || {
             reported.set(true);
             true
         });
@@ -1704,7 +1704,7 @@ mod runs {
 
         // A restart that stamps the run after the wrapper's first read: the locked
         // failure write, after the drain and the grace wait, still leaves it.
-        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, Some(&old));
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO, Some(&old), None);
         let kept = rimz::harness::run::load(&paths, &record.run_id).expect("load run");
         assert_eq!(kept.status, record.status, "the late fail write is refused");
         assert_eq!(kept.failure_tail, None, "no tail is captured onto it");
@@ -1715,6 +1715,7 @@ mod runs {
             &globals,
             Duration::ZERO,
             Some(&replacement),
+            None,
             || {
                 reported.set(true);
                 true
@@ -1728,5 +1729,448 @@ mod runs {
             "any other pane's exit settles it"
         );
         assert!(reported.get());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refused_step_exit_wakes_waiter_and_workflow_without_pane_capture() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixDatagram;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tracing_subscriber::prelude::*;
+
+        if std::env::var_os("RIMZ_TEST_REFUSED_WAKE_LOG").is_none() {
+            let bin = tempfile::tempdir().expect("fake mux dir");
+            let tmux = bin.path().join("tmux");
+            std::fs::write(
+                &tmux,
+                "#!/bin/sh\nprintf 'capture\\n' >> \"$RIMZ_TEST_REFUSED_WAKE_LOG\"\nexit 1\n",
+            )
+            .expect("fake tmux");
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("executable tmux");
+            let log = bin.path().join("captures");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::refused_step_exit_wakes_waiter_and_workflow_without_pane_capture"
+                    )
+                    .split_once("::")
+                    .expect("test module has a crate prefix")
+                    .1,
+                    "--nocapture",
+                ])
+                .env("PATH", bin.path())
+                .env("XDG_RUNTIME_DIR", bin.path())
+                .env("TMUX_PANE", "%7")
+                .env("RIMZ_TEST_REFUSED_WAKE_LOG", &log)
+                .output()
+                .expect("isolated refused-wake test");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !log.exists(),
+                "a refused step's settled run must trigger no pane capture: {:?}",
+                std::fs::read_to_string(&log)
+            );
+            return;
+        }
+
+        struct CountWorkflowWakes(Arc<AtomicUsize>);
+
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CountWorkflowWakes {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                event.record(
+                    &mut |field: &tracing::field::Field, value: &dyn std::fmt::Debug| {
+                        if field.name() == "message"
+                            && format!("{value:?}").contains("could not wake workflow attempt")
+                        {
+                            self.0.fetch_add(1, Ordering::SeqCst);
+                        }
+                    },
+                );
+            }
+        }
+
+        let own_pane = rimz::ids::PaneId::parse("tmux:%7").expect("pane");
+        let globals = GlobalFlags {
+            mux: Some(MuxName::Tmux),
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let mut results = Vec::new();
+        for (label, lifecycle, exit_code, superseded_pane) in [
+            (
+                "turn_refused",
+                rimz::store::run::RunLifecycle::Turn,
+                Some(rimz::agents::capabilities::SESSION_STEP_REFUSED),
+                false,
+            ),
+            (
+                "session_refused",
+                rimz::store::run::RunLifecycle::Session,
+                Some(rimz::agents::capabilities::SESSION_STEP_REFUSED),
+                false,
+            ),
+            (
+                "turn_signaled",
+                rimz::store::run::RunLifecycle::Turn,
+                None,
+                false,
+            ),
+            (
+                "session_signaled",
+                rimz::store::run::RunLifecycle::Session,
+                None,
+                false,
+            ),
+            (
+                "turn_other_exit",
+                rimz::store::run::RunLifecycle::Turn,
+                Some(1),
+                false,
+            ),
+            (
+                "session_other_exit",
+                rimz::store::run::RunLifecycle::Session,
+                Some(1),
+                false,
+            ),
+            (
+                "turn_refused_superseded",
+                rimz::store::run::RunLifecycle::Turn,
+                Some(rimz::agents::capabilities::SESSION_STEP_REFUSED),
+                true,
+            ),
+            (
+                "session_signaled_superseded",
+                rimz::store::run::RunLifecycle::Session,
+                None,
+                true,
+            ),
+        ] {
+            let state = tempfile::tempdir().expect("state dir");
+            let runtime_root = tempfile::Builder::new()
+                .prefix("rr")
+                .tempdir_in("/tmp")
+                .expect("runtime dir");
+            let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+            let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+            let runtime = rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path())
+                .expect("runtime");
+            paths.ensure_dirs().expect("state dirs");
+            runtime.ensure_dirs().expect("runtime dirs");
+            let mut record = RunRecord::new(
+                workspace_id.clone(),
+                AgentKind::new_unchecked("opencode"),
+                PermissionMode::Auto,
+                "summarize".to_owned(),
+                Path::new("/tmp/rimz-run").to_path_buf(),
+            );
+            record.lifecycle = lifecycle;
+            record.status = RunStatus::Failed;
+            record.failure_tail = Some("step refused launch".to_owned());
+            if superseded_pane {
+                record.handed_over_from = Some(own_pane.clone());
+            }
+            let workflow = rimz::ids::WorkflowRunId::new();
+            std::fs::create_dir_all(paths.workflow(&workflow).record).expect("unreadable workflow");
+            record.workflow = Some(rimz::agents::WorkflowAttemptRef {
+                run: workflow,
+                seq: 1,
+                role: rimz::agents::WorkflowAttemptRole::Step,
+            });
+            let run_id = record.run_id.clone();
+            rimz::harness::run::create(&paths, &record).expect("create run");
+
+            let sock_path = {
+                let waiter = rimz::harness::run_wake::RunWaiter::bind(
+                    &runtime,
+                    ExpectedRunFrame {
+                        workspace_id: workspace_id.clone(),
+                        run_id: run_id.clone(),
+                    },
+                    rimz::harness::run::RunCancellation::new(),
+                )
+                .expect("bind waiter");
+                waiter.socket_path().to_path_buf()
+            };
+            let sock = UnixDatagram::bind(&sock_path).expect("bind waiter socket");
+            sock.set_nonblocking(true).expect("nonblocking socket");
+
+            let context = RunExecContext {
+                run_id: run_id.clone(),
+                store: rimz::Store::open(paths.clone(), runtime).expect("store"),
+                session_name: "rimz-test".to_owned(),
+                workspace: rimz::ResolvedWorkspace {
+                    workspace_id: workspace_id.clone(),
+                    project_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                    cwd_project_root: None,
+                    root_class: rimz::workspace::RootClass::Directory,
+                    worktree_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                    worktree_branch: None,
+                    session_name: "rimz-test".to_owned(),
+                    mux_hint: None,
+                },
+            };
+            let wakes = Arc::new(AtomicUsize::new(0));
+            let subscriber = tracing_subscriber::registry().with(CountWorkflowWakes(wakes.clone()));
+            tracing::subscriber::with_default(subscriber, || {
+                fail_run_if_child_exited_first(
+                    &context,
+                    &globals,
+                    Duration::ZERO,
+                    Some(&own_pane),
+                    exit_code,
+                );
+            });
+            let mut buf = [0u8; 512];
+            let wake_frame = match sock.recv(&mut buf) {
+                Ok(len) => {
+                    let frame: rimz::store::run::WakeupFrame =
+                        serde_json::from_slice(&buf[..len]).expect("valid wakeup frame");
+                    matches!(
+                        frame,
+                        rimz::store::run::WakeupFrame::RunCompleted {
+                            workspace_id: ws,
+                            run_id: id,
+                            status: RunStatus::Failed,
+                        } if ws == workspace_id && id == run_id
+                    )
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => false,
+                Err(err) => panic!("{label}: unexpected recv error: {err}"),
+            };
+            results.push((label, wake_frame, wakes.load(Ordering::SeqCst)));
+        }
+        assert_eq!(
+            results,
+            vec![
+                ("turn_refused", true, 1),
+                ("session_refused", true, 1),
+                ("turn_signaled", true, 1),
+                ("session_signaled", true, 1),
+                ("turn_other_exit", true, 1),
+                ("session_other_exit", true, 1),
+                ("turn_refused_superseded", false, 0),
+                ("session_signaled_superseded", false, 0),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refused_step_fallback_fails_registered_session_run_with_pane_tail() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixDatagram;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tracing_subscriber::prelude::*;
+
+        const CAPTURE_ENV: &str = "RIMZ_TEST_REFUSED_SESSION_FALLBACK";
+        if std::env::var_os(CAPTURE_ENV).is_none() {
+            let bin = tempfile::tempdir().expect("fake mux dir");
+            let tmux = bin.path().join("tmux");
+            std::fs::write(
+                &tmux,
+                "#!/bin/sh\n[ \"$1\" = '-S' ] || exit 1\nshift 3\n[ \"$*\" = 'capture-pane -p -t %7 -S -60' ] || exit 1\nprintf 'rimz: opencode 1.9.0 is older than 2.0.0\\n'\n",
+            )
+            .expect("fake tmux");
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("executable tmux");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::refused_step_fallback_fails_registered_session_run_with_pane_tail"
+                    )
+                    .split_once("::")
+                    .expect("test module has a crate prefix")
+                    .1,
+                    "--nocapture",
+                ])
+                .env("PATH", bin.path())
+                .env("XDG_RUNTIME_DIR", bin.path())
+                .env("TMUX_PANE", "%7")
+                .env(CAPTURE_ENV, "1")
+                .output()
+                .expect("isolated refused-session-fallback test");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        struct CountWorkflowWakes(Arc<AtomicUsize>);
+
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CountWorkflowWakes {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                event.record(
+                    &mut |field: &tracing::field::Field, value: &dyn std::fmt::Debug| {
+                        if field.name() == "message"
+                            && format!("{value:?}").contains("could not wake workflow attempt")
+                        {
+                            self.0.fetch_add(1, Ordering::SeqCst);
+                        }
+                    },
+                );
+            }
+        }
+
+        let state = tempfile::tempdir().expect("state dir");
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .expect("runtime dir");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+        let runtime =
+            rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+        paths.ensure_dirs().expect("state dirs");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let mut record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "summarize".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.lifecycle = rimz::store::run::RunLifecycle::Session;
+        let workflow = rimz::ids::WorkflowRunId::new();
+        std::fs::create_dir_all(paths.workflow(&workflow).record).expect("unreadable workflow");
+        record.workflow = Some(rimz::agents::WorkflowAttemptRef {
+            run: workflow,
+            seq: 1,
+            role: rimz::agents::WorkflowAttemptRole::Step,
+        });
+        let run_id = record.run_id.clone();
+        rimz::harness::run::create(&paths, &record).expect("create run");
+
+        // Register two conversation bindings so the session run is Running, at rest
+        // (no snapshot row reads as rest), and carries spend across earlier_sessions.
+        for (id, cost) in [("first", 1.25), ("second", 2.5)] {
+            let mut ctx = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+            ctx.cost = Some(rimz::agents::AgentCost {
+                total_cost_usd: Some(cost),
+                ..Default::default()
+            });
+            rimz::store::agent_context::write(&runtime, "claude", id, &ctx, None)
+                .expect("write context");
+            let observation = rimz::agents::AgentLifecycleObservation::new(
+                Some(id.into()),
+                rimz::agents::LifecycleSignal::Registered,
+            );
+            rimz::harness::run::record_lifecycle(
+                &paths,
+                &run_id,
+                "claude",
+                &observation,
+                None,
+                || None,
+            )
+            .expect("register session");
+        }
+        let before = rimz::harness::run::load(&paths, &run_id).expect("load running session");
+        assert_eq!(before.status, RunStatus::Running);
+        assert_eq!(before.earlier_sessions.len(), 1);
+
+        let sock_path = {
+            let waiter = rimz::harness::run_wake::RunWaiter::bind(
+                &runtime,
+                ExpectedRunFrame {
+                    workspace_id: workspace_id.clone(),
+                    run_id: run_id.clone(),
+                },
+                rimz::harness::run::RunCancellation::new(),
+            )
+            .expect("bind waiter");
+            waiter.socket_path().to_path_buf()
+        };
+        let sock = UnixDatagram::bind(&sock_path).expect("bind waiter socket");
+        sock.set_nonblocking(true).expect("nonblocking socket");
+
+        let context = RunExecContext {
+            run_id: run_id.clone(),
+            store: rimz::Store::open(paths.clone(), runtime).expect("store"),
+            session_name: "rimz-test".to_owned(),
+            workspace: rimz::ResolvedWorkspace {
+                workspace_id: workspace_id.clone(),
+                project_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                cwd_project_root: None,
+                root_class: rimz::workspace::RootClass::Directory,
+                worktree_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                worktree_branch: None,
+                session_name: "rimz-test".to_owned(),
+                mux_hint: None,
+            },
+        };
+        let own_pane = rimz::ids::PaneId::parse("tmux:%7").expect("pane");
+        let globals = GlobalFlags {
+            mux: Some(MuxName::Tmux),
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let grace = Duration::from_secs(30);
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(CountWorkflowWakes(wakes.clone()));
+        let start = Instant::now();
+        tracing::subscriber::with_default(subscriber, || {
+            fail_run_if_child_exited_first(
+                &context,
+                &globals,
+                grace,
+                Some(&own_pane),
+                Some(rimz::agents::capabilities::SESSION_STEP_REFUSED),
+            );
+        });
+        assert!(
+            start.elapsed() < grace,
+            "refused session fallback must skip terminal grace"
+        );
+
+        let settled = rimz::harness::run::load(&paths, &run_id).expect("load settled session");
+        assert_eq!(settled.status, RunStatus::Failed);
+        assert_eq!(
+            settled.failure_tail.as_deref(),
+            Some("rimz: opencode 1.9.0 is older than 2.0.0")
+        );
+        assert_eq!(settled.cost_usd, Some(3.75));
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+
+        let mut buf = [0u8; 512];
+        let len = sock.recv(&mut buf).expect("waiter wake frame");
+        let frame: rimz::store::run::WakeupFrame =
+            serde_json::from_slice(&buf[..len]).expect("valid wakeup frame");
+        assert!(matches!(
+            frame,
+            rimz::store::run::WakeupFrame::RunCompleted {
+                workspace_id: ws,
+                run_id: id,
+                status: RunStatus::Failed,
+            } if ws == workspace_id && id == run_id
+        ));
     }
 }

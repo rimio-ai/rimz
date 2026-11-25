@@ -1938,6 +1938,10 @@ fn session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String> {
         request.kind.to_string(),
     ];
     argv.extend(model_step_args(request));
+    if let Some(run_id) = &request.run_id {
+        argv.push("--run-id".into());
+        argv.push(run_id.to_string());
+    }
     argv.push("--".into());
     argv
 }
