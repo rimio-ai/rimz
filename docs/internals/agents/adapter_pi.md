@@ -19,7 +19,7 @@ Pi's only integration surface is in-process TypeScript extensions ([pi-reference
 
 ## The extension
 
-Every forwarded event spawns one `rimz hooks feed --source pi` child, with the envelope as JSON on stdin and `RIMZ_AGENT_PID` set to Pi's own pid. The extension runs `$RIMZ_BIN` when set, else `rimz` from `PATH`. Every event except `tool_call` is fire-and-forget: the child's stdout and stderr are discarded, and a spawn error or a broken pipe is swallowed, so a missing `rimz` never surfaces inside Pi.
+Every forwarded event spawns one `rimz hooks feed --source pi` child, with the envelope as JSON on stdin and `RIMZ_AGENT_PID` set to Pi's own pid. The extension runs `$RIMZ_BIN` when set, else `rimz` from `PATH`. Every event except `tool_call` and `tool_result` is fire-and-forget: the child's stdout and stderr are discarded, and a spawn error or a broken pipe is swallowed, so a missing `rimz` never surfaces inside Pi.
 
 `tool_call` is Pi's awaited pre-tool gate. Its handler reads the child's stdout and blocks the tool only when stdout parses as JSON with `block: true`. Empty or unparseable stdout, a spawn error, or a missing binary lets the tool run. Pi's `decode_hook` sets no reply, so stdout stays empty ([Neutral output](#neutral-output)). Pi awaits the handler with no timeout ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#blocking-dialogs-and-errors)), so a slow feed child delays the tool and its siblings.
 
@@ -75,6 +75,7 @@ Pi hot-reloads discovered extensions on `/reload`, which fires `session_shutdown
 | `model_select`, `thinking_level_select` | none | `model`, `effort` |
 | `tool_execution_end` | `ToolUsed { effect, name, native_key }` | `tool_name`, `tool_call_id`, `is_error`, plus `tool_details` for `ask_user_question` |
 | `tool_call` | `AwaitingInput { Question }` for `ask_user_question` with UI, else none | `tool_name`, `tool_input`, `tool_call_id`, `has_ui` |
+| `tool_result` | none; forwarded only inside a `rimz` run, to carry the [deadline context](#deadline-context) | `tool_name`, `tool_call_id` |
 | `ui_prompt_start` | `AwaitingInput { Question, detail }` | `ui_prompt_id`, `ui_prompt_kind`, `ui_prompt_title`, `has_ui` |
 | `ui_prompt_end` | `ToolUsed` with no name | `ui_prompt_id` |
 | `subagent_started` | `SubagentStarted` on the child | `subagent_id`, `subagent_label`, `subagent_source`, `cwd` |
@@ -164,6 +165,12 @@ The plan refuses a non-`Question` ask, an ask without structured questions (ever
 ### Neutral output
 
 Pi's `decode_hook` returns no reply on any event, so the `tool_call` child's stdout is empty (`crates/rimz/src/agents/adapters/pi/tests/mod.rs::neutral_decision_shape_is_pinned`). Empty stdout lets an ordinary tool run and lets `ask_user_question` open rpiv's own UI.
+
+### Deadline context
+
+A `rimz subagents` child gets the [deadline ladder](../harness/subagents.md#the-deadline-ladder)'s warning and stop rungs through `tool_result`, Pi's post-tool hook, which Pi awaits before it finalizes the tool. The extension feeds it only when `RIMZ_RUN_ID` is in its environment, so a session outside a run spawns nothing per tool. The spec's `hook_context` is `HookContextReply::TopLevel { event: "tool_result", key: "context" }`, so a claimed rung comes back as `{"context":"..."}` (`crates/rimz/src/agents/adapters/pi/tests/mod.rs::deadline_context_reply_rides_the_post_tool_result`). The extension passes that text to `pi.sendMessage` as a `rimz-deadline` custom message with `deliverAs: "steer"`, and leaves the tool result untouched. Pi delivers a steer once the current tool batch finishes, before the next model call, stores it as a `custom_message` session entry, and shows it under a `[rimz-deadline]` header, never as the user (Pi 1.6.1, live probe). The transcript reader reads only `message` entries, so the rung never shows up as a user turn there either. The rung is claimed when the feed answers, so a run aborted between the steer and the next model call loses that rung. The host stop and the kill still bound the run.
+
+The rung rides the post-tool event, not the pre-tool `tool_call`, because a steer waits for the tool batch to finish. A stop rung claimed before a long command would reach the model only after that command ends, and the claim would keep the host from typing the stop itself (`crates/rimz/src/harness/deadline.rs::stop_due_by_pane`).
 
 ## Subagents
 

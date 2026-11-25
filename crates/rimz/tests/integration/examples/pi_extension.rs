@@ -81,35 +81,10 @@ fn run_extension_harness(
 ) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/adapters/pi/extension.ts");
-
     let dir = tempfile::tempdir().unwrap();
-    let extension_path = dir.path().join("rimz.mjs");
+    let extension_path = stage_extension(dir.path(), pi_version);
     let capture_path = dir.path().join("capture.jsonl");
     let stub_path = dir.path().join("rimz-capture");
-    std::fs::write(&extension_path, EXTENSION_SOURCE).unwrap();
-
-    // Pi's extension loader aliases the host package so an extension can import
-    // runtime values like `VERSION`. Standalone Node has no such alias, so
-    // stand up the minimal module the bare import resolves to.
-    let pkg_dir = dir
-        .path()
-        .join("node_modules/@earendil-works/pi-coding-agent");
-    std::fs::create_dir_all(&pkg_dir).unwrap();
-    std::fs::write(
-        pkg_dir.join("package.json"),
-        r#"{"name":"@earendil-works/pi-coding-agent","version":"0.0.0","type":"module","exports":"./index.js"}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        pkg_dir.join("index.js"),
-        format!(
-            "export const VERSION = {};\n",
-            serde_json::to_string(pi_version).unwrap()
-        ),
-    )
-    .unwrap();
-
     std::fs::write(
         &stub_path,
         "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$RIMZ_CAPTURE\"\n",
@@ -682,6 +657,132 @@ if (providerErrors.length > 0) {{
     assert!(
         output.status.success(),
         "node harness failed for pi {pi_version}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Write the embedded extension into `dir` beside a stand-in for the host
+/// package, and return the extension's path. Pi's extension loader aliases the
+/// host package so an extension can import runtime values like `VERSION`.
+/// Standalone Node has no such alias, so stand up the minimal module the bare
+/// import resolves to.
+#[cfg(unix)]
+fn stage_extension(dir: &std::path::Path, pi_version: &str) -> std::path::PathBuf {
+    const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/adapters/pi/extension.ts");
+
+    let extension_path = dir.join("rimz.mjs");
+    std::fs::write(&extension_path, EXTENSION_SOURCE).unwrap();
+    let pkg_dir = dir.join("node_modules/@earendil-works/pi-coding-agent");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("package.json"),
+        r#"{"name":"@earendil-works/pi-coding-agent","version":"0.0.0","type":"module","exports":"./index.js"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        pkg_dir.join("index.js"),
+        format!(
+            "export const VERSION = {};\n",
+            serde_json::to_string(pi_version).unwrap()
+        ),
+    )
+    .unwrap();
+    extension_path
+}
+
+/// A `rimz` run child awaits a feed on every `tool_result` and steers the
+/// reply's `context` in as a custom message; a session outside a run spawns no
+/// feed there, and an empty or unparseable reply steers nothing.
+#[test]
+#[cfg(unix)]
+fn extension_steers_deadline_context_from_the_tool_result_feed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        crate::common::skip("node not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let extension_path = stage_extension(dir.path(), "1.6.1");
+    let capture_path = dir.path().join("capture.jsonl");
+    let stub_path = dir.path().join("rimz-reply");
+    std::fs::write(
+        &stub_path,
+        "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$RIMZ_CAPTURE\"\nprintf '%s' \"$RIMZ_STUB_REPLY\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&stub_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&stub_path, permissions).unwrap();
+
+    let harness = dir.path().join("harness.mjs");
+    std::fs::write(
+        &harness,
+        format!(
+            r#"
+import fs from "node:fs/promises";
+import assert from "node:assert/strict";
+
+process.env.RIMZ_BIN = {};
+process.env.RIMZ_CAPTURE = {};
+delete process.env.RIMZ_RUN_ID;
+const {{ default: rimz }} = await import({});
+const handlers = new Map();
+const steered = [];
+rimz({{
+  on: (event, handler) => handlers.set(event, handler),
+  events: {{ on: () => () => {{}} }},
+  getThinkingLevel: () => "medium",
+  sendMessage: (message, options) => steered.push([message, options]),
+}});
+const ctx = {{
+  sessionManager: {{
+    getSessionId: () => "sess-1",
+    getCwd: () => "/repo",
+    getBranch: () => [],
+  }},
+  getContextUsage: () => undefined,
+}};
+const result = (id) => handlers.get("tool_result")({{
+  toolCallId: id, toolName: "bash", input: {{}}, content: [], isError: false,
+}}, ctx);
+const rung = "2m left. Wrap up now.";
+process.env.RIMZ_STUB_REPLY = JSON.stringify({{ context: rung }});
+assert.equal(await result("outside-run"), undefined);
+process.env.RIMZ_RUN_ID = "run-1";
+assert.equal(await result("rung-call"), undefined);
+process.env.RIMZ_STUB_REPLY = "";
+assert.equal(await result("silent-call"), undefined);
+process.env.RIMZ_STUB_REPLY = "not json";
+assert.equal(await result("garbled-call"), undefined);
+assert.deepEqual(steered, [[
+  {{ customType: "rimz-deadline", content: rung, display: true }},
+  {{ deliverAs: "steer" }},
+]]);
+const fed = (await fs.readFile(process.env.RIMZ_CAPTURE, "utf8")).trim().split("\n")
+  .map((line) => JSON.parse(line));
+assert.deepEqual(fed.map((payload) => [payload.hook_event_name, payload.tool_call_id]), [
+  ["tool_result", "rung-call"], ["tool_result", "silent-call"], ["tool_result", "garbled-call"],
+]);
+"#,
+            serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
+        ),
+    )
+    .unwrap();
+    let output = std::process::Command::new("node")
+        .arg(&harness)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node harness failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

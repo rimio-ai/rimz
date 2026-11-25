@@ -352,7 +352,7 @@ mod tests {
         let deadline = record.deadline_at.unwrap();
         let delay = Duration::from_secs(10);
         for kind in [
-            "claude", "codex", "copilot", "cursor", "droid", "grok", "opencode", "qwen",
+            "claude", "codex", "copilot", "cursor", "droid", "grok", "opencode", "pi", "qwen",
         ] {
             record.kind = AgentKind::new_unchecked(kind);
             assert!(!stop_due_by_pane(&record, deadline), "{kind}");
@@ -376,7 +376,6 @@ mod tests {
         for kind in [
             "antigravity",
             "amp",
-            "pi",
             "kimi",
             "kiro",
             "qoder",
