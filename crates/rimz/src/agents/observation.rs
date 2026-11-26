@@ -680,6 +680,10 @@ pub struct AgentLifecycleObservation {
     /// leaves the folded list unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_scripts: Option<BackgroundScriptReport>,
+    /// The ask this hook opens was raised by a call inside a running script, which
+    /// waits on it: the fold marks each listed script held by the ask.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub script_ask: bool,
     /// The provider limit a failed turn end names in the provider's own stop report. The
     /// supervised run fold reads it; the agent row reads its refill only off the turn-error
     /// marker the adapter builds from the same stop (`AgentTurnError::refill_at`).
@@ -730,6 +734,7 @@ impl AgentLifecycleObservation {
             parent_agent_id: None,
             background_shells: None,
             background_scripts: None,
+            script_ask: false,
             limit_stop: None,
         }
     }

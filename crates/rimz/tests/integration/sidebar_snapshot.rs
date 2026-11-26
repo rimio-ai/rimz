@@ -384,6 +384,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         parent_agent_id: None,
         background_shells: None,
         background_scripts: None,
+        script_ask: false,
         limit_stop: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(

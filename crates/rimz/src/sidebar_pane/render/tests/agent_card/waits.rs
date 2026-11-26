@@ -868,6 +868,7 @@ fn background_scripts_join_the_shells_and_the_count_past_the_threshold() {
         id: id.to_owned(),
         description: description.map(ToOwned::to_owned),
         started_at: fixed_now() - Duration::from_secs(age),
+        held_by: None,
     };
     let mut parent = agent(
         "claude-1",
@@ -934,6 +935,55 @@ fn background_scripts_join_the_shells_and_the_count_past_the_threshold() {
     assert_snapshot(
         "background_script_entries",
         snapshot_to_screen(&snapshot, 54, 28),
+    );
+
+    let mut asking = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    asking.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("Ship it?".to_owned()),
+        extra_questions: 0,
+        native_key: Some("repl_e3d5".to_owned()),
+        since: fixed_now(),
+    });
+    asking.background_scripts = vec![BackgroundScript {
+        held_by: Some("repl_e3d5".to_owned()),
+        ..script("held", Some("ask the user"), 45)
+    }];
+    let rows = line_texts(&group_lines(
+        &snapshot_with(vec![asking.clone()]),
+        &theme,
+        0,
+    ));
+    assert!(
+        rows.iter().any(|line| line.contains("Ship it?")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|line| line.contains("waits") || line.contains("ask the user")),
+        "a script blocked on its own ask is no running work: {rows:#?}"
+    );
+
+    asking.status = AgentStatus::Success;
+    asking.open_ask = None;
+    let rows = line_texts(&group_lines(&snapshot_with(vec![asking]), &theme, 0));
+    assert!(
+        rows.iter().any(|line| line.contains("waits (1)")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.contains(&shell_lead(&theme, "shell · ask the user"))),
+        "once the ask closes, the script runs on: {rows:#?}"
     );
 }
 

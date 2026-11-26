@@ -1032,6 +1032,10 @@ impl AgentCard {
             background_scripts: agent
                 .background_scripts
                 .iter()
+                .filter(|script| {
+                    ask.and_then(|ask| ask.native_key.as_ref())
+                        .is_none_or(|key| script.held_by.as_ref() != Some(key))
+                })
                 .map(|script| CardScript {
                     label: script
                         .description

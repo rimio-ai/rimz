@@ -566,8 +566,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_adopted_subagent_identity_contract_is_version_118() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 118);
+fn snapshot_script_held_by_ask_contract_is_version_119() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 119);
+}
+
+#[test]
+fn pre_119_script_held_by_ask_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(118);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose scripts held by their own ask still counted as running must refold"
+    );
 }
 
 #[test]
@@ -1183,6 +1198,7 @@ fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) ->
         parent_agent_id: None,
         background_shells: None,
         background_scripts: None,
+        script_ask: false,
         limit_stop: None,
     };
     EventEnvelope::agent_lifecycle(

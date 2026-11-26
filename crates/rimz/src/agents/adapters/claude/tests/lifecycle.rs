@@ -971,6 +971,7 @@ fn background_script_reports_replay_the_captured_repl_sequence() {
                 id: id.to_owned(),
                 description: Some(description.to_owned()),
                 started_at: Timestamp::UNIX_EPOCH,
+                held_by: None,
             },
         })
     };
@@ -1080,6 +1081,39 @@ fn background_script_reports_replay_the_captured_repl_sequence() {
         ),
         None,
         "a subagent's script targets its child row, which lists no scripts"
+    );
+
+    // A script blocked on its own AskUserQuestion: the ask reports no script
+    // change and flags itself as raised inside a script.
+    let asking =
+        json!({ "code": "await tools.AskUserQuestion({})", "description": "ask the user" });
+    let question = json!({ "questions": [{ "question": "Ship it?", "options": [] }] });
+    let script_ask = |tool_name: &str, tool_input: &serde_json::Value, tool_use_id: &str| {
+        let payload = json!({
+            "session_id": "sess-1", "hook_event_name": "PreToolUse",
+            "tool_name": tool_name, "tool_input": tool_input, "tool_use_id": tool_use_id,
+        });
+        hook_observation(&ClaudeAdapter, "PreToolUse", &payload)
+            .map(|o| (o.script_ask, o.background_scripts.is_some()))
+    };
+    assert_eq!(
+        script_ask("REPL", &asking, "toolu_01BS"),
+        Some((false, true))
+    );
+    assert_eq!(
+        script_ask("AskUserQuestion", &question, "repl_e3d51258"),
+        Some((true, false)),
+        "an ask a script raised holds that script"
+    );
+    assert_eq!(
+        script_ask("AskUserQuestion", &question, "toolu_01Ask"),
+        Some((false, false)),
+        "a direct ask holds no script"
+    );
+    assert_eq!(
+        script_ask("Bash", &json!({ "command": "true" }), "repl_0a5b"),
+        Some((false, false)),
+        "a script's own command is no ask"
     );
 }
 

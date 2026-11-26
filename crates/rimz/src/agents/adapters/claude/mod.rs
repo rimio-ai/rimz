@@ -2014,6 +2014,12 @@ fn build_claude_observation(
         let now = Timestamp::now();
         observation.background_shells = claude_background_shells(hook, now);
         observation.background_scripts = claude_background_scripts(payload, hook, now);
+        // A call a script makes carries a `repl_` key, and nothing in the payload
+        // names the script, so an ask it opens holds every listed script.
+        observation.script_ask = matches!(
+            &observation.signal,
+            LifecycleSignal::AwaitingInput { native_key: Some(key), .. } if key.starts_with("repl_")
+        );
     }
     observation.parent_agent_id = parent_agent_id;
     observation.task = claude_task(payload, hook.subagent_common());
@@ -2168,6 +2174,7 @@ fn claude_background_scripts(
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     started_at: now,
+                    held_by: None,
                 },
             })
         }

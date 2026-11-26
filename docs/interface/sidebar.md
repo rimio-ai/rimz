@@ -509,7 +509,7 @@ Each entry starts with its live state or wait icon, then who or what it names an
 | check | working spinner | `check · test` (program name) | time since armed | full command, with the program path trimmed |
 | file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
 | background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since the transcript step that backgrounded the command (Antigravity), else since RimZ first saw it | command when known, with the program path trimmed |
-| background script | working spinner | `shell ·` the script description, else `script`; listed once it has run 30 s | time since RimZ first saw it | never |
+| background script | working spinner | `shell ·` the script description, else `script`; listed once it has run 30 s, and not while the agent's open ask came from that script | time since RimZ first saw it | never |
 | signal | `⌁` | `signal · pr.merged` (selector) | time since armed | never |
 | idle stop | `◷` | `stop · after 3m idle, in 1m`: the requested rest, then the time left or `due` while the agent rests and its clock runs | time since requested | never |
 
