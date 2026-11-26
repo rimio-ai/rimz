@@ -1248,6 +1248,7 @@ esac"#,
                 "paste" => command.args(["message", "--steer", "@claude", "hello"]),
                 _ => unreachable!("the table names every write kind"),
             };
+            let started_ms = rimz::utils::time::unix_now_ms();
             let output = command.output().unwrap();
             if !fail {
                 assert!(output.status.success(), "{kind}: {output:?}");
@@ -1257,7 +1258,7 @@ esac"#,
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
                     .and_then(|value| value["panes"]["tmux:%3"]["quiet_until_ms"].as_u64())
-                    .is_some_and(|until| until > rimz::utils::time::unix_now_ms())
+                    .is_some_and(|until| until > started_ms)
             };
             let backend = if kind == "paste" {
                 "load-buffer"
