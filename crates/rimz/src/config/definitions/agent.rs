@@ -868,10 +868,10 @@ pub(super) struct SeatInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SeatEdits {
     /// Only the leader keeps the question tool.
-    pub leader: bool,
+    leader: bool,
     /// A team running the shipped reflect consensus adds `rimz-reflect` to a non-empty skills
     /// list.
-    pub reflects: bool,
+    reflects: bool,
 }
 
 /// The capability every Markdown team seat's built-in consensus names (`rimz(message)`).
@@ -887,6 +887,16 @@ struct SeatSkillEdits {
 }
 
 impl SeatEdits {
+    /// Builds seat edits for `handle` on `team`, taking the leader from
+    /// [`crate::config::Team::leader_role`] so seat edits share one leader definition with the
+    /// served-capability and launch switch-off rules.
+    pub(super) fn for_seat(team: &crate::config::Team, handle: &str, reflects: bool) -> Self {
+        Self {
+            leader: team.leader_role() == Some(handle),
+            reflects,
+        }
+    }
+
     /// Applies seat edits to resolved frontmatter and reports whether the seat should append an
     /// optional `CONSENSUS_SKILL` entry to `profile.skills` after `skill_policy` checks the
     /// author-written entries (and whether the seat also appended `rimz-reflect`).
