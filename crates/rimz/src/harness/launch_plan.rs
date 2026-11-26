@@ -1330,6 +1330,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         mcps: mcps.as_deref(),
                         granted: request.rimz_capabilities.is_some(),
                         login_env: &env,
+                        rendered_tools: request.tools.is_some(),
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")

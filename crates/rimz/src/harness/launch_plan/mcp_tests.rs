@@ -290,6 +290,81 @@ fn claude_mcps_lists_become_only_args_and_the_exact_allowlist() {
     assert_eq!(claude_entry(&argv(&switches(true, false), None)), None);
 }
 
+/// A launch that hands over RimZ's server adds `ToolSearch` once to the `--tools` it rendered
+/// from the profile, code mode on or off, so Claude keeps deferring the server's tools; a
+/// raw `--tools` and a launch without the server stay as written.
+#[test]
+fn claude_rendered_tools_gain_tool_search_when_the_server_is_handed_over() {
+    let room = Room::new();
+    let argv = |server: bool, rendered: Option<&[&str]>, args: &[&str], code_mode| {
+        let mut request = launch("claude", None, args);
+        request.tools = rendered.map(|tools| tools.iter().map(|tool| (*tool).to_owned()).collect());
+        request.identity.params.code_mode = code_mode;
+        let argv = room
+            .compile(&switches(true, server), &request)
+            .process()
+            .provider_argv
+            .clone();
+        flag_values(&argv, "--tools")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let bash = Some(&["Bash"][..]);
+    for (server, rendered, args, code_mode, want) in [
+        (
+            true,
+            bash,
+            &["--tools", "Bash"][..],
+            None,
+            &["Bash,ToolSearch"][..],
+        ),
+        (
+            true,
+            bash,
+            &["--tools", "Bash,REPL,Poll"],
+            Some(true),
+            &["Bash,REPL,Poll,ToolSearch"],
+        ),
+        (
+            true,
+            Some(&["Bash", "ToolSearch"]),
+            &["--tools", "Bash,ToolSearch"],
+            None,
+            &["Bash,ToolSearch"],
+        ),
+        (
+            true,
+            bash,
+            &["--tools", "Bash", "--tools", "Read"],
+            None,
+            &["Bash,ToolSearch", "Read"],
+        ),
+        (false, bash, &["--tools", "Bash"], None, &["Bash"]),
+        (true, None, &["--tools", "Bash"], None, &["Bash"]),
+        (
+            true,
+            Some(&["default"]),
+            &["--tools", "default"],
+            None,
+            &["default"],
+        ),
+        (
+            true,
+            Some(&["Default"]),
+            &["--tools", " Default "],
+            None,
+            &[" Default "],
+        ),
+    ] {
+        assert_eq!(
+            argv(server, rendered, args, code_mode),
+            want,
+            "server {server}, rendered {rendered:?}, args {args:?}, code mode {code_mode:?}"
+        );
+    }
+}
+
 #[test]
 fn codex_entry_names_the_spawn_env_and_approval_follows_the_switch() {
     let room = Room::new();

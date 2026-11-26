@@ -618,6 +618,30 @@ fn render_tool_rules(
     Ok(())
 }
 
+/// Adds `ToolSearch` once to the first `--tools` list: without it Claude turns tool search
+/// off and loads every MCP tool up front, whatever load mode the server marks.
+///
+/// A list that is Claude's `default` preset alone stays as written: Claude expands the preset
+/// only when it is the whole value, so `default,ToolSearch` would leave the agent with no
+/// built-in tool, and the preset is the set a launch without `--tools` gets, tool search with it.
+fn keep_tool_search(args: &mut [String]) {
+    let Some(at) = args.iter().position(|arg| arg == "--tools") else {
+        return;
+    };
+    let Some(list) = args.get_mut(at + 1) else {
+        return;
+    };
+    if list.trim().eq_ignore_ascii_case("default")
+        || list.split(',').any(|name| name == "ToolSearch")
+    {
+        return;
+    }
+    if !list.is_empty() {
+        list.push(',');
+    }
+    list.push_str("ToolSearch");
+}
+
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,
     extra: &[&str],
@@ -940,6 +964,9 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             )?;
         }
         if let Some(server) = &launch.server {
+            if launch.rendered_tools {
+                keep_tool_search(extra_args);
+            }
             let mut args = server.args.clone();
             args.extend(launch.capability_mark_args());
             let mut entry = serde_json::json!({
