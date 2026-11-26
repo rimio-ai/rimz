@@ -1628,11 +1628,28 @@ fn reminders(
         |profile| profile.model_reminder,
     )
     .unwrap_or(true);
+    let first_in_chain = |pick: fn(&crate::config::Profile) -> Option<bool>| {
+        crate::config::effective::resolve_seat_setting(
+            params.profile.as_deref(),
+            recorded_agent,
+            Some(request.kind.as_str()),
+            scope,
+            &effective.profiles,
+            &effective.subagent_profiles,
+            false,
+            pick,
+        )
+    };
+    // The launch's kind base decides; a launch with no row in its chain has none.
+    let built_in_base =
+        first_in_chain(|profile| profile.kind_base.then_some(profile.built_in_base))
+            .unwrap_or_else(|| first_in_chain(|_| Some(false)).is_none());
     if request.subagent {
         return (
             LaunchReminders {
                 model,
                 lsp_configured,
+                built_in_base,
                 ..LaunchReminders::default()
             },
             Vec::new(),
@@ -1664,6 +1681,7 @@ fn reminders(
             model,
             lsp_configured,
             subagent_catalog,
+            built_in_base,
             team,
             ..LaunchReminders::default()
         },

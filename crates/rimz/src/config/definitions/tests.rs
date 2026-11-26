@@ -8636,12 +8636,6 @@ fn definitions_with_no_home_or_pack_base_run_on_the_built_in_one() {
             &format!("agent: {kind}"),
             "Craft.",
         );
-        definition(
-            root.path(),
-            "agents/granted.md",
-            &format!("agent: {kind}\ncapabilities: [bash, read, write, ask, web, rimz]"),
-            "Craft.",
-        );
         let loaded = load(
             root.path(),
             SkillCheck::Skip,
@@ -8662,10 +8656,7 @@ fn definitions_with_no_home_or_pack_base_run_on_the_built_in_one() {
             expected.push((kind, None, Vec::new(), true, None, String::new()));
             continue;
         }
-        let (worker, granted) = (
-            launch_cell(&loaded, "worker", None),
-            launch_cell(&loaded, "granted", None),
-        );
+        let worker = launch_cell(&loaded, "worker", None);
         let (system, appended) = prompt_texts(
             &worker.system_prompt_file,
             &worker.append_system_prompt_files,
@@ -8674,7 +8665,7 @@ fn definitions_with_no_home_or_pack_base_run_on_the_built_in_one() {
             kind,
             system,
             appended,
-            worker.tools.is_some() && worker.tools == granted.tools,
+            worker.tools.is_none() && worker.rimz_capabilities.is_none(),
             worker.launch.code_mode,
             format!("{:?}", loaded.errors),
         ));
@@ -8702,10 +8693,7 @@ fn every_built_in_kind_base_loads_as_a_home_base_would() {
     assert!(clean(empty.path()).errors.is_empty());
     for kind in ["claude", "codex", "antigravity", "opencode", "pi"] {
         let (yaml, body) = embedded_base(kind);
-        assert!(
-            yaml.contains("capabilities: [bash, read, write, ask, web, rimz]"),
-            "{kind}: {yaml}"
-        );
+        assert!(!yaml.contains("capabilities:"), "{kind}: {yaml}");
         let root = tempfile::tempdir().unwrap();
         write(
             root.path(),
@@ -8718,7 +8706,7 @@ fn every_built_in_kind_base_loads_as_a_home_base_would() {
 }
 
 #[test]
-fn a_bodyless_antigravity_definition_on_the_built_in_base_sends_its_body_and_grant() {
+fn a_bodyless_antigravity_definition_on_the_built_in_base_sends_its_body_and_native_tools() {
     let root = tempfile::tempdir().unwrap();
     definition(root.path(), "agents/worker.md", "agent: antigravity", "");
     let loaded = clean(root.path());
@@ -8726,9 +8714,10 @@ fn a_bodyless_antigravity_definition_on_the_built_in_base_sends_its_body_and_gra
         launch_prompt(&loaded, "worker"),
         (Some(embedded_base("antigravity").1), Vec::new())
     );
-    assert!(
-        launch_cell(&loaded, "worker", None).tools.is_some(),
-        "the grant rides the body's agent file"
+    assert_eq!(
+        launch_cell(&loaded, "worker", None).tools,
+        None,
+        "the body's agent file grants agy's own tools"
     );
 }
 
@@ -8739,9 +8728,10 @@ fn a_bodyless_definition_on_the_built_in_base_keeps_the_native_prompt_outside_a_
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let loaded = clean(root.path());
     assert_eq!(launch_prompt(&loaded, "worker"), (None, Vec::new()));
-    assert!(
-        launch_cell(&loaded, "worker", None).tools.is_some(),
-        "the grant still applies"
+    assert_eq!(
+        launch_cell(&loaded, "worker", None).tools,
+        None,
+        "the provider's own tools apply"
     );
     let mut spec = crate::harness::spec::resolve_team(
         "probe",
@@ -8961,7 +8951,7 @@ fn an_agent_override_from_a_kind_base_onto_a_kind_on_the_built_in_base_takes_tha
             prompt_texts(&routed.system_prompt_file, &[]).0,
             routed.tools.is_some()
         ),
-        ("antigravity", Some(embedded_base("antigravity").1), true)
+        ("antigravity", Some(embedded_base("antigravity").1), false)
     );
     let bare = launch_cell(&loaded, "codex", Some("antigravity"));
     assert_eq!((bare.system_prompt_file, bare.tools), (None, None));

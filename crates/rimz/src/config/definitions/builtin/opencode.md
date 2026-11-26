@@ -1,6 +1,5 @@
 ---
 description: OpenCode with the house agent prompt.
-capabilities: [bash, read, write, ask, web, rimz]
 ---
 
 You are an agent working with the user toward their goals, using your own judgment along the way.

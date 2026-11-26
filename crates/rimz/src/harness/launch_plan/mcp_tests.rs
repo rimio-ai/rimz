@@ -2361,12 +2361,17 @@ fn prompt_rewrite_reaches_every_prompt_channel_and_keeps_unmodified_author_files
     )
     .unwrap();
 
-    // An on-disk `rimz-ask` skill switches native asking off only while the model can call it.
+    // An on-disk `rimz-ask` skill switches native asking off only while the model can call it,
+    // on an authored profile: a launch with none keeps the provider's own.
     let ask_dir = home.join(".rimz/skills/rimz-ask");
     std::fs::create_dir_all(&ask_dir).unwrap();
+    let mut asker: crate::config::MachineConfig = toml::from_str(&switches(true, false)).unwrap();
+    asker.agents.profiles = toml::from_str("[asker]\nagent = 'claude'\n").unwrap();
+    let mut ask = launch("claude", None, &[]);
+    ask.identity.params.profile = Some("asker".to_owned());
     let native_ask_denied = |body: &str| {
         std::fs::write(ask_dir.join("SKILL.md"), body).unwrap();
-        let plan = room.compile(&switches(true, false), &launch("claude", None, &[]));
+        let plan = room.compile_config(&asker, &ask, Isolation::Host);
         let argv = &plan.process().provider_argv;
         argv.iter()
             .rposition(|arg| arg == "--disallowedTools")
@@ -3334,4 +3339,200 @@ fn seat_added_rimz_message_reads_trusted_project_env() {
         matches!(earlier, LaunchPlanErr::Prompt(_)),
         "trust refusal must not jump ahead of prompt digest refusal: {earlier:?}"
     );
+}
+
+/// A launch on a built-in kind base, as a definition with no home or pack base or as a bare kind
+/// launch, keeps the provider's question tool and native delegation on every kind, as the
+/// official program does; one on a home kind base loses both where `rimz-ask` is served and a
+/// child is launchable.
+#[test]
+fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
+    let native = |plan: &LaunchPlan, kind: &str| -> (bool, bool) {
+        let argv = &plan.process().provider_argv;
+        match kind {
+            "claude" => {
+                let denied = |tool: &str| {
+                    argv.iter().enumerate().any(|(index, arg)| {
+                        arg == "--disallowedTools"
+                            && argv[index + 1..]
+                                .iter()
+                                .take_while(|arg| !arg.starts_with('-'))
+                                .any(|value| value.split(',').any(|name| name == tool))
+                    })
+                };
+                (!denied("AskUserQuestion"), !denied("Agent"))
+            }
+            "codex" => {
+                let off = |key: &str| {
+                    argv.windows(2)
+                        .any(|pair| pair[0] == "-c" && pair[1] == format!("{key}=false"))
+                };
+                let ask_off = [
+                    "features.default_mode_request_user_input",
+                    "tools.experimental_request_user_input.enabled",
+                ]
+                .map(off);
+                assert_eq!(ask_off[0], ask_off[1], "both question keys move together");
+                (!ask_off[0], !off("agents.enabled"))
+            }
+            _ => {
+                let file = plan
+                    .agent_file
+                    .as_ref()
+                    .expect("a fresh agy launch writes its file");
+                let text = String::from_utf8_lossy(&file.bytes).into_owned();
+                let tools = text
+                    .lines()
+                    .find(|line| line.starts_with("tools: "))
+                    .unwrap();
+                (
+                    tools.contains("ask_question"),
+                    tools.contains("invoke_subagent"),
+                )
+            }
+        }
+    };
+    let compile = |bases: &[(&str, &str)], spec: Option<&str>, kind: &str| {
+        let room = Room::new();
+        let agents_home = Path::new(&room.ambient["HOME"]).join(".rimz");
+        let mut files = vec![
+            ("subagents/helper.md", "agent: claude".to_owned()),
+            ("agents/worker-claude.md", "agent: claude".to_owned()),
+            ("agents/worker-codex.md", "agent: codex".to_owned()),
+            (
+                "agents/worker-antigravity.md",
+                "agent: antigravity".to_owned(),
+            ),
+        ];
+        let teams: Vec<_> = ["claude", "codex", "antigravity"]
+            .map(|kind| {
+                format!(
+                    "teams/crew-{kind}.md\0---\nleader: lead\nstages: [Build]\nroles:\n  - agent: \
+                     worker-{kind}\n    role: lead\n    owns: [Build]\n  - agent: worker-{kind}\n    \
+                     role: coder\n---\nCrew."
+                )
+            })
+            .into();
+        for team in &teams {
+            let (path, text) = team.split_once('\0').unwrap();
+            let path = agents_home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        files.extend(bases.iter().map(|(path, head)| (*path, (*head).to_owned())));
+        for (path, head) in files {
+            let path = agents_home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!("---\ndescription: Probe.\n{head}\n---\nCraft."),
+            )
+            .unwrap();
+        }
+        let mut machine: crate::config::MachineConfig =
+            toml::from_str(&switches(true, true)).unwrap();
+        let loaded = crate::config::definitions::load(
+            &agents_home,
+            crate::config::definitions::SkillCheck::Skip,
+            &machine.agents.commands,
+            &agents_home.join("config.toml"),
+            &machine.tiers,
+            machine.harness.auto_compact_default(),
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        machine.agents.profiles = loaded.agent_profiles.clone();
+        machine.subagents.profiles = loaded.subagent_profiles.clone();
+        machine.agents.teams = loaded.teams.clone();
+        let mut request = launch(kind, None, &[]);
+        if let Some(spec) = spec {
+            let layout = crate::harness::spec::resolve_spec_with_agent_override(
+                Some(spec),
+                &loaded.agent_profiles,
+                &loaded.agent_profiles,
+                &machine.agents.commands,
+                &loaded.teams,
+                None,
+            )
+            .unwrap();
+            let cell = layout.agent_cells().next().unwrap();
+            request.identity.params = cell.launch.clone();
+            // The launcher stamps a seat's team on its params; the layout cell carries none.
+            if let Some((team, _)) = spec.split_once('.') {
+                request.identity.params.team = Some(team.to_owned());
+            }
+            request.tools.clone_from(&cell.tools);
+            request
+                .system_prompt_file
+                .clone_from(&cell.system_prompt_file);
+        }
+        if kind == "antigravity" && request.system_prompt_file.is_none() {
+            request.system_prompt_file = Some(crate::config::PromptSource::Text {
+                origin: room.project.path().join("prompt.md"),
+                text: "Prompt.\n".to_owned(),
+            });
+        }
+        room.compile_config(&machine, &request, Isolation::Host)
+    };
+    let home_bases = [
+        (
+            "agents/claude.md",
+            "tools: [Bash, Read, AskUserQuestion, Agent, Skill]",
+        ),
+        ("agents/codex.md", "tools: [Bash, Read, Skill]"),
+        (
+            "agents/antigravity.md",
+            "tools: [Read, AskUserQuestion, Agent]",
+        ),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["claude", "codex", "antigravity"] {
+        let worker = format!("worker-{kind}");
+        let (lead, coder) = (format!("crew-{kind}.lead"), format!("crew-{kind}.coder"));
+        for (case, bases, spec, kept) in [
+            ("bare", &[][..], None, (true, true)),
+            (
+                "built-in base",
+                &[][..],
+                Some(worker.as_str()),
+                (true, true),
+            ),
+            (
+                "home base",
+                &home_bases[..],
+                Some(worker.as_str()),
+                (false, false),
+            ),
+            (
+                "bare on home base",
+                &home_bases[..],
+                Some(kind),
+                (false, false),
+            ),
+            // Only the leader reaches the user, so a seat beside it loses its own question
+            // tool on every base.
+            (
+                "leader on built-in base",
+                &[][..],
+                Some(lead.as_str()),
+                (true, true),
+            ),
+            (
+                "seat on built-in base",
+                &[][..],
+                Some(coder.as_str()),
+                (false, true),
+            ),
+            (
+                "seat on home base",
+                &home_bases[..],
+                Some(coder.as_str()),
+                (false, false),
+            ),
+        ] {
+            actual.push((kind, case, native(&compile(bases, spec, kind), kind)));
+            expected.push((kind, case, kept));
+        }
+    }
+    assert_eq!(actual, expected);
 }

@@ -2,7 +2,6 @@
 description: Pi with the house agent prompt.
 fast: false
 code-mode: on
-capabilities: [bash, read, write, ask, web, rimz]
 ---
 
 You are an agent working with the user toward their goals, using your own judgment along the way.

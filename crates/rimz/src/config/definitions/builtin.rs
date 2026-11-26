@@ -1,7 +1,8 @@
 //! The kind bases RimZ ships, one Markdown file per provider in `builtin/`, compiled in. A
 //! kind that takes a system prompt and has no home or pack base takes its own file, or, without
-//! one, the grant and body of `claude.md`; a kind whose prompt appends to the provider's own
-//! takes the grant alone. Each loads through the checks a home base passes
+//! one, the body of `claude.md`; a kind whose prompt appends to the provider's own takes an
+//! empty body. None lists tools or capabilities, so a launch on one keeps the provider's own
+//! tools. Each loads through the checks a home base passes
 //! (`super::BaseLoad::rows`) and reaches a launch only under a definition
 //! (`super::DefinitionSource::built_in_base`), never as a profile row.
 
@@ -16,9 +17,6 @@ const FILES: [(&str, &str); 5] = [
     ("opencode", include_str!("builtin/opencode.md")),
     ("pi", include_str!("builtin/pi.md")),
 ];
-
-/// The grant every built-in base carries in its frontmatter.
-const GRANT: &str = "capabilities: [bash, read, write, ask, web, rimz]";
 
 /// The built-in base text for `kind`, or `None` for a kind that takes no system prompt.
 pub(super) fn text(kind: &str) -> Option<Cow<'static, str>> {
@@ -43,6 +41,6 @@ pub(super) fn text(kind: &str) -> Option<Cow<'static, str>> {
             .map_or("", |(_, body)| body)
     };
     Some(Cow::Owned(format!(
-        "---\ndescription: The built-in kind base for {kind}.\n{GRANT}\n---\n{body}"
+        "---\ndescription: The built-in kind base for {kind}.\n---\n{body}"
     )))
 }

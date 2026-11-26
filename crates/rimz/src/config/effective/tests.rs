@@ -3912,7 +3912,7 @@ fn project_config_loads_without_machine_load_contexts() {
     assert!(machine.definition_contexts.is_none());
     let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
     assert!(launch.profiles.0.contains_key("promptless"));
-    assert!(launch.profiles.0["needs_base"].tools.is_some());
+    assert_eq!(launch.profiles.0["needs_base"].tools, None);
 }
 
 #[test]

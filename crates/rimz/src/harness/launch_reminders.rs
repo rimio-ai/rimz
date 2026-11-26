@@ -63,6 +63,9 @@ pub(super) struct LaunchReminders {
     /// compiles.
     pub rimz_skills: BTreeSet<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
+    /// The launch runs on a built-in kind base, or on no profile row: it keeps the provider's
+    /// own question tool and native delegation, as the provider's official program does.
+    pub built_in_base: bool,
     pub system_prompt_file: Option<PathBuf>,
     pub team: Option<TeamReminder>,
     /// The request's result file as the agent sees it; absent in preflight compiles.
@@ -104,6 +107,7 @@ impl Default for LaunchReminders {
             lsp_servers: Vec::new(),
             rimz_skills: BTreeSet::new(),
             subagent_catalog: None,
+            built_in_base: false,
             system_prompt_file: None,
             team: None,
             result_file: None,
@@ -280,16 +284,22 @@ impl LaunchReminders {
 
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
-            || (self.callable(request, Capability::Subagents)
+            || (!self.built_in_base
+                && self.callable(request, Capability::Subagents)
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
 
-    /// The launch reaches `rimz-ask`, so the provider's own question tool goes: its `ask` tool
-    /// is served, or its skill is callable and on disk. Unlike `disable_native_subagents`, a
-    /// callable skill counts only on disk, since a launch with neither would lose asking.
+    /// The provider's own question tool goes: on a team seat beside the leader, on every base,
+    /// since only the leader reaches the user; elsewhere where the launch reaches `rimz-ask`,
+    /// its `ask` tool served or its skill callable and on disk. Unlike
+    /// `disable_native_subagents`, a callable skill counts only on disk, since a launch with
+    /// neither would lose asking. Any other launch on a built-in kind base keeps its own.
     pub(super) fn disable_native_ask(&self, request: &ExecRequest) -> bool {
         let ask = Capability::Ask;
-        !self.denied_capabilities(request).contains(&ask)
+        if self.denied_capabilities(request).contains(&ask) {
+            return true;
+        }
+        !self.built_in_base
             && self.callable(request, ask)
             && (self.reach(request, ask) == Reach::Tools(ask)
                 || self.rimz_skills.contains(ask.name()))
