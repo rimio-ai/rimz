@@ -21,7 +21,7 @@ use crate::agents::{
 use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
-use super::accounts::{cached_account_usage_hint, merge_usage_plan};
+use super::accounts::{cached_account_usage_hint, map_by_kind, merge_usage_plan};
 use super::credits::{
     CreditsWrite, account_usage_claim_matches, cancel_provider_account_usage_claim,
     claim_idle_account_usage, claim_provider_account_usage, complete_provider_account_usage,
@@ -375,8 +375,10 @@ pub fn complete_realtime_account_usage(
 }
 
 /// Refresh the account usage of `logins` for `rimz accounts`, forcing each read
-/// when requested or otherwise following its durable cadence. Cache
-/// publication remains nonce-guarded by the normal claim path.
+/// when requested or otherwise following its durable cadence. A worker per kind
+/// reads that kind's logins in list order, so a provider sees one read at a time
+/// while kinds read in parallel. Cache publication remains nonce-guarded by the
+/// normal claim path.
 pub fn refresh_logins_usage(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
@@ -396,10 +398,10 @@ pub fn refresh_logins_usage(
 fn refresh_logins_usage_with(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
-    refresh: impl Fn(&ProviderLogin) -> bool,
+    refresh: impl Fn(&ProviderLogin) -> bool + Sync,
 ) {
     let started = Instant::now();
-    for login in logins {
+    map_by_kind(usize::MAX, logins, |login| {
         let read_started = Instant::now();
         let landed = refresh(login);
         let elapsed_ms = duration_ms(read_started.elapsed());
@@ -409,7 +411,7 @@ fn refresh_logins_usage_with(
             elapsed_ms,
             landed,
         });
-    }
+    });
     let total_ms = duration_ms(started.elapsed());
     trace::record(runtime, || TraceEvent::UsagePass {
         login_count: logins.len(),

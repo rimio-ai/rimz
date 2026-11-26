@@ -502,6 +502,20 @@ fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
     assert!(called);
 }
 
+#[test]
+fn usage_pass_queues_each_kind_in_order_while_kinds_overlap() {
+    let (_dir, runtime) = account_usage_runtime();
+    let logins = crate::sidebar::test_support::kind_queue_logins();
+    let probes = crate::sidebar::test_support::KindProbes::new(&logins);
+
+    refresh_logins_usage_with(&runtime, &logins, |login| {
+        probes.probe(login);
+        true
+    });
+
+    probes.assert_queued(&logins);
+}
+
 fn usage_windows(percent: u8) -> AgentRateLimits {
     AgentRateLimits {
         windows: vec![RateLimitWindow {

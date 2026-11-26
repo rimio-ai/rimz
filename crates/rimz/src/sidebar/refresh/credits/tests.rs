@@ -923,6 +923,49 @@ fn non_authoritative_completions_preserve_lapse_but_account_change_resets_it() {
 }
 
 #[test]
+fn concurrent_in_process_credits_edits_all_land() {
+    let (_dir, runtime) = runtime();
+    let kinds: Vec<_> = (0..6).map(|index| format!("kind-{index}")).collect();
+    let barrier = std::sync::Barrier::new(kinds.len());
+    let writes: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = kinds
+            .iter()
+            .map(|kind| {
+                let (runtime, barrier) = (&runtime, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    edit_credits_cache(runtime, |cache| {
+                        // Hold the edit open while every other thread arrives.
+                        std::thread::sleep(Duration::from_millis(50));
+                        let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind));
+                        cache.entry_mut(&key.into()).observed_at_ms = 1;
+                        Some(())
+                    })
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+
+    assert_eq!(
+        writes,
+        kinds
+            .iter()
+            .map(|_| CreditsWrite::Saved(()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        read_credits_cache(&runtime.shared_credits_path())
+            .logins
+            .len(),
+        kinds.len()
+    );
+}
+
+#[test]
 fn realtime_invalidation_and_claim_writers_preserve_lapse() {
     let (_dir, runtime) = runtime();
     let key: LoginKey = "claude@default".parse().unwrap();

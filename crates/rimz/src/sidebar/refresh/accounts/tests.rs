@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -691,41 +691,56 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
 }
 
 #[test]
-fn account_probe_pool_runs_each_kind_once_with_four_worker_ceiling() {
-    let due: Vec<_> = (0..8)
-        .map(|index| {
-            ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(format!(
-                "kind-{index}"
-            )))
+fn account_probe_pool_probes_each_login_once_under_the_worker_ceiling() {
+    let due: Vec<_> = crate::agents::known_kinds()
+        .filter_map(|kind| {
+            let kind = crate::ids::AgentKind::new_unchecked(kind);
+            let spare = ProviderLogin::named(
+                kind.clone(),
+                "spare".parse().unwrap(),
+                PathBuf::from(format!("/tmp/{kind}-spare")),
+            )
+            .ok()?;
+            Some([ProviderLogin::default_for(kind), spare])
         })
+        .take(8)
+        .flatten()
         .collect();
+    assert_eq!(due.len(), 16, "eight kinds that take a named login");
     let barrier = Arc::new(Barrier::new(MAX_PARALLEL_ACCOUNT_PROBES));
     let first_wave = AtomicUsize::new(0);
     let active = AtomicUsize::new(0);
     let maximum = AtomicUsize::new(0);
-    let calls = Mutex::new(BTreeMap::<String, usize>::new());
+    let calls = Mutex::new(BTreeMap::<LoginKey, usize>::new());
 
-    let batch = execute_account_probes(&due, &BTreeSet::new(), |login, _active| {
-        let kind = login.kind().as_str();
-        *calls.lock().unwrap().entry(kind.to_owned()).or_default() += 1;
-        let live = active.fetch_add(1, Ordering::SeqCst) + 1;
-        maximum.fetch_max(live, Ordering::SeqCst);
-        if first_wave.fetch_add(1, Ordering::SeqCst) < MAX_PARALLEL_ACCOUNT_PROBES {
-            barrier.wait();
-        }
-        active.fetch_sub(1, Ordering::SeqCst);
-        Some(successful_probe(kind))
-    });
+    let batch = execute_account_probes(
+        &due,
+        &BTreeSet::new(),
+        MAX_PARALLEL_ACCOUNT_PROBES,
+        |login, _active| {
+            *calls.lock().unwrap().entry(login.key()).or_default() += 1;
+            let live = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(live, Ordering::SeqCst);
+            if first_wave.fetch_add(1, Ordering::SeqCst) < MAX_PARALLEL_ACCOUNT_PROBES {
+                barrier.wait();
+            }
+            active.fetch_sub(1, Ordering::SeqCst);
+            Some(ProviderProbeResult {
+                key: login.key(),
+                ..successful_probe(login.kind().as_str())
+            })
+        },
+    );
 
     assert_eq!(batch.worker_count, MAX_PARALLEL_ACCOUNT_PROBES);
-    assert_eq!(batch.results.len(), due.len());
-    assert_eq!(maximum.load(Ordering::SeqCst), MAX_PARALLEL_ACCOUNT_PROBES);
     assert_eq!(
         calls.into_inner().unwrap(),
-        due.into_iter()
-            .map(|login| (login.kind().to_string(), 1))
-            .collect()
+        due.iter()
+            .map(|login| (login.key(), 1))
+            .collect::<BTreeMap<_, _>>()
     );
+    assert_eq!(batch.results.len(), due.len());
+    assert_eq!(maximum.load(Ordering::SeqCst), MAX_PARALLEL_ACCOUNT_PROBES);
 
     let merged = merge_probe_results(
         &AccountsCache::default(),
@@ -733,19 +748,55 @@ fn account_probe_pool_runs_each_kind_once_with_four_worker_ceiling() {
         10,
         batch.results,
     );
-    let serialized = serde_json::to_string(&merged).unwrap();
-    assert!(
-        serialized.find("kind-0") < serialized.find("kind-7"),
-        "BTreeMap publication is deterministic regardless of worker completion order"
+    assert_eq!(
+        merged.logins.into_keys().collect::<Vec<_>>(),
+        due.iter()
+            .map(ProviderLogin::key)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        "every login publishes under its own key, in key order whatever order workers finish in"
+    );
+}
+
+#[test]
+fn account_probes_queue_each_kind_in_order_while_kinds_overlap() {
+    let due = crate::sidebar::test_support::kind_queue_logins();
+    let probes = crate::sidebar::test_support::KindProbes::new(&due);
+    let batch = execute_account_probes(&due, &BTreeSet::new(), usize::MAX, |login, _active| {
+        probes.probe(login);
+        Some(ProviderProbeResult {
+            key: login.key(),
+            ..successful_probe(login.kind().as_str())
+        })
+    });
+
+    probes.assert_queued(&due);
+    assert_eq!(batch.worker_count, 3, "one worker per kind");
+    assert_eq!(
+        batch
+            .results
+            .iter()
+            .map(|result| result.key.clone())
+            .collect::<Vec<_>>(),
+        due.iter().map(ProviderLogin::key).collect::<Vec<_>>(),
+        "results keep the due list's order"
     );
 }
 
 #[test]
 fn missing_worker_result_preserves_prior_record() {
-    let due: Vec<_> = ["ok", "panic"]
+    let mut due: Vec<_> = ["ok", "panic", "claude"]
         .into_iter()
         .map(|kind| ProviderLogin::default_for(key(kind).kind))
         .collect();
+    let split_spare = ProviderLogin::named(
+        key("claude").kind,
+        "spare".parse().unwrap(),
+        PathBuf::from("/tmp/claude-spare"),
+    )
+    .unwrap();
+    due.push(split_spare.clone());
     let prior = record(
         7,
         true,
@@ -757,15 +808,61 @@ fn missing_worker_result_preserves_prior_record() {
     let previous = AccountsCache {
         logins: BTreeMap::from([(key("panic"), prior.clone())]),
     };
-    let batch = execute_account_probes(&due, &BTreeSet::new(), |login, _active| {
+    let batch = execute_account_probes(&due, &BTreeSet::new(), usize::MAX, |login, _active| {
         let kind = login.kind().as_str();
         assert_ne!(kind, "panic", "injected worker failure");
+        assert_ne!(
+            login.key(),
+            split_spare.key(),
+            "injected failure after a finished login"
+        );
         Some(successful_probe(kind))
     });
     let merged = merge_probe_results(&previous, &BTreeSet::new(), 20, batch.results);
 
     assert_eq!(merged.logins[&key("panic")], prior);
     assert_eq!(merged.logins[&key("ok")].probed_at_ms, 20);
+    assert_eq!(
+        merged
+            .logins
+            .get(&key("claude"))
+            .map(|record| record.probed_at_ms),
+        Some(20),
+        "a login its kind finished before the panic keeps its result"
+    );
+}
+
+#[test]
+fn forced_wait_covers_the_hosts_whole_batch_and_grows_with_the_longest_queue() {
+    let set = RoomLoginSet::native();
+    let per_login =
+        (INFORMATIONAL_PROBE_TIMEOUT * 2 + Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)) * 2;
+    let merge_base = per_login
+        * crate::agents::known_kinds()
+            .count()
+            .div_ceil(MAX_PARALLEL_ACCOUNT_PROBES) as u32;
+    let one_each = native_logins();
+    let mut deeper = one_each.clone();
+    deeper.extend(["work", "home"].map(|name| {
+        ProviderLogin::named(
+            key("claude").kind,
+            name.parse().unwrap(),
+            PathBuf::from(format!("/tmp/claude-{name}")),
+        )
+        .unwrap()
+    }));
+    let one_each_wait = forced_account_wait(&one_each, &set);
+
+    assert_eq!(
+        (
+            one_each_wait >= merge_base,
+            forced_account_wait(&one_each[..1], &set) >= merge_base,
+            forced_account_wait(&deeper, &set) >= one_each_wait + per_login * 2,
+        ),
+        (true, true, true),
+        "(one login per kind waits out the merge base's bound, so does a one-login re-probe, \
+         two more logins of one kind add two login budgets)"
+    );
 }
 
 #[test]

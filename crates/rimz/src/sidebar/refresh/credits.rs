@@ -254,12 +254,21 @@ impl<T> CreditsWrite<T> {
     }
 }
 
-/// Edit `credits.json` under its lock without waiting for it. `edit` declines
+/// Edits from this process's threads, held across one edit's read, change, and
+/// write, which no provider call or lock wait enters.
+static IN_PROCESS_CREDITS_EDITS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Edit `credits.json` under its lock. Edits within this process queue behind
+/// one another, so parallel workers of one pass never skip each other's edit;
+/// a lock another process holds skips the edit without waiting. `edit` declines
 /// by returning `None`, and its value is returned only once the write is saved.
 fn edit_credits_cache<T>(
     runtime: &RuntimePaths,
     edit: impl FnOnce(&mut CreditsCache) -> Option<T>,
 ) -> CreditsWrite<T> {
+    let _queued = IN_PROCESS_CREDITS_EDITS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = runtime.shared_credits_path();
     let Some(_guard) =
         crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
