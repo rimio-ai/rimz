@@ -209,6 +209,10 @@ impl ConfigEditor {
     /// fields only validate together, which goes whole. A removed line whose
     /// key the template documents as a commented default gets that line back, so
     /// `unset` undoes the uncommenting `set` does.
+    ///
+    /// Every rule keyed on a leaf or an entry path applies to each such path under
+    /// a table key, and each rule gets a test that names a parent key: a test of
+    /// the named key alone passes while the parent path skips the rule.
     pub fn unset(&self, key: &str) -> Result<String> {
         let key = normalize_unset_key(parse_key(key)?);
         validate_unset_key(&self.files, &key)?;

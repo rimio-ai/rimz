@@ -444,6 +444,10 @@ pub enum LaunchPlacement {
     Tab,
 }
 
+/// A project row that failed to load is absent from the rows and present in `Self::failed`. A
+/// reader that looks a launch name up in the rows asks `failed` first, or resolves through
+/// `crates/rimz/src/harness/spec.rs`, so a failed name never resolves to a kind base, a variant, a
+/// command, or a namesake in another table.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct ProfilesConfig(
