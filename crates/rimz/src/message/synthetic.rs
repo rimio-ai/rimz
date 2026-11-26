@@ -60,7 +60,7 @@ pub fn deliver_now(
 }
 
 /// Attempt one delivery of an already queued record under `policy` and record a miss under
-/// `on_miss`.
+/// `on_miss`. Whether it was typed.
 pub fn attempt_now(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -70,22 +70,63 @@ pub fn attempt_now(
     on_miss: DeliveryFailureDisposition,
     fallback_reason: &str,
 ) -> Result<bool> {
+    Ok(attempt_now_report(
+        workspace,
+        store,
+        message_id,
+        pane,
+        policy,
+        on_miss,
+        fallback_reason,
+    )? == Attempted::Typed)
+}
+
+/// What one attempt of a queued record did ([`attempt_now_report`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Attempted {
+    Typed,
+    /// Nothing was typed; `pressed` when an interrupt pressed the receiver's key first.
+    Untyped {
+        pressed: bool,
+    },
+}
+
+/// [`attempt_now`], telling an untyped attempt that pressed the receiver's interrupt key from
+/// one that pressed none.
+pub(super) fn attempt_now_report(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message_id: &MessageId,
+    pane: Option<&PaneId>,
+    policy: DeliveryPolicy,
+    on_miss: DeliveryFailureDisposition,
+    fallback_reason: &str,
+) -> Result<Attempted> {
     let outcome =
         deliver::deliver_one_report(workspace, store, message_id, pane.map(PaneId::mux), policy);
+    let pressed = matches!(
+        outcome,
+        Ok(DeliveryReport::StoppedAfterKey
+            | DeliveryReport::InterruptWithheld { pressed: true, .. })
+    );
     let reason = match &outcome {
-        Ok(DeliveryReport::Sent { .. }) => return Ok(true),
+        Ok(DeliveryReport::Sent { .. }) => return Ok(Attempted::Typed),
         Ok(DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { .. }))
             if on_miss == DeliveryFailureDisposition::Retry =>
         {
             None
         }
         Ok(DeliveryReport::Refused(verdict)) => Some(verdict.reason()),
-        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. })
-            if on_miss == DeliveryFailureDisposition::Terminal =>
-        {
-            Some(fallback_reason.to_owned())
-        }
-        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. }) => None,
+        Ok(
+            DeliveryReport::Stopped
+            | DeliveryReport::StoppedAfterKey
+            | DeliveryReport::InterruptWithheld { .. },
+        ) if on_miss == DeliveryFailureDisposition::Terminal => Some(fallback_reason.to_owned()),
+        Ok(
+            DeliveryReport::Stopped
+            | DeliveryReport::StoppedAfterKey
+            | DeliveryReport::InterruptWithheld { .. },
+        ) => None,
         Err(err) => Some(err.to_string()),
     };
     let head_sent = match reason {
@@ -99,9 +140,9 @@ pub fn attempt_now(
         }),
     };
     if head_sent? {
-        return Ok(true);
+        return Ok(Attempted::Typed);
     }
-    outcome.map(|_| false)
+    outcome.map(|_| Attempted::Untyped { pressed })
 }
 
 #[cfg(test)]

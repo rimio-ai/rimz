@@ -14,7 +14,7 @@ use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
 use super::deliver::{self, DeliveryPolicy};
-use super::synthetic::{self, SyntheticMessage};
+use super::synthetic::{self, Attempted, SyntheticMessage};
 
 type Result<T> = std::result::Result<T, CompactErr>;
 
@@ -145,6 +145,9 @@ pub enum SoftBecause {
     AwaitingAnswer,
     /// No continue text is configured, and a compaction that ends the turn must owe one.
     NoContinueText,
+    /// The compaction the request joins carries premises, which can withdraw it once the turn
+    /// ends and leave the agent stopped for nothing.
+    PremisedCommand,
 }
 
 /// A request's [`CompactOutcome`], or `Joined` when the agent's command was already queued:
@@ -177,7 +180,9 @@ impl From<CompactOutcome> for ReceiptOutcome {
 /// brief, from `sender`, as `ask` asks. When `agent` holds an open turn and the continue is
 /// owed (its own request, unless `no_continue`, or an effective hard one), the configured continue
 /// is queued behind the command (or added when joining a queued command that has none yet). A
-/// hard attempt that does not type the command leaves what the request without `hard` leaves.
+/// hard request that joins a queued command carrying premises is not effective. A hard attempt
+/// that does not type the command leaves what the request without `hard` leaves, unless it
+/// pressed the kind's stop key first (`untyped_fate`).
 /// `handle` names the agent in a delivery refusal.
 pub fn compact_agent(
     workspace: &ResolvedWorkspace,
@@ -224,6 +229,17 @@ pub fn compact_agent(
     }
     .context("adapter has no native compaction command")?;
     let configured_continue = config.resume.auto_continue_text.trim();
+    let pending = refuse_repeat(store, agent, Timestamp::now());
+    let joins_premised = match &pending {
+        Err(CompactErr::Pending {
+            message_id,
+            status: MessageStatus::Queued,
+        }) => store
+            .list_messages()?
+            .iter()
+            .any(|queued| queued.message_id == *message_id && !queued.premises.is_empty()),
+        _ => false,
+    };
     let soft_because = if !ask.hard {
         None
     } else if ask.own && agent.holds_open_turn() {
@@ -232,6 +248,8 @@ pub fn compact_agent(
         Some(SoftBecause::AwaitingAnswer)
     } else if agent.holds_open_turn() && configured_continue.is_empty() {
         Some(SoftBecause::NoContinueText)
+    } else if agent.holds_open_turn() && joins_premised {
+        Some(SoftBecause::PremisedCommand)
     } else {
         None
     };
@@ -244,7 +262,7 @@ pub fn compact_agent(
         |err: CompactErr| anyhow::anyhow!("{handle}: {}", err.live_message(Timestamp::now()));
     // One compaction waits per agent: a request joins a queued command, and one that the join
     // finds no longer queued goes on to `send_compact`, which refuses the state it finds now.
-    match refuse_repeat(store, agent, Timestamp::now()) {
+    match pending {
         Ok(()) => {}
         Err(CompactErr::Pending {
             message_id,
@@ -266,25 +284,31 @@ pub fn compact_agent(
             .map_err(refused)?
             {
                 let outcome = if hard {
-                    // A miss leaves what a join without `--hard` leaves: the continue it replaced.
+                    // A miss that pressed no key leaves what a join without `--hard` leaves: the
+                    // continue it replaced.
                     let restore = replaced.map(|follower| {
                         continue_record(workspace, agent, &message_id, follower.text)
                     });
                     match attempt(workspace, store, agent, &message_id, &pane_id, hard)
                         .map_err(refused)?
                     {
-                        true => ReceiptOutcome::Sent { continues },
-                        false => match untyped_fate(
+                        Attempted::Typed => ReceiptOutcome::Sent { continues },
+                        Attempted::Untyped { pressed } => match untyped_fate(
                             workspace,
                             store,
                             &message_id,
                             hard,
+                            pressed,
                             restore.as_ref(),
                         )
                         .map_err(refused)?
                         {
                             Untyped::Waiting => ReceiptOutcome::Joined {
-                                continues: restore.is_some(),
+                                continues: if pressed {
+                                    continues
+                                } else {
+                                    restore.is_some()
+                                },
                             },
                             Untyped::Delivered => ReceiptOutcome::Sent { continues },
                         },
@@ -405,21 +429,29 @@ pub fn send_compact(
             continues: request.hard && continuation.is_some(),
         })
     };
-    if attempt(
+    let Attempted::Untyped { pressed } = attempt(
         workspace,
         store,
         request.agent,
         &message.message_id,
         &request.pane_id,
         request.hard,
-    )? {
+    )?
+    else {
         return sent();
-    }
-    match untyped_fate(workspace, store, &message.message_id, request.hard, None)? {
-        // A hard request owes no continue unless it typed the command: it is never the agent's
-        // own, so the same request without `--hard` queues none.
+    };
+    match untyped_fate(
+        workspace,
+        store,
+        &message.message_id,
+        request.hard,
+        pressed,
+        None,
+    )? {
+        // A hard request owes no continue unless its key stopped the turn or it typed the
+        // command: it is never the agent's own, so the same request without `--hard` queues none.
         Untyped::Waiting => Ok(CompactOutcome::Queued {
-            continues: !request.hard && continuation.is_some(),
+            continues: (!request.hard || pressed) && continuation.is_some(),
         }),
         Untyped::Delivered => sent(),
     }
@@ -433,18 +465,24 @@ enum Untyped {
     Delivered,
 }
 
-/// Read what became of the compaction `command_id` after an attempt that did not type it. One
-/// still waiting is left, when `hard`, as the same request without `--hard` leaves it
-/// (`Store::soften_untyped_command`, queuing `restore` again); one that ended untyped withdraws
-/// the continue behind it and is the error.
+/// Read what became of the compaction `command_id` after an attempt that did not type it,
+/// `pressed` when it pressed the kind's stop key first. One still waiting is left, when `hard`,
+/// to wait for the turn boundary (`Store::soften_untyped_command`): as the same request without
+/// `--hard` leaves it, queuing `restore` again, unless `pressed`, when the continue stays owed
+/// past the stop the key made. One that ended untyped withdraws the continue behind it and is
+/// the error.
 fn untyped_fate(
     workspace: &ResolvedWorkspace,
     store: &Store,
     command_id: &MessageId,
     hard: bool,
+    pressed: bool,
     restore: Option<&MessageRecord>,
 ) -> Result<Untyped> {
-    if hard && store.soften_untyped_command(command_id, restore, &workspace.session_name)? {
+    let restore = restore.filter(|_| !pressed);
+    if hard
+        && store.soften_untyped_command(command_id, pressed, restore, &workspace.session_name)?
+    {
         return Ok(Untyped::Waiting);
     }
     let live = store.list_messages()?;
@@ -486,8 +524,7 @@ fn untyped_fate(
 
 /// Attempt the queued compaction `command_id` now: at the boundary, or, when `hard`, into
 /// `agent`'s open turn, ending it, as a steer where the kind's command steers
-/// (`CompactCommand::steer_checked`) and an interrupt elsewhere. Whether it was typed; a miss
-/// leaves it queued.
+/// (`CompactCommand::steer_checked`) and an interrupt elsewhere. A miss leaves it queued.
 fn attempt(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -495,7 +532,7 @@ fn attempt(
     command_id: &MessageId,
     pane_id: &PaneId,
     hard: bool,
-) -> Result<bool> {
+) -> Result<Attempted> {
     let steers = crate::agents::spec_by_kind(agent.kind.as_str())
         .and_then(|spec| spec.launch.compact_command)
         .is_some_and(|compact| compact.steer_checked);
@@ -504,7 +541,7 @@ fn attempt(
         (true, true) => DeliveryPolicy::Steer { force: false },
         (true, false) => DeliveryPolicy::Interrupt { force: false },
     };
-    Ok(synthetic::attempt_now(
+    Ok(synthetic::attempt_now_report(
         workspace,
         store,
         command_id,
@@ -727,10 +764,11 @@ mod tests {
     }
 
     /// What a hard attempt that typed nothing leaves: a command still queued keeps no continue owed
-    /// past its stop and gets back the one owed before the request; one that ended untyped
+    /// past its stop and gets back the one owed before the request, unless the attempt pressed
+    /// the stop key, when the continue owed past that stop stays; one that ended untyped
     /// withdraws the continue behind it and is the error.
     #[test]
-    fn an_untyped_hard_command_leaves_what_the_soft_request_leaves() {
+    fn an_untyped_hard_command_keeps_its_past_stop_continue_only_after_its_key() {
         let dir = tempfile::tempdir().unwrap();
         let (workspace, store) = room(dir.path());
         let busy = AgentState::stub("claude", "session-1", AgentStatus::Running);
@@ -763,7 +801,7 @@ mod tests {
         let (waiting, _) = queue();
         let restore = continue_record(&workspace, &busy, &waiting, "owed before".to_owned());
         assert!(matches!(
-            untyped_fate(&workspace, &store, &waiting, true, Some(&restore)),
+            untyped_fate(&workspace, &store, &waiting, true, false, Some(&restore)),
             Ok(Untyped::Waiting)
         ));
         let mut followers = follower(&waiting);
@@ -776,10 +814,20 @@ mod tests {
             ]
         );
 
+        let (stopped, _) = queue();
+        assert!(matches!(
+            untyped_fate(&workspace, &store, &stopped, true, true, Some(&restore)),
+            Ok(Untyped::Waiting)
+        ));
+        assert_eq!(
+            follower(&stopped),
+            [(MessageStatus::Queued, true, "now".to_owned())]
+        );
+
         let (ended, tail) = queue();
         assert!(store.cancel_message(&ended, "room", "withdrawn").unwrap());
         let Err(CompactErr::Settled { message_id, .. }) =
-            untyped_fate(&workspace, &store, &ended, true, None)
+            untyped_fate(&workspace, &store, &ended, true, true, None)
         else {
             panic!("an ended command is the error");
         };

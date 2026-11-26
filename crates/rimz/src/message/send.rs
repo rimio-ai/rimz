@@ -106,6 +106,8 @@ pub(super) struct LiveSend {
     pub(super) kind: DeliveryKind,
     /// A forced cache keepalive: the typing hold is the one check it skips.
     pub(super) past_typing_hold: bool,
+    /// An interrupt pressed the receiver's key, whatever the write did after it.
+    pub(super) key_pressed: bool,
     pacer: Pacer,
     command_submit_delay: Duration,
 }
@@ -117,6 +119,7 @@ impl LiveSend {
             force,
             kind,
             past_typing_hold: false,
+            key_pressed: false,
             pacer: Pacer::from_env(),
             command_submit_delay: command_submit_delay_from_env(),
         }
@@ -383,6 +386,10 @@ fn write_live(
     } else {
         Interrupted::NoKey
     };
+    send.key_pressed = matches!(
+        interrupted,
+        Interrupted::Pressed(_) | Interrupted::Withheld { pressed: true, .. }
+    );
     let (fresh, batch, interrupt) = match interrupted {
         Interrupted::NoKey => (fresh, batch, InterruptConfirmation::NotChecked),
         // The stop wait outlasts every decision made before the key, so they are made again
@@ -1306,6 +1313,7 @@ mod tests {
             force: false,
             kind: DeliveryKind::Boundary,
             past_typing_hold: false,
+            key_pressed: false,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };
@@ -1343,6 +1351,7 @@ mod tests {
             force: false,
             kind: DeliveryKind::Boundary,
             past_typing_hold: false,
+            key_pressed: false,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };
