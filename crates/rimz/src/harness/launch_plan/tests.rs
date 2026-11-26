@@ -3985,6 +3985,113 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
 }
 
 #[test]
+fn minimax_composed_prompt_rides_inline_beside_the_reminder_without_an_artifact() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("base.md"), "file base").unwrap();
+    std::fs::write(project.path().join("raw.md"), "raw file").unwrap();
+    let text = |name: &str, text: &str| crate::config::PromptSource::Text {
+        origin: project.path().join(format!("agents/{name}.md")),
+        text: text.to_owned(),
+    };
+    let adapter = crate::agents::find_definition("minimax").unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (case, base, crafts, composed) in [
+        (
+            "body",
+            text("minimax", "You are a MiniMax agent."),
+            vec![text("mm", "Do careful work.")],
+            "You are a MiniMax agent.\n\nDo careful work.\n",
+        ),
+        (
+            "bodyless",
+            text("minimax", "You are a MiniMax agent."),
+            Vec::new(),
+            "You are a MiniMax agent.",
+        ),
+        (
+            "file",
+            project.path().join("base.md").into(),
+            Vec::new(),
+            "file base",
+        ),
+    ] {
+        let root = project.path().join(case);
+        let id = crate::WorkspaceId::from_project_root(&root);
+        let runtime = RuntimePaths::under(id.clone(), &root).unwrap();
+        let state = StatePaths::under(id, &root).unwrap();
+        let raw = [
+            "--append-system-prompt-file",
+            "raw.md",
+            "--append-system-prompt=raw text",
+        ];
+        let mut request = request(
+            "minimax",
+            action_with_args("launch", raw.map(str::to_owned).to_vec()),
+        );
+        request.system_prompt_file = Some(base);
+        request.append_system_prompt_files = crafts;
+        let outcome = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+        })
+        .map(|plan| {
+            let process = plan.process();
+            let argv = &process.provider_argv;
+            let slots: Vec<_> = argv
+                .iter()
+                .enumerate()
+                .filter(|(_, arg)| arg.starts_with("--append-system-prompt"))
+                .map(|(index, arg)| {
+                    let value = argv
+                        .get(index + 1)
+                        .map(|value| value.replace(process.reminder.as_str(), "<reminder>"));
+                    (arg.clone(), value)
+                })
+                .collect();
+            let digest =
+                configured_system_prompt_digest(adapter, &[], Some(composed), project.path())
+                    .unwrap();
+            (
+                slots,
+                plan.system_prompt_digest == digest,
+                runtime.prompt_dir().exists(),
+            )
+        })
+        .map_err(|error| error.to_string());
+        actual.push((case, outcome));
+        expected.push((
+            case,
+            Ok((
+                vec![(
+                    "--append-system-prompt".to_owned(),
+                    Some(format!("{composed}\n\n<reminder>")),
+                )],
+                true,
+                false,
+            )),
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
     let project = tempfile::tempdir().unwrap();
     let root = project.path().canonicalize().unwrap();

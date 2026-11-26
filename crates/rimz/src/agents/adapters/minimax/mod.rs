@@ -201,9 +201,11 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
         presets: PresetMatchers {
             code_mode: CodeModeSwitch::Unsupported,
             model: Some(StaticPresetMatcher::Flag(&["--model", "-m"])),
-            system_prompt_file: Some(StaticPresetMatcher::Flag(&[
-                "--append-system-prompt-file",
+            // mcode gives both forms one slot, and the launch reminder joins the
+            // composed prompt there, so the prompt rides inline.
+            system_prompt_file: Some(StaticPresetMatcher::TextFlag(&[
                 "--append-system-prompt",
+                "--append-system-prompt-file",
             ])),
             ..PresetMatchers::EMPTY
         },

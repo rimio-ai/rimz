@@ -7318,6 +7318,102 @@ fn explain_prints_the_plan_without_side_effects() {
     );
 }
 
+#[test]
+fn explain_plans_minimax_on_home_pack_and_built_in_bases() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for base in ["home", "pack", "built-in"] {
+        let env = Env::new();
+        assert!(init_launch_repo(&env.project_root));
+        std::fs::create_dir_all(env.rimz_home()).expect("mkdir config");
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = \"host\"\n",
+        )
+        .expect("write config");
+        let kind_base = "---\ndescription: MiniMax base\n---\nYou are a MiniMax agent.\n";
+        let agents = env.agents_home().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        match base {
+            "home" => std::fs::write(agents.join("minimax.md"), kind_base).unwrap(),
+            "pack" => {
+                let source = env.home_root.join("source");
+                std::fs::create_dir_all(source.join("crew/agents")).unwrap();
+                std::fs::write(
+                    source.join("rimz-packs.toml"),
+                    "[[pack]]\nname = 'crew'\ndescription = 'The crew'\npath = 'crew'\n",
+                )
+                .unwrap();
+                std::fs::write(source.join("crew/agents/minimax.md"), kind_base).unwrap();
+                rimz::packs::install(&env.agents_home(), &source).unwrap();
+            }
+            _ => {}
+        }
+        std::fs::write(
+            agents.join("mm.md"),
+            "---\ndescription: Careful\nagent: minimax\n---\nDo careful work.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agents.join("mmbare.md"),
+            "---\ndescription: Bare\nagent: minimax\n---\n",
+        )
+        .unwrap();
+        for target in ["mm", "mmbare", "minimax"] {
+            let output = env
+                .rimz()
+                .args(["agents", "explain", target, "--json"])
+                .output()
+                .unwrap();
+            let outcome = if output.status.success() {
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("explain JSON");
+                let reminder = report["prompt"]["reminder"].as_str().unwrap();
+                let argv: Vec<_> = report["provider_argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|arg| arg.as_str().unwrap())
+                    .collect();
+                let slots: Vec<_> = argv
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, arg)| arg.starts_with("--append-system-prompt"))
+                    .map(|(index, arg)| {
+                        let value = argv
+                            .get(index + 1)
+                            .map(|value| value.replace(reminder, "<reminder>"));
+                        (arg.to_string(), value)
+                    })
+                    .collect();
+                Ok(slots)
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).into_owned())
+            };
+            actual.push((base, target, outcome));
+            let composed = match (base, target) {
+                ("built-in", "mm") => Some("Do careful work.\n"),
+                ("built-in", _) => None,
+                (_, "mm") => Some("You are a MiniMax agent.\n\nDo careful work.\n"),
+                _ => Some("You are a MiniMax agent."),
+            };
+            let value = composed.map_or("<reminder>".to_owned(), |composed| {
+                format!("{composed}\n\n<reminder>")
+            });
+            expected.push((
+                base,
+                target,
+                Ok(vec![("--append-system-prompt".to_owned(), Some(value))]),
+            ));
+        }
+        assert!(
+            !env.runtime_paths().prompt_dir().exists(),
+            "{base}: explain created prompt artifacts"
+        );
+    }
+    assert_eq!(actual, expected);
+}
+
 #[cfg(unix)]
 #[test]
 fn explain_redacts_trusted_project_env_in_json_and_human_output() {

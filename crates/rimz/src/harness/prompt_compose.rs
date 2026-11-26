@@ -677,13 +677,6 @@ mod tests {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
         };
-        let err = materialize_system_prompt(
-            &AgentKind::new_unchecked("pi"),
-            &sources,
-            &RuntimePaths::shared(),
-        )
-        .expect_err("oversized prompt");
-        assert!(matches!(err, PromptComposeErr::TooLarge { .. }));
         let text_sources = SystemPromptSources {
             system_prompt_file: Some(PromptSource::Text {
                 origin: dir.path().join("missing.md"),
@@ -691,10 +684,28 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(matches!(
-            validate_text_prompt_size(&AgentKind::new_unchecked("pi"), &text_sources),
-            Err(PromptComposeErr::TooLarge { .. })
-        ));
+        let mut actual = Vec::new();
+        for kind in ["pi", "minimax"] {
+            let kind = AgentKind::new_unchecked(kind);
+            actual.push((
+                kind.to_string(),
+                matches!(
+                    materialize_system_prompt(&kind, &sources, &RuntimePaths::shared()),
+                    Err(PromptComposeErr::TooLarge { .. })
+                ),
+                matches!(
+                    validate_text_prompt_size(&kind, &text_sources),
+                    Err(PromptComposeErr::TooLarge { .. })
+                ),
+            ));
+        }
+        assert_eq!(
+            actual,
+            [
+                ("pi".to_owned(), true, true),
+                ("minimax".to_owned(), true, true)
+            ]
+        );
     }
 
     #[test]
