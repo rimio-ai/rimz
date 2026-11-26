@@ -753,6 +753,28 @@ pub struct MessageRecord {
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<MessageId>,
+    /// On a `rimz teams resume` prompt, the members its return brings back: the prompt stands in
+    /// for the stage re-wake each of them would take on that return
+    /// (`harness::team_stage::with_rewake`), while it is pending and, once delivered, for a resume
+    /// that began before the delivery or a registration within a delivery window after it. Empty
+    /// on every other record, on one an older binary wrote, and on a `message requeue` copy; an
+    /// older binary that rewrites the live queue drops it, and the return then wakes as if it had
+    /// no prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_return: Vec<ReturningMember>,
+}
+
+/// A team member a `rimz teams resume` prompt's return brings back: the launch and the epoch it
+/// comes back at, which a later swap of that launch moves past.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReturningMember {
+    pub launch_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub epoch: u32,
+}
+
+fn is_zero(epoch: &u32) -> bool {
+    *epoch == 0
 }
 
 /// A smart-compaction record's role. `WrapUp` is the steer-only reminder to compact that only an
@@ -886,6 +908,7 @@ impl MessageRecord {
             premises: Vec::new(),
             withdrawn: false,
             batch_id: None,
+            team_return: Vec::new(),
         }
     }
 

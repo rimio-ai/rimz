@@ -4863,7 +4863,8 @@ path = "crates/rimz/src/store"
 # MessageRecord::awaits_resumed_provider shares the resumed-provider hold between pre-claim and write checks (+1).
 # event::{SoftCompactClaim, SOFT_COMPACT_CLAIMED_METHOD} and EventEnvelope::agent_soft_compact_claimed
 # carry a claimed reminder rung from the hook-context hook's ingress frame to the fold (+3).
-surface-budget = 702
+# store::message::ReturningMember is the launch and epoch a `rimz teams resume` prompt lists per member, read by the stage re-wake (+1).
+surface-budget = 703
 
 [[verdict]]
 kind = "item"

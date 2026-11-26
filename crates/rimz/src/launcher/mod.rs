@@ -1426,6 +1426,9 @@ fn prepare_peer_prompt(
     Ok(run.map(|run| (peer.clone(), run)))
 }
 
+/// Queue the resume's positional prompt to its leader. A team's prompt names every member the
+/// return brings back, so that it stands in for their stage re-wake.
+#[allow(clippy::too_many_arguments)]
 fn queue_resume_prompt(
     store: &crate::Store,
     session_name: &str,
@@ -1434,9 +1437,10 @@ fn queue_resume_prompt(
     prompt: &str,
     leader: usize,
     sender: crate::store::message::MessageSender,
+    team: bool,
 ) -> Result<()> {
     use crate::harness::plan::CohortSeed;
-    use crate::store::message::{DeliveryGate, MessageRecord};
+    use crate::store::message::{DeliveryGate, MessageRecord, ReturningMember};
     let (kind, agent_id, name, launch) = match &seeds[leader] {
         CohortSeed::Resume(agent) => (
             &agent.kind,
@@ -1458,7 +1462,7 @@ fn queue_resume_prompt(
             )
         }
     };
-    let message = MessageRecord::new_for_card(
+    let mut message = MessageRecord::new_for_card(
         store.paths().workspace_id.clone(),
         kind.clone(),
         agent_id.clone(),
@@ -1468,6 +1472,21 @@ fn queue_resume_prompt(
     )
     .with_launch_id(launch)
     .with_sender(sender);
+    let mut fresh = identities.iter();
+    message.team_return = seeds
+        .iter()
+        .filter(|_| team)
+        .filter_map(|seed| match seed {
+            CohortSeed::Resume(agent) => Some(ReturningMember {
+                launch_id: agent.launch_key().clone(),
+                epoch: agent.epoch,
+            }),
+            CohortSeed::Fresh => fresh.next().map(|identity| ReturningMember {
+                launch_id: identity.launch_id().clone(),
+                epoch: identity.launch.epoch.unwrap_or(0),
+            }),
+        })
+        .collect();
     store.queue_message(&message, session_name)?;
     Ok(())
 }
@@ -2014,6 +2033,7 @@ fn launch_resume_layout(
             prompt,
             crate::harness::spec::prompt_leader(&layout, team)?,
             context::sender_for(caller.as_ref(), channel.as_deref(), false),
+            team.is_some(),
         )?;
     }
     interaction.notice(Notice::ResumeAnnouncement(&plan))?;

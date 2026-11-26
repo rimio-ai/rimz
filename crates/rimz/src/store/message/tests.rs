@@ -1221,10 +1221,26 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     record.queued_notice_at = Some(now);
     record.compacted_context_tokens = Some(150_000);
     record.batch_id = Some(message_id(1));
+    record.team_return = vec![
+        ReturningMember {
+            launch_id: "launch-swapped".into(),
+            epoch: 2,
+        },
+        ReturningMember {
+            launch_id: "launch-first".into(),
+            epoch: 0,
+        },
+    ];
 
     let json = serde_json::to_string(&record).unwrap();
     let back: MessageRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(back, record);
+    assert!(
+        json.contains(
+            r#""team_return":[{"launch_id":"launch-swapped","epoch":2},{"launch_id":"launch-first"}]"#
+        ),
+        "{json}"
+    );
 
     // An older binary's reply wait left these keys on disk; they decode and are dropped.
     let mut waited = serde_json::to_value(&record).unwrap();
@@ -1259,6 +1275,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         "auto_compact",
         "compacted_context_tokens",
         "batch_id",
+        "team_return",
     ] {
         legacy.as_object_mut().unwrap().remove(key);
     }
@@ -1285,6 +1302,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     assert_eq!(legacy.auto_compact, None);
     assert_eq!(legacy.compacted_context_tokens, None);
     assert_eq!(legacy.batch_id, None);
+    assert!(legacy.team_return.is_empty());
     assert_eq!(legacy.status, MessageStatus::Delivered);
     assert_eq!(legacy.text, "next");
 }
@@ -1331,6 +1349,10 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     original.compacted_context_tokens = Some(120_000);
     original.batch_id = Some(message_id(1));
     original.past_stop = true;
+    original.team_return = vec![ReturningMember {
+        launch_id: "launch-first".into(),
+        epoch: 0,
+    }];
 
     assert!(original.is_deliverable(now));
 
@@ -1380,6 +1402,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         !requeued.past_stop,
         "a requeued continue owes nothing past a stop"
     );
+    assert!(requeued.team_return.is_empty());
 }
 
 #[test]
