@@ -1,6 +1,5 @@
 //! Board commands through the CLI, durable store, and native hook delivery boundary.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -17,9 +16,7 @@ use rimz::store::message::{
 };
 use serde_json::json;
 
-use crate::common::{
-    DeliveryRendezvous, Env, ScrubSessionEnvExt, wait_for_text_then_enter, wait_for_text_then_key,
-};
+use crate::common::{Env, ScrubSessionEnvExt, wait_for_text_then_enter, wait_for_text_then_key};
 
 const BOARD: &str = "# Work\nStage: Build (@coder)\n\n## Progress log\n- existing entry\n\n## Evidence\nKeep this section.\n";
 const CONFIG: &str = r#"leader: coder
@@ -1801,6 +1798,49 @@ impl Fixture {
             .collect()
     }
 
+    /// Queue a `rimz teams resume` PROMPT to the leader card `(kind, leader)`, naming `members`
+    /// at their current launch and epoch as the ones its return brings back.
+    fn return_prompt(
+        &self,
+        kind: &str,
+        leader: &AgentSessionId,
+        members: &[&str],
+    ) -> rimz::store::message::MessageRecord {
+        let store = self.env.store();
+        let agents = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        let returning = members
+            .iter()
+            .map(|name| {
+                let agent = agents
+                    .iter()
+                    .find(|agent| agent.name.as_deref() == Some(name))
+                    .unwrap();
+                rimz::store::message::ReturningMember {
+                    launch_id: agent.launch_key().clone(),
+                    epoch: agent.epoch,
+                }
+            })
+            .collect();
+        let mut prompt = rimz::store::message::MessageRecord::new_for_card(
+            self.env.workspace_id.clone(),
+            AgentKind::new_unchecked(kind),
+            leader.clone(),
+            Some("coder".to_owned()),
+            "say hi".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Human);
+        prompt.team_return = returning;
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        store
+            .queue_message(&prompt, &workspace.session_name)
+            .unwrap();
+        prompt
+    }
+
     fn running(&self, role: &str, pane: Option<&str>) {
         self.seed(role, None);
         self.hook(role, "SessionStart", pane);
@@ -3570,8 +3610,9 @@ fn resume_skips_a_stage_delivered_after_its_attempt_began() {
 
 /// A resumed member is owed one wake: the owner of the open stage its notice, the leader one
 /// continue while no stage is open, and nobody anything at `Done` or on another role's stage.
-/// `--no-continue` takes the leader's continue away, and so does a prompt already queued for
-/// it, as a `rimz teams resume` PROMPT is, so the PROMPT is its one prompt.
+/// `--no-continue` takes the leader's continue away, and so does a `rimz teams resume` PROMPT
+/// queued for it, so the PROMPT is its one prompt. Other mail queued for the leader, due now or
+/// later, leaves its continue queued beside it.
 #[test]
 fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
     let stage = || MessageSender::Harness {
@@ -3580,22 +3621,34 @@ fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
     let no_stage = "# Work\n\n## Progress log\n";
     let review = BOARD.replace("Stage: Build (@coder)", "Stage: Review (@reviewer)");
     let done = BOARD.replace("Stage: Build (@coder)", "Stage: Done");
+    #[derive(Clone, Copy)]
+    enum Queued {
+        Nothing,
+        ReturnPrompt,
+        Mail,
+        Scheduled,
+    }
     let cases = [
-        (no_stage, "coder", false, false),
-        (no_stage, "reviewer", false, false),
-        (&review, "coder", false, false),
-        (&review, "reviewer", false, false),
-        (&done, "coder", false, false),
-        (no_stage, "coder", true, false),
-        (no_stage, "coder", false, true),
+        (no_stage, "coder", false, Queued::Nothing),
+        (no_stage, "reviewer", false, Queued::Nothing),
+        (&review, "coder", false, Queued::Nothing),
+        (&review, "reviewer", false, Queued::Nothing),
+        (&done, "coder", false, Queued::Nothing),
+        (no_stage, "coder", true, Queued::Nothing),
+        (no_stage, "coder", false, Queued::ReturnPrompt),
+        (no_stage, "coder", false, Queued::Mail),
+        (no_stage, "coder", false, Queued::Scheduled),
     ];
     let mut woken = Vec::new();
-    for (board, role, no_continue, prompted) in cases {
+    for (board, role, no_continue, queued) in cases {
         let fixture = Fixture::new();
         std::fs::write(fixture.board(), board).unwrap();
         let session = fixture.ended("claude", role);
-        if prompted {
-            let prompt = rimz::store::message::MessageRecord::new_for_card(
+        if let Queued::ReturnPrompt = queued {
+            fixture.return_prompt("claude", &session, &[role]);
+        }
+        if let Queued::Mail | Queued::Scheduled = queued {
+            let mut prompt = rimz::store::message::MessageRecord::new_for_card(
                 fixture.env.workspace_id.clone(),
                 AgentKind::new_unchecked("claude"),
                 session.clone(),
@@ -3604,6 +3657,9 @@ fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
                 DeliveryGate::Done,
             )
             .with_sender(MessageSender::Human);
+            if let Queued::Scheduled = queued {
+                prompt.not_before = Some(jiff::Timestamp::now() + Duration::from_secs(7200));
+            }
             let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
             fixture
                 .env
@@ -3632,6 +3688,14 @@ fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
             Vec::new(),
             Vec::new(),
             vec![(name("coder"), MessageSender::Human)],
+            vec![
+                (name("coder"), MessageSender::Human),
+                (name("coder"), MessageSender::System)
+            ],
+            vec![
+                (name("coder"), MessageSender::Human),
+                (name("coder"), MessageSender::System)
+            ],
         ]
     );
 }
@@ -3715,92 +3779,161 @@ fn a_leaders_first_launch_queues_no_continue() {
     assert!(messages.is_empty(), "{messages:#?}");
 }
 
+/// A `rimz teams resume` PROMPT to a leader that owns the open stage is its one prompt: its
+/// return queues no Stage notice to batch with it.
 #[test]
-fn resumed_lazy_leader_gets_its_resume_prompt_then_its_stage() {
+fn resumed_lazy_leader_gets_its_resume_prompt_alone() {
     let fixture = Fixture::new();
     fixture.env.install_agent_hooks("codex");
     crate::common::trust_codex_hooks(&fixture.env);
     let session = fixture.ended("codex", "coder");
     std::fs::write(fixture.board(), BOARD).unwrap();
     // The cohort resume queues the positional prompt to the leader before placing its pane.
-    let prompt = rimz::store::message::MessageRecord::new_for_card(
-        fixture.env.workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        session.clone(),
-        Some("coder".to_owned()),
-        "say hi".to_owned(),
-        DeliveryGate::Done,
-    )
-    .with_sender(MessageSender::Human);
-    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
-    fixture
-        .env
-        .store()
-        .queue_message(&prompt, &workspace.session_name)
-        .unwrap();
+    let prompt = fixture.return_prompt("codex", &session, &["coder"]);
     fixture.live_panes_running("codex", &["terminal_3"]);
-    let worktree = fixture.env.project_root.canonicalize().unwrap();
-    let board_lock = rimz::disk::lock::WorkspaceLock::acquire(
-        &fixture.env.runtime_paths().board_lock(&worktree),
-    )
-    .unwrap();
-    let before_claim = DeliveryRendezvous::new(&fixture.env, "resume-before-claim");
-    let _wrapper = fixture.spawn_resume_with_env(
+    let _wrapper = fixture.spawn_resume("codex", "coder", &session);
+    fixture.wrapper_log_until("resume: wake settled");
+    wait_for_text_then_key(&fixture.trace, "say hi", "9");
+    fixture.feed_from(
         "codex",
         "coder",
-        &session,
-        &[("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before_claim.path)],
+        session.as_str(),
+        "SessionStart",
+        Some("terminal_3"),
+        None,
+        "",
     );
-    fixture.wait_for(|events| {
-        events.iter().any(|event| {
-            matches!(event.kind(), EventKind::AgentLifecycle(payload)
-                if payload.event_name.as_deref() == Some("rimz.agent-resumed"))
-        })
-    });
-    // An early deliverer can reach its claim while the re-wake waits on this lock.
-    let early = before_claim.arrive_timeout(Duration::from_secs(2));
-    let mut delivery = if let Some(stream) = early {
-        stream
-    } else {
-        drop(board_lock);
-        before_claim.arrive()
-    };
-    let stages = fixture.stage_records();
-    assert_eq!(
-        stages.len(),
-        1,
-        "the Stage must be queued before the resume deliverer claims the prompt"
+    let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+    let messages = live
+        .iter()
+        .chain(&history)
+        .map(|message| (message.message_id.clone(), message.status))
+        .collect::<Vec<_>>();
+    assert_eq!(messages, [(prompt.message_id, MessageStatus::Sent)]);
+    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
+    assert!(
+        trace_position(&trace, "Type: STAGE").is_none(),
+        "a STAGE reached the pane: {trace}"
     );
-    let stage = &stages[0];
-    assert_eq!(stage.status, MessageStatus::Queued);
-    assert_eq!(
-        fixture
-            .env
-            .store()
-            .list_messages()
-            .unwrap()
-            .iter()
-            .find(|message| message.message_id == prompt.message_id)
-            .unwrap()
-            .status,
-        MessageStatus::Queued
-    );
-    delivery.write_all(&[1]).unwrap();
+}
 
-    let paste = format!(
-        "say hi\n\nType: STAGE\nFrom: @rimz\nContent:\n{}",
-        stage.text
-    );
-    wait_for_text_then_key(&fixture.trace, &paste, "9");
-    let messages = fixture.env.store().list_messages().unwrap();
-    for id in [&prompt.message_id, &stage.message_id] {
-        let message = messages
-            .iter()
-            .find(|message| &message.message_id == id)
-            .unwrap();
-        assert_eq!(message.status, MessageStatus::Sent);
-        assert_eq!(message.batch_id.as_ref(), Some(&prompt.message_id));
+/// A `rimz teams resume` PROMPT stands in for the stage re-wake of each member its return brings
+/// back, from the wrapper and from registration alike, while it is on its way to the leader or
+/// delivered on this return. A PROMPT delivered before an earlier return, or one withdrawn before
+/// delivery, leaves the owner woken.
+#[test]
+fn a_team_resume_prompt_stands_in_for_its_returns_stage_wake() {
+    #[derive(Clone, Copy, Debug)]
+    enum Prompt {
+        Queued,
+        DeliveredBefore,
+        Canceled,
     }
+    let review = BOARD.replace("Stage: Build (@coder)", "Stage: Review (@reviewer)");
+    let no_stage = "# Work\n\n## Progress log\n";
+    let cases = [
+        (review.as_str(), "reviewer", Prompt::Queued),
+        (review.as_str(), "reviewer", Prompt::DeliveredBefore),
+        (review.as_str(), "reviewer", Prompt::Canceled),
+        (no_stage, "coder", Prompt::Queued),
+    ];
+    let mut woken = Vec::new();
+    for (board, role, state) in cases {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.board(), board).unwrap();
+        let leader = fixture.ended("claude", "coder");
+        let session = if role == "coder" {
+            leader.clone()
+        } else {
+            fixture.ended("claude", role)
+        };
+        let prompt = fixture.return_prompt("claude", &leader, &["coder", role]);
+        let store = fixture.env.store();
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        match state {
+            Prompt::Queued => {}
+            Prompt::DeliveredBefore => {
+                store
+                    .record_sent_batch(std::slice::from_ref(&prompt), &workspace.session_name)
+                    .unwrap();
+                store
+                    .confirm_delivered_for_card(
+                        &prompt.kind,
+                        &prompt.agent_id,
+                        Some("coder"),
+                        rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                        &workspace.session_name,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    fixture.message_status(&prompt.message_id),
+                    MessageStatus::Delivered
+                );
+            }
+            Prompt::Canceled => {
+                assert!(
+                    store
+                        .cancel_message(&prompt.message_id, &workspace.session_name, "test")
+                        .unwrap()
+                );
+            }
+        }
+        let _wrapper = fixture.spawn_resume("claude", role, &session);
+        fixture.wrapper_log_until("resume: wake settled");
+        fixture.feed_from(
+            "claude",
+            role,
+            session.as_str(),
+            "SessionStart",
+            None,
+            None,
+            "",
+        );
+        let (live, history) = store.list_messages_and_history().unwrap();
+        woken.push(
+            live.iter()
+                .chain(&history)
+                .filter(|message| message.message_id != prompt.message_id)
+                .map(|message| (message.agent_name.clone(), message.sender.clone()))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let stage = vec![(
+        Some("reviewer".to_owned()),
+        MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        },
+    )];
+    assert_eq!(
+        woken,
+        [Vec::new(), stage.clone(), stage, Vec::new()],
+        "{cases:?}"
+    );
+}
+
+/// A member that comes back fresh on a `rimz teams resume` takes the PROMPT as its stage wake
+/// too: its registration queues no Stage notice while the PROMPT is on its way.
+#[test]
+fn a_fresh_owner_registering_under_a_team_resume_prompt_is_not_woken() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.board(),
+        BOARD.replace("Stage: Build (@coder)", "Stage: Review (@reviewer)"),
+    )
+    .unwrap();
+    let leader = fixture.ended("claude", "coder");
+    fixture.seed("reviewer", None);
+    let prompt = fixture.return_prompt("claude", &leader, &["coder", "reviewer"]);
+    fixture.hook("reviewer", "SessionStart", None);
+    let messages = fixture.env.store().list_messages().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| &message.message_id)
+            .collect::<Vec<_>>(),
+        [&prompt.message_id],
+        "{messages:#?}"
+    );
 }
 
 #[test]

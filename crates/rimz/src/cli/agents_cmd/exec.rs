@@ -2129,8 +2129,9 @@ fn card_last_prompt_at(
 /// Queue one system continue for the resumed card at its next turn boundary; the queued-head
 /// delivery spawned after this sends it. `last_prompt_at` is the card's prompt stamp read
 /// before spawn: a card prompted since takes no continue, and the continue is withdrawn once
-/// it is. A leader's continue (`leader`) also yields to a prompt already queued for the card,
-/// such as a `rimz teams resume` PROMPT, which a continue would otherwise join in one batch.
+/// it is. A leader's continue (`leader`) also yields to a `rimz teams resume` PROMPT queued for
+/// the card (a record with a `team_return`), which a continue would otherwise join in one
+/// batch; other mail, due now or held, leaves it queued beside that mail.
 fn queue_resume_continue(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
@@ -2149,11 +2150,10 @@ fn queue_resume_continue(
     }
     if leader
         && store.list_messages()?.iter().any(|message| {
-            message.body == rimz::store::message::MessageBody::Prompt
-                && agent.card_ref().matches(message.card_ref())
+            !message.team_return.is_empty() && agent.card_ref().matches(message.card_ref())
         })
     {
-        tracing::debug!("resume: a prompt queued for the leader stands in for its continue");
+        tracing::debug!("resume: the team resume prompt stands in for the leader's continue");
         return Ok(());
     }
     store.queue_message(

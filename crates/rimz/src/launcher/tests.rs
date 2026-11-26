@@ -331,9 +331,13 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
         .unwrap();
         let mut leader = test_agent("leader-session");
         leader.name = Some("leader".into());
+        leader.launch_id = Some("launch-resumed-leader".into());
+        let mut worker = test_agent("worker-session");
+        worker.launch_id = Some("launch-resumed-worker".into());
+        worker.epoch = 2;
         let seeds = vec![
             CohortSeed::Fresh,
-            CohortSeed::Resume(test_agent("worker-session").into()),
+            CohortSeed::Resume(worker.into()),
             if fresh {
                 CohortSeed::Fresh
             } else {
@@ -352,6 +356,7 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
             "say hi",
             2,
             sender.clone(),
+            sender == MessageSender::Human,
         )
         .unwrap();
         let messages = store.list_messages().unwrap();
@@ -372,6 +377,29 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
             } else {
                 "leader-session"
             }
+        );
+        let returning = |launch: &str, epoch| crate::store::message::ReturningMember {
+            launch_id: launch.into(),
+            epoch,
+        };
+        assert_eq!(
+            message.team_return,
+            match (sender == MessageSender::Human, fresh) {
+                (false, _) => Vec::new(),
+                (true, fresh) => vec![
+                    returning("launch-worker", 0),
+                    returning("launch-resumed-worker", 2),
+                    returning(
+                        if fresh {
+                            "launch-leader"
+                        } else {
+                            "launch-resumed-leader"
+                        },
+                        0,
+                    ),
+                ],
+            },
+            "a team's prompt names every member its return brings back; any other names none"
         );
     }
 }
