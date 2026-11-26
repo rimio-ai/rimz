@@ -4,6 +4,7 @@
 
 ```sh
 rimz workflow schema                              # the spec's JSON Schema
+rimz workflow types                               # TypeScript for a workflow script's globals
 rimz workflow validate                            # every machine workflow
 rimz workflow validate ~/.rimz/workflows/babysit-pr --json
 rimz workflow run babysit-pr                      # in the current checkout
@@ -770,6 +771,10 @@ Route rules read the definition as written:
 ### Schema
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`, derived from the loader's own tables, so an editor flags an unknown field (every table keeps `additionalProperties: false`), a value of the wrong type, and a field the loader always requires, such as an agent's `then`. Rules that depend on other fields or on the node's routes, such as `run` or `shell`, a judge's `summary`, and a test's `on.pass` and `on.fail`, are checked by `validate` alone.
+
+### Types
+
+`rimz workflow types` takes no argument and prints TypeScript declarations for the globals of a workflow script: `args`, `file`, `pipeline`, `parallel`, the six blocks (`agent`, `team`, `shell`, `watch`, `workflow`, `schedule`) with the object each takes and the result each gives, and the `Failure` an awaited call throws. Each block's object and result, and the failure, are printed from that type's own schema, so every field a script may pass is declared, and the fields a script may not pass are left out: `on` and `check_in` of `shell`, `check_in` of `watch`, and `worktree`, `max_launches`, and `detach` of `workflow`. It reads no workflow and needs no room. Every other subcommand that reads a definition (`run`, `show`, `validate`) reads a `workflow.toml`.
 
 ## Inspect definitions
 

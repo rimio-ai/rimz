@@ -1,0 +1,253 @@
+---
+source: crates/rimz/src/harness/block/tests.rs
+expression: typescript()
+---
+// The globals of a RimZ workflow script, printed by `rimz workflow types`.
+
+/** What the start passed, or `undefined`. */
+declare const args: any;
+
+/** The text of a file of the workflow's directory; a path that leaves the directory is refused. */
+declare function file(path: string): string;
+
+/**
+ * Runs every item through the stages in turn and gives one result per item, in the order of
+ * the items. A stage is called with the result of the stage before it (the item itself, for the
+ * first stage), the item, and its index. A stage that throws leaves `null` in its item's place.
+ */
+declare function pipeline<T>(
+  items: T[],
+  stage: (previous: any, item: T, index: number) => unknown,
+  ...stages: ((previous: any, item: T, index: number) => unknown)[]
+): Promise<any[]>;
+
+/**
+ * Calls every task and gives their results in the order of the list. A task that throws leaves
+ * `null` in its place.
+ */
+declare function parallel(tasks: (() => unknown)[]): Promise<any[]>;
+
+/**
+ * Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
+ * `cwd`) it works in its caller's checkout.
+ */
+declare function agent(block: Agent & { schema: object }): Promise<any>;
+declare function agent(block: Agent): Promise<AgentResult>;
+
+interface Agent {
+  /** Agent profile (from `rimz agents profiles`) or bare model; one seat, never a team. */
+  profile: string;
+  /** The brief: the agent's first turn. */
+  prompt: string;
+  /** Inherit this profile or provider kind below the launched profile. */
+  agent?: string;
+  /** Existing directory to work in. */
+  cwd?: string;
+  /** Label for `tasks` and the sidebar, 3 to 5 words. */
+  description?: string;
+  /** `worktree` only: start a new session in a closed worktree (otherwise refused). */
+  fresh?: boolean;
+  /** Worktree for this open pull request, by number or URL. */
+  from_pr?: string;
+  /** Distinct handle when the channel already holds this profile's. */
+  name?: string;
+  /**
+   * JSON Schema the agent's answer must fit, over `type`, `required`, `properties`,
+   * `enum`, and `items` only; the call's result is that answer.
+   */
+  schema?: Record<string, unknown>;
+  /**
+   * `true` (the default): the agent stays in the room after its first turn until it is
+   * closed, and the call resolves when its session has closed. `false`: one task, and it
+   * closes when its turn ends.
+   */
+  stay?: boolean;
+  /**
+   * Stop the agent after this long (`90m`, `2h`, `3d`) and fail the call with
+   * `timeout`; none by default.
+   */
+  timeout?: string;
+  /**
+   * Kebab-case worktree name (at most two words); at most one of `worktree`, `from_pr`, and
+   * `cwd`.
+   */
+  worktree?: string;
+}
+
+interface AgentResult {
+  /** The agent's last message. */
+  report: string;
+  /** The agent's handle. */
+  handle: string;
+}
+
+/**
+ * Launches a configured team on a brief, which goes to its leader; the call resolves the first
+ * time the team's board is done.
+ */
+declare function team(block: Team): Promise<TeamResult>;
+
+interface Team {
+  /** Configured team to launch (from `rimz teams list`). */
+  team: string;
+  /** The brief, delivered to the team's leader. */
+  prompt: string;
+  /** Label each seat carries in the sidebar, a few words. */
+  description?: string;
+  /** Open pull request, by number or URL, to create or reuse a worktree for. */
+  from_pr?: string;
+  /**
+   * Stop the team after this long (`90m`, `2h`, `3d`) and fail the call with
+   * `timeout`; none by default.
+   */
+  timeout?: string;
+  /**
+   * Kebab-case worktree name (at most two words); give exactly one of `worktree` and
+   * `from_pr`.
+   */
+  worktree?: string;
+}
+
+interface TeamResult {
+  /** The leader's last message. */
+  report: string;
+}
+
+/** Runs one command; a nonzero exit fails the call with cause `exit`. */
+declare function shell(block: Shell): Promise<ShellResult>;
+
+interface Shell {
+  /**
+   * The whole command as one string, run once through POSIX `sh -c` at the checkout's root
+   * with stdin closed, stdout and stderr going to the shell's output file.
+   */
+  command: string;
+  /** Checkout to run in; defaults to the caller's. */
+  cwd?: string;
+  /**
+   * Any JSON value, written to the `context.json` the command finds in
+   * `RIMZ_WORKFLOW_DIR`.
+   */
+  input?: unknown;
+  /** What you will do on waking, 1 to 60 characters. */
+  label?: string;
+  /**
+   * Stop the command after this long (`90m`, `2h`, `3d`) and fail the call with
+   * `timeout`; none by default.
+   */
+  timeout?: string;
+}
+
+interface ShellResult {
+  /** The exit code, `0`. */
+  code: number;
+  /** What the command printed, up to a cap. */
+  stdout: string;
+  /** The path of the log that holds everything it printed. */
+  output: string;
+}
+
+/** Waits until a condition reads true, already true when called included. */
+declare function watch(block: Watch): Promise<WatchResult>;
+
+interface Watch {
+  /** A condition, firing once it reads true, already true when set included. */
+  when: string;
+  /** Checkout to arm in, whose branch bare forge terms read; defaults to the caller's. */
+  cwd?: string;
+  /** What you will do on waking, 1 to 60 characters; the wake carries only what fired. */
+  label?: string;
+  /**
+   * Stop watching after this long (`90m`, `2h`, `3d`) and fail the call with `timeout`;
+   * none by default.
+   */
+  timeout?: string;
+}
+
+interface WatchResult {
+  /** The reading of each key the condition names, at the look that read it true. */
+  readings: Record<string, string>;
+}
+
+/** Runs a workflow; the call gives what its script returned, and fails with what it threw. */
+declare function workflow(block: Workflow): Promise<any>;
+
+interface Workflow {
+  /**
+   * What `value` is: an installed workflow's `name`, a workflow directory or file's
+   * `path`, a `script`'s text, or an ended `run`'s id to run again.
+   */
+  source: "name" | "path" | "script";
+  /** The workflow's name, path, script text, or run id. */
+  value: string;
+  /** Any JSON value, which the script reads as the global `args`. */
+  args?: unknown;
+  /** When to give up capacity waits. */
+  give_up?: string;
+  /** Launch agent steps past every capacity hold. */
+  skip_capacity?: boolean;
+  /** How long the run may take (`8h`, `5d`); none by default. */
+  timeout?: string;
+}
+
+/** Books a launch for later; the call gives the booking's id at once, and nothing follows. */
+declare function schedule(block: Schedule): Promise<ScheduleResult>;
+
+interface Schedule {
+  /** Booking name; reusing a name you hold replaces it. */
+  name: string;
+  /** What fires the booking. */
+  trigger: "at" | "in" | "every" | "cron" | "signal" | "when";
+  /**
+   * The trigger's argument: a clock time, delay, interval, cron expression, signal name, or
+   * condition.
+   */
+  value: string;
+  /** The block each fire launches. */
+  tool: "agent" | "team" | "workflow";
+  /** That block's own object, without `worktree` (pass top-level `worktree`). */
+  arguments: Record<string, unknown>;
+  /** `when` only: how long the condition must hold before firing. */
+  for?: string;
+  /** `signal` only: payload fields that must equal these values (`*` matches any value). */
+  match?: Record<string, string>;
+  /** Disable after this many failed fires in a row (default `3`; `0` never). */
+  max_strikes?: number;
+  /** Repeating triggers only: what a trigger during a live fire does (`skip` default). */
+  overlap?: "skip" | "coalesce" | "queue" | "replace" | "allow";
+  /** `signal` or `when` only: fire on every match rather than once (default once). */
+  repeat?: boolean;
+  /** RimZ-owned worktree for every fire, created at the first fire when missing. */
+  worktree?: string;
+}
+
+interface ScheduleResult {
+  /** The booking's id. */
+  id: string;
+}
+
+/**
+ * A call that did not end as asked, given in place of its result: in a script, the `Error`
+ * the awaited call throws.
+ */
+interface Failure extends Error {
+  /**
+   * `exit`, `died`, `timeout`, `capacity`, or `invalid` for a call; `replay`, `stuck`,
+   * or `invalid` (a cap) for a run that ended without one.
+   */
+  cause: "exit" | "died" | "timeout" | "capacity" | "invalid" | "replay" | "stuck";
+  /** What happened, in a sentence. */
+  reason: string;
+  /** The block whose call failed; none for a run that ended without a call. */
+  block?: "agent" | "team" | "shell" | "watch" | "workflow" | "schedule";
+  /** A command's exit code. */
+  code?: number;
+  /** An agent's handle. */
+  handle?: string;
+  /** The path of a command's log. */
+  output?: string;
+  /** What a command printed, up to a cap. */
+  stdout?: string;
+  /** The call's number in the run. */
+  step?: number;
+}
