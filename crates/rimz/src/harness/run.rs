@@ -10,7 +10,7 @@ pub use peer::{
 };
 pub use team::{open_team_run, open_team_run_for, reopen_team_run, settle_team_run};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -959,23 +959,29 @@ pub fn expire_interrupt(
     Ok(Some(record))
 }
 
+/// Claim the deadline rung due at `now` when `attach` delivers it. `seen` names a result-file
+/// run's file as its subagent sees it for the rung's text; it runs on an unlocked read, only when
+/// a rung is due, and before the lock is taken.
 pub fn claim_rung(
     paths: &StatePaths,
     run_id: &RunId,
     now: Timestamp,
-    attach: impl FnOnce(&RunRecord, &super::deadline::Rung) -> bool,
+    seen: impl FnOnce(&RunRecord) -> Option<PathBuf>,
+    attach: impl FnOnce(&RunRecord, &super::deadline::Rung, Option<&Path>) -> bool,
 ) -> Result<Option<super::deadline::Rung>> {
     // Records are published atomically, so an unlocked read can rule out the
     // common case (no rung due) without taking the workspace lock on every tool
     // hook; a due rung is re-checked under the lock.
-    if super::deadline::due_rung(&load(paths, run_id)?, now).is_none() {
+    let unlocked = load(paths, run_id)?;
+    if super::deadline::due_rung(&unlocked, now).is_none() {
         return Ok(None);
     }
+    let seen = seen(&unlocked);
     update_record(paths, run_id, |record, _| {
         let Some(rung) = super::deadline::due_rung(record, now) else {
             return Ok(RecordMutation::Keep(None));
         };
-        if !attach(record, &rung) {
+        if !attach(record, &rung, seen.as_deref()) {
             return Ok(RecordMutation::Keep(None));
         }
         record.deadline_notice_at = Some(rung.at());

@@ -32,16 +32,19 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     }
     if stop_due_by_pane(&initial, now) {
         let mut previous = None;
+        let mut text = String::new();
         let claim = rimz::harness::run::claim_rung(
             ctx.store.paths(),
             &request.run_id,
             now,
-            |record, rung| {
+            |record| rimz::harness::run::result_file::seen(&ctx.store, record),
+            |record, rung, result_file| {
                 previous = record.deadline_notice_at;
+                text = rung.text(result_file);
                 claims_stop(record, rung, now)
             },
         )?;
-        if let Some(rung @ Rung::Stop { at }) = claim {
+        if let Some(Rung::Stop { at }) = claim {
             let Some(target) = deadline_stop_target(&initial) else {
                 tracing::debug!(run_id = %request.run_id, "deadline stop has no agent session id");
                 return Ok(());
@@ -52,7 +55,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
                 deadline_stop_request(
                     &request.run_id,
                     target,
-                    rung.text(),
+                    text,
                     globals.mux,
                     DispatchMode::Interrupt,
                 ),

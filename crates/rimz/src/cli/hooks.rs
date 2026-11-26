@@ -1310,7 +1310,8 @@ fn attach_context(
             store.paths(),
             &run_id,
             jiff::Timestamp::now(),
-            |record, rung| {
+            |record| rimz::harness::run::result_file::seen(store, record),
+            |record, rung, result_file| {
                 if matches!(rung, rimz::harness::deadline::Rung::Stop { .. }) && !carries_stop {
                     return false;
                 }
@@ -1322,7 +1323,7 @@ fn attach_context(
                 {
                     return false;
                 }
-                let block = wrap_hook_context(&rung.text());
+                let block = wrap_hook_context(&rung.text(result_file));
                 let attached = agent.attach_hook_context(&mut decoded, &block);
                 if attached {
                     blocks.push(block);
