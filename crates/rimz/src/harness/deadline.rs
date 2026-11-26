@@ -11,8 +11,15 @@ use crate::utils::time::format_duration_compact;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rung {
-    Warn { at: Timestamp, text: String },
-    Stop { at: Timestamp },
+    /// `of` is the run's timeout on every warning but the last, which asks the child to wrap up.
+    Warn {
+        at: Timestamp,
+        remaining: Duration,
+        of: Option<Duration>,
+    },
+    Stop {
+        at: Timestamp,
+    },
 }
 
 impl Rung {
@@ -22,10 +29,29 @@ impl Rung {
         }
     }
 
-    pub fn text(&self) -> String {
-        match self {
-            Self::Warn { text, .. } => text.clone(),
-            Self::Stop { .. } => "Time is up. Stop now and report what is done, what is unverified, and what remains. End your turn.".to_owned(),
+    /// The rung's text; `result_file` is a result-file run's file as its subagent sees it
+    /// (`harness::run::result_file::seen`), which the wrap-up and the stop name.
+    pub fn text(&self, result_file: Option<&std::path::Path>) -> String {
+        match (self, result_file) {
+            (Self::Warn { remaining, of: Some(timeout), .. }, _) => format!(
+                "{} of {} left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report.",
+                remaining_label(*remaining),
+                format_duration_compact(*timeout)
+            ),
+            (Self::Warn { remaining, of: None, .. }, None) => format!(
+                "{} left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains.",
+                remaining_label(*remaining)
+            ),
+            (Self::Warn { remaining, of: None, .. }, Some(path)) => format!(
+                "{} left. Wrap up now: finish only what is in flight, then write what is done, what is unverified, and what remains to `{}`.",
+                remaining_label(*remaining),
+                path.display()
+            ),
+            (Self::Stop { .. }, None) => "Time is up. Stop now and report what is done, what is unverified, and what remains. End your turn.".to_owned(),
+            (Self::Stop { .. }, Some(path)) => format!(
+                "Time is up. Stop now and write what is done, what is unverified, and what remains to `{}`. End your turn.",
+                path.display()
+            ),
         }
     }
 }
@@ -57,7 +83,8 @@ pub(super) fn due_rung(record: &RunRecord, now: Timestamp) -> Option<Rung> {
         let remaining = Duration::from_secs(deadline.duration_since(now).as_secs().max(0) as u64);
         Rung::Warn {
             at: deadline - *offset,
-            text: warning_text(record, remaining, index + 1 == record.warn.len()),
+            remaining,
+            of: (index + 1 != record.warn.len()).then(|| record.timeout.unwrap_or_default()),
         }
     };
     (Some(rung.at()) > record.deadline_notice_at).then_some(rung)
@@ -68,22 +95,13 @@ pub fn kill_due(record: &RunRecord, now: Timestamp) -> bool {
         && kill_at(record).is_some_and(|deadline| deadline <= now)
 }
 
-fn warning_text(record: &RunRecord, remaining: Duration, last: bool) -> String {
+fn remaining_label(remaining: Duration) -> String {
     let seconds = remaining.as_secs();
-    let remaining = if seconds >= 60 {
+    if seconds >= 60 {
         format!("{}m", seconds / 60)
     } else {
         format!("{seconds}s")
-    };
-    if last {
-        return format!(
-            "{remaining} left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains."
-        );
     }
-    let total = format_duration_compact(record.timeout.unwrap_or_default());
-    format!(
-        "{remaining} of {total} left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report."
-    )
 }
 
 /// The longest the host leaves the stop rung to a kind's hook before it types
@@ -201,14 +219,14 @@ mod tests {
         let first = due_rung(&record, deadline - Duration::from_secs(299)).unwrap();
         assert_eq!(first.at(), deadline - Duration::from_secs(360));
         assert_eq!(
-            first.text(),
+            first.text(None),
             "4m of 30m left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report."
         );
         record.deadline_notice_at = Some(first.at());
         assert_eq!(due_rung(&record, deadline - Duration::from_secs(200)), None);
         let last = due_rung(&record, deadline - Duration::from_secs(120)).unwrap();
         assert_eq!(
-            last.text(),
+            last.text(None),
             "2m left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains."
         );
         assert!(matches!(
@@ -219,6 +237,29 @@ mod tests {
         assert_eq!(
             due_rung(&record, deadline - Duration::from_secs(120)),
             Some(last)
+        );
+    }
+
+    #[test]
+    fn a_result_file_run_writes_its_wrap_up_and_its_stop_to_its_file() {
+        let record = record();
+        let deadline = record.deadline_at.unwrap();
+        let file = std::path::Path::new("/tmp/child.output");
+        let first = due_rung(&record, deadline - Duration::from_secs(299)).unwrap();
+        assert_eq!(first.text(Some(file)), first.text(None));
+        let last = due_rung(&record, deadline - Duration::from_secs(120)).unwrap();
+        assert_eq!(
+            last.text(Some(file)),
+            "2m left. Wrap up now: finish only what is in flight, then write what is done, what is unverified, and what remains to `/tmp/child.output`."
+        );
+        let stop = due_rung(&record, deadline).unwrap();
+        assert_eq!(
+            stop.text(Some(file)),
+            "Time is up. Stop now and write what is done, what is unverified, and what remains to `/tmp/child.output`. End your turn."
+        );
+        assert_eq!(
+            stop.text(None),
+            "Time is up. Stop now and report what is done, what is unverified, and what remains. End your turn."
         );
     }
 

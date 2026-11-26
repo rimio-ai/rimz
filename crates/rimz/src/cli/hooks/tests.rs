@@ -6634,3 +6634,81 @@ fn a_result_file_turn_end_with_no_result_parks_and_queues_one_reminder_until_a_t
         );
     }
 }
+
+#[test]
+fn a_result_file_runs_deadline_context_names_its_file() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use std::time::Duration;
+
+    let (dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let path = dir.path().join("elsewhere").join("dl-rf.output");
+    let mut record = rimz::store::run::RunRecord::new(
+        store.paths().workspace_id.clone(),
+        adapter.spec().kind_id(),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    record.agent_id = Some("dl-rf".into());
+    record.subagent = true;
+    record.status = rimz::store::run::RunStatus::Running;
+    record.timeout = Some(Duration::from_secs(1800));
+    record.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
+    record.grace = Some(Duration::from_secs(180));
+    record.deadline_at = Some(jiff::Timestamp::now() + Duration::from_secs(150));
+    record.result_file = Some(path.clone());
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let env = std::collections::BTreeMap::from([(
+        rimz::harness::launch::ENV_RUN_ID.to_owned(),
+        record.run_id.to_string(),
+    )]);
+    let payload = serde_json::json!({"session_id":"dl-rf", "cwd":"/tmp/hooks-test", "tool_name":"Read", "tool_input":{}, "tool_response":{}});
+    let feed = || {
+        let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
+            boot_id: None,
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: adapter.spec().kind_id(),
+            event: Some("PostToolUse".to_owned()),
+            payload: serde_json::to_string(&payload).unwrap(),
+            cwd: "/tmp/hooks-test".into(),
+            hook_pid: std::process::id(),
+            env: env.clone(),
+        };
+        with_frame_env(&frame, FrameAttempt::First, || {
+            super::attach_context(
+                &store,
+                adapter,
+                rimz::RuntimeOwnerKind::Agent,
+                "PostToolUse",
+                &payload,
+                None,
+            )
+        })
+    };
+    let reply = |text: String| {
+        rimz::agents::HookReply::Json(
+            serde_json::json!({"hookSpecificOutput":{"hookEventName":"PostToolUse", "additionalContext":format!("<system_reminder>\n{text}\n</system_reminder>")}}),
+        )
+    };
+    assert_eq!(
+        feed(),
+        reply(format!(
+            "2m left. Wrap up now: finish only what is in flight, then write what is done, what is unverified, and what remains to `{}`.",
+            path.display()
+        ))
+    );
+    record = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    record.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(1));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    assert_eq!(
+        feed(),
+        reply(format!(
+            "Time is up. Stop now and write what is done, what is unverified, and what remains to `{}`. End your turn.",
+            path.display()
+        ))
+    );
+}

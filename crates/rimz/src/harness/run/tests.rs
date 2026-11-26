@@ -1458,7 +1458,7 @@ fn a_released_stop_is_due_again_unless_the_claim_moved_on() {
     record.deadline_at = Some(now - std::time::Duration::from_secs(11));
     record.deadline_notice_at = Some(now - std::time::Duration::from_secs(600));
     create(&paths, &record).unwrap();
-    let claim = || claim_rung(&paths, &record.run_id, now, |_, _| true).unwrap();
+    let claim = || claim_rung(&paths, &record.run_id, now, |_| None, |_, _, _| true).unwrap();
     let Some(crate::harness::deadline::Rung::Stop { at }) = claim() else {
         panic!("the stop is due");
     };
@@ -1492,7 +1492,7 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
     record.deadline_at = Some(now - std::time::Duration::from_secs(1));
     create(&paths, &record).unwrap();
     assert_eq!(
-        claim_rung(&paths, &record.run_id, now, |_, _| false).unwrap(),
+        claim_rung(&paths, &record.run_id, now, |_| None, |_, _, _| false).unwrap(),
         None
     );
     assert_eq!(
@@ -1500,16 +1500,20 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
         None
     );
     assert_eq!(
-        claim_rung(&paths, &record.run_id, now, |_, _| true).unwrap(),
+        claim_rung(&paths, &record.run_id, now, |_| None, |_, _, _| true).unwrap(),
         Some(crate::harness::deadline::Rung::Stop {
             at: record.deadline_at.unwrap()
         })
     );
     for _ in 0..3 {
         assert_eq!(
-            claim_rung(&paths, &record.run_id, now, |_, _| panic!(
-                "already claimed"
-            ))
+            claim_rung(
+                &paths,
+                &record.run_id,
+                now,
+                |_| None,
+                |_, _, _| panic!("already claimed")
+            )
             .unwrap(),
             None
         );
