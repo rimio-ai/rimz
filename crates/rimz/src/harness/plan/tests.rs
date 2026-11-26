@@ -4687,15 +4687,17 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
 
 #[test]
 fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
-    for (kind, raw, expected) in [
+    for (kind, raw, written, expected) in [
         (
             "claude",
             "--autocompact=100000 --debug",
+            "--autocompact=100000",
             vec!["--debug", "--autocompact", "200000"],
         ),
         (
             "codex",
             "--config=model_auto_compact_token_limit=100000 -c web_search=cached",
+            "--config=model_auto_compact_token_limit=100000",
             vec![
                 "-c",
                 "web_search=cached",
@@ -4718,8 +4720,11 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
             .expect("profile cell");
         let mut layout = LayoutSpec::single(Cell::Agent(cell));
         let warnings = finalize(&mut layout, &Default::default(), &[]).expect("finalize");
-        assert!(
-            matches!(warnings.as_slice(), [LaunchFinalizeWarning::DeclaredFieldWins { field: "auto-compact", value, .. }] if value == "200000")
+        assert_eq!(
+            warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [format!(
+                "warning: profile `compact` args set {written}; declared auto-compact 200000 wins"
+            )]
         );
         let finalized = with_auto_args(kind, &expected);
         assert!(
