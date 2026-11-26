@@ -3899,6 +3899,56 @@ fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
     assert_text_then_enter(&trace_log, &user_message("continue"));
 }
 
+/// A lazily registering receiver resolves over the live pane read, so a human send reads its
+/// limit pause from the context sidecar as an agent's send does: both gates park, and the
+/// receipt names the pause.
+#[test]
+fn human_send_to_a_limit_paused_lazy_receiver_parks_on_the_pause() {
+    let (env, panes) = interrupt_fixture("codex");
+    append_lifecycle(
+        &env,
+        "codex",
+        "Stop",
+        "sess-interrupt",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        |_| {},
+    );
+    seed_turn_error(
+        &env,
+        "sess-interrupt",
+        TurnErrorClass::PausedRateLimit,
+        true,
+    );
+    let trace = env.project_root.join("paused-lazy-trace.log");
+    for gate in ["done", "any"] {
+        let output = run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "--on", gate, "@codex", "--", "after the refill"]),
+            "human send to a paused receiver",
+        );
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        let message_id = queued_id_from_stdout(&output.stdout);
+        assert!(
+            receipt.contains(&format!(
+                "is paused; send now: rimz message steer {message_id}"
+            )),
+            "{gate}: {receipt}"
+        );
+        assert!(!receipt.contains("is failed"), "{gate}: {receipt}");
+        assert_eq!(
+            message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
+            MessageStatus::Queued,
+            "{gate}"
+        );
+    }
+    assert!(trace_lines(&trace).is_empty(), "{:?}", trace_lines(&trace));
+}
+
 #[test]
 fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
     let env = Env::new();
@@ -18113,7 +18163,8 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn:
         .find(|agent| agent.agent_id.as_str() == agent_id)
         .expect("agent");
     let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
-    let mut context = rimz::agents::AgentContext::new("claude", at);
+    let kind = agent.kind.as_str();
+    let mut context = rimz::agents::AgentContext::new(kind, at);
     context.turn_error = Some(AgentTurnError {
         model: None,
         ended_turn,
@@ -18121,8 +18172,7 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn:
         at,
         label: Some("provider parked".to_owned()),
     });
-    let record =
-        rimz::agents::context::record::AgentContextRecord::new("claude", agent_id, context);
+    let record = rimz::agents::context::record::AgentContextRecord::new(kind, agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed turn error");
 }

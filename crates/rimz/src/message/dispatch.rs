@@ -69,14 +69,6 @@ impl DispatchMode {
             Self::Boundary { gate, .. } => *gate,
         }
     }
-
-    fn needs_agent_context(&self) -> bool {
-        match self {
-            Self::Interrupt => true,
-            Self::Steer => false,
-            Self::Boundary { after, when, .. } => !after.is_empty() || !when.is_empty(),
-        }
-    }
 }
 
 pub struct DispatchRequest {
@@ -341,11 +333,6 @@ pub fn dispatch(
     } else {
         Vec::new()
     };
-    let needs_context =
-        request.mode.needs_agent_context() || matches!(request.sender, MessageSender::Agent { .. });
-    let agent_context =
-        needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
-
     let selecting = !request.selected.is_empty();
     let cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
     // A selection resolves each address on its own, over the live read.
@@ -369,10 +356,11 @@ pub fn dispatch(
     } else {
         crate::sidebar::produce::resolution_snapshot(workspace, store, request.mux)?
     };
-    if (!rollup_only || resuming)
-        && let Some(context) = agent_context
-    {
-        snapshot = snapshot.with_agent_context(context);
+    // The live read attaches rest certificates only; a limit pause, like every other status
+    // the gate reads, needs the context records whoever sends.
+    if !rollup_only || resuming {
+        snapshot = snapshot
+            .with_agent_context(crate::store::agent_context::read_all(store.runtime_paths()));
     }
     // Ordinary delivery excludes ended rows; only the resume doorway names one explicitly.
     snapshot.agents = snapshot
