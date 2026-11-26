@@ -423,6 +423,11 @@ fn tier_stamp(model: &str) -> Box<crate::agents::TierStamp> {
     })
 }
 
+/// Whether `args` hold the setting only Codex's own render writes.
+fn codex_render(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "web_search=\"disabled\"")
+}
+
 fn routed_profile(effort: Option<&str>) -> Profile {
     Profile {
         variant: None,
@@ -444,6 +449,39 @@ fn routed_profile(effort: Option<&str>) -> Profile {
         model: Some("opus".to_owned()),
         ..profile("claude")
     }
+}
+
+/// `name`, a senior-tier Claude definition writing `effort` when given, loaded beside Claude and
+/// Codex kind bases, so a stamp on Codex replays its Codex build. The directory holds the prompt
+/// files the profiles render from.
+fn tiered_claude(name: &str, effort: Option<&str>) -> (tempfile::TempDir, ProfilesConfig) {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    let effort = effort
+        .map(|effort| format!("effort: {effort}\n"))
+        .unwrap_or_default();
+    for (name, text) in [
+        ("claude", "---\ndescription: Base.\n---\nBase.".to_owned()),
+        ("codex", "---\ndescription: Base.\n---\nBase.".to_owned()),
+        (
+            name,
+            format!(
+                "---\ndescription: Planner.\nagent: claude\ntier: senior\ntools: [Read]\n{effort}---\nPlan."
+            ),
+        ),
+    ] {
+        std::fs::write(root.path().join(format!("agents/{name}.md")), text).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &crate::config::CommandsConfig::default(),
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    (root, loaded.agent_profiles)
 }
 
 /// A Claude definition as the loader builds it: `model` is its own, and a

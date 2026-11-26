@@ -564,120 +564,36 @@ fn resolve_posture_with_role(
         return Ok(bare_posture(request.stamped_mode, request.kind));
     }
     let name = request.profile.unwrap_or(request.kind.as_str());
-    let mut profiles = std::borrow::Cow::Borrowed(profiles);
     let base_name = request.record.and_then(|record| record.agent.as_deref());
-    if (request.stamped_tier.is_some() || request.record.is_some())
-        && base_name.is_none()
-        && profiles.failed(name).is_none()
-        && let Some(profile) = profiles.0.get(name)
-    {
-        let rendered = profile
-            .definition_renders
-            .as_ref()
-            .and_then(|renders| {
-                renders.renders.get(request.kind.as_str()).map(|profile| {
-                    let mut profile = profile.clone();
-                    if let Some(stamp) = request.stamped_tier {
-                        profile.model = Some(stamp.model.clone());
-                        // A kind base keeps its own effort; under a definition the kind base and
-                        // then the built-in default fill what the definition leaves unwritten.
-                        if !profile.kind_base {
-                            profile.effort = renders.effort.clone();
-                        }
-                        profile.tier_stamp = Some(Box::new(stamp.clone()));
-                    }
-                    profile
-                })
-            })
-            .or_else(|| {
-                if profile.agent == request.kind.as_str() {
-                    return None;
-                }
-                let mut built = if profile.definition.is_some() {
-                    profile
-                        .build_under(None, Some(request.kind.as_str()), None)?
-                        .ok()?
-                } else if profile.kind_base {
-                    crate::harness::spec::routed_kind_base(
-                        request.kind.as_str(),
-                        &profiles,
-                        fallback,
-                    )?
-                } else {
-                    return None;
-                };
-                if let Some(stamp) = request.stamped_tier {
-                    built.model = Some(stamp.model.clone());
-                    built.tier_stamp = Some(Box::new(stamp.clone()));
-                }
-                Some(built)
-            });
-        // Without a stamp the record's model is the launch's, none included: a
-        // render's Intern model, or a model the profile or any layer it
-        // resolves onto gained since, would move the agent and the effort
-        // default derived from it. So no layer in this table keeps a model of
-        // its own, since the resolver fills an absent one from the layers
-        // below. A `--model` a layer writes in raw `args` stays, as on a fresh
-        // launch.
-        if request.stamped_tier.is_none()
-            && let Some(record) = request.record
-        {
-            let mut top = rendered.unwrap_or_else(|| profile.clone());
-            top.model.clone_from(&record.model);
-            let table = &mut profiles.to_mut().0;
-            for layer in table.values_mut() {
-                layer.model = None;
-            }
-            table.insert(name.to_owned(), top);
-        } else if let Some(rendered) = rendered {
-            profiles.to_mut().0.insert(name.to_owned(), rendered);
-        } else if request.stamped_tier.is_some() {
-            let now = crate::harness::spec::profile_cell(name, &profiles)
-                .map(|cell| cell.kind)
-                .unwrap_or_else(|_| request.kind.clone());
-            return Err(PostureDegrade::KindChanged {
-                profile: name.to_owned(),
-                was: request.kind.clone(),
-                now,
-            });
-        }
-    }
-    // The role is the last layer over the profile, so it loses its model when
-    // a launch record or tier stamp decides the model; a `--model` in its raw
-    // `args` stays too.
-    let modelless_role = role
-        .filter(|_| request.record.is_some() || request.stamped_tier.is_some())
-        .map(|role| crate::config::RoleBinding {
-            model: None,
-            ..role.clone()
-        });
-    let role = modelless_role.as_ref().or(role);
-    let resolved = crate::harness::spec::resolve_agent_override(base_name, &profiles, fallback)
+    // A recorded launch replays its engine on the session's kind: the record's model when a
+    // record exists, none included, else the stamp's, over whatever the role or a layer gained.
+    let recorded = (request.record.is_some() || request.stamped_tier.is_some()).then(|| {
+        selection.clone().resume(
+            request.kind.as_str(),
+            request.record.map(|record| record.model.as_deref()),
+            request.stamped_tier,
+        )
+    });
+    let resolved = crate::harness::spec::resolve_agent_override(base_name, profiles, fallback)
         .and_then(|base| {
-            let replay = if base.is_some() {
-                crate::harness::spec::ReplayOptions {
-                    target_kind: Some(request.kind.as_str()),
-                    recorded_model: request
-                        .stamped_tier
-                        .is_none()
-                        .then(|| request.record.and_then(|record| record.model.as_deref())),
-                    stamped_tier: request.stamped_tier,
-                }
-            } else {
-                crate::harness::spec::ReplayOptions::default()
-            };
             crate::harness::spec::profile_cell_for_replay(
                 name,
-                &profiles,
+                profiles,
                 fallback,
                 base.as_ref(),
                 role,
-                replay,
-                selection,
+                recorded.as_ref().unwrap_or(selection),
             )
         });
     let mut cell = match resolved {
         Ok(cell) => cell,
+        Err(crate::harness::spec::LayoutErr::KindChanged { now, .. }) => {
+            return Err(PostureDegrade::KindChanged {
+                profile: name.to_owned(),
+                was: request.kind.clone(),
+                now: AgentKind::new_unchecked(now),
+            });
+        }
         Err(err) => {
             return Err(PostureDegrade::Unresolved {
                 profile: base_name.unwrap_or(name).to_owned(),
@@ -2781,7 +2697,7 @@ fn plan_resume_candidates_detailed(
             if overrides.permission_mode.is_some()
                 || !overrides.preset.is_empty()
                 || overrides.agent.is_some()
-                || overrides.tier.is_some()
+                || overrides.selection.tier_flag().is_some()
             {
                 let mut cell = posture.launch.clone().into_cell(
                     candidate.identity.kind.clone(),
@@ -2793,7 +2709,7 @@ fn plan_resume_candidates_detailed(
                     profiles,
                     fallback,
                     overrides,
-                    Some(posture.launch),
+                    Some(&posture),
                     true,
                 ) {
                     Ok(warnings) => launch_warnings = warnings,
@@ -2889,7 +2805,9 @@ fn plan_resume_candidates_detailed(
                     .launch
                     .tier
                     .as_ref()
-                    .filter(|stamp| options.overrides.tier.is_some() && stamp.moved())
+                    .filter(|stamp| {
+                        options.overrides.selection.tier_flag().is_some() && stamp.moved()
+                    })
                     .map(|stamp| crate::agents::LaunchParams {
                         profile: candidate.identity.profile.clone(),
                         tier: Some(stamp.clone()),
@@ -3271,15 +3189,10 @@ pub struct ResumeOverrides<'a> {
     pub permission_mode: Option<PermissionMode>,
     pub preset: crate::agents::LaunchPreset,
     pub agent: Option<&'a str>,
-    /// Select only this row on the session's engine; never climb to a higher tier.
-    pub tier: Option<(
-        crate::config::tiers::ModelTier,
-        &'a crate::config::tiers::TierConfig,
-    )>,
-    pub unavailable: Option<&'a ResumeAvailability<'a>>,
+    /// `--tier` with the tier table and availability it reads: only that row on the session's
+    /// engine, never a higher tier.
+    pub selection: crate::config::Selection,
 }
-
-type ResumeAvailability<'a> = dyn Fn(&str, &str) -> Option<crate::agents::TierSkipReason> + 'a;
 
 /// Rebuild cohort members before preflight and pane compilation.
 pub fn restore_routed_cells(
@@ -3343,7 +3256,7 @@ fn restore_resume_cell(
     profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
     overrides: &ResumeOverrides<'_>,
-    replayed: Option<ResumeLaunchPosture>,
+    replayed: Option<&ResumePosture>,
     is_resume: bool,
 ) -> Result<Vec<crate::harness::plan::LaunchFinalizeWarning>, PostureDegrade> {
     let preset = &overrides.preset;
@@ -3355,6 +3268,7 @@ fn restore_resume_cell(
             .iter()
             .find(|role| cell.launch.role.as_deref() == Some(role.role.as_str()))
     });
+    let flags = overrides.selection.clone().model(preset.model.as_deref());
     // Legacy unstamped members retain the resolved layout, including role prompt layers.
     let mut posture = if let Some(base_name) = overrides.agent {
         let base =
@@ -3374,33 +3288,18 @@ fn restore_resume_cell(
             )
             .map_err(error)?;
         }
-        if let Some(base_override) = &base
-            && base_override.resolved.kind != kind
-        {
-            return Err(error(format!(
-                "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
-                base_override.resolved.kind
-            )));
-        }
-        let resolve = |target_kind| {
-            crate::harness::spec::profile_cell_for_replay(
-                profile.unwrap_or(kind.as_str()),
-                profiles,
-                fallback,
-                base.as_ref(),
-                role,
-                crate::harness::spec::ReplayOptions {
-                    target_kind,
-                    ..Default::default()
-                },
-                &crate::config::Selection::default(),
-            )
-        };
-        // A tier with no model of the session's kind walks to another one, or to none.
-        let overridden = match resolve(None) {
-            Ok(cell) if cell.kind == kind => cell,
-            _ => resolve(Some(kind.as_str())).map_err(|err| error(err.to_string()))?,
-        };
+        // X replaces the record, so the resume entry chooses under X, `--model` and `--tier`
+        // alone, held to the session's kind.
+        let selection = flags.clone().resume(kind.as_str(), None, None);
+        let overridden = crate::harness::spec::profile_cell_for_replay(
+            profile.unwrap_or(kind.as_str()),
+            profiles,
+            fallback,
+            base.as_ref(),
+            role,
+            &selection,
+        )
+        .map_err(|err| error(err.to_string()))?;
         ResumeLaunchPosture {
             mode: base
                 .as_ref()
@@ -3421,7 +3320,7 @@ fn restore_resume_cell(
             ..ResumeLaunchPosture::from(&overridden)
         }
     } else if let Some(replayed) = replayed {
-        replayed
+        replayed.launch.clone()
     } else if is_resume && (request.record.is_some() || request.stamped_tier.is_some()) {
         resolve_posture_with_role(
             PostureRequest {
@@ -3437,117 +3336,57 @@ fn restore_resume_cell(
     } else {
         ResumeLaunchPosture::from(&*cell)
     };
-    if let Some((tier, tiers)) = overrides.tier {
-        if let Some(detail) = profile.and_then(|name| profiles.failed(name)) {
-            return Err(error(detail.to_owned()));
+    if overrides.agent.is_none() && (flags.tier_flag().is_some() || flags.model_flag().is_some()) {
+        // As a fresh `--tier` or `--model` launch: the build under that model on the session's
+        // kind, under the `--agent` the session recorded, gives the effort, from the definition,
+        // then that agent, then the kind base, then the built-in default.
+        if let Some(model) = flags.model_flag()
+            && let Some(adapter) = find_definition(kind.as_str())
+        {
+            // A provider with no model flag refuses `--model` itself, ahead of any build under it.
+            crate::harness::plan::apply_preset_args(
+                &mut Vec::new(),
+                adapter,
+                &crate::agents::LaunchPreset {
+                    model: Some(model.to_owned()),
+                    ..Default::default()
+                },
+                &[],
+                None,
+            )
+            .map_err(|err| error(err.to_string()))?;
         }
-        let profile_row = profile.and_then(|name| profiles.0.get(name));
-        let definition = profile_row
-            .and_then(|profile| profile.definition_renders.as_ref())
-            .ok_or_else(|| {
-                error(
-                    "--tier on resume requires a Markdown definition or a trusted project profile"
-                        .into(),
-                )
-            })?;
-        let mut skipped = Vec::new();
-        let mut first = None;
-        let model = tiers
-            .entries(tier)
-            .filter(|(row, family, _)| {
-                *row == tier
-                    && (crate::agents::runs_other_providers_models(&kind)
-                        || *family == Some(kind.as_str()))
-            })
-            .find_map(|(_, _, model)| {
-                first.get_or_insert_with(|| model.to_owned());
-                if tiers.routing == crate::config::tiers::Routing::Fallback
-                    && let Some(reason) = overrides
-                        .unavailable
-                        .and_then(|unavailable| unavailable(&kind, model))
-                {
-                    skipped.push(crate::agents::TierSkip {
-                        model: model.to_owned(),
-                        reason,
-                    });
-                    return None;
-                }
-                Some(model.to_owned())
-            })
-            .or_else(|| {
-                // Match the fresh walk's best-effort availability, without climbing.
-                skipped.clear();
-                first
-            })
-            .ok_or_else(|| {
-                let working = tiers
-                    .entries(crate::config::tiers::ModelTier::Intern)
-                    .filter_map(|(tier, family, _)| {
-                        (crate::agents::runs_other_providers_models(&kind)
-                            || family == Some(kind.as_str()))
-                        .then_some(tier)
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .map(|tier| tier.to_string())
-                    .collect::<Vec<_>>();
-                error(format!(
-                    "tier {tier} has no entry for {kind}; tiers carrying {kind}: {}",
-                    if working.is_empty() {
-                        "none".into()
-                    } else {
-                        working.join(", ")
-                    }
-                ))
-            })?;
-        // As a fresh `--tier` launch: an explicit effort from the override chain or definition,
-        // then the kind base's, then the built-in default for the tier's model.
-        let keep_override_effort = overrides.agent.is_some()
-            && posture.effort.is_some()
-            && !matches!(
-                posture.tuning.effort,
-                Some(
-                    TuningSource::KindBase(_)
-                        | TuningSource::BuiltInKindBase(_)
-                        | TuningSource::BuiltIn
-                        | TuningSource::Recorded
-                )
-            );
-        if !keep_override_effort {
-            let base = crate::harness::spec::kind_base_for(kind.as_str(), profiles, None, fallback)
-                .and_then(|base| Some((base.effort.clone()?, base.kind_base)));
-            (posture.effort, posture.tuning.effort) = if let Some(effort) = &definition.effort {
-                let writer = profile_row
-                    .and_then(|row| row.definition.as_ref())
-                    .and_then(|def| def.writers().effort.as_deref())
-                    .or(profile);
-                (
-                    Some(effort.clone()),
-                    writer.map(|name| TuningSource::Profile(name.to_owned())),
-                )
-            } else if let Some((effort, kind_base)) = base {
-                let source = if kind_base {
-                    TuningSource::KindBase(kind.clone())
-                } else {
-                    TuningSource::Profile(kind.to_string())
-                };
-                (Some(effort), Some(source))
-            } else {
-                let effort = crate::agents::definition_defaults(kind.as_str(), Some(&model)).effort;
-                (
-                    effort.map(str::to_owned),
-                    effort.map(|_| TuningSource::BuiltIn),
-                )
-            };
-        }
-        posture.model = Some(model.clone());
-        posture.tier = Some(Box::new(crate::agents::TierStamp {
-            tier,
-            model,
-            used_tier: None,
-            unbuildable: Vec::new(),
-            skipped,
-        }));
+        // A replay that degraded to bare takes the flag as a bare launch of the session's kind,
+        // as the resume without the flag runs.
+        let degraded = replayed.is_some_and(|replayed| replayed.degraded.is_some());
+        let recorded_agent = if degraded {
+            None
+        } else {
+            crate::harness::spec::resolve_agent_override(
+                request.record.and_then(|record| record.agent.as_deref()),
+                profiles,
+                fallback,
+            )
+            .map_err(|err| error(err.to_string()))?
+        };
+        let selection = flags.resume(
+            kind.as_str(),
+            request.record.map(|record| record.model.as_deref()),
+            request.stamped_tier,
+        );
+        let tiered = crate::harness::spec::profile_cell_for_replay(
+            profile.filter(|_| !degraded).unwrap_or(kind.as_str()),
+            profiles,
+            fallback,
+            recorded_agent.as_ref(),
+            role,
+            &selection,
+        )
+        .map_err(|err| error(err.to_string()))?;
+        posture.model = tiered.launch.model;
+        posture.effort = tiered.launch.effort;
+        posture.tuning.effort = tiered.tuning.effort;
+        posture.tier = tiered.launch.tier;
         if let Some(adapter) = find_definition(kind.as_str()) {
             crate::harness::plan::apply_preset_args(
                 &mut posture.args,
@@ -3573,8 +3412,9 @@ fn restore_resume_cell(
         cell.launch.mode.or(posture.mode)
     });
     cell.kind = kind;
-    cell.resume_model_override =
-        preset.model.is_some() || overrides.tier.is_some() || overrides.agent.is_some();
+    cell.resume_model_override = preset.model.is_some()
+        || overrides.selection.tier_flag().is_some()
+        || overrides.agent.is_some();
     cell.args = posture.args;
     cell.notices = posture.notices;
     cell.auto_compact = posture.auto_compact;
@@ -3596,9 +3436,6 @@ fn restore_resume_cell(
     cell.launch.mode = posture.mode;
     cell.launch.tier = posture.tier;
     cell.launch.record = posture.record;
-    if preset.model.is_some() {
-        cell.launch.tier = None;
-    }
     let mut warnings = Vec::new();
     let mut preset = preset.clone();
     if is_resume

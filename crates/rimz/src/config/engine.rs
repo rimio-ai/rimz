@@ -24,8 +24,9 @@ mod tests;
 type Availability = dyn Fn(&str, &str) -> Option<TierSkipReason> + Send + Sync;
 
 /// What a launch asks of every agent cell it starts: `--agent`, `--model`, `--tier`, the tier
-/// table they walk, and which models can take a launch now. The default is a launch with no
-/// flags that reads every model as available.
+/// table they walk, which models can take a launch now, and, for a resume, the engine the
+/// session's launch recorded. The default is a fresh launch with no flags that reads every model
+/// as available.
 #[derive(Clone, Default)]
 pub struct Selection {
     agent: Option<String>,
@@ -33,6 +34,16 @@ pub struct Selection {
     tier: Option<ModelTier>,
     tiers: TierConfig,
     availability: Option<Arc<Availability>>,
+    session: Option<Recorded>,
+}
+
+/// The engine a resumed session's launch recorded, which a resume holds every cell to.
+#[derive(Clone, Debug)]
+struct Recorded {
+    kind: String,
+    /// The record's model when a record exists; `Some(None)` when it ran with none.
+    model: Option<Option<String>>,
+    stamp: Option<TierStamp>,
 }
 
 impl std::fmt::Debug for Selection {
@@ -42,6 +53,7 @@ impl std::fmt::Debug for Selection {
             .field("model", &self.model)
             .field("tier", &self.tier)
             .field("availability", &self.availability.is_some())
+            .field("session", &self.session)
             .finish_non_exhaustive()
     }
 }
@@ -83,6 +95,48 @@ impl Selection {
     ) -> Self {
         self.availability = Some(Arc::new(unavailable));
         self
+    }
+
+    /// Holds every cell to the resumed session's `kind`, replaying the model its launch
+    /// recorded when a record exists (`Some(None)`: it ran with none) and its tier stamp.
+    #[must_use]
+    pub(crate) fn resume(
+        mut self,
+        kind: &str,
+        recorded: Option<Option<&str>>,
+        stamp: Option<&TierStamp>,
+    ) -> Self {
+        self.session = Some(Recorded {
+            kind: kind.to_owned(),
+            model: recorded.map(|model| model.map(str::to_owned)),
+            stamp: stamp.cloned(),
+        });
+        self
+    }
+
+    /// The resume this selection asks of a cell with L and X, when it resumes a session.
+    pub(crate) fn resume_of<'a>(
+        &'a self,
+        l: Side<'a>,
+        x: Option<Side<'a>>,
+        role: Option<&'a str>,
+    ) -> Option<Resume<'a>> {
+        let session = self.session.as_ref()?;
+        Some(Resume {
+            session: &session.kind,
+            l,
+            x,
+            role,
+            model: self.model.as_deref(),
+            tier: self.tier,
+            recorded: session.model.as_ref().map(Option::as_deref),
+            stamp: session.stamp.as_ref(),
+        })
+    }
+
+    /// Whether this selection resumes a session.
+    pub(crate) fn resumes(&self) -> bool {
+        self.session.is_some()
     }
 
     pub fn agent_name(&self) -> Option<&str> {
@@ -143,10 +197,6 @@ pub(crate) enum Model {
     /// Nothing names one: the final kind's base model fills it, then the provider's default.
     FromBase,
     /// The recorded launch ran with none, so no layer fills one on replay.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "only replay through `resume` sets it")
-    )]
     Unset,
 }
 
@@ -287,14 +337,12 @@ pub(crate) struct Launch<'a> {
 
 /// A resume of a session: its kind, L as its lines stand now, X, the flags, and what the
 /// session's launch recorded.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "replay chooses through it in a later step")
-)]
-pub(super) struct Resume<'a> {
+pub(crate) struct Resume<'a> {
     pub session: &'a str,
     pub l: Side<'a>,
     pub x: Option<Side<'a>>,
+    /// The model the resumed team role writes, which only X's fresh choice ranks.
+    pub role: Option<&'a str>,
     pub model: Option<&'a str>,
     pub tier: Option<ModelTier>,
     /// The recorded launch's model when a record exists; `Some(None)` when it ran with none.
@@ -496,24 +544,28 @@ pub(crate) fn launch<T>(
     )
 }
 
-/// A resume's engine, held to the session's kind: X of another kind refuses; `--tier`, or L's
-/// tier with nothing recorded, takes its own row on that kind and never climbs; `--model` runs as
-/// given; X resolves as a fresh launch would and falls back to the session's kind; otherwise the
-/// record's model when a record exists, none included, else the stamp's, else L's where the
+/// A resume's engine, held to the session's kind: X given on the resume (nothing recorded) of
+/// another kind refuses, while a recorded X keeps the session's kind; `--tier` takes its
+/// own row on that kind and never climbs; `--model` runs as given unless it names a tier or a
+/// model the session's kind does not run; then the record's model when
+/// a record exists, none included, keeping the stamp only when it names that model; else the
+/// stamp's; else X as a fresh launch would choose it, on the session's kind with X's or L's model
+/// where X's choice lands elsewhere; else L's tier, never climbing, or L's model where the
 /// session's kind keeps it. A failed build under the session's kind reads as
-/// [`EngineErr::KindChanged`] only when L now runs on another kind.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "replay chooses through it in a later step")
-)]
-pub(super) fn resume<T>(
+/// [`EngineErr::KindChanged`] only when L now runs on another kind, X given or not.
+pub(crate) fn resume<T>(
     req: &Resume<'_>,
     tiers: &TierConfig,
     probe: &mut Probe<'_, T>,
 ) -> Result<(Engine, T), EngineErr> {
-    check_flags(req.x.as_ref(), req.model, req.tier)?;
     let session = req.session;
-    if let Some(x) = &req.x
+    // A recorded X ran where its tier walk landed, which can be another kind than its own.
+    let given_x = req
+        .x
+        .as_ref()
+        .filter(|_| req.recorded.is_none() && req.stamp.is_none());
+    check_flags(given_x, req.model, req.tier)?;
+    if let Some(x) = given_x
         && x.kind != session
     {
         return Err(EngineErr::OtherKind {
@@ -522,6 +574,14 @@ pub(super) fn resume<T>(
             requested: x.kind.to_owned(),
         });
     }
+    if let Some(model) = req.model
+        && let Some(owner) = model_moves_to(Some(session), model).filter(|owner| *owner != session)
+    {
+        return Err(EngineErr::Conflict(format!(
+            "this session is {session}, but --model {model} runs on {owner}; resume with a \
+             {session} model or launch fresh"
+        )));
+    }
     let owner = req.x.as_ref().unwrap_or(&req.l);
     let variant = variant(session, owner.kind, owner.variant);
     let (model, tier) = if let Some(tier) = req.tier {
@@ -529,11 +589,20 @@ pub(super) fn resume<T>(
         (Model::Named(stamp.model.clone()), Some(stamp))
     } else if let Some(model) = req.model {
         (Model::Named(model.to_owned()), None)
+    } else if let Some(recorded) = req.recorded {
+        let model = recorded.map_or(Model::Unset, |model| Model::Named(model.to_owned()));
+        let tier = req
+            .stamp
+            .filter(|stamp| model.named() == Some(stamp.model.as_str()))
+            .cloned();
+        (model, tier)
+    } else if let Some(stamp) = req.stamp {
+        (Model::Named(stamp.model.clone()), Some(stamp.clone()))
     } else if let Some(x) = &req.x {
         let fresh = Launch {
             l: req.l.clone(),
             x: Some(x.clone()),
-            role: None,
+            role: req.role,
             model: None,
             tier: None,
         };
@@ -551,15 +620,6 @@ pub(super) fn resume<T>(
             Model::written(model.filter(|model| keeps_inherited_model(x.kind, session, model))),
             None,
         )
-    } else if let Some(recorded) = req.recorded {
-        let model = recorded.map_or(Model::Unset, |model| Model::Named(model.to_owned()));
-        let tier = req
-            .stamp
-            .filter(|stamp| model.named() == Some(stamp.model.as_str()))
-            .cloned();
-        (model, tier)
-    } else if let Some(stamp) = req.stamp {
-        (Model::Named(stamp.model.clone()), Some(stamp.clone()))
     } else if let Some(tier) = req.l.tier {
         let stamp = session_tier(tiers, tier, session, &mut *probe.unavailable)?;
         (Model::Named(stamp.model.clone()), Some(stamp))

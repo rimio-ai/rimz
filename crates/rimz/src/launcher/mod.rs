@@ -1798,8 +1798,9 @@ fn launch_resume_layout(
         machine_config,
         jiff::Timestamp::now(),
     );
-    let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
-    let mut overrides = resume_overrides(&args.launch.overrides, machine_config, &unavailable)?;
+    let selection = crate::config::Selection::new(&machine_config.tiers)
+        .availability(move |kind, model| availability.unavailable(kind, model));
+    let mut overrides = resume_overrides(&args.launch.overrides, selection)?;
     overrides.team = team;
     for warning in crate::harness::resume::restore_routed_cells(
         &mut layout,
@@ -2329,16 +2330,14 @@ fn team_resume_error(
 
 fn resume_overrides<'a>(
     overrides: &'a LaunchOverrides,
-    machine: &'a crate::config::MachineConfig,
-    unavailable: &'a dyn Fn(&str, &str) -> Option<crate::agents::TierSkipReason>,
+    selection: crate::config::Selection,
 ) -> Result<crate::harness::resume::ResumeOverrides<'a>> {
     Ok(crate::harness::resume::ResumeOverrides {
         team: None,
         permission_mode: overrides.mode,
         preset: resolve::launch_override_preset(overrides)?,
         agent: overrides.agent.as_deref(),
-        tier: overrides.tier.map(|tier| (tier, &machine.tiers)),
-        unavailable: Some(unavailable),
+        selection: selection.tier(overrides.tier),
     })
 }
 

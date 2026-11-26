@@ -350,11 +350,8 @@ fn resume_selected(
         &machine,
         Timestamp::now(),
     );
-    let availability = std::sync::Arc::new(availability);
-    let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
-    let shared = std::sync::Arc::clone(&availability);
     let config = LaneRestoreConfig::load(&machine, &workspace.project_root, move |kind, model| {
-        shared.unavailable(kind, model)
+        availability.unavailable(kind, model)
     })?;
     let resume_ctx = ResumeContext {
         in_place: placement == Placement::SamePane,
@@ -370,7 +367,7 @@ fn resume_selected(
         catalog: &catalog,
     };
     let options = SingleResumeOptions {
-        overrides: super::resume_overrides(&args.overrides, &machine, &unavailable)?,
+        overrides: super::resume_overrides(&args.overrides, &config.selection)?,
         isolation: args.overrides.isolation,
         machine_isolation: machine.agents.isolation,
     };
