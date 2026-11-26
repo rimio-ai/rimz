@@ -83,6 +83,10 @@ pub struct HookIngress {
     pub cwd: PathBuf,
     pub hook_pid: u32,
     pub env: BTreeMap<String, String>,
+    /// The smart-compaction reminder rung this hook claimed and attached, for the apply side to
+    /// record. Older binaries ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_compact_claim: Option<crate::store::event::SoftCompactClaim>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

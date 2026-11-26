@@ -3224,6 +3224,7 @@ fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
     let mut row = crate::testkit::agent_state("claude", "sess", at);
     row.soft_compact = Some(SoftCompactMark {
         compactions: Some(1),
+        rung: None,
         low_water_tokens: Some(18_000),
         low_water_pct: Some(9),
         continue_owed: Some(OwedContinue {

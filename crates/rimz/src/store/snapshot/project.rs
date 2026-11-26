@@ -310,6 +310,7 @@ pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, Agent
         EventKind::AgentLaunchWarnings(payload) => payload.agent_id.clone(),
         EventKind::AgentWorkflowCleared(payload) => payload.agent_id.clone(),
         EventKind::AgentTune(payload) => payload.agent_id.clone(),
+        EventKind::AgentSoftCompactClaimed(claim) => claim.agent_id.clone(),
         _ => return None,
     };
     Some((
@@ -385,6 +386,15 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                     envelope.timestamp,
                     payload.by.as_deref(),
                 );
+            }
+            EventKind::AgentSoftCompactClaimed(claim) => {
+                let key = (
+                    AgentKind::new_unchecked(envelope.source.clone()),
+                    claim.agent_id.clone(),
+                );
+                if let Some(agent) = state.map.get_mut(&key) {
+                    stamp_reminder(agent_mut(agent), claim.compactions, Some(claim.rung));
+                }
             }
             EventKind::AgentLifecycle(payload) => {
                 state.reduce_lifecycle_event(envelope, payload);
@@ -911,6 +921,24 @@ pub(super) fn message_agent_key<'a>(
     Some((agent.kind.clone(), agent.agent_id.clone()))
 }
 
+/// Spends the reminder rung claimed in epoch `compactions` (`None`: a legacy wrap-up, rung 1). A
+/// claim armed before the row's latest compaction spends nothing; a later rung in the same epoch
+/// raises the spent one.
+fn stamp_reminder(agent: &mut AgentState, compactions: u32, rung: Option<u8>) {
+    if compactions < agent.compaction_count {
+        return;
+    }
+    let mark = agent.soft_compact.get_or_insert_default();
+    if mark.compactions == Some(compactions) {
+        mark.rung = mark.rung.max(rung);
+    } else {
+        mark.compactions = Some(compactions);
+        mark.rung = rung;
+    }
+    mark.low_water_tokens = None;
+    mark.low_water_pct = None;
+}
+
 fn stamp_message(
     agents: &mut BTreeMap<AgentKey, Arc<AgentState>>,
     method: MessageEventMethod,
@@ -929,11 +957,9 @@ fn stamp_message(
     // not re-owe one an interrupt or a user prompt already cleared.
     let enqueued = method == MessageEventMethod::Queued && payload.reason.is_none();
     match (payload.soft_compact, payload.status) {
+        // Only older binaries sharing the store still write a wrap-up message.
         (Some(SoftCompactStep::WrapUp), MessageStatus::Sent) => {
-            let mark = agent.soft_compact.get_or_insert_default();
-            mark.compactions = Some(agent.compaction_count);
-            mark.low_water_tokens = None;
-            mark.low_water_pct = None;
+            stamp_reminder(agent, agent.compaction_count, None);
         }
         (Some(SoftCompactStep::Continue), MessageStatus::Queued) if enqueued => {
             agent.soft_compact.get_or_insert_default().continue_owed = Some(OwedContinue {

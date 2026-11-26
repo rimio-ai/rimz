@@ -10,6 +10,7 @@ const answers = {
   stop: [0, '{"additional_context":"Time is up."}\n'],
   garbage: [0, "not json\n"],
   stall: [2500, '{"additional_context":"late rung"}\n'],
+  reminder: [0, '{"additional_context":"<system_reminder>\\nYour context is getting high.\\n</system_reminder>"}\n'],
 };
 let records = [];
 childProcess.spawn = (binary, argv, options) => {
@@ -100,8 +101,8 @@ await test("a claimed rung reaches every later request of the turn", async () =>
   assert.deepEqual(await system("child"), [], "a native child session takes no rung");
   await emit("session.execution.succeeded", { sessionID: "root" });
   assert.deepEqual(await system("root"), [], "the turn end clears the rung");
-  assert.ok(records.filter((r) => r.payload.hook_event_name === "tool_after").every((r) => r.stdio[1] === "pipe"));
-  assert.ok(records.filter((r) => r.payload.hook_event_name !== "tool_after").every((r) => r.stdio[1] === "ignore"));
+  assert.ok(records.filter((r) => r.payload.hook_event_name === "tool_after").every((r) => r.stdio[1] === "pipe" && r.payload.reads_reply === true));
+  assert.ok(records.filter((r) => r.payload.hook_event_name !== "tool_after").every((r) => r.stdio[1] === "ignore" && r.payload.reads_reply === undefined));
   await cleanup();
 });
 
@@ -126,11 +127,11 @@ await test("a rung that lands after its turn ended is dropped", async () => {
   await cleanup();
 });
 
-await test("an unsupervised session never reads the feed", async () => {
+await test("a session outside a supervised run carries the claimed reminder", async () => {
   const { cleanup, tool, system } = await activate(false);
-  await tool("root", "rung");
-  assert.deepEqual(await system("root"), []);
-  assert.ok(records.length > 0 && records.every((r) => r.stdio[1] === "ignore"));
+  await tool("root", "reminder");
+  assert.deepEqual(await system("root"), ["<system_reminder>\nYour context is getting high.\n</system_reminder>"]);
+  assert.ok(records.filter((r) => r.payload.hook_event_name === "tool_after").every((r) => r.stdio[1] === "pipe"));
   await cleanup();
 });
 

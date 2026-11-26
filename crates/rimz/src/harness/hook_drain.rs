@@ -1415,6 +1415,7 @@ mod tests {
         let mut bytes = Vec::new();
         for _ in 0..prefix_frames + 4 {
             let frame = HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: EventId::new(),

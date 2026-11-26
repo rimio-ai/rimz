@@ -749,8 +749,8 @@ pub struct MessageRecord {
     pub batch_id: Option<MessageId>,
 }
 
-/// A smart-compaction record's role. `WrapUp`, a tag older than the reminder it now marks, is
-/// the steer-only reminder to compact; `Continue` is the continue queued behind a compaction
+/// A smart-compaction record's role. `WrapUp` is the steer-only reminder to compact that only an
+/// older binary sharing the store still queues; `Continue` is the continue queued behind a compaction
 /// command. Both spellings stay, since records and events on disk carry them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

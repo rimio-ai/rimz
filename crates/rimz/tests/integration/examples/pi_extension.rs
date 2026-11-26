@@ -691,9 +691,9 @@ fn stage_extension(dir: &std::path::Path, pi_version: &str) -> std::path::PathBu
     extension_path
 }
 
-/// A `rimz` run child awaits a feed on every `tool_result` and steers the
-/// reply's `context` in as a custom message; a session outside a run spawns no
-/// feed there, and an empty or unparseable reply steers nothing.
+/// Every session, inside a `rimz` run or not, awaits a feed on each
+/// `tool_result` and steers the reply's `context` in as a custom message; an
+/// empty or unparseable reply steers nothing.
 #[test]
 #[cfg(unix)]
 fn extension_steers_deadline_context_from_the_tool_result_feed() {
@@ -751,23 +751,26 @@ const ctx = {{
 const result = (id) => handlers.get("tool_result")({{
   toolCallId: id, toolName: "bash", input: {{}}, content: [], isError: false,
 }}, ctx);
+const reminder = "<system_reminder>\nYour context is getting high.\n</system_reminder>";
+process.env.RIMZ_STUB_REPLY = JSON.stringify({{ context: reminder }});
+assert.equal(await result("outside-run"), undefined);
 const rung = "2m left. Wrap up now.";
 process.env.RIMZ_STUB_REPLY = JSON.stringify({{ context: rung }});
-assert.equal(await result("outside-run"), undefined);
 process.env.RIMZ_RUN_ID = "run-1";
 assert.equal(await result("rung-call"), undefined);
 process.env.RIMZ_STUB_REPLY = "";
 assert.equal(await result("silent-call"), undefined);
 process.env.RIMZ_STUB_REPLY = "not json";
 assert.equal(await result("garbled-call"), undefined);
-assert.deepEqual(steered, [[
-  {{ customType: "rimz-deadline", content: rung, display: true }},
-  {{ deliverAs: "steer" }},
-]]);
+assert.deepEqual(steered, [
+  [{{ customType: "rimz-context", content: reminder, display: true }}, {{ deliverAs: "steer" }}],
+  [{{ customType: "rimz-context", content: rung, display: true }}, {{ deliverAs: "steer" }}],
+]);
 const fed = (await fs.readFile(process.env.RIMZ_CAPTURE, "utf8")).trim().split("\n")
   .map((line) => JSON.parse(line));
 assert.deepEqual(fed.map((payload) => [payload.hook_event_name, payload.tool_call_id]), [
-  ["tool_result", "rung-call"], ["tool_result", "silent-call"], ["tool_result", "garbled-call"],
+  ["tool_result", "outside-run"], ["tool_result", "rung-call"], ["tool_result", "silent-call"],
+  ["tool_result", "garbled-call"],
 ]);
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),

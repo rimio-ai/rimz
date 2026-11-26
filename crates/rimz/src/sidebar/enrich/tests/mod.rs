@@ -107,6 +107,7 @@ fn hook_drain_lag_is_projected_on_both_folds_past_the_threshold() {
     state.ensure_dirs().unwrap();
     std::fs::create_dir_all(state.hook_drain_cursor.parent().unwrap()).unwrap();
     let fed = |ago: i64| HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: crate::ids::EventId::new(),

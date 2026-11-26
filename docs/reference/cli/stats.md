@@ -223,7 +223,7 @@ In the timeline header, `N held` joins the detail. A line's mark names its kind:
 | `⤳` | Molt: the agent moved into a fresh session under the same handle. |
 | `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
 | `⌁` | Compaction: before a delivery (`auto-compact`), at a RimZ-enforced ceiling (`auto-compact` / `auto-compact held`), after an idle gap (`idle compacted`, with a duration range for repeats), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
-| `⌁` | Smart-compaction reminder: a mid-turn steer asking the agent to compact itself (`compact reminder`), or `compact reminder held` when it missed. A compaction the agent then runs is its own `rimz agents compact` command, not an assist. |
+| `⌁` | Smart-compaction reminder: a mid-turn note on the agent's tool result asking it to compact itself (`compact reminder`), or `compact reminder held` for a steer an older binary missed. A compaction the agent then runs is its own `rimz agents compact` command, not an assist. |
 | `↻` | Credit redemption for a provider account, with its rule and outcome. |
 | `⟲` | Room restore after a crash or reboot (`rebirth recovery`), with the agents it brought back. |
 | `♻` | Automatic `rimz gc` sweep: `gc swept` for room scope or `machine gc swept` for machine scope, followed by what it reclaimed and removed, then its workspace and cutoff; `gc failed` carries the error. Temp evictions name the handle, reclaimed bytes, and workspace. `spend rebuilt` names rebuilt UTC days and before/after dollars, then parsed files, pending dates, and kept account-days. |
@@ -294,7 +294,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 | `auto_redeem` | Auto-redeem | `kind`, `login?`, `reason`, `request_id`, `credits`, `soonest_expiry?`, `natural_reset?`, `outcome?`, `windows_reset`, `window_resets`, `error?` |
 | `auto_continue` | Auto-continue | `kind`, `agent_id`, `label?`, `park`, `parked_since?`, `delivered`, `message_id` |
 | `auto_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id` |
-| `soft_compact` | Smart-compaction reminder | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id`, `delivered`, `error?` |
+| `soft_compact` | Smart-compaction reminder | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id?`, `rung?`, `delivered`, `error?` |
 | `ceiling_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id`, `delivered`, `error?` |
 | `cache_keepalive` | Keepalive | `kind`, `agent_id`, `label?`, `idle_secs`, `waits`, `horizon_secs?`, `message_id`, `delivered`, `error?`, `capped`, `forced` |
 | `idle_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `idle_secs`, `idle_after_secs?`, `occupied_tokens`, `message_id`, `delivered`, `error?` |
@@ -325,7 +325,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 
 `Keepalive: N` counts delivered pings. `capped` is true on the ping that told the agent the keepalive maximum was reached; its `◷` line ends with `, limit reached`. `horizon_secs` is the [keep-warm](../../guide/configuration.md#keep-warm) finite maximum that was holding the agent (the resolved `max`, including the global default, or the keepalive cap for a `while` with no resolved maximum); its line reads `holding warm (2h)`. `forced` is true on the ping sent past the typing hold 30 s before the cache expired; its line reads `forced cache keepalive`, and a forced and a polite ping never fold into one row. `waits` counts all pending waits, including subagent and team waits. Failed attempts appear with `--all` without increasing the count.
 
-`Compact reminder: N` counts delivered mid-turn compaction reminders, separately from the compact commands counted by `Auto-compact:`. A missed reminder appears only with `--all` and in the held count, not as a delivered reminder.
+`Compact reminder: N` counts delivered mid-turn compaction reminders, separately from the compact commands counted by `Auto-compact:`. A reminder rides the agent's post-tool hook and counts once per rung it claims. A missed reminder, which only an older binary's steer records, appears only with `--all` and in the held count, not as a delivered reminder.
 
 `Idle stop: N` counts [`stop --when-idle`](./agents.md#stop) requests that stopped their agent. `idle_secs` is how long the agent had rested, `idle_after_secs` the requested threshold, `requested_by` the asking agent's handle, and `stopped` whether the stop ended the agent: no pane hosts it and its process is gone, or, for a process RimZ does not know, its end is recorded. A stop that did not appears with `--all` with `stopped: false` and its reason in `error`, such as its pane staying open or its process still running after SIGTERM; it leaves its request armed unless it closed the agent's pane. `error` can accompany `stopped: true`: the agent stopped and something else failed, such as a child's pane staying open.
 

@@ -21,6 +21,7 @@ fn spawn_arguments_name_only_the_current_hook_frame() {
     ];
     assert_eq!(spawn_args(&record), ordinary);
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),

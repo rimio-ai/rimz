@@ -1697,6 +1697,41 @@ fn an_unstamped_launch_never_carries_the_runtime_switch() {
 }
 
 #[test]
+fn the_self_compact_stamp_follows_the_served_mcp_tool() {
+    let inherited = BTreeMap::from([(ENV_SELF_COMPACT_TOOL.to_owned(), "1".to_owned())]);
+    for served in [false, true] {
+        let process = compile_agent_process_with_extra_env(
+            None,
+            Path::new("/checkout"),
+            &request(
+                "claude",
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            ),
+            Path::new("/checkout"),
+            &inherited,
+            &LaunchReminders {
+                mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
+                ..LaunchReminders::default()
+            },
+        )
+        .expect("process");
+        assert_eq!(
+            process.env.get(ENV_SELF_COMPACT_TOOL).map(String::as_str),
+            served.then_some("1"),
+            "served={served}"
+        );
+        assert_eq!(
+            process.unset.contains(ENV_SELF_COMPACT_TOOL),
+            !served,
+            "an inherited stamp never outlives a launch that serves no tool"
+        );
+    }
+}
+
+#[test]
 fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     for kind in ["claude", "qwen", "droid"] {

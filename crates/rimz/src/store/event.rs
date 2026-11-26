@@ -23,6 +23,7 @@ use crate::store::message::{
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
 pub const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
 pub const SIGNAL_METHOD: &str = "signal.emit";
+pub const SOFT_COMPACT_CLAIMED_METHOD: &str = "agent.soft_compact_claimed";
 
 macro_rules! lifetime_fields {
     ($transcript:ident; $($observation:ident),*; $($launch:ident),*) => {
@@ -296,6 +297,24 @@ pub struct AgentTunePayload {
     pub by: Option<String>,
 }
 
+/// A smart-compaction reminder rung for one row: what the host pass arms in the pending file,
+/// what the root post-tool hook that claims it carries on its ingress frame, and the params of
+/// the `agent.soft_compact_claimed` event the apply side appends. The fold reads `agent_id`,
+/// `compactions`, and `rung`; the rest feeds the assist record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftCompactClaim {
+    pub agent_id: AgentSessionId,
+    /// The row's compaction epoch (`AgentState::compaction_count`) the rung was due in.
+    pub compactions: u32,
+    /// 1 at the smart-compact line, 2 at the second line 10% past it.
+    pub rung: u8,
+    pub threshold: crate::store::message::AutoCompact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupied_tokens: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionDeathCause {
@@ -547,6 +566,7 @@ pub enum EventKind<'a> {
     AgentLaunchWarnings(AgentLaunchWarningsPayload),
     AgentWorkflowCleared(AgentWorkflowClearedPayload),
     AgentTune(AgentTunePayload),
+    AgentSoftCompactClaimed(SoftCompactClaim),
     AgentLaunch(AgentLaunchPayload),
     Message {
         method: MessageEventMethod,
@@ -572,6 +592,9 @@ impl PartialEq for EventKind<'_> {
             (Self::AgentLaunchWarnings(left), Self::AgentLaunchWarnings(right)) => left == right,
             (Self::AgentWorkflowCleared(left), Self::AgentWorkflowCleared(right)) => left == right,
             (Self::AgentTune(left), Self::AgentTune(right)) => left == right,
+            (Self::AgentSoftCompactClaimed(left), Self::AgentSoftCompactClaimed(right)) => {
+                left == right
+            }
             (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
             (
                 Self::Message {
@@ -757,6 +780,24 @@ impl EventEnvelope {
         )
     }
 
+    pub fn agent_soft_compact_claimed(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        kind: &AgentKind,
+        claim: &SoftCompactClaim,
+    ) -> Self {
+        let params = serde_json::to_value(claim)
+            .expect("SoftCompactClaim contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            kind.as_str(),
+            "agent",
+            SOFT_COMPACT_CLAIMED_METHOD,
+            params,
+        )
+    }
+
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
             AGENT_LIFECYCLE_METHOD => {
@@ -801,6 +842,12 @@ impl EventEnvelope {
                 }),
             "agent.tune" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentTune)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
+            SOFT_COMPACT_CLAIMED_METHOD => serde_json::from_str(self.params.get())
+                .map(EventKind::AgentSoftCompactClaimed)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,

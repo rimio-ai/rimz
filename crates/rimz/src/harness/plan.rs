@@ -210,9 +210,10 @@ impl<'a> LaunchCompactPolicy<'a> {
             return;
         };
         let profile = cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str());
-        if seat
+        let explicit = seat
             .explicit(self.teams, self.profiles, self.subagent_profiles)
-            .is_some()
+            .is_some();
+        if explicit
             && let Some(adapter) = crate::agents::find_definition(&cell.kind)
             && let Some(reason) = crate::agents::soft_compact_skip(adapter)
         {
@@ -242,6 +243,16 @@ impl<'a> LaunchCompactPolicy<'a> {
                 line,
                 window: AutoCompact::Tokens(window),
                 enforcer,
+            });
+        } else if explicit
+            && let Some(second @ AutoCompact::Tokens(second_tokens)) =
+                crate::harness::soft_compact::second_line(line)
+            && second_tokens >= window
+        {
+            warnings.push(LaunchFinalizeWarning::SmartCompactSecondLineWindow {
+                profile: profile.to_owned(),
+                second,
+                window: AutoCompact::Tokens(window),
             });
         }
     }
@@ -1246,6 +1257,11 @@ pub enum LaunchFinalizeWarning {
         window: AutoCompact,
         enforcer: crate::agents::AutoCompactEnforcer,
     },
+    SmartCompactSecondLineWindow {
+        profile: String,
+        second: AutoCompact,
+        window: AutoCompact,
+    },
     TierMoved {
         profile: String,
         stamp: crate::agents::TierStamp,
@@ -1390,6 +1406,14 @@ impl fmt::Display for LaunchFinalizeWarning {
                     "warning: `{profile}` smart-compact {line} is at or above its auto-compact {window}; {actor} compacts first"
                 )
             }
+            Self::SmartCompactSecondLineWindow {
+                profile,
+                second,
+                window,
+            } => write!(
+                formatter,
+                "warning: `{profile}` smart-compact's second reminder at {second} is at or above its auto-compact {window}; only the first fires"
+            ),
             Self::TierMoved { profile, stamp } => {
                 let passes = stamp
                     .passes()

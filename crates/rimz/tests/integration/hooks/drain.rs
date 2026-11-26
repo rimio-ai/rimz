@@ -41,6 +41,7 @@ fn stop_frame(env: &Env) -> HookIngress {
         ),
     ]);
     HookIngress {
+        soft_compact_claim: None,
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".into(),
         event_id: EventId::new(),
@@ -3192,7 +3193,7 @@ fn post_tool_use_rung_is_answered_without_the_drainer() {
                 reply["hookSpecificOutput"]["additionalContext"]
                     .as_str()
                     .unwrap()
-                    .starts_with("4m of 30m left.")
+                    .starts_with("<system_reminder>\n4m of 30m left.")
             );
         }
     }
@@ -3327,7 +3328,7 @@ fn antigravity_pre_invocation_injects_a_claimed_warning_and_leaves_the_stop_to_t
     );
     assert_eq!(
         feed("PreInvocation", "agy-child"),
-        json!({"injectSteps": [{"systemMessage": {"systemMessage": "2m left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains."}}]})
+        json!({"injectSteps": [{"systemMessage": {"systemMessage": "<system_reminder>\n2m left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains.\n</system_reminder>"}}]})
     );
     assert_eq!(
         feed("PreInvocation", "agy-child"),

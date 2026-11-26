@@ -506,7 +506,9 @@ upward-dependencies = [
 # first hook, a fact only the adapter can read from the payload (+1).
 # HookContextReply::carries_stop tells the hook feed and the deadline host whether a kind's hook
 # context carries the stop rung, since an Antigravity injected system message does not (+1).
-surface-budget = 1387
+# HookCapability::reads_hook_reply lets the feed claim a reminder only from a carrier that reads
+# its reply, which only the adapter can tell from the payload (+1).
+surface-budget = 1388
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -680,7 +682,7 @@ reason = "Command and declared context/compaction coverage determine participati
 [[verdict]]
 kind = "item"
 key = "agents::registry::compact_reminder"
-reason = "The reminder helper composes the self-compaction reminder, always asking for the bare command so the configured or built-in brief applies."
+reason = "The post-tool hook composes the self-compaction reminder, naming mcp(self_compact) when the launch serves it and the bare command otherwise."
 
 [[verdict]]
 kind = "item"
@@ -2493,7 +2495,9 @@ path = "crates/rimz/src/harness"
 # spec::validate_team shares per-item team validation with pack loading (+1).
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
-# soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
+# soft_compact shares its module and decision with CLI/producer callers.
+# soft_compact::{arm, claim_pending} hand a due reminder rung from the host pass to the post-tool hook,
+# and launch_reminders::wrap_hook_context wraps each hook-context body in the one tag.
 # soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
 # Definition::target, Node visit bounds, timeout_at, and journal hops share inspection rules.
 # hold_until shares the condition hold instant with workflow inspection (+1).
@@ -2603,7 +2607,7 @@ path = "crates/rimz/src/harness"
 # `TaskCatalog::skipped_machine_row` lets the schedule tool refuse a name whose booker is unknown (+1).
 # One-chain `--agent` override helpers (`AgentOverride`, `resolve_agent_override`, `check_agent_model_family`, `inline_layout_profile_targets`, `pick_in_launch_chain`) unify launch routing, spec resolution, and seat settings (+4).
 # `subagent_policy::allowed_specs` and `spec::explain_profile_chain` share one-chain explain and allowlist resolution with CLI explain (+2).
-# `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and detached CLI helper (+2).
+# `soft_compact::ReminderVerdict` and `ReminderVerdict::is_due` share the three-way fill-guard verdict between the sidebar host pass and the integration suite (+2).
 # `run::fail_step_refusal` and `run::wake_workflow` split in-pane step refusal writes from host-side wakes (+2).
 # `soft_compact::{CeilingCompactRequest, ceiling_due, enforce_ceiling_agents}` share the RimZ-enforced auto-compact ceiling watch across sidebar refresh and CLI helper (+3).
 # `idle_stop::rested_since` shares the rest clock with the subagent wrapper's idle-close duty (+1).
@@ -2673,32 +2677,32 @@ reason = "The CLI invokes the harness-owned locked recheck and enqueue with fres
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::compact_agents"
-reason = "Sidebar refresh drives the shared smart-compaction reminder decision through detached helpers and disposable pacing."
+reason = "Sidebar refresh arms a due smart-compaction reminder rung for the post-tool hook through runtime pending files."
 
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact"
-reason = "The sidebar and detached helper share one read-only smart-compaction reminder policy."
-
-[[verdict]]
-kind = "item"
-key = "harness::soft_compact::SoftCompactRequest"
-reason = "The producer passes card identity and the cycle step to its detached CLI helper."
+reason = "The sidebar host pass and the post-tool hook share one read-only smart-compaction reminder policy."
 
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::reminder_due"
-reason = "Producer and helper make the same live-row, context, reminder-epoch, and fill-guard decision."
+reason = "The host pass and the integration suite make the same live-row, context, reminder-epoch, and fill-guard decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::arm"
+reason = "The host pass writes a due rung under the session key and the launch key, and the hook tests arm one directly."
+
+[[verdict]]
+kind = "item"
+key = "harness::soft_compact::claim_pending"
+reason = "The root post-tool hook takes the armed rung by rename, so one hook reply carries it once."
 
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::ReminderVerdict"
-reason = "Producer and helper share one three-way reminder verdict (due, not due, or withheld by the fill guard)."
-
-[[verdict]]
-kind = "item"
-key = "harness::soft_compact::spawn_soft_compact"
-reason = "Smart-compaction reminder helpers use the shared typed argv and detached null-stdio transport."
+reason = "The host pass and the integration suite share one three-way reminder verdict (due, not due, or withheld by the fill guard)."
 
 [[verdict]]
 kind = "item"
@@ -3634,7 +3638,7 @@ upward-dependencies = [
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
-# soft_compact exposes its module, the reminder send and its delivery outcome to the helper.
+# soft_compact exposes its module and its delivery outcome to the ceiling helper.
 # TurnWaitView::soft_compact_in_flight shares owed-continue debt without another queue read (+1).
 # InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
 # InterruptConfirmation::warning and interrupt_withheld_detail give the CLI receipts and the MCP
@@ -3670,12 +3674,7 @@ reason = "The count and senders of the prompts that stopped a wait carry to the 
 [[verdict]]
 kind = "item"
 key = "message::soft_compact::ReminderOutcome"
-reason = "The helper records whether the reminder reached the pane, including a miss's reason."
-
-[[verdict]]
-kind = "item"
-key = "message::soft_compact::send_reminder"
-reason = "The reminder steer owns enqueue, one delivery attempt and queued-only cancellation."
+reason = "The ceiling helper records whether its steer reached the pane, including a miss's reason."
 
 [[verdict]]
 kind = "item"
@@ -4835,7 +4834,9 @@ path = "crates/rimz/src/store"
 # message::next_prompt_compact_kind shares the NextPrompt compaction-command check between batching and send decisions, and Store::claim_steer_batch replaces claim_message_spending_force (+1).
 # SidebarRow::delegated_wait exposes the ladder's waiting-subagent mark to sidebar and CLI readers (+1).
 # MessageRecord::awaits_resumed_provider shares the resumed-provider hold between pre-claim and write checks (+1).
-surface-budget = 700
+# event::{SoftCompactClaim, SOFT_COMPACT_CLAIMED_METHOD} and EventEnvelope::agent_soft_compact_claimed
+# carry a claimed reminder rung from the post-tool hook's ingress frame to the fold (+3).
+surface-budget = 702
 
 [[verdict]]
 kind = "item"
@@ -4871,6 +4872,16 @@ reason = "A typed override carries its event timestamp and optional actor across
 kind = "item"
 key = "agents::state::TuneSetting"
 reason = "The tuning wire and its parser share the setting vocabulary with the CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::event::SoftCompactClaim"
+reason = "The host pass arms it, the post-tool hook carries it on its ingress frame, and the apply side appends it as event params the fold reads."
+
+[[verdict]]
+kind = "item"
+key = "store::event::SOFT_COMPACT_CLAIMED_METHOD"
+reason = "Tests and the assist stats find a claimed reminder rung by its event method."
 
 [[verdict]]
 kind = "item"
@@ -5771,6 +5782,8 @@ allowed-dependencies = [
     "ids",
     "mux",
     "proc",
+    # The second-line warning reads the reminder's own second line past the smart-compact line.
+    "harness::soft_compact",
     # Smart/native window comparisons reuse the existing threshold parser.
     "store::message",
     "store::writer",
@@ -5911,7 +5924,13 @@ allowed-dependencies = [
 # judge, read by the served set and the reminder's capability set (+1).
 # ExecRequest is the one reader of a `capabilities:` grant: skill_callable, served_marks,
 # mcp_list, and skill_grant serve the reminder, the plan, and both skill enforcers (+4).
-surface-budget = 66
+# ENV_SELF_COMPACT_TOOL tells the post-tool hook its launch serves the self-compaction tool (+1).
+surface-budget = 67
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_SELF_COMPACT_TOOL"
+reason = "The launch stamps whether it serves mcp(self_compact), and the post-tool hook names that tool in the reminder."
 
 [[verdict]]
 kind = "item"
@@ -10602,6 +10621,11 @@ reason = "Error type of pub resolve_launch_ancestry (ancestry.rs:152-156); atlas
 
 [[verdict]]
 kind = "item"
+key = "harness::launch_reminders::wrap_hook_context"
+reason = "The post-tool hook wraps each hook-context body in the one tag launch_reminders owns."
+
+[[verdict]]
+kind = "item"
 key = "harness::launch_reminders::wrap"
 reason = "Private reach strands the held harness/launch reminder-composition test (harness/launch/tests.rs:2,705), which pass 23b may not edit."
 
@@ -10983,7 +11007,7 @@ reason = "The bundle every adapter implements and AgentDefinition holds as a tra
 [[verdict]]
 kind = "item"
 key = "agents::definition::HookContextReply"
-reason = "Floored pub by the public Capabilities::hook_context field the binary reads (harness/deadline.rs::host_stop_delay calls .is_some(), and cli/hooks.rs::attach_deadline_context gates on HookContextReply::event); the binary never names the type, so it is not re-exported from agents (pass 32a)."
+reason = "Floored pub by the public Capabilities::hook_context field the binary reads (harness/deadline.rs::host_stop_delay calls .carries_stop(), and cli/hooks.rs::root_context_event gates on HookContextReply::event); the binary never names the type, so it is not re-exported from agents (pass 32a)."
 
 [[verdict]]
 kind = "item"

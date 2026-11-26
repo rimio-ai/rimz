@@ -682,6 +682,7 @@ fn a_leader_turn_observation_rests_past_only_the_waking_frame() {
     let mut run = leader_run(&leader);
     run.workflow = Some(pin.clone());
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),
@@ -891,6 +892,7 @@ impl RestScene {
         }
         if self.frame {
             let frame = crate::store::ingress::HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: EventId::new(),

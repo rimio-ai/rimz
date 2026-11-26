@@ -273,7 +273,10 @@ pub(super) enum AssistEvent {
         threshold: AutoCompact,
         #[serde(skip_serializing_if = "Option::is_none")]
         occupied_tokens: Option<u64>,
-        message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rung: Option<u8>,
         delivered: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
@@ -988,6 +991,7 @@ impl AssistEvent {
                 threshold,
                 occupied_tokens,
                 message_id,
+                rung,
                 delivered,
                 error,
             } => Self::SoftCompact {
@@ -998,6 +1002,7 @@ impl AssistEvent {
                 threshold,
                 occupied_tokens,
                 message_id,
+                rung,
                 delivered,
                 error,
             },
@@ -2529,13 +2534,26 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
-        AssistEvent::Compact {
+        AssistEvent::SoftCompact {
             agent_id,
             message_id,
+            rung,
             threshold,
             ..
+        } => {
+            let message = message_id
+                .as_ref()
+                .map(|id| format!(" · message {id}"))
+                .unwrap_or_default();
+            let rung = rung
+                .map(|rung| format!(" · rung {rung}"))
+                .unwrap_or_default();
+            format!(
+                "{at} {benefit} · agent {agent_id}{message}{rung} · threshold {}",
+                compact_threshold(*threshold),
+            )
         }
-        | AssistEvent::SoftCompact {
+        AssistEvent::Compact {
             agent_id,
             message_id,
             threshold,

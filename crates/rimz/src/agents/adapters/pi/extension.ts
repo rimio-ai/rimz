@@ -8,8 +8,9 @@
 // UI. Two handlers await the child and read its stdout. `tool_call`, pi's
 // blocking pre-tool gate, reads the decision — `{"block": true, "reason": …}`
 // blocks the tool, anything else (including an absent or broken rimz) lets it
-// run. `tool_result`, inside a `rimz` run only, reads a deadline rung as
-// `{"context": …}` and steers it into the model's context. RimZ authors this
+// run. `tool_result` reads hook context (a supervised run's deadline rung, the
+// smart-compaction reminder) as `{"context": …}` and steers it into the
+// model's context. RimZ authors this
 // wire; the event mapping it feeds is docs/internals/agents/adapter_pi.md and
 // the upstream surface is docs/externals/agent-adapter/pi-reference.md.
 // Fast launches also request OpenAI priority serving through
@@ -699,13 +700,12 @@ export default function rimz(pi) {
     };
   });
 
-  // The deadline ladder's carrier, post-tool like other agents' PostToolUse.
-  // Only a `rimz` run child (RIMZ_RUN_ID set) awaits a feed here, so other
-  // sessions spawn nothing per tool. A reply's `context` is steered in as a
-  // custom message: Pi sends it to the model before its next call and renders
-  // it as extension text, never as the user. The tool result stays untouched.
+  // The hook-context carrier (a deadline rung, the smart-compaction reminder),
+  // post-tool like other agents' PostToolUse, in every session. A reply's
+  // `context` is steered in as a custom message: Pi sends it to the model
+  // before its next call and renders it as extension text, never as the user.
+  // The tool result stays untouched.
   pi.on("tool_result", async (ev, ctx) => {
-    if (!process.env.RIMZ_RUN_ID) return undefined;
     const reply = await ask("tool_result", ctx, {
       tool_call_id: ev?.toolCallId,
       tool_name: ev?.toolName,
@@ -714,11 +714,11 @@ export default function rimz(pi) {
     if (!context) return undefined;
     try {
       pi.sendMessage(
-        { customType: "rimz-deadline", content: context, display: true },
+        { customType: "rimz-context", content: context, display: true },
         { deliverAs: "steer" },
       );
     } catch {
-      // A failed steer loses this rung; the host stop and the kill remain.
+      // A failed steer loses this context; the host stop and the kill remain.
     }
     return undefined;
   });

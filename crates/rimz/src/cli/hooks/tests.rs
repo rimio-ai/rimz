@@ -102,6 +102,7 @@ fn apply_raised_frame(
     }
     let mut decoded = agent.decode_hook(event, &payload).unwrap();
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
@@ -267,6 +268,7 @@ fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay()
                         .unwrap();
                 }
                 let frame = rimz::store::ingress::HookIngress {
+                    soft_compact_claim: None,
                     boot_id: None,
                     schema_version: "1".into(),
                     event_id: rimz::EventId::new(),
@@ -430,6 +432,7 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
         env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
         env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -538,6 +541,7 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
             env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
             env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
             let frame = rimz::store::ingress::HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::EventId::new(),
@@ -648,6 +652,7 @@ fn cold_team_tool_frames_read_a_constant_number_of_sidecars() {
             let env = env.clone();
             std::thread::spawn(move || {
                 let frame = rimz::store::ingress::HookIngress {
+                    soft_compact_claim: None,
                     boot_id: None,
                     schema_version: "1".into(),
                     event_id: rimz::EventId::new(),
@@ -742,6 +747,7 @@ fn cold_team_frames_read_a_constant_number_of_run_records() {
             let env = env.clone();
             std::thread::spawn(move || {
                 let frame = rimz::store::ingress::HookIngress {
+                    soft_compact_claim: None,
                     boot_id: None,
                     schema_version: "1".into(),
                     event_id: rimz::EventId::new(),
@@ -834,6 +840,7 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
     run.agent_id = Some(child.agent_id.clone());
     let payload = serde_json::json!({"session_id": "child", "tool_name": "Bash", "tool_input": {"command": "true"}});
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
@@ -962,6 +969,7 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
         };
         let frame_for =
             |event: &str, payload: &serde_json::Value| rimz::store::ingress::HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::EventId::new(),
@@ -1118,6 +1126,7 @@ fn lifecycle_records_subagent_owners_for_the_pane_and_native_children() {
             ),
         ] {
             let frame = rimz::store::ingress::HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::EventId::new(),
@@ -1177,6 +1186,7 @@ fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
     let home = store.paths().root.join("home");
     let unit = store.paths().temp_unit_dir(Some("scout"));
     let mut frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
@@ -1402,6 +1412,7 @@ fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
             ])
             .env("RIMZ_TEST_DEADLINE_FEED", "1")
             .env(ENV_RUN_ID, run_id.as_str())
+            .env(rimz::harness::launch::ENV_SELF_COMPACT_TOOL, "1")
             .env_remove(rimz::harness::launch::ENV_AGENT_ID)
             .env_remove(rimz::harness::launch::ENV_AGENT_NAME)
             .env("RIMZ_BIN", "/nonexistent/rimz")
@@ -1453,10 +1464,31 @@ fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
             &hooks_test_globals(),
         )
         .unwrap();
-        super::attach_deadline_context(&store, adapter, event, &payload)
+        let owner = rimz::RuntimeOwnerKind::Agent;
+        let claim = super::claim_reminder(&store, adapter, owner, event, &payload);
+        super::attach_context(&store, adapter, owner, event, &payload, claim.as_ref())
     };
+    // The host pass armed a reminder before the deadline's first rung fell due.
+    let kind = adapter.spec().kind_id();
+    assert!(rimz::harness::soft_compact::arm(
+        store.runtime_paths(),
+        &kind,
+        None,
+        &rimz::store::event::SoftCompactClaim {
+            agent_id: "deadline-child".into(),
+            compactions: 0,
+            rung: 1,
+            threshold: rimz::store::message::AutoCompact::Tokens(100_000),
+            label: None,
+            occupied_tokens: None,
+        },
+    ));
     assert_eq!(feed("PreToolUse", false), HookReply::Silent);
-    assert_eq!(feed("PostToolUse", true), HookReply::Silent);
+    assert_eq!(
+        feed("PostToolUse", true),
+        HookReply::Silent,
+        "a native subagent's payload claims nothing"
+    );
     let root_context =
         rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "deadline-child");
     assert_eq!(feed("SubagentStop", true), HookReply::Silent);
@@ -1483,16 +1515,17 @@ fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
             .deadline_notice_at,
         None
     );
-    let reply = |text| {
+    let reply = |text: &str| {
         HookReply::Json(
-            serde_json::json!({"hookSpecificOutput":{"hookEventName":"PostToolUse", "additionalContext":text}}),
+            serde_json::json!({"hookSpecificOutput":{"hookEventName":"PostToolUse", "additionalContext":format!("<system_reminder>\n{text}\n</system_reminder>")}}),
         )
     };
     assert_eq!(
         feed("PostToolUse", false),
         reply(
-            "4m of 30m left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report."
-        )
+            "4m of 30m left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report.\n</system_reminder>\n\n<system_reminder>\nYour context is getting high. If this turn finishes your work, just finish and rest. Otherwise, take a pause and write down what is left to do, then compact yourself: run `mcp(self_compact)` and end your turn."
+        ),
+        "a rung and a reminder due together go out in one reply, the rung first"
     );
     assert_eq!(feed("PostToolUse", false), HookReply::Silent);
     record = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
@@ -2822,6 +2855,7 @@ fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
                    ts: jiff::Timestamp| {
         let workspace = hooks_test_workspace(Some("main"));
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -3057,6 +3091,7 @@ fn qwen_rate_limit_stop_failure_keeps_admitted_subagent_run_open() {
     let ts = jiff::Timestamp::now();
     let workspace = hooks_test_workspace(Some("main"));
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
@@ -4903,6 +4938,7 @@ fn antigravity_1_5_parked_parent_adopts_running_child_and_stays_live_through_res
                        payload: serde_json::Value| {
         let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -5172,6 +5208,7 @@ fn antigravity_1_5_unparked_parent_tool_use_adopts_running_child() {
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
     let feed = |event_name: &str, payload: serde_json::Value| {
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -5310,6 +5347,7 @@ fn antigravity_1_5_retry_after_failed_invoke_subagent_adopts_child_and_keeps_par
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
     let feed = |event_name: &str, payload: serde_json::Value| {
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -5490,6 +5528,7 @@ fn antigravity_1_5_native_child_joins_its_pane_parent_at_its_first_hook() {
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -5917,6 +5956,7 @@ fn antigravity_1_5_killed_parked_child_rests_with_no_shells_after_parent_rest_re
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
     let feed = |event_name: &str, payload: serde_json::Value| {
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
@@ -6235,6 +6275,7 @@ fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_re
         run.report_to = rimz::store::run::ReportTo::Nobody;
         rimz::harness::run::create(store.paths(), &run).unwrap();
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),

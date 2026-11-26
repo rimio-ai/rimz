@@ -27,8 +27,9 @@
 //! blocking tool as a native question and returns neutral so pi can open its
 //! UI. `ui_prompt_start` (Pi 0.84.4+) marks any other extension dialog opened
 //! inside a run as a generic question, and `ui_prompt_end` clears it by key.
-//! `tool_result`, also awaited, is fed only inside a `rimz` run, where its
-//! reply carries the deadline ladder's rung for the extension to steer in.
+//! `tool_result`, also awaited, reads its reply for hook context (a supervised
+//! run's deadline rung, the smart-compaction reminder) for the extension to
+//! steer in.
 //! Managed extension instances also identify child Pi sessions through
 //! RimZ-owned process-lineage markers and feed lifecycle rows keyed by the
 //! child's own session id, so its model, effort, context, and usage envelopes

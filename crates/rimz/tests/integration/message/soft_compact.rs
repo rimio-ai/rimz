@@ -1,12 +1,25 @@
 use super::*;
-use rimz::harness::soft_compact::SoftCompactRequest;
-use rimz::store::message::SoftCompactStep;
+use rimz::harness::soft_compact::{ReminderVerdict, arm, reminder_due};
+use rimz::store::event::{SOFT_COMPACT_CLAIMED_METHOD, SoftCompactClaim};
+use rimz::store::message::{AutoCompact, SoftCompactStep};
+
+/// The card the fixture drives.
+struct Card {
+    workspace_id: rimz::ids::WorkspaceId,
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    pane_id: PaneId,
+    label: String,
+}
 
 struct Fixture {
     env: Env,
-    request: SoftCompactRequest,
+    request: Card,
     panes: PathBuf,
+    continue_text: std::cell::RefCell<String>,
 }
+
+const REMINDER_LINE: &str = "Your context is getting high.";
 
 impl Fixture {
     fn new(kind: &str) -> Self {
@@ -26,13 +39,12 @@ impl Fixture {
                 "configure soft compaction",
             );
         }
-        let request = SoftCompactRequest {
+        let request = Card {
             workspace_id: env.workspace_id.clone(),
             kind: AgentKind::new_unchecked(kind),
             agent_id: "soft-session".into(),
             pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
             label: "@worker".into(),
-            step: SoftCompactStep::WrapUp,
         };
         let program = rimz::agents::spec_by_kind(kind)
             .and_then(|spec| spec.launch.program)
@@ -55,6 +67,7 @@ impl Fixture {
             env,
             request,
             panes,
+            continue_text: std::cell::RefCell::new("keep going".to_owned()),
         };
         fixture.lifecycle(LifecycleSignal::Registered);
         fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
@@ -112,23 +125,125 @@ impl Fixture {
         rimz::store::agent_context::write_record(&self.env.runtime_paths(), &record).unwrap();
     }
 
-    fn command(&self, step: SoftCompactStep) -> std::process::Command {
-        let mut request = self.request.clone();
-        request.step = step;
-        let mut command = traced_rimz(&self.env, "soft-trace.log");
-        command
-            .env("RIMZ_TEST_PANE_LIST", &self.panes)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
-            .args(rimz::child_process::agent_helper_argv(
-                "soft-compact",
-                &request,
-            ));
-        command
+    /// One host pass's reminder decision over the published snapshot at the fixture's 100k line.
+    /// When a rung is due it arms it, and the agent's next root post-tool hook must carry it.
+    fn remind(&self) -> bool {
+        let session = self
+            .env
+            .resolve_workspace(&self.env.project_root)
+            .session_name;
+        let snapshot = rimz::sidebar::consumer::PublishedSnapshotReader::new(
+            self.env.runtime_paths(),
+            session,
+            None,
+        )
+        .read(self.env.store().paths())
+        .unwrap();
+        let agent = rimz::store::snapshot::find_agent(
+            &snapshot.agents,
+            &self.request.kind,
+            &self.request.agent_id,
+        )
+        .unwrap();
+        let threshold = AutoCompact::Tokens(100_000);
+        let ReminderVerdict::Due(rung) = reminder_due(
+            &snapshot,
+            agent,
+            Some(threshold),
+            &self.continue_text.borrow(),
+            jiff::Timestamp::now(),
+            || false,
+        ) else {
+            return false;
+        };
+        let claim = SoftCompactClaim {
+            agent_id: self.request.agent_id.clone(),
+            compactions: agent.compaction_count,
+            rung,
+            threshold,
+            label: Some(self.request.label.clone()),
+            occupied_tokens: agent.occupied_context_tokens(),
+        };
+        assert!(arm(
+            &self.env.runtime_paths(),
+            &self.request.kind,
+            None,
+            &claim
+        ));
+        let reply = self.post_tool();
+        assert!(reply.contains(REMINDER_LINE), "{reply}");
+        true
     }
 
-    fn send(&self, step: SoftCompactStep) {
-        run_success(&mut self.command(step), "soft compaction helper");
+    /// Arms rung 1 for the card as the host pass would, keyed by its session alone.
+    fn arm_rung_one(&self) {
+        let claim = SoftCompactClaim {
+            agent_id: self.request.agent_id.clone(),
+            compactions: 0,
+            rung: 1,
+            threshold: AutoCompact::Tokens(100_000),
+            label: None,
+            occupied_tokens: None,
+        };
+        assert!(arm(
+            &self.env.runtime_paths(),
+            &self.request.kind,
+            None,
+            &claim
+        ));
+    }
+
+    /// The pending reminder files armed and not yet claimed.
+    fn pending(&self) -> Vec<PathBuf> {
+        let dir = self.env.runtime_paths().live_dir.join("soft-compact");
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.to_string_lossy().ends_with("-pending.json"))
+            .collect()
+    }
+
+    fn post_tool_payload(&self) -> serde_json::Value {
+        serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": self.request.agent_id.as_str(),
+            "cwd": self.env.project_root,
+            "tool_name": "Read",
+            "tool_input": {"file_path": "src/lib.rs"},
+            "tool_response": {},
+        })
+    }
+
+    /// The agent's root post-tool hook, returning its stdout reply.
+    fn post_tool(&self) -> String {
+        self.hook_reply(&self.post_tool_payload())
+    }
+
+    /// Feeds `payload` as the card's hook and returns its stdout reply.
+    fn hook_reply(&self, payload: &serde_json::Value) -> String {
+        let output = self
+            .env
+            .run_hook(self.request.kind.as_str(), &payload.to_string());
+        assert!(output.status.success(), "{output:?}");
+        let reply = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            reply.lines().count() <= 1
+                && reply
+                    .lines()
+                    .all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()),
+            "hook stdout stays one JSON reply: {reply}"
+        );
+        reply
+    }
+
+    fn set_continue_text(&self, text: &str) {
+        run_success(
+            self.env
+                .rimz()
+                .args(["config", "set", "resume.auto_continue_text", text]),
+            "set continue text",
+        );
+        self.continue_text.replace(text.to_owned());
     }
 
     fn records(&self) -> Vec<MessageRecord> {
@@ -279,11 +394,17 @@ impl Fixture {
             .status
     }
 
+    /// Reminders the agent's hooks claimed, as the apply side recorded them.
     fn reminders(&self) -> usize {
-        self.records()
+        let events = self.env.read_events();
+        events
             .iter()
-            .filter(|record| record.soft_compact == Some(SoftCompactStep::WrapUp))
+            .filter(|event| event.method == SOFT_COMPACT_CLAIMED_METHOD)
             .count()
+    }
+
+    fn reminder_rung(&self) -> Option<u8> {
+        self.agent().soft_compact.and_then(|mark| mark.rung)
     }
 
     fn assert_canceled_with(&self, id: &MessageId, reason: &str) {
@@ -317,33 +438,23 @@ fn compaction_end() -> LifecycleSignal {
 
 fn reminder_once_per_epoch(kind: &str) {
     let fixture = Fixture::new(kind);
-    fixture.send(SoftCompactStep::WrapUp);
-    let records = fixture.records();
-    assert_eq!(records.len(), 1, "the helper must send one reminder");
-    let reminder = &records[0];
-    assert_eq!(reminder.soft_compact, Some(SoftCompactStep::WrapUp));
-    assert_eq!(reminder.status, MessageStatus::Sent);
-    assert_eq!(reminder.sender, MessageSender::System);
-    assert_eq!(reminder.gate, DeliveryGate::Any);
-    assert!(reminder.automated);
-    assert_eq!(reminder.auto_compact, None);
+    assert!(fixture.remind(), "past both lines, one reminder fires");
+    assert_eq!(fixture.reminders(), 1);
     assert_eq!(
-        Some(reminder.text.as_str()),
-        rimz::agents::compact_reminder(&fixture.agent()).as_deref()
+        fixture.reminder_rung(),
+        Some(2),
+        "a jump past both lines spends both rungs"
     );
     assert!(
-        fixture
-            .trace()
-            .iter()
-            .any(|line| is_paste(line, &reminder.text))
+        fixture.records().is_empty(),
+        "the reminder never enters the queue: {:?}",
+        fixture.records()
     );
-    fixture.send(SoftCompactStep::WrapUp);
-    fixture.send(SoftCompactStep::Continue);
-    assert_eq!(
-        fixture.records().len(),
-        1,
-        "no second reminder in the epoch, and an older host's continue request sends nothing"
+    assert!(
+        !fixture.post_tool().contains(REMINDER_LINE),
+        "a claimed reminder attaches once"
     );
+    assert!(!fixture.remind(), "no second reminder in the epoch");
     fixture.lifecycle(LifecycleSignal::Compacting);
     fixture.lifecycle(LifecycleSignal::CompactionEnded {
         auto: Some(true),
@@ -352,38 +463,45 @@ fn reminder_once_per_epoch(kind: &str) {
     });
     fixture.context(20_000);
     fixture.end_turn();
-    fixture.send(SoftCompactStep::WrapUp);
-    fixture.send(SoftCompactStep::Continue);
-    assert_eq!(
-        fixture.records().len(),
-        1,
+    assert!(
+        !fixture.remind(),
         "nothing follows a reminder after a native compaction and a turn end"
     );
     let trace = fixture.trace();
     assert!(
-        !trace.iter().any(|line| is_compact_command(line)),
-        "{trace:?}"
-    );
-    assert!(
-        !trace.iter().any(|line| is_paste(line, "keep going")),
+        !trace
+            .iter()
+            .any(|line| is_compact_command(line) || line.contains(REMINDER_LINE)),
         "{trace:?}"
     );
     let stats = fixture.stats();
     assert_eq!(stats["rollup"]["soft_compacts"], 1);
+    let events = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "soft_compact")
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1, "{stats}");
     assert_eq!(
-        stats["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|event| event["assist"] == "soft_compact")
-            .count(),
-        1
+        (&events[0]["rung"], &events[0]["delivered"]),
+        (&serde_json::json!(2), &serde_json::json!(true)),
+        "{stats}"
     );
     fixture.lifecycle_usage(LifecycleSignal::TurnStarted { turn_id: None }, 20_000);
-    fixture.context(130_000);
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(fixture.reminders(), 2, "a new epoch re-arms the reminder");
-    assert_eq!(fixture.stats()["rollup"]["soft_compacts"], 2);
+    fixture.context(105_000);
+    assert!(fixture.remind(), "a new epoch re-arms the first rung");
+    assert_eq!(fixture.reminder_rung(), Some(1));
+    assert!(!fixture.remind(), "the first rung fires once");
+    fixture.context(115_000);
+    assert!(
+        fixture.remind(),
+        "ten percent past the line, the second rung fires"
+    );
+    assert_eq!(fixture.reminder_rung(), Some(2));
+    assert!(!fixture.remind(), "the second rung fires once");
+    assert_eq!(fixture.reminders(), 3);
+    assert_eq!(fixture.stats()["rollup"]["soft_compacts"], 3);
 }
 
 #[test]
@@ -400,43 +518,29 @@ fn non_trailing_adapter_gets_one_reminder_per_epoch_and_nothing_after_it() {
 fn reminder_is_withheld_behind_an_owed_continue_blank_text_or_an_interrupt_but_not_a_clear() {
     let fixture = Fixture::new("claude");
     fixture.compact(&[]);
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        0,
+    assert!(
+        !fixture.remind(),
         "a compaction owed a continue withholds the reminder"
     );
     let fixture = Fixture::new("claude");
-    run_success(
-        fixture
-            .env
-            .rimz()
-            .args(["config", "set", "resume.auto_continue_text", "  "]),
-        "blank continue",
-    );
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(fixture.reminders(), 0, "blank text withholds the reminder");
+    fixture.set_continue_text("  ");
+    assert!(!fixture.remind(), "blank text withholds the reminder");
 
     let fixture = Fixture::new("claude");
-    fixture.send(SoftCompactStep::WrapUp);
+    assert!(fixture.remind());
     fixture.lifecycle(LifecycleSignal::TurnInterrupted { turn_id: None });
     fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        1,
-        "an interrupt does not re-arm the epoch"
-    );
+    assert!(!fixture.remind(), "an interrupt does not re-arm the epoch");
     fixture.lifecycle(LifecycleSignal::Registered);
     fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(fixture.reminders(), 2, "a /clear re-arms the reminder");
+    assert!(fixture.remind(), "a /clear re-arms the reminder");
+    assert_eq!(fixture.reminders(), 2);
 }
 
 #[test]
 fn self_compaction_mid_turn_types_the_command_then_its_continue() {
     let fixture = Fixture::new("claude");
-    fixture.send(SoftCompactStep::WrapUp);
+    assert!(fixture.remind());
     let receipt = fixture.compact(&["keep the plan"]);
     let named =
         rimz::address::handle_with_name("@claude", fixture.records()[0].agent_name.as_deref());
@@ -448,7 +552,7 @@ fn self_compaction_mid_turn_types_the_command_then_its_continue() {
         "{receipt}"
     );
     let records = fixture.records();
-    assert_eq!(records.len(), 3, "{records:?}");
+    assert_eq!(records.len(), 2, "{records:?}");
     let command = records
         .iter()
         .find(|record| record.body == MessageBody::Command)
@@ -531,10 +635,8 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
         (command.body, command.status),
         (MessageBody::Command, MessageStatus::Queued)
     );
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        1,
+    assert!(
+        fixture.remind(),
         "a waiting command no longer withholds the reminder"
     );
     for _ in 0..2 {
@@ -999,7 +1101,7 @@ fn supervised_run_parks_until_the_compaction_continue_turn_finishes() {
 #[test]
 fn codex_continuation_receives_the_owed_continue_and_rearms_the_reminder() {
     let mut fixture = Fixture::new("codex");
-    fixture.send(SoftCompactStep::WrapUp);
+    assert!(fixture.remind());
     fixture.compact(&[]);
     let records = fixture.records();
     let command = records
@@ -1084,104 +1186,87 @@ fn codex_continuation_receives_the_owed_continue_and_rearms_the_reminder() {
             .any(|record| record.message_id == continuation.message_id)
     );
     fixture.context(130_000);
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture
-            .records()
-            .iter()
-            .filter(|record| record.agent_id == fixture.request.agent_id
-                && record.soft_compact == Some(SoftCompactStep::WrapUp)
-                && record.status == MessageStatus::Sent)
-            .count(),
-        1,
+    assert!(
+        fixture.remind(),
         "the compaction that created this row must re-arm its reminder"
     );
+    assert_eq!(fixture.reminders(), 2);
 }
 
 #[test]
-fn reminder_skips_an_input_prompt_raised_while_it_waited_for_the_pane_lock() {
+fn an_unparsable_pending_reminder_attaches_nothing_and_records_no_claim() {
     let fixture = Fixture::new("claude");
-    let before = DeliveryRendezvous::new(&fixture.env, "soft-before-lock");
-    let child = fixture
-        .command(SoftCompactStep::WrapUp)
-        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut release = before.arrive();
-    fixture.lifecycle(LifecycleSignal::AwaitingInput {
-        extra_questions: 0,
-        kind: AskKind::Permission,
-        ask_id: None,
-        detail: None,
-        native_key: None,
+    fixture.arm_rung_one();
+    let pending = fixture.pending();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    std::fs::write(&pending[0], "not json").unwrap();
+    let reply = fixture.post_tool();
+    assert!(!reply.contains(REMINDER_LINE), "{reply}");
+    assert_eq!(fixture.reminders(), 0);
+    assert_eq!(fixture.stats()["rollup"]["soft_compacts"], 0);
+}
+
+/// OpenCode's shared-service client (`tui.ts`) discards the feed's stdout, so its `tool_after`
+/// claims nothing; the server plugin (`index.ts`) marks the envelope whose reply it reads.
+#[test]
+fn opencode_claims_a_reminder_only_from_the_carrier_that_reads_the_reply() {
+    let fixture = Fixture::new("opencode");
+    fixture.arm_rung_one();
+    let mut tool_after = serde_json::json!({
+        "hook_event_name": "tool_after",
+        "session_id": fixture.request.agent_id.as_str(),
+        "cwd": fixture.env.project_root,
+        "tool_name": "bash",
+        "is_error": false,
     });
-    release.write_all(&[1]).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        fixture.trace().iter().all(|line| is_mux_read(line)),
-        "no write into an input prompt: {:?}, {output:?}",
-        fixture.trace()
-    );
-    let records = fixture.records();
-    assert_eq!(records.len(), 1, "{output:?}");
-    assert_eq!(records[0].status, MessageStatus::Canceled);
-    assert_eq!(
-        records[0].last_error.as_deref(),
-        Some("agent is waiting on input in its pane")
-    );
+    let reply = fixture.hook_reply(&tool_after);
+    assert!(!reply.contains(REMINDER_LINE), "{reply}");
+    assert_eq!(fixture.pending().len(), 1, "the reminder stays armed");
+    assert_eq!(fixture.reminders(), 0);
+    assert_eq!(fixture.stats()["rollup"]["soft_compacts"], 0);
+    tool_after["reads_reply"] = serde_json::json!(true);
+    let reply = fixture.hook_reply(&tool_after);
+    assert!(reply.contains(REMINDER_LINE), "{reply}");
+    assert!(fixture.pending().is_empty());
+    assert_eq!(fixture.reminders(), 1);
 }
 
+/// A hook the shared Codex daemon routes carries the daemon's environment, which belongs to
+/// whichever launch started it: the claim goes by the payload's session, and the text names
+/// only the command every session has.
 #[test]
-fn an_unreadable_queue_fails_the_reminder() {
-    let fixture = Fixture::new("claude");
-    let messages_dir = fixture.env.store().paths().messages_dir.clone();
-    std::fs::create_dir_all(&messages_dir).unwrap();
-    std::fs::write(messages_dir.join("messages.jsonl"), "not json\n").unwrap();
-    let output = fixture.command(SoftCompactStep::WrapUp).output().unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(
-        stderr.contains("sending smart-compaction reminder") && stderr.contains("messages.jsonl"),
-        "{stderr}"
-    );
-}
-
-#[test]
-fn reminder_write_failure_cancels_the_miss_and_records_one_failed_assist() {
-    let fixture = Fixture::new("claude");
-    let output = fixture
-        .command(SoftCompactStep::WrapUp)
-        .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
-        .output()
-        .unwrap();
-    let records = fixture.records();
-    assert_eq!(
-        records.len(),
-        1,
-        "the failed attempt stays recorded: {output:?}"
-    );
-    assert_eq!(records[0].status, MessageStatus::Canceled);
-    assert!(records[0].last_error.is_some());
-    assert!(
-        fixture.env.store().list_messages().unwrap().is_empty(),
-        "a missed steer must never reach the boundary"
-    );
-    let stats = fixture.stats();
-    assert_eq!(stats["rollup"]["soft_compacts"], 0);
-    let attempts = stats["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|event| event["assist"] == "soft_compact")
-        .collect::<Vec<_>>();
-    assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0]["delivered"], false);
-    assert_eq!(
-        attempts[0]["error"].as_str(),
-        records[0].last_error.as_deref()
-    );
+fn a_daemon_routed_hook_claims_by_session_and_reads_no_daemon_env() {
+    #[cfg(not(target_os = "linux"))]
+    {
+        crate::common::skip("/proc recovery is Linux-only");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let fixture = Fixture::new("codex");
+        fixture.arm_rung_one();
+        let daemon = crate::common::spawn_sibling_codex(
+            &fixture.env,
+            &fixture.env.home_root,
+            &["app-server"],
+        );
+        let mut hook = fixture.env.hook_command("codex");
+        hook.current_dir(&fixture.env.project_root)
+            .env("RIMZ_AGENT_PID", daemon.child.id().to_string())
+            .env(rimz::harness::launch::ENV_AGENT_ID, "another-launch")
+            .env(rimz::harness::launch::ENV_SELF_COMPACT_TOOL, "1");
+        let output = fixture
+            .env
+            .spawn_payload(hook, &fixture.post_tool_payload().to_string())
+            .wait_with_output()
+            .unwrap();
+        fixture.env.drain_hooks();
+        assert!(output.status.success(), "{output:?}");
+        let reply = String::from_utf8(output.stdout).unwrap();
+        assert!(reply.contains("`rimz agents compact @me`"), "{reply}");
+        assert!(!reply.contains("self_compact"), "{reply}");
+        assert!(fixture.pending().is_empty());
+        assert_eq!(fixture.reminders(), 1);
+    }
 }
 
 fn record_mutating_tool(fixture: &Fixture) {
@@ -1195,13 +1280,13 @@ fn record_mutating_tool(fixture: &Fixture) {
 
 fn assert_reminder_with_background_precompact(precompact: bool) {
     let fixture = Fixture::new("claude");
-    fixture.send(SoftCompactStep::WrapUp);
+    assert!(fixture.remind());
     if precompact {
         fixture.lifecycle(LifecycleSignal::Compacting);
     }
     record_mutating_tool(&fixture);
     fixture.context(130_000);
-    fixture.send(SoftCompactStep::WrapUp);
+    assert!(!fixture.remind());
     assert_eq!(fixture.reminders(), 1);
     assert_eq!(fixture.agent().compaction_count, 0);
 }
@@ -1273,8 +1358,7 @@ fn queued_compaction_and_owed_continue_without_background_precompact() {
 fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_clear_rearms_immediately()
  {
     let fixture = Fixture::new("claude");
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(fixture.reminders(), 1);
+    assert!(fixture.remind());
 
     // Count moves to 1, sidecar drops then crosses 100k again, but no lifecycle event reports a
     // low fill: the fill guard withholds the repeat reminder.
@@ -1286,10 +1370,8 @@ fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_c
     });
     fixture.context(20_000);
     fixture.context(130_000);
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        1,
+    assert!(
+        !fixture.remind(),
         "a moved count with no fold low-water reading must withhold"
     );
 
@@ -1303,10 +1385,8 @@ fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_c
         },
         100_000,
     );
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        1,
+    assert!(
+        !fixture.remind(),
         "a low-water reading at the line must withhold"
     );
 
@@ -1329,23 +1409,21 @@ fn fill_guard_withholds_repeat_reminder_until_lifecycle_reports_low_fill_while_c
         },
         130_000,
     );
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        2,
+    assert!(
+        fixture.remind(),
         "a fold low-water reading under the line must re-arm the reminder"
     );
+    assert_eq!(fixture.reminders(), 2);
 
     // `/clear` drops the mark and re-arms immediately without needing a low-water reading.
     fixture.lifecycle(LifecycleSignal::Registered);
     fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
     fixture.context(130_000);
-    fixture.send(SoftCompactStep::WrapUp);
-    assert_eq!(
-        fixture.reminders(),
-        3,
+    assert!(
+        fixture.remind(),
         "/clear drops the mark and re-arms without the fill guard"
     );
+    assert_eq!(fixture.reminders(), 3);
 }
 
 #[test]

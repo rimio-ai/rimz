@@ -217,7 +217,12 @@ pub enum Assist {
         threshold: crate::store::message::AutoCompact,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         occupied_tokens: Option<u64>,
-        message_id: String,
+        /// The wrap-up message an older binary steered; absent for a reminder a hook claimed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        /// The reminder rung a hook claimed; absent on a record an older binary wrote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung: Option<u8>,
         delivered: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,

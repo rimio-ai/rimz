@@ -3227,6 +3227,17 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         "soft-compaction attempts must be recognized: {soft_compacts:?}"
     );
     records.extend(soft_compacts.into_iter().map(Result::unwrap));
+    let claimed = serde_json::from_value::<AssistRecord>(serde_json::json!({
+        "at": ts(4_165), "assist": "soft_compact", "kind": "claude",
+        "agent_id": "session-2", "label": "@planner",
+        "threshold": rimz::store::message::AutoCompact::Tokens(100_000),
+        "occupied_tokens": 112_000, "rung": 2, "delivered": true,
+    }));
+    assert!(
+        claimed.is_ok(),
+        "a reminder a hook claimed carries a rung and no message: {claimed:?}"
+    );
+    records.extend(claimed);
     let nudges = [None, Some("delivery failed")].map(|error| {
         serde_json::from_value::<AssistRecord>(serde_json::json!({
             "at": ts(4_170), "assist": "stall_nudge", "kind": "claude",
@@ -3265,7 +3276,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             resumes: 1,
             recovered_secs: 3_600,
             compacts: 2,
-            soft_compacts: 1,
+            soft_compacts: 2,
             keepalives: 0,
             idle_stops: 0,
             idle_stop_withdrawals: 0,
@@ -3292,14 +3303,14 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     );
     assert_eq!(
         stats.events.len(),
-        14,
+        15,
         "every assist outcome stays forensic"
     );
-    assert_eq!(stats.timeline(0, false).0.len(), 9);
-    assert_eq!(stats.timeline(0, true).0.len(), 14);
+    assert_eq!(stats.timeline(0, false).0.len(), 10);
+    assert_eq!(stats.timeline(0, true).0.len(), 15);
     assert_eq!(
         serde_json::to_value(&stats.rollup).unwrap()["soft_compacts"],
-        1
+        2
     );
     let categories = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
         .into_iter()
@@ -3313,7 +3324,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(
         categories
             .iter()
-            .any(|line| line == "Compact reminder: 1 (1 held)")
+            .any(|line| line == "Compact reminder: 2 (1 held)")
     );
     assert!(
         categories
@@ -3378,6 +3389,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         forensics
             .iter()
             .any(|line| line.ends_with("agent session-2 · message msg_4"))
+    );
+    assert!(
+        forensics
+            .iter()
+            .any(|line| line.contains("agent session-2 · rung 2 · threshold 100k")),
+        "{forensics:?}"
     );
     assert!(forensics.iter().any(|line| {
         line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")

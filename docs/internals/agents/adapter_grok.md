@@ -90,7 +90,7 @@ A root `idle_prompt` notification with a parseable timestamp writes an `Interrup
 
 ### Hook stdout
 
-Hook stdout is empty except on one path. During a supervised run, a `PostToolUse` hook from the run's own session can carry the run's deadline-rung text as `{"hookSpecificOutput":{"additionalContext":"..."}}`, the shape the spec's `hook_context` declares (`crates/rimz/src/cli/hooks.rs::attach_deadline_context`).
+Hook stdout is empty except on one path, hook context on a root `PostToolUse`: a supervised run's deadline-rung text, from the run's own session, or the smart-compaction reminder comes back as `{"hookSpecificOutput":{"additionalContext":"..."}}`, the shape the spec's `hook_context` declares (`crates/rimz/src/cli/hooks.rs::attach_context`).
 
 ### Foreign payloads
 

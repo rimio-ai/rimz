@@ -65,6 +65,26 @@ fn queued_at(at: i64) -> serde_json::Value {
     })
 }
 
+/// A hook's claim of the reminder at `rung`, armed in epoch `compactions`.
+fn claimed(at: i64, id: &str, compactions: u32, rung: u8) -> EventEnvelope {
+    let claim = crate::store::event::SoftCompactClaim {
+        agent_id: id.into(),
+        compactions,
+        rung,
+        threshold: crate::store::message::AutoCompact::Tokens(100_000),
+        label: None,
+        occupied_tokens: Some(120_000),
+    };
+    let mut event = EventEnvelope::agent_soft_compact_claimed(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        &claim,
+    );
+    event.timestamp = epoch() + std::time::Duration::from_secs(at.try_into().unwrap());
+    event
+}
+
 fn mark(events: &[EventEnvelope], id: &str) -> serde_json::Value {
     let agents = reduce_agent_states(events);
     let agent = agents
@@ -492,5 +512,47 @@ fn owed_continue_settles_on_turn_started_after_command_sent_without_compaction_h
         mark(&after_sent, "sess-1"),
         json!({}),
         "a harness turn after command Sent settles the continue even with no compaction hook"
+    );
+}
+
+#[test]
+fn a_claimed_reminder_spends_its_rung_in_its_epoch_and_an_older_epochs_claim_is_ignored() {
+    let mut events = vec![
+        lifecycle(0, "sess-1", json!({"signal": "registered"})),
+        lifecycle(1, "sess-1", json!({"signal": "compacting"})),
+        lifecycle(
+            2,
+            "sess-1",
+            json!({"signal": "compaction_ended", "auto": false}),
+        ),
+        lifecycle(3, "sess-1", json!({"signal": "turn_started"})),
+        claimed(4, "sess-1", 0, 2),
+    ];
+    assert_eq!(
+        mark(&events, "sess-1"),
+        json!(null),
+        "a claim armed before the compaction spends nothing in the new epoch"
+    );
+    events.push(claimed(5, "sess-1", 1, 1));
+    assert_eq!(
+        mark(&events, "sess-1"),
+        json!({"compactions": 1, "rung": 1})
+    );
+    events.push(claimed(6, "sess-1", 1, 2));
+    assert_eq!(
+        mark(&events, "sess-1"),
+        json!({"compactions": 1, "rung": 2})
+    );
+    events.push(claimed(7, "sess-1", 1, 1));
+    assert_eq!(
+        mark(&events, "sess-1"),
+        json!({"compactions": 1, "rung": 2}),
+        "a late first-rung claim never lowers the spent rung"
+    );
+    events.push(message(8, "sess-1", "wrap_up", MessageStatus::Sent));
+    assert_eq!(
+        mark(&events, "sess-1"),
+        json!({"compactions": 1, "rung": 2}),
+        "an older binary's wrap-up message in the same epoch keeps the spent rung"
     );
 }

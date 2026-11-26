@@ -48,6 +48,8 @@ pub use payloads::{
 };
 #[cfg(unix)]
 pub(crate) use shim::codex_appserver_stub;
+#[cfg(target_os = "linux")]
+pub use shim::spawn_sibling_codex;
 #[cfg(unix)]
 pub use shim::{cargo_bin, zellij_trace_shim};
 pub use shim::{hermetic_providers, provider_bin};

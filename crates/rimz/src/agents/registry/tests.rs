@@ -478,26 +478,13 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
 
 #[test]
 fn compact_reminder_lets_a_finishing_agent_rest() {
-    let mut agent = AgentState::seed(
-        AgentKind::new_unchecked("codex"),
-        AgentSessionId::from("soft-compact"),
-        AgentStatus::Running,
-        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
-    );
-    let expected = "Your context is getting high. If this turn finishes your work, just finish and rest. Otherwise, at a good stopping point, before you start anything new, write down what is left to do, then compact yourself: run `rimz agents compact @me`.";
-    for kind in ["claude", "codex"] {
-        agent.kind = AgentKind::new_unchecked(kind);
-        assert_eq!(
-            compact_reminder(&agent).as_deref(),
-            Some(expected),
-            "{kind}"
-        );
-    }
-    agent.kind = AgentKind::new_unchecked("amp");
     assert_eq!(
-        compact_reminder(&agent),
-        None,
-        "no native compaction command"
+        compact_reminder(false),
+        "Your context is getting high. If this turn finishes your work, just finish and rest. Otherwise, take a pause and write down what is left to do, then compact yourself: run `rimz agents compact @me` and end your turn."
+    );
+    assert_eq!(
+        compact_reminder(true),
+        "Your context is getting high. If this turn finishes your work, just finish and rest. Otherwise, take a pause and write down what is left to do, then compact yourself: run `mcp(self_compact)` and end your turn."
     );
 }
 

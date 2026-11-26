@@ -1235,24 +1235,28 @@ impl<'a> AgentCardRef<'a> {
     }
 }
 
-/// What smart compaction holds on a card: the compaction epoch its reminder went out in, the
-/// lowest lifecycle fill observed in the fold since that reminder was sent, and the continue
-/// queued behind a compaction command that is still owed.
+/// What smart compaction holds on a card: the compaction epoch and rung its reminder was claimed
+/// in, the lowest lifecycle fill observed in the fold since that reminder, and the continue queued
+/// behind a compaction command that is still owed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoftCompactMark {
-    /// The local compaction epoch the reminder was steered in, or `None` when none was steered
+    /// The local compaction epoch a reminder rung was claimed in, or `None` when none was claimed
     /// on this session (a mark inherited after compaction, or one a continue set alone). A
     /// registration (`/clear`) drops the whole mark, which re-arms the reminder; an interrupt
     /// clears only `continue_owed` and leaves the epoch spent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions: Option<u32>,
+    /// The highest reminder rung claimed in `compactions`'s epoch: 1 at the smart-compact line,
+    /// 2 at the second line past it. `None` reads as rung 1 (a mark a legacy `WrapUp` stamped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rung: Option<u8>,
     /// Lowest context-window token occupancy observed on a lifecycle event in the fold since the
-    /// latest reminder was sent (never from a sidecar; blank or retired readings lower nothing).
-    /// Reset when a reminder is sent or a continuation row inherits the mark.
+    /// latest reminder (never from a sidecar; blank or retired readings lower nothing). Reset
+    /// when a reminder rung is claimed or a continuation row inherits the mark.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub low_water_tokens: Option<u64>,
     /// Lowest explicit `context_pct` observed on a lifecycle event in the fold since the latest
-    /// reminder was sent, for guarded kinds (Pi, OMP) that can report a percentage without a
+    /// reminder, for guarded kinds (Pi, OMP) that can report a percentage without a
     /// token count. Reset alongside `low_water_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub low_water_pct: Option<u8>,

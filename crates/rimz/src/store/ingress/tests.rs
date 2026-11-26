@@ -14,6 +14,7 @@ fn paths(dir: &std::path::Path) -> StatePaths {
 
 fn frame() -> HookIngress {
     HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),
@@ -426,6 +427,7 @@ fn reset_removes_ingress_and_cursor_in_both_modes() {
 
 fn fed_at(at: &str) -> HookIngress {
     HookIngress {
+        soft_compact_claim: None,
         ts: at.parse().unwrap(),
         ..frame()
     }

@@ -186,6 +186,12 @@ pub trait HookCapability: CoreCapability {
         &[]
     }
 
+    /// Whether the carrier that sent `payload` reads the feed's stdout reply. The feed claims a
+    /// smart-compaction reminder only from one that does, since the claim spends the reminder.
+    fn reads_hook_reply(&self, _payload: &Value) -> bool {
+        true
+    }
+
     /// The payload-only decision reply, without lifecycle decode or provider reads.
     fn payload_hook_reply(&self, _event_name: &str, _payload: &Value) -> HookReply {
         HookReply::Silent

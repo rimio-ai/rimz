@@ -92,9 +92,9 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const gauges = new Map<string, Gauge>();
   const steps = new Map<string, { sessionID: string; model: ModelRef }>();
   const forms = new Map<string, string[]>();
-  // A supervised run's deadline rungs: the feed claims one on a tool end, and the newest
-  // claimed rung rides every later model request of that turn.
-  const supervised = Boolean(process.env.RIMZ_RUN_ID);
+  // Hook context (a supervised run's deadline rung, the smart-compaction reminder): the feed
+  // claims it on a tool end, and the newest claimed context rides every later model request of
+  // that turn.
   const rungFeeds = new Map<string, Promise<void>>();
   const rungs = new Map<string, string>();
   const turnEnds = new Map<string, number>();
@@ -423,8 +423,7 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     if (disposed) return;
     if (!roots.has(input.sessionID)) return;
     const sessionID = input.sessionID;
-    const feed = send(base("tool_after", sessionID, { tool_name: input.tool, is_error: input.status === "error" }), supervised);
-    if (!supervised) return;
+    const feed = send(base("tool_after", sessionID, { tool_name: input.tool, is_error: input.status === "error", reads_reply: true }), true);
     // A rung that lands after its turn ended belongs to no request.
     const turn = turnEnds.get(sessionID);
     rungFeeds.set(sessionID, feed.then((stdout) => {
