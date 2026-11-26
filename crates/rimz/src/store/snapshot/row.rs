@@ -643,7 +643,8 @@ pub struct AgentCard {
     /// Open run of consecutive identical tool calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_repeat: Option<crate::agent_activity::ToolRepeat>,
-    /// Label explaining why the row projected to paused or failed.
+    /// Label explaining why the row projected to paused or failed, or to waiting on a turn
+    /// that sent no request to the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -498,6 +498,38 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
 }
 
 #[test]
+fn request_start_records_pin_every_builtin_and_its_version_floor() {
+    use crate::agents::definition::RequestStartRecord;
+    let recorded: Vec<_> = BUILTINS
+        .iter()
+        .filter_map(
+            |definition| match definition.spec().capabilities.request_start_record {
+                RequestStartRecord::Unrecorded => None,
+                RequestStartRecord::Recorded { since } => {
+                    Some((definition.spec().kind, since.map(|floor| floor.to_string())))
+                }
+            },
+        )
+        .collect();
+    assert_eq!(recorded, [("claude", Some("2.1.300".to_owned()))]);
+    let claude = find_definition("claude").unwrap().spec().capabilities;
+    assert_eq!(
+        [
+            None,
+            Some("next"),
+            Some("2.1.299"),
+            Some("2.1.300"),
+            Some("2.1.301 (Claude Code)"),
+        ]
+        .map(|version| claude.request_start_record.covers(version)),
+        [false, false, false, true, true]
+    );
+    let every_version = RequestStartRecord::Recorded { since: None };
+    assert!(every_version.covers(None));
+    assert!(!RequestStartRecord::Unrecorded.covers(Some("2.1.300")));
+}
+
+#[test]
 fn compact_reminder_lets_a_finishing_agent_rest() {
     assert_eq!(
         compact_reminder(false),

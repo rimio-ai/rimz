@@ -28,7 +28,7 @@ use self::payloads::{
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal, ToolEffect};
@@ -95,6 +95,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: QWEN_COVERAGE,
     user_coverage: QWEN_USER_COVERAGE,

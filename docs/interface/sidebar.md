@@ -59,7 +59,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 
 | glyph | status | meaning | needs you |
 |-------|--------|---------|-----------|
-| `?` | waiting | asked you something: a permission, a plan approval, a question, a raised question over a resting card, or one of its current subagents is waiting on you | yes |
+| `?` | waiting | asked you something: a permission, a plan approval, a question, a raised question over a resting card, a turn that sent no request to the model, or one of its current subagents is waiting on you | yes |
 | `!` | failed | a manually raised alert, or the turn errored, died on a provider API error, ended on a refused tool call, went silent past the stall window (also a launched child whose first turn never started), or repeated one tool call 20 times, or rests on a model its provider refuses on that account (the description quotes the provider's sentence) | yes |
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or on Claude's auto-mode safety check returning no verdict, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume, or one on a model the provider refuses on that account, becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |

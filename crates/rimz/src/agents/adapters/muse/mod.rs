@@ -14,7 +14,7 @@ use crate::agents::capabilities::*;
 use crate::agents::definition::{
     Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations, HookCoverage,
     LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
+    RequestStartRecord, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use crate::agents::hook_types::{HookEventSpec, decode_catalog_hook};
 use crate::agents::payload::decode_or_default;
@@ -61,6 +61,7 @@ static MUSE_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: MUSE_COVERAGE,
     user_coverage: MUSE_USER_COVERAGE,

@@ -734,6 +734,43 @@ fn local_context_refresh_stat_gates_and_discovers_session_file() {
     );
 }
 
+/// A read that fails while the transcript's stat holds still must not mark the stat read: the
+/// next tick rereads the request line instead of waiting for the file to change.
+#[cfg(unix)]
+#[test]
+fn a_failed_read_is_reread_on_the_next_tick() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session-1.jsonl");
+    let request = json!({
+        "type": "api-request",
+        "timestamp": "2026-11-11T15:44:52.830Z",
+        "querySource": "repl_main_thread",
+    });
+    std::fs::write(&path, format!("{request}\n")).unwrap();
+    let mode = |bits| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(bits));
+    mode(0o000).unwrap();
+    if std::fs::read(&path).is_ok() {
+        // Root reads through mode 000, so this host cannot produce the read error.
+        return;
+    }
+    let failed = refresh(&path, None, None);
+    mode(0o644).unwrap();
+    let reread = refresh(
+        &path,
+        failed
+            .as_ref()
+            .and_then(|failed| failed.transcript_stat.as_ref()),
+        failed
+            .as_ref()
+            .and_then(|failed| failed.spend_fold.as_set()),
+    );
+    assert!(
+        reread.is_some_and(|reread| reread.context.recorded_request_at.as_set().is_some()),
+        "the request line on disk at the failed read is read on the next tick"
+    );
+}
+
 #[test]
 fn session_only_refresh_preserves_an_established_current_window() {
     let refresh = crate::agents::LocalTokenPatch::PreserveEstablished(Some(AgentTokenUsage {

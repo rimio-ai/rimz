@@ -46,7 +46,7 @@ use super::AskKind;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -106,6 +106,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: OPENCODE_COVERAGE,
     user_coverage: OPENCODE_USER_COVERAGE,

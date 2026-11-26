@@ -25,6 +25,7 @@ pub(super) fn project_display_status(
     delegated_waits: &BTreeMap<AgentKey, DelegatedWait>,
     now: Timestamp,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
     tool_repeat_attention_after: u32,
 ) {
     for row in rows.iter_mut() {
@@ -45,8 +46,9 @@ pub(super) fn project_display_status(
             .get(&key)
             .map(|(status, label)| (*status, label.as_str()));
         let delegated_wait = delegated_waits.get(&key);
-        // A launched child rendered as its own row has no root source; only its turn start and
-        // the refusal step read its own state, and every other rung keeps what it sees without one.
+        // A launched child rendered as its own row has no root source; only its turn start, the
+        // no-request rung, the stall rung's request clock, and the refusal step read its own
+        // state, and every other rung keeps what it sees without one.
         project_display(
             source_agent,
             source_agent.or_else(|| index.launched(&key)),
@@ -66,6 +68,7 @@ pub(super) fn project_display_status(
             demotion,
             now,
             stalled_after_secs,
+            no_request_after_secs,
             tool_repeat_attention_after,
         );
     }

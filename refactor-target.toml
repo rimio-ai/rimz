@@ -518,7 +518,11 @@ upward-dependencies = [
 # ended a turn for a hard compaction (+1).
 # capabilities::UnappliedMark carries each load mark a launch cannot apply from the adapter to
 # `rimz agents explain --mcps`, the one reader, outside the launch warnings (+1).
-surface-budget = 1396
+# RequestStartRecord is the type of the public Capabilities::request_start_record field, which
+# tells the sidebar's no-request rung which kinds record a request's start (+1).
+# AgentState::no_request_alert shares the no-request rule with a nested child's line, and
+# AgentContext::latest_unstopped_rest bounds a request a rested turn left behind (+2).
+surface-budget = 1399
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

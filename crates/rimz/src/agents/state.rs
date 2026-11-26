@@ -582,7 +582,9 @@ impl ContextSeverity {
 /// long-running tool, or a genuine wedge — is surfaced as `!` so it becomes
 /// actionable. The escalation self-heals: the next heartbeat readvances
 /// `last_activity`, [`is_stalled`] goes false, and the row leaves attention on
-/// the following snapshot with no human action.
+/// the following snapshot with no human action. On a row, the clock is the card agent's
+/// [`quiet_since`], the one a child's silence check takes too, so a menu answered past the
+/// window reads running from its request.
 ///
 /// A `running` agent that has merely delegated to subagents is *not* stalled — its work is the children's heartbeats, not its own — so the projection caller suppresses this while a child holds its delegated turn (see the sidebar's "waiting for subagents" derivation). A silent native or launched child no longer holds it; the child silence predicate also covers a prompted launched child whose first turn never started, without widening this root-row rule. A clean turn parked on background work settles to success in the sidebar projection before this predicate becomes relevant.
 fn is_stalled(
@@ -593,6 +595,89 @@ fn is_stalled(
 ) -> bool {
     status == AgentStatus::Running
         && now.duration_since(last_activity).as_secs() >= i64::from(stalled_after_secs)
+}
+
+/// When a `running` turn that has reached no model past `no_request_after_secs` raised its
+/// alert: the turn start plus the window, a fixed instant, so the user's focus receipt from
+/// typing the prompt does not swallow the alert and a later look at the pane clears it. A
+/// provider writing no request-start record, or one below the version its kind declares
+/// ([`RequestStartRecord::covers`](crate::agents::definition::RequestStartRecord::covers)),
+/// never raises it; nor does a provider-native child, whose requests are not the main
+/// thread's. Each progress input is named, never `last_activity` alone: a request record
+/// for this turn ([`open_turn_request`]), a root tool, or a compaction since the turn
+/// opened, or a compaction still inside its window. A live child or a delegated wait holds
+/// the turn at the rung walk.
+fn unrequested_turn_alert(
+    agent: &AgentState,
+    status: AgentStatus,
+    now: Timestamp,
+    no_request_after_secs: u32,
+) -> Option<Timestamp> {
+    if status != AgentStatus::Running || agent.is_provider_subagent() {
+        return None;
+    }
+    let opened = agent
+        .turn_started_at
+        .filter(|_| records_request_starts(agent))?;
+    let raised_at = opened + std::time::Duration::from_secs(u64::from(no_request_after_secs));
+    let since_open = |at: Option<Timestamp>| at.is_some_and(|at| at >= opened);
+    let progressed = open_turn_request(agent).is_some()
+        || since_open(agent.last_tool_at)
+        || since_open(agent.compacting_since)
+        || since_open(agent.compacted_at)
+        || agent.is_compacting(now);
+    (now >= raised_at && !progressed).then_some(raised_at)
+}
+
+/// The card sentence of an [`unrequested_turn_alert`], on a row and a nested child's line.
+fn no_request_label(after_secs: u32) -> String {
+    let after = crate::utils::time::format_duration_compact(std::time::Duration::from_secs(
+        u64::from(after_secs),
+    ));
+    format!("sent no request to the model {after} after the prompt; look at its pane")
+}
+
+/// Whether `agent`'s provider writes a request-start record at its version.
+fn records_request_starts(agent: &AgentState) -> bool {
+    let version = agent
+        .context
+        .as_ref()
+        .and_then(|context| context.agent_version.as_deref());
+    crate::agents::spec_by_kind(agent.kind.as_str())
+        .is_some_and(|spec| spec.capabilities.request_start_record.covers(version))
+}
+
+/// The provider's request record that belongs to `agent`'s open turn, for a kind that
+/// [records request starts](records_request_starts). A prompt landing on a turn still open
+/// (a steer) and a child's start restamp the turn start while that turn's request runs on,
+/// and the fold keeps the turn's close (and its carry) at the turn before, so a request since
+/// the latest close before the turn opened counts for it: a turn's or a keep-warm ping's,
+/// whose own request the fold leaves newer than the turn's close, a rest the provider's own
+/// records showed with no `Stop`
+/// ([`AgentContext::latest_unstopped_rest`](crate::agents::AgentContext::latest_unstopped_rest)),
+/// or registration before any of them. A ping closing inside the open turn bounds nothing,
+/// so its request holds the turn as the turn's would.
+fn open_turn_request(agent: &AgentState) -> Option<Timestamp> {
+    let context = agent.context.as_ref()?;
+    let opened = agent
+        .turn_started_at
+        .filter(|_| records_request_starts(agent))?;
+    let before_open = |at: Option<Timestamp>| at.filter(|at| *at < opened);
+    let open_since = before_open(agent.turn_ended_at)
+        .max(before_open(agent.pinged_at))
+        .max(before_open(context.latest_unstopped_rest()))
+        .or_else(|| before_open(agent.registered_at));
+    context
+        .recorded_request_at
+        .filter(|at| *at >= opened || open_since.is_some_and(|closed| *at > closed))
+}
+
+/// The later of `last_activity` and the request `agent`'s provider recorded for its open turn
+/// ([`open_turn_request`]): the clock a row's stall rung and a child's silence check share. A
+/// request is progress the hooks never saw, since a menu answered past the stall window writes
+/// only the request line until the next hook.
+fn quiet_since(agent: &AgentState, last_activity: Timestamp) -> Timestamp {
+    open_turn_request(agent).map_or(last_activity, |request| request.max(last_activity))
 }
 
 /// Whether a `running` agent has repeated one identical named tool call enough
@@ -805,7 +890,8 @@ pub struct DelegatedWait {
     /// unread episode and trigger a notification.
     #[serde(default)]
     pub start: DelegatedWaitStart,
-    /// One-line summary of the child's own open ask when present.
+    /// One-line summary of the child's own open ask when present, else the no-request
+    /// sentence its line shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The parent's own projected status was `running` before the wait turned
@@ -850,7 +936,7 @@ impl DelegatedWait {
 }
 
 /// Facts only a sidebar row carries into the rung walk: its tool-repeat run,
-/// its subagents, and the room's attention windows.
+/// its subagents, the card's own agent, and the room's attention windows.
 struct RowEvidence<'a> {
     tool_repeat: Option<&'a ToolRepeat>,
     has_live_child: bool,
@@ -858,8 +944,9 @@ struct RowEvidence<'a> {
     has_delegated_wait: bool,
     demotion: &'a super::ParkDemotion,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
     tool_repeat_attention_after: u32,
-    turn_started_at: Option<Timestamp>,
+    card_agent: Option<&'a AgentState>,
 }
 
 /// Where the displayed-status rung walk stopped.
@@ -882,6 +969,10 @@ enum RungLabel<'a> {
     TurnError(&'a AgentTurnError),
     Delegated(&'a str),
     Loop(&'a ToolRepeat),
+    NoRequest {
+        raised_at: Timestamp,
+        after_secs: u32,
+    },
 }
 
 /// The one displayed-status rung order, shared by the agent's own
@@ -901,7 +992,7 @@ fn walk_rungs<'a>(
     row: Option<&RowEvidence<'a>>,
     now: Timestamp,
 ) -> Rung<'a> {
-    use AgentStatus::{Failed, Idle, Paused, Running, Success};
+    use AgentStatus::{Failed, Idle, Paused, Running, Success, Waiting};
     let keep = |status| Rung::Decided(status, RungLabel::Keep);
     let interrupted = match WaitingResolution::resolve(*status, context, last_activity, source, now)
     {
@@ -931,7 +1022,7 @@ fn walk_rungs<'a>(
     }
     let turn_started_at = source
         .and_then(|agent| agent.turn_started_at)
-        .or_else(|| row.and_then(|row| row.turn_started_at));
+        .or_else(|| row.and_then(|row| row.card_agent?.turn_started_at));
     if let Some(error) = display_turn_error(status, context, last_activity, turn_started_at) {
         // A limit marker on a refused model the agent has since left rests as if
         // it were gone: the open turn it paused and the errored end it raised alike.
@@ -996,7 +1087,24 @@ fn walk_rungs<'a>(
     if let Some(repeat) = row.tool_repeat.filter(looping) {
         return Rung::Decided(Failed, RungLabel::Loop(repeat));
     }
-    if !row.has_delegated_wait && is_stalled(status, last_activity, now, row.stalled_after_secs) {
+    if !row.has_delegated_wait
+        && let Some(raised_at) = row
+            .card_agent
+            .and_then(|agent| unrequested_turn_alert(agent, status, now, row.no_request_after_secs))
+    {
+        let after_secs = row.no_request_after_secs;
+        return Rung::Decided(
+            Waiting,
+            RungLabel::NoRequest {
+                raised_at,
+                after_secs,
+            },
+        );
+    }
+    let quiet_since = row
+        .card_agent
+        .map_or(last_activity, |agent| quiet_since(agent, last_activity));
+    if !row.has_delegated_wait && is_stalled(status, quiet_since, now, row.stalled_after_secs) {
         let spent = source.is_some_and(|agent| row.demotion.window_spent(&agent.login_key()));
         return keep(if spent { Paused } else { Failed });
     }
@@ -1035,9 +1143,9 @@ fn project_refusal(
 /// own `rested_status` on its own clock, so a parent kept fresh by a finished
 /// child does not stall on its own silence. The stall rung runs before the
 /// display-only lift of wait and shell work. `card_agent` is the root source or a
-/// promoted launched child's own state: the model refusal and a promoted
-/// child's turn start read it, and the refusal decides before a waiting
-/// subagent can turn the card to `waiting`.
+/// promoted launched child's own state: the model refusal, a promoted child's
+/// turn start, and the no-request rung read it, and the refusal decides before a
+/// waiting subagent can turn the card to `waiting`.
 #[expect(
     clippy::too_many_arguments,
     reason = "each slot is a card field the projection writes in place, and the row facts \
@@ -1062,6 +1170,7 @@ pub(crate) fn project_display(
     demotion: &super::ParkDemotion,
     now: Timestamp,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
     tool_repeat_attention_after: u32,
 ) {
     use AgentStatus::{Failed, Idle, Running, Sleeping, Success, Waiting};
@@ -1072,8 +1181,9 @@ pub(crate) fn project_display(
         has_delegated_wait: delegated_wait.is_some(),
         demotion,
         stalled_after_secs,
+        no_request_after_secs,
         tool_repeat_attention_after,
-        turn_started_at: card_agent.and_then(|agent| agent.turn_started_at),
+        card_agent,
     });
     let mut open = *status;
     let decided = match walk_rungs(source, &mut open, phase, context, last_activity, row, now) {
@@ -1103,6 +1213,13 @@ pub(crate) fn project_display(
         RungLabel::Delegated(label) => *turn_error_label = Some(label.to_owned()),
         RungLabel::Loop(repeat) => {
             *turn_error_label = Some(format!("loop: {} ×{}", repeat.tool, repeat.count));
+        }
+        RungLabel::NoRequest {
+            raised_at,
+            after_secs,
+        } => {
+            *turn_error_label = Some(no_request_label(after_secs));
+            *overlay_raised_at = Some(raised_at);
         }
     }
     if let Some(agent) = card_agent {
@@ -3142,6 +3259,19 @@ impl AgentState {
         (status, phase)
     }
 
+    /// The no-request alert ([`unrequested_turn_alert`]) on this agent's turn read at
+    /// `status`: when it raised and the sentence its card shows. A row's rung walk and a
+    /// nested launched child's line both read it, so the one rule decides both.
+    pub(crate) fn no_request_alert(
+        &self,
+        status: AgentStatus,
+        now: Timestamp,
+        no_request_after_secs: u32,
+    ) -> Option<(Timestamp, String)> {
+        unrequested_turn_alert(self, status, now, no_request_after_secs)
+            .map(|raised_at| (raised_at, no_request_label(no_request_after_secs)))
+    }
+
     /// Displayed status, phase and turn-error label of an agent with no sidebar
     /// row of its own. A displayed fatal or unknown marker reads `failed`, on a
     /// raw-`failed` row too, and so does a displayed pausing marker the card's
@@ -3226,7 +3356,8 @@ impl AgentState {
     /// prompted launched child resting before its first turn. Raw `Idle`, no `last_prompt_at`,
     /// and no end clock distinguish the latter from a settled interrupt, a finished request, or a
     /// reopened child that a prompt had reached; the carried prompt excludes promptless launches.
-    /// Effective status and displayed errors exclude sleep, pause, and errors.
+    /// Effective status and displayed errors exclude sleep, pause, and errors. Silence runs from
+    /// [`quiet_since`], so a request recorded for the open turn counts as activity.
     pub(crate) fn silent_child_for(
         &self,
         now: Timestamp,
@@ -3252,7 +3383,9 @@ impl AgentState {
             }
             _ => return None,
         };
-        let silent_secs = now.duration_since(self.last_activity).as_secs();
+        let silent_secs = now
+            .duration_since(quiet_since(self, self.last_activity))
+            .as_secs();
         (silent_secs >= i64::from(stalled_after_secs)).then_some((silent_secs as u64, cause))
     }
 

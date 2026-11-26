@@ -88,6 +88,7 @@ The launch block is data, so one registry entry is enough to render `rimz agents
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |
 | `same_pane_session` | how co-resident roots are ordered: with on-screen evidence, `FollowLatest` prefers open asks, then the later claim. Without that evidence, open turns use earliest registration for `KeepPrimary` and latest for `FollowLatest`. Rested roots follow latest activity ([ownership](./instances.md#same-pane-ownership)) |
 | `remote_control` | which remote-control surfaces the provider hosts (pane sessions, background sessions) |
+| `request_start_record` | the provider records each turn's model request as it starts (`AgentContext::recorded_request_at`), from an optional version floor on, so the sidebar's [no-request rung](./model.md#the-sidebar-ladder) can read a turn that never reached the model. `RequestStartRecord::covers` holds only for a reported version that parses and meets the floor. Claude alone declares it, from 2.1.300 |
 
 ### The traits
 

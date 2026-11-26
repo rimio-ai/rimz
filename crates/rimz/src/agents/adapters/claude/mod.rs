@@ -59,7 +59,8 @@ use super::RemoteControlStatus;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanCapacities,
-    PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    PlanCapacity, PlanLabel, RemoteControlCapability, RequestStartRecord, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -171,6 +172,10 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         remote_control: RemoteControlCapability {
             pane_sessions: true,
             background_sessions: true,
+        },
+        // `api-request` transcript lines, written from Claude Code 2.1.300 on.
+        request_start_record: RequestStartRecord::Recorded {
+            since: Some(CliVersion::new(2, 1, 300)),
         },
     },
     coverage: CLAUDE_COVERAGE,

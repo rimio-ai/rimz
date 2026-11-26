@@ -23,7 +23,7 @@ use super::context::{AgentCurrentUsage, AgentTokenUsage};
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    RequestStartRecord, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -110,6 +110,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: KIMI_COVERAGE,
     user_coverage: KIMI_USER_COVERAGE,

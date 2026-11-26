@@ -19,7 +19,8 @@ use serde_json::Value;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, SamePaneSessionPolicy, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal, ToolEffect};
@@ -77,6 +78,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: GROK_COVERAGE,
     user_coverage: GROK_USER_COVERAGE,

@@ -121,12 +121,14 @@ fn row_entry(row: &SidebarRow) -> GroupEntry<'_> {
 }
 
 /// The per-machine attention timing windows the row fold reads, bundled so the
-/// fold entry point stays under the argument cap and the two knobs travel
+/// fold entry point stays under the argument cap and the knobs travel
 /// together from the config that owns them.
 #[derive(Clone, Copy)]
 pub(super) struct AttentionWindows {
     /// Silent-`running` → actionable `!` projection window (`stalled_after_secs`).
     pub stalled_after_secs: u32,
+    /// Running turn with no model request → actionable `?` window (`no_request_after_secs`).
+    pub no_request_after_secs: u32,
     /// Identical-tool run length that projects a running row to `!`.
     pub tool_repeat_attention_after: u32,
     /// No-activity → inactive-sink window (`inactive_after_secs`).
@@ -147,6 +149,7 @@ impl AttentionWindows {
             .max(inactive_after_secs.saturating_add(1));
         Self {
             stalled_after_secs: config.stalled_after_secs.get(),
+            no_request_after_secs: config.no_request_after_secs.get(),
             tool_repeat_attention_after: config.tool_repeat_attention_after.get(),
             inactive_after_secs,
             archive_after_secs,
@@ -175,6 +178,7 @@ impl SidebarSnapshot {
             now,
             demotion,
             windows.stalled_after_secs,
+            windows.no_request_after_secs,
         );
         // Same-pane conversations keep separate durable projections, so fold the
         // hidden roots' clocks onto whichever one currently owns the pane. A fork
@@ -195,6 +199,7 @@ impl SidebarSnapshot {
             &delegated.waits,
             now,
             windows.stalled_after_secs,
+            windows.no_request_after_secs,
             windows.tool_repeat_attention_after,
         );
         stamp_attention(&mut rows, now, windows);
@@ -381,6 +386,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                no_request_after_secs: 60,
                 tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
@@ -395,6 +401,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                no_request_after_secs: 60,
                 tool_repeat_attention_after: 20,
                 inactive_after_secs: 1_200,
                 archive_after_secs: 86_400,
@@ -412,6 +419,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                no_request_after_secs: 60,
                 tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
@@ -424,6 +432,7 @@ mod tests {
             now(),
             AttentionWindows {
                 stalled_after_secs: 1,
+                no_request_after_secs: 60,
                 tool_repeat_attention_after: 20,
                 inactive_after_secs: 3_600,
                 archive_after_secs: 86_400,
@@ -436,6 +445,7 @@ mod tests {
     fn process_rows_cool_and_archive_at_strict_window_boundaries() {
         let windows = AttentionWindows {
             stalled_after_secs: 1,
+            no_request_after_secs: 60,
             tool_repeat_attention_after: 20,
             inactive_after_secs: 3_600,
             archive_after_secs: 86_400,
@@ -461,6 +471,7 @@ mod tests {
     fn archive_window_is_threshold_driven_and_strict() {
         let windows = AttentionWindows {
             stalled_after_secs: 1,
+            no_request_after_secs: 60,
             tool_repeat_attention_after: 20,
             inactive_after_secs: 3_600,
             archive_after_secs: 86_400,
@@ -483,6 +494,7 @@ mod tests {
     fn stamp_attention_records_score() {
         let windows = AttentionWindows {
             stalled_after_secs: 1,
+            no_request_after_secs: 60,
             tool_repeat_attention_after: 20,
             inactive_after_secs: 3_600,
             archive_after_secs: 86_400,

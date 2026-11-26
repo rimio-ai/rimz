@@ -419,6 +419,7 @@ With `[room] style = "native"`, `focus_key` is the multiplexer chord that focuse
 [agents.attention]
 active_grace_secs = 180
 stalled_after_secs = 900
+no_request_after_secs = 60
 tool_repeat_warn_after = 3
 tool_repeat_attention_after = 20
 inactive_after_secs = 3600
@@ -431,6 +432,7 @@ archive_after_secs = 86400
 | --- | --- | --- |
 | `active_grace_secs` | `180` | How much silence inside an open working span still counts as active time. |
 | `stalled_after_secs` | `900` | When a silent running agent, including native and launched children, escalates to the actionable `!` bucket. The same window covers a launched child given a task whose first turn has not started, and an unfinished team stage whose members are all idle or done, measured since the latest member activity or stage start. A native child silent for three hours leaves its card, so a window of `10800` or more never flags one. |
+| `no_request_after_secs` | `60` | When a running agent whose turn has sent no request to the model since the prompt escalates to the actionable `?` bucket, reading `sent no request to the model 1m after the prompt; look at its pane`. A tool call, a compaction, or a running subagent since the prompt holds it. Only Claude Code 2.1.300 and later records request starts; every other agent, and a Claude session whose version the sidebar has not read, waits out `stalled_after_secs` instead. |
 | `tool_repeat_warn_after` | `3` | Identical tool calls in a row before `⟲` appears on the selected or held card's stats line, or under `expanded` density. |
 | `tool_repeat_attention_after` | `20` | Identical tool calls in a row before that agent escalates to `!`. |
 | `inactive_after_secs` | `3600` | How long calm and parked cards stay hot after their last activity, and [process rows](./sidebar.md#process-rows) after their pane's first sighting; busy work does not renew a process row, and a shell an agent exits from keeps that card's band. Asks and failures hold their place while the agent is alive. |

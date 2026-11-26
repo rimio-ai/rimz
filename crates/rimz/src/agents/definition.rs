@@ -1897,6 +1897,36 @@ pub struct Capabilities {
     pub same_pane_session: SamePaneSessionPolicy,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
+    /// Whether the provider records each turn's model request as it starts, which the
+    /// sidebar reads to tell a turn that reached the model from one held in the pane.
+    pub request_start_record: RequestStartRecord,
+}
+
+/// A provider's own record of a turn's model request starting, read from its local
+/// transcript into `AgentContext::recorded_request_at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestStartRecord {
+    /// The provider writes no such record.
+    Unrecorded,
+    /// The provider writes the record from version `since` on, or from every version
+    /// when `since` is `None`.
+    Recorded {
+        since: Option<crate::agents::version::CliVersion>,
+    },
+}
+
+impl RequestStartRecord {
+    /// Whether a session reporting `version` writes the record. A floor holds only for a
+    /// reported version that parses and meets it.
+    pub(super) fn covers(self, version: Option<&str>) -> bool {
+        match self {
+            Self::Unrecorded => false,
+            Self::Recorded { since: None } => true,
+            Self::Recorded { since: Some(floor) } => version
+                .and_then(|version| version.parse::<crate::agents::version::CliVersion>().ok())
+                .is_some_and(|version| version >= floor),
+        }
+    }
 }
 
 /// Provider-local session discovery performed by the room host.

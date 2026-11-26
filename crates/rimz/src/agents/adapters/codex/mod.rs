@@ -77,7 +77,8 @@ use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanCapacities,
-    PlanCapacity, PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    PlanCapacity, PlanLabel, RemoteControlCapability, RequestStartRecord, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -223,6 +224,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: true,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: CODEX_COVERAGE,
     user_coverage: CODEX_USER_COVERAGE,

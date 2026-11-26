@@ -243,6 +243,7 @@ pub fn merge_turn_error(
             return false;
         }
         record.context.source = kind.to_owned();
+        record.context.unstopped_rest_at = record.context.latest_unstopped_rest();
         record.context.turn_error = Some(marker);
         record.context.observed_at = observed_at;
         true
