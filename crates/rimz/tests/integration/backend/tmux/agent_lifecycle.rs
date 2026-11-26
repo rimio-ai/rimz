@@ -1754,17 +1754,33 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         "anything".to_owned(),
         rimz::store::message::DeliveryGate::Done,
     );
-    assert_eq!(
+    // A lazy provider reports no start before its first prompt, so queued text waits out the
+    // provider-start hold, one prompt delivery window from the resume stamp, then goes in.
+    let verdict_at = |now| {
         rimz::message::deliver::explain(
             &message,
             std::slice::from_ref(&message),
             &snapshot,
-            jiff::Timestamp::now(),
+            now,
             &rimz::harness::CardStatus::from_demotion(rimz::agents::ParkDemotion::default()),
         )
-        .verdict(),
-        rimz::message::deliver::DeliveryVerdict::Ready,
-        "queued text can wake the lazy resumed provider without a human prompt"
+        .verdict()
+    };
+    let hold_ends = bound.resumed_at.expect("the wrapper stamped the resume")
+        + rimz::store::message::MessageBody::Prompt.delivery_window();
+    let now = jiff::Timestamp::now();
+    assert!(
+        now < hold_ends,
+        "the check runs inside the hold: {now} vs {hold_ends}"
+    );
+    assert_eq!(
+        (verdict_at(now), verdict_at(hold_ends)),
+        (
+            rimz::message::deliver::DeliveryVerdict::ProviderStarting,
+            rimz::message::deliver::DeliveryVerdict::Ready,
+        ),
+        "queued text waits out the provider-start hold, then wakes the lazy resumed provider \
+         without a human prompt"
     );
 }
 

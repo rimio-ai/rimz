@@ -235,7 +235,9 @@ fn park_detail(label: &str, reason: &ParkReason, message_id: &crate::ids::Messag
         ),
         ParkReason::ModelHeld(hold) => hold.to_string(),
         ParkReason::ProviderStarting => {
-            format!("{label} is resuming; it delivers when its provider registers")
+            format!(
+                "{label} is resuming; it delivers once its provider starts or the provider-start hold ends"
+            )
         }
         ParkReason::Resuming { register_by, .. } => format!(
             "{label} is resuming; it delivers once it is up, and fails if it is not by {}",

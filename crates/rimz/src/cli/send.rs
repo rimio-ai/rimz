@@ -223,7 +223,7 @@ pub(crate) fn render_dispatch_outcome(
             ),
             None => format!("queued for {named} ({message_id})"),
             Some(ParkReason::ProviderStarting) => format!(
-                "queued for {named} ({message_id}) — {named} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
+                "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer {message_id}"
             ),
             Some(ParkReason::Resuming {
                 register_by,
@@ -233,17 +233,12 @@ pub(crate) fn render_dispatch_outcome(
                 "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts a session; fails if none has started by {register_by}"
             ),
             Some(ParkReason::Resuming {
-                register_by, start, ..
-            }) => {
-                let delivers = if *start == ResumeStart::Timed {
-                    "delivers one delivery window after its pane comes up"
-                } else {
-                    "delivers once its pane comes up"
-                };
-                format!(
-                    "queued for {named} ({message_id}) — {named} is resuming; {delivers}; fails if it has not come up by {register_by}"
-                )
-            }
+                register_by,
+                start: ResumeStart::Timed,
+                ..
+            }) => format!(
+                "queued for {named} ({message_id}) — {named} is resuming; delivers one delivery window after its pane comes up; fails if it has not come up by {register_by}"
+            ),
         }),
         DispatchOutcome::CompactionPending { message_id, .. } => Some(format!(
             "compacting {named}; queued {message_id} (delivers when compaction completes)"
@@ -675,7 +670,7 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
+                "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_0123456789abcdef"
             )
         );
     }
@@ -711,7 +706,7 @@ mod tests {
         );
         assert_eq!(
             render(&outcome("round-binder", Some(ParkReason::ProviderStarting))),
-            "queued for @coder#auth (@round-binder) (msg_0123456789abcdef) — @coder#auth (@round-binder) is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
+            "queued for @coder#auth (@round-binder) (msg_0123456789abcdef) — @coder#auth (@round-binder) is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_0123456789abcdef"
         );
         assert_eq!(
             render(&DispatchOutcome::CompactionPending {
@@ -756,12 +751,6 @@ mod tests {
                 Some(receipt(
                     "delivers once its provider starts a session; fails if none has started by 2026-01-01T00:02:00Z"
                 ))
-            );
-            assert_eq!(
-                render_dispatch_outcome(kind, &outcome(ResumeStart::Lazy)),
-                Some(receipt(&format!(
-                    "delivers once its pane comes up; {pane_deadline}"
-                )))
             );
             assert_eq!(
                 render_dispatch_outcome(kind, &outcome(ResumeStart::Timed)),
