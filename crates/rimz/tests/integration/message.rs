@@ -3904,27 +3904,27 @@ fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
 /// receipt names the pause.
 #[test]
 fn human_send_to_a_limit_paused_lazy_receiver_parks_on_the_pause() {
-    let (env, panes) = interrupt_fixture("codex");
-    append_lifecycle(
-        &env,
-        "codex",
-        "Stop",
-        "sess-interrupt",
-        LifecycleSignal::TurnEnded {
-            errored: true,
-            parked_on_background: false,
-            turn_id: None,
-        },
-        |_| {},
-    );
-    seed_turn_error(
-        &env,
-        "sess-interrupt",
-        TurnErrorClass::PausedRateLimit,
-        true,
-    );
-    let trace = env.project_root.join("paused-lazy-trace.log");
     for gate in ["done", "any"] {
+        let (env, panes) = interrupt_fixture("codex");
+        append_lifecycle(
+            &env,
+            "codex",
+            "Stop",
+            "sess-interrupt",
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            |_| {},
+        );
+        seed_turn_error(
+            &env,
+            "sess-interrupt",
+            TurnErrorClass::PausedRateLimit,
+            true,
+        );
+        let trace = env.project_root.join("paused-lazy-trace.log");
         let output = run_success(
             traced_rimz(&env, &trace)
                 .env("RIMZ_TEST_PANE_LIST", &panes)
@@ -3945,8 +3945,12 @@ fn human_send_to_a_limit_paused_lazy_receiver_parks_on_the_pause() {
             MessageStatus::Queued,
             "{gate}"
         );
+        assert!(
+            trace_lines(&trace).is_empty(),
+            "{gate}: {:?}",
+            trace_lines(&trace)
+        );
     }
-    assert!(trace_lines(&trace).is_empty(), "{:?}", trace_lines(&trace));
 }
 
 #[test]
