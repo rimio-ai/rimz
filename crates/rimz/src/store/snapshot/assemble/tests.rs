@@ -1199,7 +1199,6 @@ fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) ->
         background_shells: None,
         background_scripts: None,
         script_ask: false,
-        limit_stop: None,
     };
     EventEnvelope::agent_lifecycle(
         workspace.clone(),

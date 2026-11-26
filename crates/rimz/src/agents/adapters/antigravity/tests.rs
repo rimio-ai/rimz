@@ -608,6 +608,21 @@ fn stop_string_errors_set_capped_turn_error_markers_classed_by_status_form() {
             TurnErrorClass::Failed,
             "invalid request: missing parameter",
         ),
+        // A quota status form names 429, so the stop is a rate limit whatever code comes first
+        // and whatever its sentence says.
+        (
+            "ERROR",
+            "transport error (InvalidArgument, HTTP 400): bad: RESOURCE_EXHAUSTED (code 429): Ask \
+             again next week.",
+            TurnErrorClass::PausedRateLimit,
+            "Ask again next week.",
+        ),
+        (
+            "ERROR",
+            "generating: (ResourceExhausted, HTTP 429): Ask again next week.",
+            TurnErrorClass::PausedRateLimit,
+            "Ask again next week.",
+        ),
     ]
     .into_iter()
     .chain(
@@ -768,46 +783,38 @@ fn stop_string_errors_set_capped_turn_error_markers_classed_by_status_form() {
     }
 }
 #[test]
-fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
+fn quota_stops_set_a_rate_limit_marker_with_the_provider_sentence_and_refill() {
+    use crate::agents::TurnErrorClass;
+
     const SENTENCE: &str =
         "Individual quota reached. Please upgrade your subscription to increase your limits.";
-    let limit = |refill_in_secs| {
-        Some(crate::agents::TurnLimitStop {
-            label: Some(SENTENCE.to_owned()),
-            refill_in_secs,
-        })
+    let errored = LifecycleSignal::TurnEnded {
+        errored: true,
+        parked_on_background: false,
+        turn_id: None,
     };
-    // The agy 1.5.17 Stop a weekly-spent login sent on 2026-11-25, verbatim.
-    let captured = json_value(include_str!("tests/fixtures/quota_stop.json"));
-    let observation = hook_observation(&AntigravityAdapter, "Stop", &captured).unwrap();
-    assert_eq!(
-        (observation.signal, observation.limit_stop),
+    let marker_of = |payload: &Value| {
+        let decoded = hook_output(&AntigravityAdapter, "Stop", payload);
+        let marker = decoded.turn_error().cloned();
         (
-            LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-                turn_id: None,
-            },
-            limit(Some(121 * 3600 + 44 * 60 + 54)),
+            decoded
+                .lifecycle()
+                .map(|observation| observation.signal.clone()),
+            marker.map(|marker| (marker.class, marker.label)),
         )
-    );
-    let decoded = hook_output(&AntigravityAdapter, "Stop", &captured);
-    let marker = decoded
-        .turn_error()
-        .expect("a quota Stop sets a turn-error marker");
-    assert_eq!(
-        (marker.class, marker.label.as_deref()),
-        (
-            crate::agents::TurnErrorClass::PausedRateLimit,
-            Some(SENTENCE)
-        )
-    );
-    let refill_after = |marker: &crate::agents::AgentTurnError| {
+    };
+    let refill_after = |payload: &Value| {
+        let decoded = hook_output(&AntigravityAdapter, "Stop", payload);
+        let marker = decoded.turn_error()?;
         marker
             .refill_at
             .map(|refill| refill.duration_since(marker.at).as_secs())
     };
-    assert_eq!(refill_after(marker), Some(121 * 3600 + 44 * 60 + 54));
+    // The agy 1.5.17 Stop a weekly-spent login sent on 2026-11-25, verbatim.
+    let captured = json_value(include_str!("tests/fixtures/quota_stop.json"));
+    let quota = Some((TurnErrorClass::PausedRateLimit, Some(SENTENCE.to_owned())));
+    assert_eq!(marker_of(&captured), (Some(errored.clone()), quota.clone()));
+    assert_eq!(refill_after(&captured), Some(121 * 3600 + 44 * 60 + 54));
 
     let transport = "generating and executing: transport error (ResourceExhausted, HTTP 429): ";
     let twice = |resets: &str| {
@@ -830,6 +837,8 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
         (twice(" Resets in soon."), None),
         (twice(" Resets in 3d."), None),
         (twice(" Resets in ."), None),
+        // A refill past the clock's range names none.
+        (twice(" Resets in 100000000h."), None),
     ] {
         let payload = with(
             &captured,
@@ -838,36 +847,14 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
                 ("conversationId", json!(SESSION_ID)),
             ],
         );
-        let observation = hook_observation(&AntigravityAdapter, "Stop", &payload).unwrap();
-        assert_eq!(observation.limit_stop, limit(refill), "{error}");
-        let decoded = hook_output(&AntigravityAdapter, "Stop", &payload);
         assert_eq!(
-            decoded.turn_error().and_then(refill_after),
-            refill.map(|secs| i64::try_from(secs).unwrap()),
-            "{error}"
-        );
-        assert!(
-            matches!(
-                observation.signal,
-                LifecycleSignal::TurnEnded { errored: true, .. }
-            ),
+            (marker_of(&payload), refill_after(&payload)),
+            ((Some(errored.clone()), quota.clone()), refill),
             "{error}"
         );
     }
 
-    let past_the_clock = with(
-        &captured,
-        [("error", json!(twice(" Resets in 100000000h.")))],
-    );
-    let observation = hook_observation(&AntigravityAdapter, "Stop", &past_the_clock).unwrap();
-    assert_eq!(observation.limit_stop, limit(Some(360_000_000_000)));
-    let decoded = hook_output(&AntigravityAdapter, "Stop", &past_the_clock);
-    assert_eq!(
-        decoded.turn_error().map(|marker| marker.refill_at),
-        Some(None),
-        "a refill past the clock's range names none"
-    );
-
+    // Any other stop is no quota stop: a string error labels its marker whole.
     for (reason, error) in [
         ("ERROR", json!("rate limit reached; retry later")),
         (
@@ -901,17 +888,15 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
                 ("error", error.clone()),
             ],
         );
-        let observation = hook_observation(&AntigravityAdapter, "Stop", &payload).unwrap();
+        let (signal, marker) = marker_of(&payload);
+        let label = error
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned);
         assert_eq!(
-            (observation.signal, observation.limit_stop),
-            (
-                LifecycleSignal::TurnEnded {
-                    errored: true,
-                    parked_on_background: false,
-                    turn_id: None,
-                },
-                None,
-            ),
+            (signal, marker.map(|(_, label)| label)),
+            (Some(errored.clone()), label.map(Some)),
             "{reason} {error}"
         );
     }

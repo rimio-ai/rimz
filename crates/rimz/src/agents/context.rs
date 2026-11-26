@@ -1715,6 +1715,12 @@ pub struct AgentTurnError {
 }
 
 impl AgentTurnError {
+    /// Whether `text` is this marker's own error text, as a provider that sends its error as
+    /// the turn's final message gives it.
+    pub(crate) fn is_own_text(&self, text: &str) -> bool {
+        self.label.is_some() && self.label == cap_turn_error_label(text)
+    }
+
     /// The marker every adapter builds for a provider error seen `at`, before it sets
     /// [`ended_turn`](Self::ended_turn): classed by [`TurnErrorClass::of_provider_error`].
     pub(in crate::agents) fn classified(

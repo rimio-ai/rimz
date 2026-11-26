@@ -684,24 +684,6 @@ pub struct AgentLifecycleObservation {
     /// waits on it: the fold marks each listed script held by the ask.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub script_ask: bool,
-    /// The provider limit a failed turn end names in the provider's own stop report. The
-    /// supervised run fold reads it; the agent row reads its refill only off the turn-error
-    /// marker the adapter builds from the same stop (`AgentTurnError::refill_at`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit_stop: Option<TurnLimitStop>,
-}
-
-/// A provider limit that ended a turn, as the provider's stop report states it. The run fold
-/// turns it into the run's typed limit failure at the stop's recorded time.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TurnLimitStop {
-    /// The provider's sentence naming the limit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    /// Whole seconds, rounded up, from the stop to the refill the report names; absent when
-    /// the report names none that parses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refill_in_secs: Option<u64>,
 }
 
 impl AgentLifecycleObservation {
@@ -735,7 +717,6 @@ impl AgentLifecycleObservation {
             background_shells: None,
             background_scripts: None,
             script_ask: false,
-            limit_stop: None,
         }
     }
 
@@ -809,42 +790,6 @@ mod tests {
     enum DepthlessAutomation {
         Loop,
         Workflow { workflow: String, step: String },
-    }
-
-    #[test]
-    fn limit_stop_round_trips_and_defaults_when_absent() {
-        use crate::agents::LifecycleSignal;
-
-        let ended = LifecycleSignal::TurnEnded {
-            errored: true,
-            parked_on_background: false,
-            turn_id: None,
-        };
-        let mut observation = super::AgentLifecycleObservation::new(Some("a".into()), ended);
-        let bare = serde_json::to_value(&observation).unwrap();
-        assert!(bare.get("limit_stop").is_none(), "{bare}");
-        let decoded: super::AgentLifecycleObservation = serde_json::from_value(bare).unwrap();
-        assert_eq!(decoded.limit_stop, None);
-        for limit_stop in [
-            super::TurnLimitStop {
-                label: Some("Individual quota reached.".to_owned()),
-                refill_in_secs: Some(5215),
-            },
-            super::TurnLimitStop {
-                label: None,
-                refill_in_secs: None,
-            },
-        ] {
-            observation.limit_stop = Some(limit_stop);
-            let wire = serde_json::to_value(&observation).unwrap();
-            let decoded: super::AgentLifecycleObservation =
-                serde_json::from_value(wire.clone()).unwrap();
-            assert_eq!(decoded.limit_stop, observation.limit_stop, "{wire}");
-        }
-        assert_eq!(
-            serde_json::to_value(&observation).unwrap()["limit_stop"],
-            json!({})
-        );
     }
 
     #[test]

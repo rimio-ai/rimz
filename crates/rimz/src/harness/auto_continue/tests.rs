@@ -1951,7 +1951,7 @@ fn overload_replies_preserve_backoff_and_retry_cap() {
 #[test]
 fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
     for (kind, stopped_status) in [
-        ("claude", AgentStatus::Running),
+        ("claude", AgentStatus::Failed),
         ("grok", AgentStatus::Failed),
     ] {
         let (_dir, runtime) = temp_runtime();
@@ -2192,7 +2192,7 @@ fn bare_limit_replies_preserve_allowances_from_folded_provider_hooks() {
             "UserPromptSubmit",
             "StopFailure",
             json!("rate_limit"),
-            AgentStatus::Running,
+            AgentStatus::Failed,
         ),
         (
             "claude",
@@ -2326,10 +2326,10 @@ fn background_wake_bare_limit_reply_keeps_episode_anchor() {
             ),
         ],
     );
-    assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
+    assert_eq!(snapshot.agents[0].status, AgentStatus::Failed);
     assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(1_000)));
     assert_eq!(snapshot.agents[0].last_tool_at, Some(ts(1_001)));
-    assert_eq!(snapshot.agents[0].last_activity, ts(6_001));
+    assert_eq!(snapshot.agents[0].last_activity, ts(6_002));
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].context =
         parked_agent(1_500, 6_002, TurnErrorClass::PausedRateLimit, "usage limit").context;
     let mut record = rate_record(5_000, 1_500, Some(6_000), 2);
@@ -2347,7 +2347,7 @@ fn background_wake_bare_limit_reply_keeps_episode_anchor() {
         &config,
         &[resume_message(1, MessageStatus::Delivered, 6_000)],
     );
-    record.parked_at_activity = ts(6_001);
+    record.parked_at_activity = ts(6_002);
     assert_eq!(
         read_park(&park_path(&runtime)),
         Some(record),
@@ -2918,7 +2918,7 @@ fn a_ping_the_provider_limit_rejected_never_arms_a_resume() {
         },
     );
     // A clean turn, then a keepalive the spent window rejects: Claude reports it with a
-    // pausing `StopFailure` and no `Stop`, so the ping turn stays open.
+    // pausing `StopFailure` and no `Stop`, whose errored end closes the ping turn.
     let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
     let mut snapshot = folded_hook_frames(
         &runtime,
@@ -2943,7 +2943,10 @@ fn a_ping_the_provider_limit_rejected_never_arms_a_resume() {
         ],
     );
     let agents = std::sync::Arc::make_mut(&mut snapshot.agents);
-    assert!(agents[0].ping_turn, "the keepalive opened a ping turn");
+    assert!(
+        !agents[0].ping_turn && agents[0].pinged_at == Some(ts(4_001)),
+        "the rejected keepalive's errored end closed its ping turn"
+    );
     agents[0].context =
         parked_agent(1_001, 4_001, TurnErrorClass::PausedRateLimit, "rate limit").context;
     snapshot.agent_panes = vec![live_pane()].into();

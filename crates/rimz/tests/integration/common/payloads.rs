@@ -56,7 +56,6 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         background_shells: None,
         background_scripts: None,
         script_ask: false,
-        limit_stop: None,
     }
 }
 

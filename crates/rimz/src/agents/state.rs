@@ -689,22 +689,6 @@ fn terminal_turn_error(
         .filter(|error| error.at >= started)
 }
 
-/// The class to use for display and auto-resume decisions. Current adapters
-/// stamp the class directly; the label fallback keeps older sidecars that saw
-/// a provider "session limit" or "spend limit" before RimZ knew that phrase
-/// parked instead of actionable. Only the limit-park classes remap: a legacy
-/// `Failed` with an overload-ish label stays `Failed`, so old markers never
-/// start arming overload retries.
-pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorClass {
-    if error.class != TurnErrorClass::Failed {
-        return error.class;
-    }
-    match TurnErrorClass::classify_label(error.label.as_deref()) {
-        class @ (TurnErrorClass::PausedSpendLimit | TurnErrorClass::PausedRateLimit) => class,
-        _ => TurnErrorClass::Failed,
-    }
-}
-
 /// How a turn came to rest when the lifecycle state machine never saw its end,
 /// or `None` when no marker applies. The provider marker
 /// (`AgentContext::settle`, folded in via the context sidecar) must postdate the
@@ -960,8 +944,7 @@ fn walk_rungs<'a>(
                 status
             });
         }
-        let class = effective_turn_error_class(error);
-        let status = match class {
+        let status = match error.class {
             TurnErrorClass::PausedRateLimit
             | TurnErrorClass::PausedSpendLimit
             | TurnErrorClass::PausedOverloaded => Paused,
@@ -973,7 +956,7 @@ fn walk_rungs<'a>(
         let demoted = status == Paused
             && row
                 .zip(source)
-                .is_some_and(|(row, agent)| row.demotion.is_spent(agent, class));
+                .is_some_and(|(row, agent)| row.demotion.is_spent(agent, error.class));
         let status = if demoted { Failed } else { status };
         return Rung::Decided(status, RungLabel::TurnError(error));
     }
@@ -2171,9 +2154,10 @@ impl AgentState {
 
     /// Whether the error explaining the row's state ([`display_turn_error`] on its raw status)
     /// is a rate or spend limit ([`TurnErrorClass::is_limit`]) no older than the newest request
-    /// input: the provider refused that input before inference, so it made no request. Claude
-    /// leaves such a row raw `running` behind a marker newer than its last activity; a turn
-    /// that closes errored leaves it raw `failed` behind a marker inside the turn. An overload,
+    /// input: the provider refused that input before inference, so it made no request. A
+    /// refusal that ends no turn leaves such a row raw `running` behind a marker newer than its
+    /// last activity; a turn that closes errored (Claude's `StopFailure`) leaves it raw `failed`
+    /// behind a marker inside the turn. An overload,
     /// unknown or other error can strike after the request read the cache, so it keeps
     /// counting, and any newer activity (a prompt, a tool, a ping) ends the refusal's reading.
     fn limit_refusal(&self) -> bool {
@@ -2187,14 +2171,12 @@ impl AgentState {
             self.last_activity,
             self.turn_started_at,
         )
-        .is_some_and(|error| {
-            effective_turn_error_class(error).is_limit() && Some(error.at) >= latest_input
-        })
+        .is_some_and(|error| error.class.is_limit() && Some(error.at) >= latest_input)
     }
 
     /// What a turn opening on this row carries as [`Self::prior_turn`]: the row's turn
     /// stamps, or the carry it already holds when its latest turn closed errored or never
-    /// closed (Claude leaves a refused prompt's turn open). The fold never sees an error's
+    /// closed (as a refusal that ends no turn leaves it). The fold never sees an error's
     /// class, so such a turn may yet read as a refusal, and a run of refused prompts keeps
     /// the request before the first. A context reset leaves no carry to keep.
     pub(crate) fn prior_turn_for_next(&self) -> Option<PriorTurn> {
@@ -3104,9 +3086,9 @@ impl AgentState {
         })
     }
 
-    /// Provider API error currently explaining this row's displayed state. The
-    /// returned class includes legacy label remapping; the marker retains the
-    /// upstream label and timestamp for display and resume decisions.
+    /// Provider API error currently explaining this row's displayed state, with the class the
+    /// adapter stamped on it; the marker retains the upstream label and timestamp for display
+    /// and resume decisions.
     pub fn displayed_turn_error(
         &self,
         now: Timestamp,
@@ -3118,7 +3100,7 @@ impl AgentState {
             self.last_activity,
             self.turn_started_at,
         )?;
-        Some((effective_turn_error_class(error), error))
+        Some((error.class, error))
     }
 
     /// Displayed status and phase of an agent with no sidebar row of its own

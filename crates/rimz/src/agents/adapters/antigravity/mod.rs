@@ -1085,23 +1085,26 @@ struct DecodedLifecycleFields {
     turn_error: Option<AgentTurnError>,
 }
 
-/// The marker for a string `Stop.error`, classified by agy's status form ([`status_verdict`])
-/// over the whole message and labelled with the provider's sentence when the stop names a limit,
-/// so the card shows the quota rather than the transport prefix. The marker carries the refill
-/// the stop names, so the quota stop confirms no model refusal.
+/// The marker for a string `Stop.error`. A stop naming a spent quota is a rate limit,
+/// whatever code comes first, labelled with the provider's sentence so the card shows the quota
+/// rather than the transport prefix. Any other stop is classified by agy's status form
+/// ([`status_verdict`]) over the whole message. The marker carries the refill a quota stop
+/// names, so the quota stop confirms no model refusal.
 fn antigravity_turn_error(
     message: &str,
-    limit_stop: Option<&crate::agents::TurnLimitStop>,
+    quota: Option<&payloads::QuotaStop>,
 ) -> Option<AgentTurnError> {
-    let verdict = status_verdict(message);
+    let verdict = quota
+        .map(|_| TurnErrorClass::PausedRateLimit)
+        .or_else(|| status_verdict(message));
     let message = crate::agents::context::cap_turn_error_label(message)?;
-    let label = limit_stop
-        .and_then(|limit| limit.label.as_deref())
+    let label = quota
+        .and_then(|quota| quota.label.as_deref())
         .and_then(crate::agents::context::cap_turn_error_label)
         .unwrap_or(message);
     let at = Timestamp::now();
-    let refill_at = limit_stop
-        .and_then(|limit| limit.refill_in_secs)
+    let refill_at = quota
+        .and_then(|quota| quota.refill_in_secs)
         .and_then(|secs| i64::try_from(secs).ok())
         .and_then(|secs| at.checked_add(jiff::SignedDuration::from_secs(secs)).ok());
     Some(AgentTurnError {
@@ -1178,7 +1181,6 @@ fn decode_lifecycle_fields(
 ) -> DecodedLifecycleFields {
     let mut prompt_read = None;
     let mut background_shells = None;
-    let mut limit_stop = None;
     let mut turn_error = None;
     let (common, signal) = match event_name {
         "PreInvocation" => {
@@ -1258,7 +1260,7 @@ fn decode_lifecycle_fields(
                     background_shells =
                         Some(BackgroundShellReport::Snapshot { shells: Vec::new() });
                 }
-                limit_stop = stop.limit_stop();
+                let quota = stop.quota_stop();
                 let signal = stop
                     .fully_idle
                     .map(|fully_idle| LifecycleSignal::TurnEnded {
@@ -1272,7 +1274,7 @@ fn decode_lifecycle_fields(
                 ) {
                     turn_error = stop
                         .error_message()
-                        .and_then(|message| antigravity_turn_error(message, limit_stop.as_ref()));
+                        .and_then(|message| antigravity_turn_error(message, quota.as_ref()));
                 }
                 signal
             };
@@ -1285,18 +1287,14 @@ fn decode_lifecycle_fields(
             (common, None)
         }
     };
-    let mut fields = observation_with_prompt_reader(
+    observation_with_prompt_reader(
         common,
         signal,
         prompt_read,
         background_shells,
         turn_error,
         prompt_reader,
-    );
-    if let Some(observation) = fields.lifecycle.as_mut() {
-        observation.limit_stop = limit_stop;
-    }
-    fields
+    )
 }
 
 fn observation_with_prompt_reader(
