@@ -298,7 +298,7 @@ pub struct AgentTunePayload {
 }
 
 /// A smart-compaction reminder rung for one row: what the host pass arms in the pending file,
-/// what the root post-tool hook that claims it carries on its ingress frame, and the params of
+/// what the root hook-context hook that claims it carries on its ingress frame, and the params of
 /// the `agent.soft_compact_claimed` event the apply side appends. The fold reads `agent_id`,
 /// `compactions`, and `rung`; the rest feeds the assist record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

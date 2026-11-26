@@ -1,5 +1,5 @@
 //! The smart-compaction reminder: whether it is due mid-turn, and the pending file the host pass
-//! arms for the agent's next root post-tool hook to claim.
+//! arms for the agent's next root hook-context reply to claim.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -221,7 +221,7 @@ const LAUNCH_PENDING: &str = "launch-pending";
 const ARMED: &str = "armed";
 
 /// Arms the reminder rung due for each row in `snapshot` as a pending file its next root
-/// post-tool hook claims through [`claim_pending`], and removes what a row armed once its
+/// hook-context reply claims through [`claim_pending`], and removes what a row armed once its
 /// reminder is no longer due (claimed and folded, a new epoch, a turn that ended).
 pub(crate) fn compact_agents(
     snapshot: &SidebarSnapshot,
@@ -319,7 +319,7 @@ fn disarm(runtime: &RuntimePaths, agent: &AgentState, armed_path: &std::path::Pa
     }
 }
 
-/// Writes `claim` as the reminder pending for its row's next root post-tool hook, under the row's
+/// Writes `claim` as the reminder pending for its row's next root hook-context reply, under the row's
 /// launch id (when it has one) and under its session key, so a hook finds it whether or not its
 /// env carries `RIMZ_AGENT_ID`. Returns whether every copy was written.
 pub fn arm(

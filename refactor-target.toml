@@ -495,7 +495,7 @@ upward-dependencies = [
 # parked turn on a provider rest report across the adapter/CLI hook seam (+2).
 # AutoCompactEnforcer, auto_compact_enforcer, and their facade re-exports derive whether the
 # provider or RimZ enforces a kind's `auto-compact` ceiling (+4).
-# HookContextReply::event names the post-tool event the hook feed claims a deadline rung on (+1).
+# HookContextReply::event names the event the hook feed claims a deadline rung on (+1).
 # DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
 # notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
 # TurnLimitStop carries a provider stop report's limit from the adapter to the run fold (+1).
@@ -684,7 +684,7 @@ reason = "Command and declared context/compaction coverage determine participati
 [[verdict]]
 kind = "item"
 key = "agents::registry::compact_reminder"
-reason = "The post-tool hook composes the self-compaction reminder, naming mcp(self_compact) when the launch serves it and the bare command otherwise."
+reason = "The hook-context hook composes the self-compaction reminder, naming mcp(self_compact) when the launch serves it and the bare command otherwise."
 
 [[verdict]]
 kind = "item"
@@ -2503,7 +2503,7 @@ path = "crates/rimz/src/harness"
 # SeatPolicy::smart_compact shares the config resolver with agent-row consumers (+1).
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # soft_compact shares its module and decision with CLI/producer callers.
-# soft_compact::{arm, claim_pending} hand a due reminder rung from the host pass to the post-tool hook,
+# soft_compact::{arm, claim_pending} hand a due reminder rung from the host pass to the hook-context hook,
 # and launch_reminders::wrap_hook_context wraps each hook-context body in the one tag.
 # soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
 # Definition::target, Node visit bounds, timeout_at, and journal hops share inspection rules.
@@ -2684,12 +2684,12 @@ reason = "The CLI invokes the harness-owned locked recheck and enqueue with fres
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::compact_agents"
-reason = "Sidebar refresh arms a due smart-compaction reminder rung for the post-tool hook through runtime pending files."
+reason = "Sidebar refresh arms a due smart-compaction reminder rung for the hook-context hook through runtime pending files."
 
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact"
-reason = "The sidebar host pass and the post-tool hook share one read-only smart-compaction reminder policy."
+reason = "The sidebar host pass and the hook-context hook share one read-only smart-compaction reminder policy."
 
 [[verdict]]
 kind = "item"
@@ -2704,7 +2704,7 @@ reason = "The host pass writes a due rung under the session key and the launch k
 [[verdict]]
 kind = "item"
 key = "harness::soft_compact::claim_pending"
-reason = "The root post-tool hook takes the armed rung by rename, so one hook reply carries it once."
+reason = "The root hook-context hook takes the armed rung by rename, so one hook reply carries it once."
 
 [[verdict]]
 kind = "item"
@@ -4842,7 +4842,7 @@ path = "crates/rimz/src/store"
 # SidebarRow::delegated_wait exposes the ladder's waiting-subagent mark to sidebar and CLI readers (+1).
 # MessageRecord::awaits_resumed_provider shares the resumed-provider hold between pre-claim and write checks (+1).
 # event::{SoftCompactClaim, SOFT_COMPACT_CLAIMED_METHOD} and EventEnvelope::agent_soft_compact_claimed
-# carry a claimed reminder rung from the post-tool hook's ingress frame to the fold (+3).
+# carry a claimed reminder rung from the hook-context hook's ingress frame to the fold (+3).
 surface-budget = 702
 
 [[verdict]]
@@ -4883,7 +4883,7 @@ reason = "The tuning wire and its parser share the setting vocabulary with the C
 [[verdict]]
 kind = "item"
 key = "store::event::SoftCompactClaim"
-reason = "The host pass arms it, the post-tool hook carries it on its ingress frame, and the apply side appends it as event params the fold reads."
+reason = "The host pass arms it, the hook-context hook carries it on its ingress frame, and the apply side appends it as event params the fold reads."
 
 [[verdict]]
 kind = "item"
@@ -5931,13 +5931,13 @@ allowed-dependencies = [
 # judge, read by the served set and the reminder's capability set (+1).
 # ExecRequest is the one reader of a `capabilities:` grant: skill_callable, served_marks,
 # mcp_list, and skill_grant serve the reminder, the plan, and both skill enforcers (+4).
-# ENV_SELF_COMPACT_TOOL tells the post-tool hook its launch serves the self-compaction tool (+1).
+# ENV_SELF_COMPACT_TOOL tells the hook-context hook its launch serves the self-compaction tool (+1).
 surface-budget = 67
 
 [[verdict]]
 kind = "item"
 key = "harness::launch::ENV_SELF_COMPACT_TOOL"
-reason = "The launch stamps whether it serves mcp(self_compact), and the post-tool hook names that tool in the reminder."
+reason = "The launch stamps whether it serves mcp(self_compact), and the hook-context hook names that tool in the reminder."
 
 [[verdict]]
 kind = "item"
@@ -10629,7 +10629,7 @@ reason = "Error type of pub resolve_launch_ancestry (ancestry.rs:152-156); atlas
 [[verdict]]
 kind = "item"
 key = "harness::launch_reminders::wrap_hook_context"
-reason = "The post-tool hook wraps each hook-context body in the one tag launch_reminders owns."
+reason = "The hook-context hook wraps each hook-context body in the one tag launch_reminders owns."
 
 [[verdict]]
 kind = "item"
