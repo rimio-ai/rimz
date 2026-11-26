@@ -396,6 +396,15 @@ pub(crate) struct PresetArgOccurrence {
     pub(crate) value: String,
 }
 
+impl PresetArgOccurrence {
+    /// This occurrence as `argv`, the args it was found in, spells it: the flag
+    /// that matched, of the several a matcher may accept, and a `--flag=VALUE`
+    /// kept as one word.
+    pub(crate) fn written(&self, argv: &[String]) -> String {
+        argv[self.argv_range.clone()].join(" ")
+    }
+}
+
 impl PresetArgMatcher {
     /// Remove every occurrence of this typed setting from provider argv.
     ///
@@ -443,18 +452,6 @@ impl PresetArgMatcher {
             }
         }
         occurrences
-    }
-
-    pub(crate) fn display_setting(&self, value: &str) -> String {
-        match self {
-            Self::AgentFile(flag) => format!("{flag} {value}"),
-            Self::Flag(flags) | Self::TextFlag(flags) => flags
-                .first()
-                .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
-            Self::ConfigKey { key, .. } => format!("{key} {value}"),
-            Self::EnvPathVar(key) => format!("{key}={value}"),
-            Self::EnvConfigMember { var, member } => format!("{var} {member}={value}"),
-        }
     }
 }
 
