@@ -1927,7 +1927,7 @@ fn reconcile_preset_args(
                     if occurrence.value != winner.value {
                         warnings.push(LaunchFinalizeWarning::LaterModelWins {
                             profile: label.clone(),
-                            setting: matcher.display_setting(&occurrence.value),
+                            setting: occurrence.written(&cell.args),
                             model: winner.value.clone(),
                         });
                     }
@@ -1944,7 +1944,7 @@ fn reconcile_preset_args(
             if occurrence.value != declared_value && !overridden.contains(&field) {
                 warnings.push(LaunchFinalizeWarning::DeclaredFieldWins {
                     profile: label.clone(),
-                    setting: matcher.display_setting(&occurrence.value),
+                    setting: occurrence.written(&cell.args),
                     field: field.flag_name(),
                     value: declared_value.clone(),
                 });
@@ -1976,7 +1976,7 @@ fn reconcile_preset_args(
                 if !matches_declared_path {
                     warnings.push(LaunchFinalizeWarning::DeclaredPromptWins {
                         profile: label.clone(),
-                        setting: matcher.display_setting(&occurrence.value),
+                        setting: occurrence.written(&cell.args),
                     });
                 }
             }

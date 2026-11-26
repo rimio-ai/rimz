@@ -4486,7 +4486,13 @@ fn args_only_model_becomes_identity_and_suppresses_default() {
 fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
     let mut different = LayoutSpec::single(preset_cell(
         "codex",
-        &["--model", "gpt-5.6-max", "--model=gpt-5.6-sol"],
+        &[
+            "--model",
+            "gpt-5.6-max",
+            "--model=gpt-5.6-sol",
+            "-m",
+            "gpt-5.6-mini",
+        ],
         Some("gpt-5.6-max"),
         None,
     ));
@@ -4497,7 +4503,8 @@ fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
             .map(|warning| warning.to_string())
             .collect::<Vec<_>>(),
         [
-            "warning: profile `codex-coder` args set --model gpt-5.6-sol; declared model gpt-5.6-max wins"
+            "warning: profile `codex-coder` args set --model=gpt-5.6-sol; declared model gpt-5.6-max wins",
+            "warning: profile `codex-coder` args set -m gpt-5.6-mini; declared model gpt-5.6-max wins",
         ]
     );
     assert!(matches!(&different.columns[0].rows[0],
@@ -4549,6 +4556,28 @@ fn declared_prompt_removes_raw_replacement_args_before_process_compilation() {
     );
     assert!(matches!(&layout.columns[0].rows[0],
         Cell::Agent(AgentCell { args, .. }) if args == &with_auto_args("claude", &["--debug"])));
+
+    let mut cell = preset_cell(
+        "minimax",
+        &["--append-system-prompt-file", "raw.md"],
+        None,
+        None,
+    );
+    let Cell::Agent(agent_cell) = &mut cell else {
+        unreachable!("preset_cell always returns an agent");
+    };
+    agent_cell.system_prompt_file = Some(dir.path().join("typed.md").into());
+    let mut layout = LayoutSpec::single(cell);
+    assert_eq!(
+        finalize(&mut layout, &Default::default(), &[])
+            .expect("finalize launch")
+            .into_iter()
+            .map(|warning| warning.to_string())
+            .collect::<Vec<_>>(),
+        [
+            "warning: profile `minimax-coder` args set --append-system-prompt-file raw.md; declared system prompt wins"
+        ]
+    );
 }
 
 #[test]
