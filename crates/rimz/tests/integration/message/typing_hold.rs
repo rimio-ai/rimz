@@ -1028,20 +1028,40 @@ fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
     for record_later in [false, true] {
         let fixture = Fixture::new(false);
         fixture.keepalive_config();
-        // A 10 s lifetime with a 9 s margin: due one second after the clock's stamp.
-        for (key, value) in [
-            ("harness.prompt_cache_margin", "9s"),
-            ("harness.prompt_cache_ttl.claude", "10s"),
-        ] {
-            run_success(
-                fixture.command().args(["config", "set", key, value]),
-                "short lifetime",
-            );
-        }
+        let ttl = if record_later {
+            // `keepalive_config`'s 61 s lifetime under the default 60 s margin: due one second
+            // after the clock's stamp, and warm past any host stall between the release and the
+            // cold check.
+            Duration::from_secs(61)
+        } else {
+            // A 10 s lifetime with a 9 s margin: due one second after the clock's stamp.
+            for (key, value) in [
+                ("harness.prompt_cache_margin", "9s"),
+                ("harness.prompt_cache_ttl.claude", "10s"),
+            ] {
+                run_success(
+                    fixture.command().args(["config", "set", key, value]),
+                    "short lifetime",
+                );
+            }
+            Duration::from_secs(10)
+        };
         let now = jiff::Timestamp::now();
         let recorded = if record_later {
-            // A retried request: the record lands after the hook estimate (the fixture's turn,
-            // 3 s ago), so the estimate goes cold 3 s before the record does.
+            // A retried request: the record lands after the hook estimate, a turn two lifetimes
+            // ago, so the estimate is cold before the ping starts and the record is warm for a
+            // lifetime after it.
+            let turn = now - 2 * ttl;
+            fixture.lifecycle_at(LifecycleSignal::TurnStarted { turn_id: None }, None, turn);
+            fixture.lifecycle_at(
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+                None,
+                turn,
+            );
             fixture.record_request(now);
             now
         } else {
@@ -1073,14 +1093,20 @@ fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
         } else {
             estimate.duration_since(recorded)
         };
+        // The retried request's estimate is cold before the record lands.
+        let floor = if record_later {
+            ttl
+        } else {
+            Duration::from_secs(2)
+        };
         assert!(
-            gap.as_millis() >= 2_000,
+            Duration::try_from(gap).is_ok_and(|gap| gap >= floor),
             "record_later={record_later}: {recorded} vs {estimate}"
         );
         std::thread::sleep(Duration::from_millis(1_100));
         fixture.clear_input();
         let request = fixture.keepalive(true);
-        let first_cold = recorded.min(estimate) + Duration::from_secs(10);
+        let first_cold = recorded.min(estimate) + ttl;
         let before = DeliveryRendezvous::new(&fixture.env, "recorded-cold-check");
         let child = fixture
             .keepalive_command(&request)
