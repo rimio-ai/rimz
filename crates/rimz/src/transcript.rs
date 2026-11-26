@@ -26,8 +26,8 @@ pub const HARNESS_FROM: &str = "rimz";
 /// The `from` handle a human-authored entry carries; a typed prompt carries none.
 pub const HUMAN_FROM: &str = "user";
 
-/// Who authored a transcript entry. The renderer, the thread builder, and
-/// attribution all read this projection instead of deciding for themselves, so
+/// Who authored a transcript entry. The renderer, the thread builder, attribution,
+/// and `agents history` all read this projection instead of deciding for themselves, so
 /// `from` stays identity and origin has one home.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -397,6 +397,23 @@ pub fn read_since(paths: &StatePaths, since: Timestamp) -> Result<TranscriptRead
         entries,
         older_omitted,
     })
+}
+
+/// Every entry of the weekly buckets that overlap `since..=until`, oldest first.
+pub(crate) fn read_between(
+    paths: &StatePaths,
+    since: Timestamp,
+    until: Timestamp,
+) -> Result<Vec<TranscriptEntry>> {
+    let ceiling = bucket_path(paths, until);
+    let mut entries = Vec::new();
+    for path in files_since(paths, since)?.0 {
+        if path <= ceiling {
+            entries.extend(read_bucket(&path)?);
+        }
+    }
+    entries.sort_by_key(|entry| entry.at);
+    Ok(entries)
 }
 
 /// The distinct channels stamped in the workspace's recent transcript buckets.

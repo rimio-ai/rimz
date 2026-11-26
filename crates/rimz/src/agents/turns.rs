@@ -1,10 +1,14 @@
-//! Per-turn transcript and spend projection.
+//! Per-turn transcript and spend projection, and the RimZ transcript entry that opened each turn.
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
+use super::payload::SanitizedPrompt;
 use super::spending::{CachedEntry, session_entries};
 use super::transcript::{TranscriptMessage, TranscriptRole};
+use crate::disk::paths::StatePaths;
+use crate::ids::{AgentKind, AgentSessionId};
+use crate::transcript::{TranscriptEntry, TranscriptKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +126,114 @@ pub fn session_turns(
         .collect()
 }
 
+/// How long before the provider's turn start the hook may record its opener entry: the
+/// hook and the provider stamp the same moment from two clocks, measured at most about a
+/// second apart.
+const OPENER_LEAD: SignedDuration = SignedDuration::from_secs(10);
+
+/// How long after the provider's turn start the hook may record its opener entry. The
+/// hook stamps the entry when its frame applies, and Antigravity reports a steered
+/// prompt on a later lifecycle frame, up to 140 s after the turn start in the room's
+/// records; five minutes leaves that lag room to double.
+const OPENER_LAG: SignedDuration = SignedDuration::from_secs(5 * 60);
+
+/// The RimZ transcript entry that opened each of one agent's turns, given as the
+/// provider's turn start and the text of the prompt's first section (a header's body,
+/// or the whole bare section).
+///
+/// The text is sanitized as the hook sanitizes a prompt before recording it, then
+/// compared, whitespace aside, with one entry or with the in-order run of entries one
+/// submission wrote for a batch of pasted members (the entries share an `ingress` where
+/// the hook frame carried one); the run's first entry is the opener. An entry pairs only
+/// with a turn of its agent that started between five minutes before the entry and ten
+/// seconds after it, and only once. Turns take their entries in time order, so two turns
+/// of the same text pair with that text's entries in the order both were written. Only
+/// the weekly buckets from the earliest turn's window to the latest turn's are read, and
+/// an unreadable one is an error, never an absent entry.
+pub fn turn_openers(
+    paths: &StatePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    turns: &[(Timestamp, &str)],
+) -> crate::transcript::Result<Vec<Option<TranscriptEntry>>> {
+    let mut order = (0..turns.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&turn| turns[turn].0);
+    let (Some(&first), Some(&last)) = (order.first(), order.last()) else {
+        return Ok(Vec::new());
+    };
+    let since = turns[first]
+        .0
+        .checked_sub(OPENER_LEAD)
+        .unwrap_or(turns[first].0);
+    let until = turns[last]
+        .0
+        .checked_add(OPENER_LAG)
+        .unwrap_or(turns[last].0);
+    let entries = crate::transcript::read_between(paths, since, until)?
+        .into_iter()
+        .filter(|entry| {
+            &entry.kind == kind
+                && &entry.agent_id == agent_id
+                && !matches!(
+                    entry.entry,
+                    TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
+                )
+        })
+        .collect::<Vec<_>>();
+    let mut taken = vec![false; entries.len()];
+    let mut openers = vec![None; turns.len()];
+    let mut window_start = 0;
+    for turn in order {
+        let (started_at, text) = turns[turn];
+        let Some(text) = SanitizedPrompt::new(Some(text)) else {
+            continue;
+        };
+        let words = text.split_whitespace().collect::<Vec<_>>();
+        let earliest = started_at.checked_sub(OPENER_LEAD).unwrap_or(started_at);
+        let latest = started_at.checked_add(OPENER_LAG).unwrap_or(started_at);
+        while entries
+            .get(window_start)
+            .is_some_and(|entry| entry.at < earliest)
+        {
+            window_start += 1;
+        }
+        let run = (window_start..entries.len())
+            .take_while(|&index| entries[index].at <= latest)
+            .find_map(|index| opener_run(&entries, &taken, index, latest, &words));
+        if let Some(run) = run {
+            taken[run.clone()].fill(true);
+            openers[turn] = Some(entries[run.start].clone());
+        }
+    }
+    Ok(openers)
+}
+
+/// The run of untaken entries from `start` whose words, joined in order, are `words`:
+/// one entry, or the members one submission wrote for a pasted batch.
+fn opener_run(
+    entries: &[TranscriptEntry],
+    taken: &[bool],
+    start: usize,
+    latest: Timestamp,
+    words: &[&str],
+) -> Option<std::ops::Range<usize>> {
+    let mut rest = words;
+    for index in start..entries.len() {
+        let entry = &entries[index];
+        if taken[index] || entry.at > latest || entry.ingress != entries[start].ingress {
+            return None;
+        }
+        let member = entry.text.split_whitespace().collect::<Vec<_>>();
+        rest = rest
+            .strip_prefix(member.as_slice())
+            .filter(|_| !member.is_empty())?;
+        if rest.is_empty() {
+            return Some(start..index + 1);
+        }
+    }
+    None
+}
+
 fn timestamp(seconds: u64) -> Option<Timestamp> {
     i64::try_from(seconds)
         .ok()
@@ -131,6 +243,140 @@ fn timestamp(seconds: u64) -> Option<Timestamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::EventId;
+    use crate::transcript::EntryOrigin;
+
+    fn paths() -> (tempfile::TempDir, StatePaths) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(id, dir.path()).expect("state paths");
+        (dir, paths)
+    }
+
+    fn agent() -> (AgentKind, AgentSessionId) {
+        (
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-1"),
+        )
+    }
+
+    #[test]
+    fn turn_openers_pair_in_order_across_the_hook_lag_and_through_batches() {
+        let (_dir, paths) = paths();
+        let (kind, agent_id) = agent();
+        let base: Timestamp = "2026-06-01T00:00:00Z".parse().unwrap();
+        let at = |seconds: i64| base + SignedDuration::from_secs(seconds);
+        let [human_led, other_submission, third_submission] = [(); 3].map(|()| EventId::new());
+        let line = |text: &str, seconds: i64, from: Option<&str>, ingress: Option<&EventId>| {
+            let mut entry = TranscriptEntry::new(
+                at(seconds),
+                kind.clone(),
+                agent_id.clone(),
+                TranscriptKind::Prompt,
+                text.to_owned(),
+            );
+            entry.from = from.map(str::to_owned);
+            entry.ingress = ingress.cloned();
+            entry
+        };
+        let rimz = Some(crate::transcript::HARNESS_FROM);
+        let mut header_entry = line("read the plan", 2800, Some("@planner"), None);
+        header_entry.entry = TranscriptKind::Message;
+        let mut other_agent = line("plan the rollout", 3000, None, None);
+        other_agent.agent_id = AgentSessionId::from("sess-2");
+        let mut other_kind = line("plan the rollout", 3000, None, None);
+        other_kind.kind = AgentKind::new_unchecked("codex");
+        let mut reply = line("plan the rollout", 3000, None, None);
+        reply.entry = TranscriptKind::Assistant;
+        for entry in [
+            line("continue", 3, None, None),
+            line("continue", 7, rimz, None),
+            line("reminder", 240, rimz, None),
+            line("early", 999, rimz, None),
+            line("too early", 1189, rimz, None),
+            line("too late", 1701, rimz, None),
+            line("first ask", 2001, None, Some(&human_led)),
+            line("continue", 2001, rimz, Some(&human_led)),
+            line("alpha", 2201, rimz, None),
+            line("beta", 2201, rimz, None),
+            line("one", 2401, rimz, Some(&other_submission)),
+            line("two", 2401, Some("@coder"), Some(&third_submission)),
+            line("retry me", 2600, Some("@coder"), None),
+            header_entry,
+            other_agent,
+            other_kind,
+            reply,
+        ] {
+            crate::transcript::append(&paths, &entry).unwrap();
+        }
+        let retry = format!(
+            "retry me\n\n{}",
+            super::super::payload::wrap_rimz_block(
+                super::super::payload::RimzBlock::PreviousAttemptFailure,
+                "A previous attempt at this task failed (exit 1).",
+            )
+        );
+        let turns = [
+            (at(0), "continue"),
+            (at(4), "continue"),
+            (at(100), "reminder"),
+            (at(1000), "early"),
+            (at(1200), "too early"),
+            (at(1400), "too late"),
+            (at(2000), "first ask\n\ncontinue"),
+            (at(2200), "alpha\n\n\n\nbeta"),
+            (at(2400), "one\n\ntwo"),
+            (at(2600), retry.as_str()),
+            (at(2800), "read the plan"),
+            (at(2810), "read the plan"),
+            (at(3000), "plan the rollout"),
+        ];
+
+        let openers = turn_openers(&paths, &kind, &agent_id, &turns).unwrap();
+
+        assert_eq!(
+            openers
+                .iter()
+                .map(|opener| opener.as_ref().map(|entry| (entry.at, entry.origin())))
+                .collect::<Vec<_>>(),
+            [
+                Some((at(3), EntryOrigin::Human)),
+                Some((at(7), EntryOrigin::Harness)),
+                Some((at(240), EntryOrigin::Harness)),
+                Some((at(999), EntryOrigin::Harness)),
+                None,
+                None,
+                Some((at(2001), EntryOrigin::Human)),
+                Some((at(2201), EntryOrigin::Harness)),
+                None,
+                Some((at(2600), EntryOrigin::Agent)),
+                Some((at(2800), EntryOrigin::Agent)),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn turn_openers_read_only_the_buckets_the_turns_reach() {
+        let (_dir, paths) = paths();
+        let (kind, agent_id) = agent();
+        let at: Timestamp = "2026-06-01T00:00:00Z".parse().unwrap();
+        let unreadable = |at: Timestamp| {
+            let name = crate::disk::buckets::bucket_file_name(
+                at,
+                crate::disk::retention::TRANSCRIPT_FILE_DAYS,
+            );
+            std::fs::create_dir_all(paths.transcript_dir.join(name)).unwrap();
+        };
+        let turns = [(at, "continue")];
+
+        unreadable(at + SignedDuration::from_hours(30 * 24));
+        assert!(turn_openers(&paths, &kind, &agent_id, &turns).is_ok_and(|o| o == [None]));
+        unreadable(at);
+        assert!(turn_openers(&paths, &kind, &agent_id, &turns).is_err());
+        assert!(turn_openers(&paths, &kind, &agent_id, &[]).is_ok_and(|o| o.is_empty()));
+    }
 
     fn at(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).expect("timestamp")

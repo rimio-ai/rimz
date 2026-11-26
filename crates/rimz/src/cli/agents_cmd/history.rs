@@ -5,6 +5,8 @@ use rimz::agents::turns::TurnRecord;
 use rimz::store::message::{
     HarnessNotice, HeaderKind, parse_message_header, prompt_is_keepalive_only, split_batched_prompt,
 };
+use rimz::transcript::{EntryOrigin, HARNESS_FROM, HUMAN_FROM, TranscriptEntry};
+use std::borrow::Cow;
 
 pub(super) fn history_agent(
     reference: String,
@@ -35,12 +37,25 @@ pub(super) fn history_agent(
         .read_transcript_messages(path, Some(&agent.agent_id))
         .with_context(|| format!("reading agent transcript `{}`", path.display()))?;
     let spend = adapter.parse_spend(path, None, &prices);
-    let mut turns = rimz::agents::turns::session_turns(
+    let turns = rimz::agents::turns::session_turns(
         &messages,
         &spend.entries,
         agent.agent_id.as_str(),
         session_open(&agent),
     );
+    let turns = turns.into_iter().map(HistoryTurn::new).collect::<Vec<_>>();
+    let keys = turns
+        .iter()
+        .map(|turn| (turn.turn.started_at, turn.body.as_str()))
+        .collect::<Vec<_>>();
+    let openers =
+        rimz::agents::turns::turn_openers(ctx.store.paths(), &agent.kind, &agent.agent_id, &keys)
+            .context("reading the RimZ transcript for turn senders")?;
+    let mut turns = turns
+        .into_iter()
+        .zip(openers)
+        .map(|(turn, opener)| turn.with_opener(opener.as_ref()))
+        .collect::<Vec<_>>();
     if json {
         if let Some(tail) = tail {
             turns = turns.split_off(turns.len().saturating_sub(tail));
@@ -60,6 +75,68 @@ pub(super) fn history_agent(
     Ok(())
 }
 
+/// One `agents history` turn: the provider's record, the label of who sent it (the
+/// FROM cell before any fold suffix, `None` when no sender is known), and the body of
+/// the prompt's first section.
+#[derive(serde::Serialize)]
+struct HistoryTurn {
+    #[serde(flatten)]
+    turn: TurnRecord,
+    from: Option<String>,
+    #[serde(skip)]
+    body: String,
+}
+
+impl HistoryTurn {
+    /// A turn labeled by its first section's header, when it has one.
+    fn new(turn: TurnRecord) -> Self {
+        let (from, body) = first_section(&turn.prompt);
+        let body = body.into_owned();
+        Self { turn, from, body }
+    }
+
+    /// A headerless turn takes its sender from the RimZ transcript entry that opened it.
+    fn with_opener(mut self, opener: Option<&TranscriptEntry>) -> Self {
+        self.from = self.from.or_else(|| match opener?.origin() {
+            EntryOrigin::Harness => Some(HARNESS_FROM.to_owned()),
+            EntryOrigin::Human => Some(HUMAN_FROM.to_owned()),
+            EntryOrigin::Agent => opener?.from.clone(),
+        });
+        self
+    }
+}
+
+/// The first section of a prompt: its header's FROM label, when it has one, and its
+/// body.
+fn first_section(prompt: &str) -> (Option<String>, Cow<'_, str>) {
+    let sections = split_batched_prompt(prompt);
+    let section = sections.first().copied().unwrap_or(prompt);
+    let Some((kind, sender, body)) = parse_message_header(section.trim_start()) else {
+        return (None, Cow::Borrowed(section));
+    };
+    let from = match kind {
+        HeaderKind::Agent => sender,
+        HeaderKind::Notice(notice) => match notice {
+            HarnessNotice::SubagentReport
+            | HarnessNotice::AgentReport
+            | HarnessNotice::TeamReport
+            | HarnessNotice::Other(_) => sender,
+            HarnessNotice::CacheKeepalive => "keepalive".to_owned(),
+            HarnessNotice::Deadline => "deadline".to_owned(),
+            HarnessNotice::Wait => "wait".to_owned(),
+            HarnessNotice::Signal => "signal".to_owned(),
+            HarnessNotice::Stage => "stage".to_owned(),
+            HarnessNotice::SubagentRestarted => "restarted".to_owned(),
+            HarnessNotice::SubagentStalled => "stalled".to_owned(),
+            HarnessNotice::TeamStalled => "nudge".to_owned(),
+            HarnessNotice::MessageUndelivered => "undelivered".to_owned(),
+            HarnessNotice::MessageQueued => "queued".to_owned(),
+            HarnessNotice::WorkflowReport => "workflow".to_owned(),
+        },
+    };
+    (Some(from), Cow::Owned(body))
+}
+
 fn session_open(agent: &AgentState) -> bool {
     agent.ended_at.is_none()
         && rimz::store::runtime::agent_liveness(agent) != rimz::store::runtime::AgentLiveness::Dead
@@ -73,7 +150,7 @@ fn session_open(agent: &AgentState) -> bool {
 
 fn render_history(
     w: &mut impl Write,
-    turns: &[TurnRecord],
+    turns: &[HistoryTurn],
     time_zone: &jiff::tz::TimeZone,
     now: jiff::Timestamp,
     max_width: usize,
@@ -81,9 +158,9 @@ fn render_history(
 ) -> std::io::Result<()> {
     let rows = turns
         .chunk_by(|left, right| {
-            left.outcome == right.outcome
-                && prompt_is_keepalive_only(&left.prompt)
-                && prompt_is_keepalive_only(&right.prompt)
+            left.turn.outcome == right.turn.outcome
+                && prompt_is_keepalive_only(&left.turn.prompt)
+                && prompt_is_keepalive_only(&right.turn.prompt)
         })
         .collect::<Vec<_>>();
     let rows = &rows[rows.len().saturating_sub(tail.unwrap_or(rows.len()))..];
@@ -92,6 +169,7 @@ fn render_history(
     let today = now.to_zoned_datetime(time_zone.clone()).date();
     let format = if rows.iter().all(|row| {
         row[0]
+            .turn
             .started_at
             .to_zoned_datetime(time_zone.clone())
             .date()
@@ -106,38 +184,13 @@ fn render_history(
             .right(&[1, 2, 3])
             .max_width(max_width);
     for row in rows {
-        let first = &row[0];
-        let turn = &row[row.len() - 1];
-        let sections = split_batched_prompt(&turn.prompt);
-        let prompt = sections.first().copied().unwrap_or(&turn.prompt);
-        let (mut from, prompt) = match parse_message_header(prompt.trim_start()) {
-            Some((kind, sender, body)) => {
-                let from = match kind {
-                    HeaderKind::Agent => sender,
-                    HeaderKind::Notice(notice) => match notice {
-                        HarnessNotice::SubagentReport
-                        | HarnessNotice::AgentReport
-                        | HarnessNotice::TeamReport
-                        | HarnessNotice::Other(_) => sender,
-                        HarnessNotice::CacheKeepalive => "keepalive".to_owned(),
-                        HarnessNotice::Deadline => "deadline".to_owned(),
-                        HarnessNotice::Wait => "wait".to_owned(),
-                        HarnessNotice::Signal => "signal".to_owned(),
-                        HarnessNotice::Stage => "stage".to_owned(),
-                        HarnessNotice::SubagentRestarted => "restarted".to_owned(),
-                        HarnessNotice::SubagentStalled => "stalled".to_owned(),
-                        HarnessNotice::TeamStalled => "nudge".to_owned(),
-                        HarnessNotice::MessageUndelivered => "undelivered".to_owned(),
-                        HarnessNotice::MessageQueued => "queued".to_owned(),
-                        HarnessNotice::WorkflowReport => "workflow".to_owned(),
-                    },
-                };
-                (from, body)
-            }
-            None => ("user".to_owned(), prompt.to_owned()),
-        };
+        let first = &row[0].turn;
+        let last = &row[row.len() - 1];
+        let turn = &last.turn;
+        let mut from = last.from.clone().unwrap_or_else(|| "-".to_owned());
         let duration = row
             .iter()
+            .map(|turn| &turn.turn)
             .filter_map(|turn| {
                 turn.ended_at
                     .map(|ended| ended.duration_since(turn.started_at).as_secs().max(0) as u64)
@@ -151,9 +204,9 @@ fn render_history(
         let tokens = turn_tokens(row);
         let cost = row
             .iter()
-            .filter_map(|turn| turn.cost_usd)
+            .filter_map(|turn| turn.turn.cost_usd)
             .reduce(|a, b| a + b);
-        let mut prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut prompt = last.body.split_whitespace().collect::<Vec<_>>().join(" ");
         if row.len() > 1 {
             from = format!("{from} ×{}", row.len());
             if let Some(span) = render::folded_span(first.started_at, turn.started_at) {
@@ -188,7 +241,7 @@ fn render_history(
     let tokens = turn_tokens(turns);
     let cost = turns
         .iter()
-        .filter_map(|turn| turn.cost_usd)
+        .filter_map(|turn| turn.turn.cost_usd)
         .filter(|cost| cost.is_finite() && *cost > 0.0)
         .fold(0.0, |total, cost| total + cost);
     writeln!(
@@ -201,8 +254,8 @@ fn render_history(
     )
 }
 
-fn turn_tokens(turns: &[TurnRecord]) -> rimz::agents::spending::EffortTokens {
-    turns.iter().fold(
+fn turn_tokens(turns: &[HistoryTurn]) -> rimz::agents::spending::EffortTokens {
+    turns.iter().map(|turn| &turn.turn).fold(
         rimz::agents::spending::EffortTokens::default(),
         |mut total, turn| {
             total.add_assign(rimz::agents::spending::EffortTokens {
@@ -220,6 +273,7 @@ fn turn_tokens(turns: &[TurnRecord]) -> rimz::agents::spending::EffortTokens {
 mod tests {
     use super::*;
     use rimz::agents::turns::TurnOutcome;
+    use rimz::transcript::TranscriptKind;
 
     #[test]
     fn renders_turn_rows_and_footer() {
@@ -240,7 +294,7 @@ mod tests {
 
         render_history(
             &mut out,
-            &turns,
+            &labeled(&turns),
             &jiff::tz::TimeZone::UTC,
             started_at,
             120,
@@ -260,50 +314,66 @@ mod tests {
     #[test]
     fn renders_envelopes_unknown_outcomes_and_mixed_dates() {
         let now: jiff::Timestamp = "2024-01-02T00:30:00Z".parse().unwrap();
+        let harness = opener(TranscriptKind::Prompt, Some(rimz::transcript::HARNESS_FROM));
         let prompts = [
             (
                 "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfix\nlogin\n\nType: WAIT\nFrom: @rimz\nContent:\nsecond section",
+                Some(harness.clone()),
                 "@planner",
                 "fix login",
             ),
             (
                 "Type: WAIT\nFrom: @rimz\nContent:\ntests finished",
+                None,
                 "wait",
                 "tests finished",
             ),
             (
                 "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nchild stalled",
+                None,
                 "stalled",
                 "child stalled",
             ),
             (
                 "Type: TEAM_STALLED\nFrom: @rimz\nContent:\nteam quiet",
+                None,
                 "nudge",
                 "team quiet",
             ),
             (
                 "Type: MESSAGE_UNDELIVERED\nFrom: @rimz\nContent:\nmessage failed",
+                None,
                 "undelivered",
                 "message failed",
             ),
             (
                 "Type: MESSAGE_QUEUED\nFrom: @rimz\nContent:\nmessage pending",
+                None,
                 "queued",
                 "message pending",
             ),
             (
                 "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nnew notice",
+                None,
                 "@rimz",
                 "new notice",
             ),
             (
                 "next task\n\nType: STAGE\nFrom: @rimz\nContent:\nImplement is yours.",
+                Some(opener(TranscriptKind::Prompt, None)),
                 "user",
                 "next task",
             ),
-            ("plain prompt", "user", "plain prompt"),
+            ("continue", Some(harness), "rimz", "continue"),
+            (
+                "Read the plan",
+                Some(opener(TranscriptKind::Message, Some("@coder"))),
+                "@coder",
+                "Read the plan",
+            ),
+            ("plain prompt", None, "-", "plain prompt"),
         ];
-        for (prompt, from, body) in prompts {
+        for (prompt, opener, from, body) in prompts {
             let first = TurnRecord {
                 started_at: now - jiff::SignedDuration::from_hours(24),
                 ended_at: None,
@@ -318,16 +388,15 @@ mod tests {
             };
             let mut second = first.clone();
             second.started_at = now;
+            let turns =
+                [first, second].map(|turn| HistoryTurn::new(turn).with_opener(opener.as_ref()));
+            assert_eq!(
+                serde_json::to_value(&turns[0]).unwrap().get("from"),
+                Some(&serde_json::json!((from != "-").then_some(from))),
+                "{prompt}"
+            );
             let mut out = Vec::new();
-            render_history(
-                &mut out,
-                &[first, second],
-                &jiff::tz::TimeZone::UTC,
-                now,
-                240,
-                None,
-            )
-            .unwrap();
+            render_history(&mut out, &turns, &jiff::tz::TimeZone::UTC, now, 240, None).unwrap();
             let rendered = String::from_utf8(out).unwrap();
             assert_eq!(rendered.lines().count() - 2, 2, "{rendered}");
             assert!(rendered.contains("FROM"));
@@ -343,6 +412,25 @@ mod tests {
             assert!(rendered.contains("2024-01-02 00:30"));
             assert!(rendered.contains("2 turns · 60 fresh + 140 cached tokens · $0.0000"));
         }
+    }
+
+    fn opener(entry: TranscriptKind, from: Option<&str>) -> TranscriptEntry {
+        let mut opener = TranscriptEntry::new(
+            jiff::Timestamp::UNIX_EPOCH,
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::ids::AgentSessionId::from("session"),
+            entry,
+            String::new(),
+        );
+        opener.from = from.map(str::to_owned);
+        opener
+    }
+
+    fn labeled(turns: &[TurnRecord]) -> Vec<HistoryTurn> {
+        turns
+            .iter()
+            .map(|turn| HistoryTurn::new(turn.clone()))
+            .collect()
     }
 
     fn keepalive(age: &str) -> String {
@@ -367,6 +455,10 @@ mod tests {
     }
 
     fn render(turns: &[TurnRecord], tail: Option<usize>) -> String {
+        render_labeled(&labeled(turns), tail)
+    }
+
+    fn render_labeled(turns: &[HistoryTurn], tail: Option<usize>) -> String {
         let mut out = anstream::StripStream::new(Vec::new());
         render_history(
             &mut out,
@@ -578,7 +670,10 @@ mod tests {
         last.cost_usd = Some(0.031);
         last.outcome = TurnOutcome::Open;
         turns.push(last);
-        let rendered = render(&turns, Some(3));
+        let mut turns = labeled(&turns);
+        turns[0] = HistoryTurn::new(turns[0].turn.clone())
+            .with_opener(Some(&opener(TranscriptKind::Prompt, None)));
+        let rendered = render_labeled(&turns, Some(3));
         assert_eq!(rendered.lines().count() - 2, 3, "{rendered}");
         for doc in [
             include_str!("../../../../../docs/reference/cli/agents.md"),

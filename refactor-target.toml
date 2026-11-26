@@ -11509,6 +11509,11 @@ reason = "Hook ingress dedupe and routine CLI readers select weekly files agains
 
 [[verdict]]
 kind = "item"
+key = "agents::turns::turn_openers"
+reason = "agents history labels a headerless turn's sender from the entry that opened it."
+
+[[verdict]]
+kind = "item"
 key = "transcript::recent_floor"
 reason = "Ask, answer, channel and view readers share the same 30-day horizon."
 

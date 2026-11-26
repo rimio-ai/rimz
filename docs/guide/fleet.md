@@ -169,7 +169,7 @@ START    DUR     FRESH     COST  OUTCOME  FROM          PROMPT
 5 turns · 5k fresh + 48k cached tokens · $0.4550
 ```
 
-`↘` is fresh input and `↗` output, summed over each row's turns; the footer sums these as `fresh` and counts cache reads and writes separately as `cached`. `FROM` tells you who sent the prompt, without burying its text in a delivery header. An unknown outcome reads `-`, not an interruption. Dates disappear when every shown row starts today.
+`↘` is fresh input and `↗` output, summed over each row's turns; the footer sums these as `fresh` and counts cache reads and writes separately as `cached`. `FROM` tells you who sent the prompt, without burying its text in a delivery header. Plain text reads `user` when you typed it, `rimz` when RimZ did (the `continue` after a compaction, say), and `-` when RimZ's own transcript has no record of who sent it. An unknown outcome reads `-`, not an interruption. Dates disappear when every shown row starts today.
 
 **Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead:
 
