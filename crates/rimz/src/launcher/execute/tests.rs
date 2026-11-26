@@ -407,6 +407,67 @@ fn committed_launch_counts_once_even_when_run_publication_fails() {
     });
 }
 
+/// A session workflow leader is resident when its spec resolves, under no flags, to a team: a
+/// team whose seat is a `tier:` definition resolves, and that definition alone is no team.
+#[test]
+fn a_session_leader_on_a_team_of_tiered_seats_is_resident() {
+    let fixture = Fixture::new();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("tiered", "agent: codex\ntier: principal\ntools: [Read]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBody."),
+        )
+        .unwrap();
+    }
+    let mut machine = crate::config::MachineConfig::default();
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    machine.agents.profiles = loaded.agent_profiles;
+    machine.agents.teams =
+        toml::from_str("[forge]\nroles = [{role = 'lead', profile = 'tiered'}]").unwrap();
+    let machine = Arc::new(machine);
+    let mut leader = fixture.leader();
+    leader.lifecycle = crate::store::run::RunLifecycle::Session;
+    let resident = ["forge", "tiered"].map(|spec| {
+        let request = crate::launcher::LayoutRequest {
+            context: LaunchContext {
+                machine: machine.clone(),
+                ..fixture.fresh.context.clone()
+            },
+            launch: crate::launcher::LayoutLaunch {
+                spec: Some(spec.to_owned()),
+                ..Default::default()
+            },
+            cwd: None,
+            allow_in_place: false,
+            entry: RoomEntry::Birth,
+            starter: crate::launcher::Starter::Workflow,
+            workflow: Some(crate::agents::WorkflowAttemptRef {
+                run: crate::ids::WorkflowRunId::new(),
+                seq: 1,
+                role: crate::agents::WorkflowAttemptRole::Step,
+            }),
+            automation: None,
+            leader_run: None,
+        };
+        crate::launcher::resident_leader(&request, &leader)
+    });
+    assert_eq!(resident, [true, false]);
+}
+
 #[test]
 fn session_lifecycle_reaches_the_published_record() {
     let fixture = Fixture::new();

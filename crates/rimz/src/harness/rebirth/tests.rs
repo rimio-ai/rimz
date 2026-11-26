@@ -722,6 +722,60 @@ fn rebirth_warns_when_a_team_tab_cannot_materialize() {
     }
 }
 
+/// A fresh seat resolves as a launch with no flags does: a coder seat on a `tier:` definition
+/// written on Codex, whose tier lists only a Claude model, starts on Claude.
+#[test]
+fn a_fresh_team_seat_on_a_tiered_definition_starts_on_the_kind_its_tier_picks() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("forge");
+    let fixture = Fixture::new(&[("planner", &worktree, true)]);
+    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+    let root = dir.path().join("home");
+    std::fs::create_dir_all(root.join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("tiered", "agent: codex\ntier: principal\ntools: [Read]\n"),
+    ] {
+        std::fs::write(
+            root.join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBody."),
+        )
+        .unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        &root,
+        crate::config::definitions::SkillCheck::Skip,
+        &crate::config::CommandsConfig::default(),
+        &root.join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut machine = team_machine();
+    machine.agents.profiles.0.extend(loaded.agent_profiles.0);
+    machine.agents.teams.0.get_mut("forge").unwrap().roles[1].profile = "tiered".to_owned();
+    let plan = fixture.inspect_with(&machine, false);
+    let outcome = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
+    assert!(outcome.tabs.iter().any(|tab| tab.label == "#forge"));
+    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
+    let projection = store
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .expect("projection");
+    let coder = projection
+        .agents
+        .iter()
+        .find(|agent| agent.role.as_deref() == Some("coder"))
+        .expect("fresh coder identity");
+    assert_eq!(
+        (
+            coder.kind.as_str(),
+            coder.tier.as_ref().map(|stamp| stamp.model.as_str())
+        ),
+        ("claude", Some("fable"))
+    );
+}
+
 #[test]
 fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
     let dir = tempfile::tempdir().unwrap();
