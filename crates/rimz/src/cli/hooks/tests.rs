@@ -6424,3 +6424,213 @@ fn an_antigravity_quota_stop_holds_a_detached_run_and_a_403_fails_it_on_apply_an
         );
     }
 }
+
+#[test]
+fn a_result_file_turn_end_with_no_result_parks_and_queues_one_reminder_until_a_turn_spends_it() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::message::{DeliveryGate, MessageSender};
+    use rimz::store::run::{ParkCause, RunStatus};
+
+    for write_after_reminder in [false, true] {
+        let (_dir, store) = hooks_test_store();
+        let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+        // A scoped child of `lead`, whose file lies in lead's unit as the launch writes it.
+        let path = store
+            .paths()
+            .temp_unit_dir(Some("lead"))
+            .join("rf-child.output");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let session = hooks_test_workspace(Some("main")).session_name;
+        let mut lead = AgentLifecycleObservation::new(
+            Some("lead-session".into()),
+            LifecycleSignal::Registered,
+        );
+        lead.agent_name = Some("lead".into());
+        let mut child =
+            AgentLifecycleObservation::new(Some("rf-child".into()), LifecycleSignal::Registered);
+        child.agent_name = Some("rf-child".into());
+        child.launch.parent_agent_id = Some("lead-session".into());
+        child.launch.parent_agent_kind = Some(adapter.spec().kind_id());
+        child.launch.launch_depth = Some(1);
+        for observation in [&lead, &child] {
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: &session,
+                    agent_kind: adapter.spec().kind_id(),
+                    event_name: "seed",
+                    observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+        store
+            .attach_agent_pane(
+                &adapter.spec().kind_id(),
+                &"rf-child".into(),
+                None,
+                &rimz::ids::LoginName::default(),
+                &session,
+                &rimz::ids::PaneId::parse("tmux:%7").unwrap(),
+                rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "rf-child",
+                    std::process::id(),
+                    None,
+                ),
+                None,
+                Some(rimz::config::Isolation::Scoped),
+                None,
+            )
+            .unwrap();
+        let seen = std::path::Path::new("/tmp/rf-child.output");
+        let mut run = rimz::store::run::RunRecord::new(
+            store.paths().workspace_id.clone(),
+            adapter.spec().kind_id(),
+            rimz::agents::PermissionMode::Auto,
+            "task".into(),
+            "/tmp/hooks-test".into(),
+        );
+        run.subagent = true;
+        run.status = RunStatus::Running;
+        run.agent_id = Some("rf-child".into());
+        run.result_file = Some(path.clone());
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        let env = std::collections::BTreeMap::from([(
+            rimz::harness::launch::ENV_RUN_ID.to_owned(),
+            run.run_id.to_string(),
+        )]);
+        let feed = |event: &str, extra: serde_json::Value| {
+            let mut payload =
+                serde_json::json!({"session_id": "rf-child", "cwd": "/tmp/hooks-test"});
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let workspace = hooks_test_workspace(Some("main"));
+            let frame = rimz::store::ingress::HookIngress {
+                soft_compact_claim: None,
+                boot_id: None,
+                schema_version: "1".into(),
+                event_id: rimz::EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: adapter.spec().kind_id(),
+                event: Some(event.to_owned()),
+                payload: serde_json::to_string(&payload).unwrap(),
+                cwd: workspace.project_root.clone(),
+                hook_pid: std::process::id(),
+                env: env.clone(),
+            };
+            with_frame_env(&frame, FrameAttempt::First, || {
+                let mut decoded = adapter.decode_hook_in(event, &payload, &env).unwrap();
+                handle_lifecycle_hook(
+                    &workspace,
+                    &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                    adapter,
+                    &mut decoded,
+                    &payload,
+                    rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                    &hooks_test_globals(),
+                )
+                .unwrap();
+            });
+            rimz::harness::run::load(store.paths(), &run.run_id).unwrap()
+        };
+        let stop = || {
+            feed(
+                "Stop",
+                serde_json::json!({"last_assistant_message": "a reply"}),
+            )
+        };
+        feed("SessionStart", serde_json::json!({"source": "startup"}));
+        feed("UserPromptSubmit", serde_json::json!({"prompt": "task"}));
+
+        let parked = stop();
+        assert_eq!(
+            (parked.status, parked.parked_on),
+            (RunStatus::Running, Some(ParkCause::Message))
+        );
+        let reminder = parked
+            .result_reminder
+            .clone()
+            .expect("the reminder is issued");
+        assert!(!reminder.spent);
+        let notices = || store.list_messages().unwrap();
+        let queued = notices();
+        assert_eq!(queued.len(), 1, "one reminder notice");
+        let notice = &queued[0];
+        assert_eq!(notice.message_id, reminder.message_id);
+        assert_eq!(notice.sender, MessageSender::System);
+        assert_eq!(notice.gate, DeliveryGate::Done, "delivered only at rest");
+        assert_eq!(notice.about_run.as_ref(), Some(&run.run_id));
+        assert_eq!(
+            notice.text,
+            format!(
+                "Your launcher has no result for this task yet: `{}` has not been written since \
+                 the task arrived. It reads only that file. Write your whole result there now, \
+                 then end your turn. If the task is not finished, write what you have and what \
+                 is left.",
+                seen.display()
+            )
+        );
+        assert_eq!(stop(), parked, "a replayed Stop changes nothing");
+        assert_eq!(notices().len(), 1, "a replayed Stop queues nothing more");
+        if !write_after_reminder {
+            let mut timed = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+            timed.timeout = Some(std::time::Duration::from_secs(1800));
+            timed.warn = vec![std::time::Duration::from_secs(180)];
+            timed.grace = Some(std::time::Duration::from_secs(180));
+            timed.deadline_at = Some(jiff::Timestamp::now() + std::time::Duration::from_secs(150));
+            rimz::harness::run::create(store.paths(), &timed).unwrap();
+            let payload = serde_json::json!({"session_id":"rf-child", "cwd":"/tmp/hooks-test", "tool_name":"Read", "tool_input":{}, "tool_response":{}});
+            let frame = rimz::store::ingress::HookIngress {
+                soft_compact_claim: None,
+                boot_id: None,
+                schema_version: "1".into(),
+                event_id: rimz::EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: adapter.spec().kind_id(),
+                event: Some("PostToolUse".to_owned()),
+                payload: serde_json::to_string(&payload).unwrap(),
+                cwd: "/tmp/hooks-test".into(),
+                hook_pid: std::process::id(),
+                env: env.clone(),
+            };
+            let reply = with_frame_env(&frame, FrameAttempt::First, || {
+                super::attach_context(
+                    &store,
+                    adapter,
+                    rimz::RuntimeOwnerKind::Agent,
+                    "PostToolUse",
+                    &payload,
+                    None,
+                )
+            });
+            assert_eq!(
+                reply,
+                rimz::agents::HookReply::Json(serde_json::json!({"hookSpecificOutput":{
+                    "hookEventName":"PostToolUse",
+                    "additionalContext":format!(
+                        "<system_reminder>\n2m left. Wrap up now: finish only what is in flight, then write what is done, what is unverified, and what remains to `{}`.\n</system_reminder>",
+                        seen.display()
+                    )
+                }})),
+                "the deadline text names the file W4 and the launch text name"
+            );
+        }
+
+        let woke = feed(
+            "UserPromptSubmit",
+            serde_json::json!({"prompt": notice.text}),
+        );
+        assert!(woke.result_reminder.unwrap().spent);
+        if write_after_reminder {
+            std::fs::write(&path, "the result").unwrap();
+        }
+        let settled = stop();
+        assert_eq!(settled.status, RunStatus::Completed);
+        assert_eq!(
+            settled.last_message.as_deref(),
+            write_after_reminder.then_some("the result")
+        );
+    }
+}

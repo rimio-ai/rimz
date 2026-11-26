@@ -257,6 +257,15 @@ pub enum ParkCause {
     Message,
 }
 
+/// The one reminder a result-file run's answer gets for a clean turn end with no result: the id of
+/// its notice, and whether it is spent (a turn started, or another park replaced its park, since
+/// it was issued).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResultReminder {
+    pub message_id: crate::ids::MessageId,
+    pub spent: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoppedTurn {
     pub at: Timestamp,
@@ -497,6 +506,9 @@ pub struct RunRecord {
     /// rather than from its final reply; set once at launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_file: Option<PathBuf>,
+    /// The open answer's reminder, once issued; cleared when a follow-up reopens the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_reminder: Option<ResultReminder>,
 }
 
 /// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
@@ -528,6 +540,20 @@ where
 }
 
 impl RunRecord {
+    /// The id of the reminder notice this run's open answer still waits on: issued, unspent, and
+    /// holding the run's park.
+    pub fn pending_result_reminder(&self) -> Option<&crate::ids::MessageId> {
+        self.result_reminder
+            .as_ref()
+            .filter(|reminder| {
+                !reminder.spent
+                    && !self.status.is_terminal()
+                    && self.parked_at.is_some()
+                    && self.parked_on == Some(ParkCause::Message)
+            })
+            .map(|reminder| &reminder.message_id)
+    }
+
     /// Whether a wrapper or hook in `pane` no longer speaks for this run: a restart
     /// handed the run over from `pane`, or, once any restart has, another pane
     /// bound it since. Gating the second test on the stamp keeps a run never
@@ -705,6 +731,7 @@ impl RunRecord {
             turn_opened_at: None,
             handed_over_from: None,
             result_file: None,
+            result_reminder: None,
         }
     }
 

@@ -2652,7 +2652,9 @@ path = "crates/rimz/src/harness"
 # `soft_compact::{CeilingCompactRequest, ceiling_due, enforce_ceiling_agents}` share the RimZ-enforced auto-compact ceiling watch across sidebar refresh and CLI helper (+3).
 # `idle_stop::rested_since` shares the rest clock with the subagent wrapper's idle-close duty (+1).
 # `spec::validate_team_structure` shares file-level team shape checks with `config::effective` (+1).
-surface-budget = 1380
+# `ExecRequest::result_file`, `LayoutRunParams::result_file`, and `run::result_file::remove` carry and clean a subagent's result file across launch and exec (+2).
+# `run::result_file::{seen, queue_reminder}`: the lifecycle hook queues a result-file subagent's reminder, and the deadline texts name its file as it sees it (+2).
+surface-budget = 1384
 
 [[verdict]]
 kind = "item"
@@ -4880,7 +4882,9 @@ path = "crates/rimz/src/store"
 # carry a claimed reminder rung from the hook-context hook's ingress frame to the fold (+3).
 # store::message::ReturningMember is the launch and epoch a `rimz teams resume` prompt lists per member, read by the stage re-wake (+1).
 # SidebarLaunched carries a card's launched agents and teams from the launched lane to the renderer (+1).
-surface-budget = 704
+# run::ResultReminder and RunRecord::pending_result_reminder: the fold, the strand check, and the
+# notice premise read one reminder state (+2).
+surface-budget = 706
 
 [[verdict]]
 kind = "item"

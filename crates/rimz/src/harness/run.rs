@@ -2,7 +2,7 @@
 
 mod peer;
 pub mod report;
-pub(crate) mod result_file;
+pub mod result_file;
 mod team;
 pub use peer::{
     create_peer_prompt, describes_latest_turn, fail_peer_run, fail_peer_turn, open_peer_run,
@@ -530,6 +530,18 @@ pub fn settle_stranded_park(
         }
         Ok(None) => {}
     }
+    // A reminder park waits on its own notice, which no owed wake counts; an unreadable queue
+    // holds it, and a notice never queued (its queue write failed) is queued again by its id.
+    if let Some(reminder) = record.pending_result_reminder() {
+        let live = match crate::store::message::read_record(store.paths(), reminder) {
+            Ok(Some(notice)) => !notice.status.is_terminal(),
+            Ok(None) => result_file::requeue_reminder(store, &record.run_id),
+            Err(_) => true,
+        };
+        if live {
+            return Ok(ParkCheck::Live);
+        }
+    }
     if previous != Some(parked_at) {
         return Ok(ParkCheck::Stranded(parked_at));
     }
@@ -670,6 +682,14 @@ fn write_record_locked<T>(
             let result_file = record.result_file.clone().filter(|_| newly_terminal);
             if let Some(path) = &result_file {
                 record.last_message = result_file::read(path);
+                // An answer its launcher is not owed reports nothing when this take finds no
+                // result; the turn-end fold leaves that to this read.
+                if record.last_message.is_none()
+                    && record.status == RunStatus::Completed
+                    && !owes_result(&record)
+                {
+                    record.joined_at = Some(now);
+                }
             }
             // Waiters read the record unlocked, so a terminal record must imply its file.
             // A detached plain run is outside the fleet, so this is its only publisher.
@@ -1480,12 +1500,10 @@ fn record_lifecycle_at(
     {
         return Ok(None);
     }
-    let owed = if observation.signal.terminal_disposition() == Some(TerminalDisposition::Completed)
-    {
-        owed()
-    } else {
-        None
-    };
+    let completed =
+        observation.signal.terminal_disposition() == Some(TerminalDisposition::Completed);
+    let owed = if completed { owed() } else { None };
+    let result_written = completed && result_file::written(paths, run_id);
     let (record, transition, _) = write_record(paths, run_id, |record, now| {
         let observed_at = observed_at.unwrap_or(now);
         Ok(
@@ -1498,6 +1516,7 @@ fn record_lifecycle_at(
                 now,
                 observed_at,
                 owed,
+                result_written,
             ) {
                 LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
                 LifecycleFold::Updated => RecordMutation::Write(LifecycleFold::Updated),
@@ -1762,6 +1781,7 @@ fn fold_lifecycle(
     now: Timestamp,
     observed_at: Timestamp,
     owed: Option<OwedWake>,
+    result_written: bool,
 ) -> LifecycleFold {
     let reopen = record.lifecycle == RunLifecycle::Turn
         && record.status.is_terminal()
@@ -1842,6 +1862,7 @@ fn fold_lifecycle(
         record.failure_tail = None;
         record.limit_failure = None;
         record.cancel_reason = None;
+        record.result_reminder = None;
     }
     let holds_interrupts = super::deadline::holds_interrupts(record);
     if holds_interrupts
@@ -1889,6 +1910,9 @@ fn fold_lifecycle(
             record.interrupted_at = None;
             record.parked_at = None;
             record.parked_on = None;
+            if let Some(reminder) = record.result_reminder.as_mut() {
+                reminder.spent = true;
+            }
             end_limit_hold(record, observed_at, now);
             return LifecycleFold::Updated;
         }
@@ -1906,6 +1930,13 @@ fn fold_lifecycle(
                 "supervised run parked on an owed wake",
             );
             return LifecycleFold::Updated;
+        }
+        if disposition == TerminalDisposition::Completed
+            && record.result_file.is_some()
+            && !result_written
+            && let Some(fold) = hold_for_result(record, now)
+        {
+            return fold;
         }
         record.status = match disposition {
             TerminalDisposition::Completed => RunStatus::Completed,
@@ -1936,6 +1967,11 @@ fn fold_lifecycle(
     // A hold ends before a message rearm, so its unused span cannot shorten
     // the rearmed deadline.
     let unheld = in_turn && end_limit_hold(record, observed_at, now);
+    let spent = in_turn
+        && record
+            .result_reminder
+            .as_mut()
+            .is_some_and(|reminder| !std::mem::replace(&mut reminder.spent, true));
     let unparked = record.parked_at.is_some() && in_turn;
     if unparked {
         record.parked_at = None;
@@ -1959,6 +1995,7 @@ fn fold_lifecycle(
     if !reopen
         && !unparked
         && !unheld
+        && !spent
         && !turn_opened
         && !stop_changed
         && record.status != RunStatus::Pending
@@ -1973,6 +2010,40 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
+}
+
+/// A result-file run's clean turn end with no result, before it settles: the first one its
+/// launcher is owed parks on the reminder (`ParkCause::Message`, so the reminded turn gets a
+/// fresh deadline), a replay of it changes nothing, and one its launcher is not owed settles,
+/// joined by the take in `write_record_locked` when it finds no result, so it reports nothing
+/// and earlier answers stay owed. `None` settles.
+fn hold_for_result(record: &mut RunRecord, now: Timestamp) -> Option<LifecycleFold> {
+    if !owes_result(record) {
+        return None;
+    }
+    match &record.result_reminder {
+        None => {
+            record.status = RunStatus::Running;
+            record.parked_at = Some(now);
+            record.parked_on = Some(ParkCause::Message);
+            record.interrupted_at = None;
+            record.result_reminder = Some(crate::store::run::ResultReminder {
+                message_id: crate::ids::MessageId::new(),
+                spent: false,
+            });
+            Some(LifecycleFold::Updated)
+        }
+        Some(reminder) if !reminder.spent && record.parked_at.is_some() => {
+            Some(LifecycleFold::Ignored)
+        }
+        Some(_) => None,
+    }
+}
+
+/// Whether `record`'s launcher is owed its current answer's result: the launch's own answer, or
+/// a follow-up a message opened, never one typed in the pane.
+fn owes_result(record: &RunRecord) -> bool {
+    record.follow_ups == 0 || !record.opened_by.is_empty()
 }
 
 /// Give the turn opening at `now` the run's whole timeout again: `deadline_at`

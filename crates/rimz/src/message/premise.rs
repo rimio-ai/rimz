@@ -147,8 +147,9 @@ fn ended_park(store: &Store, message: &MessageRecord, row: Option<&AgentState>) 
     (!open).then(|| "provider-limit park closed before delivery".to_owned())
 }
 
-/// The withdrawal reason of a notice about a run that ended or is gone, or of a deadline stop
-/// whose open run no longer holds the claimed stop rung (`harness::deadline::stop_claimed`).
+/// The withdrawal reason of a notice about a run that ended or is gone, of a deadline stop whose
+/// open run no longer holds the claimed stop rung (`harness::deadline::stop_claimed`), or of a
+/// result-file run's reminder notice that its run no longer waits on.
 fn ended_run(store: &Store, message: &MessageRecord) -> Option<String> {
     let run_id = message.about_run.as_ref()?;
     match crate::harness::run::load(store.paths(), run_id) {
@@ -164,6 +165,13 @@ fn ended_run(store: &Store, message: &MessageRecord) -> Option<String> {
             ) && !crate::harness::deadline::stop_claimed(&run) =>
         {
             Some("deadline stop superseded before delivery".to_owned())
+        }
+        Ok(run)
+            if run.result_file.is_some()
+                && message.sender == MessageSender::System
+                && run.pending_result_reminder() != Some(&message.message_id) =>
+        {
+            Some("result reminder spent before delivery".to_owned())
         }
         Ok(_) => None,
         Err(RunStoreErr::NotFound(_)) => Some("child run gone before delivery".to_owned()),
@@ -265,6 +273,60 @@ mod tests {
                 command.message_id
             ))
         );
+    }
+
+    /// A result-file run's reminder notice holds only while that run's reminder is unspent and
+    /// still names it.
+    #[test]
+    fn a_result_reminder_notice_is_withdrawn_once_its_reminder_is_spent_or_replaced() {
+        use crate::store::run::{ParkCause, ResultReminder, RunRecord, RunStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::parse("ws_000000000000000000000000").unwrap();
+        let store = Store::open(
+            crate::StatePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+            crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        let receiver = AgentState::stub("claude", "child", AgentStatus::Idle);
+        let mut run = RunRecord::new(
+            workspace_id.clone(),
+            crate::ids::AgentKind::new_unchecked("claude"),
+            crate::agents::PermissionMode::Auto,
+            "task".to_owned(),
+            dir.path().to_path_buf(),
+        );
+        run.subagent = true;
+        run.status = RunStatus::Running;
+        run.parked_at = Some(Timestamp::now());
+        run.parked_on = Some(ParkCause::Message);
+        run.result_file = Some(dir.path().join("child.output"));
+        let notice = MessageRecord::new(
+            workspace_id,
+            &receiver,
+            "remind".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::System)
+        .with_about_run(Some(run.run_id.clone()));
+        let judge = |reminder: Option<ResultReminder>| {
+            let mut run = run.clone();
+            run.result_reminder = reminder;
+            crate::harness::run::create(store.paths(), &run).unwrap();
+            ended_run(&store, &notice)
+        };
+        let reminder = |message_id: &crate::ids::MessageId, spent| ResultReminder {
+            message_id: message_id.clone(),
+            spent,
+        };
+        assert_eq!(judge(Some(reminder(&notice.message_id, false))), None);
+        let spent = Some("result reminder spent before delivery".to_owned());
+        assert_eq!(judge(Some(reminder(&notice.message_id, true))), spent);
+        assert_eq!(
+            judge(Some(reminder(&crate::ids::MessageId::new(), false))),
+            spent
+        );
+        assert_eq!(judge(None), spent);
     }
 
     /// A continue parked on the agent's provider limit reads the park under its holder's own kind
