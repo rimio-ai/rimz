@@ -1,11 +1,11 @@
 //! Chain resolution and profile materialization for both definition namespaces.
 
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
+use crate::config::engine::{self, Engine, keeps_inherited_model};
 use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
@@ -220,13 +220,6 @@ fn lists_agent_tool(fm: &AgentFrontmatter, kind: &str) -> bool {
             ToolSet::parse(&bare).ok()
         })
         .is_some_and(|tools| agents::grants_tool(kind, tools.bases(), "Agent"))
-}
-
-/// Whether a model inherited from `from_kind` survives a switch to `to_kind`.
-pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str) -> bool {
-    from_kind == to_kind
-        || agents::definition_model_kind(model) == Some(to_kind)
-        || agents::keeps_model(to_kind, model)
 }
 
 fn merge_crafts(
@@ -462,45 +455,16 @@ pub(in crate::config) fn build_tier_candidates(
     }
 }
 
-fn walk_tier_renders(
-    path: &Path,
-    tiers: &crate::config::tiers::TierConfig,
-    tier: ModelTier,
-    preference: &TierPreference,
-    effort: Option<&str>,
-    renders: &BTreeMap<String, Profile>,
-    exclusions: &BTreeMap<String, DefinitionErr>,
-) -> Result<Profile, DefinitionErr> {
-    // Any one model clears the tier, so the first failed dependency met is the one to fix.
-    let blocked = OnceCell::new();
-    let pick = tiers
-        .walk(
-            tier,
-            preference,
-            |kind| {
-                let error: &DefinitionErr = exclusions.get(kind)?;
-                if matches!(error.cause, DefinitionCause::DependsOnFailed { .. }) {
-                    blocked.get_or_init(|| error.cause.clone());
-                }
-                Some(error.message.as_str())
-            },
-            |_, _| None::<()>,
-        )
-        .map_err(|error| {
-            DefinitionErr::new(path, error.to_string())
-                .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
-        })?;
-    let mut selected = renders
-        .get(&pick.kind)
-        .cloned()
-        .ok_or_else(|| DefinitionErr::new(path, format!("no eligible build for {}", pick.kind)))?;
-    selected.model = Some(pick.model);
-    selected.effort = effort.map(str::to_owned);
-    selected.model_tier = Some(TierProvenance {
-        tier,
-        fell_back: pick.used_tier.is_some(),
+/// The render a tier walk picked, carrying the tier's model and provenance and the chain's
+/// effort.
+fn tiered((engine, mut render): (Engine, Profile), effort: Option<&str>) -> Profile {
+    render.model = engine.model.named().map(str::to_owned);
+    render.effort = effort.map(str::to_owned);
+    render.model_tier = engine.tier.map(|stamp| TierProvenance {
+        tier: stamp.tier,
+        fell_back: stamp.used_tier.is_some(),
     });
-    Ok(selected)
+    render
 }
 
 impl DefinitionSourceInner {
@@ -729,51 +693,48 @@ impl DefinitionSourceInner {
                     .map_err(|error: crate::config::tiers::TierError| {
                         DefinitionErr::new(&self.path, error.to_string())
                     })?;
-            let candidates = build_tier_candidates(
+            let mut build = |kind: &str, variant, candidate_model: Option<&str>| {
+                let mut candidate_fm = fm.clone();
+                candidate_fm.model = candidate_model.map(str::to_owned);
+                keeps_own_subagents(&mut candidate_fm, kind);
+                finish_profile(
+                    &self.context,
+                    &self.path,
+                    &self.name,
+                    self.namespace,
+                    self.seat.as_ref(),
+                    kind,
+                    variant,
+                    false,
+                    self.is_project,
+                    &subagent_validator,
+                    candidate_fm,
+                    craft_sources.clone(),
+                    system_prompt_file.clone(),
+                    args_for_kind(&merged_args, kind),
+                    craft,
+                )
+            };
+            let picked = engine::walk_tier(
                 &self.context.shared.tiers,
                 tier,
                 &effective_preference,
-                |kind, candidate_model| {
-                    let mut candidate_fm = fm.clone();
-                    candidate_fm.model = candidate_model.map(str::to_owned);
-                    keeps_own_subagents(&mut candidate_fm, kind);
-                    let variant = effective_variant.filter(|_| kind == effective_kind);
-                    finish_profile(
-                        &self.context,
-                        &self.path,
-                        &self.name,
-                        self.namespace,
-                        self.seat.as_ref(),
-                        kind,
-                        variant,
-                        false,
-                        self.is_project,
-                        &subagent_validator,
-                        candidate_fm,
-                        craft_sources.clone(),
-                        system_prompt_file.clone(),
-                        args_for_kind(&merged_args, kind),
-                        craft,
-                    )
+                &effective_kind,
+                effective_variant,
+                &mut engine::Probe {
+                    build: &mut build,
+                    unavailable: &mut |_, _| None,
                 },
-            );
-            let built = walk_tier_renders(
-                &self.path,
-                &self.context.shared.tiers,
-                tier,
-                &effective_preference,
-                fm.effort.as_deref(),
-                &candidates.renders,
-                &candidates.exclusions,
-            )?;
-            (built, fm)
+            )
+            .map_err(|error| error.into_definition_err(&self.path))?;
+            (tiered(picked, fm.effort.as_deref()), fm)
         } else {
             let (kind, variant) = if let Some(raw_target) = target_kind {
                 let target_rt = agents::find_runtime(raw_target);
                 let kind = target_rt.map_or(raw_target, |rt| rt.kind());
                 let variant = target_rt
                     .and_then(|rt| rt.variant)
-                    .or_else(|| effective_variant.filter(|_| kind == effective_kind));
+                    .or_else(|| engine::variant(kind, &effective_kind, effective_variant));
                 if model.is_none() {
                     let from_kind = if base_writes_engine {
                         effective_kind.as_str()
@@ -794,17 +755,17 @@ impl DefinitionSourceInner {
                     } else {
                         agents::definition_model_kind(explicit_model).unwrap_or("")
                     };
-                    (kind, effective_variant.filter(|_| kind == effective_kind))
-                } else if agents::keeps_model(&self.natural_kind, explicit_model) {
-                    (self.natural_kind.as_str(), self.natural_variant)
-                } else if let Some(implied) = agents::definition_model_kind(explicit_model) {
                     (
-                        implied,
-                        self.natural_variant
-                            .filter(|_| implied == self.natural_kind),
+                        kind,
+                        engine::variant(kind, &effective_kind, effective_variant),
                     )
                 } else {
-                    (self.natural_kind.as_str(), self.natural_variant)
+                    let kind = engine::model_moves_to(Some(&self.natural_kind), explicit_model)
+                        .unwrap_or(&self.natural_kind);
+                    (
+                        kind,
+                        engine::variant(kind, &self.natural_kind, self.natural_variant),
+                    )
                 }
             } else {
                 let kind = effective_kind.as_str();
@@ -1474,22 +1435,15 @@ impl Resolver<'_> {
         if agents::runs_other_providers_models(&profile.agent) {
             runtime_kind = Some(profile.agent.clone());
             preference.family = Some(profile.agent.clone());
-        } else if let Some(kind) = fm.model.as_deref().and_then(|model| {
-            agents::definition_model_kind(model)
-                .filter(|_| !agents::keeps_model(&profile.agent, model))
-        }) {
-            if profile.agent != kind {
-                profile.variant = None;
-            }
-            profile.agent = kind.to_owned();
-        } else if fm.model.is_some() {
-            profile.agent = runtime_kind.clone().ok_or_else(|| {
-                DefinitionErr::new(
-                    path,
-                    "model names no runtime and the chain has no family; set `agent:`",
-                )
-            })?;
         }
+        let (kind, variant) = engine::file_kind(&engine::Lines {
+            kind: &profile.agent,
+            variant: profile.variant,
+            model: fm.model.as_deref(),
+            family: runtime_kind.as_deref(),
+        })
+        .map_err(|error| error.into_definition_err(path))?;
+        (profile.agent, profile.variant) = (kind.to_owned(), variant);
         let tier = fm
             .tier
             .as_deref()
@@ -1569,15 +1523,20 @@ impl Resolver<'_> {
         }
         let mut profile = if let Some(tier) = tier {
             // The probe covers native families and model-client engines; the walk skips exclusions.
-            walk_tier_renders(
-                path,
+            let picked = engine::pick_tier(
                 &self.scope.context.shared.tiers,
                 tier,
                 &preference,
-                fm.effort.as_deref(),
-                &renders,
+                (&profile.agent, profile.variant),
+                renders
+                    .iter()
+                    .map(|(kind, render)| (kind.clone(), render))
+                    .collect(),
                 &exclusions,
-            )?
+                &mut |_, _| None,
+            )
+            .map_err(|error| error.into_definition_err(path))?;
+            tiered((picked.0, picked.1.clone()), fm.effort.as_deref())
         } else {
             source
                 .build_with_craft(None, None, None, &mut craft_state, false)

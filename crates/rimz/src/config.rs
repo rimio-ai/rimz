@@ -42,6 +42,7 @@ mod diagnosis;
 mod display;
 mod edit;
 pub mod effective;
+pub(crate) mod engine;
 mod gc;
 mod glyphs;
 mod harness;
