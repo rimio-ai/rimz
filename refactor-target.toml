@@ -1321,7 +1321,8 @@ upward-dependencies = [
 # MachineConfig::failed_definition_details shares the machine failure map across effective::load_with_roots and rebirth (+1).
 # LoadedDefinitions::built_in_base_kinds names the kinds on the built-in kind base for `agents validate`,
 # and DefinitionSource::built_in_base hands that base to the launch chain in harness::spec (+2).
-surface-budget = 322
+# engine::variant and engine::keeps_inherited_model are the one variant rule and model-survival predicate the definition builder and launch resolution share (+2).
+surface-budget = 324
 
 [[verdict]]
 kind = "item"

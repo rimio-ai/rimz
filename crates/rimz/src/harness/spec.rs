@@ -1857,7 +1857,7 @@ fn apply_role_under(
         if x.writes_engine {
             effective.model = None;
         } else if let Some(role_model) = effective.model.as_deref()
-            && !crate::config::definitions::keeps_inherited_model(
+            && !crate::config::engine::keeps_inherited_model(
                 original_kind,
                 &resolved.kind,
                 role_model,
@@ -1946,14 +1946,13 @@ fn non_markdown_engine(
     } else {
         original_kind.to_owned()
     };
-    let variant = if let Some(x) = x {
-        x.resolved
-            .variant
-            .filter(|_| kind == x.resolved.kind.as_str())
-    } else {
-        target_rt
+    let variant = match x {
+        Some(x) => {
+            crate::config::engine::variant(&kind, x.resolved.kind.as_str(), x.resolved.variant)
+        }
+        None => target_rt
             .and_then(|rt| rt.variant)
-            .or_else(|| original_variant.filter(|_| kind == original_kind))
+            .or_else(|| crate::config::engine::variant(&kind, original_kind, original_variant)),
     };
     (kind, variant)
 }
@@ -2082,7 +2081,7 @@ fn definition_launch_layers<'a>(
             .then(|| l_def.written_model())
             .flatten()
             .filter(|model| {
-                !crate::config::definitions::keeps_inherited_model(
+                !crate::config::engine::keeps_inherited_model(
                     &chain.original_kind,
                     &built.agent,
                     model,

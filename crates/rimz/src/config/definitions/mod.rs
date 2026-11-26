@@ -16,8 +16,9 @@ pub mod review;
 mod team;
 mod traits;
 
+#[cfg(test)]
+pub(crate) use super::engine::keeps_inherited_model;
 pub use agent::DefinitionSource;
-pub(crate) use agent::keeps_inherited_model;
 pub(super) use agent::{TierCandidates, build_tier_candidates};
 pub(in crate::config) use project::{ProjectProfilesInput, resolve_project_profiles};
 pub use traits::ConsensusPieces;
@@ -319,7 +320,7 @@ fn failed_kind_base(path: &Path) -> String {
 }
 
 impl DefinitionErr {
-    fn new(path: &Path, message: impl AsRef<str>) -> Self {
+    pub(in crate::config) fn new(path: &Path, message: impl AsRef<str>) -> Self {
         Self {
             path: path.to_owned(),
             cause: DefinitionCause::Invalid,
@@ -331,7 +332,7 @@ impl DefinitionErr {
         }
     }
 
-    fn with_cause(mut self, cause: DefinitionCause) -> Self {
+    pub(in crate::config) fn with_cause(mut self, cause: DefinitionCause) -> Self {
         self.cause = cause;
         self
     }

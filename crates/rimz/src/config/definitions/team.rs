@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::agents;
+use crate::config::engine;
 use crate::config::{FlipCompact, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding};
 use crate::harness::team_prompt::BUILT_IN_CONSENSUS;
 use crate::store::message::AutoCompact;
@@ -356,19 +357,8 @@ impl SeatLoader<'_> {
             DefinitionErr::new(path, format!("team '{name}' role '{handle}' {message}"))
         })?;
         fm.inherit(&self.chain_frontmatter(definition, path)?);
-        let kind = fm
-            .model
-            .as_deref()
-            .and_then(|model| {
-                // A model the role writes routes by its id; only the chain's own stays.
-                let kept = if role.model.is_some() {
-                    agents::runs_other_providers_models(&original.agent)
-                } else {
-                    agents::keeps_model(&original.agent, model)
-                };
-                agents::definition_model_kind(model).filter(|_| !kept)
-            })
-            .unwrap_or(&original.agent);
+        // A model the role writes routes by its id; only the chain's own stays.
+        let kind = engine::seat_kind(&original.agent, fm.model.as_deref(), role.model.is_some());
         fm.agent = if role.tier.is_some() && !agents::runs_other_providers_models(kind) {
             None
         } else if role.model.is_some() {
@@ -382,8 +372,10 @@ impl SeatLoader<'_> {
         } else {
             Some(kind.to_owned())
         };
-        if fm.agent.as_deref() == Some(original.agent.as_str())
-            && let Some(variant) = original.variant
+        if let Some(variant) = fm
+            .agent
+            .as_deref()
+            .and_then(|agent| engine::variant(agent, &original.agent, original.variant))
         {
             fm.agent = Some(variant.name.to_owned());
         }
