@@ -15,9 +15,10 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 20] = [
+const ALL_TOOLS: [&str; 21] = [
     "lsp",
-    "wait",
+    "shell",
+    "watch",
     "subagent",
     "agent",
     "team",
@@ -1418,7 +1419,7 @@ fn launch_env_serves_the_launchs_selection_in_its_directory() {
     let mut command = env.rimz();
     command
         .args(["mcp", "serve", "--launch-env"])
-        .env("RIMZ_MCP_SERVE", "rimz-wait:always,rimz-lsp")
+        .env("RIMZ_MCP_SERVE", "rimz-watch:always,rimz-lsp")
         .env("RIMZ_MCP_CWD", &launched);
     let mut server = McpServer::spawn(command);
     server.initialize();
@@ -1433,7 +1434,7 @@ fn launch_env_serves_the_launchs_selection_in_its_directory() {
             .collect::<Vec<_>>(),
         [
             (json!("lsp"), None),
-            (json!("wait"), always),
+            (json!("watch"), always),
             (json!("tasks"), None),
             (json!("join"), None),
             (json!("stop"), None),
@@ -1485,15 +1486,17 @@ fn launch_env_with_nothing_served_exits_at_once() {
     let output = env
         .rimz()
         .args(["mcp", "serve", "--launch-env"])
-        .env("RIMZ_MCP_SERVE", "rimz-wait,github")
+        .env("RIMZ_MCP_SERVE", "rimz-watch,github")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(
-            "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named once"
+            "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-shell, \
+             rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, \
+             rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard) with an optional \
+             `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -1536,16 +1539,16 @@ fn marked_capabilities_carry_their_load_mode_in_the_listing() {
         "--only",
         "rimz-lsp",
         "--only",
-        "rimz-wait",
+        "rimz-watch",
         "--only",
         "rimz-notes",
     ];
-    let marks = ["--always", "rimz-lsp", "--deferred", "rimz-wait"];
+    let marks = ["--always", "rimz-lsp", "--deferred", "rimz-watch"];
     assert_eq!(
         meta(&[&only[..], &marks].concat()),
         [
             (json!("lsp"), always),
-            (json!("wait"), deferred),
+            (json!("watch"), deferred),
             (json!("tasks"), None),
             (json!("join"), None),
             (json!("stop"), None),
@@ -1588,10 +1591,10 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
         (output.status, text(&output.stdout), text(&output.stderr))
     };
 
-    let (status, stdout, stderr) = run(&["--json", "--only", "rimz-wait"]);
+    let (status, stdout, stderr) = run(&["--json", "--only", "rimz-watch"]);
     assert!(status.success(), "{stderr}");
     let printed: Value = serde_json::from_str(&stdout).expect("tools json");
-    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    let mut server = serve(&env, &["--only", "rimz-watch"]);
     server.initialize();
     let listing = server.request(2, "tools/list", json!({}));
     assert_eq!(printed, listing["result"]);
@@ -1619,7 +1622,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
+            "expected one of rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{stderr}"
     );
@@ -1712,12 +1715,12 @@ fn only_serves_the_named_capability() {
             .collect::<Vec<_>>(),
         [json!("lsp")]
     );
-    server.start_call(2, "wait", json!({"trigger": "in", "value": "5m"}));
+    server.start_call(2, "watch", json!({"when": "pr=merged"}));
     let wait = server.reply(&json!(2));
     assert!(wait["error"]["code"].is_i64(), "{wait}");
     server.start_call(3, "no_such_tool", json!({}));
     assert!(server.reply(&json!(3))["error"]["code"].is_i64());
-    server.start_call(4, "guide", json!({"name": "rimz-wait/conditions"}));
+    server.start_call(4, "guide", json!({"name": "rimz-watch/conditions"}));
     let guide = server.reply(&json!(4));
     assert_eq!(guide["error"]["code"], -32602, "{guide}");
 
@@ -1734,7 +1737,7 @@ fn only_serves_the_named_capability() {
 #[test]
 fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
     let env = Env::new();
-    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    let mut server = serve(&env, &["--only", "rimz-watch"]);
     server.initialize();
     let tools = server.request(1, "tools/list", json!({}));
     let names: Vec<&str> = tools["result"]["tools"]
@@ -1743,22 +1746,22 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["wait", "tasks", "join", "stop", "guide"]);
+    assert_eq!(names, ["watch", "tasks", "join", "stop", "guide"]);
 
-    let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-wait/conditions"}));
+    let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-watch/conditions"}));
     assert!(!is_error, "{text}");
     assert_eq!(
         Ok(text.as_str()),
-        Wording::built_in().guide(&[Capability::Wait], "rimz-wait/conditions")
+        Wording::built_in().guide(&[Capability::Watch], "rimz-watch/conditions")
     );
-    for (id, name) in [(3, "rimz-wait/none"), (4, "rimz-lsp/conditions")] {
+    for (id, name) in [(3, "rimz-watch/none"), (4, "rimz-lsp/conditions")] {
         let (failure, is_error) = server.answer(id, "guide", json!({"name": name}));
         assert!(is_error, "{failure}");
         assert_eq!(
             failure,
             json!({
                 "error": format!("no guide {name:?}"),
-                "hint": "this launch has: rimz-wait/conditions, rimz-wait/traps",
+                "hint": "this launch has: rimz-watch/conditions",
             }),
         );
     }
@@ -1782,21 +1785,21 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
 #[test]
 fn a_replacement_reaches_every_reader_of_the_wording() {
     let env = Env::new();
-    let mcps = env.rimz_home().join("mcps/rimz-wait");
+    let mcps = env.rimz_home().join("mcps/rimz-watch");
     std::fs::create_dir_all(&mcps).unwrap();
     let list = format!(
         "Wait outside your turn, replaced. {}",
         "Each wait, its name. ".repeat(40)
     );
-    std::fs::write(mcps.join("wait.md"), format!("{list}\n")).unwrap();
-    std::fs::write(mcps.join("instructions.md"), "Use `wait`, replaced.\n").unwrap();
+    std::fs::write(mcps.join("watch.md"), format!("{list}\n")).unwrap();
+    std::fs::write(mcps.join("instructions.md"), "Use `watch`, replaced.\n").unwrap();
 
-    let mut server = serve(&env, &["--only", "rimz-wait"]);
+    let mut server = serve(&env, &["--only", "rimz-watch"]);
     let init = server.initialize();
     let instructions = init["result"]["instructions"].as_str().unwrap().to_owned();
     assert_eq!(
         instructions.lines().nth(1),
-        Some("Use `wait`, replaced."),
+        Some("Use `watch`, replaced."),
         "{instructions}"
     );
     let listing = server.request(1, "tools/list", json!({}));
@@ -1804,14 +1807,14 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "wait")
+        .find(|tool| tool["name"] == "watch")
         .map(|tool| tool["description"].clone());
     assert_eq!(described, Some(json!(list.trim())));
     server.close();
 
     let output = env
         .rimz()
-        .args(["mcp", "tools", "--json", "--only", "rimz-wait"])
+        .args(["mcp", "tools", "--json", "--only", "rimz-watch"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -1821,10 +1824,10 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let tokens: u64 = stdout
         .lines()
-        .find(|line| line.split_whitespace().nth(1) == Some("wait"))
+        .find(|line| line.split_whitespace().nth(1) == Some("watch"))
         .and_then(|line| line.split_whitespace().last())
         .and_then(|cell| cell.strip_prefix('~')?.parse().ok())
-        .unwrap_or_else(|| panic!("no wait row: {stdout}"));
+        .unwrap_or_else(|| panic!("no watch row: {stdout}"));
     assert!(tokens > 150, "{stdout}");
     assert!(output.stderr.is_empty(), "{output:?}");
 
@@ -1832,7 +1835,7 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
         &env,
         "agents",
         "cwait",
-        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-wait]",
+        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-watch]",
         "",
     );
     let bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
@@ -1862,12 +1865,12 @@ fn a_replacement_reaches_every_reader_of_the_wording() {
     );
     assert!(
         out.contains(&format!(
-            "· rimz-wait · load default · text {}\n",
-            mcps.join("wait.md").display()
+            "· rimz-watch · load default · text {}\n",
+            mcps.join("watch.md").display()
         )),
         "{out}"
     );
-    assert!(out.contains("## wait\n~"), "{out}");
+    assert!(out.contains("## watch\n~"), "{out}");
     assert_eq!(out.matches(" · text ").count(), 2, "{out}");
 }
 
@@ -1881,7 +1884,7 @@ fn a_bad_wording_file_warns_on_the_launch_plan() {
         &env,
         "agents",
         "cwait",
-        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-wait]",
+        "description: cwait profile\nagent: claude\ntools: [Bash]\nmcps: [rimz-watch]",
         "",
     );
     let explain = || {
@@ -1905,20 +1908,20 @@ fn a_bad_wording_file_warns_on_the_launch_plan() {
     let mcps = env.rimz_home().join("mcps");
     assert!(!explain().contains("mcps"), "{}", explain());
 
-    std::fs::create_dir_all(mcps.join("rimz-wait")).unwrap();
+    std::fs::create_dir_all(mcps.join("rimz-watch")).unwrap();
     std::fs::create_dir_all(mcps.join("rimz-lsp")).unwrap();
-    std::fs::write(mcps.join("rimz-wait/instructions.md"), " \n").unwrap();
-    std::fs::write(mcps.join("rimz-lsp/wait.md"), "Misplaced.\n").unwrap();
+    std::fs::write(mcps.join("rimz-watch/instructions.md"), " \n").unwrap();
+    std::fs::write(mcps.join("rimz-lsp/watch.md"), "Misplaced.\n").unwrap();
     std::fs::write(mcps.join("rimz-lsp/lsp.md"), "\n").unwrap();
     let stderr = explain();
     let rejected = format!(
         "rimz: {} is not used, so the built-in text is served: it is empty\n",
-        mcps.join("rimz-wait/instructions.md").display()
+        mcps.join("rimz-watch/instructions.md").display()
     );
     let misplaced = format!(
-        "rimz: {} is ignored: RimZ has no wording file rimz-lsp/wait.md; it belongs at {}\n",
-        mcps.join("rimz-lsp/wait.md").display(),
-        mcps.join("rimz-wait/wait.md").display()
+        "rimz: {} is ignored: RimZ has no wording file rimz-lsp/watch.md; it belongs at {}\n",
+        mcps.join("rimz-lsp/watch.md").display(),
+        mcps.join("rimz-watch/watch.md").display()
     );
     assert!(stderr.contains(&rejected), "{stderr}");
     assert!(stderr.contains(&misplaced), "{stderr}");
@@ -2001,11 +2004,11 @@ fn notes_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(error.contains("no language server"), "{failure}");
     assert!(!error.contains("Usage:"), "{failure}");
 
-    let (failure, is_error) = server.answer(6, "wait", json!({"trigger": "pid", "value": "one"}));
+    let (failure, is_error) = server.answer(6, "shell", json!({"command": "  "}));
     assert!(is_error, "{failure}");
     assert_eq!(
         failure["error"],
-        json!("invalid pid `one`: a process id from 1 to 2147483647"),
+        json!("a shell needs a command"),
         "{failure}"
     );
 
@@ -2022,11 +2025,8 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (start, is_error) = server.answer(
-        1,
-        "wait",
-        json!({"trigger": "in", "value": "1h", "label": "via mcp"}),
-    );
+    let (start, is_error) =
+        server.answer(1, "watch", json!({"when": "pr=merged", "label": "via mcp"}));
     assert!(!is_error, "{start}");
     let (listed, is_error) = server.answer(2, "tasks", json!({}));
     assert!(!is_error, "{listed}");
@@ -2036,14 +2036,14 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     };
     assert_eq!(row["about"], json!("via mcp"), "{listed}");
     let id = row["id"].as_str().expect("the wait's id");
-    assert!(id.starts_with("wait:"), "{listed}");
+    assert!(id.starts_with("watch:"), "{listed}");
     assert_eq!(
         start,
         json!({
             "id": id,
             "status": "running",
             "stop": format!("stop({{id: \"{id}\"}})"),
-            "report": "a message to you when the wait fires",
+            "report": "a message to you when the condition reads true",
         })
     );
     let (added, is_error) = server.answer(
@@ -2061,7 +2061,7 @@ fn a_call_as_an_agent_resolves_its_home_room_and_caller() {
     );
 }
 
-/// A `wait` label is one line of 1 to 60 characters, trimmed, as `rimz wait
+/// A `watch` label is one line of 1 to 60 characters, trimmed, as `rimz watch
 /// --label` takes it: any other label fails the call and arms nothing.
 #[test]
 fn a_wait_label_is_one_trimmed_line_as_the_command_takes_it() {
@@ -2072,11 +2072,8 @@ fn a_wait_label_is_one_trimmed_line_as_the_command_takes_it() {
     server.initialize();
     let long = "x".repeat(61);
     for (id, label) in [(1, "first\nsecond"), (2, long.as_str()), (3, "   ")] {
-        let (failure, is_error) = server.answer(
-            id,
-            "wait",
-            json!({"trigger": "in", "value": "1h", "label": label}),
-        );
+        let (failure, is_error) =
+            server.answer(id, "watch", json!({"when": "pr=merged", "label": label}));
         assert!(is_error, "{failure}");
         assert_eq!(
             failure["error"],
@@ -2090,8 +2087,8 @@ fn a_wait_label_is_one_trimmed_line_as_the_command_takes_it() {
     assert_eq!(listed["tasks"], json!([]), "a refused label arms nothing");
     let (start, is_error) = server.answer(
         5,
-        "wait",
-        json!({"trigger": "in", "value": "1h", "label": "  fix it  "}),
+        "watch",
+        json!({"when": "pr=merged", "label": "  fix it  "}),
     );
     assert!(!is_error, "{start}");
     let (listed, _) = server.answer(6, "tasks", json!({}));
@@ -2108,10 +2105,10 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "in", "value": "2h"}));
+    let (start, is_error) = server.answer(1, "watch", json!({"when": "pr=merged"}));
     assert!(!is_error, "{start}");
     let id = start["id"].as_str().unwrap();
-    let name = id.trim_start_matches("wait:");
+    let name = id.trim_start_matches("watch:");
     let (booked, is_error) = server.answer(2, "self_stop", json!({}));
     assert!(!is_error, "{booked}");
     assert_eq!(booked["booking"], json!("booked"), "{booked}");
@@ -2604,7 +2601,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             "pi",
             "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']",
         ),
-        ("poff", "pi", "[rimz-lsp, rimz-wait]\ncode-mode: off"),
+        ("poff", "pi", "[rimz-lsp, rimz-watch]\ncode-mode: off"),
         (
             "pgrant",
             "pi",
@@ -2618,7 +2615,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         (
             "ooff",
             "opencode",
-            "['rimz-lsp:deferred', 'rimz-wait', 'github:always']\ncode-mode: off",
+            "['rimz-lsp:deferred', 'rimz-watch', 'github:always']\ncode-mode: off",
         ),
         (
             "cmute",
@@ -2673,12 +2670,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Plan"), "{out}");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
-    assert_eq!(tool_load(&out, "wait"), "default", "{out}");
+    assert_eq!(tool_load(&out, "watch"), "default", "{out}");
     assert_eq!(tool_load(&out, "guide"), "default", "{out}");
     assert!(
         out.contains(&format!(
@@ -2711,7 +2708,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
     for skill in [
         "rimz-lsp",
-        "rimz-wait",
+        "rimz-watch",
         "rimz-subagents",
         "rimz-agents",
         "rimz-teams",
@@ -2729,7 +2726,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
     let out = explain("cflip");
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
-    assert_eq!(tool_load(&out, "wait"), "always", "{out}");
+    assert_eq!(tool_load(&out, "watch"), "always", "{out}");
     assert_eq!(tool_load(&out, "notes"), "always", "{out}");
     assert_eq!(tool_load(&out, "guide"), "always", "{out}");
     let guide_line = out
@@ -2755,7 +2752,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
@@ -2786,7 +2783,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         format!("always; the mcps entry `rimz-lsp:always` {coded}"),
         "{out}"
     );
-    assert_eq!(tool_load(&out, "wait"), "default", "{out}");
+    assert_eq!(tool_load(&out, "shell"), "default", "{out}");
     assert!(
         out.contains(&format!(
             "rimz-control, rimz-notes, rimz-blackboard; the mcps entry `rimz:deferred` {coded}\n"
@@ -2806,12 +2803,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("pmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "direct", "{out}");
-    assert_eq!(tool_load(&out, "wait"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "watch"), "deferred", "{out}");
     assert_eq!(tool_load(&out, "guide"), "deferred", "{out}");
     assert!(
         out.contains("\n  /mcp in the Pi session: the rimz server and each tool's exposure\n"),
@@ -2825,13 +2822,13 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(
-        out.contains("\n  RIMZ_MCP_SERVE=rimz-lsp:always,rimz-wait:deferred,"),
+        out.contains("\n  RIMZ_MCP_SERVE=rimz-lsp:always,rimz-shell:deferred,"),
         "{out}"
     );
     assert!(out.contains("\n  RIMZ_PI_MCP_EXPOSURE={"), "{out}");
     assert!(out.contains("\n## lsp\n"), "{out}");
     let out = explain("poff");
-    assert!(out.contains("serves rimz-lsp, rimz-wait\n"), "{out}");
+    assert!(out.contains("serves rimz-lsp, rimz-watch\n"), "{out}");
     assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
     assert_eq!(tool_load(&out, "tasks"), "deferred", "{out}");
     assert!(
@@ -2880,12 +2877,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("omark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "code mode", "{out}");
-    assert_eq!(tool_load(&out, "wait"), "native", "{out}");
+    assert_eq!(tool_load(&out, "watch"), "native", "{out}");
     assert_eq!(tool_load(&out, "guide"), "native", "{out}");
     assert!(out.contains("only github (policies)\n"), "{out}");
     assert!(
@@ -2906,7 +2903,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             .is_some_and(|line| line.ends_with(&format!(" · {capability} · load {load}")))
     };
     assert!(served("lsp", "rimz-lsp", "code mode"), "{out}");
-    assert!(served("wait", "rimz-wait", "native"), "{out}");
+    assert!(served("watch", "rimz-watch", "native"), "{out}");
     assert!(served("guide", "-", "native"), "{out}");
     // An inherited inline value prints none of its own members, and its policies decide which of
     // the user's servers stay, in either spelling.
@@ -2944,7 +2941,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
          RimZ tool native, and OpenCode has no tool search outside `execute`",
         "{out}"
     );
-    assert_eq!(tool_load(&out, "wait"), "native", "{out}");
+    assert_eq!(tool_load(&out, "watch"), "native", "{out}");
     assert!(
         out.contains(
             "only github (policies); the mcps entry `github:always` is not applied: OpenCode \
@@ -2958,7 +2955,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -3056,7 +3053,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -3071,7 +3068,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -3309,11 +3306,8 @@ fn a_call_under_the_codex_entrys_env_vars_resolves_the_same_agent() {
     command.env_clear().envs(kept);
     let mut server = McpServer::spawn(command);
     server.initialize();
-    let (start, is_error) = server.answer(
-        1,
-        "wait",
-        json!({"trigger": "in", "value": "1h", "label": "cleared"}),
-    );
+    let (start, is_error) =
+        server.answer(1, "watch", json!({"when": "pr=merged", "label": "cleared"}));
     assert!(!is_error, "{start}");
     let (listed, is_error) = server.answer(2, "tasks", json!({}));
     assert!(!is_error, "{listed}");
@@ -3400,10 +3394,10 @@ fn parent_env_fills_the_names_the_servers_own_environment_lacks() {
 #[test]
 fn parent_env_names_the_home_the_wording_is_read_from() {
     let env = Env::new();
-    let mcps = env.rimz_home().join("mcps/rimz-wait");
+    let mcps = env.rimz_home().join("mcps/rimz-watch");
     std::fs::create_dir_all(&mcps).unwrap();
     std::fs::write(
-        mcps.join("wait.md"),
+        mcps.join("watch.md"),
         "Wait outside your turn, from the parent's home.\n",
     )
     .unwrap();
@@ -3414,7 +3408,7 @@ fn parent_env_names_the_home_the_wording_is_read_from() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "wait")
+        .find(|tool| tool["name"] == "watch")
         .map(|tool| tool["description"].clone());
     assert_eq!(
         described,
@@ -3438,11 +3432,7 @@ fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
     crate::common::wait::register_calling_agent(&env);
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let (text, is_error) = server.call(
-        1,
-        "wait",
-        json!({"trigger": "run", "value": "sleep 1; printf fired"}),
-    );
+    let (text, is_error) = server.call(1, "shell", json!({"command": "sleep 1; printf fired"}));
     assert!(!is_error, "{text}");
     nix::sys::signal::killpg(
         nix::unistd::Pid::from_raw(server.pid() as i32),
@@ -3672,12 +3662,12 @@ fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
     server.initialize();
     let (start, is_error) = server.answer(
         1,
-        "wait",
-        json!({"trigger": "in", "value": "1h", "label": "nightly check"}),
+        "watch",
+        json!({"when": "pr=merged", "label": "nightly check"}),
     );
     assert!(!is_error, "{start}");
     let id = start["id"].as_str().unwrap().to_owned();
-    let (listed, is_error) = server.answer(2, "tasks", json!({"kind": "wait"}));
+    let (listed, is_error) = server.answer(2, "tasks", json!({"kind": "watch"}));
     assert!(!is_error, "{listed}");
     let [row] = listed["tasks"].as_array().unwrap().as_slice() else {
         panic!("one task: {listed}");
@@ -3692,7 +3682,7 @@ fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
         ),
         (
             &json!(id),
-            &json!("wait"),
+            &json!("watch"),
             &json!("running"),
             &json!("holds"),
             &json!("nightly check")
@@ -3729,17 +3719,17 @@ fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
         failure,
         json!({
             "error": "`toolu_01ABC` is no id of a thing RimZ started",
-            "hint": "an id is a kind (subagent, agent, team, workflow, schedule, or wait), a \
-                     colon, and a name, as `tasks` lists it; end a task or subagent your \
+            "hint": "an id is a kind (subagent, agent, team, workflow, schedule, shell, or \
+                     watch), a colon, and a name, as `tasks` lists it; end a task or subagent your \
                      provider started with your provider's own tool",
         })
     );
-    let (failure, is_error) = server.answer(11, "stop", json!({"id": "wait:../x"}));
+    let (failure, is_error) = server.answer(11, "stop", json!({"id": "watch:../x"}));
     assert!(is_error, "{failure}");
     assert_eq!(
         failure,
         json!({
-            "error": "invalid wait name `../x`: schedule name `../x` must be non-empty and use \
+            "error": "invalid watch name `../x`: schedule name `../x` must be non-empty and use \
                       only letters, digits, `-`, or `_`",
             "hint": "`tasks` lists what you started, by id",
         }),
@@ -3754,6 +3744,183 @@ fn tasks_join_and_stop_act_on_a_wait_by_its_id() {
             "hint": "`tasks` lists what you started, by id",
         })
     );
+}
+
+/// `join` on a shell claims its outcome: it blocks until the command exits and answers the exit,
+/// the output file and its size, and no message brings the outcome a second time.
+#[test]
+fn join_on_a_shell_answers_its_outcome_and_no_message_comes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let release = env.home_root.join("release-join");
+    let command = format!(
+        "while [ ! -e {} ]; do sleep 0.05; done; printf joined-marker; exit 3",
+        release.display()
+    );
+    let (start, is_error) = server.answer(1, "shell", json!({"command": command}));
+    assert!(!is_error, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    let name = id.strip_prefix("shell:").unwrap().to_owned();
+    server.start_call(2, "join", json!({"id": id, "timeout": "60s"}));
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while crate::common::wait::wait_instances(&env).0[&name]
+        .wait_meta
+        .as_ref()
+        .and_then(|meta| meta.joined_until)
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the join never claimed the shell"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    std::fs::write(&release, "").unwrap();
+    let (joined, is_error) = tool_answer("join", &server.reply(&json!(2)));
+    assert!(!is_error, "{joined}");
+    let output = joined["result"].as_str().expect("the output file");
+    assert_eq!(std::fs::read_to_string(output).unwrap(), "joined-marker");
+    let detail = joined["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("exit 3 after ") && detail.ends_with(" · <1k tokens, 1 line"),
+        "{joined}"
+    );
+    assert_eq!(
+        joined,
+        json!({"id": id, "status": "done", "result": output, "detail": detail}),
+        "{joined}"
+    );
+    assert!(
+        !crate::common::wait::wait_instances(&env)
+            .0
+            .contains_key(&name)
+    );
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert!(messages.is_empty(), "the outcome came twice: {messages:?}");
+    let (again, _) = server.answer(3, "join", json!({"id": id}));
+    assert_eq!(
+        again, joined,
+        "a shell that has exited answers its outcome again"
+    );
+    let unknown = "shell:shell-never-armed";
+    let (never, _) = server.answer(4, "join", json!({"id": unknown}));
+    assert_eq!(
+        never,
+        json!({"id": unknown, "status": "ended", "hint": GONE})
+    );
+}
+
+/// A shell canceled while a join holds its claim ends that join at once as `ended`, saying it
+/// was canceled, and `rimz loop logs` shows the cancel.
+#[test]
+fn a_join_on_a_shell_canceled_under_it_ends_at_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(1, "shell", json!({"command": "sleep 300"}));
+    assert!(!is_error, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    let name = id.strip_prefix("shell:").unwrap().to_owned();
+    server.start_call(2, "join", json!({"id": id, "timeout": "50s"}));
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while crate::common::wait::wait_instances(&env).0[&name]
+        .wait_meta
+        .as_ref()
+        .and_then(|meta| meta.joined_until)
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the join never claimed the shell"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let canceled_at = Instant::now();
+    let (stopped, is_error) = server.answer(3, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    let (joined, is_error) = tool_answer("join", &server.reply(&json!(2)));
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({"id": id, "status": "ended", "hint": "it was canceled before its command exited"}),
+    );
+    assert!(
+        canceled_at.elapsed() < Duration::from_secs(30),
+        "the join waited out its deadline: {:?}",
+        canceled_at.elapsed()
+    );
+    let logs = crate::common::wait::wait_ok(&env, &["loop", "logs", &name]);
+    assert!(logs.contains("canceled"), "{logs}");
+}
+
+/// A join by an owner the shell's outcome does not go to (here the parent of the child that
+/// armed it) claims nothing: it answers the outcome from history and the child gets its message.
+#[test]
+fn a_join_on_a_childs_shell_answers_and_leaves_the_childs_message() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    crate::common::wait::register_agent(
+        &env,
+        "kid-session",
+        "launch-kid",
+        "kid",
+        child_of_caller(),
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let release = env.home_root.join("release-kid");
+    let command = format!(
+        "while [ ! -e {} ]; do sleep 0.05; done; exit 3",
+        release.display()
+    );
+    let (start, is_error) = server.answer(1, "shell", json!({"command": command}));
+    assert!(!is_error, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    let name = id.strip_prefix("shell:").unwrap().to_owned();
+    // The shell reads as the child's: its outcome goes to the child.
+    let path = crate::common::wait::loop_instances_path(&env);
+    let mut rows: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    rows[&name]["wait"] = json!({"kind": "claude", "session": "launch-kid", "handle": "@kid"});
+    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    server.start_call(2, "join", json!({"id": id, "timeout": "60s"}));
+    std::thread::sleep(Duration::from_millis(500));
+    let claim = crate::common::wait::wait_instances(&env).0[&name]
+        .wait_meta
+        .as_ref()
+        .and_then(|meta| meta.joined_until);
+    std::fs::write(&release, "").unwrap();
+    let (joined, is_error) = tool_answer("join", &server.reply(&json!(2)));
+    assert!(!is_error, "{joined}");
+    assert_eq!(claim, None, "the parent's join claimed the child's shell");
+    let detail = joined["detail"].as_str().unwrap_or_default();
+    assert!(
+        joined["status"] == "done" && joined.get("hint").is_none() && detail.starts_with("exit 3"),
+        "{joined}"
+    );
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    let messages = loop {
+        let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+        messages.extend(history);
+        if !messages.is_empty() || Instant::now() >= deadline {
+            break messages;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let recipients: Vec<_> = messages
+        .iter()
+        .map(|message| message.agent_id.as_str())
+        .collect();
+    assert_eq!(recipients, ["kid-session"], "{messages:?}");
 }
 
 /// A launched child whose run is terminal reads as `done` in `tasks` while its pane lingers,
@@ -3855,7 +4022,7 @@ fn stop_refuses_a_subscription_another_armed_for_the_caller() {
     let mut server = serve_as_agent(&env);
     server.initialize();
 
-    let (listed, is_error) = server.answer(3, "tasks", json!({"kind": "wait"}));
+    let (listed, is_error) = server.answer(3, "tasks", json!({"kind": "watch"}));
     assert!(!is_error, "{listed}");
     let ids: Vec<&Value> = listed["tasks"]
         .as_array()
@@ -3863,21 +4030,24 @@ fn stop_refuses_a_subscription_another_armed_for_the_caller() {
         .iter()
         .map(|row| &row["id"])
         .collect();
-    assert_eq!(ids, [&json!("wait:own-ping")], "{listed}");
-    let (failure, is_error) = server.answer(1, "stop", json!({"id": "wait:team-ping"}));
+    assert_eq!(ids, [&json!("watch:own-ping")], "{listed}");
+    let (failure, is_error) = server.answer(1, "stop", json!({"id": "watch:team-ping"}));
     assert!(is_error, "{failure}");
     assert_eq!(
         failure,
         json!({
-            "error": "wait:team-ping was started by another agent",
+            "error": "watch:team-ping was started by another agent",
             "hint": "stop and join act on what you started, or what an agent you started \
                      started; `tasks` lists it",
         })
     );
     assert!(wait_instances(&env).0.contains_key("team-ping"));
-    let (stopped, is_error) = server.answer(2, "stop", json!({"id": "wait:own-ping"}));
+    let (stopped, is_error) = server.answer(2, "stop", json!({"id": "watch:own-ping"}));
     assert!(!is_error, "{stopped}");
-    assert_eq!(stopped, json!({"id": "wait:own-ping", "status": "stopped"}));
+    assert_eq!(
+        stopped,
+        json!({"id": "watch:own-ping", "status": "stopped"})
+    );
     assert!(!wait_instances(&env).0.contains_key("own-ping"));
 }
 
@@ -4840,7 +5010,7 @@ fn a_server_follows_its_rooms_build_in_place_and_announces_its_tools() {
     server.initialize();
     let checkout = checkout_with_fifo(&env, "follow-7c2d");
     let command = format!("cat {}", checkout.join("held.md").display());
-    let (start, is_error) = server.answer(1, "wait", json!({"trigger": "run", "value": command}));
+    let (start, is_error) = server.answer(1, "shell", json!({"command": command}));
     assert!(!is_error, "{start}");
     let held = HeldFifo::when_read(&checkout);
     // A read that overlaps the call thread's exit can miss the child as it moves to the main

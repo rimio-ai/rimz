@@ -4364,11 +4364,11 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
         ),
         (
             "codex",
-            "---\ndescription: Codex base\ncapabilities: [bash, rimz-wait]\n---\nCodex.\n",
+            "---\ndescription: Codex base\ncapabilities: [bash, rimz-watch]\n---\nCodex.\n",
         ),
         (
             "switched",
-            "---\ndescription: Switched\nagent: codex\ncapabilities: [bash, rimz-wait]\n---\n",
+            "---\ndescription: Switched\nagent: codex\ncapabilities: [bash, rimz-watch]\n---\n",
         ),
     ] {
         std::fs::write(home.path().join(format!("agents/{name}.md")), body).unwrap();
@@ -4379,7 +4379,7 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
         "[profiles.child]\ndescription = 'Child'\nagent = 'claude'\n\
          [profiles.own]\ndescription = 'Own'\nagent = 'claude'\nskills = ['rimz']\n\
          [profiles.served]\ndescription = 'Served'\nagent = 'claude'\nmcps = ['rimz']\n\
-         [profiles.listed]\ndescription = 'Listed'\nagent = 'claude'\nskills = ['work', 'rimz-wait']\n\
+         [profiles.listed]\ndescription = 'Listed'\nagent = 'claude'\nskills = ['work', 'rimz-watch']\n\
          [profiles.reflects]\ndescription = 'Reflects'\nagent = 'claude'\nskills = ['work', 'rimz-reflect']\n",
     )
     .unwrap();
@@ -4403,7 +4403,7 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
     );
     assert_eq!(
         grant(resolve_profile_under("switched", Some("claude"), &launch.profiles, None).unwrap()),
-        Some(vec!["rimz-wait".to_owned()])
+        Some(vec!["rimz-watch".to_owned()])
     );
     // A skill named exactly `rimz` is the user's own, as is a `rimz-*` skill alone; in `mcps`,
     // `rimz` is RimZ's server.
@@ -4426,7 +4426,7 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
         .definition_failure_for("listed")
         .expect("listed refuses at build time");
     assert!(
-        listed_err.contains("[profiles.listed]") && listed_err.contains("rimz-wait"),
+        listed_err.contains("[profiles.listed]") && listed_err.contains("rimz-watch"),
         "{listed_err}"
     );
 }

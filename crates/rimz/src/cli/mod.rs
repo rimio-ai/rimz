@@ -313,7 +313,8 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
         Some(Subcmd::Subagents(args)) => subagents::run(*args, &globals),
-        Some(Subcmd::Wait(args)) => wait::run(*args, &globals),
+        Some(Subcmd::Shell(args)) => wait::run_shell(*args, &globals),
+        Some(Subcmd::Watch(args)) => wait::run_watch(*args, &globals),
         Some(Subcmd::Teams(args)) => teams::run(*args, &globals),
         Some(Subcmd::Asks(args)) => asks::run(args, &globals),
         Some(Subcmd::Answer(args)) => answer::run(args, &globals),
@@ -756,8 +757,10 @@ enum Subcmd {
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Launch and drive supervised child agents.
     Subagents(Box<subagents::SubagentsArgs>),
-    /// Wake yourself on a timer, clock, condition, or watch.
-    Wait(Box<wait::WaitCommand>),
+    /// Run a command outside your turn and get its outcome as a message.
+    Shell(Box<wait::ShellCommand>),
+    /// Wake yourself once a condition reads true.
+    Watch(Box<wait::WatchCommand>),
     /// Discover, inspect, install, launch, and resume named teams.
     Teams(Box<teams::TeamsArgs>),
     /// Inspect the prompts agents currently have open.

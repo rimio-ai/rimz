@@ -21,22 +21,14 @@ fn self_signal_requires_a_concrete_other_agent() {
 fn self_wait_provenance_admits_only_one_shot_triggers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = crate::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
-    let clock = |entry: TaskEntry| match super::super::parse_trigger("t", &entry).unwrap().trigger {
-        super::super::Trigger::Schedule(parsed) => DeliveryTrigger::Clock(parsed),
-        _ => unreachable!("the entry holds only clock fields"),
-    };
     let condition = |hold: Option<Duration>, lifetime| DeliveryTrigger::Condition {
         expr: crate::harness::when::WhenExpr::parse(&["pr=merged".to_owned()]).unwrap(),
         hold,
         lifetime,
+        check_in: None,
     };
     let now = Timestamp::now();
     let cases = [
-        (
-            "delay",
-            DeliveryTrigger::Delay(Duration::from_secs(60)),
-            true,
-        ),
         (
             "watch",
             DeliveryTrigger::Watch {
@@ -47,33 +39,9 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
             true,
         ),
         (
-            "instant",
-            clock(TaskEntry {
-                fire_at: Some(now + jiff::SignedDuration::from_hours(1)),
-                ..TaskEntry::default()
-            }),
-            true,
-        ),
-        (
             "once condition",
             condition(None, SubscriptionLifetime::Once),
             true,
-        ),
-        (
-            "interval",
-            clock(TaskEntry {
-                every: Some("30m".to_owned()),
-                ..TaskEntry::default()
-            }),
-            false,
-        ),
-        (
-            "cron",
-            clock(TaskEntry {
-                cron: Some("0 * * * *".to_owned()),
-                ..TaskEntry::default()
-            }),
-            false,
         ),
         (
             "standing condition",
@@ -97,7 +65,7 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
     ];
     for (case, trigger, admitted) in cases {
         let spec = DeliverySpec {
-            name: DeliveryName::MintWait,
+            name: DeliveryName::Mint,
             label: None,
             target: TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked("claude"),
@@ -124,8 +92,8 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
                 assert!(!admitted, "{case} was refused: {reason}");
                 assert_eq!(
                     reason,
-                    "self waits require a delay, a one-shot time, a once condition without a \
-                     hold, or a watched command, without a prompt",
+                    "self waits require a once condition without a hold, or a watched command, \
+                     without a prompt",
                     "{case}"
                 );
             }
@@ -252,6 +220,70 @@ fn ended_session_with_only_a_raised_record_is_retired() {
     let bytes: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&paths.raised).unwrap()).unwrap();
     assert_eq!(bytes["human_turns"], serde_json::json!([]));
+}
+
+/// A stored pid, check, or file wait, which this RimZ no longer runs, is retired with a record
+/// naming why, and the rest of the file still loads.
+#[test]
+fn a_legacy_wait_row_is_retired_with_a_record_and_the_rest_loads() {
+    let (dir, paths, runtime) = idle_stop_fixture();
+    let stamp = Timestamp::now().as_nanosecond();
+    let target = serde_json::json!({"kind": "claude", "session": "resting", "handle": "@claude"});
+    let meta = serde_json::json!({"armed_at": "2026-01-01T00:00:00Z"});
+    let row = |watch: serde_json::Value| serde_json::json!({"root": dir.path(), "wait": target, "wait-meta": meta, "watch": watch});
+    let legacy = [
+        (
+            format!("wait-pid-{stamp}"),
+            serde_json::json!({"pid": 4242}),
+        ),
+        (
+            format!("wait-check-{stamp}"),
+            serde_json::json!({"check": "true", "every": "1s", "on": "success"}),
+        ),
+        (
+            format!("wait-file-{stamp}"),
+            serde_json::json!({"file": "/repo/app.log", "grep": "ready"}),
+        ),
+    ];
+    let mut rows = serde_json::Map::new();
+    for (name, watch) in &legacy {
+        rows.insert(name.clone(), row(watch.clone()));
+    }
+    rows.insert("shell-kept".into(), row(serde_json::json!("sleep 600")));
+    // A newer RimZ's watch shape this one cannot read is kept for it, not retired.
+    rows.insert("shell-future".into(), row(serde_json::json!({"future": 1})));
+    crate::disk::atomic::write_temp_then_rename(
+        &super::super::instances::path(&paths.root),
+        &serde_json::Value::Object(rows),
+    )
+    .unwrap();
+
+    retire_ended_sessions_in(&paths, &runtime, dir.path(), || Vec::new().into()).unwrap();
+
+    let left = super::super::instances::load_strict_from(&paths.root).unwrap();
+    assert_eq!(
+        left.0.keys().collect::<Vec<_>>(),
+        ["shell-future", "shell-kept"]
+    );
+    assert!(left.0["shell-kept"].refused.is_none());
+    let log = std::fs::read_to_string(crate::disk::paths::logs_dir().join("loop-runs.log.jsonl"))
+        .unwrap_or_default();
+    for (name, _) in &legacy {
+        let record = log
+            .lines()
+            .map(|line| serde_json::from_str::<super::super::run_log::LoopRunRecord>(line).unwrap())
+            .find(|record| &record.task == name)
+            .unwrap_or_else(|| panic!("no record retires {name}: {log}"));
+        assert_eq!(
+            record.result,
+            super::super::run_log::LoopRunResult::Canceled
+        );
+        assert_eq!(
+            record.error.as_deref(),
+            Some(LEGACY_WAIT_RETIRED),
+            "{record:?}"
+        );
+    }
 }
 
 #[test]

@@ -268,6 +268,10 @@ pub struct LoopRunRecord {
     pub last_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// The agent a shell's outcome goes to, by which a `join` tells the shell's owner once its
+    /// row is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wakes: Option<crate::config::TaskTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -398,6 +402,7 @@ impl LoopRunRecord {
             transcript_path: None,
             last_message: None,
             target: None,
+            wakes: None,
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
@@ -1375,6 +1380,8 @@ pub enum LoopRunResult {
     CapacityHeld,
     Canceled,
     Delivered,
+    /// A shell's outcome a `join` claimed: answered to the join, never sent.
+    Joined,
     TargetGone,
     CheckSkipped,
     SignalSkipped,
@@ -1418,6 +1425,7 @@ impl LoopRunResult {
             Self::Deferred => "deferred",
             Self::Replaced => "replaced",
             Self::Delivered => "delivered",
+            Self::Joined => "joined",
             Self::TargetGone => "target gone",
             Self::CheckSkipped | Self::SignalSkipped | Self::WorkflowSkipped => "skipped",
             Self::Expired => "expired",
@@ -1437,13 +1445,34 @@ pub enum RunPolarity {
 }
 
 impl LoopRunRecord {
+    /// Whether this record ends a self wait's arming: a cancel of its row (which names the agent
+    /// it woke, where a stopped run's does not), or a terminal verdict whose fire consumed the
+    /// row, sent or joined, filtered out by `on`, or with its agent gone. A gate or an overlap
+    /// that saw the exit leaves the row to fire again.
+    pub(super) fn ends_arming(&self) -> bool {
+        if self.result == LoopRunResult::Canceled {
+            return self.wakes.is_some();
+        }
+        self.watch
+            .as_ref()
+            .is_some_and(crate::harness::signal::WatchVerdict::is_terminal)
+            && matches!(
+                self.result,
+                LoopRunResult::Delivered
+                    | LoopRunResult::Joined
+                    | LoopRunResult::CheckSkipped
+                    | LoopRunResult::TargetGone
+            )
+    }
+
     pub fn polarity(&self) -> Option<RunPolarity> {
         match self.result {
             // A workflow run's launch is not an outcome; its report is.
             LoopRunResult::Launched if self.run_id.is_some() => None,
-            LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-                Some(RunPolarity::Good)
-            }
+            LoopRunResult::Completed
+            | LoopRunResult::Delivered
+            | LoopRunResult::Joined
+            | LoopRunResult::Launched => Some(RunPolarity::Good),
             LoopRunResult::CheckSkipped if self.last_verdict() == Some(true) => {
                 Some(RunPolarity::Good)
             }
@@ -1866,6 +1895,25 @@ fn logged_history(
         }
     });
     (records, reported)
+}
+
+/// The history log's length and modification time, which every append and rotation moves;
+/// `None` when it cannot be read.
+pub(super) fn log_stamp() -> Option<(u64, std::time::SystemTime)> {
+    let metadata = std::fs::metadata(log_path(&logs_dir())).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// The logged rows of row `name` at `root` written since `since`, in log order: the history
+/// of one arming of a self wait, whose task record its first fire may still be about to write.
+pub fn named_records_since(name: &str, root: &Path, since: Timestamp) -> Vec<LoopRunRecord> {
+    let mut records = Vec::new();
+    crate::disk::rotating::visit_records(&log_path(&logs_dir()), |record: LoopRunRecord| {
+        if record.task == name && matches_root(&record, Some(root)) && record.at >= since {
+            records.push(record);
+        }
+    });
+    records
 }
 
 #[derive(Clone, Debug, Default)]

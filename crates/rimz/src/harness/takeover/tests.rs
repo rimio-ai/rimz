@@ -280,6 +280,7 @@ fn each_status_either_settles_or_blocks() {
         name: "wait-command".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
+            label: None,
         },
         armed_at: Some(now()),
     });

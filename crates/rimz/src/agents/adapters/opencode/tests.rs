@@ -574,15 +574,15 @@ fn config_env(raw: &str) -> BTreeMap<String, String> {
     BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())])
 }
 
-const LSP_WAIT: &[crate::mcp::catalog::Capability] = &[
+const LSP_WATCH: &[crate::mcp::catalog::Capability] = &[
     crate::mcp::catalog::Capability::Lsp,
-    crate::mcp::catalog::Capability::Wait,
+    crate::mcp::catalog::Capability::Watch,
 ];
 
 fn rimz_record(codemode: Option<bool>) -> Value {
     let mut record = json!({
         "type": "local",
-        "command": ["/room/rimz", "mcp", "serve", "--only", "rimz-lsp", "--only", "rimz-wait"],
+        "command": ["/room/rimz", "mcp", "serve", "--only", "rimz-lsp", "--only", "rimz-watch"],
     });
     if let Some(codemode) = codemode {
         record["codemode"] = codemode.into();
@@ -607,13 +607,13 @@ fn rimz_record_and_grant_join_the_inline_config_keeping_the_users_members() {
         "permissions": [{"action": "bash", "resource": "*", "effect": "ask"}],
     });
     // One rule per served tool, so no rule matches a user server's tool (`rimz_docs_x`).
-    let grant: Vec<Value> = ["lsp", "wait", "tasks", "join", "stop", "guide"]
+    let grant: Vec<Value> = ["lsp", "watch", "tasks", "join", "stop", "guide"]
         .map(|tool| json!({"action": format!("rimz_{tool}"), "resource": "*", "effect": "allow"}))
         .into();
     let served = serve(
         &config_env(&user.to_string()),
         BTreeMap::new(),
-        Some(LSP_WAIT),
+        Some(LSP_WATCH),
         None,
         true,
         None,
@@ -637,7 +637,7 @@ fn rimz_record_and_grant_join_the_inline_config_keeping_the_users_members() {
     let served = serve(
         &BTreeMap::new(),
         BTreeMap::new(),
-        Some(LSP_WAIT),
+        Some(LSP_WATCH),
         None,
         false,
         None,
@@ -674,7 +674,7 @@ fn rimz_record_and_grant_join_the_inline_config_keeping_the_users_members() {
         let served = serve(
             &config_env(raw),
             BTreeMap::new(),
-            Some(LSP_WAIT),
+            Some(LSP_WATCH),
             None,
             true,
             None,
@@ -730,7 +730,7 @@ fn a_launch_that_serves_nothing_leaves_the_inline_config_untouched() {
 /// marks reported unapplied, for each code mode.
 #[test]
 fn marks_map_to_the_record_and_the_plugins_tool_loads_per_code_mode() {
-    let tools: Vec<&str> = crate::mcp::catalog::tools_for(LSP_WAIT)
+    let tools: Vec<&str> = crate::mcp::catalog::tools_for(LSP_WATCH)
         .map(|tool| tool.name)
         .collect();
     let every = |load: &str, except: &[&str]| {
@@ -745,11 +745,11 @@ fn marks_map_to_the_record_and_the_plugins_tool_loads_per_code_mode() {
     let off = "code-mode off sends every RimZ tool native, and OpenCode has no tool search \
                outside `execute`";
     let unapplied = |entry: &str| format!("the mcps entry `{entry}` is not applied: {off}");
-    let always = &["rimz:always", "rimz-lsp", "rimz-wait"][..];
-    let lsp_always = &["rimz-lsp:always", "rimz-wait"][..];
-    let lsp_deferred = &["rimz:always", "rimz-lsp:deferred", "rimz-wait"][..];
-    let deferred = &["rimz:deferred", "rimz-lsp:deferred", "rimz-wait"][..];
-    let unmarked = &["rimz-lsp", "rimz-wait"][..];
+    let always = &["rimz:always", "rimz-lsp", "rimz-watch"][..];
+    let lsp_always = &["rimz-lsp:always", "rimz-watch"][..];
+    let lsp_deferred = &["rimz:always", "rimz-lsp:deferred", "rimz-watch"][..];
+    let deferred = &["rimz:deferred", "rimz-lsp:deferred", "rimz-watch"][..];
+    let unmarked = &["rimz-lsp", "rimz-watch"][..];
     // code-mode, the mcps list, then the record's `codemode`, the loads, and the unapplied marks.
     type Cell<'a> = (
         Option<bool>,
@@ -815,7 +815,7 @@ fn marks_map_to_the_record_and_the_plugins_tool_loads_per_code_mode() {
         let served = serve(
             &BTreeMap::new(),
             BTreeMap::new(),
-            Some(LSP_WAIT),
+            Some(LSP_WATCH),
             Some(mcps),
             false,
             code_mode,
@@ -846,8 +846,8 @@ fn marks_map_to_the_record_and_the_plugins_tool_loads_per_code_mode() {
     let served = serve(
         &BTreeMap::new(),
         BTreeMap::new(),
-        Some(LSP_WAIT),
-        Some(&["rimz-lsp", "rimz-wait", "github:always"]),
+        Some(LSP_WATCH),
+        Some(&["rimz-lsp", "rimz-watch", "github:always"]),
         false,
         None,
     );
@@ -889,7 +889,7 @@ fn an_mcps_list_without_a_star_writes_server_policies() {
             .and_then(|config| config.get("policies").cloned())
     };
     assert_eq!(
-        policies(Some(LSP_WAIT), Some(&["rimz-lsp", "rimz-wait", "github"])),
+        policies(Some(LSP_WATCH), Some(&["rimz-lsp", "rimz-watch", "github"])),
         Some(json!([
             deny,
             allow("rimz"),
@@ -907,11 +907,11 @@ fn an_mcps_list_without_a_star_writes_server_policies() {
         Some(json!([deny, user, user_deny]))
     );
     assert_eq!(
-        policies(Some(LSP_WAIT), Some(&["*", "github"])),
+        policies(Some(LSP_WATCH), Some(&["*", "github"])),
         Some(json!([user, user_deny]))
     );
     assert_eq!(
-        policies(Some(LSP_WAIT), None),
+        policies(Some(LSP_WATCH), None),
         Some(json!([user, user_deny]))
     );
     assert_eq!(policies(None, Some(&["*", "github"])), None);
@@ -930,8 +930,8 @@ fn a_nested_launch_takes_back_the_mcp_members_its_outer_launch_wrote() {
     let outer = serve(
         &config_env(&user.to_string()),
         BTreeMap::new(),
-        Some(LSP_WAIT),
-        Some(&["rimz-lsp", "rimz-wait", "github"]),
+        Some(LSP_WATCH),
+        Some(&["rimz-lsp", "rimz-watch", "github"]),
         true,
         None,
     );
@@ -949,7 +949,7 @@ fn a_nested_launch_takes_back_the_mcp_members_its_outer_launch_wrote() {
     let nested = serve(
         &inherited,
         BTreeMap::new(),
-        Some(LSP_WAIT),
+        Some(LSP_WATCH),
         None,
         false,
         None,

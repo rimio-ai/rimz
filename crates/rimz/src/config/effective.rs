@@ -1230,9 +1230,11 @@ fn reject_project_task_state_fields(
                         "root" => "project tasks run at the project root; remove `root`",
                         "dir" => "project tasks run at the project root; remove `dir`",
                         "wait" => "project tasks cannot pin a machine-local session; use `command`",
-                        "wait-meta" => "wait provenance is machine state; arm it with `rimz wait`",
+                        "wait-meta" => {
+                            "wait provenance is machine state; arm it with `rimz shell` or `rimz watch`"
+                        }
                         "deadline" => "poll-until deadlines are machine state; remove `deadline`",
-                        "watch" => "watched commands are machine state; use `rimz wait`",
+                        "watch" => "watched commands are machine state; use `rimz shell`",
                         "when" | "for" => {
                             "project tasks cannot use conditions yet; add it with `rimz loop add` without `--project`"
                         }

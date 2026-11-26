@@ -8495,7 +8495,7 @@ fn write_loop_strikes(env: &Env, strikes: &BTreeMap<String, u32>) {
 }
 
 /// Stores the delivery row a standing wait for `session` keeps on `entry`'s trigger, at the
-/// project root: `loop add` no longer writes one, and `rimz wait` and team bindings arm
+/// project root: `loop add` no longer writes one, and `rimz watch` and team bindings arm
 /// their rows the same way.
 fn seed_wait(env: &Env, name: &str, session: &str, handle: &str, entry: TaskEntry) {
     let mut instances = read_loop_instances(env);

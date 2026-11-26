@@ -2814,7 +2814,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     }
     if let Some(timeout) = entry.timeout.clone() {
         kv.push(
-            if entry.watch.is_some() {
+            if entry.watch.is_some() || entry.wait_meta.is_some() {
                 "check-in"
             } else {
                 "timeout"
@@ -3360,9 +3360,10 @@ pub(super) struct ResultMark {
 
 pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
     let (glyph, style) = match result {
-        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-            ("✓", ui::palette::good())
-        }
+        LoopRunResult::Completed
+        | LoopRunResult::Delivered
+        | LoopRunResult::Joined
+        | LoopRunResult::Launched => ("✓", ui::palette::good()),
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut

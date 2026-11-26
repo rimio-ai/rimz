@@ -82,6 +82,7 @@ fn sleeping() -> AgentState {
         name: "gate".into(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo xtask gate".into(),
+            label: None,
         },
         armed_at: Some(ts(0)),
     });

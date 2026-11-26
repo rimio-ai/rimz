@@ -904,6 +904,7 @@ fn child_reports_name_each_parent_and_channel() {
         name: "wait-command".to_owned(),
         trigger: rimz::agents::PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
+            label: None,
         },
         armed_at: None,
     });

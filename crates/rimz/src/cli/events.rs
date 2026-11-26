@@ -623,6 +623,8 @@ mod tests {
         }
         for raw in [
             "agent.idle",
+            "shell.task",
+            "watch.task",
             "wait.task",
             "team.idle",
             "ci.finished",

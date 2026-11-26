@@ -18,27 +18,7 @@ fn catalog_wait_classes_follow_the_kind_of_work() {
             ..TaskEntry::default()
         },
         TaskEntry {
-            watch: Some(WatchSpec::File {
-                file: "app.log".into(),
-                grep: None,
-                mark: None,
-            }),
-            ..TaskEntry::default()
-        },
-        TaskEntry {
-            watch: Some(WatchSpec::Pid { pid: 42 }),
-            ..TaskEntry::default()
-        },
-        TaskEntry {
             watch: Some(WatchSpec::Command("cargo test".into())),
-            ..TaskEntry::default()
-        },
-        TaskEntry {
-            watch: Some(WatchSpec::Check {
-                check: "true".into(),
-                every: "1s".into(),
-                on: crate::config::CheckOn::Success,
-            }),
             ..TaskEntry::default()
         },
     ];
@@ -49,12 +29,7 @@ fn catalog_wait_classes_follow_the_kind_of_work() {
             pending_wait("wait", &task).unwrap().class
         })
         .collect();
-    assert_eq!(
-        classes,
-        [
-            Sleeping, Sleeping, Sleeping, Sleeping, Working, Working, Working
-        ]
-    );
+    assert_eq!(classes, [Sleeping, Sleeping, Sleeping, Working]);
 }
 
 fn projected_child_chain(
@@ -649,6 +624,7 @@ fn pending_waits_preserve_pid_and_delay() {
         armed_at,
         delay: Some("30m".into()),
         reader: None,
+        joined_until: None,
     };
     let timer = LoadedTask::new(
         "timer",
@@ -673,26 +649,25 @@ fn pending_waits_preserve_pid_and_delay() {
             WatchSpec::Command("cargo test".into()),
             PendingWaitTrigger::Command {
                 command: "cargo test".into(),
+                label: None,
             },
         ),
         (
-            WatchSpec::Pid { pid: 16776 },
-            PendingWaitTrigger::Pid { pid: 16776 },
-        ),
-        (
-            WatchSpec::Check {
-                check: "nc -z localhost 3000".into(),
-                every: "1s".into(),
-                on: crate::config::CheckOn::Success,
-            },
-            PendingWaitTrigger::Check {
-                command: "nc -z localhost 3000".into(),
+            WatchSpec::Command("cargo nextest run".into()),
+            PendingWaitTrigger::Command {
+                command: "cargo nextest run".into(),
+                label: Some("run the suite".into()),
             },
         ),
     ] {
+        let label = match &expected {
+            PendingWaitTrigger::Command { label, .. } => label.clone(),
+            _ => None,
+        };
         let task = LoadedTask::new(
             "watch",
             TaskEntry {
+                label,
                 watch: Some(spec),
                 wait_meta: Some(crate::config::WaitMeta {
                     delay: None,
@@ -717,6 +692,7 @@ fn fire_at_due_is_its_instant_even_when_armed_at_it() {
                 armed_at: at,
                 delay: None,
                 reader: None,
+                joined_until: None,
             }),
             ..TaskEntry::default()
         },

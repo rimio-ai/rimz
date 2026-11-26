@@ -240,7 +240,15 @@ pub(super) fn run_one(
             rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched
             | rimz::harness::schedule::runner::TaskFirePlan::Waiting,
         ) => return Ok(()),
-        Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => finished,
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => {
+            if !finished.supersedes.is_empty() {
+                let workspace =
+                    WorkspaceResolver::resolve_participant(".", Some(entry.resolved_root()))?;
+                let store = crate::cli::require_existing_store(&workspace)?;
+                cancel_superseded(&store, &workspace.session_name, &finished.supersedes)?;
+            }
+            finished
+        }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared)) => {
             let effect = execute_prepared_delivery(prepared, globals);
             finish_task_effect(&mut fire, effect, name, &entry)?
@@ -471,6 +479,22 @@ fn write_launched_run_command(
     Ok(())
 }
 
+/// Cancel the check-ins a wait's final outcome made stale.
+fn cancel_superseded(
+    store: &rimz::Store,
+    session_name: &str,
+    supersedes: &[rimz::ids::MessageId],
+) -> Result<()> {
+    for message_id in supersedes {
+        store.cancel_message(
+            message_id,
+            session_name,
+            "superseded by the wait's final outcome",
+        )?;
+    }
+    Ok(())
+}
+
 fn execute_prepared_delivery(
     prepared: rimz::harness::schedule::runner::PreparedDelivery,
     globals: &GlobalFlags,
@@ -478,13 +502,7 @@ fn execute_prepared_delivery(
     let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root.clone()))?;
     let store = crate::cli::require_existing_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace, Some(&store));
-    for message_id in &prepared.supersedes {
-        store.cancel_message(
-            message_id,
-            &workspace.session_name,
-            "superseded by the wait's final outcome",
-        )?;
-    }
+    cancel_superseded(&store, &workspace.session_name, &prepared.supersedes)?;
     // A swap between the fire and this dispatch can move the agent to another
     // session, so the holder is read here, and read again once when its
     // session is gone by the time the dispatch resolves it.

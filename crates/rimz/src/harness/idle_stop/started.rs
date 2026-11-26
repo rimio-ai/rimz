@@ -561,10 +561,14 @@ impl<'a> List<'a> {
                         | PendingWaitTrigger::Workflow { .. }
                 ))
                 .then(|| RowKey::Wait(wait.name.clone())),
-                command: self
-                    .seat
-                    .you
-                    .then(|| format!("{} wait cancel {}", self.seat.rimz, wait.name)),
+                command: self.seat.you.then(|| {
+                    format!(
+                        "{} {} cancel {}",
+                        self.seat.rimz,
+                        wait.trigger.verb(),
+                        wait.name
+                    )
+                }),
             });
         }
     }

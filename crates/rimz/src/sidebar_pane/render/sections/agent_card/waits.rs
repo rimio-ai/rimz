@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells and then scripts shown past their threshold, which draw as shells labelled with the script description (else `script`), with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice, and a team wait on a team the card launched draws only under launched.
+//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Shell waits and background shells carry their command on line 2 when one is known, and signals carry a deadline there when present. Timer, condition, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells and then scripts shown past their threshold, which draw as shells labelled with the script description (else `script`), with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice, and a team wait on a team the card launched draws only under launched.
 
 use jiff::Timestamp;
 
@@ -100,13 +100,7 @@ pub(super) fn awaited_entry_lines(
 
 /// A wait its watcher is actively working on: it animates while armed.
 pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
-    matches!(
-        trigger,
-        PendingWaitTrigger::Pid { .. }
-            | PendingWaitTrigger::Command { .. }
-            | PendingWaitTrigger::Check { .. }
-            | PendingWaitTrigger::File { .. }
-    )
+    matches!(trigger, PendingWaitTrigger::Command { .. })
 }
 
 pub(super) fn wait_entry_lines<'a>(

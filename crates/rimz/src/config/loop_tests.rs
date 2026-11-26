@@ -37,21 +37,13 @@ fn shell_watch_previews_preserve_trailing_redirects() {
     for operator in [">", ">>", "2>", "&>"] {
         let clause = format!("{operator} {path} 2>&1");
         let command = format!("cargo xtask test {} {clause}", "argument ".repeat(7));
-        for spec in [
-            WatchSpec::Command(command.clone()),
-            WatchSpec::Check {
-                check: command.clone(),
-                every: "1s".into(),
-                on: CheckOn::Success,
-            },
-        ] {
-            let preview = spec.subject();
-            assert!(preview.starts_with("cargo xtask test "), "{preview}");
-            assert!(preview.ends_with(&clause), "{preview}");
-            assert!(preview.contains('…'), "{preview}");
-            assert!(preview.ends_with(&format!("… {clause}")), "{preview}");
-            assert!(spec.headline().contains(&clause), "{}", spec.headline());
-        }
+        let spec = WatchSpec::Command(command.clone());
+        let preview = spec.subject();
+        assert!(preview.starts_with("cargo xtask test "), "{preview}");
+        assert!(preview.ends_with(&clause), "{preview}");
+        assert!(preview.contains('…'), "{preview}");
+        assert!(preview.ends_with(&format!("… {clause}")), "{preview}");
+        assert!(spec.headline().contains(&clause), "{}", spec.headline());
     }
     for command in [
         format!("echo '{}'", "x".repeat(150)),
@@ -68,61 +60,11 @@ fn shell_watch_previews_preserve_trailing_redirects() {
 }
 
 #[test]
-fn watch_descriptions_preserve_prefixes_and_expose_subjects() {
-    let cases = [
-        (
-            WatchSpec::Command("echo hello".into()),
-            "watch",
-            "echo hello",
-            "watch: echo hello",
-        ),
-        (WatchSpec::Pid { pid: 123 }, "pid", "123", "pid 123"),
-        (
-            WatchSpec::Check {
-                check: "false".into(),
-                every: "1s".into(),
-                on: CheckOn::Success,
-            },
-            "check",
-            "false",
-            "check: false",
-        ),
-        (
-            WatchSpec::Check {
-                check: "false".into(),
-                every: "2s".into(),
-                on: CheckOn::Fail,
-            },
-            "check",
-            "false every 2s on fail",
-            "check: false every 2s on fail",
-        ),
-        (
-            WatchSpec::File {
-                file: "app.log".into(),
-                grep: None,
-                mark: None,
-            },
-            "file",
-            "app.log",
-            "file: app.log",
-        ),
-        (
-            WatchSpec::File {
-                file: "app.log".into(),
-                grep: Some("ready".into()),
-                mark: None,
-            },
-            "file",
-            "app.log grep: ready",
-            "file: app.log grep: ready",
-        ),
-    ];
-    for (spec, kind, subject, description) in cases {
-        assert_eq!(spec.describe(), description);
-        assert_eq!(spec.kind(), kind);
-        assert_eq!(spec.subject(), subject);
-    }
+fn a_shell_spec_describes_itself_as_a_shell() {
+    let spec = WatchSpec::Command("echo hello".into());
+    assert_eq!(spec.describe(), "shell: echo hello");
+    assert_eq!(spec.kind(), "shell");
+    assert_eq!(spec.subject(), "echo hello");
 }
 
 #[test]
@@ -150,41 +92,6 @@ fn resolve_root_canonicalizes_existing_absolute_paths() {
         resolve_root_with(&dotted, PathBuf::from("/home/dev")),
         nested.canonicalize().expect("canonical nested")
     );
-}
-
-#[test]
-fn file_mark_tracks_absence_size_mtime_and_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("app.log");
-    assert_eq!(FileMark::read(&path).unwrap(), None);
-    std::fs::write(&path, "one").unwrap();
-    let first = FileMark::read(&path).unwrap().unwrap();
-    assert_eq!(first.size, 3);
-    std::fs::File::options()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_modified(std::time::SystemTime::UNIX_EPOCH)
-        .unwrap();
-    let rewritten = FileMark::read(&path).unwrap().unwrap();
-    assert_eq!(rewritten.size, first.size);
-    assert_ne!(rewritten, first);
-
-    let replacement = dir.path().join("app.log.new");
-    std::fs::write(&replacement, "one").unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&replacement)
-        .unwrap()
-        .set_modified(std::time::SystemTime::UNIX_EPOCH)
-        .unwrap();
-    std::fs::rename(&replacement, &path).unwrap();
-    let replaced = FileMark::read(&path).unwrap().unwrap();
-    assert_eq!(
-        (replaced.size, replaced.modified),
-        (rewritten.size, rewritten.modified)
-    );
-    assert_ne!(replaced, rewritten);
 }
 
 #[test]
@@ -233,8 +140,9 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
             armed_at: deadline,
             delay: Some("30m".to_owned()),
             reader: Some("coder".to_owned()),
+            joined_until: None,
         }),
-        watch: Some(WatchSpec::Pid { pid: 16776 }),
+        watch: Some(WatchSpec::Command("cargo test".to_owned())),
         prompt: Some("wait".to_owned()),
         max_strikes: Some(5),
         on: Some(CheckOn::Success),
@@ -307,42 +215,7 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
         serde_json::json!({"kind": "claude", "session": "sess-1", "handle": "@claude"})
     );
     assert!(value["ci"]["wait-meta"].get("armed_by").is_none());
-    assert_eq!(value["ci"]["watch"], serde_json::json!({"pid": 16776}));
-    for spec in [
-        WatchSpec::Check {
-            check: "nc -z localhost 3000".to_owned(),
-            every: "30s".to_owned(),
-            on: CheckOn::Fail,
-        },
-        WatchSpec::File {
-            file: PathBuf::from("/repo/app.log"),
-            grep: Some("ready".to_owned()),
-            mark: Some(FileMark {
-                size: 12,
-                modified: deadline,
-                dev: 2049,
-                ino: 131_074,
-            }),
-        },
-        WatchSpec::File {
-            file: PathBuf::from("/repo/app.log"),
-            grep: None,
-            mark: None,
-        },
-    ] {
-        let json = serde_json::to_string(&spec).unwrap();
-        assert_eq!(serde_json::from_str::<WatchSpec>(&json).unwrap(), spec);
-        let toml = toml::to_string(&TaskEntry {
-            watch: Some(spec.clone()),
-            ..TaskEntry::default()
-        })
-        .unwrap();
-        assert_eq!(
-            toml::from_str::<TaskEntry>(&toml).unwrap().watch,
-            Some(spec),
-            "{toml}"
-        );
-    }
+    assert_eq!(value["ci"]["watch"], serde_json::json!("cargo test"));
     value["ci"]["watch"] = serde_json::json!("true");
     let decoded: Tasks = serde_json::from_value(value).expect("string watch json");
     assert_eq!(

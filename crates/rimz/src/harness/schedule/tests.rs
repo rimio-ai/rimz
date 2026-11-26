@@ -8,6 +8,7 @@ fn delivery_owners_follow_provenance_and_precedence() {
         armed_at: Timestamp::UNIX_EPOCH,
         delay: Some("5m".into()),
         reader: Some("planner".into()),
+        joined_until: None,
     };
     for (team, resident, self_wait, expected) in [
         (None, None, true, "self"),
@@ -41,6 +42,7 @@ fn lost_watch_uses_host_grace_and_live_lock() {
             armed_at,
             delay: None,
             reader: None,
+            joined_until: None,
         }),
         ..TaskEntry::default()
     };

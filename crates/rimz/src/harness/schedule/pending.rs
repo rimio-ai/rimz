@@ -12,6 +12,40 @@ use crate::store::snapshot::SidebarSnapshot;
 use super::Trigger;
 use super::catalog::{LoadedTask, TaskCatalog, TaskSource};
 
+/// The two kinds of self wait, each with its own verb, id and name prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitKind {
+    Shell,
+    Watch,
+}
+
+impl WaitKind {
+    /// The kind of the wake row `entry`: a watched command is a shell, every other row a watch.
+    pub fn of(entry: &crate::config::TaskEntry) -> Self {
+        if entry.watch.is_some() {
+            Self::Shell
+        } else {
+            Self::Watch
+        }
+    }
+
+    /// The verb, the id kind and the name prefix: `shell` or `watch`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Watch => "watch",
+        }
+    }
+
+    /// The command that arms, lists and cancels this kind.
+    pub const fn verb(self) -> &'static str {
+        match self {
+            Self::Shell => "rimz shell",
+            Self::Watch => "rimz watch",
+        }
+    }
+}
+
 /// Whether a wait pinned to `kind`/`session` is for `agent`. A target armed
 /// since targets hold launch ids names the agent's launch, which every session
 /// of the agent carries whatever its kind; an older target names one session.
@@ -140,27 +174,16 @@ fn pending_wait(name: &str, task: &LoadedTask) -> Option<PendingWait> {
             due: schedule.schedule.instant()?,
             delay: meta.and_then(|meta| meta.delay.clone()),
         },
-        Trigger::Watch(spec) => match spec {
-            WatchSpec::Command(command) => PendingWaitTrigger::Command {
-                command: command.clone(),
-            },
-            WatchSpec::Pid { pid } => PendingWaitTrigger::Pid { pid: *pid },
-            WatchSpec::Check { check, .. } => PendingWaitTrigger::Check {
-                command: check.clone(),
-            },
-            WatchSpec::File { file, grep, .. } => PendingWaitTrigger::File {
-                path: file.clone(),
-                grep: grep.clone(),
-            },
+        Trigger::Watch(WatchSpec::Command(command)) => PendingWaitTrigger::Command {
+            command: command.clone(),
+            label: task.entry().label.clone(),
         },
         Trigger::Signal { selector, .. } => PendingWaitTrigger::Signal {
             selector: selector.to_string(),
         },
     };
     let class = match trigger {
-        PendingWaitTrigger::Pid { .. }
-        | PendingWaitTrigger::Command { .. }
-        | PendingWaitTrigger::Check { .. } => PendingWaitClass::Working,
+        PendingWaitTrigger::Command { .. } => PendingWaitClass::Working,
         _ => PendingWaitClass::Sleeping,
     };
     Some(PendingWait {
@@ -198,10 +221,7 @@ fn sort_waits(waits: &mut [PendingWait]) {
     waits.sort_by_key(|wait| {
         let (kind, due) = match wait.trigger {
             PendingWaitTrigger::Timer { due, .. } => (0, Some(due)),
-            PendingWaitTrigger::Pid { .. }
-            | PendingWaitTrigger::Command { .. }
-            | PendingWaitTrigger::Check { .. }
-            | PendingWaitTrigger::File { .. } => (1, None),
+            PendingWaitTrigger::Command { .. } => (1, None),
             PendingWaitTrigger::Signal { .. }
             | PendingWaitTrigger::Condition { .. }
             | PendingWaitTrigger::Subagent { .. }

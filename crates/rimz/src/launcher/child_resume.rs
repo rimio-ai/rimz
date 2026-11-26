@@ -167,14 +167,8 @@ fn limit_refusal(
         .as_deref()
         .or(run.agent_name.as_deref())
         .unwrap_or_else(|| child.agent_id.as_str());
-    let minutes = u64::try_from(refill.duration_since(now).as_secs())
-        .unwrap_or(0)
-        .div_ceil(60)
-        // Under a second before the refill the ceiling is 0, and the delay parser refuses `0m`.
-        .max(1);
     Some(format!(
-        "not sent: @{name}'s provider limit refills in {}. Run `rimz wait --in {minutes}m`, \
-         then send it again.",
+        "not sent: @{name}'s provider limit refills in {}; send it again then.",
         crate::theme::fmt::refill_in(refill, now, &jiff::tz::TimeZone::system()),
     ))
 }

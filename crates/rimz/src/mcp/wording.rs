@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
-const BUILT_IN: [(&str, &str); 44] = [
+const BUILT_IN: [(&str, &str); 45] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
     ("tasks.md", include_str!("tools/tasks.md")),
@@ -26,17 +26,24 @@ const BUILT_IN: [(&str, &str); 44] = [
     ),
     ("rimz-lsp/lsp.md", include_str!("tools/rimz-lsp/lsp.md")),
     (
-        "rimz-wait/instructions.md",
-        include_str!("tools/rimz-wait/instructions.md"),
-    ),
-    ("rimz-wait/wait.md", include_str!("tools/rimz-wait/wait.md")),
-    (
-        "rimz-wait/guides/conditions.md",
-        include_str!("tools/rimz-wait/guides/conditions.md"),
+        "rimz-shell/instructions.md",
+        include_str!("tools/rimz-shell/instructions.md"),
     ),
     (
-        "rimz-wait/guides/traps.md",
-        include_str!("tools/rimz-wait/guides/traps.md"),
+        "rimz-shell/shell.md",
+        include_str!("tools/rimz-shell/shell.md"),
+    ),
+    (
+        "rimz-watch/instructions.md",
+        include_str!("tools/rimz-watch/instructions.md"),
+    ),
+    (
+        "rimz-watch/watch.md",
+        include_str!("tools/rimz-watch/watch.md"),
+    ),
+    (
+        "rimz-watch/guides/conditions.md",
+        include_str!("tools/rimz-watch/guides/conditions.md"),
     ),
     (
         "rimz-subagents/instructions.md",
@@ -169,18 +176,9 @@ const BUILT_IN: [(&str, &str); 44] = [
     ),
 ];
 
-/// Where `wait` and `schedule` carry the one description of the `when`, `in`, and `at` values.
-const TRIGGER_VALUES_MARK: &str = "{{trigger-values}}";
-const TRIGGER_VALUES: &str = include_str!("tools/trigger-values.md");
-
 /// The conditions guide, which `rimz-loop` serves beside its owner, so one file teaches the
 /// grammar to a launch serving either.
-const CONDITIONS_GUIDE: &str = "rimz-wait/guides/conditions.md";
-
-/// `text` with the shared trigger values in place of their mark.
-fn expanded(text: &str) -> String {
-    text.replace(TRIGGER_VALUES_MARK, TRIGGER_VALUES.trim())
-}
+const CONDITIONS_GUIDE: &str = "rimz-watch/guides/conditions.md";
 
 /// The shared part of the instructions, after the group sentences.
 const SHARED: &str = "instructions.md";
@@ -243,7 +241,7 @@ impl Wording {
             .iter()
             .map(|(path, text)| {
                 let text = Text {
-                    text: Cow::Owned(expanded(text.trim())),
+                    text: Cow::Borrowed(text.trim()),
                     path: None,
                 };
                 (*path, text)
@@ -285,7 +283,7 @@ impl Wording {
             };
             let text = match std::fs::read(&path) {
                 Ok(bytes) => String::from_utf8(bytes)
-                    .map(|text| expanded(text.trim()))
+                    .map(|text| text.trim().to_owned())
                     .map_err(|_| "it is not UTF-8".to_owned()),
                 Err(err) => Err(format!("it cannot be read: {err}")),
             };
@@ -591,7 +589,7 @@ pub fn has_guides(group: Capability) -> bool {
 }
 
 /// Whether the built-in file at `path` is a guide of another group that `groups` are served:
-/// the conditions guide, which `rimz-loop` shares with `rimz-wait`.
+/// the conditions guide, which `rimz-loop` shares with `rimz-watch`.
 fn lent_guide(path: &str, groups: &[Capability]) -> bool {
     path == CONDITIONS_GUIDE && groups.contains(&Capability::Loop)
 }

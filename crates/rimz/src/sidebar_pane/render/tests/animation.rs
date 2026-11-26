@@ -507,20 +507,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         (
             crate::agents::PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),
-            },
-            true,
-        ),
-        (crate::agents::PendingWaitTrigger::Pid { pid: 16776 }, true),
-        (
-            crate::agents::PendingWaitTrigger::Check {
-                command: "nc -z localhost 3000".to_owned(),
-            },
-            true,
-        ),
-        (
-            crate::agents::PendingWaitTrigger::File {
-                path: "/repo/app.log".into(),
-                grep: None,
+                label: None,
             },
             true,
         ),

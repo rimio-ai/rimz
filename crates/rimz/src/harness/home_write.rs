@@ -42,8 +42,8 @@ mod tests {
     #[test]
     fn hint_only_for_read_only_filesystem() {
         for (command, action) in [
-            ("rimz wait", "armed"),
-            ("rimz wait", "canceled"),
+            ("rimz shell", "armed"),
+            ("rimz watch", "canceled"),
             ("rimz workflow", "started"),
         ] {
             for kind in [

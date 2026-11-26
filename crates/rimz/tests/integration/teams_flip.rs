@@ -3753,7 +3753,7 @@ fn team_restart_opens_a_fresh_member_on_its_stage_notice_alone() {
                 .env("RIMZ_AGENT_NAME", "reviewer");
         };
         let mut wait = fixture.command();
-        as_reviewer(wait.args(["wait", "--in", "30m"]));
+        as_reviewer(wait.args(["watch", "team.stage=Done"]));
         success(wait.output().unwrap());
         let instances = crate::common::wait::wait_instances(&fixture.env);
         let (binding, _) = instances
@@ -3829,7 +3829,7 @@ fn team_restart_opens_a_fresh_member_on_its_stage_notice_alone() {
         );
         fixture.env.drain_hooks();
         let mut list = fixture.command();
-        as_reviewer(list.args(["wait", "list"]));
+        as_reviewer(list.args(["watch", "list"]));
         let listed = success(list.output().unwrap());
         assert!(
             listed.contains("also woken by deploy.done (team forge#feature-team)"),

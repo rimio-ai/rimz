@@ -732,7 +732,9 @@ fn signal_names_pin_the_public_grammar() {
         assert!(invalid.parse::<SignalName>().is_err(), "{invalid}");
     }
     assert!("agent.idle".parse::<SignalName>().unwrap().is_reserved());
-    assert!("wait.task".parse::<SignalName>().unwrap().is_reserved());
+    for name in ["shell.task", "watch.task", "wait.task"] {
+        assert!(name.parse::<SignalName>().unwrap().is_reserved(), "{name}");
+    }
     for family in [
         "agent", "wait", "team", "ci", "pr", "trunk", "worktree", "workflow",
     ] {

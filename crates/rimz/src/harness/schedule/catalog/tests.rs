@@ -158,6 +158,7 @@ fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
             armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
             delay: None,
             reader: None,
+            joined_until: None,
         }),
         ..command.clone()
     };
@@ -166,9 +167,9 @@ fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
             ("z-command".into(), command.clone()),
             ("a-command".into(), command.clone()),
             (
-                "m-pid".into(),
+                "m-make".into(),
                 TaskEntry {
-                    watch: Some(crate::config::WatchSpec::Pid { pid: 16776 }),
+                    watch: Some(crate::config::WatchSpec::Command("make".to_owned())),
                     ..command.clone()
                 },
             ),
@@ -232,7 +233,7 @@ fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
         vec![
             "a-command",
             "a-later-timer",
-            "m-pid",
+            "m-make",
             "signal",
             "standing",
             "z-command",
@@ -249,7 +250,7 @@ fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
             "z-sooner-timer",
             "a-later-timer",
             "a-command",
-            "m-pid",
+            "m-make",
             "z-command",
             "signal"
         ]
@@ -433,6 +434,7 @@ fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
         armed_at: jiff::Timestamp::UNIX_EPOCH,
         delay: None,
         reader: None,
+        joined_until: None,
     });
     assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
     assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);

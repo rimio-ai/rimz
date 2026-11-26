@@ -71,6 +71,7 @@ fn command_wait(name: &str) -> PendingWait {
         name: name.to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo xtask gate".to_owned(),
+            label: None,
         },
         armed_at: Some(ts(900)),
     }
@@ -187,7 +188,7 @@ fn a_wait_offers_its_cancel_only_to_the_agent_it_wakes() {
     let own = read(&store, dir.path(), &agents, &agent, true);
     assert_eq!(
         own.holding[0].command.as_deref(),
-        Some("rimz wait cancel wait-gate")
+        Some("rimz shell cancel wait-gate")
     );
     let other = read(&store, dir.path(), &agents, &agent, false);
     assert_eq!(other.holding[0].command, None);

@@ -2042,6 +2042,9 @@ fn skill_implied(capabilities: &[String], skills: Option<&[String]>) -> bool {
         })
 }
 
+/// The capability `rimz-shell` and `rimz-watch` replaced.
+const RETIRED_WAIT: &str = "rimz-wait";
+
 /// Lowers a resolved `capabilities:` list to the tools value it stands for: each word's tool
 /// bases in written order, then `Skill` where [`skill_implied`], carrying each listed
 /// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted,
@@ -2086,6 +2089,16 @@ fn lower_capabilities(
             None => None,
         };
         let marked_well = mode.is_some() || name == entry;
+        if name == RETIRED_WAIT {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "lists `{entry}` in `capabilities:`, a capability RimZ split in two: list \
+                     `rimz-shell` to run a command outside your turn, `rimz-watch` to wake on a \
+                     condition, or both"
+                ),
+            ));
+        }
         let Some(name) = parsed.filter(|_| marked_well) else {
             let skill = name.parse::<crate::config::RimzEntry>().is_ok();
             let reason = if skill && marked_well {

@@ -1491,6 +1491,41 @@ fn team_skill_clear_and_custom_model_keep_the_original_kind() {
     );
 }
 
+/// `rimz-wait` split into `rimz-shell` and `rimz-watch`; a profile still naming it is refused
+/// with both.
+#[test]
+fn a_profile_naming_rimz_wait_is_refused_with_its_two_replacements() {
+    for entry in ["rimz-wait", "rimz-wait:always"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("agent: claude\ncapabilities: [read, {entry}]"),
+            "",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
+        );
+        assert_eq!(
+            loaded
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>(),
+            [format!(
+                "lists `{entry}` in `capabilities:`, a capability RimZ split in two: list \
+                 `rimz-shell` to run a command outside your turn, `rimz-watch` to wake on a \
+                 condition, or both"
+            )]
+        );
+    }
+}
+
 #[test]
 fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
     let root = fixture();
@@ -1549,10 +1584,10 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
                 .collect::<Vec<_>>(),
             [format!(
                 "sets `mcps:` with an invalid mcps entry `{shown}`: list `*`, `rimz`, a RimZ \
-                 capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, \
-                 rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, \
-                 rimz-blackboard), or one of your own MCP servers, each name with an optional \
-                 `:always` or `:deferred`"
+                 capability (rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, \
+                 rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, \
+                 rimz-notes, rimz-blackboard), or one of your own MCP servers, each name with an \
+                 optional `:always` or `:deferred`"
             )]
         );
     }
@@ -1588,8 +1623,8 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
             &["*", "rimz:deferred", "rimz-lsp:always", "github:always"][..],
         ),
         (
-            "mcps:\n  - '*'\n  - rimz-wait:deferred\n  - linear",
-            &["*", "rimz-wait:deferred", "linear"],
+            "mcps:\n  - '*'\n  - rimz-watch:deferred\n  - linear",
+            &["*", "rimz-watch:deferred", "linear"],
         ),
     ] {
         let root = fixture();
@@ -5732,7 +5767,7 @@ fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
         ),
         (
             "agents/granted.md",
-            "agent: claude\ncapabilities: [read, rimz-wait]\nskills: []",
+            "agent: claude\ncapabilities: [read, rimz-watch]\nskills: []",
         ),
         (
             "agents/own.md",
@@ -5743,7 +5778,7 @@ fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
         ("agents/back.md", "agent: all\ntools: [Bash, Skill]"),
         (
             "agents/more.md",
-            "agent: all\ncapabilities: [+rimz-lsp, +rimz-wait:always]",
+            "agent: all\ncapabilities: [+rimz-lsp, +rimz-watch:always]",
         ),
         ("agents/old.md", "agent: codex\ntools: [Bash]"),
         ("agents/new.md", "agent: old\ncapabilities: [bash]"),
@@ -5787,14 +5822,14 @@ fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
         form("more"),
         (
             every.to_owned(),
-            grant(&["rimz-lsp", "rimz-message", "rimz-wait:always"])
+            grant(&["rimz-lsp", "rimz-message", "rimz-watch:always"])
         )
     );
     assert_eq!(form("quiet"), ("Read,Grep,Glob,LS".to_owned(), grant(&[])));
     assert_eq!(seat_skills(&loaded, "quiet"), Some(Vec::new()));
     assert_eq!(
         form("granted"),
-        ("Read,Grep,Glob,LS,Skill".to_owned(), grant(&["rimz-wait"]))
+        ("Read,Grep,Glob,LS,Skill".to_owned(), grant(&["rimz-watch"]))
     );
     assert_eq!(
         form("own"),
@@ -5835,7 +5870,7 @@ fn capabilities_lower_to_tool_bases_and_the_nearest_writer_decides_the_form() {
 #[test]
 fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_user_lists() {
     let mark = "but a load mark applies only to `rimz` and a capability with MCP tools (rimz-lsp";
-    let skill = "which holds only RimZ's capabilities with MCP tools (rimz-lsp, rimz-wait, \
+    let skill = "which holds only RimZ's capabilities with MCP tools (rimz-lsp, rimz-shell, rimz-watch, \
                  rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
                  rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or `rimz` for all of them;";
     for (fields, needle) in [
@@ -5892,8 +5927,8 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
             "sets `capabilities:`, and its `skills:` lists `rimz-lsp`".to_owned(),
         ),
         (
-            "agent: claude\ncapabilities: [bash]\nmcps: [rimz-wait]",
-            "sets `capabilities:`, and its `mcps:` lists `rimz-wait`".to_owned(),
+            "agent: claude\ncapabilities: [bash]\nmcps: [rimz-watch]",
+            "sets `capabilities:`, and its `mcps:` lists `rimz-watch`".to_owned(),
         ),
         (
             "agent: claude\ncapabilities: [bash]\nmcps: [github, 'rimz:always']",
@@ -5901,7 +5936,7 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
         ),
         (
             "agent: legacy\ncapabilities: [bash]",
-            "sets `capabilities:`, and its `skills:` lists `rimz-wait`".to_owned(),
+            "sets `capabilities:`, and its `skills:` lists `rimz-watch`".to_owned(),
         ),
         (
             "agent: claude\ncapabilities: [+bash]",
@@ -5918,7 +5953,7 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
         definition(
             root.path(),
             "agents/legacy.md",
-            "agent: claude\ntools: [Bash, Skill]\nskills: [rimz-wait]",
+            "agent: claude\ntools: [Bash, Skill]\nskills: [rimz-watch]",
             "",
         );
         definition(root.path(), "agents/probe.md", fields, "");

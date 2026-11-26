@@ -56,7 +56,7 @@ fn a_call_that_panics_answers_a_failure_and_the_next_call_succeeds() {
         run_isolated(
             &runner,
             Call::Stop(StopArgs {
-                id: "wait:nightly".to_owned()
+                id: "shell:nightly".to_owned()
             }),
             &|| false
         ),

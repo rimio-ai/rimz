@@ -37,10 +37,10 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
     put(dir.path(), "guide.md", "Load a guide, replaced.");
     put(
         dir.path(),
-        "rimz-wait/guides/conditions.md",
+        "rimz-watch/guides/conditions.md",
         "Conditions, replaced.",
     );
-    put(dir.path(), "rimz-wait/notes.txt", "not wording");
+    put(dir.path(), "rimz-watch/notes.txt", "not wording");
     let wording = Wording::read(dir.path());
     assert_eq!(messages(&wording), Vec::<String>::new());
 
@@ -51,11 +51,11 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
         wording.description(tool(GUIDE)).text(),
         "Load a guide, replaced."
     );
-    let wait = wording.description(tool("wait"));
-    assert_eq!(wait.path(), None);
+    let shell = wording.description(tool("shell"));
+    assert_eq!(shell.path(), None);
     assert_eq!(
-        wait.text(),
-        Wording::built_in().description(tool("wait")).text()
+        shell.text(),
+        Wording::built_in().description(tool("shell")).text()
     );
 
     assert_eq!(
@@ -70,9 +70,9 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
             dir.path().join("instructions.md")
         ]
     );
-    assert_eq!(wording.instruction_paths(&[Capability::Wait]).count(), 1);
+    assert_eq!(wording.instruction_paths(&[Capability::Watch]).count(), 1);
     assert_eq!(
-        wording.guide(&[Capability::Wait], "rimz-wait/conditions"),
+        wording.guide(&[Capability::Watch], "rimz-watch/conditions"),
         Ok("Conditions, replaced.")
     );
 }
@@ -102,11 +102,11 @@ fn the_instructions_name_only_the_served_groups_in_group_order() {
         )
     );
     assert_eq!(
-        wording.instructions(&[Capability::Wait]),
+        wording.instructions(&[Capability::Shell]),
         format!(
-            "RimZ tools to wait outside your turn, track what you started, and load usage \
-             guides.\n{}\n{started}\n{guide}\n{shared}",
-            sentence(Capability::Wait)
+            "RimZ tools to wait outside your turn and track what you started.\n{}\n{started}\n\
+             {shared}",
+            sentence(Capability::Shell)
         )
     );
     assert_eq!(
@@ -148,8 +148,8 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
     let built_in = Wording::built_in();
     let long_sentence = format!("Use `lsp` {}.", "word ".repeat(16));
     let cases: Vec<(&str, Vec<u8>, &str)> = vec![
-        ("rimz-wait/wait.md", vec![0xff, 0xfe, b'\n'], "not UTF-8"),
-        ("rimz-wait/wait.md", b"  \n\t\n".to_vec(), "it is empty"),
+        ("rimz-shell/shell.md", vec![0xff, 0xfe, b'\n'], "not UTF-8"),
+        ("rimz-shell/shell.md", b"  \n\t\n".to_vec(), "it is empty"),
         (
             "rimz-lsp/lsp.md",
             "x".repeat(4096).into_bytes(),
@@ -176,7 +176,7 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
             "the instructions with every group would hold",
         ),
         (
-            "rimz-wait/guides/conditions.md",
+            "rimz-watch/guides/conditions.md",
             b"\n".to_vec(),
             "it is empty",
         ),
@@ -238,15 +238,15 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
 #[test]
 fn a_file_at_no_wording_path_is_ignored_and_named_where_it_belongs() {
     let dir = tempfile::tempdir().unwrap();
-    put(dir.path(), "rimz-lsp/wait.md", "Arm a watcher, misplaced.");
+    put(dir.path(), "rimz-lsp/shell.md", "Run a command, misplaced.");
     put(
         dir.path(),
         "rimz-lsp/guides/conditions.md",
         "Conditions, misplaced.",
     );
-    put(dir.path(), "rimz-wait/extra.md", "A tool of my own.");
+    put(dir.path(), "rimz-shell/extra.md", "A tool of my own.");
     let wording = Wording::read(dir.path());
-    assert_eq!(wording.description(tool("wait")).path(), None);
+    assert_eq!(wording.description(tool("shell")).path(), None);
     let shown = |path: &str| dir.path().join(path).display().to_string();
     assert_eq!(
         messages(&wording),
@@ -255,16 +255,16 @@ fn a_file_at_no_wording_path_is_ignored_and_named_where_it_belongs() {
                 "{} is ignored: RimZ has no wording file rimz-lsp/guides/conditions.md; \
                  it belongs at {}",
                 shown("rimz-lsp/guides/conditions.md"),
-                shown("rimz-wait/guides/conditions.md")
+                shown("rimz-watch/guides/conditions.md")
             ),
             format!(
-                "{} is ignored: RimZ has no wording file rimz-lsp/wait.md; it belongs at {}",
-                shown("rimz-lsp/wait.md"),
-                shown("rimz-wait/wait.md")
+                "{} is ignored: RimZ has no wording file rimz-lsp/shell.md; it belongs at {}",
+                shown("rimz-lsp/shell.md"),
+                shown("rimz-shell/shell.md")
             ),
             format!(
-                "{} is ignored: RimZ has no wording file rimz-wait/extra.md",
-                shown("rimz-wait/extra.md")
+                "{} is ignored: RimZ has no wording file rimz-shell/extra.md",
+                shown("rimz-shell/extra.md")
             ),
         ]
     );
@@ -280,26 +280,26 @@ fn a_symlinked_group_folder_is_served_and_a_loop_in_it_ends() {
     let elsewhere = tempfile::tempdir().unwrap();
     put(
         elsewhere.path(),
-        "rimz-wait/wait.md",
+        "rimz-shell/shell.md",
         "Arm a watcher, linked.",
     );
-    std::fs::create_dir_all(elsewhere.path().join("rimz-wait/guides")).unwrap();
+    std::fs::create_dir_all(elsewhere.path().join("rimz-shell/guides")).unwrap();
     std::os::unix::fs::symlink(
-        elsewhere.path().join("rimz-wait"),
-        elsewhere.path().join("rimz-wait/guides/back"),
+        elsewhere.path().join("rimz-shell"),
+        elsewhere.path().join("rimz-shell/guides/back"),
     )
     .unwrap();
     std::os::unix::fs::symlink(
-        elsewhere.path().join("rimz-wait"),
-        dir.path().join("rimz-wait"),
+        elsewhere.path().join("rimz-shell"),
+        dir.path().join("rimz-shell"),
     )
     .unwrap();
     let wording = Wording::read(dir.path());
-    let wait = wording.description(tool("wait"));
-    assert_eq!(wait.text(), "Arm a watcher, linked.");
+    let shell = wording.description(tool("shell"));
+    assert_eq!(shell.text(), "Arm a watcher, linked.");
     assert_eq!(
-        wait.path(),
-        Some(dir.path().join("rimz-wait/wait.md").as_path())
+        shell.path(),
+        Some(dir.path().join("rimz-shell/shell.md").as_path())
     );
     assert_eq!(messages(&wording), Vec::<String>::new());
 }
@@ -311,7 +311,11 @@ fn a_symlinked_group_folder_is_served_and_a_loop_in_it_ends() {
 fn an_unreadable_folder_warns_by_its_path_and_its_siblings_are_served() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
-    put(dir.path(), "rimz-wait/wait.md", "Arm a watcher, replaced.");
+    put(
+        dir.path(),
+        "rimz-shell/shell.md",
+        "Arm a watcher, replaced.",
+    );
     put(dir.path(), "rimz-lsp/lsp.md", "Unreadable.");
     let locked = dir.path().join("rimz-lsp");
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
@@ -323,7 +327,7 @@ fn an_unreadable_folder_warns_by_its_path_and_its_siblings_are_served() {
     let wording = Wording::read(dir.path());
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
-        wording.description(tool("wait")).text(),
+        wording.description(tool("shell")).text(),
         "Arm a watcher, replaced."
     );
     let warnings = messages(&wording);
@@ -335,7 +339,7 @@ fn an_unreadable_folder_warns_by_its_path_and_its_siblings_are_served() {
             )),
         "{warnings:?}"
     );
-    assert_eq!(wording.warnings_for(&[Capability::Wait]).count(), 0);
+    assert_eq!(wording.warnings_for(&[Capability::Shell]).count(), 0);
     assert_eq!(wording.warnings_for(&[Capability::Lsp]).count(), 1);
 }
 
@@ -344,12 +348,12 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
     let dir = tempfile::tempdir().unwrap();
     put(dir.path(), "rimz-lsp/lsp.md", "");
     put(dir.path(), "guide.md", "");
-    put(dir.path(), "rimz-wait/guides/conditions.md", "");
+    put(dir.path(), "rimz-watch/guides/conditions.md", "");
     let wording = Wording::read(dir.path());
     let count = |groups: &[Capability]| wording.warnings_for(groups).count();
     assert_eq!(count(&[Capability::Lsp]), 2);
     assert_eq!(count(&[Capability::Notes]), 1);
-    assert_eq!(count(&[Capability::Wait]), 2);
+    assert_eq!(count(&[Capability::Watch]), 2);
     assert_eq!(
         count(&[Capability::Loop]),
         2,
@@ -365,16 +369,11 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
 fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
     let wording = Wording::built_in();
     let conditions = wording
-        .guide(&[Capability::Wait], "rimz-wait/conditions")
+        .guide(&[Capability::Watch], "rimz-watch/conditions")
         .expect("the conditions guide");
     assert!(conditions.contains("`pr.queue`"), "{conditions}");
-    let traps = wording
-        .guide(&[Capability::Wait], "rimz-wait/traps")
-        .expect("the wait traps guide");
-    assert!(traps.contains("`check_in`"), "{traps}");
     let served = vec![
-        "rimz-wait/conditions".to_owned(),
-        "rimz-wait/traps".to_owned(),
+        "rimz-watch/conditions".to_owned(),
         "rimz-subagents/delegating".to_owned(),
         "rimz-agents/launching".to_owned(),
         "rimz-teams/launching".to_owned(),
@@ -386,32 +385,21 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         "rimz-control/fresh-eyes".to_owned(),
     ];
     assert_eq!(
-        wording.guide(&Capability::ALL, "rimz-wait/nope"),
+        wording.guide(&Capability::ALL, "rimz-watch/nope"),
         Err(served.clone())
     );
     assert_eq!(wording.guide(&Capability::ALL, "conditions"), Err(served));
     assert_eq!(
-        wording.guide(&[Capability::Lsp], "rimz-wait/conditions"),
+        wording.guide(&[Capability::Shell], "rimz-watch/conditions"),
         Err(Vec::new())
     );
     assert_eq!(
-        wording.guide(&[Capability::Loop], "rimz-wait/conditions"),
+        wording.guide(&[Capability::Loop], "rimz-watch/conditions"),
         Ok(conditions),
         "a launch serving rimz-loop alone loads the one conditions guide"
     );
-    assert!(
-        wording
-            .guide(&[Capability::Loop], "rimz-wait/traps")
-            .is_err(),
-        "rimz-wait/traps stays with rimz-wait and is not lent to rimz-loop"
-    );
-    let values = "`in`: a delay, one number and unit";
-    for tool in ["wait", "schedule"] {
-        let description = wording.description(self::tool(tool)).text();
-        assert_eq!(description.matches(values).count(), 1, "{description}");
-        assert!(!description.contains("{{"), "{description}");
-    }
-    assert!(has_guides(Capability::Wait));
+    assert!(has_guides(Capability::Watch));
+    assert!(!has_guides(Capability::Shell));
     assert!(has_guides(Capability::Loop));
     assert!(has_guides(Capability::Subagents));
     assert!(has_guides(Capability::Agents));

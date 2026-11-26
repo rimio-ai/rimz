@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn prompt_references_scan_all_three_forms_with_ranges_and_grammars() {
-        let rimz_text = "Use rimz(wait), `rimz(lsp)`, and (rimz(workflow-write)); rimz(wait) again.\n\
+        let rimz_text = "Use rimz(shell), `rimz(lsp)`, and (rimz(workflow-write)); rimz(shell) again.\n\
                          rimz(notes2) and x-rimz(control) count. spawn_detached_rimz(foo), \
                          rimz2(bar), Rimz(baz), RIMZ(qux), rimz(Wait), rimz( wait), rimz(), \
                          rimz(1x), rimz(-x), rimz(a_b), rimz(a b), Skill(rimz-message), rimz(open";
@@ -233,24 +233,24 @@ mod tests {
         assert_eq!(
             rimz_found,
             [
-                (PromptReferenceKind::Rimz, "wait", "rimz(wait)"),
+                (PromptReferenceKind::Rimz, "shell", "rimz(shell)"),
                 (PromptReferenceKind::Rimz, "lsp", "rimz(lsp)"),
                 (
                     PromptReferenceKind::Rimz,
                     "workflow-write",
                     "rimz(workflow-write)"
                 ),
-                (PromptReferenceKind::Rimz, "wait", "rimz(wait)"),
+                (PromptReferenceKind::Rimz, "shell", "rimz(shell)"),
                 (PromptReferenceKind::Rimz, "notes2", "rimz(notes2)"),
                 (PromptReferenceKind::Rimz, "control", "rimz(control)"),
             ]
         );
-        let lone = "rimz(wait)";
+        let lone = "rimz(shell)";
         assert_eq!(
             prompt_references(lone),
             [PromptReference {
                 kind: PromptReferenceKind::Rimz,
-                name: "wait",
+                name: "shell",
                 range: 0..lone.len(),
             }]
         );
@@ -259,7 +259,7 @@ mod tests {
                     skill(s), subagent(explorer), subagent(opencode-mini), subagent(forge.lint), \
                     subagent(My_Profile), and subagent(s).\n\
                     Plain: Skill(rimz-lsp), Agent(explorer), Subagent(explorer), Rimz(lsp), \
-                    my_skill(commit), my_subagent(explorer), spawn_detached_rimz(wait), \
+                    my_skill(commit), my_subagent(explorer), spawn_detached_rimz(shell), \
                     skill(), skill(.), skill(..), skill(+commit), skill(a/b), skill(a\\b), \
                     skill(a:b), skill(a b), skill(a(b)), subagent(), subagent(a b), \
                     subagent(a,b), subagent(a+b), subagent(a/b), subagent(a(b)), \
@@ -305,12 +305,12 @@ mod tests {
             ]
         );
         // Nested parentheses reject the outer form and still scan a valid inner form.
-        let nested = "skill(rimz(wait))";
+        let nested = "skill(rimz(shell))";
         let inner: Vec<_> = prompt_references(nested)
             .into_iter()
             .map(|r| (r.kind, r.name, &nested[r.range]))
             .collect();
-        assert_eq!(inner, [(PromptReferenceKind::Rimz, "wait", "rimz(wait)")]);
+        assert_eq!(inner, [(PromptReferenceKind::Rimz, "shell", "rimz(shell)")]);
     }
 
     #[test]

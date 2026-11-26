@@ -538,7 +538,7 @@ fn briefing_section(
     }
     if !waits.is_empty() {
         lines.push(format!(
-            "- {} still armed for you ({}): `rimz wait list`",
+            "- {} still armed for you ({}): `rimz shell list`, `rimz watch list`",
             plural(waits.len(), "wait", "waits"),
             waits.join(", ")
         ));

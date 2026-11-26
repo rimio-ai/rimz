@@ -151,9 +151,9 @@ pub(super) fn remove_machine_at_root(name: &str, root: &Path) -> Result<bool> {
     remove_at_root(TaskStore::Machine, name, Some(root))
 }
 
-/// A store with no matching row is left without opening the lock: `rimz wait` arms through
-/// here for a name that normally has no row, inside a provider's command sandbox that leaves
-/// the home's `loops/` read-only. A matching row is read again and decided under the lock.
+/// A store with no matching row is left without opening the lock: `rimz shell` and
+/// `rimz watch` arm through here for a name that normally has no row, inside a provider's
+/// command sandbox that leaves the home's `loops/` read-only. A matching row is read again and decided under the lock.
 fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Result<bool> {
     if matching_row(store, name, root)?.is_none() {
         return Ok(false);
@@ -356,7 +356,7 @@ mod tests {
         assert!(written());
     }
 
-    /// Removing a row the store does not hold opens no lock, so `rimz wait` arms where a
+    /// Removing a row the store does not hold opens no lock, so `rimz shell` arms where a
     /// command sandbox leaves the home's `loops/` read-only; a row it holds is removed under it.
     #[test]
     fn removing_an_absent_row_needs_no_edit_lock() {

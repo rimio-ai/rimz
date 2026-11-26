@@ -496,12 +496,8 @@ pub enum ScheduleErr {
         "schedule `{name}` reads a provider window without `provider`; set `provider = \"<agent kind>\"` or re-add the task with `rimz loop add`"
     )]
     WindowWithoutProvider { name: String },
-    #[error("schedule `{name}` has an empty watched command, check, file, or pattern")]
+    #[error("schedule `{name}` has an empty watched command")]
     BadWatch { name: String },
-    #[error(
-        "schedule `{name}` has an invalid check watch: `every` must be a positive duration like `1s` and `on` must be `success` or `fail`"
-    )]
-    BadCheckWatch { name: String },
     #[error(
         "schedule `{name}` has an invalid one-shot time `{value}`; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
     )]
@@ -737,7 +733,13 @@ impl Trigger {
             Self::Signal { selector, matches } => {
                 crate::harness::signal::resolve_subscription(selector, matches, signal)
             }
-            Self::Watch { .. } if signal.name.as_str() == format!("wait.{task_name}") => Deliver,
+            // An older RimZ's watcher emits `wait.<name>`.
+            Self::Watch { .. }
+                if [format!("shell.{task_name}"), format!("wait.{task_name}")]
+                    .contains(&signal.name.as_str().to_owned()) =>
+            {
+                Deliver
+            }
             Self::Watch { .. } => Ignore,
         }
     }
@@ -1308,48 +1310,13 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
 }
 
 fn validate_watch(name: &str, spec: &crate::config::WatchSpec) -> Result<(), ScheduleErr> {
-    use crate::config::{CheckOn, WatchSpec};
-    let name = name.to_owned();
-    match spec {
-        WatchSpec::Command(command) | WatchSpec::Check { check: command, .. }
-            if command.trim().is_empty() =>
-        {
-            Err(ScheduleErr::BadWatch { name })
-        }
-        WatchSpec::File { file, grep, .. }
-            if file.as_os_str().is_empty() || grep.as_deref().is_some_and(str::is_empty) =>
-        {
-            Err(ScheduleErr::BadWatch { name })
-        }
-        WatchSpec::Check {
-            on: CheckOn::Any, ..
-        } => Err(ScheduleErr::BadCheckWatch { name }),
-        WatchSpec::Check { .. } if watch_interval(spec).is_none_or(|every| every.is_zero()) => {
-            Err(ScheduleErr::BadCheckWatch { name })
-        }
-        WatchSpec::Command(_)
-        | WatchSpec::Pid { .. }
-        | WatchSpec::Check { .. }
-        | WatchSpec::File { .. } => Ok(()),
+    let crate::config::WatchSpec::Command(command) = spec;
+    if command.trim().is_empty() {
+        return Err(ScheduleErr::BadWatch {
+            name: name.to_owned(),
+        });
     }
-}
-
-/// `rimz wait --every` stays under a day, so its label never needs days.
-const WATCH_EVERY_UNITS: &[DurationUnit] = &[
-    DurationUnit::Second,
-    DurationUnit::Minute,
-    DurationUnit::Hour,
-];
-
-/// How long a polled watch sleeps between probes; `None` for a run-once
-/// command or an unparseable `every`.
-fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration> {
-    use crate::config::WatchSpec;
-    match spec {
-        WatchSpec::Command(_) => None,
-        WatchSpec::Pid { .. } | WatchSpec::File { .. } => Some(std::time::Duration::from_secs(1)),
-        WatchSpec::Check { every, .. } => parse_duration_units(every, WATCH_EVERY_UNITS).ok(),
-    }
+    Ok(())
 }
 
 enum TimingFields<'a> {

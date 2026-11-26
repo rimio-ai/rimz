@@ -15,7 +15,7 @@ expression: screen
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
 ▌  ⧖ waits (4)                                       ▐
-▌    ⣾ command · make                           ◔ <1m▐
+▌    ⣾ shell · make                             ◔ <1m▐
 ▌      make check                                    ▐
 ▌    ⣾ shell · Run the test suite               ◔  5m▐
 ▌      cargo test                                    ▐

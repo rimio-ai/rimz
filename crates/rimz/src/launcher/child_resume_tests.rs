@@ -260,7 +260,7 @@ fn a_limit_failure_refuses_until_its_recorded_refill_on_the_same_login_when_no_w
     .expect("a refill recorded ahead refuses the message");
     assert!(
         refusal.starts_with("not sent: @otter's provider limit refills in 2h00m (at ")
-            && refusal.ends_with("Run `rimz wait --in 120m`, then send it again."),
+            && refusal.ends_with("; send it again then."),
         "{refusal}"
     );
     for run in [
@@ -439,24 +439,25 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
             "an identity switch since the failure clears a stated refill: read {read_secs_ago}s ago"
         );
     }
-    let refill_minutes = |refusal: Option<String>| {
+    let refill_wait = |refusal: Option<String>| {
         refusal.and_then(|text| {
-            text.split("--in ")
-                .nth(1)?
-                .split('m')
-                .next()?
-                .parse::<u64>()
-                .ok()
+            Some(
+                text.split("refills in ")
+                    .nth(1)?
+                    .split(" (at ")
+                    .next()?
+                    .to_owned(),
+            )
         })
     };
     assert_eq!(
-        refill_minutes(refusal(60, None, true, true)),
-        Some(120),
+        refill_wait(refusal(60, None, true, true)).as_deref(),
+        Some("2h00m"),
         "with no switch, the later of a spent read's reset and a stated refill holds"
     );
     assert_eq!(
-        refill_minutes(refusal(60, Some(300), true, true)),
-        Some(60),
+        refill_wait(refusal(60, Some(300), true, true)).as_deref(),
+        Some("1h00m"),
         "an identity switch since the failure clears a stated refill beside a spent read, whose \
          own reset still refuses"
     );

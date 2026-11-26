@@ -14,17 +14,19 @@ pub enum TaskKind {
     Team,
     Workflow,
     Schedule,
-    Wait,
+    Shell,
+    Watch,
 }
 
 impl TaskKind {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Subagent,
         Self::Agent,
         Self::Team,
         Self::Workflow,
         Self::Schedule,
-        Self::Wait,
+        Self::Shell,
+        Self::Watch,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -34,7 +36,8 @@ impl TaskKind {
             Self::Team => "team",
             Self::Workflow => "workflow",
             Self::Schedule => "schedule",
-            Self::Wait => "wait",
+            Self::Shell => "shell",
+            Self::Watch => "watch",
         }
     }
 
@@ -53,8 +56,8 @@ impl TaskKind {
             })
             .ok_or_else(|| {
                 Failure::new(format!("`{id}` is no id of a thing RimZ started")).with_hint(
-                    "an id is a kind (subagent, agent, team, workflow, schedule, or wait), a \
-                     colon, and a name, as `tasks` lists it; end a task or subagent your \
+                    "an id is a kind (subagent, agent, team, workflow, schedule, shell, or \
+                     watch), a colon, and a name, as `tasks` lists it; end a task or subagent your \
                      provider started with your provider's own tool",
                 )
             })
@@ -74,7 +77,8 @@ impl From<StartedKind> for TaskKind {
             StartedKind::Team => Self::Team,
             StartedKind::Workflow => Self::Workflow,
             StartedKind::Schedule => Self::Schedule,
-            StartedKind::Wait => Self::Wait,
+            StartedKind::Shell => Self::Shell,
+            StartedKind::Watch => Self::Watch,
         }
     }
 }

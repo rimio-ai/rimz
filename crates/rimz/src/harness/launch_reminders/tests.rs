@@ -255,7 +255,8 @@ fn a_served_subagent_tool_keeps_the_subagents_policy_and_a_child_is_not_served_i
             let served = reminders.mcp_capabilities(request);
             assert!(!served.contains(&Capability::Subagents), "{served:?}");
             assert!(!served.contains(&Capability::Loop), "{served:?}");
-            assert!(served.contains(&Capability::Wait), "{served:?}");
+            assert!(served.contains(&Capability::Shell), "{served:?}");
+            assert!(served.contains(&Capability::Watch), "{served:?}");
             assert!(served.contains(&Capability::Workflow), "{served:?}");
         };
         request.subagent = true;
@@ -998,7 +999,7 @@ fn capability_lines_use_short_form_and_reminder_omits_rimz_capabilities_section(
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked(kind), Vec::new());
         let reminders = LaunchReminders {
             mcp_server: Some(("/bin/rimz".into(), Vec::new())),
-            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-watch"]),
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/checkout"), None);
@@ -1017,7 +1018,8 @@ fn capability_lines_use_short_form_and_reminder_omits_rimz_capabilities_section(
         .join(", ");
     let served = vec![
         ("rimz-lsp".to_owned(), "mcp(lsp)".to_owned()),
-        ("rimz-wait".to_owned(), "mcp(wait)".to_owned()),
+        ("rimz-shell".to_owned(), "mcp(shell)".to_owned()),
+        ("rimz-watch".to_owned(), "mcp(watch)".to_owned()),
         ("rimz-subagents".to_owned(), "mcp(subagent)".to_owned()),
         ("rimz-agents".to_owned(), "mcp(agent)".to_owned()),
         ("rimz-teams".to_owned(), "mcp(team)".to_owned()),
@@ -1040,7 +1042,7 @@ fn capability_lines_on_a_skills_only_launch_follow_the_skills_list() {
     let mut actual = Vec::new();
     for skills in [
         None,
-        Some(vec!["rimz-message", "rimz-wait", "commit"]),
+        Some(vec!["rimz-message", "rimz-watch", "commit"]),
         Some(Vec::new()),
     ] {
         let mut request =
@@ -1048,7 +1050,7 @@ fn capability_lines_on_a_skills_only_launch_follow_the_skills_list() {
         request.skills =
             skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
         let reminders = LaunchReminders {
-            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-wait"]),
+            rimz_skills: rimz_skills(&["rimz-lsp", "rimz-message", "rimz-watch"]),
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/checkout"), None);
@@ -1061,11 +1063,11 @@ fn capability_lines_on_a_skills_only_launch_follow_the_skills_list() {
             vec![
                 ("rimz-lsp".to_owned(), "skill(rimz-lsp)".to_owned()),
                 ("rimz-message".to_owned(), "skill(rimz-message)".to_owned()),
-                ("rimz-wait".to_owned(), "skill(rimz-wait)".to_owned()),
+                ("rimz-watch".to_owned(), "skill(rimz-watch)".to_owned()),
             ],
             vec![
                 ("rimz-message".to_owned(), "skill(rimz-message)".to_owned()),
-                ("rimz-wait".to_owned(), "skill(rimz-wait)".to_owned()),
+                ("rimz-watch".to_owned(), "skill(rimz-watch)".to_owned()),
             ],
             Vec::new(),
         ]
@@ -1083,7 +1085,7 @@ fn capability_lines_under_a_grant_name_only_the_granted_capabilities() {
     for (kind, server) in [("claude", true), ("opencode", false)] {
         for skills in [
             None,
-            Some(vec!["rimz-wait", "rimz-reflect", "commit"]),
+            Some(vec!["rimz-watch", "rimz-reflect", "commit"]),
             Some(Vec::new()),
         ] {
             let quiet = skills.as_ref().is_some_and(Vec::is_empty);
@@ -1094,7 +1096,7 @@ fn capability_lines_under_a_grant_name_only_the_granted_capabilities() {
             request.rimz_capabilities = Some(vec!["rimz-lsp:deferred".parse().unwrap()]);
             let reminders = LaunchReminders {
                 mcp_server: server.then(|| ("/bin/rimz".into(), Vec::new())),
-                rimz_skills: rimz_skills(&["rimz-lsp", "rimz-reflect", "rimz-wait"]),
+                rimz_skills: rimz_skills(&["rimz-lsp", "rimz-reflect", "rimz-watch"]),
                 ..LaunchReminders::default()
             };
             let names: Vec<_> = reminders
@@ -1184,7 +1186,7 @@ fn a_child_has_no_launching_capability_as_tool_or_skill() {
             assert!(lines.iter().all(|(name, _)| name != denied), "{lines:?}");
         }
         assert_eq!(
-            lines.iter().any(|(name, _)| name == "rimz-wait"),
+            lines.iter().any(|(name, _)| name == "rimz-watch"),
             served,
             "{lines:?}"
         );
@@ -1238,7 +1240,7 @@ fn a_judge_has_no_launching_capability_as_tool_or_skill() {
             assert!(lines.iter().all(|(name, _)| name != launching), "{lines:?}");
         }
         assert_eq!(
-            lines.iter().any(|(name, _)| name == "rimz-wait"),
+            lines.iter().any(|(name, _)| name == "rimz-watch"),
             served,
             "{lines:?}"
         );
@@ -1249,7 +1251,8 @@ fn a_judge_has_no_launching_capability_as_tool_or_skill() {
 fn resolve_reach_maps_tools_and_skills_to_short_form() {
     let actual = [
         resolve_reach("rimz-lsp", Reach::Tools(Capability::Lsp)),
-        resolve_reach("rimz-wait", Reach::Tools(Capability::Wait)),
+        resolve_reach("rimz-shell", Reach::Tools(Capability::Shell)),
+        resolve_reach("rimz-watch", Reach::Tools(Capability::Watch)),
         resolve_reach("rimz-subagents", Reach::Tools(Capability::Subagents)),
         resolve_reach("rimz-agents", Reach::Tools(Capability::Agents)),
         resolve_reach("rimz-teams", Reach::Tools(Capability::Teams)),
@@ -1266,7 +1269,8 @@ fn resolve_reach_maps_tools_and_skills_to_short_form() {
         actual,
         [
             "mcp(lsp)",
-            "mcp(wait)",
+            "mcp(shell)",
+            "mcp(watch)",
             "mcp(subagent)",
             "mcp(agent)",
             "mcp(team)",

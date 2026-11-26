@@ -173,13 +173,7 @@ fn steer_and_self_wait_reach_the_live_consumer_among_two_sessions() {
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", launch_id.as_str())
             .env("RIMZ_AGENT_NAME", "planner")
-            .args([
-                "--mux",
-                "zellij",
-                "wait",
-                "--run",
-                "printf self-wait-marker",
-            ])
+            .args(["--mux", "zellij", "shell", "--", "printf self-wait-marker"])
             .bounded_output()
             .expect("arm self wait");
         assert!(

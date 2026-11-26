@@ -207,7 +207,8 @@ fn routine_rimz_settings_union_and_idempotence() {
             "teams",
             "asks",
             "answer",
-            "wait",
+            "shell",
+            "watch",
             "pane list",
             "pane capture",
             "loop show",
@@ -258,13 +259,13 @@ fn routine_rimz_settings_union_and_idempotence() {
             value["sandbox"]["excludedCommands"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("rimz wait *"))
+                .contains(&json!("rimz shell *"))
         );
         let env = value["autoMode"]["environment"].as_array().unwrap();
         assert_eq!(env.iter().filter(|entry| **entry == "$defaults").count(), 1);
         let text = env.last().unwrap().as_str().unwrap();
-        assert!(text.contains("rimz wait,"), "{text}");
-        assert!(!text.contains("rimz wait --in"), "{text}");
+        assert!(text.contains("rimz shell, rimz watch,"), "{text}");
+        assert!(!text.contains("rimz wait"), "{text}");
         for name in [
             format!("$TMPDIR ({})", dirs[0].display()),
             format!("$RIMZ_SHARED ({})", dirs[1].display()),

@@ -71,6 +71,9 @@ pub struct TaskFireFinished {
     pub presentation: LoopRunPresentation,
     pub transition: RunTransition,
     pub notice: TaskFireNotice,
+    /// This arming's check-ins a fire with no delivery made stale, which the CLI cancels; a
+    /// delivery carries its own in [`PreparedDelivery::supersedes`].
+    pub supersedes: Vec<MessageId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1078,7 +1081,13 @@ impl<'a> Fire<'a> {
     }
 
     fn consume_ephemeral(&self) -> Result<()> {
-        if self.watch_spec().is_some()
+        let checks_in = self.watch_spec().is_some()
+            || self
+                .task
+                .trigger()
+                .as_ref()
+                .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Condition { .. }));
+        if checks_in
             && self
                 .watch_outcome()
                 .is_some_and(|watch| !watch.verdict.is_terminal())
@@ -1149,6 +1158,9 @@ impl<'a> Fire<'a> {
         record.condition = self.condition.clone();
         record.absorbed = self.absorbed;
         record.check.clone_from(&self.watch_check);
+        if self.watch_spec().is_some() && self.entry.wait_meta.is_some() {
+            record.wakes.clone_from(&self.entry.wait);
+        }
         record.late_ms = self.late_ms;
         if self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
@@ -1217,6 +1229,7 @@ impl<'a> Fire<'a> {
             presentation,
             transition,
             notice,
+            supersedes: Vec::new(),
         }
     }
 

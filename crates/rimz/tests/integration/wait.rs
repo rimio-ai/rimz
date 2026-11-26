@@ -1,11 +1,11 @@
-//! Integration coverage for the agent-facing `rimz wait` doorway.
+//! Integration coverage for the agent-facing `rimz shell` and `rimz watch` doorways.
 
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
     agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, register_agent,
-    register_agent_with_owner, register_calling_agent, register_calling_agent_with_launch,
-    reset_minute, seed_signal_wait, wait_instances, wait_ok,
+    register_agent_with_owner, register_calling_agent, reset_minute, seed_signal_wait,
+    wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -26,7 +26,7 @@ fn unreadable_task_record_leaves_no_wait() {
     std::fs::create_dir_all(record.parent().unwrap()).unwrap();
     std::fs::write(&record, "not json").unwrap();
     let output = agent_wait(&env)
-        .args(["wait", "--run", "true"])
+        .args(["shell", "--", "true"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -36,7 +36,7 @@ fn unreadable_task_record_leaves_no_wait() {
     );
     std::fs::remove_file(&record).unwrap();
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
     assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
 }
@@ -138,7 +138,7 @@ fn pending_rows_at_rest(json: &str) -> serde_json::Value {
     rows
 }
 
-fn assert_unresolved_wait(output: &std::process::Output, unchanged: &str) {
+fn assert_unresolved_wait(output: &std::process::Output, unchanged: &str, verb: &str) {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -147,8 +147,8 @@ fn assert_unresolved_wait(output: &std::process::Output, unchanged: &str) {
         format!(
             "error: {unchanged}RimZ could not find the calling agent's live session from this \
              process (looked for kind `claude`, launch id `launch-session`). If this ran inside \
-             a provider's command sandbox: Run `rimz wait …` as its own command, without a chain, \
-             pipe, redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
+             a provider's command sandbox: Run `rimz {verb} …` as its own command, without a \
+             chain, pipe, redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
              `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine \
              rules predate this RimZ, refresh them with `rimz hooks install codex` from a user \
              shell and restart the agent"
@@ -165,12 +165,12 @@ fn pid_namespaced_arm_refuses_unresolved_caller_and_leaves_no_wait() {
     env.record(&env.project_root);
     register_owned_calling_agent(&env);
     let output = read_only_home_wait(&env, &bwrap, true)
-        .args(["wait", "--run", "true"])
+        .args(["shell", "--", "true"])
         .output()
         .unwrap();
-    assert_unresolved_wait(&output, "nothing was armed: ");
+    assert_unresolved_wait(&output, "nothing was armed: ", "shell");
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
     assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
 }
@@ -183,20 +183,20 @@ fn pid_namespaced_list_refuses_unresolved_caller_and_keeps_wait_pending() {
     let env = Env::new();
     env.record(&env.project_root);
     register_owned_calling_agent(&env);
-    wait_ok(&env, &["wait", "--in", "5m", "--json"]);
+    wait_ok(&env, &["watch", "--json", "pr=merged"]);
     let before = wait_instances(&env);
-    let pending = wait_ok(&env, &["wait", "list", "--json"]);
+    let pending = wait_ok(&env, &["watch", "list", "--json"]);
     let output = read_only_home_wait(&env, &bwrap, true)
-        .args(["wait", "list", "--json"])
+        .args(["watch", "list", "--json"])
         .output()
         .unwrap();
-    assert_unresolved_wait(&output, "");
+    assert_unresolved_wait(&output, "", "watch");
     assert_eq!(wait_instances(&env), before);
     assert_eq!(
-        pending_rows_at_rest(&wait_ok(&env, &["wait", "list", "--json"])),
+        pending_rows_at_rest(&wait_ok(&env, &["watch", "list", "--json"])),
         pending_rows_at_rest(&pending)
     );
-    wait_ok(&env, &["wait", "cancel", "--all"]);
+    wait_ok(&env, &["watch", "cancel", "--all"]);
 }
 
 #[test]
@@ -208,21 +208,21 @@ fn pid_namespaced_cancel_refuses_unresolved_caller_and_keeps_wait_pending() {
     env.record(&env.project_root);
     register_owned_calling_agent(&env);
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "--json", "pr=merged"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let before = wait_instances(&env);
-    let pending = wait_ok(&env, &["wait", "list", "--json"]);
+    let pending = wait_ok(&env, &["watch", "list", "--json"]);
     let output = read_only_home_wait(&env, &bwrap, true)
-        .args(["wait", "cancel", name])
+        .args(["watch", "cancel", name])
         .output()
         .unwrap();
-    assert_unresolved_wait(&output, "nothing was canceled: ");
+    assert_unresolved_wait(&output, "nothing was canceled: ", "watch");
     assert_eq!(wait_instances(&env), before);
     assert_eq!(
-        pending_rows_at_rest(&wait_ok(&env, &["wait", "list", "--json"])),
+        pending_rows_at_rest(&wait_ok(&env, &["watch", "list", "--json"])),
         pending_rows_at_rest(&pending)
     );
-    wait_ok(&env, &["wait", "cancel", name]);
+    wait_ok(&env, &["watch", "cancel", name]);
 }
 
 #[test]
@@ -233,11 +233,8 @@ fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
     let env = Env::new();
     env.record(&env.project_root);
     register_owned_calling_agent(&env);
-    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
-        &env,
-        &["wait", "--pid", &std::process::id().to_string(), "--json"],
-    ))
-    .unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["shell", "--json", "--", "exec sleep 600"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     wait_until(&env, "process watcher did not start", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
@@ -246,7 +243,7 @@ fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
     });
     let before = wait_instances(&env);
     let output = read_only_home_wait(&env, &bwrap, false)
-        .args(["wait", "list", "--json"])
+        .args(["shell", "list", "--json"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -256,7 +253,7 @@ fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
         String::from_utf8_lossy(&output.stderr),
         format!(
             "error: this command cannot write the RimZ home, for example inside a provider's \
-             command sandbox. Run `rimz wait …` as its own command, without a chain, pipe, \
+             command sandbox. Run `rimz shell …` as its own command, without a chain, pipe, \
              redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
              `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine \
              rules predate this RimZ, refresh them with `rimz hooks install codex` from a user \
@@ -267,10 +264,10 @@ fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
     );
     assert_eq!(wait_instances(&env), before);
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(pending.as_array().unwrap().len(), 1);
     assert_eq!(pending[0]["name"], name);
-    wait_ok(&env, &["wait", "cancel", name]);
+    wait_ok(&env, &["shell", "cancel", name]);
 }
 
 #[test]
@@ -282,7 +279,7 @@ fn read_only_home_arm_shows_hint_and_leaves_no_wait() {
     env.record(&env.project_root);
     register_owned_calling_agent(&env);
     let output = read_only_home_wait(&env, &bwrap, false)
-        .args(["wait", "--run", "true"])
+        .args(["shell", "--", "true"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -300,7 +297,7 @@ fn read_only_home_arm_shows_hint_and_leaves_no_wait() {
     );
     assert!(!stderr.contains("nothing was canceled"), "{stderr}");
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
     assert!(!loop_instances_path(&env).exists() || wait_instances(&env).0.is_empty());
 }
@@ -314,11 +311,11 @@ fn read_only_home_cancel_shows_hint_and_keeps_wait_pending() {
     env.record(&env.project_root);
     register_calling_agent(&env);
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "--json", "pr=merged"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let before = wait_instances(&env);
     let output = read_only_home_wait(&env, &bwrap, false)
-        .args(["wait", "cancel", name])
+        .args(["watch", "cancel", name])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -336,10 +333,10 @@ fn read_only_home_cancel_shows_hint_and_keeps_wait_pending() {
     assert!(!stderr.contains("nothing was armed"), "{stderr}");
     assert_eq!(wait_instances(&env), before);
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap();
     assert_eq!(pending.as_array().unwrap().len(), 1);
     assert_eq!(pending[0]["name"], name);
-    wait_ok(&env, &["wait", "cancel", name]);
+    wait_ok(&env, &["watch", "cancel", name]);
     assert!(wait_instances(&env).0.is_empty());
 }
 
@@ -350,7 +347,7 @@ fn watcher_spawn_failure_leaves_no_wait() {
     register_calling_agent(&env);
     let output = agent_wait(&env)
         .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
-        .args(["wait", "--run", "true"])
+        .args(["shell", "--", "true"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -359,7 +356,7 @@ fn watcher_spawn_failure_leaves_no_wait() {
         "{output:?}"
     );
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(pending, serde_json::json!([]));
     assert!(wait_instances(&env).0.is_empty());
 }
@@ -371,7 +368,7 @@ fn cancel_with_an_unreadable_task_record_keeps_wait_pending() {
     env.record(&env.project_root);
     register_calling_agent(&env);
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "--json", "pr=merged"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let before = wait_instances(&env);
     let record = env.rimz_home().join("loops/tasks.json");
@@ -379,7 +376,7 @@ fn cancel_with_an_unreadable_task_record_keeps_wait_pending() {
     std::fs::create_dir_all(record.parent().unwrap()).unwrap();
     std::fs::write(&record, "not json").unwrap();
     let output = agent_wait(&env)
-        .args(["wait", "cancel", name])
+        .args(["watch", "cancel", name])
         .output()
         .unwrap();
     match &kept {
@@ -393,10 +390,10 @@ fn cancel_with_an_unreadable_task_record_keeps_wait_pending() {
     );
     assert_eq!(wait_instances(&env), before);
     let pending: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap();
     assert_eq!(pending.as_array().unwrap().len(), 1);
     assert_eq!(pending[0]["name"], name);
-    wait_ok(&env, &["wait", "cancel", name]);
+    wait_ok(&env, &["watch", "cancel", name]);
     assert!(wait_instances(&env).0.is_empty());
 }
 
@@ -411,13 +408,20 @@ fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
     let command = format!("exec sleep 600 {clause}");
     let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
         &env,
-        &["wait", "--run", &command, "--check-in", "90m", "--json"],
+        &["shell", "--check-in", "90m", "--json", "--", &command],
     ))
     .unwrap();
     let live = receipt["name"].as_str().unwrap();
     let past: serde_json::Value = serde_json::from_str(&wait_ok(
         &env,
-        &["wait", "--check", "false", "--check-in", "30m", "--json"],
+        &[
+            "shell",
+            "--check-in",
+            "30m",
+            "--json",
+            "--",
+            "exec sleep 600",
+        ],
     ))
     .unwrap();
     let past = past["name"].as_str().unwrap();
@@ -456,8 +460,8 @@ fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
         serde_json::to_vec(&tasks).unwrap(),
     )
     .unwrap();
-    let text = wait_ok(&env, &["wait", "list"]);
-    assert!(text.starts_with("@planner#main · 3 waits\n"), "{text}");
+    let text = wait_ok(&env, &["shell", "list"]);
+    assert!(text.starts_with("@planner#main · 3 shells\n"), "{text}");
     assert!(
         text.find("zz-lost").unwrap() < text.find(past).unwrap(),
         "{text}"
@@ -476,7 +480,7 @@ fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
     assert!(line.ends_with(&clause), "{text}");
     assert!(line.chars().count() > 120, "{text}");
     assert!(!line.contains(" · in project"), "{text}");
-    wait_ok(&env, &["wait", "cancel", "--all"]);
+    wait_ok(&env, &["shell", "cancel", "--all"]);
 }
 
 #[test]
@@ -486,7 +490,7 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
     register_calling_agent(&env);
     seed_signal_wait(&env, "deployment", "deploy.failed", true);
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--check", "false", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "--json", "--", "exec sleep 600"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
     wait_until(&env, "watcher did not start", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
@@ -494,20 +498,23 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
             .is_some()
     });
     let canceled: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "cancel", "--all", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "cancel", "--all", "--json"])).unwrap();
     assert_eq!(canceled["canceled"], serde_json::json!([name]));
-    assert_eq!(canceled["pending"].as_array().unwrap().len(), 1);
-    assert_eq!(canceled["pending"][0]["owner"], "loop:deployment");
+    assert_eq!(canceled["pending"], serde_json::json!([]));
+    let watches: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap();
+    assert_eq!(watches.as_array().unwrap().len(), 1, "{watches}");
+    assert_eq!(watches[0]["owner"], "loop:deployment");
     wait_until(&env, "cancel left the self watcher alive", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
             .unwrap()
             .is_none()
     });
     assert_eq!(
-        wait_ok(&env, &["wait", "cancel", "--all"]),
-        "@planner#main · no waits · also woken by deploy.failed (loop deployment)\n"
+        wait_ok(&env, &["watch", "cancel", "--all"]),
+        "@planner#main · no watches · also woken by deploy.failed (loop deployment)\n"
     );
-    wait_ok(&env, &["wait", "cancel", "deployment"]);
+    wait_ok(&env, &["watch", "cancel", "deployment"]);
 }
 
 #[test]
@@ -531,7 +538,7 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
         },
     );
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "--json", "pr=merged"])).unwrap();
     let root_name = receipt["name"].as_str().unwrap();
     let mut tasks = wait_instances(&env);
     let root = tasks.0[root_name].clone();
@@ -572,7 +579,7 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
     .unwrap();
     let rows = env
         .rimz()
-        .args(["wait", "list", "--json"])
+        .args(["watch", "list", "--json"])
         .output()
         .unwrap();
     assert!(
@@ -614,9 +621,9 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
         );
         String::from_utf8(output.stdout).unwrap()
     };
-    let waits = shell_text(&["wait", "list"]);
+    let waits = shell_text(&["watch", "list"]);
     assert!(
-        waits.starts_with("~/project · whole room · 3 waits · 3 subscriptions\n\n"),
+        waits.starts_with("~/project · whole room · 3 watches · 3 subscriptions\n\n"),
         "{waits}"
     );
     let body = waits.split_once("\n\n").unwrap().1;
@@ -693,9 +700,9 @@ fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
         String::from_utf8(output.stdout).unwrap()
     };
     let receipt: serde_json::Value =
-        serde_json::from_str(&run(&["wait", "--in", "5m", "--json"], true)).unwrap();
+        serde_json::from_str(&run(&["watch", "--json", "pr=merged"], true)).unwrap();
     assert_eq!(receipt["target"], "@claude#main");
-    let waits = run(&["wait", "list"], false);
+    let waits = run(&["watch", "list"], false);
     let body = waits.split_once("\n\n").unwrap().1;
     let loops = run(&["loop", "list", "--all"], false);
     let loop_body = loops
@@ -719,21 +726,18 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let pid = std::process::id().to_string();
     let unicode_label = "é".repeat(60);
-    for (trigger, subject, label) in [
-        ("--in", "5m", unicode_label.as_str()),
-        ("--pid", pid.as_str(), "process"),
-        ("--check", "false", "check"),
-        ("--file", "pending.log", "file"),
-        ("--run", "exec sleep 300", "run"),
+    for (verb, subject, label) in [
+        ("watch", "pr=merged", unicode_label.as_str()),
+        ("shell", "exec sleep 300", "run"),
     ] {
         let padded = format!("  {label}  ");
-        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
-            &env,
-            &["wait", trigger, subject, "--label", &padded, "--json"],
-        ))
-        .unwrap();
+        let mut argv = vec![verb, "--label", &padded, "--json"];
+        if verb == "shell" {
+            argv.push("--");
+        }
+        argv.push(subject);
+        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &argv)).unwrap();
         let name = receipt["name"].as_str().unwrap();
         let tasks = serde_json::to_value(wait_instances(&env)).unwrap();
         assert_eq!(
@@ -741,7 +745,7 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
             "label must survive the instance write"
         );
         let rows: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+            serde_json::from_str(&wait_ok(&env, &[verb, "list", "--json"])).unwrap();
         let row = rows
             .as_array()
             .unwrap()
@@ -749,13 +753,11 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
             .find(|row| row["name"] == name)
             .unwrap();
         assert_eq!(row["label"], label);
-        if trigger != "--in" {
+        if verb == "shell" {
             assert_eq!(row["trigger"], label);
-            let text = wait_ok(&env, &["wait", "list"]);
+            let text = wait_ok(&env, &["shell", "list"]);
             assert!(text.contains(label), "{text}");
-            if trigger == "--run" {
-                assert!(!text.contains(subject), "{text}");
-            }
+            assert!(!text.contains(subject), "{text}");
         }
         let shown = wait_ok(&env, &["loop", "show", name]);
         assert!(
@@ -764,10 +766,10 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
                 .any(|line| line.trim_start().starts_with("label:") && line.contains(label)),
             "{shown}"
         );
-        wait_ok(&env, &["wait", "cancel", name]);
+        wait_ok(&env, &[verb, "cancel", name]);
     }
     let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["watch", "--json", "ci=passed"])).unwrap();
     assert!(receipt["pending"][0].get("label").is_none());
     let tasks = serde_json::to_value(wait_instances(&env)).unwrap();
     assert!(
@@ -778,27 +780,24 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
 }
 
 #[test]
-fn clock_and_condition_wait_lines_keep_their_trigger_and_add_the_label_once() {
+fn watch_lines_keep_their_condition_and_add_the_label_once() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
     let mut lines = Vec::new();
-    for (args, trigger) in [
-        (&["--at", "23:59"][..], "once at "),
-        (&["--in", "5m"][..], "once at "),
-        (&["--when", "pr=merged"][..], "when pr=merged"),
+    for (expr, trigger) in [
+        ("pr=merged", "when pr=merged"),
+        ("ci=passed", "when ci=passed"),
     ] {
         let label = format!("label-{}", lines.len());
-        let mut argv = vec!["wait"];
-        argv.extend_from_slice(args);
-        argv.extend_from_slice(&["--label", &label, "--json"]);
+        let argv = ["watch", "--label", &label, "--json", expr];
         let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &argv)).unwrap();
         lines.push((receipt["name"].as_str().unwrap().to_owned(), trigger, label));
     }
-    let shell = env.rimz().args(["wait", "list"]).output().unwrap();
+    let shell = env.rimz().args(["watch", "list"]).output().unwrap();
     assert!(shell.status.success());
     for view in [
-        wait_ok(&env, &["wait", "list"]),
+        wait_ok(&env, &["watch", "list"]),
         String::from_utf8(shell.stdout).unwrap(),
     ] {
         for (name, trigger, label) in &lines {
@@ -826,7 +825,7 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
         "end\n".into(),
     ] {
         for args in [
-            vec!["wait", "--in", "5m", "--label", &label],
+            vec!["watch", "--label", &label, "pr=merged"],
             vec![
                 "loop", "add", "labelled", "--every", "1h", "--label", &label, "--", "true",
             ],
@@ -887,9 +886,9 @@ fn wait_run_preserves_shell_string_and_runs_both_commands() {
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let command = "printf 'one\\n' && printf 'two\\n'";
-    let receipt = wait_ok(&env, &["wait", "--json", "--run", command]);
+    let receipt = wait_ok(&env, &["shell", "--json", "--", command]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    assert_eq!(receipt["trigger"], format!("watch: {command}"));
+    assert_eq!(receipt["trigger"], format!("shell: {command}"));
     let records = wait_for_wait_records(&env, 1);
     let check = records[0].check.as_ref().unwrap();
     assert_eq!(check.code, Some(0));
@@ -908,6 +907,29 @@ fn wait_run_preserves_shell_string_and_runs_both_commands() {
     assert!(
         message.contains(&format!("waited on `{command}`")),
         "{message}"
+    );
+    wait_for_no_wait_instances(&env);
+    // Several words run as that argv, each quoted for sh.
+    let receipt = wait_ok(
+        &env,
+        &[
+            "shell",
+            "--json",
+            "--",
+            "sh",
+            "-c",
+            "printf one; printf two",
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let quoted = "sh -c 'printf one; printf two'";
+    assert_eq!(receipt["trigger"], format!("shell: {quoted}"));
+    let records = wait_for_wait_records(&env, 2);
+    let check = records[1].check.as_ref().unwrap();
+    assert_eq!(check.code, Some(0));
+    assert_eq!(
+        std::fs::read_to_string(check.output_path.as_ref().unwrap()).unwrap(),
+        "onetwo"
     );
     wait_for_no_wait_instances(&env);
 }
@@ -929,7 +951,7 @@ fn wait_run_output_file_holds_only_the_command_output() {
     std::fs::create_dir_all(homes.parent().unwrap()).unwrap();
     std::fs::write(homes, "not a directory").unwrap();
     let output = agent_wait(&env)
-        .args(["wait", "--run", "printf 'first line\\nsecond line\\n'"])
+        .args(["shell", "--", "printf 'first line\\nsecond line\\n'"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -962,7 +984,7 @@ fn wait_run_keeps_the_agent_temp_environment() {
         .env("RIMZ_USER_TMPDIR", &user)
         .env("CLAUDE_CODE_TMPDIR", &unit)
         .env("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR")
-        .args(["wait", "--run", command])
+        .args(["shell", "--", command])
         .output()
         .expect("arm watched wait");
     assert!(
@@ -986,269 +1008,40 @@ fn wait_run_rejects_empty_commands() {
     register_calling_agent(&env);
     for command in ["", "   "] {
         let output = agent_wait(&env)
-            .args(["wait", "--run", command])
+            .args(["shell", "--", command])
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("--run needs a command"), "{stderr}");
+        assert!(stderr.contains("a shell needs a command"), "{stderr}");
         assert!(!loop_instances_path(&env).exists());
     }
 }
 
+/// A command the shell cannot start still answers once: its exit and the shell's own error in
+/// the output file, and the row retires.
 #[test]
-fn wait_empty_file_is_refused_by_rimz_and_cancel_usage_names_all() {
+fn a_shell_whose_command_cannot_start_reports_its_exit_and_error() {
     let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let output = agent_wait(&env)
-        .args(["wait", "--file", ""])
+        .args(["shell", "--", "rimz-absent-program-xyz"])
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("--file needs a path"), "{stderr}");
-    assert!(!loop_instances_path(&env).exists());
-    for args in [
-        vec!["wait", "cancel"],
-        vec!["wait", "cancel", "build", "--all"],
-    ] {
-        let output = agent_wait(&env).args(&args).output().unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
-        assert!(
-            stderr.contains("Usage: rimz wait cancel <NAME|--all>"),
-            "{args:?}: {stderr}"
-        );
-    }
-}
-
-#[test]
-fn wait_rejects_retired_timeout_with_fix() {
-    let env = Env::new();
-    for extra in [vec![], vec!["--run", "true"], vec!["--in", "5m"]] {
-        let output = env
-            .rimz()
-            .args(["wait", "--timeout", "5m"])
-            .args(extra)
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stderr).trim(),
-            "error: `--timeout` is now `--check-in`: it sends one still-running notice and never stops the command"
-        );
-    }
-}
-
-#[test]
-fn wait_check_lists_elapsed_and_checkin_limit() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let receipt = wait_ok(&env, &["wait", "--check", "false", "--check-in", "12m"]);
+    assert!(output.status.success(), "{output:?}");
+    let records = wait_for_wait_records(&env, 1);
+    let check = records[0].check.as_ref().unwrap();
+    let error = std::fs::read_to_string(check.output_path.as_ref().unwrap()).unwrap();
+    assert!(error.contains("rimz-absent-program-xyz"), "{error}");
+    let messages = wait_for_wait_messages(&env, 1);
     assert!(
-        receipt.lines().next().unwrap().ends_with("(check-in 12m)"),
-        "{receipt}"
+        messages[0].text.contains("exit 127 after"),
+        "{}",
+        messages[0].text
     );
-    wait_until(&env, "watcher holds its lock", || {
-        let rows: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-        rows[0]["watcher_pid"].is_u64()
-    });
-    let rows: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-    let row = &rows[0];
-    assert_eq!(row["type"], "check");
-    assert_eq!(row["state"], "watching");
-    assert_eq!(row["trigger"], "false");
-    assert_eq!(row["check_in"], "12m");
-    assert_eq!(row["check_in_s"], 720);
-    assert!(row["elapsed_s"].is_u64());
-    assert!(row["watcher_pid"].is_u64());
-    assert!(row.get("age").is_none());
-    assert!(row.get("timeout").is_none());
-    assert!(row.get("timeout_s").is_none());
-    let text = wait_ok(&env, &["wait", "list"]);
-    assert!(text.starts_with("@planner#main · 1 wait\n"), "{text}");
-    assert!(
-        text.contains("watching") && text.contains("check-in in "),
-        "{text}"
-    );
-    wait_ok(&env, &["wait", "cancel", "--all"]);
-}
-
-#[test]
-fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
-    // Keepalive on with a provider TTL records no limit; off falls back to 30m.
-    for (switch, timeout, timeout_s) in [
-        ("false", serde_json::json!("30m"), serde_json::json!(1800)),
-        ("true", serde_json::Value::Null, serde_json::Value::Null),
-    ] {
-        let env = Env::new();
-        env.record(&env.project_root);
-        register_calling_agent(&env);
-        wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
-        wait_ok(
-            &env,
-            &["config", "set", "harness.prompt_cache_ttl.claude", "1h"],
-        );
-        let armed = agent_wait(&env)
-            .env("RIMZ_BIN", "/bin/true")
-            .args(["wait", "--check", "false", "--json"])
-            .output()
-            .unwrap();
-        assert!(
-            armed.status.success(),
-            "{}",
-            String::from_utf8_lossy(&armed.stderr)
-        );
-        let rows: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-        assert_eq!(rows[0]["state"], "starting");
-        assert!(wait_ok(&env, &["wait", "list"]).contains("starting"));
-        let loops: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["loop", "list", "--json"])).unwrap();
-        assert!(loops["rooms"][0]["tasks"][0].get("attention").is_none());
-        let mut tasks = wait_instances(&env);
-        for entry in tasks.0.values_mut() {
-            entry.wait_meta.as_mut().unwrap().armed_at =
-                jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60);
-        }
-        std::fs::write(
-            loop_instances_path(&env),
-            serde_json::to_vec(&tasks).unwrap(),
-        )
-        .unwrap();
-        let rows: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-        assert_eq!(rows[0]["state"], "lost");
-        let loops: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["loop", "list", "--json"])).unwrap();
-        assert_eq!(loops["rooms"][0]["tasks"][0]["attention"], "lost");
-        assert!(rows[0]["elapsed_s"].is_u64());
-        assert_eq!(rows[0]["check_in"], timeout, "keepalive {switch}");
-        assert_eq!(rows[0]["check_in_s"], timeout_s, "keepalive {switch}");
-        assert!(rows[0].get("watcher_pid").is_none());
-    }
-}
-
-#[test]
-fn wait_delay_arms_instance_for_the_calling_agent() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent_with_launch(
-        &env,
-        LaunchParams {
-            team: Some("forge".to_owned()),
-            role: Some("planner".to_owned()),
-            ..LaunchParams::default()
-        },
-    );
-    assert_eq!(
-        agents_wait_exit(&env),
-        Some(124),
-        "never-started agent finished"
-    );
-    let stdout = wait_ok(&env, &["wait", "--in", "5m"]);
-    assert!(stdout.starts_with("armed wait-"), "{stdout}");
-    assert!(stdout.contains("in 5m"), "{stdout}");
-    assert!(stdout.contains("→ @planner"), "{stdout}");
-    assert!(!stdout.lines().next().unwrap().contains("(check-in"));
-    let listed = wait_ok(&env, &["wait", "list"]);
-    assert_eq!(
-        listed
-            .lines()
-            .next()
-            .unwrap()
-            .split_whitespace()
-            .collect::<Vec<_>>(),
-        ["@planner#main", "·", "1", "wait"]
-    );
-    let rows: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-    assert_eq!(rows[0]["type"], "timer");
-    assert_eq!(rows[0]["state"], "pending");
-    assert_eq!(rows[0]["owner"], "self");
-    assert_eq!(rows[0].get("parent"), Some(&serde_json::Value::Null));
-    assert_eq!(rows[0]["check_in"], "5m");
-    assert_eq!(rows[0]["check_in_s"], 300);
-    assert!(rows[0]["elapsed_s"].is_u64());
-    assert!(rows[0].get("watcher_pid").is_none());
-    let tasks = wait_instances(&env);
-    assert_eq!(tasks.0.len(), 1);
-    let (name, entry) = tasks.0.iter().next().unwrap();
-    assert!(name.starts_with("wait-"));
-    assert!(entry.fire_at.is_some());
-    assert_eq!(
-        entry
-            .wait_meta
-            .as_ref()
-            .and_then(|meta| meta.delay.as_deref()),
-        Some("5m")
-    );
-    assert!(entry.signal.is_none());
-    assert!(entry.deadline.is_none());
-    assert!(entry.prompt.is_none());
-    assert!(entry.wait_meta.is_some());
-    let target = entry.wait.as_ref().expect("pinned wait target");
-    assert_eq!(target.kind.as_str(), "claude");
-    assert_eq!(target.session.as_str(), "launch-session");
-    assert_eq!(target.handle, "@planner#main");
-
-    for signal in [
-        LifecycleSignal::TurnStarted { turn_id: None },
-        LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-            turn_id: None,
-        },
-    ] {
-        let observation =
-            AgentLifecycleObservation::new(Some(AgentSessionId::from("provider-session")), signal);
-        env.store()
-            .append_agent_lifecycle(AgentLifecycleIntent {
-                session_name: "rimz-test",
-                agent_kind: AgentKind::new_unchecked("claude"),
-                event_name: "test",
-                observation: &observation,
-                spawned_subagents: &[],
-            })
-            .expect("record the arming turn");
-    }
-    let report: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
-            .expect("agent report");
-    assert_eq!(report["agent"]["status"], "sleeping");
-    assert_eq!(report["agent"]["pending_waits"][0]["name"], *name);
-    let teams: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["teams", "list", "--json"])).expect("team report");
-    assert_eq!(teams[0]["instances"][0]["state"], "sleeping", "{teams}");
-    assert_eq!(agents_wait_exit(&env), Some(124), "sleeping agent finished");
-    wait_ok(&env, &["wait", "cancel", name]);
-    let report: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
-            .expect("agent report after cancellation");
-    assert_eq!(report["agent"]["status"], "success");
-    let teams: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["teams", "list", "--json"]))
-            .expect("team report after cancellation");
-    assert_eq!(teams[0]["instances"][0]["state"], "idle");
-    assert_eq!(agents_wait_exit(&env), Some(0));
-    rimz::transcript::append(
-        env.store().paths(),
-        &rimz::transcript::TranscriptEntry::new(
-            jiff::Timestamp::now(),
-            AgentKind::new_unchecked("claude"),
-            AgentSessionId::from("provider-session"),
-            rimz::transcript::TranscriptKind::Assistant,
-            "planned the rollout".to_owned(),
-        ),
-    )
-    .expect("record the turn's final message");
-    assert_eq!(
-        wait_ok(&env, &["agents", "wait", "@planner", "--timeout", "1s"]),
-        "planned the rollout\n"
-    );
+    wait_for_no_wait_instances(&env);
 }
 
 #[test]
@@ -1260,28 +1053,33 @@ fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
         ("true", "off", None, Some("30m")),
         ("true", "1h", Some("1s"), Some("1s")),
     ] {
-        let env = Env::new();
-        env.record(&env.project_root);
-        register_calling_agent(&env);
-        wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
-        wait_ok(
-            &env,
-            &["config", "set", "harness.prompt_cache_ttl.claude", ttl],
-        );
-        let mut args = vec!["wait", "--json"];
-        if let Some(timeout) = explicit {
-            args.extend(["--check-in", timeout]);
+        for (verb, what) in [
+            ("shell", &["--", "sleep 600"][..]),
+            ("watch", &["pr=merged"][..]),
+        ] {
+            let env = Env::new();
+            env.record(&env.project_root);
+            register_calling_agent(&env);
+            wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
+            wait_ok(
+                &env,
+                &["config", "set", "harness.prompt_cache_ttl.claude", ttl],
+            );
+            let mut args = vec![verb, "--json"];
+            if let Some(timeout) = explicit {
+                args.extend(["--check-in", timeout]);
+            }
+            args.extend(what);
+            let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &args)).unwrap();
+            let name = receipt["name"].as_str().unwrap();
+            let tasks = wait_instances(&env);
+            assert_eq!(
+                tasks.0[name].timeout.as_deref(),
+                expected,
+                "{verb}: keepalive {switch}, TTL {ttl}, explicit {explicit:?}"
+            );
+            wait_ok(&env, &[verb, "cancel", name]);
         }
-        args.extend(["--run", "sleep 600"]);
-        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &args)).unwrap();
-        let name = receipt["name"].as_str().unwrap();
-        let tasks = wait_instances(&env);
-        assert_eq!(
-            tasks.0[name].timeout.as_deref(),
-            expected,
-            "keepalive {switch}, TTL {ttl}, explicit {explicit:?}"
-        );
-        wait_ok(&env, &["wait", "cancel", name]);
     }
 }
 
@@ -1386,7 +1184,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     let name = "deployment";
 
     let listed = agent_wait(&env)
-        .args(["wait", "list", "--json"])
+        .args(["watch", "list", "--json"])
         .output()
         .expect("list wait as target agent");
     assert!(
@@ -1406,12 +1204,12 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     }
     assert!(rows[0].get("dir").is_none());
     assert_eq!(
-        wait_ok(&env, &["wait", "list"]),
-        "@planner#main · no waits · also woken by deploy.failed (loop deployment)\n"
+        wait_ok(&env, &["watch", "list"]),
+        "@planner#main · no watches · also woken by deploy.failed (loop deployment)\n"
     );
 
     let canceled = agent_wait(&env)
-        .args(["wait", "cancel", name])
+        .args(["watch", "cancel", name])
         .output()
         .expect("cancel wait as target agent");
     assert!(
@@ -1421,7 +1219,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     );
     assert_eq!(
         String::from_utf8_lossy(&canceled.stdout),
-        format!("canceled {name}\n@planner#main · no waits\n")
+        format!("canceled {name}\n@planner#main · no watches\n")
     );
 }
 
@@ -1431,42 +1229,38 @@ fn wait_arm_refuses_a_plain_shell() {
     env.record(&env.project_root);
     let output = env
         .rimz()
-        .args(["wait", "--in", "5m"])
+        .args(["watch", "pr=merged"])
         .output()
         .expect("run wait from shell");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("arming a wait is only available to an agent"),
+        stderr.contains("arming a watch is only available to an agent"),
         "{stderr}"
     );
 }
 
+/// Each verb's `--check-in` help words what its one message says, as its MCP field does.
 #[test]
-fn wait_accepts_delays_of_a_day_or_more_as_an_absolute_instant() {
+fn each_verbs_check_in_help_names_what_it_waits_on() {
     let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let before = jiff::Timestamp::now();
-    let stdout = wait_ok(&env, &["wait", "--in", "2d"]);
-    assert!(stdout.contains("in 2d"), "{stdout}");
-    let tasks = wait_instances(&env);
-    let (_, entry) = tasks.0.iter().next().expect("armed wait row");
-    let fire_at = entry.fire_at.expect("a timer stores fire-at");
-    assert!(
-        fire_at
-            >= before
-                .checked_add(jiff::SignedDuration::from_secs(2 * 86_400))
-                .unwrap(),
-        "{fire_at}"
-    );
-    assert_eq!(
-        entry
-            .wait_meta
-            .as_ref()
-            .and_then(|meta| meta.delay.as_deref()),
-        Some("2d")
-    );
+    for (verb, wording) in [
+        (
+            "shell",
+            "Send one still-running message after this long; never stops the command.",
+        ),
+        (
+            "watch",
+            "Send one still-not-met message after this long; never stops the watch.",
+        ),
+    ] {
+        let output = env.rimz().args([verb, "--help"]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains(wording), "{verb}: {help}");
+        assert!(!help.contains("stops the wait"), "{verb}: {help}");
+    }
 }
 
 #[test]
@@ -1475,7 +1269,7 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
     register_calling_agent(&env);
     for timeout in ["24h", "25h"] {
         let output = agent_wait(&env)
-            .args(["wait", "--check-in", timeout, "--run", "true"])
+            .args(["shell", "--check-in", timeout, "--", "true"])
             .output()
             .expect("reject long watch check-in");
         assert!(!output.status.success(), "accepted --check-in {timeout}");
@@ -1485,449 +1279,6 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
             "{stderr}"
         );
     }
-}
-
-#[test]
-fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let mut process = std::process::Command::new("sleep")
-        .arg("30")
-        .env("HOME", &env.home_root)
-        .spawn()
-        .unwrap();
-    let pid = process.id().to_string();
-    let receipt = wait_ok(&env, &["wait", "--pid", &pid, "--check-in", "1s", "--json"]);
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    assert_eq!(receipt["trigger"], format!("pid {pid}"));
-    assert_eq!(receipt["pending"][0]["type"], "pid");
-    assert_eq!(receipt["pending"][0]["trigger"], pid);
-    let listed: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-    assert_eq!(listed[0]["trigger"], pid);
-    let tasks = wait_instances(&env);
-    let entry = &tasks.0[receipt["name"].as_str().unwrap()];
-    assert_eq!(
-        entry.watch,
-        Some(rimz::config::WatchSpec::Pid { pid: process.id() })
-    );
-    assert_eq!(entry.on, Some(rimz::config::CheckOn::Any));
-    let report: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
-            .expect("agent report");
-    assert_eq!(
-        report["agent"]["pending_waits"][0]["trigger"],
-        serde_json::json!({"kind": "pid", "pid": process.id()})
-    );
-    let checkin = wait_for_wait_messages(&env, 1);
-    assert!(
-        checkin[0]
-            .text
-            .contains(&format!("waited on pid {pid}\nstill not met after")),
-        "{}",
-        checkin[0].text
-    );
-    assert!(!checkin[0].text.contains("output"), "{}", checkin[0].text);
-    assert!(process.try_wait().unwrap().is_none());
-    assert_eq!(wait_instances(&env).0.len(), 1);
-    process.kill().unwrap();
-    process.wait().unwrap();
-    wait_for_wait_records(&env, 2);
-    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
-    messages.extend(history);
-    assert_eq!(
-        messages
-            .iter()
-            .find(|message| message.message_id == checkin[0].message_id)
-            .unwrap()
-            .status,
-        MessageStatus::Canceled
-    );
-    let completed = messages
-        .iter()
-        .find(|message| message.text.contains("\nmet after"))
-        .expect("process disappearance delivered");
-    assert!(completed.text.contains(&pid));
-    assert!(!completed.text.contains("output"), "{}", completed.text);
-    wait_for_no_wait_instances(&env);
-
-    let receipt = wait_ok(&env, &["wait", "--pid", &pid]);
-    assert!(receipt.starts_with("armed wait-"), "{receipt}");
-    assert!(receipt.contains(&format!(": pid {pid} →")), "{receipt}");
-    assert_eq!(wait_for_wait_messages(&env, 2).len(), 2);
-    wait_for_no_wait_instances(&env);
-}
-
-#[test]
-fn canceling_pid_wait_leaves_the_existing_process_running() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let mut process = std::process::Command::new("sleep")
-        .arg("30")
-        .env("HOME", &env.home_root)
-        .spawn()
-        .unwrap();
-    let receipt = wait_ok(
-        &env,
-        &["wait", "--pid", &process.id().to_string(), "--json"],
-    );
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    let name = receipt["name"].as_str().unwrap();
-    wait_until(&env, "process watcher did not start", || {
-        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
-            .unwrap()
-            .is_some()
-    });
-    wait_ok(&env, &["wait", "cancel", name]);
-    assert!(process.try_wait().unwrap().is_none());
-    assert!(wait_instances(&env).0.is_empty());
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    process.kill().unwrap();
-    process.wait().unwrap();
-}
-
-#[test]
-fn wait_pid_refuses_a_process_it_cannot_observe() {
-    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(1), None) != Err(nix::errno::Errno::EPERM)
-    {
-        crate::common::skip("pid 1 is not signal-protected from this user");
-        return;
-    }
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let output = agent_wait(&env)
-        .args(["wait", "--pid", "1"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("cannot watch PID 1: permission denied"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("choose a process owned by your user"),
-        "{stderr}"
-    );
-    assert!(!loop_instances_path(&env).exists());
-}
-
-#[test]
-fn wait_pid_rejects_invalid_pids_and_conflicting_triggers() {
-    let env = Env::new();
-    for args in [
-        vec!["wait", "--pid", "0"],
-        vec!["wait", "--pid=-1"],
-        vec!["wait", "--pid", "2147483648"],
-        vec!["wait", "--pid", "not-a-pid"],
-        vec!["wait", "--pid", "123;true"],
-        vec!["wait", "--pid", "123", "--in", "5m"],
-        vec!["wait", "--pid", "123", "--run", "true"],
-        vec!["wait", "--pid", "123", "--on", "success"],
-    ] {
-        let output = agent_wait(&env).args(&args).output().unwrap();
-        assert!(!output.status.success(), "accepted {args:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("invalid value")
-                || stderr.contains("choose exactly one wait trigger")
-                || stderr.contains("--on requires --check or --run"),
-            "{args:?}: {stderr}"
-        );
-    }
-}
-
-#[test]
-fn wait_check_polls_until_the_command_succeeds_then_retires() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let flag = env.home_root.join("check-flag");
-    let check = format!("echo probing; test -e '{}'", flag.display());
-    let receipt: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "--check", &check, "--json"])).unwrap();
-    assert_eq!(receipt["trigger"], format!("check: {check}"));
-    assert_eq!(receipt["pending"][0]["type"], "check");
-    assert_eq!(receipt["pending"][0]["trigger"], check);
-    let tasks = wait_instances(&env);
-    let entry = &tasks.0[receipt["name"].as_str().unwrap()];
-    assert_eq!(
-        entry.watch,
-        Some(rimz::config::WatchSpec::Check {
-            check: check.clone(),
-            every: "1s".to_owned(),
-            on: rimz::config::CheckOn::Success,
-        })
-    );
-    assert_eq!(entry.on, Some(rimz::config::CheckOn::Any));
-    let report: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
-            .expect("agent report");
-    assert_eq!(
-        report["agent"]["pending_waits"][0]["trigger"],
-        serde_json::json!({"kind": "check", "command": check})
-    );
-    std::thread::sleep(std::time::Duration::from_millis(1_500));
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    assert_eq!(wait_instances(&env).0.len(), 1);
-
-    std::fs::write(&flag, "").unwrap();
-    let messages = wait_for_wait_messages(&env, 1);
-    let text = &messages[0].text;
-    assert!(
-        text.contains(&format!("waited on check `{check}`\nmet after ")),
-        "{text}"
-    );
-    assert!(text.contains(" · output: "), "{text}");
-    assert!(text.contains("(<1k tokens, 1 line)"), "{text}");
-    wait_for_no_wait_instances(&env);
-    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
-}
-
-#[test]
-fn wait_check_on_fail_checks_in_with_still_not_met() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let flag = env.home_root.join("check-flag");
-    std::fs::write(&flag, "").unwrap();
-    let check = format!("test -e '{}'", flag.display());
-    let receipt = wait_ok(
-        &env,
-        &[
-            "wait",
-            "--check",
-            &check,
-            "--on",
-            "fail",
-            "--check-in",
-            "1s",
-        ],
-    );
-    assert!(
-        receipt.contains(&format!(": check: {check} on fail →")),
-        "{receipt}"
-    );
-    let checkin = wait_for_wait_messages(&env, 1);
-    let text = &checkin[0].text;
-    assert!(text.contains("\nstill not met after "), "{text}");
-    assert!(text.contains(" · still watching"), "{text}");
-    assert!(text.contains("Stop it: rimz wait cancel wait-"), "{text}");
-    assert!(!text.contains("output"), "{text}");
-    assert_eq!(wait_instances(&env).0.len(), 1);
-
-    std::fs::remove_file(&flag).unwrap();
-    wait_for_wait_records(&env, 2);
-    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
-    messages.extend(history);
-    assert_eq!(
-        messages
-            .iter()
-            .find(|message| message.message_id == checkin[0].message_id)
-            .unwrap()
-            .status,
-        MessageStatus::Canceled
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.text.contains("\nmet after ")),
-        "{messages:?}"
-    );
-    wait_for_no_wait_instances(&env);
-}
-
-#[test]
-fn wait_check_reports_a_command_it_cannot_run() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    wait_ok(&env, &["wait", "--check", "definitely-not-a-rimz-command"]);
-    let messages = wait_for_wait_messages(&env, 1);
-    assert!(
-        messages[0].text.contains("\nexit 127 after "),
-        "{}",
-        messages[0].text
-    );
-    wait_for_no_wait_instances(&env);
-}
-
-#[test]
-fn wait_check_rejects_shapes_without_a_meaning() {
-    let env = Env::new();
-    for (args, expected) in [
-        (
-            vec!["wait", "--check", "true", "--on", "any"],
-            "--on any has no meaning with --check",
-        ),
-        (
-            vec!["wait", "--every", "5s", "--run", "true"],
-            "--every requires --check",
-        ),
-        (
-            vec!["wait", "--check", "true", "--pid", "123"],
-            "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, or --run",
-        ),
-        (vec!["wait", "--check", " "], "--check needs a command"),
-        (
-            vec!["wait", "--grep", "ready", "--run", "true"],
-            "--grep requires --file",
-        ),
-        (
-            vec!["wait", "--file", "app.log", "--grep", ""],
-            "--grep needs a pattern",
-        ),
-        (
-            vec!["wait", "--file", "app.log", "--in", "5m"],
-            "choose exactly one wait trigger",
-        ),
-        (
-            vec!["wait", "--in", "5m", "--check-in", "1m"],
-            "--check-in requires --pid, --check, --file, or --run",
-        ),
-        (
-            vec!["wait", "--check", "true", "--every", "24h"],
-            "--every must be less than 24h",
-        ),
-    ] {
-        let output = agent_wait(&env).args(&args).output().unwrap();
-        assert!(!output.status.success(), "accepted {args:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains(expected), "{args:?}: {stderr}");
-    }
-}
-
-#[test]
-fn wait_file_fires_on_any_change_including_creation() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let dir = env.project_root.join("logs");
-    std::fs::create_dir_all(&dir).unwrap();
-    let output = agent_wait(&env)
-        .current_dir(&env.project_root)
-        .args(["wait", "--file", "logs/app.log", "--json"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let path = canonical(&dir).join("app.log");
-    assert_eq!(receipt["trigger"], format!("file: {}", path.display()));
-    assert_eq!(receipt["pending"][0]["type"], "file");
-    assert_eq!(receipt["pending"][0]["trigger"], path.display().to_string());
-    let tasks = wait_instances(&env);
-    assert_eq!(
-        tasks.0[receipt["name"].as_str().unwrap()].watch,
-        Some(rimz::config::WatchSpec::File {
-            file: path.clone(),
-            grep: None,
-            mark: None,
-        })
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
-            .expect("agent report");
-    assert_eq!(
-        report["agent"]["pending_waits"][0]["trigger"],
-        serde_json::json!({"kind": "file", "path": path, "grep": null})
-    );
-    std::thread::sleep(std::time::Duration::from_millis(1_500));
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-
-    std::fs::write(&path, "started\n").unwrap();
-    let messages = wait_for_wait_messages(&env, 1);
-    assert!(
-        messages[0]
-            .text
-            .starts_with(&format!("waited on file {}\nmet after ", path.display())),
-        "{}",
-        messages[0].text
-    );
-    wait_for_no_wait_instances(&env);
-    let refused = agent_wait(&env)
-        .args(["wait", "--file"])
-        .arg(&dir)
-        .output()
-        .unwrap();
-    assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("is a directory"));
-}
-
-#[test]
-fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let path = canonical(&env.home_root).join("server.log");
-    std::fs::write(&path, "booting\nlistening on :3000\n").unwrap();
-    let file = path.to_str().unwrap();
-    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
-        &env,
-        &["wait", "--file", file, "--grep", "listening", "--json"],
-    ))
-    .unwrap();
-    assert_eq!(receipt["trigger"], format!("file: {file} grep: listening"));
-    assert_eq!(receipt["pending"][0]["type"], "file");
-    assert_eq!(
-        receipt["pending"][0]["trigger"],
-        format!("{file} grep: listening")
-    );
-    let append = |text: &str| {
-        use std::io::Write;
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(text.as_bytes())
-            .unwrap();
-    };
-    append("reloading\nlisten");
-    std::thread::sleep(std::time::Duration::from_millis(1_500));
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    append("ing on :3001\n");
-    let messages = wait_for_wait_messages(&env, 1);
-    let text = &messages[0].text;
-    assert!(
-        text.starts_with(&format!(
-            "waited on file {file} for `listening`\nmet after "
-        )),
-        "{text}"
-    );
-    assert!(text.contains(": `listening on :3001` · output: "), "{text}");
-    wait_for_no_wait_instances(&env);
-    let output_path = text
-        .split(" · output: ")
-        .nth(1)
-        .and_then(|rest| rest.split(" (").next())
-        .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(output_path).unwrap(),
-        "listening on :3001\n"
-    );
-
-    wait_ok(&env, &["wait", "--file", file, "--grep", "listening"]);
-    std::fs::write(&path, "listening again\n").unwrap();
-    let messages = wait_for_wait_messages(&env, 2);
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.text.contains(": `listening again`")),
-        "{messages:?}"
-    );
-    wait_for_no_wait_instances(&env);
 }
 
 /// A linked worktree of the fixture project, canonical; `None` (skipped) when
@@ -1980,9 +1331,9 @@ fn watched_wait_runs_in_the_arming_worktree() {
     let output = agent_wait(&env)
         .current_dir(&linked)
         .args([
-            "wait",
+            "shell",
             "--json",
-            "--run",
+            "--",
             &format!(
                 "while [ ! -e {} ]; do sleep 0.025; done; pwd -P",
                 shlex::try_quote(release.to_str().unwrap()).unwrap()
@@ -2002,7 +1353,7 @@ fn watched_wait_runs_in_the_arming_worktree() {
     assert_eq!(entry.root, canonical(&env.project_root));
     assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
     let listed: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(listed[0]["name"], name);
     assert_eq!(listed[0]["dir"], "~/linked");
 
@@ -2023,9 +1374,9 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
     register_calling_agent(&env);
     let output = agent_wait(&env)
         .args([
-            "wait",
+            "shell",
             "--json",
-            "--run",
+            "--",
             "sleep 1; seq 1 5000; printf watched; exit 3",
         ])
         .output()
@@ -2122,7 +1473,7 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let child = agent_wait(&env)
-        .args(["wait", "--json", "--run", "sleep 1; printf survived"])
+        .args(["shell", "--json", "--", "sleep 1; printf survived"])
         .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2157,7 +1508,7 @@ fn missing_watcher_row_reports_its_error_to_the_wait_output() {
     let output = std::fs::File::create(&path).unwrap();
     let status = env
         .rimz()
-        .args(["wait", "watch", "wait-missing"])
+        .args(["shell", "watcher", "wait-missing"])
         .stderr(output)
         .status()
         .unwrap();
@@ -2177,7 +1528,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     register_calling_agent(&env);
     let receipt = wait_ok(
         &env,
-        &["wait", "--json", "--run", "printf started; exec sleep 30"],
+        &["shell", "--json", "--", "printf started; exec sleep 30"],
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
@@ -2278,7 +1629,7 @@ fn live_watcher_of_a_checked_in_wait_is_not_lost_past_the_grace() {
     );
     let receipt = wait_ok(
         &env,
-        &["wait", "--json", "--check-in", "1s", "--run", &command],
+        &["shell", "--json", "--check-in", "1s", "--", &command],
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
@@ -2335,7 +1686,13 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
-        wait_ok(&env, &["wait", "--on", on, "--run", command]);
+        let receipt = wait_ok(&env, &["shell", "--on", on, "--", command]);
+        let armed = receipt.lines().next().unwrap();
+        assert!(
+            armed.ends_with(&format!(": shell: {command} → @planner#main (on {on})")),
+            "{receipt}"
+        );
+        assert!(receipt.contains("@planner#main · 1 shell\n"), "{receipt}");
         let records = wait_for_wait_records(&env, 1);
         assert_eq!(records[0].result.label(), "skipped");
         assert!(records[0].message_id.is_none());
@@ -2380,7 +1737,7 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
                 })
                 .unwrap();
         }
-        wait_ok(&env, &["wait", "--run", "printf self-wait-marker"]);
+        wait_ok(&env, &["shell", "--", "printf self-wait-marker"]);
         let messages = wait_for_wait_messages(&env, 1);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].agent_id.as_str(), "provider-session");
@@ -2406,7 +1763,7 @@ fn self_wait_parks_at_an_open_prompt_then_delivers_at_the_turn_boundary() {
     let env = Env::new();
     let pane_fixture = register_waiting_caller(&env);
     let output = traced_wait(&env, &pane_fixture)
-        .args(["wait", "--run", "printf wake-marker"])
+        .args(["shell", "--", "printf wake-marker"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2505,7 +1862,7 @@ fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() 
         shlex::try_quote(release.to_str().unwrap()).unwrap()
     );
     let output = traced_wait(&env, &pane_fixture)
-        .args(["wait", "--json", "--check-in", "1s", "--run", &command])
+        .args(["shell", "--json", "--check-in", "1s", "--", &command])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2533,7 +1890,7 @@ fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() 
     assert_eq!(records[0].message_id.as_ref(), Some(&checkin.message_id));
     assert_no_wait_paste(&env);
     let listed: serde_json::Value =
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
     assert_eq!(listed[0]["name"], name);
     assert_eq!(listed[0]["state"], "watching");
     assert!(wait_instances(&env).0.contains_key(name));
@@ -2577,7 +1934,7 @@ fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
         shlex::try_quote(release.to_str().unwrap()).unwrap()
     );
     let output = traced_wait(&env, &pane_fixture)
-        .args(["wait", "--check-in", "1s", "--run", &command])
+        .args(["shell", "--check-in", "1s", "--", &command])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2683,6 +2040,146 @@ fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
     );
 }
 
+/// A watch's final wake cancels the check-in it left parked behind an open prompt.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_watch_checkin_is_canceled_when_the_final_wake_fires() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    let run = |args: &[&str]| {
+        let output = traced_wait(&env, &pane_fixture)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    publish_claude_5h(&env, 90);
+    let receipt: serde_json::Value = serde_json::from_str(&run(&[
+        "watch",
+        "--json",
+        "--check-in",
+        "1s",
+        "window.5h.left >= 40",
+    ]))
+    .unwrap();
+    let name = receipt["name"].as_str().unwrap().to_owned();
+    run(&["loop", "tick"]);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    run(&["loop", "tick"]);
+    let checkin = wait_for_wait_messages(&env, 1).pop().unwrap();
+    assert_eq!(checkin.status, MessageStatus::Queued, "{checkin:?}");
+    wait_for_wait_records(&env, 1);
+    wait_for_loop_runs_to_exit(&env, &name);
+    publish_claude_5h(&env, 10);
+    run(&["loop", "tick"]);
+    let records = wait_for_wait_records(&env, 2);
+    assert_eq!(records[1].result.label(), "delivered", "{records:?}");
+    wait_for_loop_runs_to_exit(&env, &name);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    let mut statuses: Vec<_> = messages
+        .iter()
+        .map(|message| (message.message_id == checkin.message_id, message.status))
+        .collect();
+    statuses.sort_by_key(|(checkin, _)| !checkin);
+    assert_eq!(
+        statuses,
+        [
+            (true, MessageStatus::Canceled),
+            (false, MessageStatus::Queued)
+        ],
+        "{messages:?}"
+    );
+}
+
+/// A shell whose outcome a join claimed cancels the check-in it left parked behind an open
+/// prompt, though it sends no wake of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_joined_shells_parked_checkin_is_canceled() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    let release = env.home_root.join("release");
+    let command = format!(
+        "while [ ! -e {} ]; do sleep 0.05; done",
+        shlex::try_quote(release.to_str().unwrap()).unwrap()
+    );
+    let output = traced_wait(&env, &pane_fixture)
+        .args(["shell", "--json", "--check-in", "1s", "--", &command])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let checkin = wait_for_wait_messages(&env, 1).pop().unwrap();
+    assert_eq!(checkin.status, MessageStatus::Queued, "{checkin:?}");
+    wait_for_wait_records(&env, 1);
+    wait_for_loop_runs_to_exit(&env, name);
+    let path = loop_instances_path(&env);
+    let mut rows: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    rows[name]["wait-meta"]["joined_until"] =
+        serde_json::json!(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(600));
+    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    std::fs::write(&release, "").unwrap();
+    let records = wait_for_wait_records(&env, 2);
+    assert_eq!(records[1].result.label(), "joined", "{records:?}");
+    wait_for_no_wait_instances(&env);
+    wait_for_loop_runs_to_exit(&env, name);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    let statuses: Vec<_> = messages
+        .iter()
+        .map(|message| (message.message_id == checkin.message_id, message.status))
+        .collect();
+    assert_eq!(statuses, [(true, MessageStatus::Canceled)], "{messages:?}");
+}
+
+/// A pid, check, or file wait an older RimZ stored is retired with a record `loop logs` shows
+/// by the row's name, whether the row had fired or never did.
+#[cfg(target_os = "linux")]
+#[test]
+fn retired_legacy_waits_show_in_loop_logs_with_their_reason() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let fired = arm_false_watch(&env);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    wait_ok(&env, &["loop", "tick"]);
+    wait_for_wait_records(&env, 1);
+    wait_for_loop_runs_to_exit(&env, &fired);
+    let path = loop_instances_path(&env);
+    let mut rows: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut legacy = rows[&fired].clone();
+    legacy.as_object_mut().unwrap().remove("when");
+    legacy["watch"] = serde_json::json!({"pid": 4242});
+    rows[&fired] = legacy.clone();
+    legacy["watch"] = serde_json::json!({"file": "/repo/app.log", "grep": "ready"});
+    rows["wait-never-fired"] = legacy;
+    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    wait_ok(&env, &["events", "emit", "deploy.done"]);
+    assert!(
+        wait_instances(&env).0.is_empty(),
+        "{:?}",
+        wait_instances(&env)
+    );
+    for name in [fired.as_str(), "wait-never-fired"] {
+        let logs = wait_ok(&env, &["loop", "logs", name]);
+        assert!(
+            logs.contains("canceled")
+                && logs.contains("RimZ no longer watches a pid, a check, or a file"),
+            "{name}: {logs}"
+        );
+    }
+}
+
 fn register_waiting_caller(env: &Env) -> std::path::PathBuf {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -2769,13 +2266,13 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let receipt = wait_ok(
             &env,
             &[
-                "wait",
+                "shell",
                 "--json",
                 "--on",
                 on,
                 "--check-in",
                 "1s",
-                "--run",
+                "--",
                 &format!(
                     "printf '%s' \"$$\" > {}; printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker; exit {exit}",
                     shlex::try_quote(pid_path.to_str().unwrap()).unwrap(),
@@ -2788,7 +2285,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let messages = wait_for_wait_messages(&env, 1);
         let notice = &messages[0];
         let listed: serde_json::Value =
-            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+            serde_json::from_str(&wait_ok(&env, &["shell", "list", "--json"])).unwrap();
         assert_eq!(listed[0]["state"], "watching");
         assert!(
             listed[0]["elapsed_s"].as_u64().unwrap() >= listed[0]["check_in_s"].as_u64().unwrap()
@@ -2807,11 +2304,14 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         );
         assert!(!notice.text.lines().any(|line| line == "checkin-marker"));
         assert!(
-            notice.text.contains(&format!("rimz wait cancel {name}")),
+            notice
+                .text
+                .contains(&format!("Stop it: rimz shell cancel {name}")),
             "{}",
             notice.text
         );
-        assert!(notice.text.contains("rimz wait --in 1s"), "{}", notice.text);
+        assert!(!notice.text.contains("Another check-in"), "{}", notice.text);
+        assert!(!notice.text.contains("rimz wait"), "{}", notice.text);
         assert_eq!(notice.agent_id.as_str(), "provider-session");
         assert_eq!(
             notice.sender,
@@ -2927,6 +2427,58 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             assert_eq!(records[1].result.label(), "skipped");
             assert!(records[1].message_id.is_none());
         }
+    }
+}
+
+/// A shell's exit is sent as a message unless a join's claim on its row is still ahead: then
+/// the row is consumed and its history records the outcome as joined, and nothing is sent. A
+/// claim past its deadline holds nothing back.
+#[test]
+fn a_live_join_claim_takes_a_shells_outcome_and_an_expired_one_lets_it_through() {
+    for (ahead, result, sent) in [(true, "joined", 0), (false, "delivered", 1)] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        let release = env.home_root.join("release");
+        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+            &env,
+            &[
+                "shell",
+                "--json",
+                "--",
+                &format!(
+                    "while [ ! -e {} ]; do sleep 0.05; done; exit 0",
+                    shlex::try_quote(release.to_str().unwrap()).unwrap()
+                ),
+            ],
+        ))
+        .unwrap();
+        let name = receipt["name"].as_str().unwrap();
+        let path = crate::common::wait::loop_instances_path(&env);
+        let mut rows: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let until = jiff::Timestamp::now()
+            + jiff::SignedDuration::from_secs(if ahead { 600 } else { -600 });
+        rows[name]["wait-meta"]["joined_until"] = serde_json::json!(until);
+        std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+        std::fs::write(&release, "").unwrap();
+        let records = wait_for_wait_records(&env, 1);
+        assert_eq!(records[0].result.label(), result, "{records:?}");
+        assert!(
+            matches!(
+                records[0].watch,
+                Some(rimz::harness::signal::WatchVerdict::Exited { code: Some(0), .. })
+            ),
+            "{records:?}"
+        );
+        wait_for_no_wait_instances(&env);
+        if sent > 0 {
+            wait_for_wait_messages(&env, sent);
+        }
+        let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+        messages.extend(history);
+        assert_eq!(messages.len(), sent, "claim ahead {ahead}: {messages:?}");
     }
 }
 
@@ -3046,16 +2598,16 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
-    seed_signal_wait(&env, "audit", "wait.*", false);
+    seed_signal_wait(&env, "audit", "shell.*", false);
     let release = env.home_root.join("release");
     let receipt = wait_ok(
         &env,
         &[
-            "wait",
+            "shell",
             "--json",
             "--check-in",
             "1s",
-            "--run",
+            "--",
             &format!(
                 "printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker",
                 shlex::try_quote(release.to_str().unwrap()).unwrap()
@@ -3161,7 +2713,7 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
         "scout",
         LaunchParams::default(),
     );
-    seed_signal_wait(&env, "audit", "wait.*", true);
+    seed_signal_wait(&env, "audit", "shell.*", true);
     let mut tasks = wait_instances(&env);
     tasks
         .0
@@ -3181,9 +2733,9 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
     let receipt = wait_ok(
         &env,
         &[
-            "wait",
+            "shell",
             "--json",
-            "--run",
+            "--",
             &format!(
                 "while [ ! -e {} ]; do sleep 0.05; done",
                 shlex::try_quote(release.to_str().unwrap()).unwrap()
@@ -3245,12 +2797,12 @@ fn wait_cancel_before_watcher_start_prevents_command() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let receipt = wait_ok(&env, &["wait", "--in", "5m", "--json"]);
+    let receipt = wait_ok(&env, &["watch", "--json", "pr=merged"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let mut tasks = wait_instances(&env);
     let entry = tasks.0.get_mut(name).unwrap();
-    entry.fire_at = None;
+    entry.when = None;
     entry.watch = Some(rimz::config::WatchSpec::Command(
         "touch command-started".to_owned(),
     ));
@@ -3260,8 +2812,12 @@ fn wait_cancel_before_watcher_start_prevents_command() {
     )
     .unwrap();
 
-    wait_ok(&env, &["wait", "cancel", name]);
-    let output = env.rimz().args(["wait", "watch", name]).output().unwrap();
+    wait_ok(&env, &["shell", "cancel", name]);
+    let output = env
+        .rimz()
+        .args(["shell", "watcher", name])
+        .output()
+        .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("no wait named"));
     assert!(!env.project_root.join("command-started").exists());
@@ -3280,8 +2836,8 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
         wait_ok(
             &env,
             &[
-                "wait",
-                "--run",
+                "shell",
+                "--",
                 &format!(
                     "sleep 30 & printf '%s %s' \"$$\" \"$!\" > {}; wait",
                     shlex::try_quote(path.to_str().unwrap()).unwrap()
@@ -3299,13 +2855,13 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
         }
     }
     let names = wait_instances(&env).0.into_keys().collect::<Vec<_>>();
-    let canceled = wait_ok(&env, &["wait", "cancel", "--all"]);
+    let canceled = wait_ok(&env, &["shell", "cancel", "--all"]);
     assert!(canceled.starts_with("canceled "), "{canceled}");
     for name in names {
         assert!(canceled.contains(&name), "{canceled}");
     }
     assert!(
-        canceled.ends_with("@planner#main · no waits\n"),
+        canceled.ends_with("@planner#main · no shells\n"),
         "{canceled}"
     );
     wait_until(&env, "cancel left watched descendants alive", || {
@@ -3329,11 +2885,11 @@ fn wait_receipts_and_list_share_pending_rows() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let first = wait_ok(&env, &["wait", "--in", "5m", "--json"]);
+    let first = wait_ok(&env, &["watch", "--json", "pr=merged"]);
     let first: serde_json::Value = serde_json::from_str(&first).unwrap();
-    let second = wait_ok(&env, &["wait", "--in", "10m", "--json"]);
+    let second = wait_ok(&env, &["watch", "--json", "ci=passed"]);
     let second: serde_json::Value = serde_json::from_str(&second).unwrap();
-    let listed = wait_ok(&env, &["wait", "list", "--json"]);
+    let listed = wait_ok(&env, &["watch", "list", "--json"]);
     let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
     assert_eq!(first["pending"].as_array().unwrap().len(), 1);
     assert_eq!(second["pending"].as_array().unwrap().len(), 2);
@@ -3349,7 +2905,7 @@ fn wait_receipts_and_list_share_pending_rows() {
             "1h",
         ],
     );
-    let held = wait_ok(&env, &["wait", "list", "--json"]);
+    let held = wait_ok(&env, &["watch", "list", "--json"]);
     let held: serde_json::Value = serde_json::from_str(&held).unwrap();
     let held = held.as_array().unwrap();
     assert_eq!(
@@ -3371,64 +2927,21 @@ fn wait_receipts_and_list_share_pending_rows() {
     );
     let canceled = wait_ok(
         &env,
-        &["wait", "cancel", first["name"].as_str().unwrap(), "--json"],
+        &["watch", "cancel", first["name"].as_str().unwrap(), "--json"],
     );
     let canceled: serde_json::Value = serde_json::from_str(&canceled).unwrap();
     assert_eq!(canceled["canceled"], serde_json::json!([first["name"]]));
     assert_eq!(canceled["pending"].as_array().unwrap().len(), 1);
     assert_eq!(canceled["pending"][0]["name"], second["name"]);
-    let listed = wait_ok(&env, &["wait", "list", "--json"]);
+    let listed = wait_ok(&env, &["watch", "list", "--json"]);
     assert_eq!(
         stable_rows(canceled["pending"].clone()),
         stable_rows(serde_json::from_str::<serde_json::Value>(&listed).unwrap())
     );
-    let human = wait_ok(&env, &["wait", "--in", "15m"]);
-    assert!(human.starts_with("armed wait-"), "{human}");
+    let human = wait_ok(&env, &["watch", "pr=closed"]);
+    assert!(human.starts_with("armed watch-"), "{human}");
+    assert!(human.contains("@planner#main · 2 watches\n"), "{human}");
     assert!(human.contains(second["name"].as_str().unwrap()), "{human}");
-}
-
-#[test]
-fn wait_rejects_removed_target_prompt_and_signal_flags() {
-    let env = Env::new();
-    register_calling_agent(&env);
-    for (args, refusal) in [
-        (
-            vec!["wait", "@planner", "--in", "5m"],
-            "unrecognized subcommand",
-        ),
-        (
-            vec!["wait", "--in", "5m", "--prompt", "note"],
-            "unexpected argument",
-        ),
-        (
-            vec!["wait", "--in", "5m", "--prompt-file", "note.txt"],
-            "unexpected argument",
-        ),
-        (
-            vec!["wait", "--signal", "deploy.failed"],
-            "unexpected argument",
-        ),
-        (
-            vec!["wait", "--in", "5m", "--match", "branch=feature"],
-            "unexpected argument",
-        ),
-        (
-            vec!["wait", "--wait=5s", "--run", "true"],
-            "unexpected argument",
-        ),
-        (
-            vec!["wait", "--", "cargo", "test"],
-            "unrecognized subcommand",
-        ),
-    ] {
-        let output = agent_wait(&env).args(&args).output().unwrap();
-        assert!(
-            !output.status.success(),
-            "accepted removed arguments: {args:?}"
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains(refusal), "{args:?}: {stderr}");
-    }
 }
 
 /// Ends one turn of the calling agent, so only a pending wait can keep it sleeping.
@@ -3456,13 +2969,13 @@ fn rest_calling_agent(env: &Env) {
 }
 
 fn wait_refusal(env: &Env, args: &[&str]) -> String {
-    let output = agent_wait(env).arg("wait").args(args).output().unwrap();
+    let output = agent_wait(env).args(args).output().unwrap();
     assert!(!output.status.success(), "accepted {args:?}");
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 #[test]
-fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
+fn watch_arms_a_one_shot_self_wait_in_the_arming_checkout() {
     let env = Env::new();
     env.record(&env.project_root);
     let Some(linked) = linked_worktree(&env) else {
@@ -3472,19 +2985,13 @@ fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
     rest_calling_agent(&env);
     publish_claude_5h(&env, 30);
     let mut names = Vec::new();
-    for (args, kind, label) in [
-        (&["--at", "23:59"][..], "schedule", "clock"),
-        (
-            &["--when", "pr=merged", "--when", "ci=passed"][..],
-            "condition",
-            "state",
-        ),
-    ] {
+    let (args, kind, label) = (&["pr=merged && ci=passed"][..], "condition", "state");
+    {
         let output = agent_wait(&env)
             .current_dir(&linked)
-            .arg("wait")
-            .args(args)
+            .arg("watch")
             .args(["--label", label, "--json"])
+            .args(args)
             .output()
             .unwrap();
         assert!(
@@ -3494,7 +3001,7 @@ fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
         );
         let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let name = receipt["name"].as_str().unwrap().to_owned();
-        assert!(name.starts_with("wait-"), "{receipt}");
+        assert!(name.starts_with("watch-"), "{receipt}");
         assert!(receipt.get("existing").is_none(), "{receipt}");
         assert_eq!(receipt["target"], "@planner#main");
         let row = receipt["pending"]
@@ -3527,19 +3034,13 @@ fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
         assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
         assert!(entry.every.is_none() && entry.cron.is_none());
         assert!(entry.signal.is_none() && entry.hold.is_none() && entry.prompt.is_none());
-        if kind == "schedule" {
-            assert!(entry.when.is_none(), "{entry:?}");
-            let fire_at = entry.fire_at.expect("a clock wait stores its instant");
-            assert!(fire_at > jiff::Timestamp::now(), "{fire_at}");
-        } else {
-            assert!(entry.fire_at.is_none(), "{entry:?}");
-            assert!(!entry.repeat, "{entry:?}");
-            assert_eq!(
-                entry.when.as_deref(),
-                Some(&["pr=merged && ci=passed".to_owned()][..])
-            );
-            assert_eq!(row["trigger"], "when pr=merged && ci=passed");
-        }
+        assert!(entry.fire_at.is_none(), "{entry:?}");
+        assert!(!entry.repeat, "{entry:?}");
+        assert_eq!(
+            entry.when.as_deref(),
+            Some(&["pr=merged && ci=passed".to_owned()][..])
+        );
+        assert_eq!(row["trigger"], "when pr=merged && ci=passed");
         names.push(name);
     }
     let report: serde_json::Value =
@@ -3552,21 +3053,21 @@ fn wait_at_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
         .map(|wait| wait["name"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(pending, names.iter().cloned().collect());
-    let listed = wait_ok(&env, &["wait", "list"]);
+    let listed = wait_ok(&env, &["watch", "list"]);
     for name in &names {
         assert!(listed.contains(name.as_str()), "{listed}");
     }
-    wait_ok(&env, &["wait", "cancel", "--all"]);
+    wait_ok(&env, &["watch", "cancel", "--all"]);
     assert!(wait_instances(&env).0.is_empty());
 }
 
 #[test]
-fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
+fn watch_receipts_name_the_window_and_the_condition_reading() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
     let first_lines = |args: &[&str]| -> Vec<String> {
-        let mut argv = vec!["wait"];
+        let mut argv = vec!["watch"];
         argv.extend_from_slice(args);
         wait_ok(&env, &argv)
             .lines()
@@ -3574,15 +3075,9 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
             .map(ToOwned::to_owned)
             .collect()
     };
-    let at = first_lines(&["--at", "23:59"]);
+    let forge = first_lines(&["pr=merged"]);
     assert!(
-        at[0].starts_with("armed wait-") && at[0].contains(": once at "),
-        "{at:?}"
-    );
-    assert!(at[0].ends_with(" 23:59 → @planner#main"), "{at:?}");
-    let forge = first_lines(&["--when", "pr=merged"]);
-    assert!(
-        forge[0].starts_with("armed wait-")
+        forge[0].starts_with("armed watch-")
             && forge[0].ends_with(": when pr=merged → @planner#main"),
         "{forge:?}"
     );
@@ -3591,7 +3086,7 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
         "  now: unknown · pr: readings paused (room closed)"
     );
     let resets_at = publish_claude_5h(&env, 92);
-    let window = first_lines(&["--when", "window.5h.left >= 40"]);
+    let window = first_lines(&["window.5h.left >= 40"]);
     assert!(
         window[0].ends_with(": when window.5h.left>=40 → @planner#main"),
         "{window:?}"
@@ -3604,7 +3099,7 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
         )
     );
     publish_claude_5h(&env, 10);
-    let met = first_lines(&["--when", "window.5h.left >= 40", "--when", "pr=merged"]);
+    let met = first_lines(&["window.5h.left >= 40 && pr=merged"]);
     assert_eq!(
         met[1],
         "  now: unknown · window.5h.left: 90, pr: readings paused (room closed)"
@@ -3612,22 +3107,22 @@ fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
 }
 
 #[test]
-fn wait_when_twice_names_the_existing_wait_while_other_triggers_arm_again() {
+fn watch_twice_names_the_existing_watch_while_another_expression_arms_again() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
     let arm = |args: &[&str]| -> serde_json::Value {
-        let mut argv = vec!["wait", "--json"];
+        let mut argv = vec!["watch", "--json"];
         argv.extend_from_slice(args);
         serde_json::from_str(&wait_ok(&env, &argv)).unwrap()
     };
-    let first = arm(&["--when", "pr=merged"]);
-    let again = arm(&["--when", "pr=merged"]);
+    let first = arm(&["pr=merged"]);
+    let again = arm(&["pr=merged"]);
     assert_eq!(again["name"], first["name"], "{again}");
     assert_eq!(again["existing"], true, "{again}");
     assert_eq!(again["trigger"], "when pr=merged");
     assert_eq!(again["pending"].as_array().unwrap().len(), 1, "{again}");
-    let human = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    let human = wait_ok(&env, &["watch", "pr=merged"]);
     assert_eq!(
         human.lines().next().unwrap(),
         format!(
@@ -3636,50 +3131,36 @@ fn wait_when_twice_names_the_existing_wait_while_other_triggers_arm_again() {
         )
     );
     assert_eq!(wait_instances(&env).0.len(), 1);
-    let other = arm(&["--when", "ci=passed"]);
+    let other = arm(&["ci=passed"]);
     assert_ne!(other["name"], first["name"]);
     assert!(other.get("existing").is_none(), "{other}");
-    let at = arm(&["--at", "23:59"]);
-    let at_again = arm(&["--at", "23:59"]);
-    assert_ne!(at["name"], at_again["name"]);
-    assert_eq!(wait_instances(&env).0.len(), 4);
+    assert_eq!(wait_instances(&env).0.len(), 2);
 }
 
-/// Arms `--<trigger>` with a label through `command`, publishing the window it reads, then
+/// Arms a labeled watch on a window through `command`, publishing the window it reads, then
 /// fires it the way the scheduler would.
-fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Command) -> String {
-    let args: &[&str] = match trigger {
-        "at" => &["--at", "23:59"],
-        _ => {
-            publish_claude_5h(env, 10);
-            &["--when", "window.5h.left >= 40"]
-        }
-    };
+fn arm_and_fire(env: &Env, command: impl Fn() -> std::process::Command) -> String {
+    publish_claude_5h(env, 10);
     let output = command()
-        .arg("wait")
-        .args(args)
-        .args(["--label", &format!("wake {trigger}"), "--json"])
+        .args(["watch", "--label", "wake when", "--json"])
+        .arg("window.5h.left >= 40")
         .output()
         .unwrap();
     assert!(
         output.status.success(),
-        "{trigger}: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let name = receipt["name"].as_str().unwrap().to_owned();
-    let passes: &[&[&str]] = match trigger {
-        "at" => &[&["loop", "run", &name]],
-        _ => &[&["loop", "tick"], &["loop", "tick"]],
-    };
-    for (index, pass) in passes.iter().enumerate() {
-        let output = command().args(*pass).output().unwrap();
+    for index in 0..2 {
+        let output = command().args(["loop", "tick"]).output().unwrap();
         assert!(
             output.status.success(),
-            "{pass:?}: {}",
+            "tick {index}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        if trigger == "when" && index == 0 {
+        if index == 0 {
             // First sight arms the condition; only a later tick fires it. The
             // tick writes its plan before it spawns the detached runner, so
             // the plan, not the runner's message or row, shows no fire.
@@ -3697,48 +3178,130 @@ fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Co
 }
 
 #[test]
-fn new_self_waits_steer_a_wait_carrying_label_clock_and_readings() {
-    for trigger in ["at", "when"] {
-        let env = Env::new();
-        env.record(&env.project_root);
-        env.install_agent_hooks("claude");
-        register_calling_agent(&env);
-        rest_calling_agent(&env);
-        let name = arm_and_fire(&env, trigger, || agent_wait(&env));
-        let messages = wait_for_wait_messages(&env, 1);
-        assert_eq!(messages.len(), 1, "{trigger}");
-        let wake = &messages[0];
-        assert_eq!(wake.agent_id.as_str(), "provider-session");
-        assert_eq!(wake.gate, DeliveryGate::Any, "{trigger}");
-        assert_eq!(
-            wake.sender,
-            MessageSender::Harness {
-                notice: HarnessNotice::Wait
-            }
-        );
-        let lines = wake.text.lines().collect::<Vec<_>>();
-        if trigger == "when" {
-            assert_eq!(
-                lines[0], "waited on window.5h.left>=40 · wake when",
-                "{}",
-                wake.text
-            );
-            assert!(
-                lines[1].starts_with("fired after ") && lines[1].ends_with(&format!(" [{name}]")),
-                "{}",
-                wake.text
-            );
-            assert!(lines.contains(&"window.5h.left: 90"), "{}", wake.text);
-        } else {
-            assert!(
-                lines[0].starts_with("waited until ")
-                    && lines[0].ends_with(&format!(" · wake {trigger} [{name}]")),
-                "{}",
-                wake.text
-            );
+fn a_watch_steers_a_wake_carrying_its_label_and_readings() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    rest_calling_agent(&env);
+    let name = arm_and_fire(&env, || agent_wait(&env));
+    let messages = wait_for_wait_messages(&env, 1);
+    assert_eq!(messages.len(), 1);
+    let wake = &messages[0];
+    assert_eq!(wake.agent_id.as_str(), "provider-session");
+    assert_eq!(wake.gate, DeliveryGate::Any);
+    assert_eq!(
+        wake.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait
         }
-        wait_for_no_wait_instances(&env);
+    );
+    let lines = wake.text.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines[0], "waited on window.5h.left>=40 · wake when",
+        "{}",
+        wake.text
+    );
+    assert!(
+        lines[1].starts_with("fired after ") && lines[1].ends_with(&format!(" [{name}]")),
+        "{}",
+        wake.text
+    );
+    assert!(lines.contains(&"window.5h.left: 90"), "{}", wake.text);
+    wait_for_no_wait_instances(&env);
+}
+
+/// Arms a watch on a window that reads false, with a one-second check-in, and gives the tick
+/// its first sight of it.
+fn arm_false_watch(env: &Env) -> String {
+    publish_claude_5h(env, 90);
+    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+        env,
+        &[
+            "watch",
+            "--json",
+            "--check-in",
+            "1s",
+            "window.5h.left >= 40",
+        ],
+    ))
+    .unwrap();
+    wait_ok(env, &["loop", "tick"]);
+    receipt["name"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_watch_checks_in_once_at_its_due_time_and_keeps_waiting() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_false_watch(&env);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    wait_ok(&env, &["loop", "tick"]);
+    let messages = wait_for_wait_messages(&env, 1);
+    let notice = &messages[0];
+    let lines = notice.text.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], "waited on window.5h.left>=40", "{}", notice.text);
+    assert!(
+        lines[1].starts_with("still not met after ")
+            && lines[1].ends_with(&format!(" · still watching [{name}]")),
+        "{}",
+        notice.text
+    );
+    assert_eq!(
+        lines[2..],
+        ["", &format!("Stop it: rimz watch cancel {name}")],
+        "{}",
+        notice.text
+    );
+    assert_eq!(notice.gate, DeliveryGate::Any);
+    let records = wait_for_wait_records(&env, 1);
+    assert_eq!(records[0].result.label(), "delivered", "{records:?}");
+    for _ in 0..2 {
+        wait_ok(&env, &["loop", "tick"]);
     }
+    assert!(wait_instances(&env).0.contains_key(&name));
+    let listed: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap();
+    assert_eq!(listed[0]["name"], name.as_str(), "{listed}");
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(wait_records(&env).len(), 1);
+}
+
+#[test]
+fn a_watch_cancelled_before_its_check_in_sends_none() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_false_watch(&env);
+    let shown = wait_ok(&env, &["loop", "show", &name]);
+    let labels: Vec<_> = shown
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(|label| label.trim_end_matches(':'))
+        .filter(|label| ["check-in", "timeout"].contains(label))
+        .collect();
+    assert_eq!(labels, ["check-in"], "{shown}");
+    wait_ok(&env, &["watch", "cancel", &name]);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    wait_ok(&env, &["loop", "tick"]);
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    assert!(
+        messages.is_empty(),
+        "a cancelled watch checked in: {messages:?}"
+    );
+    assert!(
+        wait_records(&env)
+            .iter()
+            .all(|record| record.result.label() != "delivered"),
+        "{:?}",
+        wait_records(&env)
+    );
 }
 
 /// The external tick reads forge keys as unread, so only the sidebar host fires a `pr=` wait:
@@ -3773,7 +3336,7 @@ fn forge_wait_fires_with_its_label_and_pr_reading() {
         .to_string(),
     )
     .unwrap();
-    let receipt = wait_ok(&env, &["wait", "--when", "pr=merged", "--label", "landed"]);
+    let receipt = wait_ok(&env, &["watch", "--label", "landed", "pr=merged"]);
     let name = receipt
         .split_whitespace()
         .nth(1)
@@ -3851,7 +3414,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     };
     let now_line = |receipt: &str| receipt.lines().nth(1).unwrap_or_default().to_owned();
     let listed = || -> Vec<serde_json::Value> {
-        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap()
+        serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap()
     };
     // The clock pass's first sight of each wait, which a condition reads from.
     let sight = |stamp: &str| {
@@ -3886,12 +3449,12 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     };
 
     // With the room closed nothing is known, so it arms and says why in the room-closed words.
-    let closed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    let closed = wait_ok(&env, &["watch", "pr=merged"]);
     assert_eq!(
         now_line(&closed),
         "  now: unknown · pr: readings paused (room closed)"
     );
-    wait_ok(&env, &["wait", "cancel", "--all"]);
+    wait_ok(&env, &["watch", "cancel", "--all"]);
 
     crate::common::room::seed_sidebar_heartbeat(
         &runtime,
@@ -3900,7 +3463,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
         "no-forge",
     );
     // A scope never probed arms as well.
-    let unprobed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    let unprobed = wait_ok(&env, &["watch", "pr=merged"]);
     assert_eq!(now_line(&unprobed), "  now: unknown · pr: not checked yet");
 
     // The next probe finds no supported forge: the armed wait says so and needs you.
@@ -3908,7 +3471,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     let rows = listed();
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["unread"], serde_json::json!({"pr": NO_FORGE}));
-    let text = wait_ok(&env, &["wait", "list"]);
+    let text = wait_ok(&env, &["watch", "list"]);
     assert!(
         text.contains(&format!("waiting · pr: {NO_FORGE}")),
         "{text}"
@@ -3920,7 +3483,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
 
     // A known no-forge reading refuses before anything is stored.
     let refused = agent_wait(&env)
-        .args(["wait", "--when", "ci=passed"])
+        .args(["watch", "ci=passed"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&refused.stderr);
@@ -3941,14 +3504,14 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     assert_eq!(json["rooms"][0]["tasks"][0]["unread"], unread, "{json}");
     let rows = listed();
     assert_eq!(rows[0]["unread"], unread, "{rows:?}");
-    let text = wait_ok(&env, &["wait", "list"]);
+    let text = wait_ok(&env, &["watch", "list"]);
     assert!(text.contains(&format!("waiting · pr: {STALE}")), "{text}");
 
     // The reading comes back: the reason and the attention are gone.
     publish("repo", false, 3_000);
     let rows = listed();
     assert!(rows[0].get("unread").is_none(), "{rows:?}");
-    let text = wait_ok(&env, &["wait", "list"]);
+    let text = wait_ok(&env, &["watch", "list"]);
     assert!(!text.contains(STALE), "{text}");
     let (text, json) = loops("1970-01-01T00:00:02Z");
     assert!(!text.contains(STALE), "{text}");
@@ -3961,7 +3524,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
 
     // A detached HEAD reads unknown under its own reason, arms, and needs nothing.
     publish("<unsupported>", true, 1_000);
-    let detached = wait_ok(&env, &["wait", "--when", "ci=passed"]);
+    let detached = wait_ok(&env, &["watch", "ci=passed"]);
     assert_eq!(
         now_line(&detached),
         "  now: unknown · ci: the checkout's HEAD is detached, so it has no branch to read"
@@ -3978,7 +3541,7 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
     // reported) says why on every surface, as `loop show` does.
     const UNREPORTED: &str = "not reported for this checkout's open PR";
     publish("repo", false, 1_000);
-    let review = wait_ok(&env, &["wait", "--when", "pr.review=approved"]);
+    let review = wait_ok(&env, &["watch", "pr.review=approved"]);
     assert_eq!(
         now_line(&review),
         format!("  now: unknown · pr.review: {UNREPORTED}")
@@ -3996,110 +3559,86 @@ fn forge_waits_refuse_without_a_supported_forge_and_say_why_once_armed() {
 }
 
 #[test]
-fn new_self_waits_park_with_any_gate_at_an_open_prompt() {
-    for trigger in ["at", "when"] {
-        let env = Env::new();
-        let pane_fixture = register_waiting_caller(&env);
-        arm_and_fire(&env, trigger, || traced_wait(&env, &pane_fixture));
-        wait_for_wait_records(&env, 1);
-        let messages = wait_for_wait_messages(&env, 1);
-        assert_eq!(messages.len(), 1, "{trigger}");
-        let wake = &messages[0];
-        assert_eq!(wake.status, MessageStatus::Queued, "{trigger}");
-        assert_eq!(wake.gate, DeliveryGate::Any, "{trigger}");
-        assert_eq!(
-            wake.sender,
-            MessageSender::Harness {
-                notice: HarnessNotice::Wait
-            }
-        );
-        assert_eq!(
-            wake.last_error.as_deref(),
-            Some("agent is waiting on input in its pane"),
-            "{trigger}"
-        );
-        assert_no_wait_paste(&env);
-        wait_for_no_wait_instances(&env);
-    }
+fn a_watch_parks_with_any_gate_at_an_open_prompt() {
+    let env = Env::new();
+    let pane_fixture = register_waiting_caller(&env);
+    arm_and_fire(&env, || traced_wait(&env, &pane_fixture));
+    wait_for_wait_records(&env, 1);
+    let messages = wait_for_wait_messages(&env, 1);
+    assert_eq!(messages.len(), 1);
+    let wake = &messages[0];
+    assert_eq!(wake.status, MessageStatus::Queued);
+    assert_eq!(wake.gate, DeliveryGate::Any);
+    assert_eq!(
+        wake.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait
+        }
+    );
+    assert_eq!(
+        wake.last_error.as_deref(),
+        Some("agent is waiting on input in its pane")
+    );
+    assert_no_wait_paste(&env);
+    wait_for_no_wait_instances(&env);
 }
 
 #[test]
-fn new_wait_triggers_refuse_in_words_true_of_a_wait() {
+fn watch_refusals_name_what_the_expression_lacks() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
     for (args, expected) in [
         (
-            &["--at", "nope"][..],
-            "--at `nope` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`",
-        ),
-        (
-            &["--at", "2020-01-01 09:00"][..],
-            "--at `2020-01-01 09:00` is in the past; choose a later time",
-        ),
-        (
-            &["--when", "window.5h.left >= 40"][..],
+            &["watch", "window.5h.left >= 40"][..],
             "no current claude 5h window reading; open the room's sidebar or run `rimz accounts \
              --refresh`",
         ),
-        (&["--when", "pr=="][..], "--when: clause 1, position "),
+        (&["watch", "pr=="][..], "clause 1, position "),
         (
-            &["--when", "team.stage=Bogus"][..],
+            &["watch", "team.stage=Bogus"][..],
             "no team defines stage Bogus; stages: Done",
         ),
+        (
+            &["watch", "--label", "x"][..],
+            "a watch needs an expression",
+        ),
+        (&["shell", "--", "  "][..], "a shell needs a command"),
     ] {
         let stderr = wait_refusal(&env, args);
         assert!(stderr.contains(expected), "{args:?}: {stderr}");
-        for wrong in ["schedule `", "task", "--check-only", "--agent", "--surplus"] {
+        for wrong in [
+            "schedule `",
+            "task",
+            "--check-only",
+            "--agent",
+            "--surplus",
+            "rimz wait",
+        ] {
             assert!(!stderr.contains(wrong), "{args:?} names {wrong}: {stderr}");
         }
     }
-    let stage = wait_refusal(&env, &["--when", "team.stage=Bogus"]);
-    assert!(stage.contains("--when: clause 1, position "), "{stage}");
     assert!(!loop_instances_path(&env).exists());
 }
 
 #[test]
-fn new_wait_triggers_take_exactly_one_trigger_and_no_watch_flags() {
+fn shell_and_watch_refuse_each_others_flags_and_list_when_bare() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let new: [&[&str]; 2] = [&["--at", "09:00"], &["--when", "pr=merged"]];
-    let old: [&[&str]; 5] = [
-        &["--in", "5m"],
-        &["--pid", "123"],
-        &["--check", "true"],
-        &["--file", "app.log"],
-        &["--run", "true"],
-    ];
-    for (index, trigger) in new.iter().enumerate() {
-        for other in old.iter().chain(new.iter().skip(index + 1)) {
-            let args = [*trigger, *other].concat();
-            let stderr = wait_refusal(&env, &args);
-            assert!(
-                stderr.contains(
-                    "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, \
-                     or --run"
-                ),
-                "{args:?}: {stderr}"
-            );
-        }
-        for (flag, expected) in [
-            (
-                &["--check-in", "1m"][..],
-                "--check-in requires --pid, --check, --file, or --run",
-            ),
-            (&["--on", "success"][..], "--on requires --check or --run"),
-            (&["--every", "5s"][..], "--every requires --check"),
-            (&["--grep", "ready"][..], "--grep requires --file"),
-        ] {
-            let args = [*trigger, flag].concat();
-            let stderr = wait_refusal(&env, &args);
-            assert!(stderr.contains(expected), "{args:?}: {stderr}");
-        }
+    for args in [
+        &["watch", "--on", "fail", "pr=merged"][..],
+        &["watch", "pr=merged", "ci=passed"],
+        &["shell", "--when", "pr=merged", "--", "true"],
+        &["shell", "--pid", "123"],
+        &["shell", "--file", "app.log"],
+    ] {
+        let stderr = wait_refusal(&env, args);
+        assert!(stderr.starts_with("error: "), "{args:?}: {stderr}");
     }
     assert!(!loop_instances_path(&env).exists());
-    assert_eq!(wait_ok(&env, &["wait"]), wait_ok(&env, &["wait", "list"]));
+    assert_eq!(wait_ok(&env, &["shell"]), wait_ok(&env, &["shell", "list"]));
+    assert_eq!(wait_ok(&env, &["watch"]), wait_ok(&env, &["watch", "list"]));
 }
 
 /// Liveness bound for every poll in this file. A watched wait delivers

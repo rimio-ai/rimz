@@ -321,6 +321,7 @@ mod tests {
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),
+                label: None,
             },
             armed_at: Some(now()),
         });

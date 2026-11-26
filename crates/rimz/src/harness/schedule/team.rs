@@ -37,7 +37,7 @@ pub enum TeamBindingFailure {
     #[error(transparent)]
     Arm(#[from] arm::ArmFailure),
     #[error(
-        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Set match = {{ branch = \"<name>\" }}, match = {{ path = \"<worktree-path>\" }}, or match = {{ branch = \"*\" }} for every checkout RimZ watches, launch with -w <worktree>, or watch it with: rimz wait --run 'gh run watch --exit-status'"
+        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Set match = {{ branch = \"<name>\" }}, match = {{ path = \"<worktree-path>\" }}, or match = {{ branch = \"*\" }} for every checkout RimZ watches, launch with -w <worktree>, or watch it with: rimz shell -- gh run watch --exit-status"
     )]
     RootCheckout,
 }

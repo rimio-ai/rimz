@@ -55,6 +55,7 @@ fn parked_working_wait_projects_running_and_keeps_phase() {
                 name: "wait-later".to_owned(),
                 trigger: PendingWaitTrigger::Command {
                     command: "cargo test".to_owned(),
+                    label: None,
                 },
                 armed_at: Some(ago(60)),
             },
@@ -94,6 +95,7 @@ fn completed_turn_working_wait_keeps_its_wait_description() {
     wait.class = crate::agents::PendingWaitClass::Working;
     wait.trigger = PendingWaitTrigger::Command {
         command: "cargo test".into(),
+        label: None,
     };
     session.pending_waits.push(wait);
 
@@ -265,13 +267,13 @@ fn settled_wait_does_not_hide_the_rested_verdict() {
 }
 
 #[test]
-fn file_wait_displays_sleeping() {
+fn watch_displays_sleeping() {
     let mut session = agent("claude", "rest", AgentStatus::Success, 0).worktree("/repo/main");
     session.pending_waits.push(PendingWait {
-        name: "file".into(),
-        trigger: PendingWaitTrigger::File {
-            path: "app.log".into(),
-            grep: None,
+        name: "watch".into(),
+        trigger: PendingWaitTrigger::Condition {
+            when: "pr=merged".into(),
+            hold: None,
         },
         armed_at: Some(ago(60)),
         class: crate::agents::PendingWaitClass::Sleeping,

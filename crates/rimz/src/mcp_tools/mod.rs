@@ -93,7 +93,8 @@ impl Runner for Tools {
     fn run(&self, call: Call, cancelled: &dyn Fn() -> bool) -> Answer {
         let answered = match call {
             Call::Lsp(args) => lsp::run(self, &args),
-            Call::Wait(args) => wait::arm(self, &args),
+            Call::Shell(args) => wait::shell(self, &args),
+            Call::Watch(args) => wait::watch(self, &args),
             Call::Subagent(args) => subagent::launch(self, &args),
             Call::Agent(args) => layout::launch_agent(self, &args),
             Call::Team(args) => layout::launch_team(self, &args),

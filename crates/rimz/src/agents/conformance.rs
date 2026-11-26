@@ -25,8 +25,9 @@ use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
 fn routine_rimz_prefixes_match_documented_list() {
-    assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz wait"));
-    assert!(!super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz wait --in"));
+    assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz shell"));
+    assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz watch"));
+    assert!(!super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz wait"));
     assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz lsp show"));
     assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz packs diff"));
     assert!(super::ROUTINE_RIMZ_PREFIXES.contains(&"rimz workflow run"));

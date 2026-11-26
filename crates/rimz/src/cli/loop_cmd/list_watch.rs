@@ -299,7 +299,7 @@ fn fold_lines(room: &Room, now: Timestamp) -> Vec<String> {
         })
         .collect::<Vec<_>>();
     if !wakes.is_empty() {
-        let counts = crate::cli::wake_view::counts(wakes.iter().map(|row| row.owner_class()));
+        let counts = crate::cli::wake_view::counts(None, wakes.iter().map(|row| row.owner_class()));
         folds.push(format!("wake-ups  {counts} · rimz loop list --all"));
     }
     folds

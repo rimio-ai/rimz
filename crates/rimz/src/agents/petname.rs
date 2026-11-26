@@ -82,11 +82,16 @@ pub(crate) fn mint_for_session(agent_id: &AgentSessionId, taken: impl Fn(&str) -
     mint_from_seed(agent_id.as_str(), taken)
 }
 
+/// The prefixes of a self wait's minted name: a shell's, a watch's, and the `wait-` an older RimZ
+/// minted. A shell's output shares an agent's `out/` directory as `<name>.output`.
+pub(crate) const WAIT_NAME_PREFIXES: [&str; 3] = ["shell-", "watch-", "wait-"];
+
 /// Accept one durable agent handle at every allocation, fold, and hook boundary.
 pub fn valid_agent_name(name: &str) -> bool {
     basic_valid_name(name)
-        // Wait outputs share an agent's `out/` directory as `wait-<petname>.output`.
-        && !name.starts_with("wait-")
+        && !WAIT_NAME_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
         && !crate::agents::known_kinds().any(|kind| {
             name == kind
                 || name
@@ -238,7 +243,10 @@ mod tests {
             ("codex-12", false),
             ("claudette-1", true),
             ("wait-x", false),
+            ("shell-x", false),
+            ("watch-x", false),
             ("await-x", true),
+            ("shellfish", true),
         ] {
             assert_eq!(valid_agent_name(name), valid, "{name}");
         }

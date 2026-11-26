@@ -4598,7 +4598,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 );
                 store.queue_message(&message, "idle-stop-test").unwrap();
             }
-            Some("wait") => as_agent(&["wait", "--in", "30m"]),
+            Some("wait") => as_agent(&["watch", "pr=merged"]),
             // Another kind's newer run under this agent's name is the run a
             // stop of this agent would select and cancel.
             Some(_) => {
@@ -4764,7 +4764,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 );
                 let shown = String::from_utf8_lossy(&shown.stdout);
                 assert!(shown.contains(&format!("held by wait {name}")), "{shown}");
-                as_agent(&["wait", "cancel", "--all"]);
+                as_agent(&["watch", "cancel", "--all"]);
             }
             if let Some(other) = &collision {
                 assert_eq!(
@@ -6163,7 +6163,7 @@ fn stop_whose_mux_read_fails_changes_nothing() {
         env.rimz()
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", "unread")
-            .args(["wait", "--in", "30m"]),
+            .args(["watch", "pr=merged"]),
         "arm the agent's wait",
     );
     assert_eq!(subscribed(), 1);
@@ -6432,7 +6432,7 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
         env.rimz()
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", "parent")
-            .args(["wait", "--in", "30m"]),
+            .args(["watch", "pr=merged"]),
         "arm the parent's wait",
     );
     assert_eq!(subscribed(), 1);
@@ -7277,7 +7277,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 &["config", "set", "harness.cache_keepalive_max", "4m"],
             );
         }
-        wait_ok(&env, &["wait", "--in", "5m"]);
+        wait_ok(&env, &["watch", "pr=merged"]);
         let store = env.store();
         let anchor = jiff::Timestamp::now() - Duration::from_secs(if capped { 25 } else { 0 });
         let turn = |offset: i64, prompt: Option<&str>| {
@@ -7433,7 +7433,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 MessageStatus::Sent
             }
         );
-        assert!(ping.text.contains("timer"));
+        assert!(ping.text.contains("pr=merged"), "{}", ping.text);
         assert_eq!(
             ping.text.ends_with(
                 "\nKeepalive limit 4m reached: this is the last ping until your next turn."
@@ -8084,31 +8084,14 @@ fn assert_limit_refusals(env: &Env, message: &mut std::process::Command, trace: 
         let rest = line
             .strip_prefix("not sent: @otter's provider limit refills in ")
             .unwrap_or_else(|| panic!("the refusal names the refill: {stderr}"));
-        let (wait, command) = rest
-            .split_once(". Run `rimz wait --in ")
-            .unwrap_or_else(|| panic!("the refusal names the wait command: {stderr}"));
+        let wait = rest
+            .strip_suffix("; send it again then.")
+            .unwrap_or_else(|| panic!("the refusal ends with its instruction: {stderr}"));
         assert!(
             wait.starts_with("1h48m (at ") || wait.starts_with("1h47m (at "),
             "{stderr}"
         );
         assert!(wait.ends_with(')') && !line.contains('\n'), "{stderr}");
-        let minutes = command
-            .strip_suffix("`, then send it again.")
-            .unwrap_or_else(|| panic!("the refusal ends with its instruction: {stderr}"));
-        assert!(matches!(minutes, "108m" | "107m"), "{stderr}");
-        use rimz::utils::time::DurationUnit;
-        // The units of `rimz wait --in` (`cli::supervised::parse_timeout`).
-        let parsed = rimz::utils::time::parse_duration_units(
-            minutes,
-            &[
-                DurationUnit::Second,
-                DurationUnit::Minute,
-                DurationUnit::Hour,
-                DurationUnit::Day,
-            ],
-        )
-        .expect("the printed duration parses as `rimz wait --in` reads it");
-        assert!(parsed >= Duration::from_secs(107 * 60), "{parsed:?}");
         assert!(store.list_pending_messages().unwrap().is_empty());
         let bounces = env
             .read_events()

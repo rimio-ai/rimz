@@ -189,8 +189,8 @@ impl LaunchKind {
 
 /// One triggered loop wake-up: a trigger, its placement, and one action. `kind`, `target` and
 /// `args` say what a fire launches in its checkout; `wait` delivers to a pinned session instead,
-/// the row `rimz wait` and team arming write. Every key outside the row refuses that row alone
-/// (`refused`), an older row's `command` included.
+/// the row `rimz shell`, `rimz watch` and team arming write. Every key outside the row refuses
+/// that row alone (`refused`), an older row's `command` included.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(remote = "Self", default, deny_unknown_fields)]
 pub struct TaskEntry {
@@ -234,7 +234,7 @@ pub struct TaskEntry {
     /// Directory the launch or watch runs in; the arming worktree, or `root` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
-    /// How long a shell row's command may run; a watch's check-in interval on a delivery row.
+    /// How long a shell row's command may run; a self wait's check-in interval on a delivery row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,7 +258,7 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
     /// The instant of an absolute one-shot, written by `rimz loop add --in` and `--at`, and by
-    /// `rimz wait --in` and `--at`. A scheduled fire that records a result removes the row,
+    /// an older RimZ's self wait. A scheduled fire that records a result removes the row,
     /// whatever the result; the clock pass dispatches a fire that recorded none again, and a
     /// manual run leaves the row.
     #[serde(rename = "fire-at", skip_serializing_if = "Option::is_none")]
@@ -344,62 +344,17 @@ pub struct WaitMeta {
     /// receives the output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader: Option<String>,
+    /// The deadline of a `join` that claimed this shell's outcome: until then its exit is
+    /// recorded as joined instead of sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_until: Option<Timestamp>,
 }
 
-/// What a wait's detached watcher observes. A bare string is a shell command
-/// run once, the form hand-written rows carry; every other form is probed by
-/// the watcher until it is met.
+/// What a shell's detached watcher runs: a shell command, run once.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum WatchSpec {
     Command(String),
-    Pid {
-        pid: u32,
-    },
-    /// A shell predicate run every `every` (a duration label) until its exit
-    /// matches `on`, `success` or `fail`.
-    Check {
-        check: String,
-        every: String,
-        on: CheckOn,
-    },
-    /// A file's changes from `mark`, its state when armed (`None`: absent);
-    /// with `grep`, only a new line containing the literal pattern counts.
-    File {
-        file: PathBuf,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        grep: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mark: Option<FileMark>,
-    },
-}
-
-/// The stat of a watched file that a later stat compares against. `dev` and
-/// `ino` identify the file, so a replacement at the same path is a change.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct FileMark {
-    pub size: u64,
-    pub modified: Timestamp,
-    pub dev: u64,
-    pub ino: u64,
-}
-
-impl FileMark {
-    /// The stat a `--file` watch compares against; `None` when the path is absent.
-    pub fn read(path: &Path) -> std::io::Result<Option<Self>> {
-        let metadata = match std::fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        let modified = Timestamp::try_from(metadata.modified()?).map_err(std::io::Error::other)?;
-        Ok(Some(Self {
-            size: metadata.len(),
-            modified,
-            dev: std::os::unix::fs::MetadataExt::dev(&metadata),
-            ino: std::os::unix::fs::MetadataExt::ino(&metadata),
-        }))
-    }
 }
 
 fn shell_command_preview(command: &str) -> std::borrow::Cow<'_, str> {
@@ -497,10 +452,7 @@ impl WatchSpec {
     /// The watch kind in wait JSON and trigger descriptions.
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::Command(_) => "watch",
-            Self::Pid { .. } => "pid",
-            Self::Check { .. } => "check",
-            Self::File { .. } => "file",
+            Self::Command(_) => "shell",
         }
     }
 
@@ -508,54 +460,18 @@ impl WatchSpec {
     pub fn subject(&self) -> String {
         match self {
             Self::Command(command) => shell_command_preview(command).into_owned(),
-            Self::Pid { pid } => pid.to_string(),
-            Self::Check { check, every, on } => {
-                let mut text = shell_command_preview(check).into_owned();
-                if every != "1s" {
-                    text.push_str(&format!(" every {every}"));
-                }
-                if *on == CheckOn::Fail {
-                    text.push_str(" on fail");
-                }
-                text
-            }
-            Self::File { file, grep, .. } => match grep {
-                Some(grep) => format!(
-                    "{} grep: {}",
-                    file.display(),
-                    crate::theme::fmt::command_preview(grep)
-                ),
-                None => file.display().to_string(),
-            },
         }
     }
 
     /// The trigger text of receipts and loop listings.
     pub fn describe(&self) -> String {
-        let separator = if matches!(self, Self::Pid { .. }) {
-            " "
-        } else {
-            ": "
-        };
-        format!("{}{separator}{}", self.kind(), self.subject())
+        format!("{}: {}", self.kind(), self.subject())
     }
 
     /// The first line of the delivered wait message.
     pub(crate) fn headline(&self) -> String {
         match self {
             Self::Command(command) => format!("waited on `{}`", shell_command_preview(command)),
-            Self::Pid { pid } => format!("waited on pid {pid}"),
-            Self::Check { check, .. } => {
-                format!("waited on check `{}`", shell_command_preview(check))
-            }
-            Self::File { file, grep, .. } => match grep {
-                Some(grep) => format!(
-                    "waited on file {} for `{}`",
-                    file.display(),
-                    crate::theme::fmt::command_preview(grep)
-                ),
-                None => format!("waited on file {}", file.display()),
-            },
         }
     }
 }

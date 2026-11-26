@@ -497,13 +497,13 @@ function editor(tools) {
 
 const tools = [
   { id: "rimz_lsp", name: "lsp", options: { namespace: "rimz", codemode: true } },
-  { id: "rimz_wait", name: "wait", options: { namespace: "rimz", codemode: true } },
+  { id: "rimz_watch", name: "watch", options: { namespace: "rimz", codemode: true } },
   { id: "rimz_notes", name: "notes", options: { namespace: "rimz", codemode: false } },
   { id: "rimz_guide", name: "guide", options: { namespace: "rimz", codemode: true } },
   { id: "other_lsp", name: "lsp", options: { namespace: "other", codemode: true } },
   { id: "bash", name: "bash", options: {} },
 ];
-process.env.RIMZ_LAUNCH_MCP_TOOLS = JSON.stringify({ lsp: "native", wait: "pinned", notes: "code" });
+process.env.RIMZ_LAUNCH_MCP_TOOLS = JSON.stringify({ lsp: "native", watch: "pinned", notes: "code" });
 const transforms = [];
 const ctx = context(transforms);
 const cleanup = await plugin.setup(ctx);
@@ -517,7 +517,7 @@ for (let replay = 0; replay < 2; replay++) {
   assert.deepEqual(edit.updates, [
     ["rimz_lsp", { namespace: "rimz", codemode: false }],
     // `codemode.pinned` is read from OpenCode 2.4, the deprecated `pinned` before it.
-    ["rimz_wait", { namespace: "rimz", codemode: { pinned: true }, pinned: true }],
+    ["rimz_watch", { namespace: "rimz", codemode: { pinned: true }, pinned: true }],
     ["rimz_notes", { namespace: "rimz", codemode: true }],
   ]);
 }

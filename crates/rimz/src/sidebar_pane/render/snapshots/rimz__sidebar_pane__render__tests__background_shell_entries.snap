@@ -16,7 +16,7 @@ expression: screen
 ▌  ▤ 0                                               ▐
 ▌  ⧖ waits (6)                                       ▐
 ▌    ◷ timer · in 12m                           ◔ <1m▐
-▌    ⣾ command · make                           ◔ <1m▐
+▌    ⣾ shell · make                             ◔ <1m▐
 ▌      make check                                    ▐
 ▌    ⣾ shell · Run the test suite               ◔  5m▐
 ▌      cargo test --workspace                        ▐

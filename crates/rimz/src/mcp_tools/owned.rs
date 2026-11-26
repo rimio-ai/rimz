@@ -1,7 +1,7 @@
 //! What an id names, read from the named thing's own record, and whether the caller started
 //! it: the record's starter chain is walked upward (an agent's launcher and the bookings that
 //! launched it, a run's starter and the booking that fired it, the agent, team, or loop task
-//! that armed a wait) until it meets the caller's launch.
+//! that armed a shell or a watch) until it meets the caller's launch.
 
 use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
@@ -132,12 +132,31 @@ impl<'a> Owners<'a> {
                 booking_links(&task.entry().booked_by).collect()
             })
         } else {
-            vec![holder.map_or_else(
-                || Link::Agent(target.kind.clone(), target.session.clone()),
-                |holder| Link::Agent(holder.kind.clone(), holder.launch_key().clone()),
-            )]
+            vec![Self::woken(holder, target)]
         };
         self.reaches(armers)
+    }
+
+    /// Whether the caller armed a self wait (a shell) for `target`, or an agent it started did:
+    /// such a wait is armed by the agent it wakes. Read once the wait's row is gone.
+    pub(super) fn armed_self_wait(&self, target: &TaskTarget) -> bool {
+        self.reaches(vec![Self::woken(self.wait_holder(target), target)])
+    }
+
+    /// Whether a wait for `target` wakes the caller itself, not an agent it started.
+    pub(super) fn wakes_caller(&self, target: &TaskTarget) -> bool {
+        match self.wait_holder(target) {
+            Some(holder) => self.is_caller(&holder.kind, holder.launch_key()),
+            None => self.is_caller(&target.kind, &target.session),
+        }
+    }
+
+    /// The agent a wait for `target` wakes: its holder now, else the target as armed.
+    fn woken(holder: Option<&AgentState>, target: &TaskTarget) -> Link {
+        holder.map_or_else(
+            || Link::Agent(target.kind.clone(), target.session.clone()),
+            |holder| Link::Agent(holder.kind.clone(), holder.launch_key().clone()),
+        )
     }
 
     fn started_booking(&self, booked_by: &[LaunchedBy]) -> bool {
@@ -214,12 +233,7 @@ pub(super) fn resolve<'a>(
     catalog: impl FnOnce() -> anyhow::Result<TaskCatalog>,
 ) -> Result<Named<'a>, Failure> {
     let id = kind.id(name);
-    let refused = || {
-        Failure::new(format!("{id} was started by another agent")).with_hint(
-            "stop and join act on what you started, or what an agent you started started; \
-             `tasks` lists it",
-        )
-    };
+    let refused = || refused(&id);
     let unknown = || {
         Failure::new(format!("no {} named `{name}`", kind.as_str()))
             .with_hint("`tasks` lists what you started, by id")
@@ -283,7 +297,7 @@ pub(super) fn resolve<'a>(
                 found: Box::new(found),
             })
         }
-        TaskKind::Schedule | TaskKind::Wait => {
+        TaskKind::Schedule | TaskKind::Shell | TaskKind::Watch => {
             TaskName::from_str(name).map_err(|err| {
                 Failure::new(format!("invalid {} name `{name}`: {err}", kind.as_str()))
                     .with_hint("`tasks` lists what you started, by id")
@@ -301,7 +315,9 @@ pub(super) fn resolve<'a>(
                         booked_by: entry.booked_by.clone(),
                     })
                 }
-                (Some(target), TaskKind::Wait) => {
+                (Some(target), TaskKind::Shell | TaskKind::Watch)
+                    if wait_kind(entry).as_str() == kind.as_str() =>
+                {
                     if !owners.armed_wait(entry, target, &catalog) {
                         return Err(refused());
                     }
@@ -313,6 +329,19 @@ pub(super) fn resolve<'a>(
             }
         }
     }
+}
+
+/// Whether the wake row `entry` is a shell or a watch.
+pub(super) fn wait_kind(entry: &TaskEntry) -> crate::harness::schedule::wait::WaitKind {
+    crate::harness::schedule::wait::WaitKind::of(entry)
+}
+
+/// The refusal of an id another agent started.
+pub(super) fn refused(id: &str) -> Failure {
+    Failure::new(format!("{id} was started by another agent")).with_hint(
+        "stop and join act on what you started, or what an agent you started started; \
+         `tasks` lists it",
+    )
 }
 
 /// The hint of a thing with no live record.

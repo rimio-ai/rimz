@@ -45,9 +45,10 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::BudgetExceeded => Signal::Strike,
         // A workflow run's launch waits for its report, which decides.
         LoopRunResult::Launched if record.run_id.is_some() => Signal::Neutral,
-        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
-            Signal::Reset
-        }
+        LoopRunResult::Completed
+        | LoopRunResult::Delivered
+        | LoopRunResult::Joined
+        | LoopRunResult::Launched => Signal::Reset,
         LoopRunResult::CheckSkipped
         | LoopRunResult::BudgetSkipped
         | LoopRunResult::SurplusSkipped
@@ -174,6 +175,7 @@ mod tests {
             transcript_path: None,
             last_message: None,
             target: None,
+            wakes: None,
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,

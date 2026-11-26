@@ -1,7 +1,7 @@
-//! Self waits: arming, listing, and canceling an agent's own wake-ups over the loop scheduler,
-//! and the rows `rimz wait` and `rimz loop list` show for each wake-up. Each function takes the
-//! caller, the room, and the directory it acts in as arguments and returns a value; the CLI
-//! handler and the MCP server present it.
+//! Self waits: arming, listing, and canceling an agent's own shells and watches over the loop
+//! scheduler, and the rows `rimz shell`, `rimz watch` and `rimz loop list` show for each
+//! wake-up. Each function takes the caller, the room, and the directory it acts in as arguments
+//! and returns a value; the CLI handler and the MCP server present it.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -48,24 +48,28 @@ pub struct WaitRoom<'a> {
     pub sidebar_fresh: SidebarFresh,
 }
 
-/// One wait to arm: exactly one trigger and its options.
-#[derive(Debug, Default)]
+/// One self wait to arm: a shell or a watch, and its options.
+#[derive(Debug)]
 pub struct WaitRequest {
     pub label: Option<String>,
-    pub in_after: Option<Duration>,
-    pub at: Option<String>,
-    pub when: Vec<String>,
-    pub pid: Option<u32>,
-    pub check: Option<String>,
-    pub run: Option<String>,
-    pub every: Option<Duration>,
-    pub file: Option<PathBuf>,
-    pub grep: Option<String>,
-    pub on: Option<CheckOn>,
+    pub trigger: WaitTrigger,
+    /// One still-running notice after this long; never a stop.
     pub check_in: Option<Duration>,
 }
 
-/// What arming a wait did, as `rimz wait --json` prints it before the pending rows.
+/// What a self wait waits on.
+#[derive(Debug)]
+pub enum WaitTrigger {
+    /// A command run once through `sh -c`, waking on its exit when the outcome matches `on`.
+    Shell { command: String, on: CheckOn },
+    /// A condition expression, waking once it reads true.
+    Watch { when: String },
+}
+
+pub use super::pending::WaitKind;
+
+/// What arming a wait did, as `rimz shell --json` and `rimz watch --json` print it before the
+/// pending rows.
 #[derive(Serialize)]
 pub struct WaitArmed {
     pub name: String,
@@ -90,9 +94,9 @@ pub struct WaitArmed {
 
 /// Which waits a cancel removes.
 pub enum CancelTarget {
-    /// One wait or subscription, by the name its listing shows.
+    /// One wait, by the name its listing shows.
     Name(TaskName),
-    /// Every wait the caller armed, leaving subscriptions intact.
+    /// Every wait of the kind the caller armed.
     AllWaits,
 }
 
@@ -229,7 +233,7 @@ pub struct ArmedWhen {
     pub provider: Option<AgentKind>,
 }
 
-/// The one reading of a `when` every surface arms (`rimz wait`, `rimz loop add`, the `wait`
+/// The one reading of a `when` every surface arms (`rimz watch`, `rimz loop add`, the `watch`
 /// and `schedule` tools): parsed against the room's team stages, refused when it reads a forge
 /// the checkout has none of, and its window terms resolved to a provider. `account` runs only
 /// when the clauses read a window. Refusals name the clauses as `field`; a window refusal keeps
@@ -600,10 +604,12 @@ pub fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String> {
 }
 
 /// The calling agent's live row in `snapshot`, or none when the caller is no agent. `action`
-/// names what a refusal left undone (`armed`, `canceled`).
+/// names what a refusal left undone (`armed`, `canceled`), and `kind` the verb a sandboxed
+/// caller is told to run on its own.
 pub fn caller_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     caller: Option<&CallerIdentity>,
+    kind: WaitKind,
     action: Option<&str>,
 ) -> Result<Option<&'a AgentState>> {
     let Some(caller) = caller else {
@@ -624,7 +630,7 @@ pub fn caller_agent<'a>(
                  process (looked for kind `{}`, {identity}). If this ran inside a provider's \
                  command sandbox: {}",
                 caller.kind,
-                crate::harness::home_write::sandbox_remedy("rimz wait")
+                crate::harness::home_write::sandbox_remedy(kind.verb())
             )
         },
     )?;
@@ -638,9 +644,15 @@ pub fn caller_agent<'a>(
 pub fn arming_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     caller: Option<&CallerIdentity>,
+    kind: WaitKind,
 ) -> Result<&'a AgentState> {
-    let agent = caller_agent(snapshot, caller, Some("armed"))?
-        .context("arming a wait is only available to an agent RimZ can identify; run this command from an agent pane")?;
+    let agent = caller_agent(snapshot, caller, kind, Some("armed"))?.with_context(|| {
+        format!(
+            "arming a {} is only available to an agent RimZ can identify; run this command \
+             from an agent pane",
+            kind.as_str()
+        )
+    })?;
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
@@ -651,50 +663,53 @@ pub fn arming_agent<'a>(
 pub fn canceling_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     caller: Option<&CallerIdentity>,
+    kind: WaitKind,
 ) -> Result<&'a AgentState> {
-    caller_agent(snapshot, caller, Some("canceled"))?.context(
-        "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
-    )
+    caller_agent(snapshot, caller, kind, Some("canceled"))?.with_context(|| {
+        format!(
+            "canceling a {} requires an agent RimZ can identify; run this command from an \
+             agent pane",
+            kind.as_str()
+        )
+    })
 }
 
-/// The waits `agent` armed and the subscriptions that wake it, or every wake-up of the room
-/// when the caller is no agent.
-pub fn list(room: &WaitRoom, agent: Option<&AgentState>) -> Result<Vec<WakeRow>> {
+/// The waits of `kind` that `agent` armed, or every one of the room when the caller is no
+/// agent.
+pub fn list(room: &WaitRoom, agent: Option<&AgentState>, kind: WaitKind) -> Result<Vec<WakeRow>> {
     match agent {
-        Some(agent) => {
-            pending_rows(room, Some(agent)).map_err(|error| home_write_hint(error, None))
-        }
-        None => room_rows(room),
+        Some(agent) => pending_rows(room, Some(agent), kind)
+            .map_err(|error| home_write_hint(error, kind, None)),
+        None => room_rows(room, kind),
     }
 }
 
-/// Arm the wait `request` describes for `agent`, which the wake comes back to. A relative
-/// `file` resolves against `dir`. `published` reads the room's published snapshot, which a
-/// watched trigger without a check-in consults for the agent's cache keepalive.
+/// Arm the wait `request` describes for `agent`, which the wake comes back to. `published`
+/// reads the room's published snapshot, which a wait without a check-in consults for the
+/// agent's cache keepalive.
 pub fn arm(
     room: &WaitRoom,
     agent: &AgentState,
     request: WaitRequest,
-    dir: &Path,
     published: impl FnOnce() -> Result<SidebarSnapshot>,
 ) -> Result<WaitArmed> {
     request.validate()?;
+    let request_kind = request.kind();
     let workspace = room.workspace;
-    let wanted_check_in = request.check_in;
-    let check_in = || -> Result<Option<Duration>> {
-        if wanted_check_in.is_some() {
-            return Ok(wanted_check_in);
+    let check_in = match request.check_in {
+        Some(check_in) => Some(check_in),
+        None => {
+            let config = MachineConfig::load_lenient();
+            let published = published()?;
+            let ping_agent = published
+                .agents
+                .iter()
+                .find(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
+                .unwrap_or(agent);
+            (!(config.harness.cache_keepalive
+                && config.harness.ping_lifetime(ping_agent).is_some()))
+            .then_some(Duration::from_secs(30 * 60))
         }
-        let config = MachineConfig::load_lenient();
-        let published = published()?;
-        let ping_agent = published
-            .agents
-            .iter()
-            .find(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
-            .unwrap_or(agent);
-        Ok((!(config.harness.cache_keepalive
-            && config.harness.ping_lifetime(ping_agent).is_some()))
-        .then_some(Duration::from_secs(30 * 60)))
     };
     let target = TaskTarget {
         kind: agent.kind.clone(),
@@ -706,98 +721,62 @@ pub fn arm(
         ),
     };
     let mut condition = None;
-    let (trigger, description) = if let Some(delay) = request.in_after {
-        (
-            DeliveryTrigger::Delay(delay),
-            format!("in {}", duration_label(delay)),
-        )
-    } else if let Some(at) = request.at.as_deref() {
-        let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
-        let fire_at = schedule::resolve_once_at("wait", at, &now)
-            .map_err(|error| at_refusal(error, "--at"))?;
-        one_shot_trigger(TaskEntry {
-            fire_at: Some(fire_at),
-            ..TaskEntry::default()
-        })?
-    } else if !request.when.is_empty() {
-        let place = WhenPlace {
-            root: &workspace.project_root,
-            scope: Some(&workspace.worktree_root),
-            sidebar_fresh: room.sidebar_fresh,
-        };
-        let armed = read_when(&request.when, "--when", &place, || {
-            let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-            let login = crate::harness::task_login::task_login(
-                &crate::store::writer::LaunchLogin::RoomDefault,
-                agent.kind.as_str(),
-                &runtime,
-            )?
-            .map(|login| login.key());
-            Ok(WindowAccount {
-                kind: Some(agent.kind.as_str().to_owned()),
-                login,
-                root: workspace.worktree_root.clone(),
-                runtime,
+    let (trigger, description) = match request.trigger {
+        WaitTrigger::Watch { when } => {
+            let clauses = vec![when];
+            let place = WhenPlace {
+                root: &workspace.project_root,
+                scope: Some(&workspace.worktree_root),
+                sidebar_fresh: room.sidebar_fresh,
+            };
+            let armed = read_when(&clauses, "when", &place, || {
+                let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
+                let login = crate::harness::task_login::task_login(
+                    &crate::store::writer::LaunchLogin::RoomDefault,
+                    agent.kind.as_str(),
+                    &runtime,
+                )?
+                .map(|login| login.key());
+                Ok(WindowAccount {
+                    kind: Some(agent.kind.as_str().to_owned()),
+                    login,
+                    root: workspace.worktree_root.clone(),
+                    runtime,
+                })
             })
-        })
-        .map_err(|error| match error.downcast::<WindowRefusal>() {
-            Ok(refusal) => window_refusal(refusal),
-            Err(error) => error,
-        })?;
-        condition = Some(armed.expr);
-        one_shot_trigger(TaskEntry {
-            when: Some(request.when.clone()),
-            provider: armed.provider,
-            ..TaskEntry::default()
-        })?
-    } else if let Some(pid) = request.pid {
-        let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
-        if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
-            bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
+            .map_err(|error| match error.downcast::<WindowRefusal>() {
+                Ok(refusal) => window_refusal(refusal),
+                Err(error) => error,
+            })?;
+            let description = format!("when {}", armed.expr);
+            condition = Some(armed.expr.clone());
+            (
+                DeliveryTrigger::Condition {
+                    expr: armed.expr,
+                    hold: None,
+                    lifetime: SubscriptionLifetime::Once,
+                    check_in,
+                },
+                description,
+            )
         }
-        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, check_in()?)
-    } else if let Some(check) = request.check.clone() {
-        let spec = WatchSpec::Check {
-            check,
-            every: duration_label(request.every.unwrap_or(Duration::from_secs(1))),
-            on: match request.on.unwrap_or(CheckOn::Any) {
-                CheckOn::Fail => CheckOn::Fail,
-                CheckOn::Success | CheckOn::Any => CheckOn::Success,
-            },
-        };
-        watch_trigger(spec, CheckOn::Any, check_in()?)
-    } else if let Some(file) = &request.file {
-        let file = crate::utils::path::normalize_path_lexical(&dir.join(file));
-        if file.is_dir() {
-            bail!("--file {} is a directory; watch a file", file.display());
+        WaitTrigger::Shell { command, on } => {
+            let spec = WatchSpec::Command(command);
+            let description = spec.describe();
+            (
+                DeliveryTrigger::Watch {
+                    spec,
+                    on,
+                    timeout: check_in,
+                },
+                description,
+            )
         }
-        let mark = crate::config::FileMark::read(&file)
-            .with_context(|| format!("reading --file {}", file.display()))?;
-        let spec = WatchSpec::File {
-            file,
-            grep: request.grep.clone(),
-            mark,
-        };
-        watch_trigger(spec, CheckOn::Any, check_in()?)
-    } else if let Some(command) = request.run.clone() {
-        watch_trigger(
-            WatchSpec::Command(command),
-            request.on.unwrap_or(CheckOn::Any),
-            check_in()?,
-        )
-    } else {
-        bail!(
-            "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, or --run"
-        )
-    };
-    let check_in = match &trigger {
-        DeliveryTrigger::Watch { timeout, .. } => *timeout,
-        _ => None,
     };
     let outcome = arm_delivery(
         workspace,
         DeliverySpec {
-            name: DeliveryName::MintWait,
+            name: DeliveryName::Mint,
             label: request.label,
             target: target.clone(),
             trigger,
@@ -809,7 +788,7 @@ pub fn arm(
             max_strikes: None,
         },
     )
-    .map_err(|error| home_write_hint(error.into(), Some("armed")))?;
+    .map_err(|error| home_write_hint(error.into(), request_kind, Some("armed")))?;
     let (name, entry) = match outcome {
         ArmOutcome::Armed { name, task } => (name, Some(task.entry().clone())),
         ArmOutcome::AlreadySubscribed { name } => (name, None),
@@ -825,9 +804,15 @@ pub fn arm(
     })
 }
 
-/// Cancel `target` among `agent`'s rows, stopping each watched command, and list what remains.
-pub fn cancel(room: &WaitRoom, agent: &AgentState, target: CancelTarget) -> Result<WaitsCanceled> {
-    let pending = pending_rows(room, Some(agent))?;
+/// Cancel `target` among `agent`'s rows of `kind`, stopping each shell's command, and list
+/// what remains.
+pub fn cancel(
+    room: &WaitRoom,
+    agent: &AgentState,
+    kind: WaitKind,
+    target: CancelTarget,
+) -> Result<WaitsCanceled> {
+    let pending = pending_rows(room, Some(agent), kind)?;
     let names = match target {
         CancelTarget::AllWaits => pending
             .into_iter()
@@ -837,26 +822,152 @@ pub fn cancel(room: &WaitRoom, agent: &AgentState, target: CancelTarget) -> Resu
         CancelTarget::Name(name) => {
             let name = name.to_string();
             if !pending.iter().any(|row| row.name == name) {
-                bail!("no pending wait named `{name}`; see `rimz wait list`");
+                bail!(
+                    "no pending {} named `{name}`; see `{} list`",
+                    kind.as_str(),
+                    kind.verb()
+                );
             }
             vec![name]
         }
     };
-    let catalog = TaskCatalog::load(Some(&room.workspace.project_root))?;
+    let root = &room.workspace.project_root;
+    let catalog = TaskCatalog::load(Some(root))?;
     for name in &names {
+        let shell = catalog
+            .visible()
+            .get(name.as_str())
+            .filter(|_| kind == WaitKind::Shell)
+            .map(|task| canceled_shell(name, task));
         catalog
             .remove(name)
-            .map_err(|error| home_write_hint(error, Some("canceled")))?;
+            .map_err(|error| home_write_hint(error, kind, Some("canceled")))?;
+        if let Some(record) = shell {
+            super::run_log::record_stopped(root, &record, Some(super::TaskKind::WakeUp));
+        }
         stop_watcher(room.store.runtime_paths(), name)?;
     }
     Ok(WaitsCanceled {
         canceled: names,
-        pending: pending_rows(room, Some(agent))?,
+        pending: pending_rows(room, Some(agent), kind)?,
     })
 }
 
-/// The rows of the waits and subscriptions that wake `agent`.
-pub fn pending_rows(room: &WaitRoom, agent: Option<&AgentState>) -> Result<Vec<WakeRow>> {
+/// The history record of canceling shell `name`, appended once its row is gone: under its task
+/// record, bound now for a shell that never fired so `rimz loop logs` finds it once the removal
+/// retires it, and naming the agent it woke, by which a `join` reads the cancel as its end.
+fn canceled_shell(name: &str, task: &super::catalog::LoadedTask) -> super::run_log::LoopRunRecord {
+    let binding = task.binding(name);
+    let mut record = super::run_log::LoopRunRecord::new(
+        name,
+        super::run_log::LoopRunResult::Canceled,
+        super::run_log::LoopRunMode::Manual,
+        0,
+    );
+    record.task_id = super::task_record_store::mutate(|records| records.bind(&binding).0)
+        .inspect_err(
+            |err| tracing::warn!(task = name, error = %err, "cancel: binding the task record"),
+        )
+        .ok();
+    record.wakes = task.entry().wait.clone();
+    record
+}
+
+/// What a `join` reads and writes of one shell: its row, its claim, and its history.
+pub struct ShellJoin {
+    paths: StatePaths,
+    root: PathBuf,
+    name: String,
+    armed_at: Timestamp,
+    target: TaskTarget,
+    /// The history log's length and modification time at the last read that found no outcome.
+    unchanged: Option<(u64, std::time::SystemTime)>,
+}
+
+impl ShellJoin {
+    /// The shell `name` in the room at `root`; `None` once its row is gone.
+    pub fn open(root: &Path, name: &str) -> Result<Option<Self>> {
+        let catalog = TaskCatalog::load(Some(root))?;
+        let Some((armed_at, target)) = catalog.visible().get(name).and_then(|task| {
+            let entry = task.entry();
+            Some((entry.wait_meta.as_ref()?.armed_at, entry.wait.clone()?))
+        }) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            paths: StatePaths::for_project_root(root)?,
+            root: root.to_owned(),
+            name: name.to_owned(),
+            armed_at,
+            target,
+            unchanged: None,
+        }))
+    }
+
+    /// The agent the shell's outcome goes to.
+    pub fn target(&self) -> &TaskTarget {
+        &self.target
+    }
+
+    /// Claim the shell's outcome for a join until `until`, or drop the claim; `false` once
+    /// its row is gone.
+    pub fn claim(&self, until: Option<Timestamp>) -> Result<bool> {
+        Ok(crate::harness::schedule::instances::claim_join(
+            &self.paths,
+            &self.name,
+            until,
+        )?)
+    }
+
+    /// Whether the shell's row is still there.
+    pub fn present(&self) -> bool {
+        crate::harness::schedule::instances::load_from(&self.paths.root)
+            .0
+            .contains_key(&self.name)
+    }
+
+    /// The history record of how this arming ended, once one is written. The history is read
+    /// again only once the log has changed since a read that found none.
+    pub fn ended(&mut self) -> Option<crate::harness::schedule::run_log::LoopRunRecord> {
+        let stamp = crate::harness::schedule::run_log::log_stamp();
+        if stamp.is_some() && stamp == self.unchanged {
+            return None;
+        }
+        let ended = last_outcome_since(&self.name, &self.root, self.armed_at);
+        if ended.is_none() {
+            self.unchanged = stamp;
+        }
+        ended
+    }
+
+    /// The newest record that ended an arming of shell `name` in the room at `root`, read once
+    /// its row is gone.
+    pub fn last_outcome(
+        root: &Path,
+        name: &str,
+    ) -> Option<crate::harness::schedule::run_log::LoopRunRecord> {
+        last_outcome_since(name, root, Timestamp::MIN)
+    }
+}
+
+/// The newest record of row `name` at `root` since `since` that ended an arming.
+fn last_outcome_since(
+    name: &str,
+    root: &Path,
+    since: Timestamp,
+) -> Option<crate::harness::schedule::run_log::LoopRunRecord> {
+    crate::harness::schedule::run_log::named_records_since(name, root, since)
+        .into_iter()
+        .rev()
+        .find(crate::harness::schedule::run_log::LoopRunRecord::ends_arming)
+}
+
+/// The rows of the waits of `kind` that wake `agent`.
+pub fn pending_rows(
+    room: &WaitRoom,
+    agent: Option<&AgentState>,
+    kind: WaitKind,
+) -> Result<Vec<WakeRow>> {
     let root = &room.workspace.project_root;
     let catalog = TaskCatalog::load(Some(root))?;
     let arming = arming::load()?;
@@ -865,6 +976,7 @@ pub fn pending_rows(room: &WaitRoom, agent: Option<&AgentState>) -> Result<Vec<W
     let rows = audit.iter().collect::<Vec<_>>();
     let source = RoomSource::read(root, room.sidebar_fresh);
     session_deliveries(&catalog, root, agent, &rows)
+        .filter(|(_, task)| WaitKind::of(task.entry()) == kind)
         .map(|(name, task)| {
             let entry = task.entry();
             let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
@@ -899,7 +1011,7 @@ pub fn pending_rows(room: &WaitRoom, agent: Option<&AgentState>) -> Result<Vec<W
         .collect()
 }
 
-fn room_rows(room: &WaitRoom) -> Result<Vec<WakeRow>> {
+fn room_rows(room: &WaitRoom, kind: WaitKind) -> Result<Vec<WakeRow>> {
     let root = &room.workspace.project_root;
     let catalog = TaskCatalog::load_room(root)?;
     let arming = arming::load()?;
@@ -911,7 +1023,9 @@ fn room_rows(room: &WaitRoom) -> Result<Vec<WakeRow>> {
         .visible()
         .iter()
         .filter(|(_, task)| {
-            task.kind() == TaskKind::WakeUp && task.entry().resolved_root() == *root
+            task.kind() == TaskKind::WakeUp
+                && task.entry().resolved_root() == *root
+                && WaitKind::of(task.entry()) == kind
         })
         .map(|(name, task)| {
             let entry = task.entry();
@@ -940,96 +1054,39 @@ fn room_rows(room: &WaitRoom) -> Result<Vec<WakeRow>> {
 }
 
 impl WaitRequest {
-    /// Refuse a request without exactly one trigger, or with an option its trigger lacks.
+    /// Refuse a request whose command or expression is blank, or whose check-in is out of range.
     pub fn validate(&self) -> Result<()> {
-        let clock_or_condition = self.at.is_some() || !self.when.is_empty();
-        if usize::from(self.in_after.is_some())
-            + usize::from(self.at.is_some())
-            + usize::from(!self.when.is_empty())
-            + usize::from(self.pid.is_some())
-            + usize::from(self.check.is_some())
-            + usize::from(self.file.is_some())
-            + usize::from(self.run.is_some())
-            != 1
-        {
-            bail!(
-                "choose exactly one wait trigger: --in, --at, --when, --pid, --check, --file, or --run"
-            );
+        match &self.trigger {
+            WaitTrigger::Shell { command, .. } if command.trim().is_empty() => {
+                bail!("a shell needs a command")
+            }
+            WaitTrigger::Watch { when } if when.trim().is_empty() => {
+                bail!("a watch needs an expression")
+            }
+            WaitTrigger::Shell { .. } | WaitTrigger::Watch { .. } => {}
+        }
+        if self.check_in.is_some_and(|duration| duration.is_zero()) {
+            bail!("--check-in must be greater than zero");
         }
         if self
-            .file
-            .as_ref()
-            .is_some_and(|file| file.as_os_str().is_empty())
+            .check_in
+            .is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60))
         {
-            bail!("--file needs a path");
-        }
-        if self.grep.is_some() && self.file.is_none() {
-            bail!("--grep requires --file");
-        }
-        if self.grep.as_deref().is_some_and(str::is_empty) {
-            bail!("--grep needs a pattern");
-        }
-        if self
-            .check
-            .as_deref()
-            .is_some_and(|check| check.trim().is_empty())
-        {
-            bail!("--check needs a command");
-        }
-        if self.run.as_deref().is_some_and(|run| run.trim().is_empty()) {
-            bail!("--run needs a command");
-        }
-        if self.on.is_some() && self.run.is_none() && self.check.is_none() {
-            bail!("--on requires --check or --run");
-        }
-        if self.check.is_some() && self.on == Some(CheckOn::Any) {
-            bail!(
-                "--on any has no meaning with --check; it polls until the command succeeds (default) or fails"
-            );
-        }
-        if self.every.is_some() && self.check.is_none() {
-            bail!("--every requires --check");
-        }
-        if self.check_in.is_some() && (self.in_after.is_some() || clock_or_condition) {
-            bail!("--check-in requires --pid, --check, --file, or --run");
-        }
-        for (name, duration, capped) in [
-            ("--in", self.in_after, false),
-            ("--check-in", self.check_in, true),
-            ("--every", self.every, true),
-        ] {
-            if duration.is_some_and(|duration| duration.is_zero()) {
-                bail!("{name} must be greater than zero");
-            }
-            if capped
-                && duration.is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60))
-            {
-                bail!("{name} must be less than 24h");
-            }
+            bail!("--check-in must be less than 24h");
         }
         Ok(())
     }
-}
 
-/// The delivery trigger and its listing text for a one-shot clock or condition row.
-fn one_shot_trigger(entry: TaskEntry) -> Result<(DeliveryTrigger, String)> {
-    let parsed = schedule::parse_trigger("wait", &entry)?;
-    let description = parsed.describe();
-    let trigger = match parsed.trigger {
-        Trigger::Schedule(clock) => DeliveryTrigger::Clock(clock),
-        Trigger::Condition { expr, hold } => DeliveryTrigger::Condition {
-            expr,
-            hold,
-            lifetime: SubscriptionLifetime::Once,
-        },
-        Trigger::Signal { .. } | Trigger::Watch(_) => {
-            bail!("a wait entry holds only clock or condition fields")
+    /// Whether the request arms a shell or a watch.
+    pub fn kind(&self) -> WaitKind {
+        match self.trigger {
+            WaitTrigger::Shell { .. } => WaitKind::Shell,
+            WaitTrigger::Watch { .. } => WaitKind::Watch,
         }
-    };
-    Ok((trigger, description))
+    }
 }
 
-/// `--at` refusals worded for the flag: a wait has no name before it arms.
+/// `at` refusals worded for the field: a schedule has no name before it arms.
 pub fn at_refusal(error: ScheduleErr, field: &str) -> anyhow::Error {
     match error {
         ScheduleErr::BadOnceAt { value, .. } => anyhow!(
@@ -1053,17 +1110,8 @@ fn window_refusal(error: WindowRefusal) -> anyhow::Error {
     }
 }
 
-fn watch_trigger(
-    spec: WatchSpec,
-    on: CheckOn,
-    timeout: Option<Duration>,
-) -> (DeliveryTrigger, String) {
-    let description = spec.describe();
-    (DeliveryTrigger::Watch { spec, on, timeout }, description)
-}
-
-fn home_write_hint(error: anyhow::Error, action: Option<&str>) -> anyhow::Error {
-    crate::harness::home_write::hint(error, "rimz wait", action)
+fn home_write_hint(error: anyhow::Error, kind: WaitKind, action: Option<&str>) -> anyhow::Error {
+    crate::harness::home_write::hint(error, kind.verb(), action)
 }
 
 #[cfg(test)]

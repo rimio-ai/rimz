@@ -3526,7 +3526,7 @@ subagents = ["+codex"]
         "",
         "[profiles.r8]\ndescription = 'No Skill tool'\nagent = 'claude'\nskills = ['review']\n\
          [profiles.r9]\ndescription = 'Agent tool + subagents'\nagent = 'claude'\nsubagents = ['codex']\n\
-         [profiles.r14_cap]\ndescription = 'Cap in skills'\nagent = 'codex'\nskills = ['rimz-wait']\n",
+         [profiles.r14_cap]\ndescription = 'Cap in skills'\nagent = 'codex'\nskills = ['rimz-watch']\n",
     );
     assert_row_refused(
         &m4,
@@ -3605,7 +3605,7 @@ description = "Project X."
 agent = "claude"
 mode = "ask"
 skills = ["other"]
-mcps = ["rimz-wait"]
+mcps = ["rimz-watch"]
 subagents = []
 budget = "5"
 idle-compact = "180k"
@@ -3655,7 +3655,7 @@ roles = [{ role = "lead", profile = "r7_effort", model = "sonnet" }]
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
-        vec!["rimz-wait"]
+        vec!["rimz-watch"]
     );
     assert_eq!(r16.launch.budget.as_deref(), Some("$5.00"));
     assert_eq!(
