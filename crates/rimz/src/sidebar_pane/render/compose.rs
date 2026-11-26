@@ -939,7 +939,7 @@ fn resolve_scroll_offset(
         let target = match cursor {
             super::EntryCursor::SubAgent(pane) => HitTarget::SubAgentPane(pane.clone()),
             super::EntryCursor::ReopenSubAgent(id) => HitTarget::ReopenSubAgent(id.clone()),
-            super::EntryCursor::PriorSubagentsToggle => HitTarget::TogglePriorSubagents {
+            super::EntryCursor::DelegationPage => HitTarget::PageDelegation {
                 row: row.id.clone(),
             },
         };
@@ -1473,7 +1473,7 @@ fn scroll_lines_windowed(
         cost_rolls: &view.cost_rolls,
         lead_unread: lead_unread_id,
         delegation_overrides: &view.toggles.delegation_overrides,
-        prior_subagents_open: &view.toggles.prior_subagents_open,
+        delegation_pages: &view.toggles.delegation_pages,
     };
     if walk.measuring
         && let Some(cache) = walk.heights.as_deref_mut()

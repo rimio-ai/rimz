@@ -7,7 +7,7 @@ expression: review
 {"frame":2,"t_ms":3000,"beat":3,"label":"3s @coder spawns @otter codex \"check the model\"","changed":["","@coder#main"],"key":true,"text":"0002.txt","ansi":"0002.ansi"}
 {"frame":3,"t_ms":4000,"beat":4,"label":"4s @coder spawns @fox claude \"review the renderer\"","changed":["@coder#main"],"key":true,"text":"0003.txt","ansi":"0003.ansi"}
 {"frame":4,"t_ms":5000,"beat":5,"label":"show the nested reviewers","changed":["","#main","@coder#main","@planner#main"],"key":true,"text":"0004.txt","ansi":"0004.ansi"}
-{"frame":5,"t_ms":6000,"beat":6,"label":"6s @fox done \"renderer reviewed\"","changed":["@coder#main"],"key":true,"text":"0005.txt","ansi":"0005.ansi"}
+{"frame":5,"t_ms":6000,"beat":6,"label":"6s @fox done \"renderer reviewed\"","changed":["","@coder#main"],"key":true,"text":"0005.txt","ansi":"0005.ansi"}
 {"frame":6,"t_ms":7000,"beat":7,"label":"7s @coder waits 5s \"child reviews\"","changed":["","@coder#main","cockpit"],"key":true,"text":"0006.txt","ansi":"0006.ansi"}
 {"frame":7,"t_ms":10000,"beat":8,"label":"10s @otter done \"model checked\"","changed":["","@coder#main","@planner#main"],"key":true,"text":"0007.txt","ansi":"0007.ansi"}
 {"frame":8,"t_ms":12000,"beat":9,"label":"hold the current layout","changed":["","@coder#main","@planner#main"],"key":true,"text":"0008.txt","ansi":"0008.ansi"}
@@ -220,8 +220,8 @@ cockpit       │
 @coder#main   │ ▌  ⧉ subagents (2)                                   ▐
 @coder#main   │ ▌    ⠁ codex · check the model                       ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ▸ +1 earlier                                    ▐
+              │
               │
               │
               │
@@ -256,9 +256,9 @@ cockpit       │
 @coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
 @coder#main   │ ▌    ⠁ codex · check the model                       ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
+@coder#main   │ ▌    ▸ +1 earlier                                    ▐
+              │
               │
               │
               │
@@ -289,11 +289,11 @@ cockpit       │
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
 @coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
-@coder#main   │ ▌    ✓ codex · model checked                         ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
+@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+              │
+              │
+              │
               │
               │
               │
@@ -326,11 +326,11 @@ cockpit       │
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
 @coder#main   │ ▎  ⧉ subagents (2) · ⧖ waits (1)                     🮇
-@coder#main   │ ▎    ✓ codex · model checked                         🮇
-@coder#main   │ ▎      xhigh                                      <1m🮇
-@coder#main   │ ▎    ✓ claude · renderer reviewed                    🮇
-@coder#main   │ ▎      xhigh                                      <1m🮇
 @coder#main   │ ▎    ◷ timer · due                              ◔ <1m🮇
+@coder#main   │ ▎    ▸ +2 earlier                                    🮇
+              │
+              │
+              │
               │
               │
               │
@@ -362,10 +362,10 @@ cockpit       │
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
 @coder#main   │ ▎  ⧉ subagents (2)                                   🮇
-@coder#main   │ ▎    ✓ codex · model checked                         🮇
-@coder#main   │ ▎      xhigh                                      <1m🮇
-@coder#main   │ ▎    ✓ claude · renderer reviewed                    🮇
-@coder#main   │ ▎      xhigh                                      <1m🮇
+@coder#main   │ ▎    ▸ +2 earlier                                    🮇
+              │
+              │
+              │
               │
               │
               │
@@ -430,14 +430,14 @@ cockpit       │
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
 @coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ✓ codex · model checked                         ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ▸ +2 earlier                                    ▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
               │
               │
               │
@@ -466,14 +466,14 @@ cockpit       │
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
 @coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ✓ codex · model checked                         ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ▸ +2 earlier                                    ▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
               │
               │
               │
@@ -502,14 +502,14 @@ cockpit       │
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
 @coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ✓ codex · model checked                         ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ▸ +2 earlier                                    ▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
               │
               │
               │
@@ -538,13 +538,13 @@ cockpit       │
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
 @coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ✓ codex · model checked                         ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
-@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ▸ +2 earlier                                    ▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
+              │
+              │
+              │
               │
               │
               │

@@ -42,6 +42,7 @@ mod template;
 mod waits;
 
 use self::{description::*, gauge::*};
+use bands::Finished;
 use entry::{Entry, agent_who, push_entry, stage_spans, team_who};
 use identity::{identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
@@ -67,10 +68,6 @@ impl From<Line<'static>> for CardLine {
 /// `opencode-docsmith` fit, and longer profiles clip with `…` rather than
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 18;
-
-/// Maximum prior-round subagents listed when the fold is open; any remainder
-/// renders as one static count line below them.
-const PRIOR_SUBAGENTS_LIMIT: usize = 10;
 
 fn card_cost_usd(row: &SidebarRow) -> Option<f64> {
     row.as_agent().and_then(AgentCard::cost_usd)
@@ -131,23 +128,6 @@ fn delegation_entries_drawn(
     template(stage, status, density, expansion, plan).contains(&CardSlot::DelegationEntries)
 }
 
-struct DelegationEntries<'a> {
-    shown: Vec<&'a SidebarSubAgent>,
-    more_finished: usize,
-    bookings: bookings::BookingBands<'a>,
-}
-
-fn delegation_entries(agent: &AgentCard) -> DelegationEntries<'_> {
-    let bands = bands::delegation_bands(agent.current_sub_agents());
-    let mut shown = bands.unfinished;
-    shown.extend(bands.finished);
-    DelegationEntries {
-        shown,
-        more_finished: bands.more_finished,
-        bookings: bookings::booking_bands(&agent.bookings),
-    }
-}
-
 fn wait_count(agent: &AgentCard, now: jiff::Timestamp) -> usize {
     agent.awaited.len()
         + waits::visible_waits(&agent.pending_waits).count()
@@ -156,12 +136,15 @@ fn wait_count(agent: &AgentCard, now: jiff::Timestamp) -> usize {
         + usize::from(agent.idle_stop.is_some())
 }
 
-/// Whether the card has a current child, a wait, or a booking for its delegation line
-/// to count.
+/// Whether the card has a child of any turn, a wait, or a booking for its delegation
+/// section to hold.
 pub(super) fn has_delegation(agent: &AgentCard, now: jiff::Timestamp) -> bool {
-    agent.current_sub_agents().next().is_some()
-        || wait_count(agent, now) > 0
-        || !agent.bookings.is_empty()
+    !agent.sub_agents.is_empty() || wait_count(agent, now) > 0 || !agent.bookings.is_empty()
+}
+
+/// Whether the card holds a finished entry for its delegation section to page.
+pub(super) fn has_finished(agent: &AgentCard) -> bool {
+    bands::has_finished(&agent.sub_agents, &agent.bookings)
 }
 
 fn sub_agent_cursor(child: &SidebarSubAgent) -> Option<EntryCursor> {
@@ -210,10 +193,10 @@ pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
     );
     let mut stops = Vec::new();
     if slots.contains(&CardSlot::DelegationEntries) {
-        let entries = delegation_entries(agent);
+        let entries = bands::delegation_entries(&agent.sub_agents, &agent.bookings, expanded.pages);
         stops.extend(
             entries
-                .shown
+                .children
                 .iter()
                 .filter_map(|child| sub_agent_cursor(child)),
         );
@@ -227,24 +210,20 @@ pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
         stops.extend(
             entries
                 .bookings
-                .listed
                 .iter()
                 .filter_map(|booking| bookings::booking_pane(booking).cloned())
                 .map(EntryCursor::SubAgent),
         );
-    }
-    if slots.contains(&CardSlot::PriorSubagents) {
-        let prior = agent.prior_sub_agents_newest_first();
-        if !prior.is_empty() {
-            stops.push(EntryCursor::PriorSubagentsToggle);
-            if expanded.prior_subagents_open {
-                stops.extend(
-                    prior
-                        .iter()
-                        .take(PRIOR_SUBAGENTS_LIMIT)
-                        .filter_map(|child| sub_agent_cursor(child)),
-                );
+        stops.extend(entries.shown.iter().filter_map(|entry| {
+            match entry {
+                Finished::SubAgent(child) => sub_agent_cursor(child),
+                Finished::Booking(booking) => bookings::booking_pane(booking)
+                    .cloned()
+                    .map(EntryCursor::SubAgent),
             }
+        }));
+        if entries.hidden > 0 {
+            stops.push(EntryCursor::DelegationPage);
         }
     }
     stops
@@ -371,13 +350,20 @@ pub(super) fn row_lines(
                 }
                 CardSlot::Cache => inner.extend(cache_line(ctx, row).map(CardLine::from)),
                 CardSlot::Delegation => {
+                    // A card its selection or density opens keeps the title over earlier
+                    // children while a pin closes the section, so the line can reopen it.
+                    let earlier = expanded.delegation
+                        || expanded.reach.opens_card()
+                        || ctx.card_density == CardDensityMode::Expanded;
                     inner.extend(
-                        delegation_line(ctx, agent, expanded.delegation).map(|line| CardLine {
-                            line,
-                            target: Some(HitTarget::ToggleDelegation {
-                                row: row.id.clone(),
-                                open: !expanded.delegation,
-                            }),
+                        delegation_line(ctx, agent, expanded.delegation, earlier).map(|line| {
+                            CardLine {
+                                line,
+                                target: Some(HitTarget::ToggleDelegation {
+                                    row: row.id.clone(),
+                                    open: !expanded.delegation,
+                                }),
+                            }
                         }),
                     );
                 }
@@ -395,13 +381,26 @@ pub(super) fn row_lines(
                     }),
                 }),
                 CardSlot::DelegationEntries => {
-                    let entries = delegation_entries(agent);
-                    let grid: Vec<_> = agent.current_sub_agents().collect();
-                    inner.extend(sub_agent_entry_lines(ctx, &grid, &entries.shown, selected));
-                    if entries.more_finished > 0 {
-                        let text = format!("{} more finished", entries.more_finished);
-                        inner.push(count_line(ctx, text));
-                    }
+                    let entries = bands::delegation_entries(
+                        &agent.sub_agents,
+                        &agent.bookings,
+                        expanded.pages,
+                    );
+                    // Every current child and each paged earlier one share one grid, so the
+                    // columns hold while current children finish out of the list.
+                    let grid: Vec<_> = agent
+                        .current_sub_agents()
+                        .chain(entries.shown.iter().filter_map(|entry| match entry {
+                            Finished::SubAgent(child) if child.prior_turn => Some(*child),
+                            _ => None,
+                        }))
+                        .collect();
+                    inner.extend(sub_agent_entry_lines(
+                        ctx,
+                        &grid,
+                        &entries.children,
+                        selected,
+                    ));
                     inner.extend(waits::awaited_entry_lines(ctx, &agent.awaited, selected));
                     inner.extend(
                         waits::wait_entry_lines(
@@ -416,50 +415,27 @@ pub(super) fn row_lines(
                     );
                     inner.extend(bookings::booking_entry_lines(
                         ctx,
-                        &entries.bookings.listed,
+                        &entries.bookings,
                         selected,
                     ));
-                    let later = entries.bookings.later;
-                    if later > 0 {
-                        inner.push(count_line(ctx, format!("+{later} later")));
-                    }
-                    let older = entries.bookings.older;
-                    if older > 0 {
-                        inner.push(count_line(ctx, format!("{older} more ended")));
-                    }
-                }
-                CardSlot::PriorSubagents => {
-                    let prior = agent.prior_sub_agents_newest_first();
-                    if !prior.is_empty() {
-                        let focused = selected
-                            && matches!(ctx.entry_cursor, Some(EntryCursor::PriorSubagentsToggle));
-                        let chevron = ctx.theme.glyph(if expanded.prior_subagents_open {
-                            GlyphRole::WorktreeInactiveOpen
-                        } else {
-                            GlyphRole::WorktreeInactiveClosed
-                        });
-                        let mut spans = entry_indent(ctx.theme, focused);
-                        spans.push(Span::styled(
-                            format!("{chevron} {} earlier", prior.len()),
-                            ctx.theme
-                                .styled(Component::PriorSubagentsFold, Modifier::empty()),
-                        ));
-                        inner.push(CardLine {
-                            line: Line::from(spans),
-                            target: Some(HitTarget::TogglePriorSubagents {
-                                row: row.id.clone(),
-                            }),
-                        });
-                        if expanded.prior_subagents_open {
-                            let shown = &prior[..prior.len().min(PRIOR_SUBAGENTS_LIMIT)];
-                            // The open fold computes its own token/model column widths
-                            // independently of the current turn's children.
-                            inner.extend(sub_agent_entry_lines(ctx, shown, shown, selected));
-                            let more = prior.len().saturating_sub(PRIOR_SUBAGENTS_LIMIT);
-                            if more > 0 {
-                                inner.push(count_line(ctx, format!("{more} more earlier")));
+                    for entry in &entries.shown {
+                        inner.extend(match entry {
+                            Finished::SubAgent(child) => {
+                                sub_agent_entry_lines(ctx, &grid, &[*child], selected)
                             }
-                        }
+                            Finished::Booking(booking) => {
+                                bookings::booking_entry_lines(ctx, &[*booking], selected)
+                            }
+                        });
+                    }
+                    if entries.hidden > 0 {
+                        inner.push(earlier_line(
+                            ctx,
+                            row,
+                            selected,
+                            expanded.pages,
+                            entries.hidden,
+                        ));
                     }
                 }
             }
@@ -512,12 +488,33 @@ pub(super) fn row_lines(
         .collect()
 }
 
-/// A static count row of an open delegation section, standing for entries it leaves
-/// unlisted: no cursor stop and no click target.
-fn count_line(ctx: &RowCtx<'_>, text: String) -> CardLine {
-    let mut spans = entry_indent(ctx.theme, false);
-    spans.push(Span::styled(text, ctx.theme.muted()));
-    Line::from(spans).into()
+/// The last line of an open delegation section while finished entries stay hidden:
+/// `▸ +N earlier` before its first page and `▸ +M more` after, each activation showing
+/// the next page.
+fn earlier_line(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    selected: bool,
+    pages: usize,
+    hidden: usize,
+) -> CardLine {
+    let focused = selected && matches!(ctx.entry_cursor, Some(EntryCursor::DelegationPage));
+    let word = if pages == 0 { "earlier" } else { "more" };
+    let mut spans = entry_indent(ctx.theme, focused);
+    spans.push(Span::styled(
+        format!(
+            "{} +{hidden} {word}",
+            ctx.theme.glyph(GlyphRole::WorktreeInactiveClosed)
+        ),
+        ctx.theme
+            .styled(Component::DelegationPager, Modifier::empty()),
+    ));
+    CardLine {
+        line: Line::from(spans),
+        target: Some(HitTarget::PageDelegation {
+            row: row.id.clone(),
+        }),
+    }
 }
 
 /// The marks, padded to end at the meter's percentage column. `trailing_width` is
@@ -584,12 +581,20 @@ fn message_mark_spans(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> V
 
 /// The standing delegation line carries the current turn's children, their
 /// known cost, pending waits with background shells, and, while the section is open
-/// or the plan unfinished, the booked half last. Expansion only appends their entries.
-fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard, open: bool) -> Option<Line<'static>> {
+/// or the plan unfinished, the booked half last. A card with only earlier children
+/// draws a bare subagents half where `earlier` holds. Expansion only appends entries.
+fn delegation_line(
+    ctx: &RowCtx<'_>,
+    agent: &AgentCard,
+    open: bool,
+    earlier: bool,
+) -> Option<Line<'static>> {
     let child_count = agent.current_sub_agents().count();
+    let children =
+        (child_count > 0 || (earlier && !agent.sub_agents.is_empty())).then_some(child_count);
     let wait_count = wait_count(agent, ctx.now);
     let booked = !agent.bookings.is_empty() && (open || bookings::open_plan(agent));
-    if child_count == 0 && wait_count == 0 && !booked {
+    if children.is_none() && wait_count == 0 && !booked {
         return None;
     }
     let width = content_width(ctx.width);
@@ -607,12 +612,12 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard, open: bool) -> Option<Li
             )]
         })
         .unwrap_or_default();
-    let halves = |long: bool| delegation_halves(ctx, child_count, wait_count, long);
+    let halves = |long: bool| delegation_halves(ctx, children, wait_count, long);
     // With bookings on the line, the labels take their short forms before the line trims,
     // so the `⚠` segment always lands beside the cost.
     let long = ctx.tier == Tier::L2
         && (!booked || {
-            let seam = if child_count > 0 || wait_count > 0 {
+            let seam = if children.is_some() || wait_count > 0 {
                 text_width(&value_seam(ctx.theme))
             } else {
                 0
@@ -628,33 +633,38 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard, open: bool) -> Option<Li
     if !booked {
         return Some(pin_right(left, right, width));
     }
-    if child_count > 0 || wait_count > 0 {
+    if children.is_some() || wait_count > 0 {
         left.push(Span::styled(value_seam(theme), theme.muted()));
     }
     Some(bookings::finish_line(ctx, agent, left, right, long))
 }
 
 /// The subagents and waits halves of the section line, with long labels when `long`.
+/// `children` is the current child count when the subagents half draws; a count of 0
+/// draws the half bare.
 fn delegation_halves(
     ctx: &RowCtx<'_>,
-    child_count: usize,
+    children: Option<usize>,
     wait_count: usize,
     long: bool,
 ) -> Vec<Span<'static>> {
     let theme = ctx.theme;
-    let (subagents_label, waits_label) = if long {
-        (
-            format!(" subagents ({child_count})"),
-            format!(" waits ({wait_count})"),
-        )
+    let subagents_label = match (children, long) {
+        (Some(0) | None, true) => " subagents".to_owned(),
+        (Some(0) | None, false) => String::new(),
+        (Some(count), true) => format!(" subagents ({count})"),
+        (Some(count), false) => format!(" {count}"),
+    };
+    let waits_label = if long {
+        format!(" waits ({wait_count})")
     } else {
-        (format!(" {child_count}"), format!(" {wait_count}"))
+        format!(" {wait_count}")
     };
     let mut left = vec![Span::raw("  ")];
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.
-    if child_count > 0 {
+    if children.is_some() {
         left.extend([
             Span::styled(
                 theme.glyph(GlyphRole::CardSubagents).to_owned(),
@@ -664,7 +674,7 @@ fn delegation_halves(
         ]);
     }
     if wait_count > 0 {
-        if child_count > 0 {
+        if children.is_some() {
             left.push(Span::styled(value_seam(theme), theme.muted()));
         }
         left.extend([

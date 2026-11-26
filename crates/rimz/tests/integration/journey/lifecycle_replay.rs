@@ -392,15 +392,14 @@ fn subagent_child_row_appears_and_leaves_at_the_next_turn() {
         );
 
         room.agent_hook(agent.source(), &subagent_stop(agent.session(), &child_id));
-        let screen = room.wait_for(|s| s.contains("✓ review"), SETTLE);
+        let screen = room.wait_for(|s| s.contains("▸ +1 earlier"), SETTLE);
         assert!(
-            screen.contains("✓ review"),
-            "subagent stop settles the child to success for the current turn:\n{screen}"
+            screen.contains("▸ +1 earlier"),
+            "subagent stop moves the finished child behind the earlier line:\n{screen}"
         );
 
-        // The standing delegation line lists the current turn's children only,
-        // so the next prompt folds the landed child into `earlier` and drops
-        // `⧉ 1`.
+        // The standing delegation line counts the current turn's children only,
+        // so the next prompt drops `⧉ 1`.
         room.agent_hook(agent.source(), &agent.prompt("next parent turn"));
         let next_turn_without_child = |screen: &str| {
             screen.contains("next parent turn")

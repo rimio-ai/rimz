@@ -14,28 +14,16 @@ expression: screen
 ▌  build feature                                     ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
-▌    ▾ 12 earlier                                    ▐
-▌    ✓ worker-12 · task p12                          ▐
-▌      Haiku                                         ▐
-▌    ! worker-11 · task p11                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-10 · task p10                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-09 · task p09                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-08 · task p08                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-07 · task p07                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-06 · task p06                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-05 · task p05                          ▐
-▌      Haiku                                         ▐
-▌    ✓ worker-04 · task p04                          ▐
-▌      Haiku                                         ▐
+▌  ⧉ subagents (1)                                   ▐
+▌    ⣾ current · task cur-wide                       ▐
+▌      ◇ 1M · Opus 4.8                               ▐
 ▌    ✓ worker-03 · task p03                          ▐
-▌      Haiku                                         ▐
-▌    2 more earlier                                  ▐
+▌             Haiku                                  ▐
+▌    ✓ worker-02 · task p02                          ▐
+▌             Haiku                                  ▐
+▌    ✓ worker-01 · task p01                          ▐
+▌             Haiku                                  ▐
+
 
  ────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00

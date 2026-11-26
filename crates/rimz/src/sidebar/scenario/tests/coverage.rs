@@ -111,7 +111,7 @@ fn fixture_frames_are_deterministic() {
 }
 
 #[test]
-fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
+fn clock_fixtures_separate_runtime_and_quiet_durations_and_page_finished_children() {
     for (state, markers) in [
         (
             "clocks",
@@ -122,11 +122,11 @@ fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
                 "◑  8m▐",
                 "silent 30m",
                 "◉ 30m▐",
-                "   9m▐",
+                " earlier",
                 "●  4h▐",
             ],
         ),
-        ("clocks-done", vec!["Done", "4h51m🮇", "   9m▐"]),
+        ("clocks-done", vec!["Done", "4h51m🮇", " earlier"]),
         (
             "clocks-nerd-font",
             vec![
@@ -134,15 +134,17 @@ fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
                 "4h51m🮇",
                 "   2h▐",
                 "silent 30m",
-                "   9m▐",
+                " earlier",
             ],
         ),
-        ("clocks-done-nerd-font", vec!["Done", "4h51m🮇", "   9m▐"]),
+        ("clocks-done-nerd-font", vec!["Done", "4h51m🮇", " earlier"]),
     ] {
         let snapshot = scenario_snapshot(state).unwrap();
         let mut ansi = Vec::new();
         crate::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, 54, 34).unwrap();
         let frame = strip_sgr(&ansi);
+        // A finished child's frozen clock waits behind the earlier line: the fixture
+        // frame pages nothing in.
         for marker in markers {
             assert!(frame.contains(marker), "{marker} absent:\n{frame}");
         }

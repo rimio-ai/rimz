@@ -46,8 +46,8 @@ pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Alert, DelegationPin, EntryCursor, FrameTime, Newborn, PresentationToggles, UiState, ViewState,
-    ViewportIntent, ViewportRequest,
+    Alert, DelegationPages, DelegationPin, EntryCursor, FrameTime, Newborn, PresentationToggles,
+    UiState, ViewState, ViewportIntent, ViewportRequest,
 };
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
@@ -290,8 +290,8 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     });
 }
 
-/// Pins and prior-round folds live while their row stays and the parent's user
-/// turn is the one they were opened or pinned in.
+/// Pins live while their row stays and the parent's user turn is the one they were
+/// pinned in; delegation pages while the card still shows them.
 fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     let agent = |id: &str| {
         snapshot
@@ -304,12 +304,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     ui.toggles
         .delegation_overrides
         .retain(|id, pin| agent(id).is_some_and(|agent| agent.user_turn_started_at == pin.turn));
-    ui.toggles.prior_subagents_open.retain(|id, turn| {
-        agent(id).is_some_and(|agent| {
-            agent.user_turn_started_at == *turn
-                && agent.sub_agents.iter().any(|child| child.prior_turn)
-        })
-    });
+    ui.prune_delegation_pages(snapshot);
     ui.validate_entry_cursor(snapshot);
 }
 
@@ -331,7 +326,7 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
             .any(|(row_index, row)| {
                 let expansion = sections::CardExpansion::resolve(
                     &ui.toggles.delegation_overrides,
-                    &ui.toggles.prior_subagents_open,
+                    &ui.toggles.delegation_pages,
                     density,
                     row,
                     sections::row_selection_reach(

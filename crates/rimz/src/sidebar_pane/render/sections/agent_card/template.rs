@@ -72,15 +72,12 @@ pub(super) enum CardSlot {
     Gauge,
     Tokens,
     Cache,
-    /// The current turn's child count and cost plus armed one-shot waits;
-    /// empty until either exists.
+    /// The current turn's child count and cost, armed waits, and bookings; empty
+    /// until one exists, or a child of an earlier turn on a card that opens it.
     Delegation,
-    /// Unfinished and newest finished child entries, a count of the other
-    /// finished children, and pending waits.
+    /// Every in-flight entry, the paged finished entries, and the `▸ +N earlier` /
+    /// `+M more` line over the finished entries still hidden.
     DelegationEntries,
-    /// The fold line under delegation entries for prior-round subagents (and,
-    /// when open, the newest 10 by rest instant plus any overflow count line).
-    PriorSubagents,
     /// The booked line alone, on a shape without `Delegation` whose card holds an
     /// unfinished booked plan.
     Booked,
@@ -102,7 +99,6 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Tokens,
     CardSlot::Cache,
     CardSlot::Delegation,
-    CardSlot::PriorSubagents,
 ];
 const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Identity,
@@ -113,7 +109,6 @@ const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Cache,
     CardSlot::Delegation,
     CardSlot::DelegationEntries,
-    CardSlot::PriorSubagents,
 ];
 const ENGAGED_RESTING: &[CardSlot] = &[
     CardSlot::Identity,
@@ -156,10 +151,7 @@ pub(in crate::sidebar_pane::render) fn engaged_base_lines() -> usize {
         .filter(|slot| {
             !matches!(
                 slot,
-                CardSlot::Question
-                    | CardSlot::Cache
-                    | CardSlot::Delegation
-                    | CardSlot::PriorSubagents
+                CardSlot::Question | CardSlot::Cache | CardSlot::Delegation
             )
         })
         .count()
@@ -361,12 +353,7 @@ mod tests {
         }
         .to_vec();
         if !expansion.reach.opens_card() && density != CardDensityMode::Expanded {
-            slots.retain(|slot| {
-                !matches!(
-                    slot,
-                    CardSlot::Tokens | CardSlot::Cache | CardSlot::PriorSubagents
-                )
-            });
+            slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
         }
         slots
     }
@@ -397,7 +384,7 @@ mod tests {
                             let expansion = CardExpansion {
                                 reach,
                                 delegation,
-                                prior_subagents_open: false,
+                                pages: 0,
                             };
                             actual.push((
                                 (stage, status, density, expansion, plan),
@@ -432,14 +419,13 @@ mod tests {
                                 CardExpansion {
                                     reach,
                                     delegation: reach == SelectionReach::Selected,
-                                    prior_subagents_open: false,
+                                    pages: 0,
                                 },
                                 plan,
                             );
                             assert!(!template.contains(&CardSlot::Tokens));
                             assert!(!template.contains(&CardSlot::Delegation));
                             assert!(!template.contains(&CardSlot::DelegationEntries));
-                            assert!(!template.contains(&CardSlot::PriorSubagents));
                             assert_eq!(template.contains(&CardSlot::Booked), plan);
                         }
                     }

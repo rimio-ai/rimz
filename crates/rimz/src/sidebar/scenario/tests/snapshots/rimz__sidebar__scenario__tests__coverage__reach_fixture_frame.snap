@@ -17,12 +17,12 @@ expression: rendered
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
 ▌      ▤ 18k · Haiku · xhigh                       3m▐
-▌    ✓ Explore · audit auth watcher changes     $0.34▐
-▌      ◇ 22k · Haiku · xhigh                       5m▐
+▌    ▸ +1 earlier                                    ▐
 ▎⢄ pi-2 · GPT 5.5 · xhigh · 272k                $6.24🮇
 ▎  debug jump-host DNS                               🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━─── 92.0% ◕ 51m🮇
 ▎  ⧉ subagents (2)                                   🮇
+▎⏸︎ claude-2 · Opus 4.8 · xhigh · 1M            $10.76🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

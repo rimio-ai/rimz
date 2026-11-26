@@ -740,10 +740,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         54,
         25,
@@ -770,7 +767,10 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         .lines()
         .position(|line| line.contains("◷ timer · in 12m"))
         .unwrap();
-    assert!(wait_entry > child_entry);
+    assert!(
+        child_entry > wait_entry,
+        "a finished child pages in below the waits"
+    );
     assert!(subagent_line.contains("· ⧖ waits (1)"));
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
 
@@ -796,10 +796,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     };
     let opened =
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 31);
-    assert!(opened.contains("map the render path"));
+    // Unpaged, both finished children wait behind the earlier line; the title counts this turn's.
     assert!(opened.contains("⧉ subagents (1)"), "{opened}");
-    assert!(!opened.contains("previous render audit"));
-    assert!(!opened.contains("more finished"));
+    assert!(opened.contains("▸ +2 earlier"), "{opened}");
+    assert!(!opened.contains("map the render path"), "{opened}");
+    assert!(!opened.contains("previous render audit"), "{opened}");
 }
 
 fn density_agent(

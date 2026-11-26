@@ -13,8 +13,9 @@ pub(in crate::sidebar_pane) enum HitTarget {
     SubAgentPane(crate::ids::PaneId),
     /// A paneless reopenable launched child; activating it runs `rimz agents resume <id>`.
     ReopenSubAgent(String),
-    /// The fold line under a card's delegation entries for its prior-round children.
-    TogglePriorSubagents {
+    /// The `▸ +N earlier` / `+M more` line of an open delegation section: shows five
+    /// more of its finished entries.
+    PageDelegation {
         row: String,
     },
     ProviderTab(crate::ids::LoginKey),
@@ -215,7 +216,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::UnreadBanner | HitTarget::FocusMarker => 2,
         HitTarget::SubAgentPane(_)
         | HitTarget::ReopenSubAgent(_)
-        | HitTarget::TogglePriorSubagents { .. }
+        | HitTarget::PageDelegation { .. }
         | HitTarget::ToggleGroup(_)
         | HitTarget::ExpandGroup { .. }
         | HitTarget::ToggleInactive

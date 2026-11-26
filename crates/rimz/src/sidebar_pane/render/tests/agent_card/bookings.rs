@@ -19,7 +19,7 @@ fn pick(tasks: &[&str]) -> Vec<SidebarBooking> {
 }
 
 /// Two fired entries running, a sibling waiting after one of them, a raw term, a
-/// timed trigger, one counted `later`, and one counted `older`.
+/// timed trigger, one waiting on an unfired sibling, and one finished.
 fn healthy_plan() -> Vec<SidebarBooking> {
     pick(&[
         "lang-typed",
@@ -136,9 +136,10 @@ fn booked_cards_render_at_46_40_and_28_columns() {
 /// Every entry names what it starts by profile or team and lane, then what it is doing: a
 /// running agent its card's text and its runtime on one line, a running team its stage on
 /// one line, any other entry the booking's own text over its second line. No task name or
-/// handle shows outside the entry needing a fix.
+/// handle shows outside the entry needing a fix. Finished entries wait behind the earlier
+/// line until paged in, newest end first.
 #[test]
-fn every_booking_state_draws_in_band_order_with_its_count_rows() {
+fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
     let snapshot = planner_snapshot(bookings_in_each_state(fixed_now()), 60);
     let theme = Theme::fixed(false);
     let current = theme.glyph(GlyphRole::PipelineCurrent);
@@ -154,14 +155,11 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
         "after forge#lane-readers",
         "– coder · try the parser",
         "ended 10m ago · no PR",
-        "– coder · fix the store",
-        "ended 5m ago · #1630 merged",
         "▷ writer · document the language",
         "pr[workflow-language]: #1640 open",
         "▷ coder ",
         "once at 2026-11-14 03:00",
-        "+1 later",
-        "1 more ended",
+        "▸ +2 earlier",
     ];
     let mut from = 0;
     for needle in order {
@@ -194,8 +192,8 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
         "landed",
         "lang-docs",
         "nightly",
-        "release the language",
         "spike the old parser",
+        "fix the store",
         "type the language",
         "@",
     ] {
@@ -211,7 +209,20 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
     );
 
     let cost_rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &cost_rolls);
+    let pages = all_paged(&snapshot);
+    let mut ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &cost_rolls);
+    let unpaged = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    let earlier = line_texts(&unpaged.lines)
+        .iter()
+        .position(|line| line.contains("▸ +2 earlier"))
+        .unwrap();
+    assert!(matches!(
+        unpaged
+            .interactions
+            .target_at(8, u16::try_from(earlier).unwrap()),
+        Some(HitTarget::PageDelegation { .. })
+    ));
+    ctx.delegation_pages = &pages;
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     let lines = line_texts(&block.lines);
     let target = |needle: &str| {
@@ -222,9 +233,22 @@ fn every_booking_state_draws_in_band_order_with_its_count_rows() {
     };
     let card = target("once at 2026-11-14 03:00");
     assert!(matches!(card, Some(HitTarget::Row(_))), "{card:?}");
-    for count in ["+1 later", "1 more ended"] {
-        assert_eq!(target(count), card, "{count} is static: the card's own row");
+    let paged = lines.join("\n");
+    let mut from = paged.find("once at 2026-11-14 03:00").unwrap();
+    for needle in [
+        "– coder · fix the store",
+        "ended 5m ago · #1630 merged",
+        "spike the old parser",
+    ] {
+        let at = paged[from..]
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} newest finish first:\n{paged}"));
+        from += at + needle.len();
     }
+    assert!(
+        !paged.contains("earlier") && !paged.contains("more"),
+        "{paged}"
+    );
 }
 
 #[test]
@@ -345,6 +369,44 @@ fn the_resting_summary_gives_way_running_first_and_the_fix_never_drops() {
     assert!(booked(&fix, 28).contains("▷ 8 · ⚠ broken"));
 }
 
+/// The section line reads the entry next to fire: a timed task, never a task whose every
+/// unmet term waits on that unfired sibling, though its name sorts first.
+#[test]
+fn the_booked_summary_reads_the_next_entry_to_fire_not_one_waiting_on_it() {
+    let theme = Theme::fixed(false);
+    let plan: Vec<SidebarBooking> = serde_json::from_value(serde_json::json!([
+        {
+            "task": "a",
+            "starts": {"kind": "profile", "name": "writer"},
+            "band": "next",
+            "state": {
+                "state": "waiting",
+                "blocker": {
+                    "after": {"state": "waiting", "starts": {"kind": "profile", "name": "coder"}},
+                    "key": "pr[z]",
+                },
+                "after_unfired": true,
+            },
+        },
+        {
+            "task": "z",
+            "starts": {"kind": "profile", "name": "coder"},
+            "band": "next",
+            "state": {"state": "waiting", "timing": "once at 2026-11-27 03:00"},
+        },
+    ]))
+    .unwrap();
+    let snapshot = planner_snapshot(plan, 60);
+    let booked = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, 60))
+        .into_iter()
+        .find(|line| line.contains('▷'))
+        .unwrap();
+    assert!(
+        booked.contains("once at 2026-11-27 03:00") && !booked.contains("after"),
+        "{booked}"
+    );
+}
+
 #[test]
 fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
     let theme = Theme::fixed(false);
@@ -374,7 +436,7 @@ fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
     }
     let open = line_texts(&group_lines_at_width(&finished, &theme, 0, 46)).join("\n");
     assert!(
-        open.contains("▷ booked (1)") && open.contains("fix the store"),
+        open.contains("▷ booked (1)") && open.contains("▸ +1 earlier"),
         "{open}"
     );
 }

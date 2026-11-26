@@ -645,8 +645,56 @@ pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         delegation_overrides: const { &std::collections::BTreeMap::new() },
-        prior_subagents_open: const { &std::collections::BTreeMap::new() },
+        delegation_pages: const { &std::collections::BTreeMap::new() },
     }
+}
+
+/// `row`'s delegation pages as `pages` activations of its earlier line in the parent's
+/// current user turn leave them.
+fn paged(row: &crate::store::snapshot::SidebarRow, pages: usize) -> (String, DelegationPages) {
+    let turn = row.as_agent().and_then(|agent| agent.user_turn_started_at);
+    let pages = std::num::NonZeroUsize::new(pages).expect("at least one page");
+    (row.id.clone(), DelegationPages { pages, turn })
+}
+
+/// Every agent card's delegation pages with all its finished entries shown.
+fn all_paged(snapshot: &SidebarSnapshot) -> std::collections::BTreeMap<String, DelegationPages> {
+    snapshot
+        .rows()
+        .filter(|row| row.is_agent())
+        .map(|row| paged(row, 99))
+        .collect()
+}
+
+/// A view selecting `selected_index` with every card's finished delegation entries paged in.
+fn paged_view(snapshot: &SidebarSnapshot, selected_index: usize) -> ViewState {
+    ViewState {
+        selected_index: Some(selected_index),
+        toggles: PresentationToggles {
+            delegation_pages: all_paged(snapshot),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// [`group_lines`] with every card's finished delegation entries paged in.
+fn group_lines_paged(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    selected_index: usize,
+) -> Vec<Line<'static>> {
+    let cost_rolls = CostRolls::default();
+    let pages = all_paged(snapshot);
+    let mut ctx = test_row_ctx(snapshot, theme, 54, selected_index, 0, &cost_rolls);
+    ctx.delegation_pages = &pages;
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    assert_eq!(
+        block.interactions.line_count(),
+        block.lines.len(),
+        "map stays in lockstep with lines"
+    );
+    block.lines
 }
 
 /// Render one worktree group's lines, asserting the hit-test map stays in
