@@ -5337,3 +5337,56 @@ fn a_launch_reads_failures_only_from_the_tables_its_scope_resolves_from() {
         )),
     );
 }
+
+/// A `subagents:` entry spelled as a kind alias is checked as the kind it names: with a failed
+/// project subagent `antigravity`, a machine agent allowing `agy` fails as one allowing
+/// `antigravity` does, plain or `+`, quoting the entry as written.
+#[test]
+fn a_subagents_alias_entry_fails_with_the_failed_row_of_its_kind() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let (machine, launch) = load_definitions_in_project(
+        home.path(),
+        project.path(),
+        &[
+            ("agents/agy_plain.md", "agent: claude\nsubagents: [agy]"),
+            ("agents/agy_plus.md", "agent: claude\nsubagents: [+agy]"),
+            (
+                "agents/kind_plain.md",
+                "agent: claude\nsubagents: [antigravity]",
+            ),
+            (
+                "agents/kind_plus.md",
+                "agent: claude\nsubagents: [+antigravity]",
+            ),
+        ],
+        "\"opus\"",
+        "[subagents.profiles.antigravity]\ndescription = \"Agy\"\nagent = \"claude\"\n",
+    );
+    let cases = [
+        ("agy_plain", "agy"),
+        ("agy_plus", "agy"),
+        ("kind_plain", "antigravity"),
+        ("kind_plus", "antigravity"),
+    ];
+    let resolve = |spec: &str| {
+        crate::harness::plan::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(spec),
+            None,
+        )
+        .map(drop)
+        .map_err(|err| err.to_string())
+    };
+    assert_eq!(
+        cases.map(|(spec, _)| resolve(spec)),
+        cases.map(|(spec, entry)| Err(format!(
+            "{}: allows subagent '{entry}', which failed to load\ncaused by: {}: \
+             [subagents.profiles.antigravity]: takes the name of an agent runtime; rename it",
+            home.path().join(format!("agents/{spec}.md")).display(),
+            project.path().join(".rimz/config.toml").display(),
+        ))),
+    );
+}
