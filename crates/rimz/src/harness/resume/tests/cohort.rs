@@ -891,7 +891,6 @@ fn legacy_tier_override_bypasses_observed_alias_replay() {
 fn check_cohort_alias_replay(override_model: Option<&str>) {
     let mut profile = profile("codex");
     profile.model = Some("sol".into());
-    profile.definition_renders = routed_profile(None).definition_renders;
     let profiles = profiles("planner", profile);
     let root = tempfile::tempdir().unwrap();
     let runtime =
@@ -1408,8 +1407,8 @@ fn resume_agent_override_requires_same_kind_and_records_base() {
 #[test]
 fn resume_tier_is_same_kind_and_never_climbs() {
     use crate::config::tiers::ModelTier;
-    let mut profiles = profiles("planner", routed_profile(None));
-    let mut coder_profile = routed_profile(None);
+    let mut profiles = profiles("planner", routed_profile());
+    let mut coder_profile = routed_profile();
     coder_profile.agent = "codex".into();
     coder_profile.model = Some("astra".into());
     profiles.0.insert("coder".into(), coder_profile);
@@ -1485,7 +1484,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
 #[test]
 fn unavailable_resume_tier_keeps_the_requested_row() {
     use crate::config::tiers::ModelTier;
-    let profiles = profiles("planner", routed_profile(None));
+    let profiles = profiles("planner", routed_profile());
     let tiers = crate::config::tiers::TierConfig::default();
     let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
         crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
@@ -3576,13 +3575,7 @@ fn agent_override_mode_precedence_and_refusals() {
 
 #[test]
 fn tier_stamped_legacy_seat_keeps_the_layout_mode() {
-    let mut planner = routed_profile(None);
-    planner
-        .definition_renders
-        .as_mut()
-        .unwrap()
-        .renders
-        .insert("claude".into(), profile("claude"));
+    let planner = routed_profile();
     let profiles = profiles("planner", planner);
     for (label, tier, record, mode, args) in [
         (

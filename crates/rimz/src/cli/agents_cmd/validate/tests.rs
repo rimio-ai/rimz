@@ -415,7 +415,7 @@ fn tier_exclusions_warn_once_per_definition_and_family() {
     assert!(blocked.message.contains("codex.md"));
     assert!(blocked.message.contains("tier: senior"));
     assert!(codex.path.ends_with("agents/codex.md"));
-    let warnings = warnings(&loaded, Isolation::Host, &Default::default());
+    let warnings = warnings(&loaded, Isolation::Host);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].path.ends_with("routed.md"));
     assert!(
@@ -442,7 +442,7 @@ fn allowed_tools_warnings_follow_resolved_kind_and_nonempty_rules() {
     }
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let warnings = warnings(&loaded, Isolation::Host, &Default::default());
+    let warnings = warnings(&loaded, Isolation::Host);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].path.ends_with("codex-rules.md"));
     assert_eq!(
@@ -480,7 +480,7 @@ fn antigravity_warnings_name_untranslated_rules_and_the_sandbox_override() {
     }
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let warnings: Vec<_> = warnings(&loaded, Isolation::Sandbox, &Default::default())
+    let warnings: Vec<_> = warnings(&loaded, Isolation::Sandbox)
         .into_iter()
         .map(|warning| {
             (
@@ -542,7 +542,7 @@ fn host_skill_warnings_follow_definition_isolation_and_keep_success() {
         &Default::default(),
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let warnings = warnings(&loaded, Isolation::Scoped, &Default::default());
+    let warnings = warnings(&loaded, Isolation::Scoped);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].path.ends_with("host.md"));
     let json = serde_json::to_value(&warnings).unwrap();

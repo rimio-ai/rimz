@@ -405,7 +405,6 @@ fn planner_profiles() -> ProfilesConfig {
         Profile {
             empty_dir: None,
             variant: None,
-            definition_renders: None,
             definition: None,
             kind_defaults: false,
             kind_base: false,
@@ -659,7 +658,6 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             empty_dir: None,
             variant: None,
-            definition_renders: None,
             definition: None,
             kind_defaults: false,
             kind_base: false,
@@ -698,7 +696,6 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             empty_dir: None,
             variant: None,
-            definition_renders: None,
             definition: None,
             kind_defaults: false,
             kind_base: false,
@@ -2128,7 +2125,6 @@ mod launch_options {
             rimz::config::Profile {
                 empty_dir: None,
                 variant: None,
-                definition_renders: None,
                 definition: None,
                 kind_defaults: false,
                 kind_base: false,

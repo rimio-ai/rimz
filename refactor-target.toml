@@ -1311,7 +1311,7 @@ upward-dependencies = [
 # forget_loop_memos lets a loop.toml writer drop the memos of it in its own process (+1).
 # RimzEntry carries a `capabilities:` grant's entries through ToolSet to the launch (+1).
 # prompt_references, PromptReference, and PromptReferenceKind share positional rimz(x), skill(x), and subagent(x) scanning between launch rewrite and `rimz agents validate` (+3).
-# BuildBase, DefinitionSource, Profile::build_under, and keeps_inherited_model rebuild Markdown definitions on demand (+3).
+# BuildBase, DefinitionSource with its build, and keeps_inherited_model rebuild Markdown definitions on demand (+3).
 # LaunchAgents::block_failed_override shares failed-override checks with the launch planner (+1).
 # resolve_seat_setting resolves after-launch profile settings in launch chain order (+1).
 # AutoCompactWindow and AutoCompactDefault carry `[harness] auto_compact`'s tri-state machine
@@ -1330,7 +1330,9 @@ upward-dependencies = [
 # the built-in base of that kind (+1).
 # engine::resume, Resume, Selection::{resume, resume_of, resumes} let resume replay the recorded
 # engine through the same cell build, replacing the resume-side table rewrite (+5).
-surface-budget = 355
+# DefinitionSource::tier_exclusions and TierExclusion let `agents validate` ask the engine
+# module for unrunnable tier entries in place of the retired DefinitionRenders (+1 net).
+surface-budget = 356
 
 [[verdict]]
 kind = "item"

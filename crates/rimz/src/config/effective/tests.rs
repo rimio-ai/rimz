@@ -1368,11 +1368,11 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
     launch.subagent_profiles = launch.profiles.clone();
     assert!(
         launch.profiles.0["worker"]
-            .definition_renders
+            .definition
             .as_ref()
             .unwrap()
-            .renders
-            .contains_key("claude")
+            .build(None, "claude", None)
+            .is_ok()
     );
     let outcomes = [
         (ProfileScope::Agents, "worker"),
@@ -1534,11 +1534,11 @@ fn pi_model_routing_does_not_require_the_models_native_family_render() {
     let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
     assert!(
         launch.profiles.0["worker"]
-            .definition_renders
+            .definition
             .as_ref()
             .unwrap()
-            .exclusions
-            .contains_key("claude")
+            .build(None, "claude", None)
+            .is_err()
     );
     let results = [None, Some("pi")].map(|family| {
         launch_under(
@@ -1794,8 +1794,9 @@ fn model_aliases_are_machine_only() {
 
 #[test]
 fn model_tiers_are_machine_only_and_project_models_are_concrete() {
-    let profile: Profile = toml::from_str("agent = 'claude'\ndefinition_renders = {}\nmodel_tier = {tier = 'principal', fell_back = true}").unwrap();
-    assert!(profile.definition_renders.is_none());
+    let profile: Profile =
+        toml::from_str("agent = 'claude'\nmodel_tier = {tier = 'principal', fell_back = true}")
+            .unwrap();
     assert!(profile.model_tier.is_none());
     for text in [
         "[profiles.worker]\nagent = 'claude'\ntier = 'senior'",
@@ -1914,7 +1915,6 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         variant: None,
-        definition_renders: None,
         definition: None,
         kind_defaults: false,
         kind_base: false,
@@ -4349,7 +4349,7 @@ fn team_role_args_drop_on_provider_switch_for_model_and_tier_on_fresh_and_replay
             "codex",
             false,
         ),
-        // Non-tier provider switch exercises build_under on replay as well.
+        // Non-tier provider switch exercises the definition rebuild on replay as well.
         (None, Some("neon"), "antigravity", false),
         // The same provider keeps role args.
         (None, Some("opus"), "claude", true),

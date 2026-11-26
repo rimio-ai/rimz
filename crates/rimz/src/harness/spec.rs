@@ -2100,7 +2100,7 @@ fn build_launched<'a>(
         let built = if x.is_none() && model.is_none() && kind == root.agent {
             Cow::Borrowed(root)
         } else {
-            Cow::Owned(def.build(x.map(AgentOverride::build_base), Some(kind), model)?)
+            Cow::Owned(def.build(x.map(AgentOverride::build_base), kind, model)?)
         };
         let names = if x.is_some() || req.target_kind.is_some() {
             built
@@ -2127,7 +2127,7 @@ fn build_launched<'a>(
             let x_built = if kind == x_profile.agent {
                 Cow::Borrowed(x_profile)
             } else {
-                Cow::Owned(x_def.build(None, Some(kind), None)?)
+                Cow::Owned(x_def.build(None, kind, None)?)
             };
             match &x_built.definition {
                 Some(def) => built.names.extend(def.chain().iter().cloned()),

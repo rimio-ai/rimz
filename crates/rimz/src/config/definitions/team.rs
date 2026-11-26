@@ -363,9 +363,11 @@ impl SeatLoader<'_> {
             None
         } else if role.model.is_some() {
             Some(kind.to_owned())
-        } else if let Some(route) = &original.definition_renders {
-            route
-                .preference
+        } else if original.kind_base {
+            Some(original.agent.clone())
+        } else if let Some(source) = &original.definition {
+            source
+                .preference()
                 .family
                 .clone()
                 .or_else(|| Some(kind.to_owned()))
@@ -423,7 +425,7 @@ impl SeatLoader<'_> {
             .unwrap_or_default();
         seat_writers.overlay_from(&role_overlay, &seat_info.profile_name);
         // Resolve the overlaid leaf through the standalone checks/defaults with its already-rendered
-        // ancestor crafts in place, so precomputed renders and on-demand builds share one path.
+        // ancestor crafts in place, so the load-time seat and on-demand builds share one path.
         let tree = Namespace {
             definitions: BTreeMap::from([(
                 role.agent.clone(),

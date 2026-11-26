@@ -1003,20 +1003,6 @@ impl<'a> ExplainReport<'a> {
         );
         let model_override =
             rimz::harness::plan::normalized_preset_value(args.overrides.model.as_deref()).is_some();
-        let routed_profile = params
-            .profile
-            .as_ref()
-            .and_then(|name| profiles.0.get(name))
-            .filter(|profile| {
-                profile.definition_renders.as_ref().is_some_and(|renders| {
-                    args.overrides
-                        .agent
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|family| !family.is_empty())
-                        .is_none_or(|family| renders.renders.contains_key(family))
-                })
-            });
         let adapter = rimz::agents::find_definition(request.kind.as_str())
             .expect("compiled agent has an adapter");
         // A source names the layer that supplied the planned value; a value the plan
@@ -1184,24 +1170,7 @@ impl<'a> ExplainReport<'a> {
             ),
             mode: params.mode,
             model: params.model.as_deref(),
-            tier: if let Some(stamp) = &params.tier {
-                Some(stamp.tier)
-            } else if args.target.starts_with('@')
-                || routed_profile.is_none()
-                || args
-                    .overrides
-                    .model
-                    .as_deref()
-                    .is_some_and(|model| !model.trim().is_empty())
-            {
-                None
-            } else {
-                args.overrides.tier.or_else(|| {
-                    routed_profile
-                        .and_then(|profile| profile.model_tier.as_ref())
-                        .map(|provenance| provenance.tier)
-                })
-            },
+            tier: params.tier.as_ref().map(|stamp| stamp.tier),
             effort: params.effort.as_deref(),
             effort_source: source(&tuning.effort, params.effort.is_some()),
             fast: params.fast,

@@ -429,10 +429,6 @@ pub(super) fn file_kind<'a>(
 
 /// A definition's own engine: its lines' kind, or the walk of its tier over the kinds that
 /// build.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "validation asks it in a later step")
-)]
 pub(super) fn file<T>(
     lines: &Lines<'_>,
     tier: Option<ModelTier>,
@@ -665,22 +661,35 @@ fn build<T>(
     ))
 }
 
-/// Walks `tier` upward under `preference`: builds each candidate kind once (the one engine
-/// when the family runs every provider's models, else each kind the tier table names from
-/// `tier` up), then picks as [`pick_tier`] does.
-pub(super) fn walk_tier<T>(
+/// A tier entry a definition cannot run: the first entry of its kind at the tier or above, and
+/// why the build under that kind and model failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TierExclusion {
+    pub tier: ModelTier,
+    pub model: String,
+    pub kind: String,
+    pub reason: String,
+}
+
+/// The family that runs every provider's models, when `preference` names one.
+fn client(preference: &TierPreference) -> Option<&str> {
+    preference
+        .family
+        .as_deref()
+        .filter(|kind| agents::runs_other_providers_models(kind))
+}
+
+/// Builds each kind a walk of `tier` under `preference` tries, once: the one engine when the
+/// family runs every provider's models, else each kind the tier table names from `tier` up,
+/// under its first entry's model. Returns the builds and the refusals, by kind.
+fn tier_builds<T>(
     tiers: &TierConfig,
     tier: ModelTier,
     preference: &TierPreference,
-    owner_kind: &str,
-    owner_variant: Option<&'static Variant>,
+    (owner_kind, owner_variant): (&str, Option<&'static Variant>),
     probe: &mut Probe<'_, T>,
-) -> Result<(Engine, T), EngineErr> {
-    let client = preference
-        .family
-        .as_deref()
-        .filter(|kind| agents::runs_other_providers_models(kind));
-    let candidates: Vec<(&str, Option<&str>)> = if let Some(client) = client {
+) -> (BTreeMap<String, T>, BTreeMap<String, DefinitionErr>) {
+    let candidates: Vec<(&str, Option<&str>)> = if let Some(client) = client(preference) {
         vec![(client, None)]
     } else {
         tiers
@@ -703,7 +712,48 @@ pub(super) fn walk_tier<T>(
             }
         }
     }
+    (built, exclusions)
+}
+
+/// The entries of `tier` and the tiers above it that a definition cannot run, one per kind a
+/// walk of `tier` under `preference` builds through `probe` and that refuses.
+pub(super) fn tier_exclusions<T>(
+    tiers: &TierConfig,
+    tier: ModelTier,
+    preference: &TierPreference,
+    owner: (&str, Option<&'static Variant>),
+    probe: &mut Probe<'_, T>,
+) -> Vec<TierExclusion> {
+    let client = client(preference);
+    let (_, exclusions) = tier_builds(tiers, tier, preference, owner, probe);
+    exclusions
+        .into_iter()
+        .filter_map(|(kind, error)| {
+            let (listed, _, model) = tiers
+                .entries(tier)
+                .find(|(_, entry, _)| client.is_some() || *entry == Some(kind.as_str()))?;
+            Some(TierExclusion {
+                tier: listed,
+                model: model.to_owned(),
+                kind,
+                reason: error.message,
+            })
+        })
+        .collect()
+}
+
+/// Walks `tier` upward under `preference`: builds each candidate kind once, as
+/// [`tier_builds`] does, then picks as [`pick_tier`] does.
+pub(super) fn walk_tier<T>(
+    tiers: &TierConfig,
+    tier: ModelTier,
+    preference: &TierPreference,
+    owner_kind: &str,
+    owner_variant: Option<&'static Variant>,
+    probe: &mut Probe<'_, T>,
+) -> Result<(Engine, T), EngineErr> {
     let owner = (owner_kind, owner_variant);
+    let (built, exclusions) = tier_builds(tiers, tier, preference, owner, probe);
     pick_tier(
         tiers,
         tier,
@@ -719,7 +769,7 @@ pub(super) fn walk_tier<T>(
 /// (`exclusions`): passes over the refused kinds and the models `unavailable` names, takes the
 /// first buildable entry when every one is unavailable, and never descends. The variant is the
 /// owner's, by [`variant`].
-pub(super) fn pick_tier<T>(
+fn pick_tier<T>(
     tiers: &TierConfig,
     tier: ModelTier,
     preference: &TierPreference,

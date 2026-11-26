@@ -55,10 +55,8 @@ fn mini_definitions_and_seats_keep_the_variant_and_canonical_base() {
                 .unwrap()
                 .contains_key("variant")
         );
-        let renders = profile.definition_renders.as_ref().unwrap();
         assert!(
-            renders
-                .renders
+            renders(profile)
                 .iter()
                 .all(|(kind, render)| { render.variant.is_none() || kind == "opencode" })
         );
@@ -457,7 +455,7 @@ fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
             "{child}"
         );
         assert!(profile.tier_stamp.is_none());
-        assert!(profile.definition_renders.is_some());
+        assert!(profile.definition.is_some());
     }
 }
 
@@ -594,10 +592,10 @@ fn model_tiers_choose_the_nearest_preference_and_absolute_effort() {
     assert_eq!(provenance.tier.to_string(), "principal");
     assert_eq!(
         parent
-            .definition_renders
+            .definition
             .as_ref()
             .unwrap()
-            .preference
+            .preference()
             .family
             .as_deref(),
         Some("codex")
@@ -649,7 +647,7 @@ fn model_tiers_are_identity_migrations() {
         let b = &loaded.agent_profiles.0["tiered"];
         assert!(a.model_tier.is_none());
         assert!(a.tier_stamp.is_none());
-        assert!(a.definition_renders.is_some());
+        assert!(a.definition.is_some());
         assert!(b.model_tier.is_some());
         assert_eq!(
             (&a.agent, &a.model, &a.effort),
@@ -2859,13 +2857,7 @@ fn definition_tools_stay_typed_until_the_final_engine_is_known() {
     assert!(profile.args.is_none(), "generated tools are not raw args");
     assert_eq!(profile.tools.as_ref().unwrap().bases(), ["Bash", "Read"]);
     assert_eq!(tool_args(&loaded, "worker"), ["--tools", "Bash,Read"]);
-    for render in profile
-        .definition_renders
-        .as_ref()
-        .unwrap()
-        .renders
-        .values()
-    {
+    for render in renders(profile).values() {
         assert_eq!(render.tools, profile.tools);
     }
 }
@@ -3297,12 +3289,24 @@ fn tier_families_name_a_failed_base_rather_than_asking_to_create_it() {
         "agents/codex.md",
         "---\ndescription: Base\n---\nBase.",
     );
+    write(
+        root.path(),
+        "agents/worker.md",
+        "---\ndescription: Worker\nagent: codex\ntier: senior\ntools: [Bash]\n---\nWork.",
+    );
     let loaded = load_checked(root.path());
-    let renders = loaded.agent_profiles.0["codex"].definition_renders.as_ref();
+    let exclusions = loaded.agent_profiles.0["worker"]
+        .definition
+        .as_ref()
+        .unwrap()
+        .tier_exclusions();
+    let claude = exclusions
+        .iter()
+        .find(|exclusion| exclusion.kind == "claude");
     assert_eq!(
-        renders.unwrap().exclusions["claude"],
+        claude.unwrap().reason,
         format!(
-            "whose kind base {} failed to load; fix that file",
+            "runs on claude, whose kind base {} failed to load; fix that file",
             root.path().join("agents/claude.md").display()
         )
     );
@@ -5252,9 +5256,7 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
     assert_eq!(texts(&agents["plain"]), ["Plain."]);
 
     // Each table's routed renders carry that table's base copy.
-    let render = |profile: &Profile, kind: &str| {
-        profile.definition_renders.as_ref().unwrap().renders[kind].clone()
-    };
+    let render = |profile: &Profile, kind: &str| renders(profile)[kind].clone();
     for (profile, timeout, idle, subagents) in [
         (&agents["claude"], None, true, true),
         (&subagents["claude"], Some(1800), false, false),
@@ -5447,15 +5449,7 @@ fn plus_lists_add_to_the_chain_and_the_kind_base_in_place_and_in_order() {
     assert_eq!(mcps("heir"), ["github", "rimz-lsp:deferred", "linear"]);
     assert_eq!(mcps("edit"), ["github:deferred", "rimz-lsp:always"]);
     assert_eq!(mcps("stacked"), ["github:deferred", "rimz-lsp"]);
-    let render = |kind: &str| {
-        tools(
-            &agents["ranked"]
-                .definition_renders
-                .as_ref()
-                .unwrap()
-                .renders[kind],
-        )
-    };
+    let render = |kind: &str| tools(&renders(&agents["ranked"])[kind]);
     assert_eq!(render("claude"), ["Bash", "Skill", "Write"]);
     assert_eq!(render("codex"), ["Bash", "Write"]);
     assert_eq!(
@@ -6514,14 +6508,16 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     let missing = load_checked(root.path());
     assert_loaded_seats(&missing);
     let rebuilt_judge = missing.agent_profiles.0["probe.judge"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(
                 &missing.agent_profiles.0["codex-listed"],
             )),
-            None,
+            "codex",
             None,
         )
-        .expect("team seat must build")
         .expect("seat built under codex-listed without rimz-message on disk must succeed");
     assert_eq!(rebuilt_judge.agent, "codex");
     assert_eq!(
@@ -6597,11 +6593,37 @@ fn a_seat_gained_rimz_message_loads_without_the_skill_on_disk() {
     );
 }
 
+/// `profile` built under each kind a tier walk can try, as the loader used to keep them: each
+/// tier-table kind under its first entry's model and each kind that runs every provider's models
+/// under the definition's own, the kinds that refuse left out. A kind base is its own build.
+fn renders(profile: &Profile) -> BTreeMap<String, Profile> {
+    let Some(source) = &profile.definition else {
+        return BTreeMap::from([(profile.agent.clone(), profile.clone())]);
+    };
+    let mut renders = BTreeMap::new();
+    let candidates = source
+        .tiers()
+        .entries(crate::config::tiers::ModelTier::Intern)
+        .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
+        .chain(
+            crate::agents::known_kinds()
+                .filter(|kind| crate::agents::runs_other_providers_models(kind))
+                .map(|kind| (kind, source.written_model())),
+        );
+    for (kind, model) in candidates {
+        if !renders.contains_key(kind)
+            && let Ok(render) = source.build(None, kind, model)
+        {
+            renders.insert(kind.to_owned(), render);
+        }
+    }
+    renders
+}
+
 /// Normalize fields that belong to the stored load wrapper rather than the resolved profile shape,
 /// plus the fixture tempdir prefix in prompt origins, so a built row compares field-by-field
 /// against a definition file loaded with `agent: X` written directly.
 fn comparable_profile(mut profile: Profile, root: &Path) -> Profile {
-    profile.definition_renders = None;
     profile.definition = None;
     let strip = |source: PromptSource| match source {
         PromptSource::File(path) => {
@@ -6622,7 +6644,7 @@ fn comparable_profile(mut profile: Profile, root: &Path) -> Profile {
 }
 
 #[test]
-fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_tiers_and_toml() {
+fn build_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_tiers_and_toml() {
     let base_root = fixture();
     let direct_root = fixture();
     for root in [base_root.path(), direct_root.path()] {
@@ -6756,12 +6778,14 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 
     // 1. Direct namespace: `leaf` under `astra`.
     let built_leaf = base.agent_profiles.0["leaf"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .expect("Markdown definition must build")
         .expect("leaf under astra must succeed");
     assert_eq!(
         comparable_profile(built_leaf, base_root.path()),
@@ -6770,12 +6794,14 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 
     // 2. Subagents namespace under subagent `helper`.
     let built_sub = base.subagent_profiles.0["advisor"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.subagent_profiles.0["helper"])),
-            None,
+            "codex",
             None,
         )
-        .expect("Markdown subagent must build")
         .expect("advisor under helper must succeed");
     assert_eq!(
         comparable_profile(built_sub, base_root.path()),
@@ -6788,12 +6814,14 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
     // 3. Subagent built under direct `agents/astra.md`: strips `subagents` and `idle-compact`,
     // keeps `smart-compact` and advisor's own fields, composes `[astra, advisor]`.
     let advisor_under_astra = base.subagent_profiles.0["advisor"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .expect("Markdown subagent must build")
         .expect("advisor under astra must succeed");
     assert_eq!(advisor_under_astra.agent, "codex");
     assert_eq!(advisor_under_astra.model.as_deref(), Some("astra"));
@@ -6825,12 +6853,14 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 
     // 4. `+` lists re-merge against X's pre-base lists instead of L's old base.
     let built_plus = base.agent_profiles.0["plus_lists"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["x_lists"])),
-            None,
+            "codex",
             None,
         )
-        .expect("Markdown definition must build")
         .expect("plus_lists under x_lists must succeed");
     assert_eq!(
         comparable_profile(built_plus, base_root.path()),
@@ -6840,31 +6870,35 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
         ),
     );
 
-    // 5. Tier-carrying X clears L's concrete model and walks the tier.
+    // 5. Tier-carrying X clears L's concrete model; built on the kind and model its tier walk
+    // chose, it matches the direct chain apart from the stamp, which the engine writes.
+    let mut direct_tier = direct.agent_profiles.0["tier_leaf"].clone();
+    direct_tier.model_tier = None;
     let built_tier = base.agent_profiles.0["tier_leaf"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["tiered"])),
-            None,
-            None,
+            &direct_tier.agent,
+            direct_tier.model.as_deref(),
         )
-        .expect("Markdown definition must build")
         .expect("tier_leaf under tiered must succeed");
     assert_eq!(
         comparable_profile(built_tier, base_root.path()),
-        comparable_profile(
-            direct.agent_profiles.0["tier_leaf"].clone(),
-            direct_root.path()
-        ),
+        comparable_profile(direct_tier, direct_root.path()),
     );
 
     // 6. Team seats: role overlay stays above X, while X's model replaces the role's model/tier.
     let built_lead = base.agent_profiles.0["probe.lead"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .expect("team seat must build")
         .expect("probe.lead under astra must succeed");
     assert_eq!(built_lead.agent, "codex");
     assert_eq!(built_lead.model.as_deref(), Some("astra"));
@@ -6891,12 +6925,14 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
     assert_eq!(lead_crafts, ["Astra craft.", "Worker craft."]);
 
     let built_judge = base.agent_profiles.0["probe.judge"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&base.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .expect("team seat must build")
         .expect("probe.judge under astra must succeed");
     assert_eq!(built_judge.agent, "codex");
     assert_eq!(built_judge.model.as_deref(), Some("astra"));
@@ -6906,41 +6942,41 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 
     let codex_rt = crate::agents::find_runtime("codex").unwrap();
     let judge_bare_codex = base.agent_profiles.0["probe.judge"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .expect("team seat must build")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", Some("astra"))
         .expect("probe.judge under bare codex must succeed");
     assert_eq!(judge_bare_codex.agent, "codex");
     assert_eq!(judge_bare_codex.model.as_deref(), Some("astra"));
-    assert_eq!(
-        judge_bare_codex.model_tier.as_ref().map(|t| t.tier),
-        Some(crate::config::tiers::ModelTier::Senior)
-    );
 
     // 7. Bare runtime (kind-base X) and bare variant X add no Markdown layer.
     let from_runtime = base.agent_profiles.0["leaf"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, Some("astra"))
-        .expect("Markdown definition must build")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", Some("astra"))
         .expect("leaf under runtime + explicit model must succeed");
     assert_eq!(from_runtime.agent, "codex");
     assert_eq!(from_runtime.model.as_deref(), Some("astra"));
 
-    // Bare/kind-base runtime X adds no layer, so `ranked` keeps its tier and prefers codex.
+    // Bare/kind-base runtime X adds no layer, so `ranked` takes the codex base's budget.
     let ranked_under_runtime = base.agent_profiles.0["ranked"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .expect("Markdown definition must build")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", Some("astra"))
         .expect("ranked under codex runtime must succeed");
     assert_eq!(ranked_under_runtime.agent, "codex");
     assert_eq!(ranked_under_runtime.model.as_deref(), Some("astra"));
     assert_eq!(ranked_under_runtime.budget.as_deref(), Some("9"));
-    assert_eq!(
-        ranked_under_runtime.model_tier.as_ref().map(|t| t.tier),
-        Some(crate::config::tiers::ModelTier::Senior)
-    );
 
     let mini_rt = crate::agents::find_runtime("opencode-mini").unwrap();
     let leaf_mini = base.agent_profiles.0["leaf"]
-        .build_under(Some(BuildBase::Runtime(mini_rt)), None, None)
-        .expect("Markdown definition must build")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(mini_rt)), "opencode-mini", None)
         .expect("leaf under opencode-mini must succeed");
     assert_eq!(leaf_mini.agent, "opencode");
     assert_eq!(
@@ -6950,7 +6986,7 @@ fn build_under_matches_direct_inheritance_for_both_namespaces_seats_plus_lists_t
 }
 
 #[test]
-fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
+fn build_engine_rules_model_keep_and_agent_tool_subagents() {
     let root = fixture();
     for kind in ["antigravity", "opencode"] {
         write(
@@ -7022,20 +7058,24 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // X writing no model/tier drops an incompatible model.
     let advisor_codex = loaded.subagent_profiles.0["advisor"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", None)
         .unwrap();
     assert_eq!(advisor_codex.agent, "codex");
     assert_eq!(advisor_codex.model, None);
     assert_eq!(advisor_codex.effort.as_deref(), Some("high"));
 
     let advisor_codex_profile = loaded.subagent_profiles.0["advisor"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["codex_only"])),
-            None,
+            "codex",
             None,
         )
-        .unwrap()
         .unwrap();
     assert_eq!(advisor_codex_profile.agent, "codex");
     assert_eq!(advisor_codex_profile.model, None);
@@ -7043,52 +7083,64 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 
     // Multi-provider engine keeps the model.
     let explorer_oc = loaded.subagent_profiles.0["explorer"]
-        .build_under(Some(BuildBase::Runtime(opencode_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(opencode_rt)), "opencode", None)
         .unwrap();
     assert_eq!(explorer_oc.agent, "opencode");
     assert_eq!(explorer_oc.model.as_deref(), Some("sonnet"));
 
     // Same kind keeps a custom model.
     let custom_same = loaded.agent_profiles.0["custom"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", None)
         .unwrap();
     assert_eq!(custom_same.agent, "codex");
     assert_eq!(custom_same.model.as_deref(), Some("custom-codex-model"));
 
     // Model belonging to the final kind is kept even across a kind change.
     let oc_to_claude = loaded.agent_profiles.0["opencode_opus"]
-        .build_under(Some(BuildBase::Runtime(claude_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(claude_rt)), "claude", None)
         .unwrap();
     assert_eq!(oc_to_claude.agent, "claude");
     assert_eq!(oc_to_claude.model.as_deref(), Some("opus"));
 
     // `--model M` alone moves to M's kind unless L's kind keeps M.
     let finder_neon = loaded.subagent_profiles.0["finder"]
-        .build_under(None, None, Some("neon"))
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(None, "antigravity", Some("neon"))
         .unwrap();
     assert_eq!(finder_neon.agent, "antigravity");
     assert_eq!(finder_neon.model.as_deref(), Some("neon"));
     assert_eq!(finder_neon.effort.as_deref(), Some("low"));
 
     let oc_neon = loaded.agent_profiles.0["opencode_opus"]
-        .build_under(None, None, Some("neon"))
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(None, "opencode", Some("neon"))
         .unwrap();
     assert_eq!(oc_neon.agent, "opencode");
     assert_eq!(oc_neon.model.as_deref(), Some("neon"));
 
     // A chain listing the `Agent` tool skips X's `subagents:` list instead of failing.
     let delegator_astra = loaded.agent_profiles.0["delegator"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .unwrap()
         .expect("delegator under astra must drop X's subagents list");
     assert_eq!(delegator_astra.agent, "codex");
     assert_eq!(delegator_astra.model.as_deref(), Some("astra"));
@@ -7096,7 +7148,7 @@ fn build_under_engine_rules_model_keep_and_agent_tool_subagents() {
 }
 
 #[test]
-fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
+fn build_idempotence_ancestors_no_disk_read_equality_and_errors() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Profile>();
     assert_send_sync::<DefinitionSource>();
@@ -7153,17 +7205,9 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     let loaded = load_checked(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
 
-    // Non-Markdown rows return None.
-    assert!(
-        loaded.agent_profiles.0["codex"]
-            .build_under(None, Some("claude"), None)
-            .is_none()
-    );
-    assert!(
-        agent::empty_profile("claude")
-            .build_under(None, Some("codex"), None)
-            .is_none()
-    );
+    // Non-Markdown rows carry no definition to build.
+    assert!(loaded.agent_profiles.0["codex"].definition.is_none());
+    assert!(agent::empty_profile("claude").definition.is_none());
 
     // Errors are returned cleanly and are safe to ask again.
     let codex_rt = crate::agents::find_runtime("codex").unwrap();
@@ -7171,53 +7215,55 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     for (label, call, needle) in [
         (
             "missing required tools",
-            loaded.agent_profiles.0["no_tools"].build_under(
-                Some(BuildBase::Runtime(codex_rt)),
-                None,
-                None,
-            ),
+            loaded.agent_profiles.0["no_tools"]
+                .definition
+                .as_ref()
+                .expect("definition-backed row")
+                .build(Some(BuildBase::Runtime(codex_rt)), "codex", None),
             "lists neither",
         ),
         (
             "skill policy",
-            loaded.agent_profiles.0["with_manual_skill"].build_under(
-                Some(BuildBase::Runtime(codex_rt)),
-                None,
-                None,
-            ),
+            loaded.agent_profiles.0["with_manual_skill"]
+                .definition
+                .as_ref()
+                .expect("definition-backed row")
+                .build(Some(BuildBase::Runtime(codex_rt)), "codex", None),
             "user-only for codex",
         ),
         (
             "no system prompt on definition",
-            loaded.agent_profiles.0["parent"].build_under(
-                Some(BuildBase::Runtime(amp_rt)),
-                None,
-                None,
-            ),
+            loaded.agent_profiles.0["parent"]
+                .definition
+                .as_ref()
+                .expect("definition-backed row")
+                .build(Some(BuildBase::Runtime(amp_rt)), "amp", None),
             "takes no system prompt",
         ),
         (
             "no system prompt on seat",
-            loaded.agent_profiles.0["probe.lead"].build_under(
-                Some(BuildBase::Runtime(amp_rt)),
-                None,
-                None,
-            ),
+            loaded.agent_profiles.0["probe.lead"]
+                .definition
+                .as_ref()
+                .expect("definition-backed row")
+                .build(Some(BuildBase::Runtime(amp_rt)), "amp", None),
             "takes no system prompt",
         ),
         (
             "model incompatible with X",
-            loaded.agent_profiles.0["parent"].build_under(
-                Some(BuildBase::Profile(&loaded.agent_profiles.0["astra"])),
-                None,
-                Some("opus"),
-            ),
+            loaded.agent_profiles.0["parent"]
+                .definition
+                .as_ref()
+                .expect("definition-backed row")
+                .build(
+                    Some(BuildBase::Profile(&loaded.agent_profiles.0["astra"])),
+                    "codex",
+                    Some("opus"),
+                ),
             "runs on 'codex' but model 'opus' runs on 'claude'",
         ),
     ] {
-        let err = call
-            .unwrap_or_else(|| panic!("{label}: expected Some(Err)"))
-            .expect_err(label);
+        let err = call.expect_err(label);
         assert!(
             err.message.contains(needle),
             "{label}: expected {needle:?} in {:?}",
@@ -7226,8 +7272,10 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     }
     // Ask a failing build a second time to prove it does not poison or change.
     let repeat_err = loaded.agent_profiles.0["no_tools"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", None)
         .unwrap_err();
     assert!(
         repeat_err.message.contains("lists neither"),
@@ -7237,14 +7285,20 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
 
     // Config equality ignores build memos and retained skill caches.
     let _ = cfg_a.agents.profiles.0["child"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&cfg_a.agents.profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .unwrap()
         .unwrap();
-    let _ = cfg_a.agents.profiles.0["parent"].build_under(None, None, Some("neon"));
+    let _ = cfg_a.agents.profiles.0["parent"]
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(None, "antigravity", Some("neon"));
     assert_eq!(
         cfg_a, cfg_b,
         "two config loads must compare equal after one serves builds"
@@ -7256,20 +7310,24 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
 
     // Idempotence: a row built under X asked for X again returns itself without duplicating crafts.
     let once = loaded.agent_profiles.0["child"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .unwrap()
         .unwrap();
     let twice = once
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["astra"])),
-            None,
+            "codex",
             None,
         )
-        .unwrap()
         .unwrap();
     assert_eq!(once, twice);
     assert_eq!(once.append_system_prompt_files.len(), 3);
@@ -7277,13 +7335,17 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     // A build under a bare or kind-base runtime base gives the same render on every call.
     let codex_rt = crate::agents::find_runtime("codex").unwrap();
     let under_rt = loaded.agent_profiles.0["child"]
-        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-        .unwrap()
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Runtime(codex_rt)), "codex", None)
         .unwrap();
     assert_eq!(
         under_rt
-            .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
-            .unwrap()
+            .definition
+            .as_ref()
+            .expect("definition-backed row")
+            .build(Some(BuildBase::Runtime(codex_rt)), "codex", None)
             .unwrap(),
         under_rt
     );
@@ -7291,12 +7353,14 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     // Self keeps the definition's engine and crafts; an ancestor X applies its own engine while
     // keeping non-engine fields and crafts once.
     let under_self = loaded.agent_profiles.0["child"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["child"])),
-            None,
+            &loaded.agent_profiles.0["child"].agent,
             None,
         )
-        .unwrap()
         .unwrap();
     assert_eq!(under_self.agent, loaded.agent_profiles.0["child"].agent);
     assert_eq!(under_self.model, loaded.agent_profiles.0["child"].model);
@@ -7307,12 +7371,14 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     );
 
     let under_ancestor = loaded.agent_profiles.0["child"]
-        .build_under(
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(
             Some(BuildBase::Profile(&loaded.agent_profiles.0["parent"])),
-            None,
+            "claude",
             None,
         )
-        .unwrap()
         .unwrap();
     assert_eq!(under_ancestor.agent, "claude");
     assert_eq!(under_ancestor.model.as_deref(), Some("sonnet"));
@@ -7737,17 +7803,14 @@ fn precomputed_renders_preserve_models_for_multi_provider_and_native_kinds() {
         ("base_model", Some("openrouter/foo"), Some("haiku")),
         ("multi", Some("opus"), Some("haiku")),
     ] {
-        let renders = loaded.agent_profiles.0[name]
-            .definition_renders
-            .as_ref()
-            .unwrap_or_else(|| panic!("{name} has renders"));
+        let renders = renders(&loaded.agent_profiles.0[name]);
         assert_eq!(
-            renders.renders["opencode"].model.as_deref(),
+            renders["opencode"].model.as_deref(),
             expected_opencode_model,
             "{name} opencode render"
         );
         assert_eq!(
-            renders.renders["claude"].model.as_deref(),
+            renders["claude"].model.as_deref(),
             expected_claude_model,
             "{name} claude render"
         );
@@ -7755,7 +7818,7 @@ fn precomputed_renders_preserve_models_for_multi_provider_and_native_kinds() {
 }
 
 #[test]
-fn build_under_ancestor_matches_engine_only_profile_and_dedupes_plus_lists_and_crafts() {
+fn build_ancestor_matches_engine_only_profile_and_dedupes_plus_lists_and_crafts() {
     let root = fixture();
     for skill in ["base_skill", "alpha", "beta"] {
         write(
@@ -7804,17 +7867,20 @@ fn build_under_ancestor_matches_engine_only_profile_and_dedupes_plus_lists_and_c
     assert_eq!(reviewer.model.as_deref(), Some("opus"));
 
     let under_psol = reviewer
-        .build_under(Some(BuildBase::Profile(psol)), None, None)
-        .expect("markdown row")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Profile(psol)), "codex", None)
         .expect("build under ancestor");
     let under_e = reviewer
-        .build_under(Some(BuildBase::Profile(e_only)), None, None)
-        .expect("markdown row")
+        .definition
+        .as_ref()
+        .expect("definition-backed row")
+        .build(Some(BuildBase::Profile(e_only)), "codex", None)
         .expect("build under engine-only profile");
 
     let strip_def = |mut profile: Profile| {
         profile.definition = None;
-        profile.definition_renders = None;
         profile
     };
     assert_eq!(strip_def(under_psol.clone()), strip_def(under_e));
@@ -8050,7 +8116,7 @@ fn toml_extras_system_prompt_file_and_append_order_through_chain_and_override() 
         .definition
         .as_ref()
         .unwrap()
-        .build(Some(BuildBase::Profile(over)), None, None)
+        .build(Some(BuildBase::Profile(over)), "claude", None)
         .unwrap();
     assert_eq!(child_under_x.system_prompt_file.as_ref(), Some(&p_base));
     assert_eq!(
@@ -8063,7 +8129,7 @@ fn toml_extras_system_prompt_file_and_append_order_through_chain_and_override() 
         .definition
         .as_ref()
         .unwrap()
-        .build(Some(BuildBase::Profile(over)), None, None)
+        .build(Some(BuildBase::Profile(over)), "claude", None)
         .unwrap();
     assert_eq!(plain_under_x.system_prompt_file.as_ref(), Some(&x_base));
     assert_eq!(plain_under_x.append_system_prompt_files, vec![x_app, l_app]);
@@ -8132,7 +8198,7 @@ fn toml_extras_prompt_files_refused_on_promptless_provider() {
         .definition
         .as_ref()
         .unwrap()
-        .build(None, Some("cursor"), None)
+        .build(None, "cursor", None)
         .unwrap_err();
     assert!(
         err.message.contains("takes no system prompt"),
@@ -8200,18 +8266,15 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
 
     let claude_row = &loaded.agent_profiles.0["claude_row"];
     assert_eq!(claude_row.args.as_deref(), Some("--claude-flag"));
-    let renders = claude_row.definition_renders.as_ref().unwrap();
-    assert_eq!(
-        renders.renders["claude"].args.as_deref(),
-        Some("--claude-flag")
-    );
-    assert_eq!(renders.renders["codex"].args, None);
+    let renders = renders(claude_row);
+    assert_eq!(renders["claude"].args.as_deref(), Some("--claude-flag"));
+    assert_eq!(renders["codex"].args, None);
 
     let rebuilt_codex = claude_row
         .definition
         .as_ref()
         .unwrap()
-        .build(None, Some("codex"), None)
+        .build(None, "codex", None)
         .unwrap();
     assert_eq!(rebuilt_codex.args, None);
 
@@ -8219,7 +8282,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(None, None, Some("sol"))
+        .build(None, "codex", Some("sol"))
         .unwrap();
     assert_eq!(rebuilt_by_model.agent, "codex");
     assert_eq!(rebuilt_by_model.args, None);
@@ -8231,7 +8294,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(None, Some("claude"), None)
+        .build(None, "claude", None)
         .unwrap();
     assert_eq!(child_on_claude.args.as_deref(), Some("--claude-flag"));
 
@@ -8244,7 +8307,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(Some(BuildBase::Profile(x_codex)), None, None)
+        .build(Some(BuildBase::Profile(x_codex)), "codex", None)
         .unwrap();
     assert_eq!(l_under_x_codex.agent, "codex");
     assert_eq!(l_under_x_codex.args.as_deref(), Some("--x-codex"));
@@ -8254,7 +8317,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(Some(BuildBase::Profile(x_claude)), None, None)
+        .build(Some(BuildBase::Profile(x_claude)), "claude", None)
         .unwrap();
     assert_eq!(l_under_x_claude.agent, "claude");
     assert_eq!(l_under_x_claude.args.as_deref(), Some("--claude-flag"));
@@ -8337,18 +8400,32 @@ fn override_subagents_yield_to_the_agent_tool_on_each_build_kind() {
         ("leaf_senior", "over_codex", None, "codex", &deny_all),
         ("leaf_junior", "over_codex", None, "claude", &no_subagents),
     ] {
-        let profile = &loaded.agent_profiles.0[leaf];
-        let built = profile
-            .definition
-            .as_ref()
-            .unwrap()
-            .build(
-                profile,
-                Some(BuildBase::Profile(&loaded.agent_profiles.0[over])),
-                target.map(|(kind, _)| kind),
-                target.map(|(_, model)| model),
+        let def = loaded.agent_profiles.0[leaf].definition.as_ref().unwrap();
+        let x = &loaded.agent_profiles.0[over];
+        let base = Some(BuildBase::Profile(x));
+        // A `tier:` leaf under a plain X walks under X's family, as a launch's engine does.
+        let built = match target {
+            Some((kind, model)) => def
+                .build(base, kind, Some(model))
+                .map_err(|error| error.message),
+            None => crate::config::engine::walk_tier(
+                &tiers,
+                def.written_tier().unwrap(),
+                &crate::config::tiers::TierPreference {
+                    model: None,
+                    family: Some(x.agent.clone()),
+                },
+                &x.agent,
+                None,
+                &mut crate::config::engine::Probe {
+                    build: &mut |kind: &str, _, model: Option<&str>| def.build(base, kind, model),
+                    unavailable: &mut |_, _| None,
+                },
             )
-            .unwrap_or_else(|error| panic!("{leaf} under {over} on {kind}: {}", error.message));
+            .map(|(_, built)| built)
+            .map_err(|error| error.to_string()),
+        }
+        .unwrap_or_else(|error| panic!("{leaf} under {over} on {kind}: {error}"));
         assert_eq!(
             (built.agent.as_str(), &built.subagents),
             (kind, subagents),
@@ -8708,12 +8785,12 @@ fn overrides_and_tiers_onto_a_kind_with_only_the_built_in_base_resolve() {
         ),
         (Some(embedded_base("codex").1), vec!["Craft.".to_owned()])
     );
-    let renders = loaded.agent_profiles.0["tiered"]
-        .definition_renders
+    let exclusions = loaded.agent_profiles.0["tiered"]
+        .definition
         .as_ref()
-        .unwrap();
-    assert!(renders.exclusions.is_empty(), "{:?}", renders.exclusions);
-    assert!(!renders.renders.is_empty());
+        .unwrap()
+        .tier_exclusions();
+    assert!(exclusions.is_empty(), "{exclusions:?}");
 }
 
 #[test]

@@ -39,7 +39,7 @@ use crate::config::effective::ProfileScope;
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::AgentFrontmatter;
 
-/// An override base passed to [`Profile::build_under`]: a definition-backed row (Markdown or
+/// An override base passed to `DefinitionSource::build`: a definition-backed row (Markdown or
 /// trusted project TOML), or a resolved provider runtime (bare kind or kind base).
 #[derive(Clone, Copy)]
 pub enum BuildBase<'a> {
@@ -1193,29 +1193,6 @@ fn load_resolved(
         loaded.insert("agents", name, &base.item.path, &origin, base.rows.0);
         loaded.insert("subagents", name, &base.item.path, &origin, base.rows.1);
     }
-    // Only kind bases have been materialized yet; each family keeps its own base prompt.
-    let families: BTreeSet<_> = tiers
-        .entries(super::tiers::ModelTier::Intern)
-        .filter_map(|(_, kind, _)| kind)
-        .chain(
-            crate::agents::known_kinds()
-                .filter(|kind| crate::agents::runs_other_providers_models(kind)),
-        )
-        .collect();
-    let mut exclusions = BTreeMap::new();
-    for kind in &families {
-        if loaded.agent_profiles.0.contains_key(*kind) || built_in.contains_key(*kind) {
-            continue;
-        }
-        let message = match failed_bases.get(*kind) {
-            Some(error) if error.is_conflict_over(kind) => error.message.clone(),
-            Some(error) => failed_kind_base(&error.path),
-            None => no_kind_base(kind),
-        };
-        exclusions.insert((*kind).to_owned(), message);
-    }
-    // Each table's rows route to that table's copy of each family's base, and of each built-in
-    // base, which a `--model` onto its kind takes.
     for (profiles, subagent) in [
         (&mut loaded.agent_profiles, false),
         (&mut loaded.subagent_profiles, true),
@@ -1237,29 +1214,6 @@ fn load_resolved(
                 })
                 .collect(),
         );
-        let renders: BTreeMap<_, _> = families
-            .iter()
-            .copied()
-            .chain(built_in.keys().map(String::as_str))
-            .filter_map(|kind| {
-                let base = profiles.0.get(kind).or_else(|| {
-                    let rows = built_in.get(kind)?;
-                    Some(if subagent { &rows.1 } else { &rows.0 })
-                })?;
-                Some((kind.to_owned(), base.clone()))
-            })
-            .collect();
-        for profile in profiles.0.values_mut() {
-            profile.definition_renders = Some(super::tiers::DefinitionRenders {
-                preference: super::tiers::TierPreference {
-                    model: None,
-                    family: Some(profile.agent.clone()),
-                },
-                renders: renders.clone(),
-                exclusions: exclusions.clone(),
-                effort: None,
-            });
-        }
     }
     // A public name belongs to exactly one tree; neither copy is loadable.
     for name in agents.definitions.keys() {

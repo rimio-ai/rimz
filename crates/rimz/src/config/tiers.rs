@@ -59,14 +59,6 @@ pub struct TierProvenance {
     pub fell_back: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DefinitionRenders {
-    pub preference: TierPreference,
-    pub renders: BTreeMap<String, super::Profile>,
-    pub exclusions: BTreeMap<String, String>,
-    pub effort: Option<String>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TierPreference {
     pub model: Option<String>,
