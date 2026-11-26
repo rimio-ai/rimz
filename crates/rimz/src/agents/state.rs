@@ -68,12 +68,17 @@ pub struct RaisedAsk {
     pub raised_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
 }
 
 impl RaisedAsk {
+    /// The card line: the brief whole, collapsed and capped at 160 characters; without one, the
+    /// first question sentence of `text`, otherwise its first non-blank line, likewise capped.
     pub fn detail(&self) -> Option<String> {
+        if let Some(brief) = self.brief.as_deref() {
+            return single_line_prefix(brief, 160);
+        }
         let text = self.text.as_deref()?;
         let question = question_sentence(text);
         let line = if question.ends_with('?') {

@@ -100,7 +100,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Site | Module and composing symbol | Sender / body queued |
 | --- | --- | --- |
 | Human or agent message | `crates/rimz/src/cli/message/dispatch.rs::send_message`, caller text. `crates/rimz/src/launcher/context.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`. `--no-from` uses `System` / `Prompt` |
-| Answer to a raised ask | `crates/rimz/src/cli/answer.rs::answer_raised`, the chosen label or text, `sender_for` on the caller | `Human` or `Agent` / `Prompt` |
+| Answer to a raised ask | `crates/rimz/src/cli/answer.rs::answer_raised`, the answer text, `sender_for` on the caller | `Human` or `Agent` / `Prompt` |
 | Prompt for a cohort already running | `crates/rimz/src/launcher/reconcile.rs::reconcile_cohort_launch`, the launch prompt sent to the running leader, `sender_for` on the launcher | `Human` or `Agent` / `Prompt` |
 | Resume prompt | `crates/rimz/src/launcher/mod.rs::queue_resume_prompt`, called by `launch_resume_layout` with the resume's prompt, `sender_for` on the launcher | `Human` or `Agent` / `Prompt` |
 | Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `crates/rimz/src/harness/run/report.rs::compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |

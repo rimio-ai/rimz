@@ -163,7 +163,7 @@ fn outside_raise_without_text_refuses_an_agent_sleeping_on_a_timer() {
 fn printed_raised_answer_targets_its_ask_even_with_a_native_prompt() {
     let env = room();
     env.install_agent_hooks("claude");
-    let id = seed_open(&env, vec!["safe".into(), "fast".into()]);
+    let id = seed_open(&env);
     feed_claude_hook(
         &env,
         json!({"hook_event_name": "PermissionRequest",
@@ -178,7 +178,7 @@ fn printed_raised_answer_targets_its_ask_even_with_a_native_prompt() {
             .lines()
             .find_map(|line| {
                 let command = line.split_once("rimz answer ")?.1;
-                command.contains("<1|2>").then_some(command)
+                command.contains("--text").then_some(command)
             })
             .expect("raised answer command");
         let target = command.split_whitespace().next().unwrap();
@@ -188,8 +188,8 @@ fn printed_raised_answer_targets_its_ask_even_with_a_native_prompt() {
             .bounded_output()
             .unwrap();
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("1=safe, 2=fast"),
-            "the printed command must resolve the raised options, not the native prompt: {output:?}"
+            String::from_utf8_lossy(&output.stderr).contains("asks \"Which option?\""),
+            "the printed command must resolve the raised question, not the native prompt: {output:?}"
         );
         assert_eq!(target, id.as_str());
     }
@@ -207,13 +207,13 @@ fn raised_answer_routes_an_opaque_session_id_through_its_resolved_card() {
     );
     let output = env
         .rimz()
-        .args(["asks", "raise", "@claude", "Which?", "--option", "safe"])
+        .args(["asks", "raise", "@claude", "Which?"])
         .bounded_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let output = env
         .rimz()
-        .args(["answer", "@claude", "1"])
+        .args(["answer", "@claude", "--text", "safe"])
         .bounded_output()
         .unwrap();
     assert!(
@@ -229,7 +229,7 @@ fn raised_answer_routes_an_opaque_session_id_through_its_resolved_card() {
 #[test]
 fn show_prints_a_single_raised_question_once() {
     let env = room();
-    let id = seed_open(&env, vec!["safe".into()]);
+    let id = seed_open(&env);
     let output = env
         .rimz()
         .args(["asks", "show", id.as_str()])
@@ -238,13 +238,16 @@ fn show_prints_a_single_raised_question_once() {
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(stdout.matches("Which option?").count(), 1, "{stdout}");
-    assert!(stdout.contains("1. safe"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("rimz answer {id} --text")),
+        "{stdout}"
+    );
 }
 
 #[test]
 fn hook_driven_raised_closes_have_no_operator_actor_even_in_an_agent_process() {
     let env = room();
-    seed_open(&env, vec![]);
+    seed_open(&env);
     let store = env.store();
     let mut ask = rimz::store::raised::read(store.paths()).asks.remove(0);
     ask.value.state = rimz::agents::state::RaisedAskState::Armed;
@@ -299,7 +302,7 @@ fn hook_driven_raised_closes_have_no_operator_actor_even_in_an_agent_process() {
 fn a_user_shell_message_closes_a_raised_question_when_its_prompt_lands() {
     let env = room();
     env.install_agent_hooks("claude");
-    let id = seed_open(&env, vec![]);
+    let id = seed_open(&env);
     let output = env
         .rimz()
         .args(["message", "@claude", "yes, ship it"])
@@ -329,14 +332,22 @@ fn a_user_shell_message_closes_a_raised_question_when_its_prompt_lands() {
 }
 
 #[test]
-fn outside_raise_lists_full_context_options_and_withdrawal_audit() {
+fn outside_raise_lists_its_text_as_brief_and_context_and_withdrawal_audit() {
     let env = room();
     let text = "The result is ready. Which option?\nPlease review the full context.";
     let output = env
         .rimz()
-        .args([
-            "asks", "raise", "@claude", text, "--option", "safe", "--option", "fast",
-        ])
+        .args(["asks", "raise", "@claude", text, "--option", "safe"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--option'"),
+        "{output:?}"
+    );
+    let output = env
+        .rimz()
+        .args(["asks", "raise", "@claude", text])
         .bounded_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -344,9 +355,12 @@ fn outside_raise_lists_full_context_options_and_withdrawal_audit() {
     assert_eq!(asks.as_array().unwrap().len(), 1);
     assert_eq!(asks[0]["kind"], "question");
     assert_eq!(asks[0]["delivery"], "raised");
-    assert_eq!(asks[0]["detail"], "Which option?");
+    assert_eq!(
+        asks[0]["detail"],
+        "The result is ready. Which option? Please review the full context."
+    );
     assert_eq!(asks[0]["context"], text);
-    assert_eq!(asks[0]["questions"][0]["options"][1]["label"], "fast");
+    assert_eq!(asks[0]["questions"][0]["options"], json!([]));
     assert!(asks[0]["raised_by"].is_null());
     let id = asks[0]["ask_id"].as_str().unwrap();
     let output = env
@@ -356,12 +370,9 @@ fn outside_raise_lists_full_context_options_and_withdrawal_audit() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("full context"), "{stdout}");
     assert!(
-        stdout.contains("full context") && stdout.contains("2. fast"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains(&format!("rimz answer {id} <1|2>")),
+        stdout.contains(&format!("rimz answer {id} --text")),
         "{stdout}"
     );
     let snapshot = env.store().snapshot_cached().unwrap();
@@ -387,6 +398,15 @@ fn outside_raise_lists_full_context_options_and_withdrawal_audit() {
 
 #[test]
 fn self_raise_is_armed_until_stop_and_a_later_human_turn_closes_it() {
+    for (brief, detail) in [
+        (None, "Should we ship?"),
+        (Some("Ship it? Or wait?"), "Ship it? Or wait?"),
+    ] {
+        self_raise_opens_on_stop(brief, detail);
+    }
+}
+
+fn self_raise_opens_on_stop(brief: Option<&str>, detail: &str) {
     let env = room();
     let output = env
         .rimz()
@@ -394,6 +414,7 @@ fn self_raise_is_armed_until_stop_and_a_later_human_turn_closes_it() {
         .env("RIMZ_AGENT_ID", "raised-session")
         .env("RIMZ_AGENT_NAME", "worker")
         .args(["asks", "raise"])
+        .args(brief)
         .bounded_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -406,7 +427,8 @@ fn self_raise_is_armed_until_stop_and_a_later_human_turn_closes_it() {
     );
     let asks = listed_asks(&env);
     assert_eq!(asks.as_array().unwrap().len(), 1);
-    assert_eq!(asks[0]["detail"], "Should we ship?");
+    assert_eq!(asks[0]["detail"], detail);
+    assert_eq!(asks[0]["context"], "Ready. Should we ship?");
     assert_eq!(asks[0]["raised_by"], "@worker#main");
     feed_claude_hook(
         &env,
@@ -515,7 +537,7 @@ fn raise_requires_a_target_in_a_user_shell_and_text_for_an_active_outside_target
     assert_eq!(listed_asks(&env)[0]["context"], "--help");
 }
 
-fn seed_open(env: &Env, options: Vec<String>) -> AskId {
+fn seed_open(env: &Env) -> AskId {
     let store = env.store();
     let at = jiff::Timestamp::now();
     let id = AskId::new();
@@ -532,7 +554,7 @@ fn seed_open(env: &Env, options: Vec<String>) -> AskId {
                 opened_at: Some(at),
                 text: Some("Which option?".into()),
                 raised_by: None,
-                options,
+                brief: None,
             },
         },
     )
@@ -541,11 +563,11 @@ fn seed_open(env: &Env, options: Vec<String>) -> AskId {
 }
 
 #[test]
-fn raised_answer_enqueues_the_label_from_the_caller_then_closes_with_one_audit() {
+fn raised_answer_enqueues_the_text_from_the_caller_then_closes_with_one_audit() {
     for agent_caller in [false, true] {
         let env = room();
         env.install_agent_hooks("claude");
-        let id = seed_open(&env, vec!["safe".into(), "fast".into()]);
+        let id = seed_open(&env);
         let mut command = env.rimz();
         if agent_caller {
             command
@@ -554,7 +576,7 @@ fn raised_answer_enqueues_the_label_from_the_caller_then_closes_with_one_audit()
                 .env("RIMZ_AGENT_NAME", "worker");
         }
         let output = command
-            .args(["answer", id.as_str(), "2"])
+            .args(["answer", id.as_str(), "--text", "fast"])
             .bounded_output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -592,23 +614,16 @@ fn raised_answer_enqueues_the_label_from_the_caller_then_closes_with_one_audit()
 #[test]
 fn raised_answer_invalid_selectors_and_failed_dispatch_leave_the_ask_open() {
     let env = room();
-    let id = seed_open(&env, vec![]);
+    let id = seed_open(&env);
     let output = env
         .rimz()
         .args(["answer", id.as_str(), "1"])
         .bounded_output()
         .unwrap();
     assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let id = seed_open(&env, vec!["safe".into()]);
     let output = env
         .rimz()
-        .args(["answer", id.as_str(), "2"])
-        .bounded_output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let output = env
-        .rimz()
-        .args(["answer", id.as_str(), "1"])
+        .args(["answer", id.as_str(), "--text", "safe"])
         .bounded_output()
         .unwrap();
     assert!(
@@ -659,7 +674,7 @@ fn outside_raise_without_text_uses_the_last_clean_reply_and_closed_targets_refus
 #[test]
 fn ended_session_retires_a_raised_ask_with_one_audit() {
     let env = room();
-    let id = seed_open(&env, vec![]);
+    let id = seed_open(&env);
     feed_claude_hook(
         &env,
         json!({"hook_event_name": "SessionEnd", "session_id": "raised-session"}),

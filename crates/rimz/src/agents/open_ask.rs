@@ -59,7 +59,7 @@ pub fn read_open_ask(
         return Ok(Some(OpenAskDetail {
             questions: vec![AskQuestion {
                 question: open.detail.clone().unwrap_or_default(),
-                options: raised.options.iter().cloned().map(Into::into).collect(),
+                options: Vec::new(),
                 multi_select: false,
                 has_option_previews: false,
             }],
@@ -171,7 +171,7 @@ mod tests {
             opened_at: Some(opened_at),
             raised_by: Some("@lead".into()),
             text: Some("Ready. Which one?\nFull context.".into()),
-            options: vec!["safe".into(), "fast".into()],
+            brief: Some("Ship safe? Or fast?".into()),
         });
         assert_eq!(agent.actionable_asks().count(), 1);
         assert!(!agent.is_awaiting_input());
@@ -179,13 +179,13 @@ mod tests {
         assert_eq!(detail.delivery.label(), "raised");
         assert_eq!(detail.route, AskRoute::Shell);
         assert_eq!(detail.open.kind, AskKind::Question);
-        assert_eq!(detail.open.detail.as_deref(), Some("Which one?"));
+        assert_eq!(detail.open.detail.as_deref(), Some("Ship safe? Or fast?"));
         assert_eq!(detail.open.since, opened_at);
         assert_eq!(
             detail.context.as_deref(),
             Some("Ready. Which one?\nFull context.")
         );
-        assert_eq!(detail.questions[0].options[1].label, "fast");
+        assert!(detail.questions[0].options.is_empty());
     }
 
     #[test]

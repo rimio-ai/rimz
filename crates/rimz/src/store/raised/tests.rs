@@ -52,7 +52,7 @@ fn ask(session: &str, state: RaisedAskState) -> Entry<RaisedAsk> {
             opened_at: None,
             raised_by: None,
             text: Some("Which one?".into()),
-            options: vec!["A".into(), "B".into()],
+            brief: None,
         },
     }
 }
@@ -255,6 +255,45 @@ fn stale_outside_raise_is_refused_and_invalid_records_read_empty() {
 }
 
 #[test]
+fn prepare_raise_keeps_the_brief_and_an_outside_raise_opens_with_it_as_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    let now = Timestamp::from_second(100).unwrap();
+    let mut agent = AgentState::stub("claude", "raised", AgentStatus::Idle);
+    agent.registered_at = Some(Timestamp::from_second(10).unwrap());
+    let brief = Some("Ship it? Or wait for review?".to_owned());
+    let own = prepare_raise(&paths, &agent, true, brief.clone(), None, now)
+        .unwrap()
+        .value;
+    assert_eq!(
+        (own.state, own.brief.as_deref(), own.text),
+        (RaisedAskState::Armed, brief.as_deref(), None)
+    );
+    let outside = prepare_raise(&paths, &agent, false, brief.clone(), None, now)
+        .unwrap()
+        .value;
+    assert_eq!(
+        (outside.state, outside.brief, outside.text),
+        (RaisedAskState::Open, brief.clone(), brief)
+    );
+}
+
+#[test]
+fn a_record_written_with_options_still_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    std::fs::create_dir_all(paths.raised.parent().unwrap()).unwrap();
+    std::fs::write(
+        &paths.raised,
+        br#"{"version":1,"asks":[{"kind":"claude","agent_id":"a","ask_id":"ask_0123456789abcdef","state":"open","raised_at":"1970-01-01T00:00:00Z","basis_at":"1970-01-01T00:00:00Z","text":"Which one?","options":["safe","fast"]}],"alerts":[],"human_turns":[]}"#,
+    )
+    .unwrap();
+    let record = read(&paths);
+    assert_eq!(record.asks.len(), 1);
+    assert_eq!(record.asks[0].value.text.as_deref(), Some("Which one?"));
+}
+
+#[test]
 fn prepare_raise_without_text_refuses_a_parked_agent_as_not_resting() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(&dir);
@@ -264,7 +303,7 @@ fn prepare_raise_without_text_refuses_a_parked_agent_as_not_resting() {
     agent.registered_at = Some(Timestamp::from_second(10).unwrap());
     agent.last_prompt_at = Some(Timestamp::from_second(20).unwrap());
     agent.last_activity = Timestamp::from_second(50).unwrap();
-    let result = prepare_raise(&paths, &agent, false, None, Vec::new(), None, now);
+    let result = prepare_raise(&paths, &agent, false, None, None, now);
     assert!(
         matches!(result, Err(RaisedErr::NotResting)),
         "expected NotResting for a parked agent, got {result:?}"

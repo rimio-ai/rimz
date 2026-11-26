@@ -36,7 +36,7 @@ fn raise(env: &Env, state: RaisedAskState, text: Option<&str>) -> AskId {
                 basis_at: at,
                 opened_at: (state == RaisedAskState::Open).then_some(at),
                 text: text.map(ToOwned::to_owned),
-                options: vec![],
+                brief: None,
                 raised_by: None,
             },
         },
@@ -89,8 +89,8 @@ fn raised_hook_human_prompts_close_but_compaction_and_harness_prompts_do_not() {
 }
 
 #[test]
-fn raised_hook_opens_only_on_stop_and_preserves_explicit_text() {
-    for text in [None, Some("Explicit question?")] {
+fn raised_hook_opens_only_on_stop_with_the_final_reply_as_its_text() {
+    for text in [None, Some("Stale question?")] {
         let env = room();
         let id = raise(&env, RaisedAskState::Armed, text);
         assert!(
@@ -109,7 +109,7 @@ fn raised_hook_opens_only_on_stop_and_preserves_explicit_text() {
             .as_ref()
             .expect("Stop opens the armed ask");
         assert_eq!(ask.ask_id, id);
-        assert_eq!(ask.text.as_deref(), Some(text.unwrap_or("Final reply?")));
+        assert_eq!(ask.text.as_deref(), Some("Final reply?"));
         assert!(ask.opened_at.unwrap() >= ask.raised_at);
     }
 }

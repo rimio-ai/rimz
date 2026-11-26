@@ -3,8 +3,9 @@ use crate::agents::state::question_sentence;
 use crate::sidebar_pane::render::layout::wrap_words;
 use crate::store::snapshot::CardDescription;
 
-/// The open ask while waiting, led by its first question and word-wrapped over
-/// at most two lines with an ellipsis for omitted text, then ` +N` for extra questions.
+/// The open ask while waiting, led by its first question (a raised ask's line whole) and
+/// word-wrapped over at most two lines with an ellipsis for omitted text, then ` +N` for
+/// extra questions.
 /// Other descriptions keep their single full-width line. Rich context metadata
 /// wins the fallback; for Codex that is thread `name`, then app-server `preview`.
 /// Named sessions and live task/prompt fallbacks keep the row labelled when
@@ -23,9 +24,9 @@ pub(super) fn description_lines(
     attention: CardAttention,
 ) -> Vec<Line<'static>> {
     let width = content_width(ctx.width);
-    let Some((ask, extra_questions)) = row
+    let Some((agent, ask)) = row
         .as_agent()
-        .and_then(|agent| agent.open_ask().map(|ask| (ask, agent.extra_questions)))
+        .and_then(|agent| agent.open_ask().map(|ask| (agent, ask)))
     else {
         let mut spans = vec![Span::raw("  ")];
         spans.extend(description_spans(ctx, row, attention));
@@ -35,9 +36,15 @@ pub(super) fn description_lines(
             width,
         )];
     };
-    let text = question_sentence(ask);
-    let suffix = if extra_questions > 0 {
-        format!(" +{extra_questions}")
+    // A raised ask, the one open ask beside an overlay stamp, already chose its card line
+    // (`RaisedAsk::detail`), so its brief shows whole.
+    let text = if agent.overlay_raised_at.is_some() {
+        ask
+    } else {
+        question_sentence(ask)
+    };
+    let suffix = if agent.extra_questions > 0 {
+        format!(" +{}", agent.extra_questions)
     } else {
         String::new()
     };

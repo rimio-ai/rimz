@@ -163,6 +163,34 @@ fn waiting_question_wraps_naturally_without_its_preamble() {
 }
 
 #[test]
+fn a_raised_brief_shows_whole_though_its_first_sentence_ends_early() {
+    let mut asker = waiting_asker();
+    asker.status = AgentStatus::Idle;
+    asker.open_ask = None;
+    asker.waiting_since = None;
+    asker.raised_ask = Some(crate::agents::state::RaisedAsk {
+        ask_id: "ask_0123456789abcdef".parse().unwrap(),
+        state: crate::agents::state::RaisedAskState::Open,
+        raised_at: asker.last_activity,
+        basis_at: asker.last_activity,
+        opened_at: Some(asker.last_activity),
+        raised_by: None,
+        text: Some("The cache is ready. Should I keep it? More details follow.".into()),
+        brief: Some("Keep the cache? Or rebuild it?".into()),
+    });
+    let snapshot = snapshot_with(vec![asker]);
+    let theme = Theme::fixed(false);
+    let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 32));
+    let shown = text
+        .iter()
+        .map(|line| line.trim_matches(['▌', '▐', ' ']))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(shown.contains("Keep the cache? Or rebuild it?"), "{text:?}");
+    assert_snapshot("raised_brief_whole", snapshot_to_screen(&snapshot, 32, 22));
+}
+
+#[test]
 fn waiting_description_marks_omitted_lines_and_wide_words() {
     for (name, detail) in [
         (

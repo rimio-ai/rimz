@@ -28,15 +28,15 @@ pub struct AsksArgs {
 
 #[derive(Debug, Subcommand)]
 enum AsksSubcmd {
-    /// Raise a question for yourself or another agent.
+    /// Mark this turn's reply as a question to the user, or raise one on another agent.
     Raise {
+        /// An @agent to raise the question on; otherwise TEXT.
         #[arg(value_name = "TARGET|TEXT", allow_hyphen_values = true)]
         first: Option<String>,
+        /// The question in one sentence for the card, which cuts it at 160 characters; on your
+        /// own raise the full question goes in your final reply.
         #[arg(value_name = "TEXT", allow_hyphen_values = true)]
         text: Option<String>,
-        /// Offer an answer label; repeat for more options.
-        #[arg(long = "option", value_name = "LABEL")]
-        options: Vec<String>,
     },
     /// Withdraw a raised question (your own when TARGET is omitted).
     Withdraw { target: Option<String> },
@@ -146,11 +146,7 @@ pub fn run(args: AsksArgs, globals: &GlobalFlags) -> Result<()> {
         return Err(super::usage::UsageError::new(format!("did you mean `{command}`?")).into());
     }
     match args.command {
-        Some(AsksSubcmd::Raise {
-            first,
-            text,
-            options,
-        }) => raise(first, text, options, globals),
+        Some(AsksSubcmd::Raise { first, text }) => raise(first, text, globals),
         Some(AsksSubcmd::Withdraw { target }) => withdraw(target.as_deref(), globals),
         None => list(args.all, args.json, globals),
         Some(AsksSubcmd::List { all, json }) => list(args.all || all, args.json || json, globals),
@@ -198,12 +194,7 @@ fn live_raised_target<'a>(
     Ok(agent)
 }
 
-fn raise(
-    first: Option<String>,
-    text: Option<String>,
-    options: Vec<String>,
-    globals: &GlobalFlags,
-) -> Result<()> {
+fn raise(first: Option<String>, text: Option<String>, globals: &GlobalFlags) -> Result<()> {
     let (target, text) = match (first, text) {
         (Some(first), text) if first.starts_with('@') => (Some(first), text),
         (text, None) => (None, text),
@@ -213,13 +204,8 @@ fn raise(
             );
         }
     };
-    if text.as_deref().is_some_and(|text| text.trim().is_empty())
-        || options.iter().any(|option| option.trim().is_empty())
-    {
-        return Err(super::usage::UsageError::new(
-            "text and option labels must not be empty".into(),
-        )
-        .into());
+    if text.as_deref().is_some_and(|text| text.trim().is_empty()) {
+        return Err(super::usage::UsageError::new("text must not be empty".into()).into());
     }
     let ctx = raised_context(globals, target.as_deref(), "raise")?;
     let snapshot = ctx.published_snapshot()?;
@@ -244,7 +230,6 @@ fn raise(
         agent,
         is_self,
         text,
-        options,
         actor.clone(),
         jiff::Timestamp::now(),
     )?;

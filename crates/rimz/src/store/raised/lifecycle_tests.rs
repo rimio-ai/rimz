@@ -26,7 +26,7 @@ fn fixture_for(
             basis_at: Timestamp::UNIX_EPOCH,
             opened_at: None,
             text: None,
-            options: vec![],
+            brief: None,
             raised_by: None,
         },
     };
@@ -415,14 +415,16 @@ fn armed_outcomes_drop_failed_interrupted_or_unseen_turns_but_wait_for_backgroun
 }
 
 #[test]
-fn armed_open_uses_explicit_then_frame_then_current_turn_transcript_text() {
-    for (explicit, frame, expected) in [
-        (Some("Explicit?"), Some("Frame?"), Some("Explicit?")),
+fn armed_open_keeps_the_brief_and_takes_the_frame_then_current_turn_transcript_text() {
+    for (stale, frame, expected) in [
+        (Some("Stale?"), Some("Frame?"), Some("Frame?")),
+        (Some("Stale?"), None, Some("Transcript?")),
         (None, Some("Frame?"), Some("Frame?")),
         (None, None, Some("Transcript?")),
     ] {
         let (_dir, paths, mut ask) = fixture(RaisedAskState::Armed);
-        ask.value.text = explicit.map(ToOwned::to_owned);
+        ask.value.text = stale.map(ToOwned::to_owned);
+        ask.value.brief = Some("Brief?".to_owned());
         raise(&paths, ask.clone()).unwrap();
         crate::transcript::append(
             &paths,
@@ -447,6 +449,7 @@ fn armed_open_uses_explicit_then_frame_then_current_turn_transcript_text() {
         let record = read(&paths);
         assert!(record.is_open(&record.asks[0]));
         assert_eq!(record.asks[0].value.text.as_deref(), expected);
+        assert_eq!(record.asks[0].value.brief.as_deref(), Some("Brief?"));
     }
 }
 

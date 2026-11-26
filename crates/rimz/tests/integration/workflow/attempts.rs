@@ -1510,7 +1510,7 @@ fn raised_question_is_listed_without_holding_a_workflow_attempt() {
                 opened_at: Some(at),
                 raised_by: None,
                 text: Some("Review this?".into()),
-                options: vec![],
+                brief: None,
             },
         },
     )
