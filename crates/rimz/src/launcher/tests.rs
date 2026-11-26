@@ -308,7 +308,20 @@ fn held_checkout_guidance_names_the_board_command() {
 fn resume_prompt_is_queued_to_the_leader_before_registration() {
     use crate::harness::plan::CohortSeed;
     use crate::store::message::{DeliveryGate, MessageSender};
-    for fresh in [false, true] {
+    let agent = MessageSender::Agent {
+        agent_id: Some(AgentSessionId::from("caller-session")),
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("coder".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    };
+    for (fresh, sender) in [
+        (false, MessageSender::Human),
+        (true, MessageSender::Human),
+        (false, agent.clone()),
+        (true, agent),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let id = crate::WorkspaceId::from_project_root(dir.path());
         let store = crate::Store::open(
@@ -331,7 +344,16 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
             launch_identity("codex", "worker"),
             launch_identity("codex", "leader"),
         ];
-        queue_resume_prompt(&store, "room", &seeds, &identities, "say hi", 2).unwrap();
+        queue_resume_prompt(
+            &store,
+            "room",
+            &seeds,
+            &identities,
+            "say hi",
+            2,
+            sender.clone(),
+        )
+        .unwrap();
         let messages = store.list_messages().unwrap();
         assert_eq!(
             messages.len(),
@@ -339,7 +361,7 @@ fn resume_prompt_is_queued_to_the_leader_before_registration() {
             "prompt must be durable before any pane opens"
         );
         let message = &messages[0];
-        assert_eq!(message.sender, MessageSender::Human);
+        assert_eq!(message.sender, sender);
         assert_eq!(message.gate, DeliveryGate::Done);
         assert_eq!(message.text, "say hi");
         assert_eq!(message.agent_name.as_deref(), Some("leader"));
