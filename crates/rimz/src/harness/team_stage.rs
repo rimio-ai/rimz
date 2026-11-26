@@ -542,7 +542,7 @@ pub enum ResumeWake {
     /// A Stage notice was queued for the member, which owns the board's open stage.
     Stage(Box<FlipReceipt>),
     /// No stage is open and the member holds its team's leader seat
-    /// ([`super::spec::leads_team`]): the wrapper queues it the resume continue.
+    /// (`super::spec::leads_team`): the wrapper queues it the resume continue.
     Leader,
     /// Nothing is owed to the member: another role owns the open stage, the board is at
     /// `Done`, a notice or prompt already covers it, its return's `rimz teams resume` prompt
@@ -558,7 +558,7 @@ pub enum ResumeWake {
 /// or a `rimz teams resume` prompt names the member among those its return brings back
 /// ([`MessageRecord::team_return`]) and is pending or was delivered at or after `since`.
 /// The notice is withdrawn once the member is prompted or the stage visit ends. While no stage
-/// is open, the member in the seat that leads the team ([`super::spec::leads_team`], the seat a
+/// is open, the member in the seat that leads the team (`super::spec::leads_team`, the seat a
 /// launch prompt goes to) is answered [`ResumeWake::Leader`]. The wrapper calls it on every
 /// resume, after the resume stamp has revived the card; a team that no longer loads is logged
 /// and wakes nobody.
