@@ -463,6 +463,152 @@ fn subagent_pane_title_names_its_parent() {
     );
 }
 
+/// The exec request of the leader pane in tab `tab`.
+fn tab_request(
+    backend: &fake_backend::Backend,
+    tab: usize,
+    kind: &str,
+) -> crate::harness::launch::ExecRequest {
+    let tabs = backend.tabs.lock().unwrap();
+    let payload =
+        std::fs::read_to_string(tabs[tab].panes.columns[0].panes[0].argv.last().unwrap()).unwrap();
+    crate::harness::launch::decode_exec_request(kind, None, &payload).unwrap()
+}
+
+/// Launch `@child` as a subagent of a fresh `@leader`, with its cell shaped by `shape`.
+fn launch_child(
+    fixture: &Fixture,
+    backend: &fake_backend::Backend,
+    spec: &str,
+    shape: impl FnOnce(&mut crate::harness::spec::AgentCell),
+) -> (RunRecord, crate::harness::launch::ExecRequest) {
+    let LaunchOutcome::Opened(parent) = open_fresh(
+        fixture.fresh.clone(),
+        Some(fixture.leader()),
+        &mut Unattended,
+        backend,
+    )
+    .unwrap() else {
+        panic!("parent launch did not open");
+    };
+    let mut child = fixture.fresh.clone();
+    child.name = Some("child".into());
+    child.layout =
+        crate::harness::spec::parse_layout_spec(spec, &Default::default(), &Default::default())
+            .unwrap();
+    let crate::harness::spec::Cell::Agent(cell) = &mut child.layout.columns[0].rows[0] else {
+        panic!("an agent layout");
+    };
+    shape(cell);
+    child.ancestry = Some(LaunchAncestry::Subagent {
+        parent_agent_id: parent.identities[0].agent_id.clone(),
+        parent_agent_kind: parent.identities[0].kind.clone(),
+        launch_generation: 1,
+    });
+    let mut leader = fixture.leader();
+    leader.subagent = true;
+    leader.reader = Some("leader".into());
+    let LaunchOutcome::Opened(opened) =
+        open_fresh(child, Some(leader), &mut Unattended, backend).unwrap()
+    else {
+        panic!("child launch did not open");
+    };
+    (opened.run.unwrap().record, tab_request(backend, 1, spec))
+}
+
+#[test]
+fn a_subagent_is_told_its_result_file_in_its_launchers_unit_as_it_sees_it() {
+    let fixture = Fixture::new();
+    let store = fixture.fresh.context.store.clone();
+    let host = store
+        .paths()
+        .temp_unit_dir(Some("leader"))
+        .join("child.output");
+    std::fs::create_dir_all(host.parent().unwrap()).unwrap();
+    std::fs::write(&host, "an earlier child's result").unwrap();
+    let backend = fake_backend::Backend::default();
+    let (record, request) = launch_child(&fixture, &backend, "claude", |_| {});
+    assert_eq!(record.result_file.as_deref(), Some(host.as_path()));
+    assert!(!host.exists(), "the launch removes a stale result");
+    assert_eq!(request.result_file, record.result_file);
+    let agents = store
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let machine = crate::config::MachineConfig::default();
+    for (isolation, seen) in [
+        (crate::config::Isolation::Host, host.clone()),
+        (
+            crate::config::Isolation::Scoped,
+            PathBuf::from("/tmp/child.output"),
+        ),
+    ] {
+        let plan =
+            crate::harness::launch_plan::compile(crate::harness::launch_plan::LaunchPlanInputs {
+                request: &request,
+                cwd: &fixture.fresh.launch.cwd,
+                project_root: &fixture.fresh.context.workspace.project_root,
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: store.runtime_paths(),
+                state: store.paths(),
+                machine: &machine,
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                isolation,
+                bwrap: Some(Path::new("/usr/bin/bwrap")),
+                agents: Ok(&agents),
+                ambient_env: &std::collections::BTreeMap::new(),
+                agent_shell: None,
+                hibernate: false,
+                recorded_system_prompt_digest: None,
+            })
+            .unwrap();
+        // The scoped view spells the file under /tmp only when it lies in the unit the compile
+        // resolves, so the run's reader is the compile-time temp owner.
+        let told = format!(
+            "write your whole result to `{}` before you end your turn",
+            seen.display()
+        );
+        assert!(
+            plan.process().reminder.contains(&told),
+            "{isolation:?}: {}",
+            plan.process().reminder
+        );
+        assert!(!plan.process().reminder.contains("final response"));
+    }
+}
+
+#[test]
+fn a_read_only_subagent_or_one_its_launch_text_cannot_reach_keeps_its_final_reply() {
+    type Shape = fn(&mut crate::harness::spec::AgentCell);
+    let cases: [(&str, &str, Shape); 3] = [
+        ("plan mode", "claude", |cell| {
+            cell.launch.mode = Some(crate::agents::PermissionMode::Plan);
+        }),
+        ("no Write tool", "claude", |cell| {
+            cell.tools = Some(vec!["Read".into(), "Edit".into()]);
+        }),
+        ("no system channel", "amp", |_| {}),
+    ];
+    for (case, spec, shape) in cases {
+        let fixture = Fixture::new();
+        let backend = fake_backend::Backend::default();
+        let (record, request) = launch_child(&fixture, &backend, spec, shape);
+        assert_eq!(record.result_file, None, "{case}");
+        assert_eq!(request.result_file, None, "{case}");
+    }
+    let fixture = Fixture::new();
+    let backend = fake_backend::Backend::default();
+    let (record, _) = launch_child(&fixture, &backend, "claude", |cell| {
+        cell.tools = Some(vec!["Read".into(), "Write".into()]);
+    });
+    assert!(
+        record.result_file.is_some(),
+        "a tool list with Write writes its result"
+    );
+}
+
 #[test]
 fn pending_record_and_bound_waiter_precede_an_instant_completion_at_open() {
     let fixture = Fixture::new();

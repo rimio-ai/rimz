@@ -97,6 +97,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             agents: &[parent],
             reminder_section: None,
             leader_run: Some(crate::harness::plan::LayoutRunParams {
+                result_file: None,
                 run_id: &run_id,
                 resume: None,
                 leader_index: 0,
@@ -121,6 +122,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert_eq!(
         request,
         rimz::harness::launch::ExecRequest {
+            result_file: None,
             isolation_default: Some(rimz::config::Isolation::Scoped),
             kind: rimz::agents::definition_by_kind("codex")
                 .unwrap()

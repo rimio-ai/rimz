@@ -4669,6 +4669,7 @@ fn run_exiting_resume_wrapper(
     .expect("arm wrapper subscription");
 
     let request = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: kind.clone(),
         action: ExecAction::Resume {

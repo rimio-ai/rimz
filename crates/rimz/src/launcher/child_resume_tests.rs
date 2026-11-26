@@ -74,6 +74,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
     let mut newer = older.clone();
     newer.run_id = crate::RunId::new();
     newer.started_at = "2026-01-01T00:01:00Z".parse().unwrap();
+    newer.result_file = Some(PathBuf::from("/state/tmp/parent/otter.output"));
     for keep in [false, true] {
         newer.keep = keep;
         let runs = [newer.clone(), older.clone()];
@@ -92,6 +93,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
         assert_eq!(
             request,
             ExecRequest {
+                result_file: newer.result_file.clone(),
                 kind: child.kind.clone(),
                 action: ExecAction::Resume {
                     session_id: child.agent_id.to_string(),

@@ -438,6 +438,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
     assert_eq!(
         request,
         ExecRequest {
+            result_file: None,
             isolation_default: Some(crate::config::Isolation::Scoped),
             kind: agent.kind.clone(),
             action: ExecAction::Resume {
@@ -578,7 +579,12 @@ fn a_handed_over_child_carries_its_run_and_a_settled_one_carries_none() {
     assert_eq!(summary(&request), (true, None, true, false, None));
 
     let mut run = child_run(&child);
+    run.result_file = Some(PathBuf::from("/state/tmp/parent/child.output"));
     let handed = with_run(request.clone(), &run);
+    assert_eq!(
+        handed.result_file, run.result_file,
+        "a restart names the same result file"
+    );
     assert_eq!(
         summary(&handed),
         (true, Some(run.run_id.clone()), true, true, None)

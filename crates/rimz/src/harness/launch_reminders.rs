@@ -65,6 +65,8 @@ pub(super) struct LaunchReminders {
     pub subagent_catalog: Option<SubagentCatalog>,
     pub system_prompt_file: Option<PathBuf>,
     pub team: Option<TeamReminder>,
+    /// The request's result file as the agent sees it; absent in preflight compiles.
+    pub result_file: Option<PathBuf>,
 }
 
 /// The two Environment bullets naming where an agent writes files.
@@ -104,6 +106,7 @@ impl Default for LaunchReminders {
             subagent_catalog: None,
             system_prompt_file: None,
             team: None,
+            result_file: None,
         }
     }
 }
@@ -365,6 +368,23 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "your final response."
 );
 
+/// The Subagents paragraph of a child whose result is the file at `path`, as it sees the path.
+fn result_file_reminder_body(path: &Path) -> String {
+    let path = escape_reminder_text(&path.display().to_string());
+    format!(
+        "### Subagents\n\nYou are a subagent: a supervised child launched by another agent to \
+         complete the task you were given. The task is scoped to this one run, so do the work \
+         yourself. The agent that launched you reads only your result file: write your whole \
+         result to `{path}` before you end your turn, then end the turn with one line saying it \
+         is written. A turn that ends without a new result in that file gives your launcher \
+         nothing. Send your launcher no progress notes: each one stops its wait and costs it a \
+         turn. You cannot ask the user. When you need an answer to go on, write the question to \
+         the file as your result and end your turn: your launcher answers. When your launcher \
+         sends you another task, write its result to the same file. When the user types in this \
+         pane, answer in this pane."
+    )
+}
+
 const SKILLS_REMINDER_BODY: &str = concat!(
     "### Skills\n\n",
     "When a skill's description matches the work in hand, invoke it, even when you know the ",
@@ -453,7 +473,10 @@ pub(super) fn render(
         ));
     }
     if request.subagent {
-        paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
+        paragraphs.push(reminders.result_file.as_deref().map_or_else(
+            || SUBAGENT_REMINDER_BODY.to_owned(),
+            result_file_reminder_body,
+        ));
     } else if !reminders.no_subagents(request)
         && reminders.callable(request, Capability::Subagents)
         && let Some(catalog) = reminders.subagent_catalog.as_ref()

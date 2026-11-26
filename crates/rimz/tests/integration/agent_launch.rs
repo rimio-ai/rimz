@@ -182,6 +182,7 @@ fn init_launch_repo(path: &std::path::Path) -> bool {
 #[cfg(unix)]
 fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action: ExecAction::Launch {
@@ -8804,6 +8805,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 
         let dump = env.home_root.join("codex-resume.env");
         let mut resume = ExecRequest {
+            result_file: None,
             isolation_default: None,
             kind: kind.clone(),
             action: ExecAction::Resume {
@@ -8969,6 +8971,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         let shim_dir = write_env_dump_shim(&env, "codex");
         let dump = env.home_root.join("codex-no-attach.env");
         let request = ExecRequest {
+            result_file: None,
             isolation_default: None,
             kind: kind.clone(),
             action,
@@ -9084,6 +9087,7 @@ fn restarted_resume_wrapper_queues_exactly_one_continue() {
 esac"#,
     );
     let mut request = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: kind.clone(),
         action: ExecAction::Resume {
@@ -9294,6 +9298,7 @@ fn resume_exec_cleanup_case(case: ResumeExecCleanupCase) {
 esac"#,
     );
     let mut resume = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: kind.clone(),
         action: ExecAction::Resume {

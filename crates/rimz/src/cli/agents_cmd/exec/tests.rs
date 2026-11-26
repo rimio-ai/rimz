@@ -345,6 +345,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
     use rimz::store::run::{RunRecord, RunStatus};
 
     let mut request = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         action: ExecAction::Resume {
@@ -515,6 +516,7 @@ fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
 
 pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
@@ -649,6 +651,7 @@ fn picker_binding_evidence_survives_session_end() {
 
 fn bare_exec_args() -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         action: ExecAction::Launch {
@@ -743,6 +746,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         ..LaunchParams::default()
     };
     let input = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         action: ExecAction::Launch {

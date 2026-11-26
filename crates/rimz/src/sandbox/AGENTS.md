@@ -5,7 +5,7 @@ Local contract for `crates/rimz/src/sandbox/`. Extends [crates/rimz/AGENTS.md](.
 - The scoped view is not containment. Do not present a mount as a security boundary, in code or docs.
 - Provider home resolution and native override keys belong to the agent capability seam, and multiplexer endpoint resolution to `mux`. Do not duplicate either resolver here.
 - `plan` creates no file or directory, so `rimz agents explain` can run it alone. Every write goes in `apply`, and a caller that needs both runs `plan` first.
-- `TmpView` is the one mapping between a temp unit and the `/tmp` an agent sees. Nothing prints a result path through it.
+- `TmpView` is the one mapping between a temp unit and the `/tmp` an agent sees. A path RimZ reports to a reader is never spelled through it; the one path spelled through it is a subagent's own result file, in that subagent's launch text.
 - An unlisted skill the view cannot prepare is omitted and returned as a `SkippedSkill` warning, never bound unrewritten. A failure listing the skill root or writing under `skills_dir` stays an error.
 - A single-file bind detaches in every running view when the host renames a new file over its destination, which is how package managers and most config tools write. The live guard re-binds only the protected identity entries. For any other mount, bind a directory or a file that is rarely replaced, and say which in sandbox.md.
 - Real-bubblewrap tests self-skip in CI, so give a property of the view a bubblewrap-free test of `plan` and `apply` as well.

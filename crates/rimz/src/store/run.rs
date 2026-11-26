@@ -492,6 +492,11 @@ pub struct RunRecord {
     /// id again, clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed_over_from: Option<PaneId>,
+    /// Host path of the file this subagent writes its result to, in its launcher's temp unit.
+    /// Present exactly on a run whose answers are taken from that file at each terminal write
+    /// rather than from its final reply; set once at launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_file: Option<PathBuf>,
 }
 
 /// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
@@ -699,6 +704,7 @@ impl RunRecord {
             interrupted_at: None,
             turn_opened_at: None,
             handed_over_from: None,
+            result_file: None,
         }
     }
 

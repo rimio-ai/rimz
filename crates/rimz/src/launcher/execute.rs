@@ -242,7 +242,7 @@ fn open_fresh(
     let store = &fresh.context.store;
     let cwd = &fresh.launch.cwd;
     let leader_index = fresh.leader_index.unwrap_or(0);
-    let mut record = leader
+    let (mut record, writes_result_file) = leader
         .as_ref()
         .map(|leader| {
             let cell = fresh
@@ -296,9 +296,19 @@ fn open_fresh(
             record.loop_fire.clone_from(&leader.loop_fire);
             record.workflow.clone_from(&leader.workflow);
             record.reader.clone_from(&leader.reader);
-            Ok::<_, anyhow::Error>(record)
+            // A read-only child, and one whose launch text rides its prompt (composed before
+            // it has a name), keep their final reply as their result.
+            let writes_result_file = leader.subagent
+                && cell.launch.mode != Some(PermissionMode::Plan)
+                && cell
+                    .tools
+                    .as_ref()
+                    .is_none_or(|tools| tools.iter().any(|tool| tool == "Write"))
+                && super::resolve::launch_text_delivered(adapter, cell);
+            Ok::<_, anyhow::Error>((record, writes_result_file))
         })
-        .transpose()?;
+        .transpose()?
+        .unzip();
     let mut requests = launch_identity_requests(
         &fresh.layout,
         fresh.name.as_deref(),
@@ -371,6 +381,21 @@ fn open_fresh(
             &batch.identities()[leader_index].agent_id,
         );
     }
+    if let (Some(leader), Some(record), Some(true)) = (&leader, &mut record, writes_result_file) {
+        let identity = &batch.identities()[leader_index];
+        // The unit `launch_plan::temp_owner` resolves at compile: a launched child's is its
+        // launcher's, anyone else's its own.
+        let owner = match &fresh.ancestry {
+            Some(LaunchAncestry::Subagent { .. }) => leader.reader.as_deref(),
+            _ => Some(identity.name.as_str()),
+        };
+        let path = store
+            .paths()
+            .temp_unit_dir(owner)
+            .join(format!("{}.output", identity.name));
+        crate::harness::run::result_file::remove(&path);
+        record.result_file = Some(path);
+    }
     let peer = if leader.is_none() {
         prepare_peer_prompt(store, batch.identities(), cwd, fresh.report_to).inspect_err(|_| {
             let _ = store.fail_agent_launch_batch(&batch);
@@ -417,6 +442,7 @@ fn open_fresh(
                     managed_launch: fresh.managed_launches.get(leader_index),
                     cleanup: leader.cleanup,
                     subagent: leader.subagent,
+                    result_file: record.result_file.as_deref(),
                 }),
         },
     )

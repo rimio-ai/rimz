@@ -6098,12 +6098,18 @@ allowed-dependencies = [
 # subagent is the one subagent request the CLI and the MCP subagent tool build (+1).
 # fail_step_refusal lets the in-pane launch step fail its own run with a start-capped reason without waking (+1).
 # wake_workflow lets the host exec wrapper send the deferred workflow wake once the child exits (+1).
-surface-budget = 69
+# result_file::remove lets open_fresh clear a stale subagent result file with the one removal the terminal take uses (+1).
+surface-budget = 70
 
 [[verdict]]
 kind = "item"
 key = "harness::run::fail_step_refusal"
 reason = "The in-pane launch step fails its explicitly named, non-superseded run with a start-capped refusal reason in one locked write without spawning a workflow advance from inside a scoped sandbox."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::result_file::remove"
+reason = "`launcher::execute::open_fresh` clears a stale result file before a subagent's pane opens through the same warn-on-failure removal `harness::run::write_record_locked` runs after the take."
 
 [[verdict]]
 kind = "item"

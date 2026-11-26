@@ -1177,6 +1177,7 @@ fn antigravity_routine_rules() -> Vec<String> {
 
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,

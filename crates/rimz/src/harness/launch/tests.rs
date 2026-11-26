@@ -484,6 +484,7 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
 
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
@@ -3203,6 +3204,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         ..crate::agents::LaunchParams::default()
     };
     let invocation = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         action: ExecAction::Launch {

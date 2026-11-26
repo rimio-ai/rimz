@@ -783,6 +783,10 @@ pub struct ExecRequest {
     /// The reminder section composed or replayed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder_section: Option<ReminderSection>,
+    /// Host path of the result file of the run this request carries (`RunRecord::result_file`),
+    /// copied from the record wherever a request is built for a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_file: Option<PathBuf>,
     #[serde(default)]
     pub identity: ExecIdentity,
 }
@@ -1071,6 +1075,7 @@ impl ExecRequest {
             continue_session: false,
             no_continue: false,
             reminder_section: None,
+            result_file: None,
             identity: ExecIdentity::default(),
         }
     }

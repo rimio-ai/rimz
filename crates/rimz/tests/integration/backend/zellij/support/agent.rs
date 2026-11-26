@@ -33,6 +33,7 @@ pub(in crate::backend::zellij) fn zellij_agent_exec_command(
     paths.extend(std::env::split_paths(&original));
     let path = std::env::join_paths(paths).expect("join PATH");
     let request = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: rimz::ids::AgentKind::new_unchecked("claude"),
         action,
