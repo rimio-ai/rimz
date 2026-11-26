@@ -1347,7 +1347,7 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
 /// seat [`prompt_leader`] gives a team's launch prompt: a team with roles is led by its
 /// [`Team::leader_role`], and a roleless one by the cell its `leader` names. A roleless team
 /// with no `leader` has no seat that leads it by name.
-pub fn leads_team(team: &Team, role: Option<&str>, token: Option<&str>) -> bool {
+pub(super) fn leads_team(team: &Team, role: Option<&str>, token: Option<&str>) -> bool {
     if team.roles.is_empty() {
         return team.leader.is_some() && team.leader.as_deref() == token;
     }
