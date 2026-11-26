@@ -10,7 +10,7 @@ fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
         "Type: SWAP_BRIEFING\nFrom: @rimz\nContent:\nThis is a fresh session of the same agent; \
          the earlier conversation is gone, and RimZ kept what was outstanding for it.\n\
          - 1 subagent still running (@otter); their results come to you: `rimz subagents list`\n\
-         - 1 wait or delivery still armed for you (ci-green): `rimz wait list`\n\
+         - 1 wait still armed for you (ci-green): `rimz wait list`\n\
          - 2 messages queued for your next turn: `rimz message list`\n\
          Sent into the earlier session and not yet confirmed as read; RimZ sends a \
          message again, a command it does not:\n\
@@ -24,6 +24,99 @@ fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
         origins,
         [crate::transcript::SectionOrigin::Notice("@rimz".into())],
         "the briefing reads as an @rimz notice, never as the user"
+    );
+}
+
+/// The briefing lists the waits the agent armed itself: a team member whose only outstanding
+/// row is its team's signal binding gets none, and a loop row targeting it stays out too.
+#[test]
+fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
+    use crate::harness::schedule::arm::{
+        ArmOutcome, DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec,
+        DeliveryTrigger, arm_delivery,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths = crate::StatePaths::for_project_root(dir.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&paths).unwrap();
+    let store = crate::Store::open(paths, runtime).unwrap();
+    store.record_workspace(&workspace).unwrap();
+    let mut coder = crate::testkit::agent_state("claude", "sess-coder", jiff::Timestamp::now());
+    coder.launch_id = Some("launch_coder".into());
+    coder.name = Some("coder".to_owned());
+    coder.team = Some("forge".to_owned());
+    coder.role = Some("coder".to_owned());
+    crate::testkit::set_lane(&mut coder, "main");
+    let team: crate::config::Team = toml::from_str(
+        r#"
+        [[roles]]
+        role = "coder"
+        profile = "codex"
+        signals = [{ signal = "ci.failed", match = { branch = "main" } }]
+        "#,
+    )
+    .unwrap();
+    let agents = std::slice::from_ref(&coder);
+    let armed =
+        crate::harness::schedule::team::arm_member(&workspace, agents, &coder, &team).unwrap();
+    assert_eq!(armed, 1);
+    let briefing = || swap_briefing(&store, &coder, agents, dir.path(), None).unwrap();
+    assert_eq!(
+        briefing(),
+        None,
+        "a team binding alone is not the member's own wait"
+    );
+
+    let target = crate::config::TaskTarget {
+        kind: coder.kind.clone(),
+        session: coder.launch_key().clone(),
+        handle: "@coder".to_owned(),
+    };
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load(Some(dir.path())).unwrap();
+    catalog
+        .replace_machine(
+            "nightly-check",
+            &crate::config::TaskEntry {
+                every: Some("30m".to_owned()),
+                prompt: Some("check the build".to_owned()),
+                wait: Some(target.clone()),
+                root: dir.path().to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ArmOutcome::Armed { name: own, .. } = arm_delivery(
+        &workspace,
+        DeliverySpec {
+            name: DeliveryName::MintWait,
+            label: None,
+            target,
+            trigger: DeliveryTrigger::Delay(std::time::Duration::from_secs(600)),
+            prompt: DeliveryPrompt::None,
+            provenance: DeliveryProvenance::SelfWait { reader: None },
+            deadline: None,
+            max_strikes: None,
+        },
+    )
+    .unwrap() else {
+        panic!("the self wait is armed");
+    };
+    let names = crate::harness::schedule::catalog::TaskCatalog::load(Some(dir.path()))
+        .unwrap()
+        .visible()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let briefing = briefing().unwrap_or_default();
+    assert_eq!(
+        briefing
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .collect::<Vec<_>>(),
+        [format!(
+            "- 1 wait still armed for you ({own}): `rimz wait list`"
+        )],
+        "rows armed: {names:?}"
     );
 }
 
