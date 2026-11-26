@@ -12,7 +12,7 @@ use rimz::launcher::swap::{
 };
 
 /// What `rimz agents restart` adds over a bare relaunch. `rimz teams restart` passes none, so
-/// it never continues, hands over a run, or checks spend.
+/// it never continues, hands over a run, checks spend, or briefs a member that comes back fresh.
 pub(in crate::cli) struct AgentRestart<'a> {
     account: Option<rimz::ids::LoginName>,
     no_continue: bool,
@@ -374,7 +374,8 @@ pub(in crate::cli) fn restart_resolved(
         (None, _) => rimz::store::writer::LaunchLogin::Pinned(login.clone().unwrap_or_default()),
     };
     let action = match (action, fresh_reason) {
-        (ExecAction::Launch { extra_args, .. }, Some(_)) => {
+        // A team restart briefs nobody: the member its board wakes takes its stage notice.
+        (ExecAction::Launch { extra_args, .. }, Some(_)) if restart.is_some() => {
             let prompt = swap_briefing(store, agent, agents, &workspace.project_root, None)?;
             request.prompt.clone_from(&prompt);
             ExecAction::Launch { prompt, extra_args }

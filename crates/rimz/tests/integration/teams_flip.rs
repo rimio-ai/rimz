@@ -3198,6 +3198,148 @@ fn absent_owner_is_rewoken_when_its_root_session_registers() {
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), board);
 }
 
+/// A team restart opens a member that comes back fresh on no briefing: a non-owner with its own
+/// wait outstanding launches with no prompt, and a stage owner takes its stage notice once it
+/// registers, and nothing else. Its team binding stays armed for it and listed in its waits.
+#[cfg(unix)]
+#[test]
+fn team_restart_opens_a_fresh_member_on_its_stage_notice_alone() {
+    for owner in [false, true] {
+        let fixture = Fixture::new();
+        crate::common::write_definition(
+            &fixture.env,
+            "teams",
+            "forge",
+            &CONFIG.replace(
+                "    owns: [Review]\n",
+                "    owns: [Review]\n    signals: [deploy.done]\n",
+            ),
+            "Complete the work.",
+        );
+        crate::common::trust_claude_project(&fixture.env, &fixture.env.project_root);
+        std::fs::write(fixture.board(), BOARD).unwrap();
+        fixture.live_panes(&["terminal_1", "terminal_9999"]);
+        fixture.seed("reviewer", None);
+        fixture.hook("reviewer", "SessionStart", Some("terminal_1"));
+        if owner {
+            std::fs::write(
+                fixture.board(),
+                BOARD.replace("Stage: Build (@coder)", "Stage: Review (@reviewer)"),
+            )
+            .unwrap();
+        }
+        let as_reviewer = |command: &mut Command| {
+            command
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "launch_reviewer")
+                .env("RIMZ_AGENT_NAME", "reviewer");
+        };
+        let mut wait = fixture.command();
+        as_reviewer(wait.args(["wait", "--in", "30m"]));
+        success(wait.output().unwrap());
+        let instances = crate::common::wait::wait_instances(&fixture.env);
+        let (binding, _) = instances
+            .0
+            .iter()
+            .find(|(_, entry)| entry.team.is_some())
+            .unwrap_or_else(|| panic!("the reviewer's binding is armed: {instances:#?}"));
+        let binding = binding.clone();
+
+        let panes =
+            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude","pane_command":"claude"}]"#;
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let mut restart = fixture.launch_command();
+        crate::common::room::seed_live_zellij_room(
+            &fixture.env.runtime_paths(),
+            &workspace.session_name,
+            serde_json::from_str(panes).unwrap(),
+        );
+        let receipt = success(
+            restart
+                .args(["teams", "restart", "forge"])
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+                .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
+                .output()
+                .unwrap(),
+        );
+        assert!(receipt.contains("restarted @reviewer"), "{receipt}");
+        let rows = fixture.env.store().audit_rows().unwrap();
+        let replacement = rows
+            .iter()
+            .find(|row| row.launch_id.as_deref() == Some("launch_reviewer") && row.epoch == 1)
+            .unwrap_or_else(|| panic!("the restart reserved epoch 1: {rows:#?}"));
+        assert_eq!(
+            (owner, replacement.first_prompt.as_deref()),
+            (owner, None),
+            "a team restart launches a fresh member with no prompt"
+        );
+
+        let instances = crate::common::wait::wait_instances(&fixture.env);
+        let target = instances
+            .0
+            .get(&binding)
+            .and_then(|entry| entry.wait.as_ref());
+        assert_eq!(
+            target.map(|target| target.session.as_str()),
+            Some("launch_reviewer"),
+            "the binding stays armed for the member's launch: {instances:#?}"
+        );
+        // The replacement's provider registers under the reserved launch and epoch.
+        let mut register = fixture.command();
+        register
+            .args(["hooks", "feed", "--source", "claude"])
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "reviewer")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "launch_reviewer")
+            .env(rimz::harness::launch::ENV_AGENT_EPOCH, "1")
+            .env("RIMZ_AGENT_PID", fixture.env.agent_owner_pid().to_string())
+            .env("ZELLIJ_PANE_ID", "9999")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let payload = json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "reviewer-fresh",
+            "cwd": fixture.env.project_root,
+            "worktree_branch": "feature-team",
+        });
+        success(
+            fixture
+                .env
+                .spawn_payload(register, &payload.to_string())
+                .wait_with_output()
+                .unwrap(),
+        );
+        fixture.env.drain_hooks();
+        let mut list = fixture.command();
+        as_reviewer(list.args(["wait", "list"]));
+        let listed = success(list.output().unwrap());
+        assert!(
+            listed.contains("also woken by deploy.done (team forge#feature-team)"),
+            "{listed}"
+        );
+        let messages = fixture.env.store().list_messages().unwrap();
+        let prompts = messages
+            .iter()
+            .filter(|message| message.launch_id.as_deref() == Some("launch_reviewer"))
+            .map(|message| message.sender.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (owner, prompts),
+            (
+                owner,
+                if owner {
+                    vec![MessageSender::Harness {
+                        notice: HarnessNotice::Stage,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            ),
+            "the owner takes its stage notice alone, a non-owner nothing: {messages:#?}"
+        );
+    }
+}
+
 /// A resumed exec wrapper, killed and reaped when the test ends, pass or fail.
 struct Wrapper(std::process::Child);
 
