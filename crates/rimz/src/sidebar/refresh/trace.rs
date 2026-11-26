@@ -59,6 +59,18 @@ pub(super) enum TraceEvent<'a> {
         cache_publication_ms: u64,
         total_ms: u64,
     },
+    /// One login's read in the `rimz accounts` usage pass; `landed` is true
+    /// when the read reached `credits.json`.
+    UsageRead {
+        kind: &'a str,
+        login: &'a str,
+        elapsed_ms: u64,
+        landed: bool,
+    },
+    UsagePass {
+        login_count: usize,
+        total_ms: u64,
+    },
 }
 
 pub(super) fn record<'a>(runtime: &RuntimePaths, event: impl FnOnce() -> TraceEvent<'a>) {

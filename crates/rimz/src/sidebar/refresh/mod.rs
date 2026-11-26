@@ -47,7 +47,7 @@ pub use sessions::{
 };
 pub use usage::{
     complete_realtime_account_usage, publish_account_usage_snapshot, refresh_claimed_account_usage,
-    refresh_provider_usage,
+    refresh_logins_usage,
 };
 
 use self::accounts::{merge_live_accounts, produce_accounts};
