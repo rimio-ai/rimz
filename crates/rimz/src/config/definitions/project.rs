@@ -21,6 +21,8 @@ pub(in crate::config) struct ProjectProfilesInput<'a> {
     pub auto_compact_default: Option<super::super::AutoCompactDefault>,
     pub commands: &'a CommandsConfig,
     pub machine_subagent_profiles: &'a ProfilesConfig,
+    /// The machine agents table, whose rows a project row of the same name shadows.
+    pub machine_agents: &'a ProfilesConfig,
     pub agents: BTreeMap<String, (Profile, Vec<String>)>,
     pub subagents: BTreeMap<String, (Profile, Vec<String>)>,
 }
@@ -31,6 +33,12 @@ pub(in crate::config) struct ProjectProfilesOutput {
     pub subagents: BTreeMap<String, Profile>,
     pub failed_agents: BTreeMap<String, String>,
     pub failed_subagents: BTreeMap<String, String>,
+    /// Unshadowed machine agents rows whose `subagents:` list allows a subagent that failed to
+    /// load in this project; their errors stay out of `errors`, which names the root cause.
+    pub failed_machine_agents: BTreeMap<String, String>,
+    /// The other unshadowed machine agents rows as this project builds them, when a project
+    /// subagent failed; see [`in_project`].
+    pub machine_agents: BTreeMap<String, Profile>,
     pub errors: Vec<DefinitionErr>,
 }
 
@@ -206,6 +214,54 @@ fn format_detail(
     detail
 }
 
+/// The error a machine agents `row` meets when `subagents` checks its `subagents:` list: a
+/// definition through its own list check, a kind base through the check its written list met at
+/// load.
+fn machine_subagents_error(
+    row: &Profile,
+    bases: &BTreeMap<String, AgentFrontmatter>,
+    subagents: &SubagentCheck,
+) -> Option<DefinitionErr> {
+    if let Some(definition) = &row.definition {
+        return definition.check_subagents(row, subagents).err();
+    }
+    let listed = bases
+        .get(&row.agent)
+        .filter(|_| row.kind_base)?
+        .subagents
+        .as_deref()?;
+    // A kind base's system prompt is its own rendered body, so its origin is the base's file.
+    let path = row.system_prompt_file.as_ref()?.origin();
+    agent::base_subagents(path, listed, subagents).err()
+}
+
+/// A machine agents `row` as a project builds it: its definition's on-demand builds check their
+/// `subagents:` lists against `context`, and each tier render `refusal` refuses becomes an
+/// exclusion with that detail.
+fn in_project(
+    row: &Profile,
+    context: &Arc<LoadContext>,
+    refusal: impl Fn(&Profile) -> Option<String>,
+) -> Profile {
+    let mut row = row.clone();
+    row.definition = row
+        .definition
+        .map(|definition| definition.in_project(context));
+    if let Some(routes) = &mut row.definition_renders {
+        routes.renders.retain(|kind, render| {
+            if let Some(detail) = refusal(render) {
+                routes.exclusions.insert(kind.clone(), detail);
+                return false;
+            }
+            if render.definition.is_some() {
+                render.definition.clone_from(&row.definition);
+            }
+            true
+        });
+    }
+    row
+}
+
 fn fallback_contexts(input: &ProjectProfilesInput<'_>) -> LoadContexts {
     let packs = crate::packs::ResolvedPacks::default();
     let catalog = Arc::new(SkillCatalog::new(
@@ -314,9 +370,10 @@ pub(in crate::config) fn resolve_project_profiles(
         subagent_check.defined.remove(name);
         subagent_check.problems.remove(name);
     }
+    let project_check = Arc::new(subagent_check);
     let agents_ctx = Arc::new(LoadContext {
         shared: Arc::clone(&contexts.agents.shared),
-        subagents: Some(Arc::new(subagent_check)),
+        subagents: Some(Arc::clone(&project_check)),
     });
     let agents_scope = LoadScope {
         context: &agents_ctx,
@@ -350,6 +407,32 @@ pub(in crate::config) fn resolve_project_profiles(
             )
         })
         .collect();
+    let mut failed_machine_agents = BTreeMap::new();
+    let mut machine_agents = BTreeMap::new();
+    // Only a project subagent that failed can change a machine row's verdict.
+    if !subagent_errors.is_empty() {
+        let bases = &contexts.agents.shared.bases;
+        let refusal = |name: &str, row: &Profile| {
+            let error = machine_subagents_error(row, bases, &project_check)?;
+            Some(format_detail(
+                name,
+                &error,
+                &agent_errors,
+                &subagent_errors,
+                &machine_failure,
+            ))
+        };
+        for (name, row) in input.machine_agents.0.iter().filter(|(name, _)| {
+            !resolved_agents.contains_key(*name) && !agent_errors.contains_key(*name)
+        }) {
+            if let Some(detail) = refusal(name, row) {
+                failed_machine_agents.insert(name.clone(), detail);
+                continue;
+            }
+            let row = in_project(row, &agents_ctx, |render| refusal(name, render));
+            machine_agents.insert(name.clone(), row);
+        }
+    }
     let failed_subagents: BTreeMap<String, String> = subagent_errors
         .iter()
         .map(|(name, err)| {
@@ -368,6 +451,8 @@ pub(in crate::config) fn resolve_project_profiles(
         subagents: resolved_subagents,
         failed_agents,
         failed_subagents,
+        failed_machine_agents,
+        machine_agents,
         errors,
     }
 }

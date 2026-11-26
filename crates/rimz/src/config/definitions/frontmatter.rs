@@ -59,7 +59,7 @@ pub(super) fn is_plus(entry: &str) -> bool {
 }
 
 /// An entry less the one `+` that marks it added.
-fn added(entry: &str) -> &str {
+pub(super) fn added(entry: &str) -> &str {
     let entry = entry.trim();
     entry.strip_prefix('+').unwrap_or(entry).trim()
 }

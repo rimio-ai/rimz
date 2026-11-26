@@ -989,7 +989,10 @@ fn load_resolved(
     // which fails its kind's subagents in turn, so this settles before either tree resolves.
     // A subagent's first error here predates any refusal its own failure causes.
     let mut first_errors: Vec<DefinitionErr> = Vec::new();
-    while pending.iter().any(|base| base.rows.0.subagents.is_some()) {
+    let written = |bases: &BTreeMap<String, AgentFrontmatter>, base: &PendingBase<'_>| {
+        bases.get(&base.keys[0]).and_then(|fm| fm.subagents.clone())
+    };
+    while pending.iter().any(|base| written(&bases, base).is_some()) {
         let probe_ctx = Arc::new(LoadContext {
             shared: Arc::new(SharedLoadState {
                 home: agents_home.to_owned(),
@@ -1023,11 +1026,11 @@ fn load_resolved(
         let subagent_check = SubagentCheck::from_namespace(&subagents, &children);
         let mut refused = Vec::new();
         for (index, base) in pending.iter_mut().enumerate() {
-            let Some(listed) = &base.rows.0.subagents else {
+            let Some(listed) = written(&bases, base) else {
                 continue;
             };
-            match agent::subagent_names(&base.item.path, listed, &subagent_check, true) {
-                Ok(names) => base.rows.0.subagents = Some(names),
+            match agent::base_subagents(&base.item.path, &listed, &subagent_check) {
+                Ok(names) => base.rows.0.subagents = names,
                 Err(error) => refused.push((index, error)),
             }
         }
