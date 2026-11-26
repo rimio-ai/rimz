@@ -1160,7 +1160,7 @@ fn code_mode_switch_characterization() {
         .collect();
     insta::assert_snapshot!(cases.join("\n"), @r#"
     claude: Supported { tools: ["REPL", "Poll"], without_tools: [], env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1")), off_env: Some(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "0")), off_exclude: None }
-    codex: Args { on: ["-c", "features.code_mode=true"], off: ["-c", "features.code_mode=false"] }
+    codex: Args { on: ["-c", "features.code_mode_only=true"], off: ["-c", "features.code_mode=false", "-c", "features.code_mode_only=false"] }
     amp: Unsupported
     copilot: Unsupported
     kimi: Unsupported

@@ -309,12 +309,18 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             steer_checked: false,
         }),
         presets: super::PresetMatchers {
-            // `features.code_mode` adds the JavaScript cell tools beside the
-            // direct ones; `code_mode_only` would hide shell and apply_patch.
-            // Off wins over a `code_mode` saved in `config.toml`.
+            // On is Code Mode Only: shell and apply_patch nest under `exec`, which
+            // stays top-level with `wait` and `request_user_input`. Off sets both
+            // features, so it wins over either saved in `config.toml`. A model whose
+            // catalog entry carries a `tool_mode` ignores both.
             code_mode: super::CodeModeSwitch::Args {
-                on: &["-c", "features.code_mode=true"],
-                off: &["-c", "features.code_mode=false"],
+                on: &["-c", "features.code_mode_only=true"],
+                off: &[
+                    "-c",
+                    "features.code_mode=false",
+                    "-c",
+                    "features.code_mode_only=false",
+                ],
             },
             auto_compact: Some(super::StaticPresetMatcher::ConfigKey {
                 flags: &["-c", "--config"],
