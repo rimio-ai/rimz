@@ -26,7 +26,8 @@ use super::{SidebarSnapshot, trace};
 const ACCOUNTS_WAIT_STEP: Duration = Duration::from_millis(20);
 const ACCOUNTS_WAIT_STEPS: u32 = 15;
 
-/// Most independent provider account/version chains probed concurrently.
+/// The sidebar host's constant worker cap: the most kinds whose account queues
+/// it probes at once.
 const MAX_PARALLEL_ACCOUNT_PROBES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +171,16 @@ pub(super) fn produce_accounts(
         runtime,
         logins,
         |snapshot, runtime, due, cache, policy| {
-            probe_accounts(snapshot, runtime, &selected, logins, due, cache, policy)
+            probe_accounts(
+                snapshot,
+                runtime,
+                &selected,
+                logins,
+                due,
+                cache,
+                policy,
+                MAX_PARALLEL_ACCOUNT_PROBES,
+            )
         },
     )
 }
@@ -208,7 +218,8 @@ pub fn read_provider_accounts(runtime: &RuntimePaths) -> AccountsCache {
 /// Query the requested logins through the shared account-cache single-flight.
 /// A forced query bypasses per-login TTLs and waits behind a live producer,
 /// then performs its own probes and profile reads. Only a producer outliving
-/// the batch-derived wait bound makes it serve the current cache instead.
+/// the wait bound, sized to the slowest peer that can hold the single-flight,
+/// makes it serve the current cache instead. Every kind gets its own worker.
 pub fn query_provider_accounts(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
@@ -220,27 +231,59 @@ pub fn query_provider_accounts(
         Vec::new(),
         jiff::Timestamp::now(),
     );
-    let waves = logins
-        .len()
-        .max(crate::agents::known_kinds().count())
-        .div_ceil(MAX_PARALLEL_ACCOUNT_PROBES) as u32;
-    // Two batch budgets leave room for credential lookup, publication, and
-    // scheduling between the bounded account, version, and profile calls.
-    let forced_wait = (INFORMATIONAL_PROBE_TIMEOUT * 2
-        + Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS))
-        * waves
-        * 2;
     query_provider_accounts_with(
         &snapshot,
         runtime,
         logins,
         force,
-        forced_wait,
+        forced_account_wait(logins, set),
         |login| adapter_inputs_stamp(set, login),
         |snapshot, runtime, due, cache, policy| {
-            probe_accounts(snapshot, runtime, logins, set, due, cache, policy)
+            probe_accounts(
+                snapshot,
+                runtime,
+                logins,
+                set,
+                due,
+                cache,
+                policy,
+                usize::MAX,
+            )
         },
     )
+}
+
+/// How long a forced caller waits out a peer's account batch: long enough for
+/// the slowest peer that can hold the single-flight. The sidebar host walks the
+/// kind queues on at most [`MAX_PARALLEL_ACCOUNT_PROBES`] workers, so it ends
+/// within an even share of every login plus the longest queue; another command
+/// gives each kind a worker and ends within the longest queue alone. A kind's
+/// queue is the most logins `logins` or the machine catalog holds for it, and
+/// at least one for every known kind, so a short re-probe list still waits out
+/// a peer probing the whole catalog.
+fn forced_account_wait(logins: &[ProviderLogin], set: &RoomLoginSet) -> Duration {
+    let mut queues: BTreeMap<&str, usize> = crate::agents::known_kinds()
+        .map(|kind| (kind, set.declared(kind).len().max(1)))
+        .collect();
+    let mut listed = BTreeMap::<&str, usize>::new();
+    for login in logins {
+        *listed.entry(login.kind().as_str()).or_default() += 1;
+    }
+    for (kind, count) in listed {
+        let queue = queues.entry(kind).or_default();
+        *queue = (*queue).max(count);
+    }
+    let longest = queues.values().copied().max().unwrap_or(1);
+    let units = queues
+        .values()
+        .sum::<usize>()
+        .div_ceil(MAX_PARALLEL_ACCOUNT_PROBES)
+        + longest;
+    // Two budgets per login leave room for credential lookup, publication, and
+    // scheduling between the bounded account, version, and profile calls.
+    (INFORMATIONAL_PROBE_TIMEOUT * 2 + Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS))
+        * units as u32
+        * 2
 }
 
 fn query_provider_accounts_with(
@@ -343,7 +386,7 @@ fn query_provider_accounts_with(
         }
         // A live producer still owns publication. The short unforced wait
         // avoids duplicate cold batches; a forced caller reaches this only
-        // when the producer outlives its batch-derived wait bound.
+        // when the producer outlives its wait bound.
         crate::disk::single_flight::Coordination::ContentionTimeout => {
             let wait_ms = duration_ms(coordination_started.elapsed());
             trace::record(runtime, || TraceEvent::Contention {
@@ -670,6 +713,10 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 
 /// Keep the adapter calls at the edge; `probe_accounts_with` owns the pure
 /// per-login record merge and is exercised without subprocesses in unit tests.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each caller passes its own login set, due keys, policy, and worker cap"
+)]
 fn probe_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -678,6 +725,7 @@ fn probe_accounts(
     due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
     policy: ProfileReadPolicy,
+    max_workers: usize,
 ) -> ProbeRun {
     let active_version_kinds = active_version_probe_kinds(snapshot);
     let probed_at_ms = unix_now_ms();
@@ -695,25 +743,26 @@ fn probe_accounts(
         .filter(|login| due_keys.contains(&login.key()))
         .cloned()
         .collect();
-    let batch = execute_account_probes(&due, &active_version_kinds, |login, active| {
-        let key = login.key();
-        let trigger_ms = session_start_ms.max(
-            rate_limits
-                .entries
-                .get(&key.clone().into())
-                .and_then(|entry| entry.reset_spotted_at_ms)
-                .unwrap_or(0),
-        );
-        probe_one_account(
-            login,
-            set,
-            active,
-            previous.logins.get(&key),
-            policy,
-            trigger_ms,
-            probed_at_ms,
-        )
-    });
+    let batch =
+        execute_account_probes(&due, &active_version_kinds, max_workers, |login, active| {
+            let key = login.key();
+            let trigger_ms = session_start_ms.max(
+                rate_limits
+                    .entries
+                    .get(&key.clone().into())
+                    .and_then(|entry| entry.reset_spotted_at_ms)
+                    .unwrap_or(0),
+            );
+            probe_one_account(
+                login,
+                set,
+                active,
+                previous.logins.get(&key),
+                policy,
+                trigger_ms,
+                probed_at_ms,
+            )
+        });
     let success_count = batch
         .results
         .iter()
@@ -844,6 +893,7 @@ fn probe_account_version(
 fn execute_account_probes(
     logins: &[ProviderLogin],
     active_version_kinds: &BTreeSet<String>,
+    max_workers: usize,
     probe: impl Fn(&ProviderLogin, bool) -> Option<ProviderProbeResult> + Sync,
 ) -> ProbeBatch {
     if logins.is_empty() {
@@ -854,20 +904,61 @@ fn execute_account_probes(
         };
     }
     let started = Instant::now();
-    let jobs: Vec<_> = logins.to_vec();
-    let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
-    let results: Vec<_> =
-        crate::utils::parallel::bounded_map(crate::lane::current(), worker_count, &jobs, |login| {
-            probe(login, active_version_kinds.contains(login.kind().as_str()))
-        })
-        .into_iter()
-        .flatten()
-        .collect();
+    let kinds = logins
+        .iter()
+        .map(ProviderLogin::kind)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let worker_count = max_workers.min(kinds);
+    let results: Vec<_> = map_by_kind(worker_count, logins, |login| {
+        probe(login, active_version_kinds.contains(login.kind().as_str()))
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     ProbeBatch {
         results,
         worker_count,
         total_ms: duration_ms(started.elapsed()),
     }
+}
+
+/// Map every login on at most `max_workers` workers, one kind per worker, each
+/// walking its kind's logins in list order: a provider sees one request at a
+/// time while kinds run in parallel. Results come back in list order, each
+/// stored as its login finishes. A login whose map panics loses its own result
+/// and those of its kind's logins after it, which never start; every result
+/// finished before it lands.
+pub(super) fn map_by_kind<R: Send>(
+    max_workers: usize,
+    logins: &[ProviderLogin],
+    map: impl Fn(&ProviderLogin) -> R + Sync,
+) -> Vec<R> {
+    let mut queues: Vec<Vec<(usize, &ProviderLogin)>> = Vec::new();
+    for (index, login) in logins.iter().enumerate() {
+        match queues
+            .iter_mut()
+            .find(|queue| queue[0].1.kind() == login.kind())
+        {
+            Some(queue) => queue.push((index, login)),
+            None => queues.push(vec![(index, login)]),
+        }
+    }
+    let results = std::sync::Mutex::new((0..logins.len()).map(|_| None).collect::<Vec<_>>());
+    crate::utils::parallel::bounded_map(crate::lane::current(), max_workers, &queues, |queue| {
+        for (index, login) in queue {
+            let result = map(login);
+            results
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)[*index] = Some(result);
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn merge_probe_results(

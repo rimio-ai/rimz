@@ -435,3 +435,137 @@ pub(crate) fn bookings_in_each_state(
         ),
     ]
 }
+
+/// Interleaved logins of two kinds, then one of a kind no adapter serves: the
+/// list a per-kind queue test runs [`KindProbes`] over.
+pub(crate) fn kind_queue_logins() -> Vec<crate::agents::ProviderLogin> {
+    use crate::agents::ProviderLogin;
+    use crate::ids::AgentKind;
+    let named = |kind: &str, name: &str| {
+        ProviderLogin::named(
+            AgentKind::new_unchecked(kind),
+            name.parse().unwrap(),
+            std::path::PathBuf::from(format!("/tmp/{kind}-{name}")),
+        )
+        .unwrap()
+    };
+    vec![
+        ProviderLogin::default_for(AgentKind::new_unchecked("claude")),
+        ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
+        named("claude", "work"),
+        named("codex", "spare"),
+        named("claude", "home"),
+        ProviderLogin::default_for(AgentKind::new_unchecked("plugin-kind")),
+    ]
+}
+
+/// Slow fake provider requests that record, per kind, the most in flight at
+/// once and the order logins started in. Claude's first request holds until
+/// every other kind's requests finish, so a kind queued behind it shows.
+pub(crate) struct KindProbes {
+    others: usize,
+    live: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
+    most_live: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
+    most_kinds_live: std::sync::atomic::AtomicUsize,
+    started: std::sync::Mutex<Vec<crate::ids::LoginKey>>,
+    others_done: std::sync::atomic::AtomicUsize,
+    others_finished_while_held: std::sync::atomic::AtomicBool,
+}
+
+impl KindProbes {
+    const HELD: &str = "claude";
+
+    pub(crate) fn new(logins: &[crate::agents::ProviderLogin]) -> Self {
+        Self {
+            others: logins
+                .iter()
+                .filter(|login| login.kind().as_str() != Self::HELD)
+                .count(),
+            live: Default::default(),
+            most_live: Default::default(),
+            most_kinds_live: Default::default(),
+            started: Default::default(),
+            others_done: Default::default(),
+            others_finished_while_held: Default::default(),
+        }
+    }
+
+    pub(crate) fn probe(&self, login: &crate::agents::ProviderLogin) {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        let kind = login.kind().to_string();
+        {
+            let mut live = self.live.lock().unwrap();
+            let count = live.entry(kind.clone()).or_default();
+            *count += 1;
+            let mut most_live = self.most_live.lock().unwrap();
+            let most = most_live.entry(kind.clone()).or_default();
+            *most = (*most).max(*count);
+            let kinds_live = live.values().filter(|count| **count > 0).count();
+            self.most_kinds_live.fetch_max(kinds_live, Ordering::SeqCst);
+        }
+        let first_held = {
+            let mut started = self.started.lock().unwrap();
+            started.push(login.key());
+            kind == Self::HELD
+                && started
+                    .iter()
+                    .filter(|key| key.kind.as_str() == Self::HELD)
+                    .count()
+                    == 1
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        if first_held {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.others_done.load(Ordering::SeqCst) < self.others && Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.others_finished_while_held.store(
+                self.others_done.load(Ordering::SeqCst) == self.others,
+                Ordering::SeqCst,
+            );
+        }
+        *self.live.lock().unwrap().get_mut(&kind).unwrap() -= 1;
+        if kind != Self::HELD {
+            self.others_done.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Each kind ran one request at a time, in the list's order, at least two
+    /// kinds ran at once, and the other kinds finished while Claude's first
+    /// request held.
+    #[track_caller]
+    pub(crate) fn assert_queued(&self, logins: &[crate::agents::ProviderLogin]) {
+        let per_kind = |keys: Vec<crate::ids::LoginKey>| {
+            let mut kinds = std::collections::BTreeMap::<String, Vec<_>>::new();
+            for key in keys {
+                kinds.entry(key.kind.to_string()).or_default().push(key);
+            }
+            kinds
+        };
+        let once = per_kind(logins.iter().map(|login| login.key()).collect())
+            .into_keys()
+            .map(|kind| (kind, 1))
+            .collect();
+        assert_eq!(
+            (
+                self.most_live.lock().unwrap().clone(),
+                per_kind(self.started.lock().unwrap().clone()),
+                self.most_kinds_live
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    >= 2,
+                self.others_finished_while_held
+                    .load(std::sync::atomic::Ordering::SeqCst),
+            ),
+            (
+                once,
+                per_kind(logins.iter().map(|login| login.key()).collect()),
+                true,
+                true
+            ),
+            "(most in flight per kind, start order per kind, two or more kinds at once, \
+             others finished while one held)"
+        );
+    }
+}
