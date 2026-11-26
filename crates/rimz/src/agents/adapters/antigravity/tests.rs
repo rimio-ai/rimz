@@ -36,6 +36,24 @@ fn hook_payload() -> Value {
     )
 }
 #[test]
+fn deadline_context_reply_injects_one_system_message_step_on_pre_invocation() {
+    let (pre, other) =
+        crate::agents::testkit::deadline_context_replies("antigravity", "PreInvocation");
+    insta::assert_json_snapshot!(pre, @r#"
+    {
+      "injectSteps": [
+        {
+          "systemMessage": {
+            "systemMessage": "deadline context"
+          }
+        }
+      ]
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"{}");
+}
+
+#[test]
 fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
     let payload = hook_payload();
     assert_eq!(

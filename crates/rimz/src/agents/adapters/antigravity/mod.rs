@@ -4,7 +4,9 @@
 //!
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
-//! `PostToolUse` matchers recover tool phase after execution instead.
+//! `PostToolUse` matchers recover tool phase after execution instead. The
+//! one additive reply is a supervised child's deadline warning, injected on
+//! `PreInvocation` as a system message step.
 
 mod agent_file;
 mod folder_trust;
@@ -35,8 +37,8 @@ use serde_json::Value;
 use super::AgentHookClass;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
+    RemoteControlCapability, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, PROVIDER_REST_EVENT, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -205,7 +207,11 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        hook_context: None,
+        // The `PreInvocation` reply injects the rung as a system message the
+        // next model call reads; `PostToolUse` replies carry no context.
+        hook_context: Some(HookContextReply::InjectedSystemMessage {
+            event: "PreInvocation",
+        }),
         prompt_context: false,
         native_ask_ui: true,
         permission_before_auto_review: false,

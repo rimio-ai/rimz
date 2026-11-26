@@ -1262,6 +1262,12 @@ impl AgentDefinition {
             Some(HookContextReply::TopLevel { event, key }) if decoded.event_name() == event => {
                 (key.to_owned(), Value::from(text))
             }
+            Some(HookContextReply::InjectedSystemMessage { event })
+                if decoded.event_name() == event =>
+            {
+                let step = serde_json::json!({"systemMessage": {"systemMessage": text}});
+                ("injectSteps".to_owned(), Value::Array(vec![step]))
+            }
             _ => return false,
         };
         decoded.merge_reply_object([field]);
@@ -1795,7 +1801,7 @@ impl LifecycleAnnotations {
     }
 }
 
-/// How a native post-tool hook reply carries additive model context.
+/// How a native hook reply carries additive model context.
 #[derive(Clone, Copy, Debug)]
 pub enum HookContextReply {
     /// `PostToolUse` nests the text under `hookSpecificOutput.additionalContext`,
@@ -1806,6 +1812,9 @@ pub enum HookContextReply {
         event: &'static str,
         key: &'static str,
     },
+    /// The pre-model-call `event` injects the text as one `systemMessage` step
+    /// under `injectSteps`, which the next model call reads.
+    InjectedSystemMessage { event: &'static str },
 }
 
 impl HookContextReply {
@@ -1813,8 +1822,15 @@ impl HookContextReply {
     pub fn event(self) -> &'static str {
         match self {
             Self::HookSpecificOutput { .. } => "PostToolUse",
-            Self::TopLevel { event, .. } => event,
+            Self::TopLevel { event, .. } | Self::InjectedSystemMessage { event } => event,
         }
+    }
+
+    /// Whether the hook carries the stop rung too. An injected system message
+    /// does not: Claude models under Antigravity read it and ignore it (agy 1.5.17
+    /// capture), so the host keeps its interrupt at the deadline.
+    pub fn carries_stop(self) -> bool {
+        !matches!(self, Self::InjectedSystemMessage { .. })
     }
 }
 
@@ -1825,7 +1841,7 @@ impl HookContextReply {
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// The reply shape when the agent accepts additive model context in a
-    /// native post-tool hook reply; `None` when it has no such channel.
+    /// native hook reply; `None` when it has no such channel.
     pub hook_context: Option<HookContextReply>,
     /// Accepts additive model context in a native prompt-submit hook reply.
     pub prompt_context: bool,
