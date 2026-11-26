@@ -311,14 +311,13 @@ pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
 /// record that awaits a resumed provider (`awaits_resume`: a follow-up carrying `register_by`, or
 /// a compaction command that can outrank one) to a kind whose resume reports its start waits until
 /// the provider reports, bounded by any follow-up's deadline in reconciliation; any other record,
-/// and any record to another non-lazy kind, waits one delivery window from the resume stamp.
+/// and any record to another kind, lazily registering kinds included, waits one delivery window
+/// from the resume stamp.
 fn provider_start_pending(agent: &AgentState, awaits_resume: bool, now: Timestamp) -> bool {
     (awaits_resume && agent.resumed_provider_unreported())
-        || agent.resumed_at.is_some_and(|resumed_at| {
-            now < resumed_at + MessageBody::Prompt.delivery_window()
-                && !crate::agents::spec_by_kind(agent.kind.as_str())
-                    .is_some_and(|definition| definition.capabilities.registers_lazily)
-        })
+        || agent
+            .resumed_at
+            .is_some_and(|resumed_at| now < resumed_at + MessageBody::Prompt.delivery_window())
 }
 
 /// `send_now` without its leading `queue`, when a chord follows it: the keys of a forced steer

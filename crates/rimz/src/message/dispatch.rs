@@ -193,8 +193,6 @@ pub enum ResumeStart {
     /// The kind reports its provider's session start, so delivery waits for it until
     /// `register_by`.
     Reported,
-    /// The kind registers lazily, so the follow-up is typed once the resumed pane is up.
-    Lazy,
     /// The follow-up is typed one delivery window after the resumed pane is up, or once its
     /// provider reports sooner.
     Timed,
@@ -207,8 +205,6 @@ impl ResumeStart {
         };
         if definition.capabilities.reports_start_on_resume {
             Self::Reported
-        } else if definition.capabilities.registers_lazily {
-            Self::Lazy
         } else {
             Self::Timed
         }

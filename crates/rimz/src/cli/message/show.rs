@@ -687,7 +687,7 @@ fn fifo_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
 
 fn gate_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
     let detail = if check.gate.open && check.gate.provider_start_pending {
-        "waiting for provider registration".to_owned()
+        "waiting for the resumed provider to start or the provider-start hold to end".to_owned()
     } else if check.gate.resume_recovered == Some(false) {
         "waiting for provider recovery".to_owned()
     } else if check.gate.open {
@@ -854,7 +854,7 @@ pub(super) fn render_verdict(
             format!("waiting: {target} is paused; resume gate opens after provider recovery")
         }
         deliver::DeliveryVerdict::ProviderStarting => {
-            format!("waiting: {target} is resuming; delivers when its provider registers")
+            format!("waiting: {target} is resuming; delivers once its provider starts or the provider-start hold ends")
         }
         deliver::DeliveryVerdict::AskWaiting => {
             format!("waiting: {target} is waiting on input in its pane")
@@ -1164,7 +1164,7 @@ mod tests {
         let id = MessageId::parse("msg_0000000000000001").unwrap();
         assert_eq!(
             render_verdict(&verdict, "@otter", None, Timestamp::UNIX_EPOCH),
-            "waiting: @otter is resuming; delivers when its provider registers"
+            "waiting: @otter is resuming; delivers once its provider starts or the provider-start hold ends"
         );
         assert_eq!(
             delivery_action_hint(&verdict, &id, "@otter"),

@@ -12514,9 +12514,16 @@ fn sweep_holds_unconfirmed_prompt_while_resumed_codex_starts() {
     }
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
     let trace = env.project_root.join("starting-reconcile.log");
+    // The send waits out the provider-start hold's short window, so it writes the pane at once.
+    let start_hold = Duration::from_millis(500);
+    std::thread::sleep(start_hold);
     let output = run_success(
         traced_rimz(&env, &trace)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env(
+                "RIMZ_MESSAGE_DELIVERY_WINDOW_MS",
+                start_hold.as_millis().to_string(),
+            )
             .args(["message", "@codex", "--", "start once"]),
         "send to starting Codex",
     );

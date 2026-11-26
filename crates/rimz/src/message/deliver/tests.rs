@@ -515,11 +515,17 @@ fn resume_follow_up_waits_for_the_provider_session_under_every_unforced_policy()
 #[test]
 fn resume_follow_up_to_a_kind_whose_resume_reports_no_start_keeps_the_timed_hold() {
     let now = Timestamp::from_second(10_000).unwrap();
-    let mut receiver = agent("session", AgentStatus::Idle);
-    receiver.kind = crate::ids::AgentKind::new_unchecked("cursor");
-    let mut candidate = message(&receiver, 1, "hello");
-    candidate.register_by = Some(now + jiff::SignedDuration::from_secs(60));
-    for (resumed_ago, boundary_waits) in [(0, true), (3_600, false)] {
+    // Codex registers lazily, at its first prompt; Cursor reports nothing on resume.
+    for (kind, resumed_ago, boundary_waits) in [
+        ("cursor", 0, true),
+        ("cursor", 3_600, false),
+        ("codex", 0, true),
+        ("codex", 3_600, false),
+    ] {
+        let mut receiver = agent("session", AgentStatus::Idle);
+        receiver.kind = crate::ids::AgentKind::new_unchecked(kind);
+        let mut candidate = message(&receiver, 1, "hello");
+        candidate.register_by = Some(now + jiff::SignedDuration::from_secs(60));
         receiver.resumed_at = Some(now - jiff::SignedDuration::from_secs(resumed_ago));
         let live = snapshot(receiver.clone(), true, now);
         let check = explain(&candidate, std::slice::from_ref(&candidate), &live, now);

@@ -441,6 +441,18 @@ fn resumed_provider_parks_until_registration_or_the_window() {
     };
     assert_eq!(
         dispatch_decision(&lazy, &[], &target, &mode, now()),
+        DispatchDecision::Parked {
+            reason: Some(ParkReason::ProviderStarting)
+        }
+    );
+    assert_eq!(
+        dispatch_decision(
+            &lazy,
+            &[],
+            &target,
+            &mode,
+            now() + MessageBody::Prompt.delivery_window()
+        ),
         DispatchDecision::Live
     );
 }
@@ -974,7 +986,7 @@ fn conditions_record_the_watched_agents_launch() {
 fn resume_start_follows_what_the_kind_reports_on_resume() {
     let start = |kind| ResumeStart::of(&AgentKind::new_unchecked(kind));
     assert_eq!(start("claude"), ResumeStart::Reported);
-    assert_eq!(start("codex"), ResumeStart::Lazy);
+    assert_eq!(start("codex"), ResumeStart::Timed);
     assert_eq!(start("cursor"), ResumeStart::Timed);
 }
 

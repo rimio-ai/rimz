@@ -4138,8 +4138,30 @@ fn resumed_lazy_leader_gets_its_resume_prompt_alone() {
     // The cohort resume queues the positional prompt to the leader before placing its pane.
     let prompt = fixture.return_prompt("codex", &session, &["coder"]);
     fixture.live_panes_running("codex", &["terminal_3"]);
-    let _wrapper = fixture.spawn_resume("codex", "coder", &session);
+    // A lazy leader sends no registration, so the provider-start hold ends with its window and
+    // the host sweep, played here, types the prompt.
+    let window = ("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", Path::new("500"));
+    let _wrapper = fixture.spawn_resume_with_env("codex", "coder", &session, &[window]);
     fixture.wrapper_log_until("resume: wake settled");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = || {
+        let live = fixture.env.store().list_messages().unwrap();
+        live.into_iter()
+            .find(|message| message.message_id == prompt.message_id)
+            .map(|message| message.status)
+    };
+    while status() == Some(MessageStatus::Queued) {
+        assert!(Instant::now() < deadline, "the held prompt was never typed");
+        success(
+            fixture
+                .command()
+                .env(window.0, window.1)
+                .args(["message", "sweep"])
+                .output()
+                .unwrap(),
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     wait_for_text_then_key(&fixture.trace, "say hi", "9");
     fixture.feed_from(
         "codex",
