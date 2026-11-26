@@ -59,6 +59,10 @@ fn review_defaults_and_maps_modes_and_marks_dropping_codex_ask_widened() {
 fn widening_compares_effective_grants_in_both_directions() {
     use Isolation::{Host, Sandbox, Scoped};
     use PermissionMode::{Ask, Auto};
+    let on_codex = |mut profile: Profile| {
+        profile.agent = "codex".to_owned();
+        profile
+    };
     let cases = [
         (
             profile(Some(Ask), None, None, &[]),
@@ -105,6 +109,37 @@ fn widening_compares_effective_grants_in_both_directions() {
             profile(None, None, Some(&["Bash(cargo *)"]), &[]),
             Host,
         ),
+        // Claude's `default` preset holds every native Agent type, and on Codex it is a name.
+        (
+            profile(None, None, Some(&["default", "Agent(Explore)"]), &[]),
+            profile(None, None, Some(&["default"]), &[]),
+            Host,
+        ),
+        (
+            profile(
+                None,
+                None,
+                Some(&["default", "Skill", "Agent(Explore)"]),
+                &[],
+            ),
+            profile(None, None, Some(&["default", "Skill"]), &[]),
+            Host,
+        ),
+        (
+            profile(None, None, Some(&["Read"]), &[]),
+            profile(None, None, Some(&["Read", "default"]), &[]),
+            Host,
+        ),
+        (
+            on_codex(profile(
+                None,
+                None,
+                Some(&["default", "Agent(Explore)"]),
+                &[],
+            )),
+            on_codex(profile(None, None, Some(&["default"]), &[])),
+            Host,
+        ),
         (
             profile(None, None, None, &[]),
             profile(None, None, None, &["Bash(git *)"]),
@@ -134,6 +169,10 @@ fn widening_compares_effective_grants_in_both_directions() {
         (vec!["tools"], vec![]),
         (vec!["tools"], vec![]),
         (vec![], vec![]),
+        (vec!["tools"], vec![]),
+        (vec!["tools"], vec![]),
+        (vec!["tools"], vec![]),
+        (vec![], vec!["tools"]),
         (vec!["allowed-tools"], vec![]),
         (vec!["allowed-tools"], vec!["allowed-tools"]),
     ];

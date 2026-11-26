@@ -77,9 +77,9 @@ pub struct McpLaunch<'a> {
     pub granted: bool,
     /// The provider login environment, where the account's config is read.
     pub login_env: &'a BTreeMap<String, String>,
-    /// The launch argv's first `--tools` is the list RimZ rendered from the profile; a later
-    /// one, or any without this, is the user's own.
-    pub rendered_tools: bool,
+    /// The bases of the profile's tools list, which the launch argv's first `--tools` renders; a
+    /// later `--tools`, or any without this, is the user's own.
+    pub rendered_tools: Option<&'a [String]>,
     /// The profile turns the provider's code mode on.
     pub code_mode: bool,
 }

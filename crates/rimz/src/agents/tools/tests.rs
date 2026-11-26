@@ -8,12 +8,13 @@ fn tools(entries: &[&str]) -> ToolSet {
 fn skills_require_a_supplied_applied_tools_list_without_skill() {
     let without_skill = tools(&["Read", "Bash"]);
     let with_skill = tools(&["Skill", "Read"]);
+    let preset = tools(&["Read", "Default"]);
     let actual: Vec<_> = ["claude", "codex", "pi", "opencode", "omp"]
         .into_iter()
         .map(|kind| {
             (
                 kind,
-                [None, Some(&without_skill), Some(&with_skill)]
+                [None, Some(&without_skill), Some(&with_skill), Some(&preset)]
                     .map(|tools| skills_lack_skill_tool(kind, tools)),
             )
         })
@@ -21,11 +22,11 @@ fn skills_require_a_supplied_applied_tools_list_without_skill() {
     assert_eq!(
         actual,
         [
-            ("claude", [false, true, false]),
-            ("codex", [false, true, false]),
-            ("pi", [false, true, false]),
-            ("opencode", [false, false, false]),
-            ("omp", [false, false, false]),
+            ("claude", [false, true, false, false]),
+            ("codex", [false, true, false, true]),
+            ("pi", [false, true, false, true]),
+            ("opencode", [false, false, false, false]),
+            ("omp", [false, false, false, false]),
         ]
     );
 }
@@ -123,7 +124,7 @@ fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
         &'static [&'static str],
         &'static [&'static str],
     );
-    let cases: [Case; 8] = [
+    let cases: [Case; 14] = [
         (
             "claude",
             Some(read_bash),
@@ -142,8 +143,63 @@ fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
             &["--tools", "REPL,Poll"],
             &["--tools", ""],
         ),
+        // Claude's preset already holds what code mode adds: alone it renders as written,
+        // and beside other names as the one spelling Claude reads inside a list.
+        (
+            "claude",
+            Some(&["Default"]),
+            &["--tools", "Default"],
+            &["--tools", "Default"],
+        ),
+        (
+            "claude",
+            Some(&["default", "Agent"]),
+            &["--tools", "preset:default,Agent"],
+            &["--tools", "preset:default,Agent"],
+        ),
+        (
+            "claude",
+            Some(&["Agent(Explore)", "Default", "Read"]),
+            &[
+                "--disallowedTools",
+                "Agent(Plan)",
+                "Agent(general-purpose)",
+                "Agent(statusline-setup)",
+                "Agent(fork)",
+                "--tools",
+                "preset:default,Agent,Read",
+            ],
+            &[
+                "--disallowedTools",
+                "Agent(Plan)",
+                "Agent(general-purpose)",
+                "Agent(statusline-setup)",
+                "Agent(fork)",
+                "--tools",
+                "preset:default,Agent,Read",
+            ],
+        ),
+        // The preset written twice, in two cases, is still the one preset.
+        (
+            "claude",
+            Some(&["default", "Default"]),
+            &["--tools", "default"],
+            &["--tools", "default"],
+        ),
+        (
+            "claude",
+            Some(&["default", "Default", "Agent"]),
+            &["--tools", "preset:default,Agent"],
+            &["--tools", "preset:default,Agent"],
+        ),
         ("claude", None, &[], &[]),
         ("pi", None, &["--tools", "+codemode"], &[]),
+        (
+            "pi",
+            Some(&["default"]),
+            &["--tools", "codemode", "--no-skills"],
+            &["--no-tools", "--no-skills"],
+        ),
         (
             "pi",
             Some(read_bash),

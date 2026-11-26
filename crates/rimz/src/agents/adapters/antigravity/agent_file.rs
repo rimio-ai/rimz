@@ -295,7 +295,7 @@ mod tests {
                     mcps: mcps.as_deref(),
                     granted: false,
                     login_env: &env,
-                    rendered_tools: false,
+                    rendered_tools: None,
                     code_mode: false,
                 },
             })

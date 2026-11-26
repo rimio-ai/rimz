@@ -547,8 +547,12 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &["claude-"],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
+        tool_preset: Some(CLAUDE_TOOL_PRESET),
         prompt_appends: false,
     };
+
+/// The `--tools` entry Claude reads as its whole built-in tool set.
+const CLAUDE_TOOL_PRESET: &str = "default";
 
 const CLAUDE_AGENT_TYPES: &[&str] = &[
     "Explore",
@@ -623,24 +627,23 @@ fn render_tool_rules(
     Ok(())
 }
 
-/// Adds `ToolSearch` once to the first `--tools` list: without it Claude turns tool search
-/// off and loads every MCP tool up front, whatever load mode the server marks.
+/// Adds `ToolSearch` once to the first `--tools` list, the one RimZ rendered from `bases`:
+/// without it Claude turns tool search off and loads every MCP tool up front, whatever load mode
+/// the server marks.
 ///
-/// A list that is Claude's `default` preset alone stays as written: Claude expands the preset
-/// only when it is the whole value, so `default,ToolSearch` would leave the agent with no
-/// built-in tool, and the preset is the set a launch without `--tools` gets, tool search with it.
-fn keep_tool_search(args: &mut [String]) {
+/// A list that already grants it stays as written, and so does one holding Claude's `default`
+/// preset, which holds `ToolSearch`: Claude reads a bare `default` only as the whole value, so
+/// `default,ToolSearch` would leave the agent with no built-in tool.
+fn keep_tool_search(args: &mut [String], bases: &[String]) {
+    if crate::agents::grants_tool(CLAUDE_DESCRIPTOR.kind, bases, "ToolSearch") {
+        return;
+    }
     let Some(at) = args.iter().position(|arg| arg == "--tools") else {
         return;
     };
     let Some(list) = args.get_mut(at + 1) else {
         return;
     };
-    if list.trim().eq_ignore_ascii_case("default")
-        || list.split(',').any(|name| name == "ToolSearch")
-    {
-        return;
-    }
     if !list.is_empty() {
         list.push(',');
     }
@@ -669,12 +672,25 @@ fn render_definition_tools(
         args.extend(denied.into_iter().map(|name| format!("Agent({name})")));
     }
     let mut names = tools.bases().to_vec();
-    names.extend(
-        extra
-            .iter()
-            .filter(|name| !tools.has(name))
-            .map(|name| (*name).to_owned()),
-    );
+    match crate::agents::tool_preset(CLAUDE_DESCRIPTOR.kind, tools.bases()) {
+        // Claude reads its preset bare only as the whole value, and inside a list only as
+        // `preset:default`; either holds every tool `extra` names, and the preset written in
+        // several cases is still one entry.
+        Some(preset) => {
+            names.retain(|name| !name.eq_ignore_ascii_case(CLAUDE_TOOL_PRESET));
+            if names.is_empty() {
+                names.push(preset.to_owned());
+            } else {
+                names.insert(0, format!("preset:{CLAUDE_TOOL_PRESET}"));
+            }
+        }
+        None => names.extend(
+            extra
+                .iter()
+                .filter(|name| !tools.has(name))
+                .map(|name| (*name).to_owned()),
+        ),
+    }
     args.extend(["--tools".to_owned(), names.join(",")]);
     Ok(args)
 }
@@ -976,8 +992,8 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             )?;
         }
         if let Some(server) = &launch.server {
-            if launch.rendered_tools {
-                keep_tool_search(extra_args);
+            if let Some(bases) = launch.rendered_tools {
+                keep_tool_search(extra_args, bases);
             }
             let mut args = server.args.clone();
             args.extend(launch.capability_mark_args());

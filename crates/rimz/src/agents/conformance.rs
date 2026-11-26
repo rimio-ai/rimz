@@ -1022,7 +1022,7 @@ fn agent_file_matcher_comes_with_an_agent_file() {
             mcps: None,
             granted: false,
             login_env: &env,
-            rendered_tools: false,
+            rendered_tools: None,
             code_mode: false,
         },
     };
@@ -1066,7 +1066,7 @@ fn agent_file_kinds_write_a_limiting_mcps_list() {
                     mcps,
                     granted: false,
                     login_env: &env,
-                    rendered_tools: false,
+                    rendered_tools: None,
                     code_mode: false,
                 },
             })

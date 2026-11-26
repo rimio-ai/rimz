@@ -1327,7 +1327,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         mcps: mcps.as_deref(),
                         granted: request.rimz_capabilities.is_some(),
                         login_env: &env,
-                        rendered_tools: request.tools.is_some(),
+                        rendered_tools: request.tools.as_deref(),
                         code_mode: request.identity.params.code_mode == Some(true),
                     },
                 })

@@ -170,13 +170,12 @@ pub fn allowed_specs(
         subagent_profiles,
         true,
         |profile| {
-            // A Markdown definition listing the native Agent tool refuses any `subagents:`
-            // list from lower layers (override or final kind base).
+            // A Markdown definition listing the native Agent tool, its kind's preset included,
+            // refuses any `subagents:` list from lower layers (override or final kind base).
             if profile.definition.is_some()
-                && profile
-                    .tools
-                    .as_ref()
-                    .is_some_and(|tools| tools.has("Agent"))
+                && profile.tools.as_ref().is_some_and(|tools| {
+                    crate::agents::grants_tool(&profile.agent, tools.bases(), "Agent")
+                })
             {
                 Some(profile.subagents.clone())
             } else {
