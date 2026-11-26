@@ -66,13 +66,7 @@ fn recorded_resume_keeps_the_original_loop_section_through_overrides() {
 fn request(overrides: ResumeOverrides<'_>) -> ExecRequest {
     let mut saved = saved();
     saved.tier = Some(tier_stamp("opus"));
-    let mut planner = routed_profile(None);
-    planner
-        .definition_renders
-        .as_mut()
-        .unwrap()
-        .renders
-        .insert("claude".into(), profile("claude"));
+    let planner = routed_profile();
     let (plan, _) = single(
         &saved,
         &profiles("planner", planner),
@@ -304,16 +298,7 @@ fn resume_tier_on_model_clients_uses_the_exact_row_on_the_engine() {
     let tiers = crate::config::tiers::TierConfig::default();
     let actual: Vec<_> = ["pi", "opencode"]
         .map(|kind| {
-            let mut planner = profile(kind);
-            planner.definition_renders = Some(crate::config::tiers::DefinitionRenders {
-                preference: crate::config::tiers::TierPreference {
-                    family: Some(kind.into()),
-                    model: None,
-                },
-                renders: BTreeMap::from([(kind.into(), profile(kind))]),
-                exclusions: BTreeMap::new(),
-                effort: None,
-            });
+            let planner = profile(kind);
             let saved = AgentState {
                 profile: Some("planner".into()),
                 ..agent(kind, "saved", "/repo", 0)
@@ -373,13 +358,7 @@ fn recorded_tier_override_takes_the_kind_base_effort_a_fresh_tier_launch_takes()
     let tiers = crate::config::tiers::TierConfig::default();
     let mut saved = saved();
     saved.tier = Some(tier_stamp("opus"));
-    let mut planner = routed_profile(None);
-    planner
-        .definition_renders
-        .as_mut()
-        .unwrap()
-        .renders
-        .insert("claude".into(), profile("claude"));
+    let planner = routed_profile();
     let mut profiles = profiles("planner", planner);
     let mut base = profile("claude");
     base.kind_base = true;
@@ -605,7 +584,7 @@ fn unavailable_tier_refuses_without_warning_or_launch_facts() {
     let tiers = toml::from_str("principal = ['gpt-6-sol']").unwrap();
     let (plan, facts) = single(
         &saved(),
-        &profiles("planner", routed_profile(None)),
+        &profiles("planner", routed_profile()),
         SingleResumeOptions {
             overrides: ResumeOverrides {
                 selection: crate::config::Selection::new(&tiers)

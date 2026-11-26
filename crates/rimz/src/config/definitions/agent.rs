@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
 use crate::config::engine::{self, Engine, keeps_inherited_model};
-use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
+use crate::config::tiers::{ModelTier, TierPreference, TierProvenance};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
 
@@ -140,6 +140,9 @@ struct DefinitionSourceInner {
     seat: Option<SeatInfo>,
     is_project: bool,
     context: Arc<LoadContext>,
+    /// The detail of each subagent that failed in the trusted project this definition launches
+    /// in, which a build that depends on one names as its cause.
+    failed_subagents: Arc<BTreeMap<String, String>>,
 }
 
 enum CraftState<'a> {
@@ -266,8 +269,13 @@ impl DefinitionSource {
     }
 
     /// This definition with its on-demand builds checking against `context`, the agents context
-    /// of the trusted project it launches in.
-    pub(super) fn in_project(&self, context: &Arc<LoadContext>) -> Self {
+    /// of the trusted project it launches in, where `failed_subagents` holds the detail of each
+    /// subagent that failed.
+    pub(super) fn in_project(
+        &self,
+        context: &Arc<LoadContext>,
+        failed_subagents: &Arc<BTreeMap<String, String>>,
+    ) -> Self {
         let inner = &self.inner;
         Self {
             inner: Arc::new(DefinitionSourceInner {
@@ -288,6 +296,7 @@ impl DefinitionSource {
                 seat: inner.seat.clone(),
                 is_project: inner.is_project,
                 context: Arc::clone(context),
+                failed_subagents: Arc::clone(failed_subagents),
             }),
         }
     }
@@ -308,16 +317,38 @@ impl DefinitionSource {
         &self.inner.context.shared.tiers
     }
 
-    /// Builds this definition again under X (`base`), a kind and a model. Nothing is cached:
-    /// each call builds.
+    /// The entries of its tier, and of the tiers above it, that this definition cannot run, each
+    /// with the refusal of a build under that entry's kind: none for a definition with no tier.
+    pub fn tier_exclusions(&self) -> Vec<engine::TierExclusion> {
+        let Some(tier) = self.written_tier() else {
+            return Vec::new();
+        };
+        let mut build = |kind: &str, _: Option<&'static agents::Variant>, model: Option<&str>| {
+            self.build(None, kind, model)
+        };
+        engine::tier_exclusions(
+            self.tiers(),
+            tier,
+            self.preference(),
+            (&self.inner.natural_kind, self.inner.natural_variant),
+            &mut engine::Probe {
+                build: &mut build,
+                unavailable: &mut |_, _| None,
+            },
+        )
+    }
+
+    /// Builds this definition again under X (`base`) on the kind the engine already chose, with a
+    /// model. Nothing is cached: each call builds.
     pub(crate) fn build(
         &self,
         base: Option<BuildBase<'_>>,
-        target_kind: Option<&str>,
+        target_kind: &str,
         model: Option<&str>,
     ) -> Result<Profile, DefinitionErr> {
         self.inner
             .build_with_craft(base, target_kind, model, &mut CraftState::Rendered, true)
+            .map_err(|error| self.inner.name_failed_subagent(error))
     }
 }
 
@@ -334,6 +365,28 @@ fn tiered((engine, mut render): (Engine, Profile), effort: Option<&str>) -> Prof
 }
 
 impl DefinitionSourceInner {
+    /// `error` with the detail of the failed project subagent it depends on, when it does.
+    fn name_failed_subagent(&self, error: DefinitionErr) -> DefinitionErr {
+        let DefinitionCause::DependsOnFailed {
+            name,
+            subagent: true,
+        } = &error.cause
+        else {
+            return error;
+        };
+        let Some(detail) = self.failed_subagents.get(name) else {
+            return error;
+        };
+        DefinitionErr {
+            message: format!(
+                "{}: {}\ncaused by: {detail}",
+                error.path.display(),
+                error.message
+            ),
+            ..error
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "constructs the retained source for one rebuilt profile row"
@@ -379,6 +432,7 @@ impl DefinitionSourceInner {
                 seat: self.seat.clone(),
                 is_project: self.is_project || x_def.is_some_and(|x| x.is_project),
                 context,
+                failed_subagents: Arc::clone(&self.failed_subagents),
             }),
         }
     }
@@ -386,7 +440,7 @@ impl DefinitionSourceInner {
     fn build_with_craft(
         &self,
         base: Option<BuildBase<'_>>,
-        target_kind: Option<&str>,
+        target_kind: &str,
         model: Option<&str>,
         craft: &mut CraftState<'_>,
         attach_definition: bool,
@@ -542,121 +596,42 @@ impl DefinitionSourceInner {
                 )
             };
 
-        let (mut built, mut pre_base_fm) = if target_kind.is_none()
-            && model.is_none()
-            && let Some(tier_str) = fm.tier.as_deref()
-        {
-            let tier: ModelTier =
-                tier_str
-                    .parse()
-                    .map_err(|error: crate::config::tiers::TierError| {
-                        DefinitionErr::new(&self.path, error.to_string())
-                    })?;
-            let mut build = |kind: &str, variant, candidate_model: Option<&str>| {
-                let mut candidate_fm = fm.clone();
-                candidate_fm.model = candidate_model.map(str::to_owned);
-                keeps_own_subagents(&mut candidate_fm, kind);
-                finish_profile(
-                    &self.context,
-                    &self.path,
-                    &self.name,
-                    self.namespace,
-                    self.seat.as_ref(),
-                    kind,
-                    variant,
-                    false,
-                    self.is_project,
-                    &subagent_validator,
-                    candidate_fm,
-                    craft_sources.clone(),
-                    system_prompt_file.clone(),
-                    args_for_kind(&merged_args, kind),
-                    craft,
-                )
-            };
-            let picked = engine::walk_tier(
-                &self.context.shared.tiers,
-                tier,
-                &effective_preference,
-                &effective_kind,
-                effective_variant,
-                &mut engine::Probe {
-                    build: &mut build,
-                    unavailable: &mut |_, _| None,
-                },
-            )
-            .map_err(|error| error.into_definition_err(&self.path))?;
-            (tiered(picked, fm.effort.as_deref()), fm)
-        } else {
-            let (kind, variant) = if let Some(raw_target) = target_kind {
-                let target_rt = agents::find_runtime(raw_target);
-                let kind = target_rt.map_or(raw_target, |rt| rt.kind());
-                let variant = target_rt
-                    .and_then(|rt| rt.variant)
-                    .or_else(|| engine::variant(kind, &effective_kind, effective_variant));
-                if model.is_none() {
-                    let from_kind = if base_writes_engine {
-                        effective_kind.as_str()
-                    } else {
-                        self.natural_kind.as_str()
-                    };
-                    if let Some(inherited) = fm.model.as_deref()
-                        && !keeps_inherited_model(from_kind, kind, inherited)
-                    {
-                        fm.model = None;
-                    }
-                }
-                (kind, variant)
-            } else if let Some(explicit_model) = model {
-                if has_base {
-                    let kind = if !effective_kind.is_empty() {
-                        effective_kind.as_str()
-                    } else {
-                        agents::definition_model_kind(explicit_model).unwrap_or("")
-                    };
-                    (
-                        kind,
-                        engine::variant(kind, &effective_kind, effective_variant),
-                    )
-                } else {
-                    let kind = engine::model_moves_to(Some(&self.natural_kind), explicit_model)
-                        .unwrap_or(&self.natural_kind);
-                    (
-                        kind,
-                        engine::variant(kind, &self.natural_kind, self.natural_variant),
-                    )
-                }
+        let target_rt = agents::find_runtime(target_kind);
+        let kind = target_rt.map_or(target_kind, |rt| rt.kind());
+        let variant = target_rt
+            .and_then(|rt| rt.variant)
+            .or_else(|| engine::variant(kind, &effective_kind, effective_variant));
+        if model.is_none() {
+            let from_kind = if base_writes_engine {
+                effective_kind.as_str()
             } else {
-                let kind = effective_kind.as_str();
-                if !base_writes_engine
-                    && let Some(inherited) = fm.model.as_deref()
-                    && !keeps_inherited_model(&self.natural_kind, kind, inherited)
-                {
-                    fm.model = None;
-                }
-                (kind, effective_variant)
+                self.natural_kind.as_str()
             };
-            keeps_own_subagents(&mut fm, kind);
-            let pre_base_fm = fm.clone();
-            let built = finish_profile(
-                &self.context,
-                &self.path,
-                &self.name,
-                self.namespace,
-                self.seat.as_ref(),
-                kind,
-                variant,
-                false,
-                self.is_project,
-                &subagent_validator,
-                fm,
-                craft_sources,
-                system_prompt_file.clone(),
-                args_for_kind(&merged_args, kind),
-                craft,
-            )?;
-            (built, pre_base_fm)
-        };
+            if let Some(inherited) = fm.model.as_deref()
+                && !keeps_inherited_model(from_kind, kind, inherited)
+            {
+                fm.model = None;
+            }
+        }
+        keeps_own_subagents(&mut fm, kind);
+        let mut pre_base_fm = fm.clone();
+        let mut built = finish_profile(
+            &self.context,
+            &self.path,
+            &self.name,
+            self.namespace,
+            self.seat.as_ref(),
+            kind,
+            variant,
+            false,
+            self.is_project,
+            &subagent_validator,
+            fm,
+            craft_sources,
+            system_prompt_file.clone(),
+            args_for_kind(&merged_args, kind),
+            craft,
+        )?;
         if keeps_own_subagents(&mut pre_base_fm, &built.agent) {
             retained_context = Arc::clone(&self.context);
         }
@@ -694,7 +669,6 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
         variant: None,
-        definition_renders: None,
         definition: None,
         kind_defaults: false,
         kind_base: false,
@@ -1301,6 +1275,7 @@ impl Resolver<'_> {
             family: runtime_kind.as_deref(),
         })
         .map_err(|error| error.into_definition_err(path))?;
+        let (written_kind, written_variant) = (profile.agent.clone(), profile.variant);
         (profile.agent, profile.variant) = (kind.to_owned(), variant);
         let tier = fm
             .tier
@@ -1349,67 +1324,47 @@ impl Resolver<'_> {
             seat: self.seat.clone(),
             is_project: self.is_project,
             context: Arc::clone(self.scope.context),
+            failed_subagents: Arc::default(),
         };
-        let mut renders = BTreeMap::new();
-        let mut exclusions = BTreeMap::new();
-        let candidates = self
-            .scope
-            .context
-            .shared
-            .tiers
-            .entries(ModelTier::Intern)
-            .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
-            .chain(
-                agents::known_kinds()
-                    .filter(|kind| agents::runs_other_providers_models(kind))
-                    .map(|kind| (kind, fm.model.as_deref())),
-            );
-        for (kind, model) in candidates {
-            if renders.contains_key(kind) || exclusions.contains_key(kind) {
-                continue;
-            }
-            match source.build_with_craft(None, Some(kind), model, &mut craft_state, false) {
-                Ok(rendered) => {
-                    renders.insert(kind.to_owned(), rendered);
-                }
-                Err(error) => {
-                    exclusions.insert(kind.to_owned(), error);
-                }
-            }
-        }
-        let mut profile = if let Some(tier) = tier {
-            // The probe covers native families and model-client engines; the walk skips exclusions.
-            let picked = engine::pick_tier(
-                &self.scope.context.shared.tiers,
-                tier,
-                &preference,
-                (&profile.agent, profile.variant),
-                renders
-                    .iter()
-                    .map(|(kind, render)| (kind.clone(), render))
-                    .collect(),
-                &exclusions,
-                &mut |_, _| None,
-            )
-            .map_err(|error| error.into_definition_err(path))?;
-            tiered((picked.0, picked.1.clone()), fm.effort.as_deref())
-        } else {
-            source
-                .build_with_craft(None, None, None, &mut craft_state, false)
-                .map_err(|mut error| {
-                    if !self.is_project
-                        && let Some(tier) = fm.model.as_deref().and_then(|model| {
-                            agents::definition_model_kind(model).and_then(|kind| {
-                                self.scope.context.shared.tiers.tier_for_model(kind, model)
-                            })
+        let lines = engine::Lines {
+            kind: &written_kind,
+            variant: written_variant,
+            model: fm.model.as_deref(),
+            family: runtime_kind.as_deref(),
+        };
+        let mut build = |kind: &str, _: Option<&'static agents::Variant>, model: Option<&str>| {
+            source.build_with_craft(None, kind, model, &mut craft_state, false)
+        };
+        // The probe covers native families and model-client engines; the walk skips refusals.
+        let chosen = engine::file(
+            &lines,
+            tier,
+            &preference,
+            &self.scope.context.shared.tiers,
+            &mut engine::Probe {
+                build: &mut build,
+                unavailable: &mut |_, _| None,
+            },
+        );
+        let mut profile = match chosen {
+            Ok(chosen) if tier.is_some() => tiered(chosen, fm.effort.as_deref()),
+            Ok((_, profile)) => profile,
+            Err(error) => {
+                let mut error = error.into_definition_err(path);
+                if tier.is_none()
+                    && !self.is_project
+                    && let Some(tier) = fm.model.as_deref().and_then(|model| {
+                        agents::definition_model_kind(model).and_then(|kind| {
+                            self.scope.context.shared.tiers.tier_for_model(kind, model)
                         })
-                    {
-                        error.message.push_str(&format!(
-                            "; use `tier: {tier}` to allow another model or family"
-                        ));
-                    }
-                    error
-                })?
+                    })
+                {
+                    error.message.push_str(&format!(
+                        "; use `tier: {tier}` to allow another model or family"
+                    ));
+                }
+                return Err(error);
+            }
         };
         if let Some(craft_text) = craft_state.rendered_source(path) {
             source.crafts.push(PromptLayer {
@@ -1424,19 +1379,7 @@ impl Resolver<'_> {
         let def_source = DefinitionSource {
             inner: Arc::new(source),
         };
-        for rendered in renders.values_mut() {
-            rendered.definition = Some(def_source.clone());
-        }
         profile.definition = Some(def_source);
-        profile.definition_renders = Some(DefinitionRenders {
-            preference: preference.clone(),
-            renders,
-            exclusions: exclusions
-                .into_iter()
-                .map(|(kind, error)| (kind, error.message))
-                .collect(),
-            effort: fm.effort,
-        });
         Ok(Resolved {
             frontmatter: unresolved,
             writers,

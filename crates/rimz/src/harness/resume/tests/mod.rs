@@ -428,24 +428,9 @@ fn codex_render(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "web_search=\"disabled\"")
 }
 
-fn routed_profile(effort: Option<&str>) -> Profile {
+fn routed_profile() -> Profile {
     Profile {
         variant: None,
-        definition_renders: Some(crate::config::tiers::DefinitionRenders {
-            preference: Default::default(),
-            renders: BTreeMap::from([(
-                "codex".to_owned(),
-                // As the loader renders a definition: its kind's defaults apply.
-                Profile {
-                    args: Some("--search".to_owned()),
-                    effort: Some("low".to_owned()),
-                    kind_defaults: true,
-                    ..profile("codex")
-                },
-            )]),
-            exclusions: Default::default(),
-            effort: effort.map(str::to_owned),
-        }),
         model: Some("opus".to_owned()),
         ..profile("claude")
     }
@@ -484,35 +469,13 @@ fn tiered_claude(name: &str, effort: Option<&str>) -> (tempfile::TempDir, Profil
     (root, loaded.agent_profiles)
 }
 
-/// A Claude definition as the loader builds it: `model` is its own, and a
-/// `render_model` adds the same-kind render the tier table's Intern row bakes.
-fn definition_profile(
-    model: Option<&str>,
-    render_model: Option<&str>,
-    args: Option<&str>,
-) -> Profile {
-    let base = Profile {
+/// A Claude definition as the loader builds it: `model` is its own.
+fn definition_profile(model: Option<&str>, args: Option<&str>) -> Profile {
+    Profile {
         kind_defaults: true,
         args: args.map(str::to_owned),
-        ..profile("claude")
-    };
-    Profile {
-        definition_renders: render_model.map(|render_model| {
-            crate::config::tiers::DefinitionRenders {
-                preference: Default::default(),
-                renders: BTreeMap::from([(
-                    "claude".to_owned(),
-                    Profile {
-                        model: Some(render_model.to_owned()),
-                        ..base.clone()
-                    },
-                )]),
-                exclusions: Default::default(),
-                effort: None,
-            }
-        }),
         model: model.map(str::to_owned),
-        ..base
+        ..profile("claude")
     }
 }
 

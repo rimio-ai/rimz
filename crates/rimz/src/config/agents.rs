@@ -466,7 +466,8 @@ pub enum LaunchPlacement {
 /// reader that looks a launch name up in the rows asks `failed` first, or resolves through
 /// `crates/rimz/src/harness/spec.rs`, so a failed name never resolves to a kind base, a variant, a
 /// command, or a namesake in another table. A machine kind base that failed to load is absent
-/// from the rows and present in `Self::failed_base`, so a launch moved onto its kind names why.
+/// from the rows and present in `Self::failed_base`, so a launch moved onto its kind names why;
+/// one that fails in this project keeps its row and is present there too.
 /// The built-in kind base of a kind with no home or pack base adds no row; a launch moved onto
 /// that kind runs on `Self::built_in_base`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -529,6 +530,13 @@ impl ProfilesConfig {
         failed: BTreeMap<String, super::definitions::DefinitionErr>,
     ) {
         self.2 = failed;
+    }
+
+    pub(in crate::config) fn add_failed_bases(
+        &mut self,
+        failed: BTreeMap<String, super::definitions::DefinitionErr>,
+    ) {
+        self.2.extend(failed);
     }
 
     /// The built-in kind base of `kind` as a row of this table, where no home or pack base
@@ -640,9 +648,6 @@ pub struct Profile {
     pub agent: String,
     #[serde(skip)]
     pub variant: Option<&'static crate::agents::Variant>,
-    /// Complete family renders for loaded definitions (Markdown and trusted project TOML).
-    #[serde(skip)]
-    pub definition_renders: Option<super::tiers::DefinitionRenders>,
     /// Retained definition-loader state for rebuilding this row under an override, kind, or model.
     #[serde(skip)]
     pub definition: Option<super::definitions::DefinitionSource>,
@@ -781,22 +786,6 @@ pub struct Profile {
     pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
-}
-
-impl Profile {
-    /// Rebuild a definition-backed row (Markdown definition, trusted project profile, or team
-    /// seat) under an optional `--agent` base, target kind, and model without rereading disk.
-    ///
-    /// Returns `None` for kind bases and rows without retained loader state.
-    pub fn build_under(
-        &self,
-        base: Option<super::definitions::BuildBase<'_>>,
-        target_kind: Option<&str>,
-        model: Option<&str>,
-    ) -> Option<std::result::Result<Self, super::definitions::DefinitionErr>> {
-        let source = self.definition.as_ref()?;
-        Some(source.build(base, target_kind, model))
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -396,7 +396,6 @@ fn profile(agent: &str) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         variant: None,
-        definition_renders: None,
         definition: None,
         kind_defaults: false,
         kind_base: false,

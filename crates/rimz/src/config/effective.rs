@@ -411,6 +411,7 @@ pub fn load_with_roots(
         }
     }
     profiles.set_failed_rows(failed_agents);
+    profiles.add_failed_bases(resolved.failed_machine_bases);
     let mut subagent_profiles = machine_subagent_profiles.clone();
     subagent_profiles.0.extend(resolved.subagents);
     for failed_name in resolved.failed_subagents.keys() {

@@ -204,16 +204,7 @@ fn resumed_tools_policy_reaches_the_exec_request() {
 
 #[test]
 fn recorded_posture_replays_verbatim_model_without_observed_switch() {
-    let mut profiles = profiles("planner", routed_profile(Some("medium")));
-    profiles
-        .0
-        .get_mut("planner")
-        .unwrap()
-        .definition_renders
-        .as_mut()
-        .unwrap()
-        .renders
-        .insert("claude".into(), profile("claude"));
+    let profiles = profiles("planner", routed_profile());
     let record = crate::agents::LaunchRecord {
         model: Some("opus[1m]".into()),
         effort: Some("high".into()),
@@ -690,7 +681,7 @@ fn modelless_posture_in(profiles: &ProfilesConfig, effort: Option<&str>) -> Resu
 
 #[test]
 fn record_without_model_relaunches_without_the_render_model() {
-    let launch = modelless_posture(definition_profile(None, Some("haiku"), None), Some("high"));
+    let launch = modelless_posture(definition_profile(None, None), Some("high"));
     assert_eq!(
         preset_values(&launch.args, crate::agents::PresetField::Model),
         [] as [String; 0]
@@ -700,20 +691,17 @@ fn record_without_model_relaunches_without_the_render_model() {
 
 #[test]
 fn record_without_model_ignores_a_model_the_profile_gained() {
-    for render in [None, Some("haiku")] {
-        let launch = modelless_posture(definition_profile(Some("sonnet"), render, None), None);
-        assert_eq!(
-            preset_values(&launch.args, crate::agents::PresetField::Model),
-            [] as [String; 0],
-            "render {render:?}"
-        );
-        assert!(launch.model.is_none());
-    }
+    let launch = modelless_posture(definition_profile(Some("sonnet"), None), None);
+    assert_eq!(
+        preset_values(&launch.args, crate::agents::PresetField::Model),
+        [] as [String; 0]
+    );
+    assert!(launch.model.is_none());
 }
 
 #[test]
 fn record_without_model_or_effort_takes_the_kind_default_effort() {
-    let launch = modelless_posture(definition_profile(None, Some("fable"), None), None);
+    let launch = modelless_posture(definition_profile(None, None), None);
     assert_eq!(
         preset_values(&launch.args, crate::agents::PresetField::Effort),
         ["xhigh"]
@@ -724,10 +712,7 @@ fn record_without_model_or_effort_takes_the_kind_default_effort() {
 
 #[test]
 fn record_without_model_keeps_a_raw_profile_model_argument() {
-    let launch = modelless_posture(
-        definition_profile(None, Some("haiku"), Some("--model sonnet")),
-        None,
-    );
+    let launch = modelless_posture(definition_profile(None, Some("--model sonnet")), None);
     assert_eq!(
         preset_values(&launch.args, crate::agents::PresetField::Model),
         ["sonnet"]
@@ -753,7 +738,7 @@ fn record_without_model_ignores_a_model_a_base_layer_gained() {
         );
         assert!(launch.model.is_none());
     }
-    let mut table = profiles("writer", definition_profile(None, Some("haiku"), None));
+    let mut table = profiles("writer", definition_profile(None, None));
     let mut kind_base = profile("claude");
     kind_base.kind_base = true;
     kind_base.model = Some("sonnet".into());
@@ -769,7 +754,7 @@ fn record_without_model_ignores_a_model_a_base_layer_gained() {
 #[test]
 fn stamp_without_record_ignores_a_model_the_role_gained() {
     let stamp = tier_stamp("sonnet");
-    let table = profiles("writer", definition_profile(None, Some("haiku"), None));
+    let table = profiles("writer", definition_profile(None, None));
     let role: crate::config::RoleBinding =
         toml::from_str("role = 'coder'\nprofile = 'writer'\nmodel = 'opus'").unwrap();
     let launch = resolve_posture_with_role(
@@ -801,7 +786,7 @@ fn stamp_without_record_ignores_a_model_the_role_gained() {
 #[test]
 fn record_without_model_ignores_a_model_the_role_gained() {
     let record = crate::agents::LaunchRecord::default();
-    let table = profiles("writer", definition_profile(None, None, None));
+    let table = profiles("writer", definition_profile(None, None));
     for (role, expected) in [
         ("model = 'opus'", vec![]),
         ("model = 'opus'\nargs = '--model sonnet'", vec!["sonnet"]),

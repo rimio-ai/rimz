@@ -273,8 +273,13 @@ mod pack_failures {
         }
         let launch = launch(&dir);
         healthy(&launch);
-        let renders = launch.profiles.0["pi"].definition_renders.as_ref().unwrap();
-        let exclusion = &renders.exclusions["codex"];
+        let exclusion = launch.profiles.0["good"]
+            .definition
+            .as_ref()
+            .unwrap()
+            .build(None, "codex", None)
+            .unwrap_err()
+            .message;
         assert!(exclusion.contains("pack conflict"), "{exclusion}");
         assert!(exclusion.contains("rimz packs exclude crew:codex --type agents"));
     }
@@ -3463,12 +3468,14 @@ fn scoped_mount_pin_preserves_definition_family_across_isolation_spellings() {
         );
         let profile = &config.agents.profiles.0["worker"];
         assert_eq!(profile.agent, family, "stamp={stamp}, pin={pinned}");
-        let renders = profile.definition_renders.as_ref().unwrap();
+        let exclusions = profile.definition.as_ref().unwrap().tier_exclusions();
+        let claude = exclusions
+            .iter()
+            .find(|exclusion| exclusion.kind == "claude");
         if pinned {
-            assert!(renders.renders.contains_key("claude"));
+            assert!(claude.is_none(), "{claude:?}");
         } else {
-            assert!(!renders.renders.contains_key("claude"));
-            let reason = &renders.exclusions["claude"];
+            let reason = &claude.unwrap().reason;
             assert!(
                 reason.contains("skill 'work'") && reason.contains("user-only"),
                 "{reason}"

@@ -3320,7 +3320,6 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 variant: None,
-                definition_renders: None,
                 definition: None,
                 kind_defaults: false,
                 kind_base: false,
@@ -3361,7 +3360,6 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 variant: None,
-                definition_renders: None,
                 definition: None,
                 kind_defaults: false,
                 kind_base: false,

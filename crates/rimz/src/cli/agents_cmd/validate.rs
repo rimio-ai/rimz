@@ -40,7 +40,7 @@ pub(super) fn run(json: bool) -> Result<()> {
                 )
             })
         }));
-    let mut warnings = warnings(&loaded, machine.agents.isolation, &machine.tiers);
+    let mut warnings = warnings(&loaded, machine.agents.isolation);
     warnings.extend(lsp_warnings(&loaded, &machine));
     warnings.extend(keep_warm_warnings(&loaded, &machine.harness));
     if json {
@@ -155,11 +155,7 @@ struct Warning {
     message: String,
 }
 
-fn warnings(
-    loaded: &LoadedDefinitions,
-    machine: Isolation,
-    tiers: &rimz::config::tiers::TierConfig,
-) -> Vec<Warning> {
+fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
     let mut warnings: Vec<_> = loaded
         .warnings
         .iter()
@@ -177,29 +173,23 @@ fn warnings(
         let Some(profile) = profiles.0.get(&row.name) else {
             continue;
         };
-        if let (Some(tier), Some(renders)) = (&profile.model_tier, &profile.definition_renders) {
-            let engine = renders
-                .preference
-                .family
-                .as_deref()
-                .filter(|kind| rimz::agents::runs_other_providers_models(kind));
-            for (family, reason) in &renders.exclusions {
-                if engine.is_some_and(|engine| engine != family) {
-                    continue;
-                }
-                if let Some((listed_tier, _, model)) =
-                    tiers.entries(tier.tier).find(|(_, kind, _)| {
-                        engine == Some(family.as_str()) || *kind == Some(family.as_str())
-                    })
-                {
-                    warnings.push(Warning {
-                        path: row.source.clone(),
-                        message: format!(
-                            "`{listed_tier}` lists {model} ({family}), which cannot run this definition: {reason}"
-                        ),
-                    });
-                }
-            }
+        for exclusion in profile
+            .definition
+            .iter()
+            .flat_map(|source| source.tier_exclusions())
+        {
+            let rimz::config::TierExclusion {
+                tier,
+                model,
+                kind,
+                reason,
+            } = exclusion;
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: format!(
+                    "`{tier}` lists {model} ({kind}), which cannot run this definition: {reason}"
+                ),
+            });
         }
         let Some(adapter) = rimz::agents::find_definition(&row.kind) else {
             continue;
