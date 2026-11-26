@@ -24,7 +24,8 @@ const SANDBOX_TMP: &str = "/tmp";
 const TMP_MOUNTS: [&str; 2] = [SANDBOX_TMP, "/var/tmp"];
 
 /// Where an agent sees its temp unit: at both temp roots in a scoped view, at its
-/// host path otherwise.
+/// host path otherwise. A path RimZ reports to a reader is never spelled through it, save a
+/// subagent's own result file in the texts that subagent reads.
 pub struct TmpView {
     unit_dir: PathBuf,
     sandboxed: bool,
