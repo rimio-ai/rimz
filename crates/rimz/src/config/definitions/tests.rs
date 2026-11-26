@@ -8611,6 +8611,28 @@ fn a_broken_recorded_pack_keeps_every_kind_off_the_built_in_base() {
 }
 
 #[test]
+fn a_broken_recorded_pack_leaves_no_kind_listed_as_on_the_built_in_base() {
+    let home = tempfile::tempdir().unwrap();
+    definition(home.path(), "agents/worker.md", "agent: claude", "Craft.");
+    let pack = linked_pack(home.path(), "crew");
+    write(pack.path(), "rimz-packs.toml", "[[pack]\n");
+    let loaded = load(
+        home.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(crate::config::AutoCompactDefault::BuiltIn),
+    );
+    assert!(!loaded.errors.is_empty());
+    assert!(
+        loaded.built_in_base_kinds().is_empty(),
+        "{:?}",
+        loaded.built_in_base_kinds()
+    );
+}
+
+#[test]
 fn an_agent_override_from_a_kind_base_onto_a_kind_on_the_built_in_base_takes_that_base() {
     let root = tempfile::tempdir().unwrap();
     definition(
