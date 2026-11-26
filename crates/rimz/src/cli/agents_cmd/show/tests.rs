@@ -30,7 +30,7 @@ fn raised_waiting_activity_shows_the_question_instead_of_the_old_task() {
         opened_at: Some(jiff::Timestamp::UNIX_EPOCH),
         raised_by: None,
         text: Some("Which deployment?".into()),
-        options: vec![],
+        brief: None,
     });
     let mut pane = rimz::pane::PaneRef::from_id(PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
     pane.command = Some("codex".into());

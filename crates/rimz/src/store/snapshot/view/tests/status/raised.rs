@@ -10,7 +10,7 @@ fn raised() -> RaisedAsk {
         opened_at: Some(ago(1)),
         text: Some("The implementation is ready. Which option?\nMore context.".into()),
         raised_by: Some("@lead".into()),
-        options: vec![],
+        brief: None,
     }
 }
 
@@ -186,6 +186,32 @@ fn needs_you_uses_the_displayed_raised_question_and_its_attention_clock() {
         attention.since,
         row.as_agent().unwrap().overlay_raised_at.unwrap()
     );
+}
+
+#[test]
+fn raised_card_lines_show_the_brief_whole_collapsed_and_capped() {
+    for (brief, expected) in [
+        (
+            "Ship it?  Or wait\n for the review?".to_owned(),
+            "Ship it? Or wait for the review?".to_owned(),
+        ),
+        ("界".repeat(200), "界".repeat(160)),
+    ] {
+        let mut state = agent("claude", "raised", AgentStatus::Success, 0).worktree("/repo/main");
+        state.raised_ask = Some(RaisedAsk {
+            brief: Some(brief),
+            ..raised()
+        });
+        let snapshot = room_with_agent_panes(vec![state]);
+        assert_eq!(
+            row(&snapshot, "raised")
+                .as_agent()
+                .unwrap()
+                .ask_detail
+                .as_deref(),
+            Some(expected.as_str())
+        );
+    }
 }
 
 #[test]

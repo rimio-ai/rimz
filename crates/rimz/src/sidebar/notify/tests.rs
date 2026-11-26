@@ -37,7 +37,7 @@ fn self_raised_attention_opens_after_a_receipt_during_its_armed_turn() {
         opened_at: Some(opened_at),
         raised_by: None,
         text: Some("Ship it?".into()),
-        options: vec![],
+        brief: None,
     });
     let mut snapshot = snapshot(vec![raised]);
     snapshot.panes_produced_at_ms = Some(opened_at.as_millisecond() as u64);
@@ -76,7 +76,7 @@ fn deferred_raised_attention_notifies_after_a_read_before_clean_rest() {
             opened_at: Some(raised_at),
             raised_by: None,
             text: Some("Ship it?".into()),
-            options: vec![],
+            brief: None,
         });
         let build = |raised: AgentState| {
             let panes = raised.pane.iter().cloned().collect();
@@ -154,7 +154,7 @@ fn deferred_raised_attention_uses_a_provider_settle_when_no_stop_arrived() {
         opened_at: Some(raised_at),
         raised_by: None,
         text: Some("Ship it?".into()),
-        options: vec![],
+        brief: None,
     });
     raised.context = Some(crate::agents::AgentContext {
         settle: Some(crate::agents::context::TurnSettle {
@@ -327,7 +327,7 @@ fn raised_notifications_use_the_ask_line_and_id_and_alerts_need_you() {
         opened_at: None,
         raised_by: Some("@lead".into()),
         text: Some("Ready. Which one?".into()),
-        options: vec![],
+        brief: None,
     });
     let mut state = NotificationState::default();
     let notifications = evaluate_opened(
@@ -402,7 +402,7 @@ fn a_no_request_alert_over_an_undisplayed_raised_ask_pushes_the_waiting_copy() {
         opened_at: None,
         raised_by: Some("@lead".into()),
         text: Some("Ready. Which one?".into()),
-        options: vec![],
+        brief: None,
     });
     let raised = snapshot(vec![raised]);
     let row = &raised.worktree_groups[0].rows[0];

@@ -241,17 +241,10 @@ fn answer_raised(
     let caller = rimz::launcher::context::resolve_caller(&ctx.store)?;
     let sender = rimz::launcher::context::sender_for(caller.as_ref(), ctx.channel(), false);
     let actor = caller.as_ref().map(|_| sender.render());
-    let text = detail
-        .questions
+    // A raised ask offers no options, so validation left only text.
+    let text = replies
         .iter()
-        .zip(replies)
-        .flat_map(|(question, reply)| {
-            reply
-                .picks
-                .iter()
-                .map(|index| question.options[*index].label.clone())
-                .chain(reply.text.iter().cloned())
-        })
+        .filter_map(|reply| reply.text.clone())
         .collect::<Vec<_>>()
         .join("\n");
     let current = ctx.cached_snapshot()?;

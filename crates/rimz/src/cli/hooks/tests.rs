@@ -89,7 +89,7 @@ fn apply_raised_frame(
                 basis_at: at - std::time::Duration::from_secs(1),
                 opened_at: None,
                 text: None,
-                options: vec![],
+                brief: None,
                 raised_by: None,
             },
         },

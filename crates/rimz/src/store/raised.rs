@@ -144,8 +144,7 @@ pub fn prepare_raise(
     paths: &StatePaths,
     agent: &AgentState,
     is_self: bool,
-    text: Option<String>,
-    options: Vec<String>,
+    brief: Option<String>,
     raised_by: Option<String>,
     at: Timestamp,
 ) -> Result<Entry<RaisedAsk>, RaisedErr> {
@@ -158,7 +157,11 @@ pub fn prepare_raise(
             .or(agent.registered_at)
             .ok_or(RaisedErr::NoBasis)?
     };
-    let text = if text.is_none() && !is_self {
+    let text = if is_self {
+        None
+    } else if brief.is_some() {
+        brief.clone()
+    } else {
         let (status, phase) = agent.rowless_status(&Default::default(), at);
         if !matches!(
             status,
@@ -176,8 +179,6 @@ pub fn prepare_raise(
                 .ok_or(RaisedErr::NoReply)?
                 .text,
         )
-    } else {
-        text
     };
     Ok(Entry {
         kind: agent.kind.clone(),
@@ -194,7 +195,7 @@ pub fn prepare_raise(
             opened_at: (!is_self).then_some(at),
             raised_by,
             text,
-            options,
+            brief,
         },
     })
 }
@@ -414,7 +415,7 @@ pub fn observe(
                 let mut opened = prior.value;
                 opened.state = RaisedAskState::Open;
                 opened.opened_at = Some(at);
-                opened.text = opened.text.or_else(|| reply.map(ToOwned::to_owned));
+                opened.text = reply.map(ToOwned::to_owned);
                 if opened.text.is_none() {
                     opened.text = match crate::transcript::latest_assistant(
                         paths,

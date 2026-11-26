@@ -637,7 +637,7 @@ fn parent_own_waiting_or_failed_outranks_waiting_child() {
         opened_at: Some(ago(2)),
         raised_by: None,
         text: Some("Parent question?".to_owned()),
-        options: vec![],
+        brief: None,
     });
     let mut native_wait_parent = agent("claude", "root", AgentStatus::Running, 20);
     let mut ctx = crate::agents::AgentContext::new("claude", ago(2));
