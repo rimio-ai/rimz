@@ -5,8 +5,9 @@
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
 //! `PostToolUse` matchers recover tool phase after execution instead. The
-//! one additive reply is a supervised child's deadline warning, injected on
-//! `PreInvocation` as a system message step.
+//! one additive reply, a supervised child's deadline warning or the
+//! smart-compaction reminder, is injected on `PreInvocation` as a system
+//! message step.
 
 mod agent_file;
 mod folder_trust;
@@ -207,8 +208,9 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        // The `PreInvocation` reply injects the rung as a system message the
-        // next model call reads; `PostToolUse` replies carry no context.
+        // The `PreInvocation` reply injects a deadline warning or the
+        // smart-compaction reminder as a system message the next model call
+        // reads; `PostToolUse` replies carry no context.
         hook_context: Some(HookContextReply::InjectedSystemMessage {
             event: "PreInvocation",
         }),

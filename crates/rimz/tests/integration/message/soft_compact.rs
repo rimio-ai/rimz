@@ -126,7 +126,7 @@ impl Fixture {
     }
 
     /// One host pass's reminder decision over the published snapshot at the fixture's 100k line.
-    /// When a rung is due it arms it, and the agent's next root post-tool hook must carry it.
+    /// When a rung is due it arms it, and the agent's next root hook-context reply must carry it.
     fn remind(&self) -> bool {
         let session = self
             .env
@@ -170,13 +170,14 @@ impl Fixture {
             None,
             &claim
         ));
-        let reply = self.post_tool();
+        let reply = self.reply_hook();
         assert!(reply.contains(REMINDER_LINE), "{reply}");
         true
     }
 
-    /// Arms rung 1 for the card as the host pass would, keyed by its session alone.
-    fn arm_rung_one(&self) {
+    /// Arms rung 1 for the card as the host pass would, keyed by its `launch` id or, without
+    /// one, by its session alone.
+    fn arm_rung_one(&self, launch: Option<&str>) {
         let claim = SoftCompactClaim {
             agent_id: self.request.agent_id.clone(),
             compactions: 0,
@@ -188,7 +189,7 @@ impl Fixture {
         assert!(arm(
             &self.env.runtime_paths(),
             &self.request.kind,
-            None,
+            launch.map(AgentSessionId::from).as_ref(),
             &claim
         ));
     }
@@ -203,20 +204,31 @@ impl Fixture {
             .collect()
     }
 
-    fn post_tool_payload(&self) -> serde_json::Value {
+    /// The card's root hook on the event its adapter's hook-context reply names, in a payload
+    /// every built-in decoder reads, from a carrier that reads the reply.
+    fn reply_hook_payload(&self) -> serde_json::Value {
+        let event = rimz::agents::spec_by_kind(self.request.kind.as_str())
+            .and_then(|spec| spec.capabilities.hook_context)
+            .map_or("PostToolUse", |reply| reply.event());
+        let session = self.request.agent_id.as_str();
         serde_json::json!({
-            "hook_event_name": "PostToolUse",
-            "session_id": self.request.agent_id.as_str(),
+            "hook_event_name": event,
+            "hookEventName": event,
+            "session_id": session,
+            "conversationId": session,
             "cwd": self.env.project_root,
+            "workspacePaths": [self.env.project_root],
+            "invocationNum": 2,
             "tool_name": "Read",
             "tool_input": {"file_path": "src/lib.rs"},
             "tool_response": {},
+            "reads_reply": true,
         })
     }
 
-    /// The agent's root post-tool hook, returning its stdout reply.
-    fn post_tool(&self) -> String {
-        self.hook_reply(&self.post_tool_payload())
+    /// The agent's root hook-context hook, returning its stdout reply.
+    fn reply_hook(&self) -> String {
+        self.hook_reply(&self.reply_hook_payload())
     }
 
     /// Feeds `payload` as the card's hook and returns its stdout reply.
@@ -451,7 +463,7 @@ fn reminder_once_per_epoch(kind: &str) {
         fixture.records()
     );
     assert!(
-        !fixture.post_tool().contains(REMINDER_LINE),
+        !fixture.reply_hook().contains(REMINDER_LINE),
         "a claimed reminder attaches once"
     );
     assert!(!fixture.remind(), "no second reminder in the epoch");
@@ -512,6 +524,58 @@ fn trailing_adapter_gets_one_reminder_per_epoch_and_nothing_after_it() {
 #[test]
 fn non_trailing_adapter_gets_one_reminder_per_epoch_and_nothing_after_it() {
     reminder_once_per_epoch("codex");
+}
+
+/// Every built-in whose hook-context reply can carry the reminder takes it once, in that reply.
+#[test]
+fn every_hook_context_kind_carries_a_claimed_reminder_once() {
+    let kinds: Vec<_> = rimz::agents::all_definitions()
+        .filter(|definition| rimz::agents::reminder_skip(definition).is_none())
+        .map(|definition| definition.spec().kind)
+        .collect();
+    assert!(kinds.contains(&"antigravity"), "{kinds:?}");
+    for kind in kinds {
+        let fixture = Fixture::new(kind);
+        fixture.arm_rung_one(None);
+        let reply = fixture.reply_hook();
+        assert_eq!(reply.matches(REMINDER_LINE).count(), 1, "{kind}: {reply}");
+        assert!(fixture.pending().is_empty(), "{kind}");
+        assert!(!fixture.reply_hook().contains(REMINDER_LINE), "{kind}");
+        assert_eq!(fixture.reminders(), 1, "{kind}");
+    }
+}
+
+/// Antigravity carries both rungs in its `PreInvocation` reply, and a native grandchild's
+/// conversation under the same launch claims nothing.
+#[test]
+fn antigravity_injects_each_rung_as_a_system_message_for_its_own_conversation() {
+    reminder_once_per_epoch("antigravity");
+    let fixture = Fixture::new("antigravity");
+    fixture.arm_rung_one(Some("agy-launch"));
+    let feed = |conversation: &str| {
+        let mut payload = fixture.reply_hook_payload();
+        payload.as_object_mut().unwrap().remove("session_id");
+        payload["conversationId"] = serde_json::json!(conversation);
+        let mut hook = fixture.env.hook_command("antigravity");
+        hook.env(rimz::harness::launch::ENV_AGENT_ID, "agy-launch");
+        let output = fixture
+            .env
+            .spawn_payload(hook, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let armed = fixture.pending();
+    assert_eq!(feed("native-grandchild"), serde_json::json!({}));
+    assert_eq!(fixture.pending(), armed, "the reminder stays armed");
+    let reply = feed(fixture.request.agent_id.as_str());
+    let text = reply["injectSteps"][0]["systemMessage"]["systemMessage"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(text.contains(REMINDER_LINE), "{reply}");
+    fixture.env.drain_hooks();
+    assert_eq!(fixture.reminders(), 1);
 }
 
 #[test]
@@ -1196,11 +1260,11 @@ fn codex_continuation_receives_the_owed_continue_and_rearms_the_reminder() {
 #[test]
 fn an_unparsable_pending_reminder_attaches_nothing_and_records_no_claim() {
     let fixture = Fixture::new("claude");
-    fixture.arm_rung_one();
+    fixture.arm_rung_one(None);
     let pending = fixture.pending();
     assert_eq!(pending.len(), 1, "{pending:?}");
     std::fs::write(&pending[0], "not json").unwrap();
-    let reply = fixture.post_tool();
+    let reply = fixture.reply_hook();
     assert!(!reply.contains(REMINDER_LINE), "{reply}");
     assert_eq!(fixture.reminders(), 0);
     assert_eq!(fixture.stats()["rollup"]["soft_compacts"], 0);
@@ -1211,7 +1275,7 @@ fn an_unparsable_pending_reminder_attaches_nothing_and_records_no_claim() {
 #[test]
 fn opencode_claims_a_reminder_only_from_the_carrier_that_reads_the_reply() {
     let fixture = Fixture::new("opencode");
-    fixture.arm_rung_one();
+    fixture.arm_rung_one(None);
     let mut tool_after = serde_json::json!({
         "hook_event_name": "tool_after",
         "session_id": fixture.request.agent_id.as_str(),
@@ -1243,7 +1307,7 @@ fn a_daemon_routed_hook_claims_by_session_and_reads_no_daemon_env() {
     #[cfg(target_os = "linux")]
     {
         let fixture = Fixture::new("codex");
-        fixture.arm_rung_one();
+        fixture.arm_rung_one(None);
         let daemon = crate::common::spawn_sibling_codex(
             &fixture.env,
             &fixture.env.home_root,
@@ -1256,7 +1320,7 @@ fn a_daemon_routed_hook_claims_by_session_and_reads_no_daemon_env() {
             .env(rimz::harness::launch::ENV_SELF_COMPACT_TOOL, "1");
         let output = fixture
             .env
-            .spawn_payload(hook, &fixture.post_tool_payload().to_string())
+            .spawn_payload(hook, &fixture.reply_hook_payload().to_string())
             .wait_with_output()
             .unwrap();
         fixture.env.drain_hooks();

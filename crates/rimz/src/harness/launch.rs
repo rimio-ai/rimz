@@ -58,7 +58,7 @@ pub const ENV_TEAM: &str = "RIMZ_TEAM";
 /// the prompt-submit hook.
 pub const ENV_RUNTIME_ENV: &str = "RIMZ_RUNTIME_ENV";
 /// `1` on a launch whose MCP server serves `self_compact`, so the smart-compaction reminder a
-/// post-tool hook attaches names that tool; cleared on every other launch so a nested launch
+/// hook-context reply attaches names that tool; cleared on every other launch so a nested launch
 /// never inherits it.
 pub const ENV_SELF_COMPACT_TOOL: &str = "RIMZ_SELF_COMPACT_TOOL";
 /// The inline multi-agent launch cohort this agent belongs to. Team launches

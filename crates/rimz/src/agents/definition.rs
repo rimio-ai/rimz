@@ -1818,7 +1818,7 @@ pub enum HookContextReply {
 }
 
 impl HookContextReply {
-    /// The post-tool event whose reply carries the context.
+    /// The post-tool or pre-model-call event whose reply carries the context.
     pub fn event(self) -> &'static str {
         match self {
             Self::HookSpecificOutput { .. } => "PostToolUse",

@@ -116,9 +116,9 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
             a.kind = AgentKind::new_unchecked("amp");
             a
         }),
-        ("hook context cannot carry it", {
+        ("no hook context", {
             let mut a = candidate.clone();
-            a.kind = AgentKind::new_unchecked("antigravity");
+            a.kind = AgentKind::new_unchecked("kimi");
             a
         }),
         ("continue owed", {
@@ -502,7 +502,7 @@ fn producer_arms_cards_independently_and_nothing_for_a_kind_without_hook_context
         "one card never paces another"
     );
     candidate.agent_id = "hookless".into();
-    candidate.kind = AgentKind::new_unchecked("antigravity");
+    candidate.kind = AgentKind::new_unchecked("kimi");
     assert!(
         produce(
             &snapshot(&candidate),
@@ -847,8 +847,7 @@ fn reminder_stays_suppressed_on_withheld_lagging_sidecar_through_first_prompt_th
             .expect("agent row")
     };
 
-    // Antigravity takes no mid-turn reminder (its hook context cannot carry it), so the line's
-    // own reading is what this pins.
+    // This pins the line's own reading, which `reminder_due` gates on.
     let due = |row: &AgentState| AutoCompact::Tokens(100_000).triggered(row);
     let withheld = read_agent();
     assert!(withheld.compacted_awaiting_prompt.is_none());

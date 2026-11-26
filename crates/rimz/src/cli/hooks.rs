@@ -1276,7 +1276,7 @@ fn claim_reminder(
     )
 }
 
-/// The hook-context reply for the root agent's post-tool event: the supervised run's deadline
+/// The hook-context reply for the root agent's hook-context event: the supervised run's deadline
 /// rung it claims and the claimed smart-compaction `reminder`, each its own wrapped block in one
 /// reply, the rung first. A daemon-owned hook's reminder names the bare compact command, since the
 /// daemon's environment says nothing of this session's tools.
