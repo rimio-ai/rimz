@@ -144,25 +144,30 @@ impl LaunchReminders {
             .collect()
     }
 
-    /// The variables that hand the launch's selection to a server its provider starts itself
-    /// (`crate::mcp::launch_env`); `None` when the launch serves nothing that way.
-    pub(super) fn mcp_launch_env(
-        &self,
-        request: &ExecRequest,
-    ) -> Option<[(&'static str, String); 2]> {
-        use crate::mcp::launch_env;
-        let cwd = self.mcp_cwd.as_ref()?;
+    /// Each capability the launch serves (`LaunchReminders::mcp_capabilities`), with its load
+    /// mark; empty when it serves none.
+    pub(super) fn mcp_served(&self, request: &ExecRequest) -> Vec<crate::mcp::launch_env::Served> {
         let served = self.mcp_capabilities(request);
-        if served.is_empty() {
-            return None;
-        }
-        let marks: Vec<_> = request
+        request
             .served_marks()
             .into_iter()
             .filter(|(capability, _)| served.contains(capability))
-            .collect();
+            .collect()
+    }
+
+    /// The variables that hand the launch's `served` selection to a server its provider starts
+    /// itself (`crate::mcp::launch_env`); `None` when the launch serves nothing that way.
+    pub(super) fn mcp_launch_env(
+        &self,
+        served: &[crate::mcp::launch_env::Served],
+    ) -> Option<[(&'static str, String); 2]> {
+        use crate::mcp::launch_env;
+        let cwd = self.mcp_cwd.as_ref()?;
+        if served.is_empty() {
+            return None;
+        }
         Some([
-            (launch_env::ENV_SERVE, launch_env::render(&marks)),
+            (launch_env::ENV_SERVE, launch_env::render(served)),
             (launch_env::ENV_CWD, cwd.display().to_string()),
         ])
     }

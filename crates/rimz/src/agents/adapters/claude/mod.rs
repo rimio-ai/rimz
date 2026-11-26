@@ -700,11 +700,8 @@ fn render_definition_tools(
 /// marked always, since a server-level `false` overrides a tool's own `true`.
 fn server_always_load(mcps: Option<&[crate::config::McpName]>) -> Option<bool> {
     let entries = mcps?;
-    let server = entries
-        .iter()
-        .find(|entry| entry.name() == crate::mcp::catalog::SERVER_NAME)?;
     let always = crate::mcp::catalog::LoadMode::Always;
-    match server.mode()? {
+    match crate::config::server_mark(mcps)? {
         crate::mcp::catalog::LoadMode::Always => Some(true),
         crate::mcp::catalog::LoadMode::Deferred => {
             let capability_always = entries

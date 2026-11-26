@@ -14,9 +14,13 @@
 // wire; the event mapping it feeds is docs/internals/agents/adapter_pi.md and
 // the upstream surface is docs/externals/agent-adapter/pi-reference.md.
 // Fast launches also request OpenAI priority serving through
-// `before_provider_request`, without spawning a hook child.
+// `before_provider_request`, without spawning a hook child. A launch that
+// serves RimZ's MCP server has the extension register it from the launch env.
 import { spawn } from "node:child_process";
-import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+// A namespace import, so a Pi without `createCodemodeExtension` still loads.
+import * as piCodingAgent from "@earendil-works/pi-coding-agent";
+
+const PI_VERSION = piCodingAgent.VERSION;
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 
@@ -33,6 +37,9 @@ const versionAtLeast = (version, floor) => {
 };
 const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
 const hasBeforeProviderRequest = versionAtLeast(PI_VERSION, [0, 57, 0]);
+// `registerMcpServer` arrives in 0.99.0, but until 1.0.4 a `--tools` list drops
+// every MCP tool, `mcp__*` included, so RimZ's server would serve nothing.
+const servesMcp = versionAtLeast(PI_VERSION, [1, 0, 4]);
 // The routes a fast launch requests priority serving on, by provider, each
 // with the exact model ids its own evidence covers; the evidence an addition
 // needs is in docs/contributing/model-upgrades.md. openai-codex lists the
@@ -91,6 +98,78 @@ const claimLaunchReminders = () => {
   return globalThis[LAUNCH_REMINDERS];
 };
 
+// What a launch serves from RimZ's MCP server rides the launch env, as RimZ
+// computed it: the selection and cwd `rimz mcp serve --launch-env` reads, the
+// registration's exposure fields, and whether codemode runs `only`. The first
+// instance in a process claims them off `process.env` like the reminders, so a
+// `/reload` registers the same server and a `pi` the agent starts none.
+const MCP_SERVE_ENV = "RIMZ_MCP_SERVE";
+const MCP_CWD_ENV = "RIMZ_MCP_CWD";
+const MCP_EXPOSURE_ENV = "RIMZ_PI_MCP_EXPOSURE";
+const CODEMODE_ONLY_ENV = "RIMZ_PI_CODEMODE_ONLY";
+const LAUNCH_MCP = Symbol.for("rimz.launch-mcp");
+
+const claimLaunchMcp = () => {
+  if (!(LAUNCH_MCP in globalThis)) {
+    const env = process.env;
+    globalThis[LAUNCH_MCP] = {
+      serve: env[MCP_SERVE_ENV] || undefined,
+      cwd: env[MCP_CWD_ENV] || undefined,
+      exposure: env[MCP_EXPOSURE_ENV] || undefined,
+      codemodeOnly: env[CODEMODE_ONLY_ENV] === "1",
+    };
+    for (const key of [MCP_SERVE_ENV, MCP_CWD_ENV, MCP_EXPOSURE_ENV, CODEMODE_ONLY_ENV]) {
+      delete env[key];
+    }
+  }
+  return globalThis[LAUNCH_MCP];
+};
+
+// Register RimZ's server, and on a `code-mode on` launch codemode in `only`
+// mode, which replaces Pi's own. A throw from the factory would discard every
+// hook of this extension, so a registration Pi refuses (a configured server
+// named `rimz`, a namespace clash) loses only that registration. A Pi too old
+// for what the launch asks gets a notice naming the upgrade instead, which the
+// caller shows in the session.
+const registerLaunchMcp = (pi, launch) => {
+  const notices = [];
+  const tooOld = (what, floor) =>
+    `RimZ cannot ${what} on Pi ${PI_VERSION}: upgrade Pi to ${floor} or later`;
+  // Every serving Pi launch sets the exposure fields, so a selection without them is
+  // another kind's, such as a `pi` an Antigravity agent starts.
+  const serves = launch.serve && launch.exposure;
+  if (serves && !servesMcp) {
+    notices.push(tooOld("serve its MCP tools", "1.0.4"));
+  } else if (serves) {
+    // Pi reads each env value as a config template, where `$$` is a literal `$`.
+    const literal = (value) => value.replaceAll("$", () => "$$");
+    const env = { [MCP_SERVE_ENV]: literal(launch.serve) };
+    if (launch.cwd) env[MCP_CWD_ENV] = literal(launch.cwd);
+    try {
+      pi.registerMcpServer("rimz", {
+        command: RIMZ,
+        args: ["mcp", "serve", "--launch-env"],
+        // Seconds, past `join`'s longest wait; Pi's own default is 60.
+        timeout: 600,
+        env,
+        ...JSON.parse(launch.exposure),
+      });
+    } catch {
+      // Pi keeps the server it refused for: a user's `rimz` shows in `/mcp`.
+    }
+  }
+  if (launch.codemodeOnly && typeof piCodingAgent.createCodemodeExtension !== "function") {
+    notices.push(tooOld("switch codemode to its only mode", "0.99.0"));
+  } else if (launch.codemodeOnly) {
+    try {
+      piCodingAgent.createCodemodeExtension({ mode: "only" })(pi);
+    } catch {
+      // Pi's own codemode stays.
+    }
+  }
+  return notices;
+};
+
 const nowSec = () => Math.floor(Date.now() / 1000);
 const roundMaybe = (value) =>
   value == null || !Number.isFinite(Number(value)) ? undefined : Math.round(Number(value));
@@ -147,6 +226,7 @@ const windowFromHeaders = (headers, prefix, defaultMins, capturedAt) => {
 
 export default function rimz(pi) {
   const launchReminders = claimLaunchReminders();
+  const launchMcpNotices = registerLaunchMcp(pi, claimLaunchMcp());
   const usageBySession = new Map();
   const lastCacheWriteBySession = new Map();
   const costBySession = new Map();
@@ -429,6 +509,7 @@ export default function rimz(pi) {
   };
 
   pi.on("session_start", (ev, ctx) => {
+    for (const notice of launchMcpNotices) ctx?.ui?.notify?.(notice, "warning");
     latestProvider = text(ctx?.model?.provider) ?? latestProvider;
     refreshSessionCosts(ctx, true);
     const id = sessionId(ctx);

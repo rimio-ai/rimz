@@ -173,6 +173,30 @@ fn extension_source_wires_every_catalog_event() {
         );
     }
 
+    let (codemode_only, _) = PI_DESCRIPTOR
+        .launch
+        .presets
+        .code_mode
+        .env(true)
+        .expect("Pi's code mode on sets a variable");
+    for (key, contract) in [
+        (
+            crate::mcp::launch_env::ENV_SERVE,
+            "the selection RimZ's server registration forwards",
+        ),
+        (
+            crate::mcp::launch_env::ENV_CWD,
+            "the cwd RimZ's server registration forwards",
+        ),
+        (ENV_MCP_EXPOSURE, "the registration's exposure fields"),
+        (codemode_only, "the codemode `only` switch"),
+    ] {
+        assert!(
+            EXTENSION_SOURCE.contains(&format!("\"{key}\"")),
+            "extension must read {contract}: {key}"
+        );
+    }
+
     // Retired approaches, each replaced by the lineage markers above
     // (`cb43773a9 refactor(pi): self-identify child session lineage`).
     for (marker, why) in [

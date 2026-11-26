@@ -11,7 +11,8 @@
 //! stamped on every envelope from the in-process extension — payload-first, so
 //! the sidebar's bar and dollar line stay current with the turn-end spend walk
 //! reconciling the final total. The extension also requests OpenAI priority
-//! serving for fast launches, gated by the session's current model.
+//! serving for fast launches, gated by the session's current model, and registers
+//! RimZ's MCP server with the load modes this adapter computes into the launch env.
 //! Lifecycle maps per docs/internals/agents/adapter_pi.md: `session_start`
 //! registers, `before_agent_start` starts the turn with the prompt,
 //! `agent_end` captures its in-band verdict, `agent_settled` ends it once no
@@ -170,7 +171,8 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             code_mode: super::CodeModeSwitch::Supported {
                 tools: &["codemode"],
                 without_tools: &["--tools", "+codemode"],
-                env: None,
+                // The installed extension replaces Pi's codemode with one in `only` mode.
+                env: Some(("RIMZ_PI_CODEMODE_ONLY", "1")),
                 // Settings `defaultTools`, MCP activation, and session restore can turn
                 // it on with nothing on argv; an exclusion holds against all three.
                 off_env: None,
@@ -590,6 +592,223 @@ impl crate::agents::capabilities::LaunchCapability for PiAdapter {
 
     fn manual_skill(&self) -> ManualSkill {
         ManualSkill::Frontmatter
+    }
+
+    /// The installed extension registers RimZ's server from the launch env (`mcp_launch_env`),
+    /// and `mcp_server_args` keeps Pi's MCP tools in RimZ's rendered `--tools` list. Pi cannot
+    /// switch its own servers off per launch, so a list that limits them warns.
+    fn takes_mcp_servers(&self) -> bool {
+        true
+    }
+
+    fn serves_mcp_from_launch_env(&self) -> bool {
+        true
+    }
+
+    /// `--no-mcp` connects no server, the one the extension registers included, and
+    /// `--no-extensions` (`-ne`) loads neither `rimz.ts` nor Pi's built-in MCP extension.
+    fn rimz_server_switched_off<'a>(&self, extra_args: &'a [String]) -> Option<(&'a str, &'a str)> {
+        extra_args
+            .iter()
+            .find(|arg| matches!(arg.as_str(), "--no-mcp" | "--no-extensions" | "-ne"))
+            .map(|flag| (flag.as_str(), ""))
+    }
+
+    /// An installed extension that differs from the shipped one may not read the launch env, and
+    /// nothing refreshes it at launch.
+    fn launch_env_server_stale(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        let path = PI_MANAGED_SOURCE
+            .outdated_files(login_env)
+            .into_iter()
+            .next()?;
+        Some(format!(
+            "the installed Pi extension {} differs from the one this rimz ships, so this launch \
+             reaches RimZ through its skills: run `rimz hooks install pi`",
+            path.display()
+        ))
+    }
+
+    fn mcp_launch_env(
+        &self,
+        served: Option<&[crate::mcp::launch_env::Served]>,
+        server_mark: Option<crate::mcp::catalog::LoadMode>,
+        code_mode: Option<bool>,
+    ) -> Vec<(&'static str, Option<String>)> {
+        vec![(
+            ENV_MCP_EXPOSURE,
+            served.map(|served| mcp_registration(served, server_mark, code_mode).to_string()),
+        )]
+    }
+
+    fn mcp_tool_load(&self, env: &BTreeMap<String, String>, tool: &str) -> Option<&'static str> {
+        let fields: Value = serde_json::from_str(env.get(ENV_MCP_EXPOSURE)?).ok()?;
+        let exposure = fields["toolExposure"]
+            .get(tool)
+            .or_else(|| fields.get("exposure"))
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_EXPOSURE);
+        ["direct", "codemode", "deferred", "hidden"]
+            .into_iter()
+            .find(|name| *name == exposure)
+    }
+
+    fn mcp_server_args(
+        &self,
+        launch: &crate::agents::capabilities::McpLaunch<'_>,
+        _paths: (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<
+        (Vec<String>, Vec<crate::agents::capabilities::UnappliedMark>),
+        crate::agents::skills::LaunchSettingsErr,
+    > {
+        let warnings = crate::config::mcps_limit(launch.mcps)
+            .then(|| {
+                "Pi cannot limit its own MCP servers per launch: the profile's mcps list applies \
+                 to RimZ's capabilities only, and Pi loads every server it configures"
+                    .to_owned()
+            })
+            .into_iter()
+            .collect();
+        let unapplied = launch.unapplied_marks(
+            "Pi takes a load mode only for RimZ's server and its capabilities",
+            None,
+        );
+        if launch.rendered_tools.is_some() && self.rimz_server_switched_off(extra_args).is_none() {
+            let server_mark = crate::config::server_mark(launch.mcps);
+            keep_mcp_tools(extra_args, launch.served, server_mark, launch.code_mode);
+        }
+        Ok((warnings, unapplied))
+    }
+}
+
+/// The exposure fields of RimZ's server registration, as JSON, which the installed extension
+/// passes to `registerMcpServer` unchanged.
+const ENV_MCP_EXPOSURE: &str = "RIMZ_PI_MCP_EXPOSURE";
+
+/// The exposure Pi gives an MCP tool its registration leaves unset.
+const DEFAULT_EXPOSURE: &str = "codemode";
+
+/// The exposure Pi gives each tool RimZ serves for `served`: `direct` for an `:always` mark,
+/// `deferred` for a `:deferred` one, and for an unmarked tool the one `server_mark`, the mark
+/// on `rimz`, gives the same way, else Pi's default `codemode`, except under `code-mode off`,
+/// which excludes codemode, where it is `deferred`. A launch that serves nothing has none.
+fn tool_exposures(
+    served: &[crate::mcp::launch_env::Served],
+    server_mark: Option<crate::mcp::catalog::LoadMode>,
+    code_mode: Option<bool>,
+) -> Vec<(&'static str, &'static str)> {
+    use crate::mcp::catalog::LoadMode;
+    let exposure = |mark| match mark {
+        LoadMode::Always => "direct",
+        LoadMode::Deferred => "deferred",
+    };
+    let unmarked = server_mark
+        .map(exposure)
+        .unwrap_or(if code_mode == Some(false) {
+            "deferred"
+        } else {
+            DEFAULT_EXPOSURE
+        });
+    if served.is_empty() {
+        return Vec::new();
+    }
+    let capabilities: Vec<_> = served.iter().map(|(capability, _)| *capability).collect();
+    crate::mcp::catalog::tools_for(&capabilities)
+        .map(|tool| {
+            let mark = served
+                .iter()
+                .find(|(capability, _)| Some(*capability) == tool.capability)
+                .and_then(|(_, mark)| *mark);
+            (tool.name, mark.map_or(unmarked, exposure))
+        })
+        .collect()
+}
+
+/// The `exposure` and `toolExposure` fields of RimZ's server registration for `served`. Pi
+/// counts the server-level `exposure` among the server's exposures whether a tool takes it or
+/// not, and turns discovery tools on and words its prompt by them, so it is the exposure most
+/// served tools take (a tie goes to `codemode`, then `direct`), left unset when it is Pi's
+/// default, and `toolExposure` names only the tools that take another.
+fn mcp_registration(
+    served: &[crate::mcp::launch_env::Served],
+    server_mark: Option<crate::mcp::catalog::LoadMode>,
+    code_mode: Option<bool>,
+) -> Value {
+    let tools = tool_exposures(served, server_mark, code_mode);
+    let takers = |exposure: &&str| tools.iter().filter(|(_, taken)| taken == exposure).count();
+    // `max_by_key` keeps the last of equal counts, so the order runs from least preferred.
+    let server = ["deferred", "direct", DEFAULT_EXPOSURE]
+        .into_iter()
+        .max_by_key(takers)
+        .unwrap_or(DEFAULT_EXPOSURE);
+    let mut fields = serde_json::Map::new();
+    if server != DEFAULT_EXPOSURE {
+        fields.insert("exposure".to_owned(), server.into());
+    }
+    let tools: serde_json::Map<String, Value> = tools
+        .into_iter()
+        .filter(|(_, exposure)| *exposure != server)
+        .map(|(tool, exposure)| (tool.to_owned(), exposure.into()))
+        .collect();
+    if !tools.is_empty() {
+        fields.insert("toolExposure".to_owned(), Value::Object(tools));
+    }
+    Value::Object(fields)
+}
+
+/// Adds to RimZ's rendered tools flag, the first `--tools` or `--no-tools` (a later `--tools` is
+/// the user's own), what keeps Pi's MCP machinery as with no list. An `mcp__` entry makes the
+/// list filter MCP tools too, so `mcp__*` and the resource tools name every one, leaving the
+/// list to limit Pi's own tools. A rendered `--no-tools` would switch MCP off, so it becomes a
+/// list of these alone. A plain list registers `codemode` and `tool_search` only when it names
+/// them, so it names each one Pi turns on for the served exposures: `codemode` for a
+/// `codemode` tool and `tool_search` for a `deferred` one.
+fn keep_mcp_tools(
+    args: &mut Vec<String>,
+    served: &[crate::mcp::launch_env::Served],
+    server_mark: Option<crate::mcp::catalog::LoadMode>,
+    code_mode: Option<bool>,
+) {
+    let Some(at) = args
+        .iter()
+        .position(|arg| arg == "--tools" || arg == "--no-tools")
+    else {
+        return;
+    };
+    if args[at] == "--no-tools" {
+        args.splice(at..=at, ["--tools".to_owned(), String::new()]);
+    }
+    let Some(list) = args.get_mut(at + 1) else {
+        return;
+    };
+    let tools = tool_exposures(served, server_mark, code_mode);
+    let exposed = |wanted: &str| tools.iter().any(|(_, exposure)| *exposure == wanted);
+    let discovery = [
+        ("codemode", exposed("codemode")),
+        ("tool_search", exposed("deferred")),
+    ];
+    let names = [
+        "mcp__*",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ]
+    .into_iter()
+    .chain(
+        discovery
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| name),
+    );
+    for name in names {
+        if list.split(',').any(|listed| listed == name) {
+            continue;
+        }
+        if !list.is_empty() {
+            list.push(',');
+        }
+        list.push_str(name);
     }
 }
 

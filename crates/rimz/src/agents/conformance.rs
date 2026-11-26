@@ -1024,6 +1024,7 @@ fn agent_file_matcher_comes_with_an_agent_file() {
             login_env: &env,
             rendered_tools: None,
             code_mode: None,
+            served: &[],
         },
     };
     for adapter in BUILTINS {
@@ -1068,6 +1069,7 @@ fn agent_file_kinds_write_a_limiting_mcps_list() {
                     login_env: &env,
                     rendered_tools: None,
                     code_mode: None,
+                    served: &[],
                 },
             })
             .map(|file| file.unwrap().bytes)
@@ -1168,7 +1170,7 @@ fn code_mode_switch_characterization() {
     amp: Unsupported
     copilot: Unsupported
     kimi: Unsupported
-    pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: None, off_env: None, off_exclude: Some((["--exclude-tools", "-xt"], "codemode")) }
+    pi: Supported { tools: ["codemode"], without_tools: ["--tools", "+codemode"], env: Some(("RIMZ_PI_CODEMODE_ONLY", "1")), off_env: None, off_exclude: Some((["--exclude-tools", "-xt"], "codemode")) }
     opencode: Config { marker: "OPENCODE_CONFIG_CONTENT:experimental.full_codemode" }
     antigravity: Unsupported
     cursor: Unsupported

@@ -67,6 +67,9 @@ pub struct LaunchPlan {
     /// The launch argument, as `(flag, value)`, that switches the handed-over
     /// RimZ server off.
     pub mcp_switched_off: Option<(String, String)>,
+    /// Why a launch that would serve RimZ's server from the launch env serves nothing: the
+    /// agent's own entry for it cannot read the launch env (`launch_env_server_stale`).
+    pub mcp_stale: Option<String>,
     /// The rimz skills hidden from the model because the launch serves the
     /// MCP tools of the same name.
     pub hidden_skills: Vec<&'static str>,
@@ -1081,11 +1084,18 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let rides_agent_file = adapter.rides_agent_file();
     let plans_agent_file =
         agent_file_flag.is_some() && matches!(request.action, launch::ExecAction::Launch { .. });
-    if inputs.machine.agents.rimz_mcp_server
+    let serves = inputs.machine.agents.rimz_mcp_server
         && adapter.takes_mcp_servers()
         && !capabilities.is_empty()
-        && (plans_agent_file || !rides_agent_file || adapter.serves_mcp_from_launch_env())
-    {
+        && (plans_agent_file || !rides_agent_file || adapter.serves_mcp_from_launch_env());
+    // An entry that cannot read the launch env would serve nothing behind hidden skills, so the
+    // launch serves nothing and reaches RimZ through its skills.
+    let mcp_stale = (serves && adapter.serves_mcp_from_launch_env())
+        .then(|| adapter.launch_env_server_stale(&skill_env))
+        .flatten();
+    if let Some(warning) = &mcp_stale {
+        warnings.push(LaunchPlanWarning::LaunchEnv(warning.clone()));
+    } else if serves {
         let program = if inputs.state.room_bin.is_file() {
             inputs.state.room_bin.clone()
         } else {
@@ -1333,6 +1343,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         login_env: &env,
                         rendered_tools: request.tools.as_deref(),
                         code_mode: request.identity.params.code_mode,
+                        served: &reminders.mcp_served(&request),
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")
@@ -1471,6 +1482,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         skill_links,
         mcp_capabilities,
         mcp_switched_off: reminders.mcp_switched_off.clone(),
+        mcp_stale,
         withheld_skills,
         hidden_skills,
         rimz_reach,

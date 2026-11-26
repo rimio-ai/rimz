@@ -1393,7 +1393,7 @@ fn assert_terminal_note(pair: portable_pty::PtyPair, command: portable_pty::Comm
     assert!(status.success(), "{status:?}");
     let output = output.join().unwrap();
     assert!(
-        output.contains("Claude, Codex, Antigravity, and OpenCode launches"),
+        output.contains("Claude, Codex, Antigravity, OpenCode, and Pi launches"),
         "{output}"
     );
     assert!(
@@ -2466,7 +2466,17 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             "claude",
             "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']\ncode-mode: on",
         ),
-        ("pmark", "pi", "[rimz-lsp]"),
+        (
+            "pmark",
+            "pi",
+            "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']",
+        ),
+        ("poff", "pi", "[rimz-lsp, rimz-wait]\ncode-mode: off"),
+        (
+            "pgrant",
+            "pi",
+            "['*']\ncapabilities: [rimz-lsp]\ncode-mode: off",
+        ),
         (
             "omark",
             "opencode",
@@ -2498,7 +2508,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     }
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    let explain_with = |profile: &str, mcps: bool| {
+    let explain_with = |profile: &str, flag: Option<&str>| {
         let mut bins = Vec::new();
         for kind in ["claude", "codex", "pi", "opencode"] {
             bins.push(crate::common::write_failing_agent_shim(&env, kind, 0));
@@ -2512,7 +2522,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         let output = env
             .rimz()
             .args(["agents", "explain", profile])
-            .args(mcps.then_some("--mcps"))
+            .args(flag)
             .env("SHELL", shell)
             .env("PATH", path)
             .output()
@@ -2522,7 +2532,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         assert!(!stderr.contains(" entry `"), "{stderr}");
         String::from_utf8(output.stdout).unwrap()
     };
-    let explain = |profile: &str| explain_with(profile, true);
+    let explain = |profile: &str| explain_with(profile, Some("--mcps"));
     let claude_user = "the mcps entry `github:always` is not applied: Claude takes a load mode \
                        only for RimZ's server and its capabilities";
 
@@ -2658,16 +2668,78 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     );
     assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
 
+    // Pi's installed extension registers the server from the launch env, each tool at the
+    // exposure Pi gives it; Pi cannot limit or mark the user's own servers.
     let out = explain("pmark");
     assert!(
-        out.contains("pi takes no MCP servers from a launch; it loads its own as configured"),
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+        ),
         "{out}"
     );
-    assert!(!out.contains("CAPABILITY"), "{out}");
+    assert_eq!(tool_load(&out, "lsp"), "direct", "{out}");
+    assert_eq!(tool_load(&out, "wait"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "guide"), "deferred", "{out}");
     assert!(
-        !out.contains("## lsp") && !out.contains("Server instructions"),
+        out.contains("\n  /mcp in the Pi session: the rimz server and each tool's exposure\n"),
         "{out}"
     );
+    assert!(
+        out.contains(
+            "every server the account and project configure; the mcps entry `github:always` is \
+             not applied: Pi takes a load mode only for RimZ's server and its capabilities\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("\n  RIMZ_MCP_SERVE=rimz-lsp:always,rimz-wait:deferred,"),
+        "{out}"
+    );
+    assert!(out.contains("\n  RIMZ_PI_MCP_EXPOSURE={"), "{out}");
+    assert!(out.contains("\n## lsp\n"), "{out}");
+    let out = explain("poff");
+    assert!(out.contains("serves rimz-lsp, rimz-wait\n"), "{out}");
+    assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
+    assert_eq!(tool_load(&out, "tasks"), "deferred", "{out}");
+    assert!(
+        out.contains(r#"RIMZ_PI_MCP_EXPOSURE={"exposure":"deferred"}"#),
+        "{out}"
+    );
+    // A capability limit that grants no Pi tool still reaches the RimZ tools it grants.
+    let out = explain("pgrant");
+    assert!(out.contains("serves rimz-lsp\n"), "{out}");
+    let report: Value = serde_json::from_str(&explain_with("pgrant", Some("--json"))).unwrap();
+    let argv: Vec<&str> = report["provider_argv"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{report}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(!argv.contains(&"--no-tools"), "{argv:?}");
+    assert!(
+        argv.windows(2).any(|pair| pair
+            == [
+                "--tools",
+                "mcp__*,list_mcp_resources,list_mcp_resource_templates,read_mcp_resource,tool_search"
+            ]),
+        "{argv:?}"
+    );
+
+    // An installed extension that differs from the shipped one serves nothing, and the row says
+    // why and how to fix it.
+    let installed = env.home_root.join(".pi/agent/extensions/rimz.ts");
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, "// RimZ Pi extension — _rimz_managed\nold\n").unwrap();
+    let out = explain("pmark");
+    assert!(
+        out.contains(&format!(
+            "not handed over: the installed Pi extension {} differs from the one this rimz \
+             ships, so this launch reaches RimZ through its skills: run `rimz hooks install pi`",
+            installed.display()
+        )),
+        "{out}"
+    );
+    std::fs::remove_file(&installed).unwrap();
 
     // OpenCode carries the server in its composed inline config: `rimz:always` makes the record
     // native, a capability's own `:deferred` puts its tools back behind `execute` through the
@@ -2758,7 +2830,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(!out.contains("rimz-subagents"), "{out}");
-    let out = explain_with("cmute", false);
+    let out = explain_with("cmute", None);
     let callable = out
         .lines()
         .find(|line| line.starts_with("  callable: "))

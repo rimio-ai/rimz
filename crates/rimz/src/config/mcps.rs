@@ -83,14 +83,19 @@ pub fn mcp_capabilities(mcps: Option<&[McpName]>) -> Vec<Capability> {
         .collect()
 }
 
+/// The load mark on the `rimz` entry of an `mcps` selection.
+pub fn server_mark(mcps: Option<&[McpName]>) -> Option<LoadMode> {
+    mcps.unwrap_or_default()
+        .iter()
+        .find(|entry| entry.name == crate::mcp::catalog::SERVER_NAME)
+        .and_then(McpName::mode)
+}
+
 /// Each capability an `mcps` selection serves, with its load mark: its own entry's, else the
 /// `rimz` entry's, which marks every served capability that has none of its own.
 pub fn served_marks(mcps: Option<&[McpName]>) -> Vec<(Capability, Option<LoadMode>)> {
     let entries = mcps.unwrap_or_default();
-    let server_mark = entries
-        .iter()
-        .find(|entry| entry.name == crate::mcp::catalog::SERVER_NAME)
-        .and_then(McpName::mode);
+    let server_mark = server_mark(mcps);
     mcp_capabilities(mcps)
         .into_iter()
         .map(|capability| {

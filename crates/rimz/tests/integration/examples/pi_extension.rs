@@ -664,7 +664,8 @@ if (providerErrors.length > 0) {{
 
 /// Write the embedded extension into `dir` beside a stand-in for the host
 /// package, and return the extension's path. Pi's extension loader aliases the
-/// host package so an extension can import runtime values like `VERSION`.
+/// host package so an extension can import runtime values like `VERSION`, and
+/// the stand-in's `createCodemodeExtension` records the options it is given.
 /// Standalone Node has no such alias, so stand up the minimal module the bare
 /// import resolves to.
 #[cfg(unix)]
@@ -683,8 +684,11 @@ fn stage_extension(dir: &std::path::Path, pi_version: &str) -> std::path::PathBu
     std::fs::write(
         pkg_dir.join("index.js"),
         format!(
-            "export const VERSION = {};\n",
-            serde_json::to_string(pi_version).unwrap()
+            "export const VERSION = {};\n{}",
+            serde_json::to_string(pi_version).unwrap(),
+            "export const createCodemodeExtension = (options) => (pi) => {\n  \
+             (globalThis.codemodeCalls ??= []).push(options);\n  \
+             pi.registerTool({ name: \"codemode\" });\n};\n",
         ),
     )
     .unwrap();
@@ -788,5 +792,231 @@ assert.deepEqual(fed.map((payload) => [payload.hook_event_name, payload.tool_cal
         "node harness failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The extension registers RimZ's server only when the launch env carries a selection and its
+/// exposure fields, with a 600-second timeout past `join`'s longest wait, running
+/// `rimz mcp serve --launch-env` with the selection and cwd, each `$` escaped, in the
+/// registration's own env and the exposure fields as RimZ computed them, and asks for codemode
+/// `only` only when told to. It claims every launch variable off `process.env`, so a reload keeps
+/// them and a process the agent starts never inherits them. A registration Pi refuses, or a Pi
+/// with no `registerMcpServer`, loses only the server: every hook still loads.
+#[test]
+#[cfg(unix)]
+fn extension_registers_the_rimz_server_from_the_launch_env() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        crate::common::skip("node not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let extension_path = stage_extension(dir.path(), "1.6.1");
+    let harness = dir.path().join("harness.mjs");
+    std::fs::write(
+        &harness,
+        format!(
+            r#"
+import assert from "node:assert/strict";
+
+const keys = ["RIMZ_MCP_SERVE", "RIMZ_MCP_CWD", "RIMZ_PI_MCP_EXPOSURE", "RIMZ_PI_CODEMODE_ONLY"];
+const launched = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+const {{ default: rimz }} = await import({});
+const load = (registerMcpServer) => {{
+  const handlers = new Map();
+  const registered = [];
+  const tools = [];
+  const pi = {{
+    on: (event, handler) => handlers.set(event, handler),
+    events: {{ on: () => () => {{}} }},
+    registerTool: (tool) => tools.push(tool.name),
+  }};
+  if (registerMcpServer !== undefined) {{
+    pi.registerMcpServer = (name, config) => {{
+      registerMcpServer(name, config);
+      registered.push([name, config]);
+    }};
+  }}
+  rimz(pi);
+  return {{ handlers, registered, tools }};
+}};
+const first = load(() => {{}});
+const codemodeCalls = [...(globalThis.codemodeCalls ?? [])];
+for (const key of keys) assert.equal(process.env[key], undefined, key);
+if (launched.RIMZ_MCP_SERVE && launched.RIMZ_PI_MCP_EXPOSURE) {{
+  const env = {{ RIMZ_MCP_SERVE: launched.RIMZ_MCP_SERVE }};
+  if (launched.RIMZ_MCP_CWD) env.RIMZ_MCP_CWD = process.env.EXPECT_CWD ?? launched.RIMZ_MCP_CWD;
+  const config = {{
+    command: process.env.RIMZ_BIN,
+    args: ["mcp", "serve", "--launch-env"],
+    timeout: 600,
+    env,
+    ...JSON.parse(launched.RIMZ_PI_MCP_EXPOSURE),
+  }};
+  assert.deepEqual(first.registered, [["rimz", config]]);
+  assert.deepEqual(load(() => {{}}).registered, [["rimz", config]]);
+}} else {{
+  assert.deepEqual(first.registered, []);
+}}
+const only = launched.RIMZ_PI_CODEMODE_ONLY === "1";
+assert.deepEqual(first.tools, only ? ["codemode"] : []);
+assert.deepEqual(codemodeCalls, only ? [{{ mode: "only" }}] : []);
+const refused = load(() => {{ throw new Error("a configured server is named rimz"); }});
+const bare = load(undefined);
+for (const loaded of [refused, bare]) {{
+  for (const event of ["session_start", "before_agent_start", "tool_call", "tool_result"]) {{
+    assert.ok(loaded.handlers.has(event), event);
+  }}
+}}
+"#,
+            serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
+        ),
+    )
+    .unwrap();
+    let run = |vars: &[(&str, &str)]| {
+        let mut command = std::process::Command::new("node");
+        command.arg(&harness).env("RIMZ_BIN", "/opt/rimz/bin/rimz");
+        for key in [
+            "RIMZ_MCP_SERVE",
+            "RIMZ_MCP_CWD",
+            "RIMZ_PI_MCP_EXPOSURE",
+            "RIMZ_PI_CODEMODE_ONLY",
+        ] {
+            command.env_remove(key);
+        }
+        let output = command.envs(vars.iter().copied()).output().unwrap();
+        assert!(
+            output.status.success(),
+            "node harness failed for {vars:?}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let served = [
+        ("RIMZ_MCP_SERVE", "rimz-lsp:always,rimz-wait"),
+        ("RIMZ_MCP_CWD", "/work/tree"),
+        (
+            "RIMZ_PI_MCP_EXPOSURE",
+            r#"{"exposure":"deferred","toolExposure":{"lsp":"direct"}}"#,
+        ),
+    ];
+    run(&served);
+    let mut only = served.to_vec();
+    only.push(("RIMZ_PI_CODEMODE_ONLY", "1"));
+    run(&only);
+    run(&[]);
+    // Pi reads each env value as a config template, where `$$` is a literal `$`.
+    let mut dollar = served.to_vec();
+    dollar[1] = ("RIMZ_MCP_CWD", "/work/$HOME/$$tree");
+    dollar.push(("EXPECT_CWD", "/work/$$HOME/$$$$tree"));
+    run(&dollar);
+    // Every serving Pi launch sets the exposure, so a selection without one is another kind's
+    // (a `pi` an Antigravity agent starts) and registers nothing.
+    run(&served[..2]);
+}
+
+/// A Pi too old for what the launch asks shows a notice in the session naming its version and
+/// the upgrade: below 1.0.4 its `--tools` list drops every MCP tool, so the extension registers
+/// no server, and a Pi with no `createCodemodeExtension` keeps its own codemode. A Pi that has
+/// both shows nothing.
+#[test]
+#[cfg(unix)]
+fn extension_names_the_pi_upgrade_a_launch_needs() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        crate::common::skip("node not on PATH");
+        return;
+    }
+    let run = |pi_version: &str, codemode: bool, want: serde_json::Value| {
+        let dir = tempfile::tempdir().unwrap();
+        let extension_path = stage_extension(dir.path(), pi_version);
+        if !codemode {
+            std::fs::write(
+                dir.path()
+                    .join("node_modules/@earendil-works/pi-coding-agent/index.js"),
+                format!(
+                    "export const VERSION = {};\n",
+                    serde_json::to_string(pi_version).unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        let harness = dir.path().join("harness.mjs");
+        std::fs::write(
+            &harness,
+            format!(
+                r#"
+import assert from "node:assert/strict";
+
+const {{ default: rimz }} = await import({});
+const handlers = new Map();
+const registered = [];
+rimz({{
+  on: (event, handler) => handlers.set(event, handler),
+  events: {{ on: () => () => {{}} }},
+  registerTool: () => {{}},
+  registerMcpServer: (name) => registered.push(name),
+}});
+const notices = [];
+const ctx = {{ ui: {{ notify: (message, type) => notices.push([message, type]) }} }};
+await handlers.get("session_start")({{ reason: "startup" }}, ctx);
+assert.deepEqual({{ registered, notices }}, {});
+"#,
+                serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
+                want,
+            ),
+        )
+        .unwrap();
+        let output = std::process::Command::new("node")
+            .arg(&harness)
+            .env("RIMZ_BIN", "/bin/true")
+            .env("RIMZ_MCP_SERVE", "rimz-lsp")
+            .env("RIMZ_PI_MCP_EXPOSURE", "{}")
+            .env("RIMZ_PI_CODEMODE_ONLY", "1")
+            .env_remove("RIMZ_MCP_CWD")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "node harness failed for Pi {pi_version}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(
+        "1.0.3",
+        true,
+        serde_json::json!({
+            "registered": [],
+            "notices": [[
+                "RimZ cannot serve its MCP tools on Pi 1.0.3: upgrade Pi to 1.0.4 or later",
+                "warning",
+            ]],
+        }),
+    );
+    run(
+        "0.98.0",
+        false,
+        serde_json::json!({
+            "registered": [],
+            "notices": [
+                ["RimZ cannot serve its MCP tools on Pi 0.98.0: upgrade Pi to 1.0.4 or later", "warning"],
+                [
+                    "RimZ cannot switch codemode to its only mode on Pi 0.98.0: upgrade Pi to 0.99.0 or later",
+                    "warning",
+                ],
+            ],
+        }),
+    );
+    run(
+        "1.0.4",
+        true,
+        serde_json::json!({"registered": ["rimz"], "notices": []}),
     );
 }

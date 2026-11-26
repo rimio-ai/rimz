@@ -6825,7 +6825,7 @@ fn explain_shows_the_grant_of_the_launch() {
         ),
         ("web", "agent: pi-crew\ncapabilities: [+web]"),
         (
-            "unreached",
+            "skill-less",
             "agent: pi-crew\ncapabilities: [+rimz-lsp]\nskills: []",
         ),
         ("native", "agent: pi"),
@@ -6865,6 +6865,21 @@ fn explain_shows_the_grant_of_the_launch() {
         actual.push((name, report["grant"].clone(), section));
     }
     let lsp = "mcp(lsp)";
+    let native_reach = [
+        ("rimz-lsp", lsp),
+        ("rimz-wait", "mcp(wait)"),
+        ("rimz-subagents", "mcp(subagent)"),
+        ("rimz-agents", "mcp(agent)"),
+        ("rimz-teams", "mcp(team)"),
+        ("rimz-workflow", "mcp(workflow)"),
+        ("rimz-loop", "mcp(schedule)"),
+        ("rimz-message", "mcp(message)"),
+        (
+            "rimz-control",
+            "mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)",
+        ),
+        ("rimz-notes", "mcp(notes)"),
+    ];
     assert_eq!(
         actual,
         [
@@ -6900,37 +6915,47 @@ fn explain_shows_the_grant_of_the_launch() {
                     "callable: native discovery, less the RimZ skills outside the grant".to_owned(),
                 ],
             ),
+            // Pi is served RimZ's MCP server, so a grant reaches its capability without the
+            // skill, and a profile with no grant reaches every capability.
             (
-                "unreached",
+                "skill-less",
                 serde_json::json!({
                     "tools": ["Read", "Grep", "Glob", "LS", "Skill"],
-                    "rimz_capabilities": [],
+                    "rimz_capabilities": [{"name": "rimz-lsp", "via": lsp}],
                     "subagents": null,
                     "allowed_tools": null,
                 }),
                 vec![
                     "tools: Read, Grep, Glob, LS, Skill".to_owned(),
-                    "rimz: no RimZ capability".to_owned(),
+                    format!("rimz-lsp: {lsp}"),
                     "subagents: unrestricted".to_owned(),
                     "allowed-tools: none".to_owned(),
-                    "callable: none (all manual)".to_owned(),
+                    "callable: rimz-lsp".to_owned(),
                 ],
             ),
             (
                 "native",
                 serde_json::json!({
                     "tools": null,
-                    "rimz_capabilities": [],
+                    "rimz_capabilities": native_reach
+                        .iter()
+                        .map(|(name, via)| serde_json::json!({"name": name, "via": via}))
+                        .collect::<Vec<_>>(),
                     "subagents": null,
                     "allowed_tools": null,
                 }),
-                vec![
-                    "tools: provider default (no tools list)".to_owned(),
-                    "rimz: no RimZ capability".to_owned(),
-                    "subagents: unrestricted".to_owned(),
-                    "allowed-tools: none".to_owned(),
-                    "callable: native discovery".to_owned(),
-                ],
+                std::iter::once("tools: provider default (no tools list)".to_owned())
+                    .chain(
+                        native_reach
+                            .iter()
+                            .map(|(name, via)| format!("{name}: {via}"))
+                    )
+                    .chain([
+                        "subagents: unrestricted".to_owned(),
+                        "allowed-tools: none".to_owned(),
+                        "callable: native discovery".to_owned(),
+                    ])
+                    .collect(),
             ),
         ]
     );

@@ -526,7 +526,11 @@ upward-dependencies = [
 # its kind's declared preset included, for the definition loader and the subagent policy (+2).
 # capabilities::LaunchEnvEdit hands finalize_launch_env the launch's env edits and its McpLaunch,
 # so OpenCode writes RimZ's server into the one inline config the other edits share (+1).
-surface-budget = 1402
+# LaunchCapability::launch_env_server_stale, mcp_launch_env and mcp_tool_load let a kind that
+# serves from the launch env name its stale entry, stamp its own variables beside
+# RIMZ_MCP_SERVE, and read its load back for explain, so launch_plan, launch and explain stay
+# provider-neutral (+3).
+surface-budget = 1405
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1332,7 +1336,9 @@ upward-dependencies = [
 # engine through the same cell build, replacing the resume-side table rewrite (+5).
 # DefinitionSource::tier_exclusions and TierExclusion let `agents validate` ask the engine
 # module for unrunnable tier entries (+1 net).
-surface-budget = 355
+# server_mark is the one lookup of the `rimz` entry's mark, which Pi's launch env and `--tools`
+# list read for the server-level exposure, beside served_marks (+1).
+surface-budget = 356
 
 [[verdict]]
 kind = "item"

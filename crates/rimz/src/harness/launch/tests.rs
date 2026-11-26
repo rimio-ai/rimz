@@ -2333,7 +2333,7 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
             vec![(CODE_MODE_KEY, "0"), (CODE_MODE_MARKER, &marker)],
             untouched.clone(),
         ),
-        // Pi declares no variable, yet clears what an outer Claude launch stamped.
+        // Pi declares its own variable, yet clears what an outer Claude launch stamped.
         (
             "pi",
             None,
@@ -2350,7 +2350,7 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
             "pi",
             Some(true),
             vec![(CODE_MODE_KEY, "1")],
-            untouched.clone(),
+            (None, false, Some(format!("{PI_CODEMODE_ONLY}=1")), false),
         ),
         // Codex switches by argv and declares no variable: an on launch stamps nothing,
         // yet still clears what an outer Claude launch stamped.
@@ -2375,6 +2375,52 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
         .collect();
     let expected: Vec<_> = cases.into_iter().map(|(.., env)| env).collect();
     assert_eq!(actual, expected);
+}
+
+const PI_CODEMODE_ONLY: &str = "RIMZ_PI_CODEMODE_ONLY";
+
+/// Pi's code mode `on` asks its installed extension for codemode `only` through the code-mode
+/// stamp, on a launch that serves no MCP tool too; auto and off release the stamped pair.
+#[test]
+fn pi_code_mode_on_stamps_codemode_only_without_a_served_tool() {
+    let project = tempfile::tempdir().expect("project");
+    let stamped = format!("{PI_CODEMODE_ONLY}=1");
+    let compile = |code_mode: Option<bool>, inherited: &[(&str, &str)]| {
+        let mut invocation = team_request("pi");
+        invocation.identity.params.code_mode = code_mode;
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &LaunchReminders {
+                settings: Some((project.path().into(), env(inherited))),
+                ..Default::default()
+            },
+        )
+        .expect("process");
+        assert_eq!(process.env.get(crate::mcp::launch_env::ENV_SERVE), None);
+        (
+            process.env.get(PI_CODEMODE_ONLY).cloned(),
+            process.unset.contains(PI_CODEMODE_ONLY),
+            process.env.get(CODE_MODE_MARKER).cloned(),
+        )
+    };
+    assert_eq!(
+        compile(Some(true), &[]),
+        (Some("1".to_owned()), false, Some(stamped.clone()))
+    );
+    for code_mode in [None, Some(false)] {
+        assert_eq!(
+            compile(
+                code_mode,
+                &[(PI_CODEMODE_ONLY, "1"), (CODE_MODE_MARKER, &stamped)]
+            ),
+            (None, true, None),
+            "code mode {code_mode:?}"
+        );
+    }
 }
 
 const CODE_MODE_CONFIG_MARKER: &str = "RIMZ_CODE_MODE_CONFIG";

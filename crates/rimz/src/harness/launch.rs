@@ -894,10 +894,7 @@ impl ExecRequest {
         let Some(grant) = &self.rimz_capabilities else {
             return crate::config::served_marks(self.mcps.as_deref());
         };
-        let server_mark = grant
-            .iter()
-            .find(|entry| entry.is_server())
-            .and_then(crate::config::RimzEntry::mode);
+        let server_mark = crate::config::server_mark(self.mcp_list().as_deref());
         crate::mcp::catalog::Capability::ALL
             .into_iter()
             .filter_map(|capability| {
@@ -1646,18 +1643,27 @@ fn compile_agent_process_with_extra_env(
         }
     }
     // A launch hands its own MCP selection to a provider-started server, never its caller's.
-    match reminders.mcp_launch_env(request) {
-        Some(vars) => {
-            for (key, value) in vars {
+    let served = reminders.mcp_served(request);
+    let launch_vars = reminders.mcp_launch_env(&served);
+    let adapter_vars = adapter.mcp_launch_env(
+        launch_vars.is_some().then_some(&served[..]),
+        crate::config::server_mark(request.mcp_list().as_deref()),
+        code_mode,
+    );
+    let vars: Vec<(&str, Option<String>)> = match launch_vars {
+        Some(vars) => vars.map(|(key, value)| (key, Some(value))).into(),
+        None => vec![
+            (crate::mcp::launch_env::ENV_SERVE, None),
+            (crate::mcp::launch_env::ENV_CWD, None),
+        ],
+    };
+    for (key, value) in vars.into_iter().chain(adapter_vars) {
+        match value {
+            Some(value) => {
                 unset.remove(key);
                 env.insert(key.to_owned(), value);
             }
-        }
-        None => {
-            for key in [
-                crate::mcp::launch_env::ENV_SERVE,
-                crate::mcp::launch_env::ENV_CWD,
-            ] {
+            None => {
                 env.remove(key);
                 unset.insert(key.to_owned());
             }
@@ -1673,6 +1679,7 @@ fn compile_agent_process_with_extra_env(
             login_env: &skill_env,
             rendered_tools: request.tools.as_deref(),
             code_mode,
+            served: &served,
         });
     let env_warnings = adapter.finalize_launch_env(
         &skill_env,
