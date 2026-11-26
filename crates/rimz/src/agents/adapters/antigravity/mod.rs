@@ -1085,21 +1085,16 @@ struct DecodedLifecycleFields {
     turn_error: Option<AgentTurnError>,
 }
 
-/// The marker for a string `Stop.error`, classified on the whole message and labelled with the
-/// provider's sentence when the stop names a limit, so the card shows the quota rather than the
-/// transport prefix. The marker carries the refill the stop names, so the quota stop confirms
-/// no model refusal.
+/// The marker for a string `Stop.error`, classified by agy's status form ([`status_verdict`])
+/// over the whole message and labelled with the provider's sentence when the stop names a limit,
+/// so the card shows the quota rather than the transport prefix. The marker carries the refill
+/// the stop names, so the quota stop confirms no model refusal.
 fn antigravity_turn_error(
     message: &str,
     limit_stop: Option<&crate::agents::TurnLimitStop>,
 ) -> Option<AgentTurnError> {
+    let verdict = status_verdict(message);
     let message = crate::agents::context::cap_turn_error_label(message)?;
-    // Overload / transient server errors stay `Failed` for Antigravity rather
-    // than arming backoff retries.
-    let class = match TurnErrorClass::classify_label(Some(message.as_str())) {
-        TurnErrorClass::PausedOverloaded => TurnErrorClass::Failed,
-        class => class,
-    };
     let label = limit_stop
         .and_then(|limit| limit.label.as_deref())
         .and_then(crate::agents::context::cap_turn_error_label)
@@ -1110,13 +1105,70 @@ fn antigravity_turn_error(
         .and_then(|secs| i64::try_from(secs).ok())
         .and_then(|secs| at.checked_add(jiff::SignedDuration::from_secs(secs)).ok());
     Some(AgentTurnError {
-        model: None,
-        ended_turn: false,
-        class,
-        at,
-        label: Some(label),
         refill_at,
+        ..AgentTurnError::classified(at, Some(label), verdict)
     })
+}
+
+/// The gRPC status names agy prints for a transient server error, in the camel case of its
+/// `transport error (<status>)` templates and the upper snake case of `<STATUS> (code <code>)`.
+const OVERLOAD_STATUSES: [&str; 6] = [
+    "Unavailable",
+    "Internal",
+    "DeadlineExceeded",
+    "UNAVAILABLE",
+    "INTERNAL",
+    "DEADLINE_EXCEEDED",
+];
+
+/// agy's verdict from the status form its stop templates print. A code
+/// (`transport error (<status>, HTTP <code>)`, `transport error (HTTP <code>)`, or
+/// `<STATUS> (code <code>)`, the last only right after an upper-snake status) decides alone: 429
+/// is a rate limit, a 5xx an overload, and any other code a failure. A code that is not three
+/// digits, or a `(code <code>)` after anything but such a status, is no code. Without a code, an
+/// `OVERLOAD_STATUSES` name as the whole `transport error (<status>)` is an overload. Any other
+/// text gives no verdict.
+fn status_verdict(error: &str) -> Option<TurnErrorClass> {
+    const TRANSPORT: &str = "transport error (";
+    const GRPC_CODE: &str = " (code ";
+    let enclosed = |marker: &'static str| {
+        error.match_indices(marker).filter_map(move |(at, _)| {
+            let (inside, _) = error[at + marker.len()..].split_once(')')?;
+            Some((&error[..at], inside))
+        })
+    };
+    let code = |digits: &str| {
+        (digits.len() == 3 && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse::<u16>().ok())
+            .flatten()
+    };
+    let after_status = |before: &str| {
+        let rest = before.trim_end_matches(|ch: char| ch.is_ascii_uppercase() || ch == '_');
+        before[rest.len()..]
+            .bytes()
+            .any(|byte| byte.is_ascii_uppercase())
+            && !rest.ends_with(|ch: char| ch.is_ascii_alphanumeric())
+    };
+    let http_codes = enclosed(TRANSPORT).filter_map(|(_, status)| {
+        status
+            .rsplit_once(", HTTP ")
+            .map(|(_, digits)| digits)
+            .or_else(|| status.strip_prefix("HTTP "))
+            .and_then(code)
+    });
+    let grpc_codes = enclosed(GRPC_CODE)
+        .filter(|(before, _)| after_status(before))
+        .filter_map(|(_, digits)| code(digits));
+    if let Some(code) = http_codes.chain(grpc_codes).next() {
+        return Some(match code {
+            429 => TurnErrorClass::PausedRateLimit,
+            500..=599 => TurnErrorClass::PausedOverloaded,
+            _ => TurnErrorClass::Failed,
+        });
+    }
+    enclosed(TRANSPORT)
+        .any(|(_, status)| OVERLOAD_STATUSES.contains(&status))
+        .then_some(TurnErrorClass::PausedOverloaded)
 }
 
 fn decode_lifecycle_fields(
