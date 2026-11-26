@@ -326,11 +326,11 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 /// What a launch hands its provider for MCP: RimZ's server and the load mode
-/// of each of its tools, the user's servers it keeps, each `mcps` mark the
-/// adapter did not apply beside the line it concerns, and the provider
-/// arguments that carry them, all read from the compiled plan; then the
-/// instructions and each tool's description and schema, as the server sends
-/// them.
+/// of each of its tools (Pi's own exposure on Pi), the user's servers it
+/// keeps, each `mcps` mark the adapter did not apply beside the line it
+/// concerns, and the provider arguments that carry them, all read from the
+/// compiled plan; then the instructions and each tool's description and
+/// schema, as the server sends them.
 fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io::Result<()> {
     let kind = plan.request.kind.as_str();
     let adapter = rimz::agents::find_definition(kind).expect("compiled agent has an adapter");
@@ -359,12 +359,20 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         mcp_arguments(&process.provider_argv)
     };
     let served = &plan.mcp_capabilities[..];
-    let launch_env_keys: &[&str] = if adapter.serves_mcp_from_launch_env() {
-        &[launch_env::ENV_SERVE, launch_env::ENV_CWD]
+    let launch_env_keys: Vec<&str> = if adapter.serves_mcp_from_launch_env() {
+        [launch_env::ENV_SERVE, launch_env::ENV_CWD]
+            .into_iter()
+            .chain(
+                adapter
+                    .mcp_launch_env(None, None, None)
+                    .into_iter()
+                    .map(|(key, _)| key),
+            )
+            .collect()
     } else if inline_config.is_some() {
-        &[OPENCODE_TOOL_LOADS]
+        vec![OPENCODE_TOOL_LOADS]
     } else {
-        &[]
+        Vec::new()
     };
     let launch_env: Vec<(&str, &str)> = launch_env_keys
         .iter()
@@ -375,7 +383,9 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     let resumes = rides_agent_file && !matches!(plan.request.action, ExecAction::Launch { .. });
     let kept = "kept from the conversation's start: a resume writes no agent file";
     let rimz_line = if let Some((flag, value)) = &plan.mcp_switched_off {
-        format!("off: {flag} {value}")
+        format!("off: {flag} {value}").trim_end().to_owned()
+    } else if let Some(stale) = &plan.mcp_stale {
+        format!("not handed over: {stale}")
     } else if !served.is_empty() {
         let names: Vec<_> = served.iter().map(|c| c.name()).collect();
         match adapter.mcp_server_name() {
@@ -445,7 +455,9 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             let load = if inline_config.is_some() {
                 opencode_load(&arguments, &launch_env, tool.name)
             } else {
-                load_mode(&arguments, &launch_env, tool.capability)
+                adapter
+                    .mcp_tool_load(&process.env, tool.name)
+                    .unwrap_or_else(|| load_mode(&arguments, &launch_env, tool.capability))
             };
             let marks = unapplied.iter().filter(|mark| {
                 tool.capability
@@ -490,6 +502,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             "CODEX_ROLLOUT_TRACE_ROOT=<dir> on a launch: Codex writes each request's tool \
              declarations there",
         ],
+        "pi" => &["/mcp in the Pi session: the rimz server and each tool's exposure"],
         _ => &[],
     };
     writeln!(w, "\nCheck it")?;

@@ -534,6 +534,7 @@ fn serve(
         login_env: inherited,
         rendered_tools: None,
         code_mode,
+        served: &[],
     };
     let mut unset = std::collections::BTreeSet::new();
     let warnings = OpencodeAdapter.finalize_launch_env(

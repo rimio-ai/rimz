@@ -82,6 +82,9 @@ pub struct McpLaunch<'a> {
     pub rendered_tools: Option<&'a [String]>,
     /// The launch's code mode: on, off, or auto (`None`).
     pub code_mode: Option<bool>,
+    /// Each capability RimZ's server serves the launch, with its load mark; empty when it
+    /// serves none.
+    pub served: &'a [crate::mcp::launch_env::Served],
 }
 
 impl McpLaunch<'_> {
@@ -866,6 +869,32 @@ pub trait LaunchCapability: CoreCapability {
     /// The name this agent knows RimZ's MCP server by, in its tool names and permission rules.
     fn mcp_server_name(&self) -> &'static str {
         crate::mcp::catalog::SERVER_NAME
+    }
+
+    /// Why this agent's own entry for RimZ's server cannot take a launch's selection from the
+    /// launch env (an installed entry that differs from the one this binary ships): the launch
+    /// warning, with its fix, for a launch that then serves nothing.
+    fn launch_env_server_stale(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
+        None
+    }
+
+    /// The variables of this agent's own beside `RIMZ_MCP_SERVE` that its server entry reads,
+    /// each with its value for the launch's `served` selection, the `server_mark` on its `rimz`
+    /// entry, and `code_mode`, or `None` to clear it. `served` is `None` on a launch that
+    /// serves nothing from the launch env.
+    fn mcp_launch_env(
+        &self,
+        _served: Option<&[crate::mcp::launch_env::Served]>,
+        _server_mark: Option<crate::mcp::catalog::LoadMode>,
+        _code_mode: Option<bool>,
+    ) -> Vec<(&'static str, Option<String>)> {
+        Vec::new()
+    }
+
+    /// The load this agent gives RimZ's tool `tool`, in its own words, read from the launch's
+    /// compiled `env`; `None` where the load marks RimZ passes say it.
+    fn mcp_tool_load(&self, _env: &BTreeMap<String, String>, _tool: &str) -> Option<&'static str> {
+        None
     }
 
     /// Register RimZ's MCP server and keep only the user's servers a `mcps`

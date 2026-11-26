@@ -1,5 +1,5 @@
 //! RimZ's MCP server entry, its grant, and the `mcps` allowlist, through the
-//! launch compiler, on Claude, Codex, and a kind that takes neither.
+//! launch compiler, on Claude, Codex, Antigravity, Pi, and a kind that takes neither.
 
 use super::*;
 
@@ -509,7 +509,7 @@ fn codex_mcps_lists_disable_only_the_unlisted_servers_the_account_configures() {
 fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
     let room = Room::new();
     for mcps in [None, Some(&["github"][..])] {
-        let plan = room.compile(&switches(true, true), &launch("pi", mcps, &[]));
+        let plan = room.compile(&switches(true, true), &launch("amp", mcps, &[]));
         assert!(
             !plan
                 .process()
@@ -522,7 +522,7 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
         let warnings = mcp_warnings(&plan);
         let expected: &[&str] = if mcps.is_some() {
             &[
-                "pi takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual",
+                "amp takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual",
             ]
         } else {
             &[]
@@ -849,6 +849,430 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     }
 }
 
+/// The launch variables a Pi launch hands its installed extension to serve RimZ: the selection
+/// and cwd, then the registration's exposure fields.
+const PI_KEYS: [&str; 3] = ["RIMZ_MCP_SERVE", "RIMZ_MCP_CWD", "RIMZ_PI_MCP_EXPOSURE"];
+
+/// The codemode-`only` switch a Pi launch sets, which follows code mode and not the server.
+fn codemode_only(plan: &LaunchPlan) -> Option<&str> {
+    plan.process()
+        .env
+        .get("RIMZ_PI_CODEMODE_ONLY")
+        .map(String::as_str)
+}
+
+/// Each Pi launch variable the plan sets, by name; every one it does not set is also unset.
+fn pi_env(plan: &LaunchPlan) -> BTreeMap<&'static str, String> {
+    let process = plan.process();
+    PI_KEYS
+        .into_iter()
+        .filter_map(|key| match process.env.get(key) {
+            Some(value) => {
+                assert!(!process.unset.contains(key), "{key}: {:?}", process.unset);
+                Some((key, value.clone()))
+            }
+            None => {
+                assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
+                None
+            }
+        })
+        .collect()
+}
+
+/// Pi serves from its installed extension through the launch env, on a fresh launch and a
+/// resume alike. The exposure fields follow the served marks (the capability's own over the
+/// `rimz` entry's): `:always` is `direct`, `:deferred` is `deferred`, and an unmarked tool
+/// keeps Pi's default except under `code-mode off`, where the whole server is `deferred`. The
+/// `rimz` mark sets the server's exposure, so the tools of no capability follow it too. A launch
+/// that serves nothing clears every variable, even one its caller's environment carries.
+/// `code-mode on` asks for codemode `only` whether the launch serves or not.
+#[test]
+fn pi_serves_through_the_launch_env_with_its_exposures() {
+    let mut room = Room::new();
+    for key in PI_KEYS {
+        room.ambient.insert(key.into(), "caller".into());
+    }
+    let cwd = room.project.path().display().to_string();
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
+    let compile = |mcps: Option<&[&str]>, code_mode: Option<bool>, tools: bool| {
+        let mut request = launch("pi", mcps, &[]);
+        request.identity.params.code_mode = code_mode;
+        room.compile(&switches(true, tools), &request)
+    };
+    let served = |serve: &str, exposure: &str| {
+        BTreeMap::from([
+            ("RIMZ_MCP_SERVE", serve.to_owned()),
+            ("RIMZ_MCP_CWD", cwd.clone()),
+            ("RIMZ_PI_MCP_EXPOSURE", exposure.to_owned()),
+        ])
+    };
+
+    let plan = compile(None, None, true);
+    assert_eq!(pi_env(&plan), served(all, "{}"));
+    assert_eq!(
+        plan.mcp_capabilities,
+        crate::mcp::catalog::Capability::ALL.to_vec()
+    );
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
+    assert_eq!(unapplied(&plan), Vec::<String>::new());
+
+    // The list limits the user's servers too, which Pi warns of (tested beside the warning).
+    let marked = Some(&["rimz-lsp:always", "rimz-wait"][..]);
+    let serve = "rimz-lsp:always,rimz-wait";
+    for (code_mode, exposure, only) in [
+        (None, r#"{"toolExposure":{"lsp":"direct"}}"#, false),
+        (Some(true), r#"{"toolExposure":{"lsp":"direct"}}"#, true),
+        (
+            Some(false),
+            r#"{"exposure":"deferred","toolExposure":{"lsp":"direct"}}"#,
+            false,
+        ),
+    ] {
+        let plan = compile(marked, code_mode, true);
+        assert_eq!(
+            pi_env(&plan),
+            served(serve, exposure),
+            "code mode {code_mode:?}"
+        );
+        assert_eq!(codemode_only(&plan), only.then_some("1"));
+    }
+
+    // The `rimz` mark sets the server's exposure, which the tools of no group take, over the
+    // `code-mode off` default; it covers every served capability without a mark of its own.
+    let exposure = |plan: &LaunchPlan| -> serde_json::Value {
+        serde_json::from_str(&pi_env(plan)["RIMZ_PI_MCP_EXPOSURE"]).unwrap()
+    };
+    for (mcps, code_mode, server) in [
+        (&["*", "rimz:always"][..], Some(false), "direct"),
+        (&["*", "rimz:deferred"], Some(true), "deferred"),
+        (&["*", "rimz:always"], None, "direct"),
+    ] {
+        let plan = compile(Some(mcps), code_mode, true);
+        assert_eq!(exposure(&plan)["exposure"], server, "{mcps:?}");
+    }
+    let mut granted = launch("pi", None, &[]);
+    granted.rimz_capabilities = Some(vec![
+        "rimz-lsp".parse().unwrap(),
+        "rimz:always".parse().unwrap(),
+    ]);
+    let plan = room.compile(&switches(true, true), &granted);
+    assert_eq!(exposure(&plan), serde_json::json!({"exposure": "direct"}));
+    let plan = compile(Some(&["*", "rimz:deferred", "rimz-lsp:always"]), None, true);
+    assert_eq!(
+        exposure(&plan),
+        serde_json::json!({"exposure": "deferred", "toolExposure": {"lsp": "direct"}})
+    );
+
+    // The server-level exposure is always one a served tool takes, the most common, so Pi's
+    // configured exposures are the served ones: with every tool marked, it is the marks', and
+    // `code-mode off` adds no `deferred` no tool takes.
+    for (mcps, code_mode, fields) in [
+        (&["rimz-notes:always"][..], None, r#"{"exposure":"direct"}"#),
+        (
+            &["rimz-notes:always"],
+            Some(false),
+            r#"{"exposure":"direct"}"#,
+        ),
+        (&["rimz-notes:deferred"], None, r#"{"exposure":"deferred"}"#),
+        (
+            &["rimz-notes:deferred", "rimz-lsp:always"],
+            None,
+            r#"{"exposure":"direct","toolExposure":{"notes":"deferred"}}"#,
+        ),
+    ] {
+        let plan = compile(Some(mcps), code_mode, true);
+        assert_eq!(
+            pi_env(&plan)["RIMZ_PI_MCP_EXPOSURE"],
+            fields,
+            "{mcps:?}, code mode {code_mode:?}"
+        );
+    }
+
+    for (code_mode, tools) in [(Some(true), true), (None, false), (Some(true), false)] {
+        let plan = compile(marked, code_mode, tools);
+        assert_eq!(
+            codemode_only(&plan),
+            (code_mode == Some(true)).then_some("1"),
+            "code mode {code_mode:?}, tools {tools}"
+        );
+        if !tools {
+            assert_eq!(pi_env(&plan), BTreeMap::new(), "code mode {code_mode:?}");
+            assert!(plan.mcp_capabilities.is_empty());
+        }
+    }
+    assert_eq!(pi_env(&compile(Some(&[]), None, true)), BTreeMap::new());
+
+    let mut resumed = launch("pi", marked, &[]);
+    resumed.action = ExecAction::Resume {
+        session_id: "session".to_owned(),
+        extra_args: Vec::new(),
+    };
+    let plan = room.compile(&switches(true, true), &resumed);
+    assert_eq!(
+        pi_env(&plan),
+        served(serve, r#"{"toolExposure":{"lsp":"direct"}}"#)
+    );
+
+    // `--no-mcp` connects no server, and `--no-extensions` loads no `rimz.ts` to register
+    // one, so the launch serves nothing and reaches RimZ through its skills.
+    for flag in ["--no-mcp", "--no-extensions", "-ne"] {
+        let plan = room.compile_at(
+            &switches(true, true),
+            &launch("pi", None, &[flag]),
+            Isolation::Scoped,
+        );
+        assert_eq!(pi_env(&plan), BTreeMap::new(), "{flag}");
+        assert!(plan.mcp_capabilities.is_empty(), "{flag}");
+        assert_eq!(plan.hidden_skills, Vec::<&str>::new(), "{flag}");
+        assert_eq!(
+            plan.mcp_switched_off,
+            Some((flag.to_owned(), String::new()))
+        );
+    }
+}
+
+/// Pi cannot switch its own servers off per launch, so a list that limits them warns and RimZ's
+/// entries in it still apply; a list with `*`, no list, and a grant alone do not warn. A mark on
+/// one of the user's servers is unapplied, shown in explain and never warned of.
+#[test]
+fn pi_warns_of_a_limiting_mcps_list_and_reports_a_user_server_mark_unapplied() {
+    let room = Room::new();
+    let limits = "Pi cannot limit its own MCP servers per launch: the profile's mcps list applies \
+                  to RimZ's capabilities only, and Pi loads every server it configures";
+    for (mcps, warns) in [
+        (None, false),
+        (Some(&["*"][..]), false),
+        (Some(&["*", "github"]), false),
+        (Some(&["github"]), true),
+        (Some(&["rimz-lsp"]), true),
+        (Some(&[]), true),
+    ] {
+        let plan = room.compile(&switches(true, true), &launch("pi", mcps, &[]));
+        let want: &[&str] = if warns { &[limits] } else { &[] };
+        assert_eq!(mcp_warnings(&plan), want, "{mcps:?}");
+    }
+    let plan = room.compile(
+        &switches(true, true),
+        &launch("pi", Some(&["rimz-lsp", "github"]), &[]),
+    );
+    assert_eq!(pi_env(&plan)["RIMZ_MCP_SERVE"], "rimz-lsp");
+
+    let mut granted = launch("pi", None, &[]);
+    granted.rimz_capabilities = Some(vec!["rimz-lsp".parse().unwrap()]);
+    let plan = room.compile(&switches(true, true), &granted);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
+    assert_eq!(pi_env(&plan)["RIMZ_MCP_SERVE"], "rimz-lsp");
+
+    let plan = room.compile(
+        &switches(true, true),
+        &launch("pi", Some(&["*", "github:always"]), &[]),
+    );
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
+    assert_eq!(
+        unapplied(&plan),
+        [
+            "the mcps entry `github:always` is not applied: Pi takes a load mode only for RimZ's \
+          server and its capabilities"
+        ]
+    );
+}
+
+/// An installed extension that differs from the shipped one reads no launch variable, so a Pi
+/// launch that would serve warns with the fix and serves nothing, reaching RimZ through its
+/// skills. A missing extension is not stale: the launch serves as usual.
+#[test]
+fn a_stale_pi_extension_falls_back_to_skills_with_a_warning() {
+    let room = Room::new();
+    let installed = Path::new(&room.ambient["HOME"]).join(".pi/agent/extensions/rimz.ts");
+    let plan = room.compile(&switches(true, true), &launch("pi", None, &[]));
+    assert_eq!(pi_env(&plan).len(), 3);
+
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, "// RimZ Pi extension — _rimz_managed\nold\n").unwrap();
+    let stale = format!(
+        "the installed Pi extension {} differs from the one this rimz ships, so this launch \
+         reaches RimZ through its skills: run `rimz hooks install pi`",
+        installed.display()
+    );
+    let plan = room.compile(&switches(true, true), &launch("pi", None, &[]));
+    assert_eq!(pi_env(&plan), BTreeMap::new());
+    assert!(plan.mcp_capabilities.is_empty());
+    assert_eq!(plan.mcp_stale.as_deref(), Some(stale.as_str()));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| matches!(warning, LaunchPlanWarning::LaunchEnv(text) if *text == stale)),
+        "{:?}",
+        plan.warnings
+    );
+    // A launch that would serve nothing has nothing to warn of.
+    let plan = room.compile(&switches(true, false), &launch("pi", None, &[]));
+    assert_eq!(plan.mcp_stale, None);
+    assert!(
+        !plan
+            .warnings
+            .iter()
+            .any(|warning| warning.to_string() == stale)
+    );
+}
+
+/// RimZ's rendered Pi `--tools` list keeps Pi's MCP machinery: it names every MCP tool and the
+/// three resource tools, so it limits only Pi's own tools, and each discovery tool Pi would turn
+/// on for the served exposures (`codemode` for a `codemode` tool unless code mode is off,
+/// `tool_search` for a `deferred` one). A list the user passes, and a modifiers-only list,
+/// stay as written.
+#[test]
+fn pi_rendered_tools_keep_mcp_tools_and_name_the_discovery_tools() {
+    let room = Room::new();
+    let argv = |server: bool,
+                rendered: bool,
+                args: &[&str],
+                mcps: Option<&[&str]>,
+                code_mode: Option<bool>| {
+        let mut request = launch("pi", mcps, args);
+        request.tools = rendered.then(|| vec!["Bash".to_owned()]);
+        request.identity.params.code_mode = code_mode;
+        let argv = room
+            .compile(&switches(true, server), &request)
+            .process()
+            .provider_argv
+            .clone();
+        flag_values(&argv, "--tools")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let mcp = "mcp__*,list_mcp_resources,list_mcp_resource_templates,read_mcp_resource";
+    let bash = &["--tools", "bash"][..];
+    for (server, rendered, args, mcps, code_mode, want) in [
+        (true, true, bash, None, None, format!("bash,{mcp},codemode")),
+        (
+            true,
+            true,
+            &["--tools", "bash,codemode"][..],
+            None,
+            Some(true),
+            format!("bash,codemode,{mcp}"),
+        ),
+        (
+            true,
+            true,
+            bash,
+            None,
+            Some(false),
+            format!("bash,{mcp},tool_search"),
+        ),
+        (
+            true,
+            true,
+            bash,
+            Some(&["rimz-notes:deferred"][..]),
+            None,
+            format!("bash,{mcp},tool_search"),
+        ),
+        (
+            true,
+            true,
+            bash,
+            Some(&["rimz-notes:always"][..]),
+            Some(false),
+            format!("bash,{mcp}"),
+        ),
+        (
+            true,
+            true,
+            bash,
+            Some(&["rimz-notes:always", "rimz-lsp"][..]),
+            None,
+            format!("bash,{mcp},codemode"),
+        ),
+        (false, true, bash, None, None, format!("bash,{mcp}")),
+        (true, false, bash, None, None, "bash".to_owned()),
+        (
+            true,
+            false,
+            &["--tools", "+codemode"][..],
+            None,
+            Some(true),
+            "+codemode".to_owned(),
+        ),
+    ] {
+        assert_eq!(
+            argv(server, rendered, args, mcps, code_mode),
+            [want],
+            "server {server}, rendered {rendered}, args {args:?}, mcps {mcps:?}, code mode \
+             {code_mode:?}"
+        );
+    }
+    assert_eq!(
+        argv(
+            true,
+            true,
+            &["--tools", "bash", "--tools", "read"],
+            None,
+            None
+        ),
+        [format!("bash,{mcp},codemode"), "read".to_owned()]
+    );
+
+    // A list that maps to no Pi tool limits Pi's own tools to none and keeps MCP, which
+    // `--no-tools` would switch off, so a launch granted only RimZ's tools still reaches them.
+    // `--no-mcp` connects no server, so there is no MCP to keep.
+    let no_tools = |args: &[&str], code_mode: Option<bool>, granted: bool| {
+        let mut request = launch("pi", None, args);
+        request.tools = Some(Vec::new());
+        request.identity.params.code_mode = code_mode;
+        if granted {
+            request.rimz_capabilities = Some(vec!["rimz-lsp".parse().unwrap()]);
+        }
+        let plan = room.compile(&switches(true, true), &request);
+        let process = plan.process();
+        (
+            process.provider_argv.clone(),
+            process.env.get("RIMZ_MCP_SERVE").cloned(),
+        )
+    };
+    for (args, code_mode, granted, want) in [
+        (&["--no-tools"][..], None, false, format!("{mcp},codemode")),
+        (
+            &["--no-tools", "--no-skills"],
+            None,
+            true,
+            format!("{mcp},codemode"),
+        ),
+        (
+            &["--no-tools", "--exclude-tools", "codemode"],
+            Some(false),
+            true,
+            format!("{mcp},tool_search"),
+        ),
+    ] {
+        let (argv, serve) = no_tools(args, code_mode, granted);
+        assert!(!argv.iter().any(|arg| arg == "--no-tools"), "{argv:?}");
+        assert_eq!(flag_values(&argv, "--tools"), [want.as_str()], "{argv:?}");
+        if granted {
+            assert_eq!(serve.as_deref(), Some("rimz-lsp"), "{argv:?}");
+        }
+    }
+    // RimZ's rendered flag comes first; a later `--tools` is the user's own and stays as written.
+    let (argv, _) = no_tools(&["--no-tools", "--tools", "+grep"], None, false);
+    assert_eq!(
+        flag_values(&argv, "--tools"),
+        [format!("{mcp},codemode").as_str(), "+grep"],
+        "{argv:?}"
+    );
+    assert!(!argv.iter().any(|arg| arg == "--no-tools"), "{argv:?}");
+    let (argv, serve) = no_tools(&["--no-tools", "--no-mcp"], None, false);
+    assert!(argv.iter().any(|arg| arg == "--no-tools"), "{argv:?}");
+    assert!(argv.iter().any(|arg| arg == "--no-mcp"), "{argv:?}");
+    assert_eq!(
+        flag_values(&argv, "--tools"),
+        Vec::<&str>::new(),
+        "{argv:?}"
+    );
+    assert_eq!(serve, None);
+}
+
 /// The marks the launch cannot apply, as `rimz agents explain --mcps` reports them.
 fn unapplied(plan: &LaunchPlan) -> Vec<String> {
     plan.process()
@@ -1115,7 +1539,7 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
         (&["*", "*"], false),
         (&["*", "github"], true),
     ] {
-        let plan = room.compile(&switches(true, true), &launch("pi", Some(mcps), &[]));
+        let plan = room.compile(&switches(true, true), &launch("amp", Some(mcps), &[]));
         assert_eq!(mcp_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
     }
 }
@@ -1123,35 +1547,48 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
 /// A launch that registers a capability's tools hides the rimz skill of the
 /// same name from the model, on Claude and Codex, with a profile list and
 /// without one; a launch that registers nothing hides nothing.
-/// Antigravity hides the skills of the capabilities it serves only in the scoped view, on a
-/// launch with no agent file and on a resume too: on the host agy has no per-launch skill
-/// switch, so the launch hides none and reports none hidden.
+/// Antigravity and Pi hide the skills of the capabilities they serve only in the scoped view,
+/// on a launch with no agent file and on a resume too: on the host neither has a per-launch
+/// skill switch, so the launch hides none and reports none hidden.
 #[test]
-fn antigravity_hides_the_skills_of_the_capabilities_it_serves_only_when_scoped() {
+fn antigravity_and_pi_hide_the_skills_of_the_capabilities_they_serve_only_when_scoped() {
     let room = Room::new();
-    let mut request = launch("antigravity", Some(&["rimz-lsp", "rimz-wait"]), &[]);
     let hidden = |request: &ExecRequest, tools: bool, isolation| {
         room.compile_at(&switches(true, tools), request, isolation)
             .hidden_skills
     };
-    assert_eq!(
-        hidden(&request, true, Isolation::Scoped),
-        ["rimz-lsp", "rimz-wait"]
-    );
-    assert_eq!(hidden(&request, true, Isolation::Host), Vec::<&str>::new());
-    request.action = ExecAction::Resume {
-        session_id: "conversation".to_owned(),
-        extra_args: Vec::new(),
-    };
-    assert_eq!(
-        hidden(&request, true, Isolation::Scoped),
-        ["rimz-lsp", "rimz-wait"]
-    );
-    assert_eq!(hidden(&request, true, Isolation::Host), Vec::<&str>::new());
-    assert_eq!(
-        hidden(&request, false, Isolation::Scoped),
-        Vec::<&str>::new()
-    );
+    for kind in ["antigravity", "pi"] {
+        let mut request = launch(kind, Some(&["rimz-lsp", "rimz-wait"]), &[]);
+        assert_eq!(
+            hidden(&request, true, Isolation::Scoped),
+            ["rimz-lsp", "rimz-wait"],
+            "{kind}"
+        );
+        assert_eq!(
+            hidden(&request, true, Isolation::Host),
+            Vec::<&str>::new(),
+            "{kind}"
+        );
+        request.action = ExecAction::Resume {
+            session_id: "conversation".to_owned(),
+            extra_args: Vec::new(),
+        };
+        assert_eq!(
+            hidden(&request, true, Isolation::Scoped),
+            ["rimz-lsp", "rimz-wait"],
+            "{kind}"
+        );
+        assert_eq!(
+            hidden(&request, true, Isolation::Host),
+            Vec::<&str>::new(),
+            "{kind}"
+        );
+        assert_eq!(
+            hidden(&request, false, Isolation::Scoped),
+            Vec::<&str>::new(),
+            "{kind}"
+        );
+    }
 }
 
 #[test]
@@ -1163,30 +1600,33 @@ fn a_child_and_a_judge_are_served_no_capability_that_launches() {
         room.compile(&switches(true, true), request)
             .mcp_capabilities
     };
-    let peer = served(&launch("claude", None, &[]));
-    for capability in [Capability::Subagents, Capability::Agents, Capability::Teams] {
-        assert!(peer.contains(&capability), "{peer:?}");
-    }
-    let mut child = launch("claude", None, &[]);
-    child.subagent = true;
-    let mut judge = launch("claude", None, &[]);
-    judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
-        run: crate::ids::WorkflowRunId::new(),
-        seq: 1,
-        role: crate::agents::WorkflowAttemptRole::Judge,
-    });
-    for request in [child, judge] {
-        assert_eq!(
-            served(&request),
-            [
-                Capability::Lsp,
-                Capability::Wait,
-                Capability::Workflow,
-                Capability::Message,
-                Capability::Control,
-                Capability::Notes
-            ]
-        );
+    for kind in ["claude", "pi"] {
+        let peer = served(&launch(kind, None, &[]));
+        for capability in [Capability::Subagents, Capability::Agents, Capability::Teams] {
+            assert!(peer.contains(&capability), "{kind}: {peer:?}");
+        }
+        let mut child = launch(kind, None, &[]);
+        child.subagent = true;
+        let mut judge = launch(kind, None, &[]);
+        judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Judge,
+        });
+        for request in [child, judge] {
+            assert_eq!(
+                served(&request),
+                [
+                    Capability::Lsp,
+                    Capability::Wait,
+                    Capability::Workflow,
+                    Capability::Message,
+                    Capability::Control,
+                    Capability::Notes
+                ],
+                "{kind}"
+            );
+        }
     }
 }
 
@@ -1767,6 +2207,11 @@ fn prompt_rewrite_reaches_every_prompt_channel_and_keeps_unmodified_author_files
     // TextFlag kind (Pi): argv carries the rewritten text.
     let mut pi = launch("pi", None, &[]);
     pi.system_prompt_file = Some(rewritten_file.clone().into());
+    let pi_plan = room.compile(&switches(true, true), &pi);
+    assert_eq!(
+        flag_values(&pi_plan.process().provider_argv, "--system-prompt"),
+        ["Use mcp(lsp) here.\n"]
+    );
     let pi_plan = room.compile(&switches(true, false), &pi);
     assert_eq!(
         flag_values(&pi_plan.process().provider_argv, "--system-prompt"),

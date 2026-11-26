@@ -1,5 +1,5 @@
-//! RimZ's MCP server: `rimz mcp serve`, which a Claude, Codex, Antigravity, or
-//! OpenCode launch starts over stdio, the catalog of the tools it serves, and their
+//! RimZ's MCP server: `rimz mcp serve`, which a Claude, Codex, Antigravity, OpenCode,
+//! or Pi launch starts over stdio, the catalog of the tools it serves, and their
 //! wording. Each tool call but `guide`'s runs in the server's own process,
 //! through the runner `serve` is handed, and answers with data or text;
 //! `guide` answers from the wording read at the server's start. This module

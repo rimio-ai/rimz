@@ -24,7 +24,8 @@ use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
 const TIMEOUT_DEFAULT: Duration = Duration::from_secs(4 * 60);
-/// Under a provider's own tool-call limit: Codex's 600 s, Claude's 600000 ms script limit.
+/// Under a provider's own tool-call limit: Codex's 600 s, Pi's 600 s registration timeout,
+/// Claude's 600000 ms script limit.
 const TIMEOUT_MAX: Duration = Duration::from_secs(9 * 60);
 /// How a wait's outcome reaches the caller.
 const BY_MESSAGE: &str = "its outcome comes to you as a message; join does not wait for it";
