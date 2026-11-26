@@ -641,6 +641,183 @@ fn a_hard_request_types_the_command_unseen_stop_and_its_debt_closes_with_the_con
     );
 }
 
+/// A hard stop-way attempt that pressed its key and then typed nothing keeps the continue owed
+/// past the stop while its command waits (a permission prompt raised in the stop wait), so the
+/// command types at the boundary the stop made and the continue follows it; one whose command
+/// ended in that window (a cancel) fails and withdraws its continue.
+#[test]
+fn a_hard_stop_that_types_nothing_after_its_key_keeps_the_debt_while_its_command_waits() {
+    for cancel in [false, true] {
+        let fixture = Fixture::new("codex");
+        trust_codex_preflight_hooks(&fixture.env);
+        let hold = DeliveryRendezvous::new(&fixture.env, "after-interrupt-stop");
+        let child = fixture
+            .person_compact(&["--hard"])
+            .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "50")
+            .env("RIMZ_TEST_MESSAGE_AFTER_INTERRUPT_STOP", &hold.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut held = hold.arrive();
+        let (command, continuation) = fixture.command_and_continue();
+        if cancel {
+            run_success(
+                fixture
+                    .env
+                    .rimz()
+                    .args(["message", "cancel", command.message_id.as_str()]),
+                "cancel in the stop wait",
+            );
+        } else {
+            fixture.lifecycle(LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            });
+        }
+        held.write_all(&[0]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        let trace = fixture.trace();
+        assert!(
+            trace.iter().any(|line| is_escape_key(line))
+                && !trace.iter().any(|line| is_compact_command(line)),
+            "cancel {cancel}: {trace:?}"
+        );
+        let records = fixture.records();
+        let status = |id: &MessageId| fixture.status_of(id);
+        if cancel {
+            assert!(!output.status.success(), "{output:?}");
+            assert_eq!(
+                (
+                    status(&command.message_id),
+                    status(&continuation.message_id)
+                ),
+                (MessageStatus::Canceled, MessageStatus::Canceled),
+                "{records:?}"
+            );
+            continue;
+        }
+        assert!(output.status.success(), "{output:?}");
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            receipt.lines().count() == 1
+                && receipt.starts_with("queued compaction for ")
+                && receipt
+                    .trim_end()
+                    .ends_with("then continues it if nothing else is waiting"),
+            "{receipt}"
+        );
+        let live = fixture.env.store().list_messages().unwrap();
+        let command = live
+            .iter()
+            .find(|record| record.message_id == command.message_id)
+            .unwrap_or_else(|| panic!("{records:?}"));
+        assert_eq!(
+            (command.status, command.typing_hold),
+            (MessageStatus::Queued, None)
+        );
+        assert_eq!(
+            (status(&continuation.message_id), continuation.past_stop),
+            (MessageStatus::Queued, true),
+            "{records:?}"
+        );
+        assert!(
+            fixture
+                .agent()
+                .ends_turn_for_compaction(jiff::Timestamp::now())
+        );
+    }
+}
+
+/// A hard request that joins a queued compaction carrying premises (a stage flip's hand-off
+/// compaction, which the agent's rest can withdraw) presses no key: it queues what the request
+/// without `--hard` queues and names why, so RimZ never stops the agent for a compaction that
+/// may not come.
+#[test]
+fn a_hard_request_never_stops_an_agent_for_a_queued_compaction_with_premises() {
+    let fixture = Fixture::new("codex");
+    trust_codex_preflight_hooks(&fixture.env);
+    let hand_off = MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &fixture.agent(),
+        "/compact".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_body(MessageBody::Command)
+    .with_automated(true)
+    .with_premises(vec![rimz::store::message::Premise::OverHandOffLimit {
+        threshold: 150_000,
+    }]);
+    fixture
+        .env
+        .store()
+        .queue_message(&hand_off, "soft-test")
+        .unwrap();
+    let mut child = fixture
+        .person_compact(&["--hard"])
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let mut stopped = false;
+    while child.try_wait().unwrap().is_none() && started.elapsed() < Duration::from_secs(15) {
+        if !stopped && fixture.trace().iter().any(|line| is_escape_key(line)) {
+            let stop = json!({
+                "hook_event_name": "Interrupt",
+                "session_id": fixture.request.agent_id.as_str(),
+                "cwd": fixture.env.project_root,
+            });
+            assert!(
+                fixture
+                    .env
+                    .run_hook("codex", &stop.to_string())
+                    .status
+                    .success()
+            );
+            stopped = true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    let records = fixture.records();
+    let state = format!(
+        "{output:?}\ntrace: {:?}\nrow: {:?}\nrecords: {records:?}",
+        fixture.trace(),
+        fixture.agent()
+    );
+    assert!(
+        !fixture.trace().iter().any(|line| is_escape_key(line)),
+        "{state}"
+    );
+    assert!(output.status.success(), "{state}");
+    let named = fixture.named();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            format!(
+                "compaction {} is already queued for {named}; delivers at its next turn boundary, \
+                 with no continue after",
+                hand_off.message_id
+            ),
+            format!(
+                "--hard did not end {named}'s turn: the compaction already queued for it can be \
+                 withdrawn once its turn ends"
+            ),
+        ],
+        "{state}"
+    );
+    assert_eq!(records.len(), 1, "{state}");
+    assert_eq!(records[0].status, MessageStatus::Queued, "{state}");
+    assert!(fixture.agent().holds_open_turn(), "{state}");
+}
+
 /// A hard request compacts at the turn end, naming why, where it cannot end the turn now: the
 /// agent's own request, an agent waiting on an answer, no continue text. It queues what the soft
 /// request queues. A resting agent gets the ordinary compaction and receipt.

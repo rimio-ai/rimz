@@ -342,6 +342,10 @@ pub enum DeliveryReport {
         pressed: bool,
     },
     Stopped,
+    /// An interrupt pressed its receiver's key and then wrote no text: a decision made again
+    /// after the stop wait stopped the write, or the write failed. The record is queued unless
+    /// that decision ended it.
+    StoppedAfterKey,
 }
 
 pub fn deliver_one(
@@ -515,6 +519,7 @@ fn attempt_delivery(
         AttemptOutcome::TypingHeld { until } => {
             DeliveryReport::Refused(DeliveryVerdict::TypingHeld { until })
         }
+        _ if live_send.key_pressed => DeliveryReport::StoppedAfterKey,
         _ => DeliveryReport::Stopped,
     })
 }
@@ -985,7 +990,9 @@ pub fn sweep(
             let verdict = match report {
                 DeliveryReport::Sent { .. } => continue,
                 DeliveryReport::Refused(verdict) => Some(verdict),
-                DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. } => None,
+                DeliveryReport::Stopped
+                | DeliveryReport::StoppedAfterKey
+                | DeliveryReport::InterruptWithheld { .. } => None,
             };
             let ended_receiver = match &verdict {
                 Some(DeliveryVerdict::ReceiverEnded) => snapshot

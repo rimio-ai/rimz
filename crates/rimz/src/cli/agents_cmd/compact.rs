@@ -84,6 +84,8 @@ pub(super) fn compact_agent(
                 SoftBecause::AwaitingAnswer => "it is waiting on an answer",
                 SoftBecause::NoContinueText =>
                     "resume.auto_continue_text is empty, and ending a turn for a compaction owes a continue",
+                SoftBecause::PremisedCommand =>
+                    "the compaction already queued for it can be withdrawn once its turn ends",
             }
         )?;
     }

@@ -994,14 +994,16 @@ impl Store {
     }
 
     /// Leave the compaction command `command_id`, still `Queued` after a hard attempt that did
-    /// not type it, as the same request without `--hard` leaves it, in one commit: no live
-    /// replay, so it waits for the turn boundary; each continue behind it owed past the stop
+    /// not type it, to wait for the turn boundary, in one commit: no live replay; unless
+    /// `stopped` (the attempt pressed the kind's stop key, so that stop is RimZ's and the
+    /// command types at the boundary it made), each continue behind it owed past the stop
     /// withdrawn, so no stop is read as RimZ's; and `restore`, the continue owed before the
     /// request, queued behind it again. `false` when the command no longer waits to be typed.
     #[must_use = "durability barrier; check the result"]
     pub fn soften_untyped_command(
         &self,
         command_id: &MessageId,
+        stopped: bool,
         restore: Option<&MessageRecord>,
         session_name: &str,
     ) -> Result<bool> {
@@ -1034,7 +1036,7 @@ impl Store {
             let reason = format!("compaction {command_id} was not typed at once");
             queue.apply_all(session_name, now, |live| {
                 let owed_past_stop =
-                    live.past_stop && live.follows_command.as_ref() == Some(command_id);
+                    !stopped && live.past_stop && live.follows_command.as_ref() == Some(command_id);
                 withdraw_if(
                     live,
                     live.status.is_open() && owed_past_stop,

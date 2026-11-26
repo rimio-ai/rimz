@@ -57,7 +57,11 @@ pub fn send_ceiling_compact(
     let reason = match &outcome {
         Ok(DeliveryReport::Sent { .. }) => return Ok(ReminderOutcome::Sent),
         Ok(DeliveryReport::Refused(verdict)) => verdict.reason(),
-        Ok(DeliveryReport::Stopped | DeliveryReport::InterruptWithheld { .. }) => {
+        Ok(
+            DeliveryReport::Stopped
+            | DeliveryReport::StoppedAfterKey
+            | DeliveryReport::InterruptWithheld { .. },
+        ) => {
             let (live, history) = store.list_messages_and_history()?;
             let record = live
                 .iter()
