@@ -924,6 +924,7 @@ fn write_text(
     let mut typed = None;
     let mut folded_tail = None;
     let mut slash_led = false;
+    let mut steer_checked = false;
     match head.body {
         MessageBody::Command => {
             debug_assert!(
@@ -932,9 +933,10 @@ fn write_text(
                         && batch[1].follows_command.as_ref() == Some(&head.message_id))
             );
             let kind = receiver.map_or(&head.kind, |row| &row.kind);
-            let declared = crate::agents::spec_by_kind(kind.as_str())
-                .and_then(|spec| spec.launch.compact_command)
-                .map(|compact| compact.command);
+            let compact = crate::agents::spec_by_kind(kind.as_str())
+                .and_then(|spec| spec.launch.compact_command);
+            let declared = compact.map(|compact| compact.command);
+            steer_checked = compact.is_some_and(|compact| compact.steer_checked);
             let cmd_text =
                 compaction_for_receiver(head, receiver).unwrap_or_else(|| head.text.clone());
             let line = if let Some(tail) = batch.get(1) {
@@ -1012,7 +1014,7 @@ fn write_text(
     };
     writer.press_keys(match (head.body, send.kind) {
         (MessageBody::Command, DeliveryKind::Steer)
-            if folded && receiver.is_some_and(AgentState::holds_open_turn) =>
+            if (folded || steer_checked) && receiver.is_some_and(AgentState::holds_open_turn) =>
         {
             steer_keys
         }

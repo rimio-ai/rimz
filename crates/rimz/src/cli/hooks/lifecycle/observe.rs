@@ -328,6 +328,23 @@ fn record_mapped_lifecycle_observation(
         store,
         &mut observation,
     );
+    // A stop while RimZ ends the turn for a compaction is RimZ's own: it records as the clean turn
+    // end a soft compaction waits for, so no reader cancels, holds, or drops the owed continue.
+    if let LifecycleSignal::TurnInterrupted { turn_id } = &observation.signal
+        && observation
+            .agent_id
+            .as_ref()
+            .and_then(|id| super::transcript::agent_state(store, agent, id))
+            .is_some_and(|row| {
+                row.ends_turn_for_compaction(rimz::harness::hook_drain::frame_timestamp())
+            })
+    {
+        observation.signal = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: turn_id.clone(),
+        };
+    }
     let model_hint = observation.launch.model.clone().or(rollup_model);
     let spawned_subagents = if observation.parent_agent_id.is_none()
         && matches!(

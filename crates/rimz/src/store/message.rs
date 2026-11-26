@@ -722,6 +722,12 @@ pub struct MessageRecord {
     /// continue once that command has ended without reaching the pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follows_command: Option<MessageId>,
+    /// For a continue, that its compaction ends the agent's turn now rather than at the turn's
+    /// end (`rimz agents compact --hard`): the fold marks it owed past a stop
+    /// (`OwedContinue::past_stop`), and a steer never folds it onto the command's line. A
+    /// requeued copy (`requeue_from`) owes nothing past a stop: its compaction is over.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub past_stop: bool,
     /// For a smart-compact command, the occupied-context-token reading the
     /// trigger fired on. While a carried-forward stale gauge still equals this
     /// baseline, the send path suppresses duplicate `/compact` commands; a new
@@ -874,6 +880,7 @@ impl MessageRecord {
             auto_compact: None,
             soft_compact: None,
             follows_command: None,
+            past_stop: false,
             compacted_context_tokens: None,
             idle_since: None,
             premises: Vec::new(),
@@ -1689,7 +1696,8 @@ pub(crate) fn delivery_batch_indices(
 
 /// Select the record(s) to claim for an explicit steer of `target_id`. For a compaction command
 /// on a `CompactInstruction::NextPrompt` kind, also claims its queued continue tail even past an
-/// intervening boundary record so the steer folds onto one line.
+/// intervening boundary record so the steer folds onto one line, unless the continue is owed past
+/// the stop the steer makes (`MessageRecord::past_stop`), which waits for the compaction to end.
 pub(in crate::store) fn steer_batch_indices(
     live: &[MessageRecord],
     target_id: &MessageId,
@@ -1710,6 +1718,7 @@ pub(in crate::store) fn steer_batch_indices(
                 && candidate.status == MessageStatus::Queued
                 && candidate.same_card(head.card_ref())
                 && is_command_continue_tail(head, candidate)
+                && !candidate.past_stop
                 && claim_expired(candidate.last_attempt_at, now)
                 && candidate.typing_hold.is_none_or(|hold| hold.until <= now)
         })

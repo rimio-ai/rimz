@@ -53,27 +53,25 @@ pub fn deliver_now(
         store,
         &message.message_id,
         pane,
+        DeliveryPolicy::Boundary,
         on_miss,
         fallback_reason,
     )
 }
 
-/// Attempt one boundary delivery of an already queued record and record a miss under `on_miss`.
+/// Attempt one delivery of an already queued record under `policy` and record a miss under
+/// `on_miss`.
 pub fn attempt_now(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message_id: &MessageId,
     pane: Option<&PaneId>,
+    policy: DeliveryPolicy,
     on_miss: DeliveryFailureDisposition,
     fallback_reason: &str,
 ) -> Result<bool> {
-    let outcome = deliver::deliver_one_report(
-        workspace,
-        store,
-        message_id,
-        pane.map(PaneId::mux),
-        DeliveryPolicy::Boundary,
-    );
+    let outcome =
+        deliver::deliver_one_report(workspace, store, message_id, pane.map(PaneId::mux), policy);
     let reason = match &outcome {
         Ok(DeliveryReport::Sent { .. }) => return Ok(true),
         Ok(DeliveryReport::Refused(deliver::DeliveryVerdict::TypingHeld { .. }))

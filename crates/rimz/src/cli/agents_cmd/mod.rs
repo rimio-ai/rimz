@@ -912,7 +912,7 @@ enum AgentsSubcmd {
         #[arg(long)]
         no_continue: bool,
     },
-    /// Compact an agent's context at its next turn boundary.
+    /// Compact an agent's context at its next turn boundary, or now with `--hard`.
     Compact {
         /// Agent to compact: @handle, @handle#lane, pet name, or pane id (tmux:%12).
         #[arg(add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs))]
@@ -923,6 +923,9 @@ enum AgentsSubcmd {
         /// Send no continue after compacting yourself mid-turn.
         #[arg(long)]
         no_continue: bool,
+        /// Compact a busy agent now: end its turn for the compaction and continue it afterward.
+        #[arg(long, conflicts_with = "no_continue")]
+        hard: bool,
     },
     /// Resume a closed agent or a lane's closed agents where they left off.
     Resume {
@@ -1253,8 +1256,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             reference,
             instruction,
             no_continue,
+            hard,
         }) => {
-            return compact::compact_agent(reference, instruction, no_continue, globals);
+            return compact::compact_agent(reference, instruction, no_continue, hard, globals);
         }
         Some(AgentsSubcmd::Resume {
             scope,

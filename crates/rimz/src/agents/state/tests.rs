@@ -3130,19 +3130,13 @@ fn a_provider_rest_ends_only_a_parked_turn_older_than_the_report() {
     );
 }
 
+/// An interrupt settled after the queue withdraws an owed continue, except one owed past the
+/// stop, which marks the turn as RimZ's to end until the card ends.
 #[test]
 fn an_owed_continue_is_withdrawn_only_by_an_interrupt_settled_after_its_queue() {
     let queued_at = Timestamp::from_second(1_000).unwrap();
     let mut row = crate::testkit::agent_state("claude", "sess", queued_at);
     row.status = AgentStatus::Idle;
-    row.soft_compact = Some(SoftCompactMark {
-        compactions: Some(0),
-        continue_owed: Some(OwedContinue {
-            message_id: crate::ids::MessageId::new(),
-            queued_at,
-        }),
-        ..SoftCompactMark::default()
-    });
     for (label, context, owed) in [
         ("no settle", None, true),
         (
@@ -3166,15 +3160,42 @@ fn an_owed_continue_is_withdrawn_only_by_an_interrupt_settled_after_its_queue() 
             true,
         ),
     ] {
-        row.context = context;
-        assert_eq!(row.soft_compact_in_flight(), owed, "{label}");
-        let shown = if owed {
-            AgentStatus::Running
-        } else {
-            AgentStatus::Idle
-        };
-        assert_eq!(row.display_rest_status(AgentStatus::Idle), shown, "{label}");
+        for past_stop in [false, true] {
+            row.soft_compact = Some(SoftCompactMark {
+                compactions: Some(0),
+                continue_owed: Some(OwedContinue {
+                    message_id: crate::ids::MessageId::new(),
+                    queued_at,
+                    past_stop,
+                }),
+                ..SoftCompactMark::default()
+            });
+            row.context = context.clone();
+            let owed = owed || past_stop;
+            assert_eq!(row.soft_compact_in_flight(), owed, "{label} {past_stop}");
+            assert_eq!(
+                row.ends_turn_for_compaction(queued_at),
+                past_stop,
+                "{label}"
+            );
+            let before = queued_at - std::time::Duration::from_secs(1);
+            assert!(
+                !row.ends_turn_for_compaction(before),
+                "{label}: a stop before the request"
+            );
+            let shown = if owed {
+                AgentStatus::Running
+            } else {
+                AgentStatus::Idle
+            };
+            assert_eq!(row.display_rest_status(AgentStatus::Idle), shown, "{label}");
+            row.ended_at = Some(queued_at);
+            assert!(!row.soft_compact_in_flight() && !row.ends_turn_for_compaction(queued_at));
+            row.ended_at = None;
+        }
     }
+    row.soft_compact = None;
+    assert!(!row.ends_turn_for_compaction(Timestamp::now()), "no mark");
 }
 
 #[test]
@@ -3213,6 +3234,7 @@ fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
         continue_owed: Some(OwedContinue {
             message_id: crate::ids::MessageId::new(),
             queued_at: at,
+            past_stop: false,
         }),
     });
     let written = serde_json::to_value(&row).unwrap();

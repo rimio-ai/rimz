@@ -539,15 +539,27 @@ fn compact_accepts_hyphen_instruction_and_flags() {
                 reference,
                 instruction: actual,
                 no_continue,
+                hard,
             }) = args.command
             else {
                 panic!("compact")
             };
             assert_eq!(reference, "@coder");
             assert_eq!(actual.as_deref(), Some(instruction));
-            assert!(!no_continue);
+            assert!(!no_continue && !hard);
         }
     }
+    let conflict = crate::cli::Cli::try_parse_from([
+        "rimz",
+        "agents",
+        "compact",
+        "@coder",
+        "--hard",
+        "--no-continue",
+    ])
+    .err()
+    .map(|err| err.kind());
+    assert_eq!(conflict, Some(clap::error::ErrorKind::ArgumentConflict));
     let args = parse_agents(&["rimz", "compact", "@me", "keep the plan", "--no-continue"]);
     let Some(AgentsSubcmd::Compact {
         instruction,

@@ -128,6 +128,7 @@ fn reminder_requires_a_live_participating_open_turn_above_its_line() {
                 continue_owed: Some(crate::agents::state::OwedContinue {
                     message_id: crate::ids::MessageId::new(),
                     queued_at: ts(1),
+                    past_stop: false,
                 }),
                 ..SoftCompactMark::default()
             });

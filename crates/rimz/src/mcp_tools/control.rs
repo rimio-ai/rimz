@@ -96,7 +96,11 @@ pub(super) fn compact(tools: &Tools, args: &SelfCompactArgs) -> Result<Answer, F
         agent,
         &handle,
         args.instruction.as_deref(),
-        !args.no_continue,
+        crate::message::compact::CompactAsk {
+            own: true,
+            no_continue: args.no_continue,
+            hard: false,
+        },
         sender_for(caller.as_ref(), channel.as_deref(), false),
     )?;
     Ok(Answer::data(&receipt))

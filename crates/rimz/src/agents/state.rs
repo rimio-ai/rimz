@@ -1255,11 +1255,15 @@ pub struct SoftCompactMark {
     pub continue_owed: Option<OwedContinue>,
 }
 
-/// The compaction continue a card is owed: its message and the instant it was enqueued.
+/// The compaction continue a card is owed: its message, the instant it was enqueued, and
+/// whether it survives a stop because its compaction ends the turn now
+/// (`MessageRecord::past_stop`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwedContinue {
     pub message_id: MessageId,
     pub queued_at: Timestamp,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub past_stop: bool,
 }
 
 /// The session settings accepted by the tuning audit wire.
@@ -2787,16 +2791,29 @@ impl AgentState {
             && reported_at > self.last_activity
     }
 
+    /// Whether a stop at `at` is the one RimZ makes to end this live card's turn for a
+    /// compaction a request asked for now: the continue it owes survives a stop
+    /// (`OwedContinue::past_stop`) and was queued no later than `at`, so the stop records as a
+    /// clean turn end. A stop from before the request is the person's.
+    pub fn ends_turn_for_compaction(&self, at: Timestamp) -> bool {
+        self.ended_at.is_none()
+            && self
+                .soft_compact
+                .as_ref()
+                .and_then(|mark| mark.continue_owed.as_ref())
+                .is_some_and(|owed| owed.past_stop && owed.queued_at <= at)
+    }
+
     /// Whether this live card is still owed the continue queued behind its compaction command:
-    /// the fold's mark owes it and no interrupt the provider settled after its queue withdrew it.
+    /// the fold's mark owes it and no interrupt the provider settled after its queue withdrew it,
+    /// unless the continue is owed past that stop (`ends_turn_for_compaction`).
     /// A settle is compared with the queue instant, not `last_activity`, since the compaction's
     /// own hooks move activity past an Esc that came before them.
     pub(crate) fn soft_compact_in_flight(&self) -> bool {
-        let Some(queued_at) = self
+        let Some(owed) = self
             .soft_compact
             .as_ref()
             .and_then(|mark| mark.continue_owed.as_ref())
-            .map(|owed| owed.queued_at)
         else {
             return false;
         };
@@ -2805,9 +2822,9 @@ impl AgentState {
             .as_ref()
             .and_then(|context| context.settle)
             .is_some_and(|settle| {
-                settle.outcome == TurnSettleOutcome::Interrupted && settle.at > queued_at
+                settle.outcome == TurnSettleOutcome::Interrupted && settle.at > owed.queued_at
             });
-        self.ended_at.is_none() && !interrupted
+        self.ended_at.is_none() && (owed.past_stop || !interrupted)
     }
 
     /// A resting status as displayed: an owed compaction continue, a

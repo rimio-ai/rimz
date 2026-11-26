@@ -965,6 +965,7 @@ fn stamp_message(
             agent.soft_compact.get_or_insert_default().continue_owed = Some(OwedContinue {
                 message_id: payload.message_id.clone(),
                 queued_at: timestamp,
+                past_stop: payload.past_stop,
             });
         }
         // Only the owed continue's own ending settles it: an older continue, its

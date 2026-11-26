@@ -407,6 +407,31 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         });
     }
 
+    /// Withdraw each continue owed past the stop whose compaction command timed out unconfirmed in
+    /// this commit: the turn it was typed to end may never have stopped, so no later stop is
+    /// RimZ's.
+    fn withdraw_timed_out_debts(&mut self, now: Timestamp) {
+        let timed_out: BTreeSet<MessageId> = self
+            .history
+            .iter()
+            .filter(|message| {
+                message.status == MessageStatus::TimedOut && message.body == MessageBody::Command
+            })
+            .map(|message| message.message_id.clone())
+            .collect();
+        let Some(session_name) = self.session_name.clone().filter(|_| !timed_out.is_empty()) else {
+            return;
+        };
+        self.apply_all(&session_name, now, |message| {
+            let reason = message
+                .follows_command
+                .as_ref()
+                .filter(|command| message.past_stop && timed_out.contains(*command))
+                .map(|command| format!("compaction {command} timed out unconfirmed"));
+            withdraw_if(message, message.status.is_open(), reason)
+        });
+    }
+
     fn claim_indices(&mut self, indices: &[usize], now: Timestamp) -> Vec<MessageRecord> {
         let mut claimed = Vec::with_capacity(indices.len());
         for index in indices {
@@ -425,6 +450,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
 
     fn finish(mut self, store: &Store) -> Result<()> {
         if self.live_changed {
+            self.withdraw_timed_out_debts(Timestamp::now());
             self.withdraw_outlived_warnings(Timestamp::now());
         }
         if self.live_changed {
@@ -916,15 +942,17 @@ impl Store {
 
     /// Join the compaction command `command_id` in one commit that confirms it is still
     /// `Queued`: queue `tail` at its card's FIFO tail behind it, with its ID assigned there,
-    /// unless a live record already follows the command. `None` when the command is no longer
-    /// `Queued`, else whether a record follows it.
+    /// unless a live record already follows the command. A `tail` owed past the stop
+    /// (`MessageRecord::past_stop`) replaces a follower that is not, which ends `Canceled`.
+    /// `None` when the command is no longer `Queued`, else whether a record follows it and the
+    /// follower the tail replaced.
     #[must_use = "durability barrier; check the result"]
     pub fn join_queued_command(
         &self,
         command_id: &MessageId,
         tail: Option<&MessageRecord>,
         session_name: &str,
-    ) -> Result<Option<bool>> {
+    ) -> Result<Option<(bool, Option<MessageRecord>)>> {
         self.commit_queue(|queue| {
             if !queue
                 .live()
@@ -933,15 +961,25 @@ impl Store {
             {
                 return Ok(None);
             }
-            if queue
+            let mut replaced = None;
+            if let Some(follower) = queue
                 .live()
                 .iter()
-                .any(|live| live.follows_command.as_ref() == Some(command_id))
+                .find(|live| live.follows_command.as_ref() == Some(command_id))
             {
-                return Ok(Some(true));
+                if follower.past_stop || !tail.is_some_and(|tail| tail.past_stop) {
+                    return Ok(Some((true, None)));
+                }
+                replaced = Some(queue.terminalize(
+                    follower.clone(),
+                    MessageStatus::Canceled,
+                    session_name,
+                    Some("replaced by a continue owed past the stop that ends the turn now"),
+                    Timestamp::now(),
+                ));
             }
             let Some(tail) = tail else {
-                return Ok(Some(false));
+                return Ok(Some((false, None)));
             };
             let queued = queue.at_tail(tail);
             queue.stage_event(EventEnvelope::message_event(
@@ -951,7 +989,69 @@ impl Store {
                 None,
             ));
             queue.upsert(queued);
-            Ok(Some(true))
+            Ok(Some((true, replaced)))
+        })
+    }
+
+    /// Leave the compaction command `command_id`, still `Queued` after a hard attempt that did
+    /// not type it, as the same request without `--hard` leaves it, in one commit: no live
+    /// replay, so it waits for the turn boundary; each continue behind it owed past the stop
+    /// withdrawn, so no stop is read as RimZ's; and `restore`, the continue owed before the
+    /// request, queued behind it again. `false` when the command no longer waits to be typed.
+    #[must_use = "durability barrier; check the result"]
+    pub fn soften_untyped_command(
+        &self,
+        command_id: &MessageId,
+        restore: Option<&MessageRecord>,
+        session_name: &str,
+    ) -> Result<bool> {
+        self.commit_queue(|queue| {
+            let Some(mut command) = queue.get(command_id).filter(|command| {
+                matches!(
+                    command.status,
+                    MessageStatus::Queued | MessageStatus::Claimed
+                )
+            }) else {
+                return Ok(false);
+            };
+            let now = Timestamp::now();
+            if let Some(hold) = command.typing_hold.filter(|hold| hold.replay.is_some()) {
+                command.typing_hold = Some(TypingHold {
+                    replay: None,
+                    force: false,
+                    ..hold
+                });
+                command.updated_at = now;
+                let event = EventEnvelope::message_event(
+                    &command,
+                    session_name,
+                    MessageEventMethod::Queued,
+                    Some("not typed at once; waits for the turn boundary"),
+                );
+                queue.upsert(command);
+                queue.stage_event(event);
+            }
+            let reason = format!("compaction {command_id} was not typed at once");
+            queue.apply_all(session_name, now, |live| {
+                let owed_past_stop =
+                    live.past_stop && live.follows_command.as_ref() == Some(command_id);
+                withdraw_if(
+                    live,
+                    live.status.is_open() && owed_past_stop,
+                    Some(reason.clone()),
+                )
+            });
+            if let Some(restore) = restore {
+                let queued = queue.at_tail(restore);
+                queue.stage_event(EventEnvelope::message_event(
+                    &queued,
+                    session_name,
+                    MessageEventMethod::Queued,
+                    None,
+                ));
+                queue.upsert(queued);
+            }
+            Ok(true)
         })
     }
 
