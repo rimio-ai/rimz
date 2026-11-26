@@ -1604,7 +1604,13 @@ fn finish_profile(
         }
         None => None,
     };
-    if lowered.is_none() && fm.tools.is_none() && agents::tools_required(kind) && !profile.kind_base
+    // A built-in kind base lists no tools, so a launch on it keeps the provider's own.
+    let on_built_in_base = shared.built_in.contains_key(kind);
+    if lowered.is_none()
+        && fm.tools.is_none()
+        && agents::tools_required(kind)
+        && !profile.kind_base
+        && !on_built_in_base
     {
         // A project row takes its tools from the base alone.
         let message = if is_project {
@@ -1632,7 +1638,7 @@ fn finish_profile(
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?,
     };
     // A kind base may leave a required list to each definition.
-    if tools.is_some() || !profile.kind_base {
+    if tools.is_some() || !(profile.kind_base || on_built_in_base) {
         agents::render_tool_args(kind, tools.as_ref())
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
     }

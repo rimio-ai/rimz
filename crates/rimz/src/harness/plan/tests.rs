@@ -3521,8 +3521,8 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         &Default::default(),
         None,
     );
-    // Without a base the bodyless seat runs on the built-in one, whose body carries the grant
-    // into Antigravity's agent file.
+    // Without a base the bodyless seat runs on the built-in one, whose body rides Antigravity's
+    // agent file.
     let built_in_layout = crate::harness::spec::resolve_spec_with_agent_override(
         Some("readseat"),
         &loaded_without_base.agent_profiles,
@@ -7334,7 +7334,7 @@ fn a_minimax_definition_and_seat_on_the_built_in_base_send_only_their_own_prompt
     .unwrap();
     let (cell, composed) = built_in_base_launch(root.path(), "mm", &Default::default())
         .expect("a crafted minimax definition on the built-in base launches");
-    assert!(cell.tools.is_some(), "the built-in grant applies");
+    assert!(cell.tools.is_none(), "the provider's own tools apply");
     assert_eq!(composed.as_deref(), Some("Craft.\n"));
     let (seat, composed) = built_in_base_launch(root.path(), "probe", &Default::default())
         .expect("a minimax seat on the built-in base launches");

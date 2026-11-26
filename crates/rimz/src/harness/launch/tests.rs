@@ -1422,7 +1422,7 @@ fn native_ask_is_withheld_where_rimz_ask_is_reached_on_every_action() {
     assert_eq!(actual, expected);
 }
 
-/// A team seat other than the leader is served no `ask` tool and keeps its native one, as a
+/// A team seat other than the leader is served no `ask` tool and loses its native one, while a
 /// child of that seat is served `ask`; the leader keeps `ask` and loses the native tool.
 #[test]
 fn only_the_team_leader_seat_reaches_rimz_ask() {
@@ -1449,7 +1449,7 @@ fn only_the_team_leader_seat_reaches_rimz_ask() {
         actual,
         [
             ("planner", false, true, true),
-            ("coder", false, false, false),
+            ("coder", false, false, true),
             ("coder", true, true, true),
         ]
     );
