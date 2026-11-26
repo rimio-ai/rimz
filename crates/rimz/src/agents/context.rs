@@ -1544,6 +1544,13 @@ impl TurnErrorClass {
         matches!(self, Self::PausedRateLimit | Self::PausedSpendLimit)
     }
 
+    /// The class of a provider error: the adapter's `verdict` when its provider gives a
+    /// structured one, else the shared text rule over the error `label`. An adapter passes its
+    /// verdict here and never edits or discards the text rule's answer.
+    pub(in crate::agents) fn of_provider_error(verdict: Option<Self>, label: Option<&str>) -> Self {
+        verdict.unwrap_or_else(|| Self::classify_label(label))
+    }
+
     /// Classify a capped upstream provider-error label into the display and
     /// auto-resume bucket shared by every adapter.
     pub(super) fn classify_label(label: Option<&str>) -> Self {
@@ -1555,7 +1562,7 @@ impl TurnErrorClass {
             return Self::Failed;
         }
         let status = http_error_status(&lower);
-        if lower.contains("spend limit") {
+        if names_spend_limit(label) {
             Self::PausedSpendLimit
         } else if lower.contains("usage limit")
             || lower.contains("session limit")
@@ -1573,6 +1580,13 @@ impl TurnErrorClass {
             Self::Failed
         }
     }
+}
+
+/// Whether a provider error label names a spend limit, the paused class's own wording: the
+/// Anthropic API's usage cap ([`is_usage_cap_error`]) is none, even when it says "spend limit".
+pub(in crate::agents) fn names_spend_limit(label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    lower.contains("spend limit") && !is_usage_cap_error(&lower)
 }
 
 /// Whether the text is the Anthropic API's spend cap, which no window refills:
@@ -1701,6 +1715,23 @@ pub struct AgentTurnError {
 }
 
 impl AgentTurnError {
+    /// The marker every adapter builds for a provider error seen `at`, before it sets
+    /// [`ended_turn`](Self::ended_turn): classed by [`TurnErrorClass::of_provider_error`].
+    pub(in crate::agents) fn classified(
+        at: Timestamp,
+        label: Option<String>,
+        verdict: Option<TurnErrorClass>,
+    ) -> Self {
+        Self {
+            ended_turn: false,
+            class: TurnErrorClass::of_provider_error(verdict, label.as_deref()),
+            at,
+            label,
+            model: None,
+            refill_at: None,
+        }
+    }
+
     /// Stamp an incoming marker with its model: keep the stored marker's stamp
     /// when it is the same marker or an older one of the same class (`at` no
     /// later than `prior`'s) and already carries a model, else `model_id`, the

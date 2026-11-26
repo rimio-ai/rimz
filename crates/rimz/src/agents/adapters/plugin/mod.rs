@@ -179,11 +179,11 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
             .with_worktree(envelope.cwd.clone()),
         );
         decoded.set_ask(event.questions, event.ask_detail);
-        decoded.set_turn_error(event.turn_error.map(|label| super::AgentTurnError {
-            at: Timestamp::now(),
-            label: Some(label),
-            ..super::AgentTurnError::default()
-        }));
+        decoded.set_turn_error(
+            event.turn_error.map(|label| {
+                super::AgentTurnError::classified(Timestamp::now(), Some(label), None)
+            }),
+        );
         decoded.set_final_message(event.final_message);
         if event.context {
             decoded.set_observed_context(normalize_context_observation(
@@ -1051,6 +1051,31 @@ globs = ["history/**/*.jsonl"]
             "model": "model-1",
             "context_pct": 42
         })
+    }
+
+    #[test]
+    fn an_errored_turn_end_classes_its_marker_from_the_error_text() {
+        use crate::agents::TurnErrorClass;
+
+        let adapter = adapter();
+        for (message, class) in [
+            ("API Error: Overloaded", TurnErrorClass::PausedOverloaded),
+            ("Rate limit exceeded", TurnErrorClass::PausedRateLimit),
+            ("invalid tool schema", TurnErrorClass::Failed),
+        ] {
+            let mut value = payload("turn_end");
+            value["errored"] = json!(true);
+            value["error_message"] = json!(message);
+            let decoded = adapter
+                .decode_hook("turn_end", &value)
+                .expect("test hook decodes");
+            let marker = decoded.turn_error().expect("errored turn end marker");
+            assert_eq!(
+                (marker.class, marker.label.as_deref()),
+                (class, Some(message)),
+                "{message}"
+            );
+        }
     }
 
     #[test]

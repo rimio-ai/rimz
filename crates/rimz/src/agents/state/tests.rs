@@ -1262,6 +1262,12 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
         effective_turn_error_class(&turn_error("API Error: Bad Request")),
         TurnErrorClass::Failed
     );
+    // A stored `Failed` marker with overload wording, as plugin agents wrote before their markers
+    // carried a class, never starts arming overload retries.
+    assert_eq!(
+        effective_turn_error_class(&turn_error("API Error: Overloaded")),
+        TurnErrorClass::Failed
+    );
 }
 
 #[test]

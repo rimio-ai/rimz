@@ -584,20 +584,17 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
                 .last_assistant_message
                 .as_deref()
                 .and_then(crate::agents::context::cap_turn_error_label);
-            let class = match failure.error {
-                QwenStopError::RateLimit => TurnErrorClass::PausedRateLimit,
-                QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
-                QwenStopError::LoopDetected => TurnErrorClass::Failed,
-                _ => TurnErrorClass::classify_label(label.as_deref()),
+            let verdict = match failure.error {
+                QwenStopError::RateLimit => Some(TurnErrorClass::PausedRateLimit),
+                QwenStopError::ServerError => Some(TurnErrorClass::PausedOverloaded),
+                QwenStopError::LoopDetected => Some(TurnErrorClass::Failed),
+                _ => None,
             };
-            decoded.set_turn_error(Some(AgentTurnError {
-                model: None,
-                ended_turn: false,
-                class,
-                at: Timestamp::now(),
+            decoded.set_turn_error(Some(AgentTurnError::classified(
+                Timestamp::now(),
                 label,
-                refill_at: None,
-            }));
+                verdict,
+            )));
         }
         if payload_has_context_observation(payload) {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));

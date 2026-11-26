@@ -830,30 +830,28 @@ fn task_complete_has_final_message(task: &CodexTaskComplete<'_>) -> bool {
 
 fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
     AgentTurnError {
-        model: None,
         ended_turn: true,
-        class: TurnErrorClass::Unknown,
-        at,
-        label: Some(MESSAGELESS_TASK_COMPLETE_LABEL.to_owned()),
-        refill_at: None,
+        ..AgentTurnError::classified(
+            at,
+            Some(MESSAGELESS_TASK_COMPLETE_LABEL.to_owned()),
+            Some(TurnErrorClass::Unknown),
+        )
     }
 }
 
 fn turn_error_from_record(record: &RolloutRecord<'_>) -> Option<AgentTurnError> {
     let error = record.error.as_ref()?;
     let at = record.event_timestamp()?;
-    let label = turn_error_label(error);
-    let class = classify_turn_error(&error.kinds, label.as_deref());
+    let verdict = error
+        .kinds
+        .iter()
+        .find_map(|kind| class_from_codex_error_kind(kind));
     Some(AgentTurnError {
-        model: None,
         ended_turn: matches!(
             record.kind,
             RolloutKind::TaskComplete(_) | RolloutKind::TurnAborted
         ),
-        class,
-        at,
-        label,
-        refill_at: None,
+        ..AgentTurnError::classified(at, turn_error_label(error), verdict)
     })
 }
 
@@ -883,16 +881,6 @@ fn is_codex_input_prompt_text(text: &str) -> bool {
 
 fn turn_error_label(error: &RolloutError<'_>) -> Option<String> {
     error.label.as_deref().and_then(cap_turn_error_label)
-}
-
-fn classify_turn_error(kinds: &[std::borrow::Cow<'_, str>], label: Option<&str>) -> TurnErrorClass {
-    if let Some(class) = kinds
-        .iter()
-        .find_map(|kind| class_from_codex_error_kind(kind))
-    {
-        return class;
-    }
-    TurnErrorClass::classify_label(label)
 }
 
 /// Map Codex's error-kind vocabulary to a display class. The app-server schema

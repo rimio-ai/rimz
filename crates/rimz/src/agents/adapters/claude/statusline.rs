@@ -169,28 +169,38 @@ fn current_usage(field: Option<AgentCurrentUsage>) -> Option<AgentCurrentUsage> 
     field.filter(|usage| !usage.is_zero())
 }
 
-/// Classify one Claude API-error turn from its structured fields and label.
-/// `StopFailure` and the transcript tail both carry Claude's `error` value, so
-/// both paths call this and cannot disagree whichever writes the marker last.
-/// A spend-limit label wins because Claude tags spend caps `rate_limit`/429 too;
-/// a subscription rejection fails without a resume park; otherwise
-/// `rate_limit`/429 pauses on the rate window whatever the text says ("You've
-/// reached your Fable limit"), and `overloaded` or `server_error` pauses as
-/// transient.
+/// Classify one Claude API-error turn from its structured fields and label, as
+/// [`TurnErrorClass::of_provider_error`] does with [`api_error_verdict`].
 pub(super) fn classify_api_error(
     error: Option<&str>,
     status: Option<u64>,
     label: Option<&str>,
 ) -> TurnErrorClass {
-    let label_class = TurnErrorClass::classify_label(label);
-    if label_class == TurnErrorClass::PausedSpendLimit {
-        return label_class;
+    TurnErrorClass::of_provider_error(api_error_verdict(error, status, label), label)
+}
+
+/// Claude's verdict on one API-error turn from its structured fields.
+/// `StopFailure` and the transcript tail both carry Claude's `error` value, so
+/// both paths call this and cannot disagree whichever writes the marker last.
+/// Claude tags spend caps `rate_limit`/429 too, so a label naming a spend limit
+/// ([`names_spend_limit`](crate::agents::context::names_spend_limit), the Console
+/// usage cap excluded) gives no verdict and the text rule reads it; a subscription rejection fails
+/// without a resume park; otherwise `rate_limit`/429 pauses on the rate window
+/// whatever the text says ("You've reached your Fable limit"), and `overloaded`
+/// or `server_error` pauses as transient.
+pub(super) fn api_error_verdict(
+    error: Option<&str>,
+    status: Option<u64>,
+    label: Option<&str>,
+) -> Option<TurnErrorClass> {
+    if label.is_some_and(crate::agents::context::names_spend_limit) {
+        return None;
     }
     match (error.map(str::trim), status) {
-        (Some("oauth_org_not_allowed" | "billing_error"), _) => TurnErrorClass::NotEntitled,
-        (Some("rate_limit"), _) | (_, Some(429)) => TurnErrorClass::PausedRateLimit,
-        (Some("overloaded" | "server_error"), _) => TurnErrorClass::PausedOverloaded,
-        _ => label_class,
+        (Some("oauth_org_not_allowed" | "billing_error"), _) => Some(TurnErrorClass::NotEntitled),
+        (Some("rate_limit"), _) | (_, Some(429)) => Some(TurnErrorClass::PausedRateLimit),
+        (Some("overloaded" | "server_error"), _) => Some(TurnErrorClass::PausedOverloaded),
+        _ => None,
     }
 }
 
@@ -210,7 +220,7 @@ enum TranscriptScope<'a> {
 /// `isApiErrorMessage: true` (followed by a `system` / `turn_duration` record).
 /// Current Claude also fires `StopFailure`; the tail is the backstop for older
 /// builds and late-installed hooks, and every statusline push re-derives the
-/// marker from it, so both paths share [`classify_api_error`].
+/// marker from it, so both paths share [`api_error_verdict`].
 ///
 /// Scanning the bounded tail newest-first, the first conversation-bearing
 /// entry — `type` of `assistant`/`user`, not a sidechain, carrying a parseable
@@ -296,18 +306,14 @@ fn detect_resting_turn_outcome(
         && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
     {
         let label = turn_error_label(&value);
-        return Some(RestingTurnOutcome::Died(AgentTurnError {
-            model: None,
-            ended_turn: false,
-            class: classify_api_error(
-                value.get("error").and_then(Value::as_str),
-                value.get("apiErrorStatus").and_then(Value::as_u64),
-                label.as_deref(),
-            ),
-            at,
-            label,
-            refill_at: None,
-        }));
+        let verdict = api_error_verdict(
+            value.get("error").and_then(Value::as_str),
+            value.get("apiErrorStatus").and_then(Value::as_u64),
+            label.as_deref(),
+        );
+        return Some(RestingTurnOutcome::Died(AgentTurnError::classified(
+            at, label, verdict,
+        )));
     }
     if entry_type == Some("user")
         && conversation_text(&value)
@@ -390,18 +396,16 @@ fn turn_ending_denial(
         run().find(|entry| decision(entry, "reasonCode").as_deref() == Some(NO_VERDICT_REASON));
     let refusal = outage
         .or_else(|| run().rfind(|entry| decision(entry, "decision").as_deref() == Some("reject")));
-    AgentTurnError {
-        model: None,
-        ended_turn: false,
-        class: if outage.is_some() {
-            TurnErrorClass::PausedOverloaded
-        } else {
-            TurnErrorClass::Failed
-        },
+    let verdict = if outage.is_some() {
+        TurnErrorClass::PausedOverloaded
+    } else {
+        TurnErrorClass::Failed
+    };
+    AgentTurnError::classified(
         at,
-        label: tool_result_label(refusal.unwrap_or(newest)),
-        refill_at: None,
-    }
+        tool_result_label(refusal.unwrap_or(newest)),
+        Some(verdict),
+    )
 }
 
 /// The first tool_result block's text, a flat string or its first text

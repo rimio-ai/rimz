@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::agents::lifecycle::{PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
-use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
+use crate::agents::{AgentErr, AgentHookClass, AgentStatus, TurnErrorClass};
 use serde_json::json;
 
 #[test]

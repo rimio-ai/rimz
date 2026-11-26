@@ -287,7 +287,7 @@ Any event may carry these optional fields:
 | --- | --- | --- |
 | `session_start` | none | Registers the session. |
 | `turn_start` | `prompt?` | Starts a turn. `prompt` becomes the turn's task. |
-| `turn_end` | `errored?`, `error_message?`, `last_assistant_message?` | Ends the turn, as failed when `errored` is `true`. `last_assistant_message` becomes a supervised run's output. |
+| `turn_end` | `errored?`, `error_message?`, `last_assistant_message?` | Ends the turn, as failed when `errored` is `true`, or as paused when `error_message` reads as a rate limit, spend limit, or overload. `last_assistant_message` becomes a supervised run's output. |
 | `tool_use` | `tool_name?`, `is_error?` | Records tool activity, classified by [`[tools]`](#tools). |
 | `awaiting_input` | `ask` (`permission`, `plan_approval`, or `question`), `question?` | Marks the agent waiting, when `native-ask-ui = true`. |
 | `compaction_start` | none | Marks the agent compacting. |

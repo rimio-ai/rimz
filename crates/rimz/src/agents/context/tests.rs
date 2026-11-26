@@ -878,6 +878,38 @@ fn turn_error_label_classifier_maps_provider_labels() {
 }
 
 #[test]
+fn a_turn_error_marker_takes_the_adapter_verdict_over_the_text_rule() {
+    use TurnErrorClass::{Failed, PausedOverloaded, PausedRateLimit, Unknown};
+
+    let at = Timestamp::from_second(1_700_000_000).unwrap();
+    for (label, verdict, class) in [
+        (Some("API Error: Overloaded"), None, PausedOverloaded),
+        (Some("API Error: Overloaded"), Some(Failed), Failed),
+        (
+            Some("invalid request"),
+            Some(PausedRateLimit),
+            PausedRateLimit,
+        ),
+        (None, None, Failed),
+        (None, Some(Unknown), Unknown),
+    ] {
+        let label = label.map(str::to_owned);
+        assert_eq!(
+            AgentTurnError::classified(at, label.clone(), verdict),
+            AgentTurnError {
+                ended_turn: false,
+                class,
+                at,
+                label,
+                model: None,
+                refill_at: None,
+            },
+            "{verdict:?}"
+        );
+    }
+}
+
+#[test]
 fn console_usage_cap_matches_only_the_provider_pattern() {
     let cases = [
         (
