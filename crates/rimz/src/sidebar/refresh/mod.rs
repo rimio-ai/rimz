@@ -28,6 +28,7 @@ pub(super) mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
 pub(super) mod keep_warm;
+pub(super) mod launched;
 pub(super) mod live_spend;
 mod model_refusals;
 pub(super) mod pipeline;
@@ -114,6 +115,7 @@ pub struct ProducerRefreshState {
     /// tick meter once.
     pass_spawns: BTreeMap<String, u64>,
     bookings: bookings::BookingsState,
+    launched: launched::LaunchedState,
 }
 
 impl ProducerRefreshState {
@@ -543,6 +545,16 @@ pub(super) fn refresh_heavy_lanes(
             config,
             seated.then_some(teams),
             &mut state.bookings,
+        )
+    });
+    steps.step("launched", || {
+        launched::refresh_launched_for(
+            base,
+            store.as_ref(),
+            runtime,
+            config,
+            seated.then_some(teams),
+            &mut state.launched,
         )
     });
     let pr_cache = steps.step("pr_states", || produce_pr_states(base, runtime, state));

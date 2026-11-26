@@ -233,3 +233,61 @@ fn a_peer_awaited_through_two_runs_is_one_entry_in_its_live_state() {
         }]
     );
 }
+
+/// An agent the card launched and waits on lists once, under its launched entries: a wait
+/// naming any seat of a launched team, or a molted peer's successor on the entry's launch,
+/// is not awaited. A peer the card did not launch stays under waits.
+#[test]
+fn an_awaited_agent_the_card_launched_lists_only_under_launched() {
+    let launcher = root_agent("claude", "launcher", None);
+    let successor = AgentState {
+        launch_id: Some("solo-launch".into()),
+        ..root_agent("claude", "solo-new", None)
+    };
+    let seat = root_agent("claude", "seat", None);
+    let stranger = root_agent("codex", "stranger", None);
+    let mut launcher_row = row(&launcher, 0);
+    if let Some(card) = launcher_row.as_agent_mut() {
+        card.launched = ["solo-launch", "seat"]
+            .into_iter()
+            .map(|launch| crate::store::snapshot::SidebarLaunched {
+                starts: crate::store::snapshot::BookingStarts::Profile("coder".to_owned()),
+                lane: None,
+                description: None,
+                launches: vec![launch.to_owned()],
+                at: now(),
+                live: None,
+                starting: false,
+                ended_at: None,
+                pr: crate::store::snapshot::BookingPr::Unread,
+                team: None,
+            })
+            .collect();
+        card.pending_waits = vec![
+            wait("@solo", Some(&successor), None),
+            wait("@seat", Some(&seat), None),
+            wait("@stranger", Some(&stranger), None),
+        ];
+    }
+    let rows = vec![
+        launcher_row,
+        row(&successor, 1),
+        row(&seat, 2),
+        row(&stranger, 3),
+    ];
+    let mut snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/w")),
+        vec![launcher, successor, seat, stranger],
+        now(),
+    );
+    snapshot.worktree_groups = vec![worktree_group(Path::new("/w"), rows)].into();
+    attach(&mut snapshot);
+    let card = snapshot.worktree_groups[0].rows[0].as_agent().unwrap();
+    assert_eq!(
+        card.awaited
+            .iter()
+            .map(|awaited| awaited.pane.clone())
+            .collect::<Vec<_>>(),
+        [Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"))]
+    );
+}

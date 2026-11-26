@@ -192,6 +192,7 @@ impl RuntimePaths {
             self.cohort_spend_path(),
             self.pipeline_path(),
             self.bookings_path(),
+            self.launched_path(),
             self.pr_state_path(),
             self.trunk_state_path(),
             self.focus_anchor_path(),

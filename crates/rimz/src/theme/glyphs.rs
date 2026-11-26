@@ -115,6 +115,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
     glyph!(CardBooked, "▷", Some("\u{f00f0}")),
     glyph!(CardBookingEnded, "–", None),
+    glyph!(CardLaunched, "▶", None),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(CardTierMove, "↪", None),
     glyph!(CardFast, "ϟ", Some("\u{f0e7}")),

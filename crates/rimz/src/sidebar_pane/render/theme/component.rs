@@ -136,6 +136,12 @@ pub(crate) enum Component {
     WaitHeader,
     /// The booked-launches header glyph.
     BookedHeader,
+    /// The `▶` launched-peers header glyph.
+    LaunchedHeader,
+    /// The `–` lead of a launched entry with nothing alive.
+    LaunchedEnded,
+    /// The `▶` lead of a launched entry whose card has not landed yet.
+    LaunchedStarting,
     /// The `▷` lead of a booking that has not fired.
     BookingWaiting,
     /// The `–` lead of a fired booking with nothing it launched alive.
@@ -280,6 +286,9 @@ impl Component {
         Component::SubagentReopening,
         Component::WaitHeader,
         Component::BookedHeader,
+        Component::LaunchedHeader,
+        Component::LaunchedEnded,
+        Component::LaunchedStarting,
         Component::BookingWaiting,
         Component::BookingEnded,
         Component::BookingFix,
@@ -346,8 +355,8 @@ impl Component {
             | UploadFailed => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge
             | MessageQueued => palette.cool,
-            TeamLabel | SubagentHeader | WaitHeader | BookedHeader | ProcIo | CacheWrite
-            | CompactionPoint | WorkflowBadge | EntryTeamName => palette.meta,
+            TeamLabel | SubagentHeader | WaitHeader | BookedHeader | LaunchedHeader | ProcIo
+            | CacheWrite | CompactionPoint | WorkflowBadge | EntryTeamName => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing | HookDrainLag => {
                 palette.alarm
             }
@@ -358,8 +367,9 @@ impl Component {
             WorktreeQualifier | WorktreeBranchName | WorktreeMerged | InactiveChip
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
-            | NeedsYouFilter | BookingWaiting | BookingEnded | EntryLane | EntryTeamTag
-            | EntryStage | CardClosing | DelegationPager | SubagentReopening => palette.muted,
+            | NeedsYouFilter | BookingWaiting | BookingEnded | LaunchedEnded | LaunchedStarting
+            | EntryLane | EntryTeamTag | EntryStage | CardClosing | DelegationPager
+            | SubagentReopening => palette.muted,
         })
     }
 }

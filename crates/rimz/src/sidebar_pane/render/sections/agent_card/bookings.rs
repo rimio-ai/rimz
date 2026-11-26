@@ -363,12 +363,22 @@ fn detail_line(ctx: &RowCtx<'_>, booking: &SidebarBooking, focused: bool) -> Opt
 
 /// Plain muted runtime since the fire, frozen at the end stamp once nothing is alive.
 fn runtime(ctx: &RowCtx<'_>, fire: &BookingFire) -> Option<Span<'static>> {
-    let until = match (&fire.live, fire.ended_at) {
-        (Some(_), _) => ctx.now,
-        (None, Some(ended_at)) => ended_at,
-        (None, None) => return None,
+    runtime_since(ctx, fire.at, fire.live.is_some(), fire.ended_at)
+}
+
+/// Plain muted runtime since `at`, running while `alive` and frozen at `ended_at` after.
+pub(super) fn runtime_since(
+    ctx: &RowCtx<'_>,
+    at: jiff::Timestamp,
+    alive: bool,
+    ended_at: Option<jiff::Timestamp>,
+) -> Option<Span<'static>> {
+    let until = match (alive, ended_at) {
+        (true, _) => ctx.now,
+        (false, Some(ended_at)) => ended_at,
+        (false, None) => return None,
     };
-    let secs = until.as_second().saturating_sub(fire.at.as_second()).max(0);
+    let secs = until.as_second().saturating_sub(at.as_second()).max(0);
     Some(Span::styled(
         format!("{:>5}", elapsed_label(secs)),
         ctx.theme.muted(),
@@ -452,19 +462,28 @@ fn fired_text(ctx: &RowCtx<'_>, fire: &BookingFire, budget: usize) -> (String, S
     if fire.starting {
         return (ellipsize("starting", budget), theme.muted());
     }
-    // The age gives way before the reading, which never clips.
-    let pr = own_pr_words(fire.pr)
-        .map(|pr| format!("{}{pr}", value_seam(theme)))
-        .unwrap_or_default();
-    let text = fire
-        .ended_at
-        .map(|at| format!("ended {} ago{pr}", elapsed_label(age_secs(at, ctx.now))))
-        .filter(|text| text_width(text) <= budget)
-        .unwrap_or_else(|| format!("ended{pr}"));
     let style = if fire.depended_on {
         theme.body()
     } else {
         theme.muted()
     };
-    (ellipsize(&text, budget), style)
+    (ended_text(ctx, fire.ended_at, fire.pr, budget), style)
+}
+
+/// `ended 10m ago · #12 open` within `budget`: the age gives way before the reading,
+/// which never clips.
+pub(super) fn ended_text(
+    ctx: &RowCtx<'_>,
+    ended_at: Option<jiff::Timestamp>,
+    pr: BookingPr,
+    budget: usize,
+) -> String {
+    let pr = own_pr_words(pr)
+        .map(|pr| format!("{}{pr}", value_seam(ctx.theme)))
+        .unwrap_or_default();
+    let text = ended_at
+        .map(|at| format!("ended {} ago{pr}", elapsed_label(age_secs(at, ctx.now))))
+        .filter(|text| text_width(text) <= budget)
+        .unwrap_or_else(|| format!("ended{pr}"));
+    ellipsize(&text, budget)
 }

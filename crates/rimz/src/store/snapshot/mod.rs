@@ -59,7 +59,8 @@ pub use row::{
     AgentCard, BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling,
     BookingStage, BookingStarts, BookingState, BookingWait, CacheClock, CardDescription,
     CardScript, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SiblingState,
-    SidebarAwaitedAgent, SidebarBooking, SidebarRow, SidebarSubAgent, SubAgentTokens,
+    SidebarAwaitedAgent, SidebarBooking, SidebarLaunched, SidebarRow, SidebarSubAgent,
+    SubAgentTokens,
 };
 pub(crate) use view::sort_windows;
 pub use view::{

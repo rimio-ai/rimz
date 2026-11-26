@@ -822,6 +822,81 @@ fn booking_entry_whose_launched_card_is_filtered_focuses_the_owning_card() {
     }
 }
 
+/// A running launched entry whose own card a filter hides selects and focuses the card that
+/// launched it, as a fired booking's entry does.
+#[test]
+fn launched_entry_whose_agent_card_is_filtered_focuses_the_launching_card() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let parent = pane_of(&snapshot, 0);
+    let launched = PaneId::from_parts(MuxName::Zellij, "terminal_launched");
+    let now = snapshot.now;
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let row_id = rows[0].id.clone();
+    let open_pin = render::DelegationPin {
+        open: true,
+        turn: rows[0].as_agent().unwrap().user_turn_started_at,
+    };
+    rows[0].as_agent_mut().unwrap().launched = vec![crate::store::snapshot::SidebarLaunched {
+        starts: crate::store::snapshot::BookingStarts::Profile("coder".to_owned()),
+        lane: None,
+        description: Some("split the store".to_owned()),
+        launches: vec!["launch-coder".to_owned()],
+        at: now,
+        live: Some(crate::store::snapshot::BookingLive {
+            status: crate::agents::AgentStatus::Running,
+            phase: crate::agents::TurnPhase::Idle,
+            stage: None,
+            description: None,
+            pane: Some(launched.clone()),
+        }),
+        starting: false,
+        ended_at: None,
+        pr: crate::store::snapshot::BookingPr::Unread,
+        team: None,
+    }];
+    let mut own_card = rows[0].clone();
+    own_card.id = "launched-card".into();
+    own_card.pane = Some(pane("terminal_launched", "tab_0"));
+    let card = own_card.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Idle;
+    card.launched.clear();
+    rows.push(own_card);
+    let mut ui = render::ViewState {
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, open_pin)]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    assert!(
+        ui.visible_roster(&snapshot)
+            .ordinal_of_id("launched-card")
+            .is_none()
+    );
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    let line = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("split the store"))
+        .expect("the entry is drawn");
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    assert_eq!(
+        handle_mouse_click(1, line as u16, &mut ui, &mut pane_ui, &snapshot),
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(parent.clone())]
+        },
+        "line {line}"
+    );
+    assert_eq!(ui.selected_pane, Some(parent));
+}
+
 /// An awaited agent's entry whose own card a filter hides selects and focuses the card that
 /// waits on it, as a fired booking's entry does.
 #[test]

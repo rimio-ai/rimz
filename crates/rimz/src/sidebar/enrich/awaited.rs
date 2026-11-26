@@ -1,13 +1,14 @@
 //! The awaited-agents fold: every `Subagent` wait on a card whose awaited row has no
-//! entry among the card's current children becomes one entry of `AgentCard::awaited`,
-//! carrying the awaited row's display state and pane from this fold's rows, and,
-//! when a row answers, its record's profile and named lane and its card's activity text.
+//! entry among the card's current children or its launched entries becomes one entry of
+//! `AgentCard::awaited`, carrying the awaited row's display state and pane from this fold's
+//! rows, and, when a row answers, its record's profile and named lane and its card's
+//! activity text.
 //! Reads only; an awaited agent reaches no status, attention, count or sort.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::agents::{PendingWaitTarget, PendingWaitTrigger, TurnPhase};
+use crate::agents::{AgentState, PendingWaitTarget, PendingWaitTrigger, TurnPhase};
 use crate::ids::Lane;
 use crate::store::snapshot::{AgentCard, SidebarAwaitedAgent, SidebarRow, SidebarSnapshot};
 
@@ -63,10 +64,11 @@ pub(super) fn attach(snapshot: &mut SidebarSnapshot) {
     }
 }
 
-/// The card's `Subagent` waits whose target is not a current child, one per target in wait
-/// order. A wait recorded without its target yields nothing. A peer can carry a settled turn
-/// still owing its report beside the next open one, both naming its row: the open run's wait
-/// stands for the agent.
+/// The card's `Subagent` waits whose target is neither a current child nor a row of one of
+/// its launched entries (the launch the target's row belongs to, else the target's own id),
+/// one per target in wait order. A wait recorded without its target yields nothing. A peer
+/// can carry a settled turn still owing its report beside the next open one, both naming its
+/// row: the open run's wait stands for the agent.
 fn awaited(
     snapshot: &SidebarSnapshot,
     rows: &HashMap<(&str, &str), RowAt>,
@@ -85,6 +87,18 @@ fn awaited(
         if card
             .current_sub_agents()
             .any(|child| child.kind == target.kind && child.id == target.agent_id.as_str())
+        {
+            continue;
+        }
+        let launch = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.kind == target.kind && agent.agent_id == target.agent_id)
+            .map_or(&target.agent_id, AgentState::launch_key);
+        if card
+            .launched
+            .iter()
+            .any(|entry| entry.launches.iter().any(|id| id == launch.as_str()))
         {
             continue;
         }

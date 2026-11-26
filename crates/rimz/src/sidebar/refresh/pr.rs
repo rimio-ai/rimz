@@ -59,6 +59,13 @@ pub(super) fn produce_pr_states(
         &super::bookings::read_bookings_cache(&runtime.bookings_path()),
         snapshot.project_root.as_deref(),
     );
+    add_root_demand(
+        &mut condition_scopes,
+        super::launched::branch_demand(&super::launched::read_launched_cache(
+            &runtime.launched_path(),
+        )),
+        snapshot.project_root.as_deref(),
+    );
     let needed = pr_demand_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
@@ -151,10 +158,23 @@ fn add_booking_demand(
     bookings: &super::bookings::BookingsCache,
     project_root: Option<&Path>,
 ) {
+    add_root_demand(
+        demand,
+        super::bookings::branch_demand(bookings),
+        project_root,
+    );
+}
+
+/// Joins `branches` to the branch demand at the room's project root: a booking's or a
+/// launched entry's own branch, whose pull request its lane reads from these rows.
+fn add_root_demand(
+    demand: &mut BTreeMap<String, BTreeSet<String>>,
+    branches: BTreeSet<String>,
+    project_root: Option<&Path>,
+) {
     let Some(root) = project_root.filter(|root| root.is_dir()) else {
         return;
     };
-    let branches = super::bookings::branch_demand(bookings);
     if branches.is_empty() {
         return;
     }
