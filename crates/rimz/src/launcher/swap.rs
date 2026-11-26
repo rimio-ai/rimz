@@ -431,8 +431,9 @@ fn close_replaced(
 }
 
 /// The `@rimz` section a fresh session of a swapped agent starts with, listing
-/// what is still outstanding for it, or `None` when nothing is. A molt's
-/// `note` goes first.
+/// what is still outstanding for it, or `None` when nothing is. Its waits are
+/// the ones the agent armed itself: a team binding or a loop row that targets
+/// it stays armed and is not its own to tell. A molt's `note` goes first.
 pub fn swap_briefing(
     store: &Store,
     agent: &AgentState,
@@ -468,6 +469,12 @@ pub fn swap_briefing(
         Some(agent),
         &rows,
     )
+    .filter(|(name, task)| {
+        matches!(
+            crate::harness::schedule::delivery_owner(name, task.entry()),
+            crate::harness::schedule::DeliveryOwner::SelfWait
+        )
+    })
     .map(|(name, _)| name.to_owned())
     .collect::<Vec<_>>();
     let messages = store
@@ -532,7 +539,7 @@ fn briefing_section(
     if !waits.is_empty() {
         lines.push(format!(
             "- {} still armed for you ({}): `rimz wait list`",
-            plural(waits.len(), "wait or delivery", "waits or deliveries"),
+            plural(waits.len(), "wait", "waits"),
             waits.join(", ")
         ));
     }
