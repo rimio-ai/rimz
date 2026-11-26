@@ -599,6 +599,7 @@ pub fn with_run(request: ExecRequest, run: &RunRecord) -> ExecRequest {
         run_id: Some(run.run_id.clone()),
         close_pane_on_exit,
         exit_on_run_completion,
+        result_file: run.result_file.clone(),
         ..request
     }
 }

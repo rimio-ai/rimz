@@ -42,6 +42,7 @@ use crate::common::{
 #[cfg(unix)]
 fn worktree_exec_request(worktree: &Path) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         action: ExecAction::Launch {

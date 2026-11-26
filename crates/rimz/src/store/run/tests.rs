@@ -784,3 +784,29 @@ fn a_stamped_run_matches_its_launch_and_never_a_namesake() {
         );
     }
 }
+
+#[test]
+fn result_file_round_trips_and_defaults_when_absent() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    assert!(
+        serde_json::to_value(&record)
+            .unwrap()
+            .get("result_file")
+            .is_none(),
+        "a capture run writes no result_file"
+    );
+    record.result_file = Some(Path::new("/state/tmp/lead/child.output").to_path_buf());
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["result_file"], "/state/tmp/lead/child.output");
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.result_file, record.result_file);
+    value.as_object_mut().unwrap().remove("result_file");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.result_file, None);
+}

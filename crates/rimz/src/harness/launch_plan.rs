@@ -1006,6 +1006,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     let unit = inputs.state.temp_unit_dir(owner);
     let view = sandbox::TmpView::current(isolation, owner, inputs.state);
     let tmp = view.agent_path(&unit);
+    reminders.result_file = request
+        .result_file
+        .as_deref()
+        .map(|host| view.agent_path(host));
     let shared = inputs.state.room_shared_dir.clone();
     reminders.permission_roots = Some([
         inputs.state.root.clone(),

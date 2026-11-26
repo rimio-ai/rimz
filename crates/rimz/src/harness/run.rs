@@ -2,6 +2,7 @@
 
 mod peer;
 pub mod report;
+pub(crate) mod result_file;
 mod team;
 pub use peer::{
     create_peer_prompt, describes_latest_turn, fail_peer_run, fail_peer_turn, open_peer_run,
@@ -664,10 +665,15 @@ fn write_record_locked<T>(
         RecordMutation::Keep(outcome) => Ok((record, outcome, false)),
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
+            let newly_terminal = !was_terminal && record.status.is_terminal();
+            // A result-file run's answer is its file as it stands at this edge, and nothing else.
+            let result_file = record.result_file.clone().filter(|_| newly_terminal);
+            if let Some(path) = &result_file {
+                record.last_message = result_file::read(path);
+            }
             // Waiters read the record unlocked, so a terminal record must imply its file.
             // A detached plain run is outside the fleet, so this is its only publisher.
-            if !was_terminal
-                && record.status.is_terminal()
+            if newly_terminal
                 && (record.subagent
                     || record.peer.is_some()
                     || record.team.is_some()
@@ -677,7 +683,9 @@ fn write_record_locked<T>(
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
             }
             crate::store::run::write(&paths.runs_dir, &record)?;
-            let newly_terminal = !was_terminal && record.status.is_terminal();
+            if let Some(path) = &result_file {
+                result_file::remove(path);
+            }
             Ok((record, outcome, newly_terminal))
         }
     }
@@ -2145,6 +2153,10 @@ fn rebind_session(record: &mut RunRecord, kind: &str, agent_id: &AgentSessionId)
 /// A later message of the same turn replaces only this turn's part, and an
 /// empty one adds nothing.
 fn set_turn_message(record: &mut RunRecord, message: String) {
+    // A result-file run's answer is taken from its file at the terminal write alone.
+    if record.result_file.is_some() {
+        return;
+    }
     record.last_message = Some(match record.parked_answer.as_deref() {
         Some(parked) if message.is_empty() => parked.to_owned(),
         Some(parked) => format!("{parked}\n\n---\n\n{message}"),

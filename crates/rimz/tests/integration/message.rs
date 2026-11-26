@@ -8880,6 +8880,7 @@ fn assert_parent_follow_up_case(
         .unwrap();
     assert_eq!(message.status, MessageStatus::Queued);
     let mut request = ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         action: ExecAction::Resume {

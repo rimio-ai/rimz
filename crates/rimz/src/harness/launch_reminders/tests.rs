@@ -509,6 +509,26 @@ When a skill's description matches the work in hand, invoke it, even when you kn
 }
 
 #[test]
+fn a_result_file_child_is_told_its_file_and_a_capture_child_its_final_reply() {
+    let w1 = "### Subagents\n\nYou are a subagent: a supervised child launched by another agent to complete the task you were given. The task is scoped to this one run, so do the work yourself. The agent that launched you reads only your result file: write your whole result to `/tmp/child.output` before you end your turn, then end the turn with one line saying it is written. A turn that ends without a new result in that file gives your launcher nothing. Send your launcher no progress notes: each one stops its wait and costs it a turn. You cannot ask the user. When you need an answer to go on, write the question to the file as your result and end your turn: your launcher answers. When your launcher sends you another task, write its result to the same file. When the user types in this pane, answer in this pane.";
+    let mut request =
+        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+    request.skills = Some(Vec::new());
+    let told = |request: &ExecRequest, result_file: Option<&str>| {
+        let reminders = LaunchReminders {
+            result_file: result_file.map(PathBuf::from),
+            ..Default::default()
+        };
+        render(request, &reminders, Path::new("/checkout"), None)
+    };
+    request.subagent = true;
+    assert_eq!(told(&request, Some("/tmp/child.output")), wrap(w1));
+    assert_eq!(told(&request, None), wrap(SUBAGENT_REMINDER_BODY));
+    request.subagent = false;
+    assert!(!told(&request, Some("/tmp/child.output")).contains("### Subagents"));
+}
+
+#[test]
 fn child_policy_is_fixed_regardless_of_skills_or_catalog() {
     let body = "### Subagents\n\nYou are a subagent: a supervised child launched by another agent to complete the task you were given. The task is scoped to this one run, so do the work yourself. Report the result in your final response: it is the answer your caller reads once this run settles. Send your caller no progress notes: each one stops its wait and costs it a turn. When you need its answer to go on, end your turn with the question as your final response.";
     let mut request =

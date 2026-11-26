@@ -5188,6 +5188,7 @@ fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
                 agents: &[],
                 reminder_section: None,
                 leader_run: bound.then_some(LayoutRunParams {
+                    result_file: None,
                     run_id: &run_id,
                     resume: None,
                     leader_index: 0,

@@ -190,7 +190,8 @@ fn deadline_stop_target(record: &RunRecord) -> Option<String> {
 }
 
 fn harvest_last_message(record: &RunRecord) -> Option<String> {
-    if record.last_message.is_some() {
+    // A result-file run's answer is taken from its file at the terminal write.
+    if record.last_message.is_some() || record.result_file.is_some() {
         return None;
     }
     let path = record.transcript_path.as_deref()?;

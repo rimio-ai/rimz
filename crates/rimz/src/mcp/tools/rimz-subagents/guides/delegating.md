@@ -23,7 +23,7 @@ A child handed your conclusion tends to return it confirmed. For an independent 
 
 The size beside each file in `SUBAGENT_REPORT` is what reading it costs your window: read a small one whole, and a large one in the parts you need. Before an edit or a statement to the user rests on a child's claim, open the anchor the claim cites, and confirm a claim that something is absent with a search of your own.
 
-Use `join` only for the one result the next step cannot start without: it blocks your turn and returns the child's whole final message. A child that outruns `join` keeps running and comes back through the report; a child joined in your turn drops out of the report.
+Use `join` only for the one result the next step cannot start without: it blocks your turn and returns the child's whole result. A child that outruns `join` keeps running and comes back through the report; a child joined in your turn drops out of the report.
 
 ## Follow-ups and retries
 

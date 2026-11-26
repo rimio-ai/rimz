@@ -135,6 +135,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
         Path::new(RIMZ_BIN),
         &RUNTIME,
         &crate::harness::launch::ExecRequest {
+            result_file: None,
             isolation_default: None,
             kind: AgentKind::new_unchecked(kind),
             action: crate::harness::launch::ExecAction::Resume {

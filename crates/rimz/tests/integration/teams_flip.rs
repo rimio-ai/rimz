@@ -1653,6 +1653,7 @@ impl Fixture {
         );
         let stderr = self.wrapper_log_path();
         let mut request = ExecRequest {
+            result_file: None,
             isolation_default: None,
             kind: AgentKind::new_unchecked(kind),
             action: ExecAction::Resume {

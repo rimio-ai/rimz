@@ -4972,6 +4972,142 @@ impl End {
     }
 }
 
+/// A result-file subagent run of launcher `lead`, priced and held open like `priced_store`'s.
+fn result_file_store() -> (tempfile::TempDir, Store, RunRecord, PathBuf) {
+    let (dir, store, mut record) = priced_store(None);
+    record.agent_name = Some("child".into());
+    record.reader = Some("lead".into());
+    let path = store
+        .paths()
+        .temp_unit_dir(Some("lead"))
+        .join("child.output");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    record.result_file = Some(path.clone());
+    create(store.paths(), &record).unwrap();
+    (dir, store, record, path)
+}
+
+fn published(store: &Store, record: &RunRecord) -> Option<String> {
+    std::fs::read_to_string(response_path(store.paths(), record).unwrap()).ok()
+}
+
+#[test]
+fn every_terminal_write_takes_the_result_file_and_never_the_reply() {
+    enum Settle {
+        End(End),
+        TurnEnd,
+        HarvestedKill,
+        HarvestedHold,
+    }
+    let settles = End::ALL.into_iter().map(Settle::End).chain([
+        Settle::TurnEnd,
+        Settle::HarvestedKill,
+        Settle::HarvestedHold,
+    ]);
+    for settle in settles {
+        for written in [Some("the written result"), None] {
+            let (_dir, store, record, path) = result_file_store();
+            let (paths, runtime, id) = (store.paths(), store.runtime_paths(), &record.run_id);
+            if let Some(text) = written {
+                std::fs::write(&path, text).unwrap();
+            }
+            record_assistant_message(paths, id, "claude", &"child".into(), "a reply".into())
+                .unwrap();
+            let record = load(paths, id).unwrap();
+            assert_eq!(
+                record.last_message, None,
+                "an open result-file run holds no reply"
+            );
+            let ended = match settle {
+                Settle::End(end) => end.end(&store, record),
+                Settle::TurnEnd => fold_turn(paths, id, turn_ended(), Some("a reply"), false),
+                Settle::HarvestedKill => {
+                    let kill = crate::harness::deadline::kill_at(&record).unwrap();
+                    timeout_if_due(paths, runtime, id, kill, Some("a reply".into()))
+                        .unwrap()
+                        .0
+                }
+                Settle::HarvestedHold => {
+                    let mut record = record;
+                    record.interrupted_at = Some(Timestamp::now() - Duration::from_secs(61));
+                    create(paths, &record).unwrap();
+                    expire_interrupt(&store, id, Some("a reply".into()))
+                        .unwrap()
+                        .unwrap()
+                }
+            };
+            assert!(ended.status.is_terminal());
+            assert_eq!(ended.last_message.as_deref(), written);
+            assert_eq!(
+                published(&store, &ended),
+                written.map(|text| format!("{text}\n"))
+            );
+            assert!(!path.exists(), "the terminal write removes the result file");
+        }
+    }
+}
+
+#[test]
+fn the_take_reads_only_a_bounded_regular_file_and_never_fails_the_settle() {
+    const CAP: usize = 1024 * 1024;
+    let long = format!("{}tail", "x".repeat(CAP));
+    type Plant = fn(&Path, &Path);
+    let cases: [(&str, Plant); 7] = [
+        ("blank", |path, _| std::fs::write(path, " \n\t\n").unwrap()),
+        ("symlink", |path, secret| {
+            std::os::unix::fs::symlink(secret, path).unwrap()
+        }),
+        ("fifo", |path, _| {
+            nix::unistd::mkfifo(path, nix::sys::stat::Mode::S_IRWXU).unwrap()
+        }),
+        ("directory", |path, _| std::fs::create_dir(path).unwrap()),
+        ("long", |path, _| {
+            std::fs::write(path, format!("{}tail", "x".repeat(CAP))).unwrap()
+        }),
+        ("invalid", |path, _| {
+            std::fs::write(path, vec![0xFF; CAP + 1]).unwrap()
+        }),
+        ("invalid under the cap", |path, _| {
+            std::fs::write(path, vec![0xFF; CAP / 2]).unwrap()
+        }),
+    ];
+    for (case, place) in cases {
+        let (dir, store, record, path) = result_file_store();
+        let secret = dir.path().join("secret");
+        std::fs::write(&secret, "not the result").unwrap();
+        place(&path, &secret);
+        let (ended, wrote) = cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
+        assert!(wrote && ended.status == RunStatus::Canceled, "{case}");
+        match case {
+            "long" => {
+                let text = ended.last_message.unwrap();
+                assert!(text.starts_with(&long[..CAP]), "{case}");
+                assert!(!text.contains("tail"), "{case}");
+                assert!(text.ends_with("\n\n[result cut at 1 MiB]"), "{case}");
+            }
+            "invalid" | "invalid under the cap" => {
+                let text = ended.last_message.unwrap();
+                let kept = text
+                    .strip_suffix("\n\n[result cut at 1 MiB]")
+                    .unwrap_or_else(|| panic!("{case}: decoded past the cap with no cut line"));
+                assert!(kept.len() <= CAP, "{case}: {} bytes kept", kept.len());
+                assert_eq!(
+                    kept.len(),
+                    CAP / 3 * 3,
+                    "{case}: a split character is dropped whole"
+                );
+                assert!(
+                    kept.chars().all(|c| c == char::REPLACEMENT_CHARACTER),
+                    "{case}"
+                );
+            }
+            _ => assert_eq!(ended.last_message, None, "{case}"),
+        }
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "not the result");
+        assert_eq!(path.exists(), case == "directory", "{case}");
+    }
+}
+
 #[test]
 fn every_terminal_transition_writes_spend_with_its_status() {
     for end in End::ALL {

@@ -202,6 +202,11 @@ pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
 /// `RIMZ_TEST_AGENT_SLEEP_MS` sleep, and
 /// `journey::deep::wait_for_quiet_account_run` reads its landing as the run
 /// having settled into that sleep.
+///
+/// When the launch arguments carry the subagent result-file instruction
+/// (`write your whole result to `<path>``), the stub writes `"stub done\n"` to
+/// `<path>` before emitting `Stop`, so result-file subagent runs settle with a
+/// response instead of parking for a reminder.
 #[cfg(unix)]
 pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     assert!(matches!(agent, "codex" | "claude"));
@@ -263,6 +268,20 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          fi\n\
          if [ \"$exit_code\" != 0 ]; then\n\
            exit \"$exit_code\"\n\
+         fi\n\
+         result_file=\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             *'write your whole result to `'*)\n\
+               tail=${{arg#*'write your whole result to `'}}\n\
+               result_file=${{tail%%'`'*}}\n\
+               break\n\
+               ;;\n\
+           esac\n\
+         done\n\
+         if [ -n \"$result_file\" ]; then\n\
+           mkdir -p \"$(dirname \"$result_file\")\" || exit 1\n\
+           printf 'stub done\\n' > \"$result_file\" || exit 1\n\
          fi\n\
          feed '{{\"hook_event_name\":\"Stop\",\"session_id\":\"'\"$session\"'\",\"last_assistant_message\":\"stub done\"}}'\n\
          if [ \"$wait_stdin\" = 1 ]; then\n\

@@ -2320,6 +2320,8 @@ pub struct LayoutRunParams<'a> {
     pub managed_launch: Option<&'a crate::agents::ManagedLaunchState>,
     pub cleanup: bool,
     pub subagent: bool,
+    /// The run's `RunRecord::result_file`.
+    pub result_file: Option<&'a Path>,
 }
 
 #[derive(Clone, Copy)]
@@ -2533,6 +2535,7 @@ fn fresh_agent_argv(
             request.reminder_section = params.reminder_section.cloned();
         }
         request.subagent = run.subagent;
+        request.result_file = run.result_file.map(Path::to_path_buf);
         (request.close_pane_on_exit, request.exit_on_run_completion) = run_exit_policy(run.cleanup);
         request.provider_account = run.managed_launch.and_then(|state| state.binding()).map_or(
             crate::harness::launch::ProviderAccountState::Unbound,

@@ -164,6 +164,7 @@ fn empty_dir_grant_from_a_named_account_pane_trusts_each_account_file() {
 
 fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        result_file: None,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
