@@ -3924,6 +3924,21 @@ fn subagent_allowlists_replace_native_delegation() {
         "",
     );
     error(root.path(), "a child cannot launch again");
+    for doorway in ["rimz-ask", "rimz"] {
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("model: astra\ncapabilities: [read, ask, {doorway}]"),
+            "",
+        );
+        error(
+            root.path(),
+            &format!(
+                "lists `ask` and `{doorway}` in `capabilities:`; the rimz doorway replaces the \
+                 native one, so drop whichever this seat does not use"
+            ),
+        );
+    }
 }
 
 #[test]

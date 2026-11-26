@@ -929,6 +929,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         deny_native_tool(extra_args, "Agent");
     }
 
+    fn disable_native_ask_args(&self, extra_args: &mut Vec<String>) {
+        deny_native_tool(extra_args, "AskUserQuestion");
+    }
+
     fn takes_mcp_servers(&self) -> bool {
         true
     }

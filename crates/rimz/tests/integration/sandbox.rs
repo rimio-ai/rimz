@@ -4266,6 +4266,25 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
         std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
     }
     assert!(skill_argv(&env, &environment(&env), granted()).is_ok());
+    // A skill withheld under a grant refuses only once the inventory holds it.
+    let withheld = ["rimz-ask"];
+    let asking: Vec<rimz::config::RimzEntry> =
+        vec!["rimz-wait".parse().unwrap(), "rimz-ask".parse().unwrap()];
+    let withholding = || SkillInputs {
+        withheld: &withheld,
+        grant: Some(&asking),
+        ..granted()
+    };
+    assert!(skill_argv(&env, &environment(&env), withholding()).is_ok());
+    std::fs::create_dir_all(root.join("rimz-ask")).unwrap();
+    std::fs::write(root.join("rimz-ask/SKILL.md"), "body\n").unwrap();
+    let err = skill_argv(&env, &environment(&env), withholding()).unwrap_err();
+    assert!(matches!(&err, SandboxErr::ManualSkillsUnsupported { kind } if kind == "plugin"));
+    assert_eq!(
+        err.to_string(),
+        "provider plugin cannot mark skills user-only; remove the profile skills list"
+    );
+    std::fs::remove_dir_all(root.join("rimz-ask")).unwrap();
     std::fs::create_dir_all(root.join("rimz-lsp")).unwrap();
     std::fs::write(root.join("rimz-lsp/SKILL.md"), "body\n").unwrap();
     let err = skill_argv(&env, &environment(&env), granted()).unwrap_err();

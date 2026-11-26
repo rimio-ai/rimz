@@ -51,7 +51,7 @@ fn plan_view(
         };
     };
     super::validate_path(home)?;
-    if (inputs.callable.is_some() || !inputs.withheld.is_empty())
+    if (inputs.callable.is_some() || (!inputs.withheld.is_empty() && inputs.grant.is_none()))
         && inputs.manual == ManualSkill::Unsupported
     {
         return Err(SandboxErr::ManualSkillsUnsupported {
@@ -98,18 +98,27 @@ fn plan_view(
         }
     }
     changed |= !owned.is_empty();
-    // A grant restricts only the capability skills it would withhold, so a kind that cannot mark
-    // skills user-only refuses only when the inventory holds one.
-    if inputs.manual == ManualSkill::Unsupported
-        && inputs.grant.is_some()
-        && entries.iter().any(|(name, entry)| {
-            entry.source.join("SKILL.md").is_file()
-                && !crate::agents::skills::launch_callable(None, &[], inputs.grant, name)
-        })
-    {
-        return Err(SandboxErr::GrantNeedsView {
-            kind: inputs.kind.to_owned(),
-        });
+    // A grant restricts only the capability skills it would withhold, and a withheld skill
+    // restricts only itself, so a kind that cannot mark skills user-only refuses only when the
+    // inventory holds one.
+    if inputs.manual == ManualSkill::Unsupported && inputs.grant.is_some() {
+        let on_disk = |entry: &DirEntry| entry.source.join("SKILL.md").is_file();
+        if entries.iter().any(|(name, entry)| {
+            on_disk(entry) && !crate::agents::skills::launch_callable(None, &[], inputs.grant, name)
+        }) {
+            return Err(SandboxErr::GrantNeedsView {
+                kind: inputs.kind.to_owned(),
+            });
+        }
+        if inputs
+            .withheld
+            .iter()
+            .any(|name| entries.get(*name).is_some_and(on_disk))
+        {
+            return Err(SandboxErr::ManualSkillsUnsupported {
+                kind: inputs.kind.to_owned(),
+            });
+        }
     }
     let mut shadows = BTreeMap::new();
     if let Some(callable) = inputs.callable {

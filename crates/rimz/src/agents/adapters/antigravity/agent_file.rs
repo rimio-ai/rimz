@@ -111,10 +111,17 @@ pub(super) fn render_definition_tools(tools: &ToolSet, _extra: &[&str]) -> Vec<T
 }
 
 /// The `tools` the file grants.
-fn file_tools(tools: Option<&[String]>, native_subagents: bool) -> Vec<&'static str> {
+fn file_tools(
+    tools: Option<&[String]>,
+    native_subagents: bool,
+    native_ask: bool,
+) -> Vec<&'static str> {
     let mut names = tools.map_or_else(|| DEFAULT_TOOLS.to_vec(), |bases| map_tools(bases).0);
     if !native_subagents {
         names.retain(|name| !SUBAGENT_TOOLS.contains(name));
+    }
+    if !native_ask {
+        names.retain(|name| *name != "ask_question");
     }
     names
 }
@@ -167,7 +174,7 @@ pub(super) fn plan(input: &AgentFileInput<'_>) -> Result<AgentFile, AgentFileRef
         Some(_) => format!("Written by RimZ for a launch of profile {label}"),
         None => "Written by RimZ for an antigravity launch".to_owned(),
     };
-    let tools = file_tools(input.tools, input.native_subagents).join(", ");
+    let tools = file_tools(input.tools, input.native_subagents, input.native_ask).join(", ");
     let body = if input.reminder.is_empty() {
         input.prompt.to_owned()
     } else {
@@ -251,11 +258,21 @@ mod tests {
         for (tools, native_subagents, expected) in cases {
             let tools = tools.map(bases);
             assert_eq!(
-                file_tools(tools.as_deref(), native_subagents),
+                file_tools(tools.as_deref(), native_subagents, true),
                 expected,
                 "{tools:?} native subagents {native_subagents}"
             );
         }
+    }
+
+    /// A launch that reaches `rimz-ask` grants no `ask_question`, listed or by default.
+    #[test]
+    fn a_launch_reaching_rimz_ask_grants_no_native_question_tool() {
+        let listed = bases(&["AskUserQuestion", "Read"]);
+        assert_eq!(file_tools(Some(&listed), true, false), vec!["read_file"]);
+        let defaults = file_tools(None, true, false);
+        assert!(!defaults.contains(&"ask_question"), "{defaults:?}");
+        assert_eq!(defaults.len(), DEFAULT_TOOLS.len() - 1, "{defaults:?}");
     }
 
     /// The two MCP keys for each limiting list, inside the hashed part, whether or not the
@@ -284,6 +301,7 @@ mod tests {
                 reminder: "",
                 tools: Some(&[]),
                 native_subagents: true,
+                native_ask: true,
                 env: &env,
                 mcp: crate::agents::capabilities::McpLaunch {
                     server: server.then(|| crate::agents::capabilities::McpServer {

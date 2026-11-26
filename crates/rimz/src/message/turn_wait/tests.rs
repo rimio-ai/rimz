@@ -211,6 +211,40 @@ fn turn_wait_reason_projects_each_open_status() {
     assert_eq!(view.reason(&agent), None);
 }
 
+/// A child that ended its turn on a raised ask reads as done to its launcher's join and report,
+/// though its card shows the ask as waiting.
+#[test]
+fn a_raised_ask_ends_the_turn_for_join_and_report() {
+    use crate::agents::state::{RaisedAsk, RaisedAskState};
+
+    let at = Timestamp::from_second(1_000).unwrap();
+    let now = Timestamp::from_second(2_000).unwrap();
+    let mut agent = crate::testkit::agent_state("claude", "sess-ask", at);
+    agent.status = AgentStatus::Success;
+    agent.turn_started_at = Some(at);
+    agent.turn_ended_at = Some(at);
+    agent.raised_ask = Some(RaisedAsk {
+        ask_id: crate::ids::AskId::new(),
+        state: RaisedAskState::Open,
+        raised_at: at,
+        basis_at: at,
+        opened_at: Some(at),
+        raised_by: None,
+        text: Some("Ship it?".into()),
+        brief: Some("Ship it?".into()),
+    });
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let view = TurnWaitView {
+        snapshot: SidebarSnapshot::build_with_agents(workspace, vec![agent], now),
+        messages: vec![],
+        now,
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
+    };
+    let child = &view.snapshot.agents[0];
+    assert_eq!(view.completion(child), TurnCompletion::Completed);
+    assert_eq!(view.reason(child), None);
+}
+
 #[test]
 fn provider_error_settles_the_turn_until_new_activity() {
     use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
