@@ -810,3 +810,35 @@ fn result_file_round_trips_and_defaults_when_absent() {
     let decoded: RunRecord = serde_json::from_value(value).unwrap();
     assert_eq!(decoded.result_file, None);
 }
+
+#[test]
+fn result_reminder_round_trips_and_defaults_when_absent() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    assert!(
+        serde_json::to_value(&record)
+            .unwrap()
+            .get("result_reminder")
+            .is_none()
+    );
+    let message_id = crate::ids::MessageId::new();
+    record.result_reminder = Some(super::ResultReminder {
+        message_id: message_id.clone(),
+        spent: true,
+    });
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(
+        value["result_reminder"],
+        serde_json::json!({"message_id": message_id.as_str(), "spent": true})
+    );
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.result_reminder, record.result_reminder);
+    value.as_object_mut().unwrap().remove("result_reminder");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.result_reminder, None);
+}

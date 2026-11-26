@@ -89,7 +89,8 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
                     None,
                     now,
                     now,
-                    None
+                    None,
+                    false
                 ),
                 LifecycleFold::Updated,
             );
@@ -108,6 +109,7 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
                 now,
                 now,
                 None,
+                false,
             );
             assert!(record.stopped_turn.is_none());
             observation.signal = turn_end("leader").signal;
@@ -120,6 +122,7 @@ fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
                 now,
                 now,
                 None,
+                false,
             );
             assert_eq!(record.status, RunStatus::Completed);
         }
@@ -154,6 +157,7 @@ fn workflow_session_stops_are_evidence_until_work_resumes() {
             now,
             now,
             None,
+            false,
         );
         assert_eq!(record.status, RunStatus::Running);
         assert!(record.stopped_turn.is_some());
@@ -167,7 +171,8 @@ fn workflow_session_stops_are_evidence_until_work_resumes() {
                 None,
                 now,
                 now,
-                None
+                None,
+                false
             ),
             LifecycleFold::Updated,
         );
@@ -1527,6 +1532,7 @@ fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
             reopen_at,
             reopen_at,
             None,
+            false,
         );
         assert_eq!(
             record.deadline_at,
@@ -3945,7 +3951,8 @@ fn a_claim_over_a_stored_hold_moves_the_deadline_only_past_its_until() {
                 None,
                 at,
                 at,
-                None
+                None,
+                false
             ),
             LifecycleFold::Updated
         );
@@ -4038,7 +4045,8 @@ fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
                 None,
                 early,
                 early,
-                None
+                None,
+                false
             ),
             LifecycleFold::Updated,
             "{signal:?}"
@@ -4064,7 +4072,8 @@ fn an_in_turn_signal_ends_a_hold_and_an_early_resume_gives_back_the_rest() {
                 None,
                 late,
                 late,
-                None
+                None,
+                false
             ),
             LifecycleFold::Updated,
             "{signal:?}"
@@ -4117,6 +4126,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
             now,
             observed_at,
             None,
+            false,
         );
         assert_eq!(folded.limit_hold, Some(hold), "{observed_at}");
         assert_eq!(folded.deadline_at, held.deadline_at, "{observed_at}");
@@ -4150,6 +4160,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
         now,
         hold.since + Duration::from_millis(1),
         None,
+        false,
     );
     assert_eq!(resumed.limit_hold, None);
     assert_eq!(
@@ -4175,7 +4186,8 @@ fn a_reopen_clears_a_hold_and_rearms_from_the_timeout() {
             None,
             now,
             now,
-            None
+            None,
+            false
         ),
         LifecycleFold::Updated
     );
@@ -4525,7 +4537,17 @@ fn interrupted() -> LifecycleSignal {
 
 fn fold_at(record: &mut RunRecord, signal: LifecycleSignal, at: Timestamp) -> LifecycleFold {
     let observation = AgentLifecycleObservation::new(Some("child".into()), signal);
-    fold_lifecycle(record, "claude", &observation, None, None, at, at, None)
+    fold_lifecycle(
+        record,
+        "claude",
+        &observation,
+        None,
+        None,
+        at,
+        at,
+        None,
+        false,
+    )
 }
 
 #[test]
@@ -5440,6 +5462,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                     parked,
                     parked,
                     Some(owed),
+                    false,
                 ),
                 LifecycleFold::Updated,
                 "{label}"
@@ -5459,6 +5482,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                 resumed,
                 resumed,
                 None,
+                false,
             );
             assert_eq!(record.parked_at, None, "{label}");
             assert_eq!(record.parked_on, None, "{label}");
@@ -5493,6 +5517,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                     done,
                     done,
                     None,
+                    false,
                 ),
                 LifecycleFold::NewlyTerminal,
                 "{label}"
@@ -5531,6 +5556,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
                 at,
                 at,
                 Some(OwedWake::Message),
+                false,
             ),
             LifecycleFold::Updated,
             "round {round}"
@@ -5558,6 +5584,7 @@ fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
             at,
             at,
             None,
+            false,
         );
         assert_eq!(record.parked_on, None, "round {round}");
         assert_eq!(record.limit_hold, None, "round {round}");
@@ -6200,6 +6227,7 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 at,
                 at,
                 None,
+                false,
             ),
             LifecycleFold::Updated,
             "{initial_status:?} {class:?}"
@@ -6250,6 +6278,7 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 park_at + Duration::from_secs(600),
                 park_at,
                 None,
+                false,
             ),
             LifecycleFold::Updated
         );
@@ -6277,6 +6306,7 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 second_at,
                 second_at,
                 None,
+                false,
             ),
             LifecycleFold::Updated
         );
@@ -6320,6 +6350,7 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 reopened_turn + Duration::from_secs(20),
                 old_stop,
                 None,
+                false,
             ),
             LifecycleFold::Ignored,
             "replayed Stop from before turn_opened_at is ignored"
@@ -6350,6 +6381,7 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 at,
                 at,
                 None,
+                false,
             ),
             LifecycleFold::Ignored
         );
@@ -6414,7 +6446,17 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
         record.report_to = report_to;
         let obs = AgentLifecycleObservation::new(Some("child".into()), signal);
         assert_eq!(
-            fold_lifecycle(&mut record, kind.as_str(), &obs, None, err, at, at, None),
+            fold_lifecycle(
+                &mut record,
+                kind.as_str(),
+                &obs,
+                None,
+                err,
+                at,
+                at,
+                None,
+                false
+            ),
             LifecycleFold::NewlyTerminal,
             "{case}"
         );
@@ -6472,7 +6514,17 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                 (&errored_end(None), Some(err), second),
             ] {
                 let message = err.and_then(|err| err.label.clone());
-                fold_lifecycle(&mut record, kind.as_str(), obs, message, err, at, at, None);
+                fold_lifecycle(
+                    &mut record,
+                    kind.as_str(),
+                    obs,
+                    message,
+                    err,
+                    at,
+                    at,
+                    None,
+                    false,
+                );
                 assert_eq!(
                     (
                         record.status,
@@ -6492,7 +6544,8 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
                     None,
                     done,
                     done,
-                    None
+                    None,
+                    false
                 ),
                 LifecycleFold::NewlyTerminal,
                 "{case} {class:?}"
@@ -6504,4 +6557,263 @@ fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
             );
         }
     }
+}
+
+/// `result_file_store`'s run as the launch's own answer, which its launcher is owed.
+fn owed_result_file_store() -> (tempfile::TempDir, Store, RunRecord, PathBuf) {
+    let (dir, store, mut record, path) = result_file_store();
+    record.follow_ups = 0;
+    record.earlier_answers.clear();
+    create(store.paths(), &record).unwrap();
+    (dir, store, record, path)
+}
+
+fn end_turn(store: &Store, id: &RunId) -> RunRecord {
+    fold_turn(store.paths(), id, turn_ended(), Some("a reply"), false)
+}
+
+#[test]
+fn an_owed_turn_end_with_no_result_is_reminded_once_then_settles_with_none() {
+    use crate::store::run::{ParkCause, ResultReminder};
+
+    for planted in [None, Some(" \n\t\n")] {
+        let (_dir, store, record, path) = owed_result_file_store();
+        let id = &record.run_id;
+        if let Some(text) = planted {
+            std::fs::write(&path, text).unwrap();
+        }
+        let parked = end_turn(&store, id);
+        assert_eq!(
+            (parked.status, parked.parked_on),
+            (RunStatus::Running, Some(ParkCause::Message)),
+            "{planted:?}"
+        );
+        let reminder = parked
+            .result_reminder
+            .clone()
+            .expect("the reminder is issued");
+        assert!(!reminder.spent);
+        assert_eq!(
+            end_turn(&store, id),
+            parked,
+            "a replayed Stop changes nothing"
+        );
+        let woke = fold_turn(store.paths(), id, turn_started(), None, false);
+        assert_eq!(woke.parked_at, None);
+        assert_eq!(
+            woke.result_reminder,
+            Some(ResultReminder {
+                spent: true,
+                ..reminder
+            })
+        );
+        let settled = end_turn(&store, id);
+        assert_eq!(settled.status, RunStatus::Completed);
+        assert_eq!(settled.last_message, None);
+        assert_eq!(published(&store, &settled), None);
+    }
+}
+
+#[test]
+fn a_reminded_turn_that_writes_its_result_settles_with_it() {
+    let (_dir, store, record, path) = owed_result_file_store();
+    let id = &record.run_id;
+    end_turn(&store, id);
+    fold_turn(store.paths(), id, turn_started(), None, false);
+    std::fs::write(&path, "the result").unwrap();
+    let settled = end_turn(&store, id);
+    assert_eq!(
+        (settled.status, settled.last_message.as_deref()),
+        (RunStatus::Completed, Some("the result"))
+    );
+}
+
+#[test]
+fn a_follow_up_a_message_opened_is_owed_and_one_typed_in_the_pane_settles_quietly() {
+    let (_dir, store, mut record, _path) = result_file_store();
+    record.opened_by = vec![crate::ids::MessageId::new()];
+    create(store.paths(), &record).unwrap();
+    let parked = end_turn(&store, &record.run_id);
+    assert!(
+        parked.result_reminder.is_some(),
+        "a message-opened follow-up is owed"
+    );
+    assert_eq!(parked.status, RunStatus::Running);
+
+    let (_dir, store, record, _path) = result_file_store();
+    let settled = end_turn(&store, &record.run_id);
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert_eq!(settled.result_reminder, None);
+    assert!(
+        settled.joined_at.is_some(),
+        "an unowed answer reports nothing"
+    );
+    assert_eq!(
+        settled.earlier_answers, record.earlier_answers,
+        "earlier answers stay owed"
+    );
+}
+
+#[test]
+fn an_unowed_answer_is_joined_only_when_its_take_finds_no_result() {
+    for written in [Some("the result"), None] {
+        let (_dir, store, record, path) = result_file_store();
+        if let Some(text) = written {
+            std::fs::write(&path, text).unwrap();
+        }
+        // The unlocked probe read no result; a write after it lands before the locked take.
+        let observation = AgentLifecycleObservation::new(Some("child".into()), turn_ended());
+        let (settled, (), _) = write_record(store.paths(), &record.run_id, |record, now| {
+            fold_lifecycle(
+                record,
+                "claude",
+                &observation,
+                None,
+                None,
+                now,
+                now,
+                None,
+                false,
+            );
+            Ok(RecordMutation::Write(()))
+        })
+        .unwrap();
+        assert_eq!(settled.status, RunStatus::Completed, "{written:?}");
+        assert_eq!(settled.last_message.as_deref(), written);
+        assert_eq!(
+            settled.joined_at.is_some(),
+            written.is_none(),
+            "{written:?}: a taken result is reported"
+        );
+        assert_eq!(
+            settled.answer_claims().last().map(|claim| claim.owed),
+            Some(written.is_some()),
+            "{written:?}"
+        );
+    }
+}
+
+#[test]
+fn a_limit_park_after_the_reminder_spends_it_and_the_resumed_turn_settles_with_none() {
+    use crate::agents::{AgentTurnError, TurnErrorClass};
+
+    let (_dir, store, record, _path) = owed_result_file_store();
+    let (paths, id) = (store.paths(), &record.run_id);
+    end_turn(&store, id);
+    let observation = AgentLifecycleObservation::new(
+        Some("child".into()),
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let error = AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class: TurnErrorClass::PausedRateLimit,
+        at: Timestamp::now(),
+        label: Some("rate limited".to_owned()),
+        refill_at: None,
+    };
+    record_lifecycle_at(
+        paths,
+        id,
+        "claude",
+        &observation,
+        None,
+        Some(&error),
+        None,
+        || None,
+    )
+    .unwrap();
+    let held = load(paths, id).unwrap();
+    assert_eq!((held.status, held.parked_at), (RunStatus::Running, None));
+    assert!(held.result_reminder.as_ref().unwrap().spent);
+    let settled = end_turn(&store, id);
+    assert_eq!(
+        (settled.status, settled.last_message),
+        (RunStatus::Completed, None)
+    );
+}
+
+#[test]
+fn a_reminder_park_is_not_stranded_while_its_notice_is_live() {
+    use crate::store::message::DeliveryGate;
+
+    let (dir, store, record, _path) = owed_result_file_store();
+    crate::workspace::record::write(
+        store.paths(),
+        &crate::workspace::record::WorkspaceRecord {
+            layout: 2,
+            workspace_id: record.workspace_id.clone(),
+            project_root: dir.path().to_path_buf(),
+            worktree_root: None,
+            session_name: "room".to_owned(),
+            root_class: crate::workspace::RootClass::Repo,
+            rimz_bin: None,
+            rimz_build: None,
+            pins: Default::default(),
+            remote_control_off: Default::default(),
+            agent_shell: None,
+            terminal_path: None,
+            skipped: Vec::new(),
+            updated_at: Timestamp::UNIX_EPOCH,
+        },
+    )
+    .unwrap();
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "room",
+            agent_kind: record.kind.clone(),
+            event_name: "test",
+            observation: &AgentLifecycleObservation::new(
+                Some("child".into()),
+                LifecycleSignal::Registered,
+            ),
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let parked = end_turn(&store, &record.run_id);
+    let parked_at = parked.parked_at.unwrap();
+    let message_id = parked.result_reminder.clone().unwrap().message_id;
+    assert_eq!(
+        crate::store::message::read_record(store.paths(), &message_id).unwrap(),
+        None,
+        "the notice was never queued"
+    );
+    assert_eq!(
+        settle_stranded_park(&store, &parked, Some(parked_at)).unwrap(),
+        ParkCheck::Live,
+        "a reminder whose notice is missing is queued again, not settled"
+    );
+    let notice = crate::store::message::read_record(store.paths(), &message_id)
+        .unwrap()
+        .expect("the strand check queued the notice by its id");
+    assert_eq!(
+        (notice.sender, notice.gate, notice.about_run.as_ref()),
+        (
+            crate::store::message::MessageSender::System,
+            DeliveryGate::Done,
+            Some(&record.run_id)
+        )
+    );
+    assert_eq!(
+        settle_stranded_park(&store, &parked, Some(parked_at)).unwrap(),
+        ParkCheck::Live
+    );
+    store
+        .withdraw_messages("room", |live| {
+            (live.message_id == message_id).then(|| "gone".to_owned())
+        })
+        .unwrap();
+    assert_eq!(
+        settle_stranded_park(&store, &parked, Some(parked_at)).unwrap(),
+        ParkCheck::Settled
+    );
+    let settled = load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(
+        (settled.status, settled.last_message),
+        (RunStatus::Completed, None)
+    );
 }
