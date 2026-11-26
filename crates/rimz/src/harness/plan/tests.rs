@@ -2504,7 +2504,7 @@ fn finalized_smart_compact_compares_only_effective_token_windows() {
     assert_eq!(
         finalized_smart_compact_warnings(config, "coder", Agents, None),
         vec![
-            "warning: `coder` smart-compact 240000 tokens: antigravity skips the mid-turn smart-compaction reminder (no hook context)",
+            "warning: `coder` smart-compact 240000 tokens: antigravity skips the mid-turn smart-compaction reminder (hook context cannot carry the reminder)",
         ]
     );
 }
@@ -2517,7 +2517,7 @@ fn finalized_smart_compact_names_rimz_when_ceiling_is_rimz_enforced() {
     assert_eq!(
         finalized_smart_compact_warnings(config, "coder", Agents, None),
         vec![
-            "warning: `coder` smart-compact 300000 tokens: antigravity skips the mid-turn smart-compaction reminder (no hook context)",
+            "warning: `coder` smart-compact 300000 tokens: antigravity skips the mid-turn smart-compaction reminder (hook context cannot carry the reminder)",
             "warning: `coder` smart-compact 300000 tokens is at or above its auto-compact 250000 tokens; RimZ compacts first",
         ]
     );

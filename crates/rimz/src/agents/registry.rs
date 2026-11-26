@@ -226,6 +226,9 @@ pub enum SoftCompactSkip {
     NoCompactionSignal,
     NoTurnStartHook,
     NoHookContext,
+    /// The adapter replies only with an injected system message, which carries deadline
+    /// warnings but not the post-tool reminder.
+    HookContextCannotCarry,
 }
 
 impl std::fmt::Display for SoftCompactSkip {
@@ -236,6 +239,7 @@ impl std::fmt::Display for SoftCompactSkip {
             Self::NoCompactionSignal => "no compaction signal",
             Self::NoTurnStartHook => "no turn-start hook",
             Self::NoHookContext => "no hook context",
+            Self::HookContextCannotCarry => "hook context cannot carry the reminder",
         })
     }
 }
@@ -296,17 +300,16 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
 /// ceiling still reads [`soft_compact_skip`] alone.
 pub fn reminder_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip> {
     soft_compact_skip(definition).or_else(|| {
-        definition
-            .spec()
-            .capabilities
-            .hook_context
-            .is_none_or(|reply| {
+        definition.spec().capabilities.hook_context.map_or(
+            Some(SoftCompactSkip::NoHookContext),
+            |reply| {
                 matches!(
                     reply,
                     crate::agents::definition::HookContextReply::InjectedSystemMessage { .. }
                 )
-            })
-            .then_some(SoftCompactSkip::NoHookContext)
+                .then_some(SoftCompactSkip::HookContextCannotCarry)
+            },
+        )
     })
 }
 

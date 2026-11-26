@@ -485,7 +485,10 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
         unreminded,
         [
             ("amp", "no compact command".into()),
-            ("antigravity", "no hook context".into()),
+            (
+                "antigravity",
+                "hook context cannot carry the reminder".into()
+            ),
             ("hermes", "no compaction signal".into()),
             ("kimi", "no hook context".into()),
             ("kiro", "no compaction signal".into()),
