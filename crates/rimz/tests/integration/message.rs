@@ -3271,6 +3271,14 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
                 },
             );
         }
+        crate::common::wait::register_agent(
+            &env,
+            "caller-session",
+            "caller-launch",
+            "caller",
+            LaunchParams::default(),
+        );
+        crate::common::trust_claude_project(&env, &env.project_root);
         let workspace = env.resolve_workspace(&env.project_root);
         let shim = crate::common::write_env_dump_shim(&env, "claude");
         let panes = env.write_pane_fixture(&["terminal_1", "terminal_2"].map(|id| {
@@ -3280,7 +3288,7 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             pane.cwd = Some(worktree.display().to_string());
             pane
         }));
-        let launch = |prompt: Option<&str>| {
+        let launch = |prompt: Option<&str>, agent_caller: bool| {
             let mut command = traced_rimz(&env, "live-cohort.log");
             command
                 .env("PATH", crate::common::path_with_front(&shim))
@@ -3294,12 +3302,18 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             if let Some(prompt) = prompt {
                 command.arg(prompt);
             }
+            if agent_caller {
+                command
+                    .env("RIMZ_AGENT_KIND", "claude")
+                    .env("RIMZ_AGENT_ID", "caller-launch")
+                    .env("RIMZ_AGENT_NAME", "caller");
+            }
             command.output().unwrap()
         };
-        let no_prompt = launch(None);
+        let no_prompt = launch(None, false);
         assert!(no_prompt.status.success(), "{no_prompt:?}");
         assert!(env.store().list_messages().unwrap().is_empty());
-        let output = launch(Some("review the design"));
+        let output = launch(Some("review the design"), false);
         assert!(output.status.success(), "{output:?}");
         let messages = env.store().list_messages().unwrap();
         assert_eq!(messages.len(), 1, "{scene}: {output:?}");
@@ -3316,6 +3330,26 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             receipt.contains("already running; prompt sent to its leader"),
             "{receipt}"
         );
+        let from_agent = launch(Some("review the agent design"), true);
+        assert!(from_agent.status.success(), "{from_agent:?}");
+        let messages = env.store().list_messages().unwrap();
+        let senders: Vec<_> = messages
+            .iter()
+            .map(|message| (message.agent_id.as_str(), &message.sender))
+            .collect();
+        let caller = MessageSender::Agent {
+            agent_id: Some(AgentSessionId::from("caller-launch")),
+            kind: AgentKind::new_unchecked("claude"),
+            name: Some("caller".into()),
+            profile: None,
+            role: None,
+            channel: Some(rimz::ids::LaneName::trunk()),
+        };
+        assert_eq!(
+            senders,
+            [("planner", &MessageSender::Human), ("planner", &caller)],
+            "{scene}: {from_agent:?}"
+        );
         append_lifecycle(
             &env,
             "claude",
@@ -3324,17 +3358,34 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             LifecycleSignal::Ended,
             |_| {},
         );
-        let refused = launch(Some("try again"));
+        let refused = launch(Some("try again"), false);
         assert_eq!(refused.status.code(), Some(1), "{refused:?}");
         let error = String::from_utf8_lossy(&refused.stderr);
         assert!(error.contains("leader is not live"), "{error}");
         assert!(error.contains("rimz message '@reviewer#topic'"), "{error}");
-        assert_eq!(env.store().list_messages().unwrap().len(), 1);
+        assert_eq!(env.store().list_messages().unwrap().len(), 2);
     }
 }
 
+/// The resume's prompt records its caller as sender: `Human` from a terminal, the calling agent
+/// from an agent pane.
 #[test]
 fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
+    let senders = [false, true].map(resume_prompt_sender);
+    let caller = MessageSender::Agent {
+        agent_id: Some(AgentSessionId::from("launch-session")),
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("planner".into()),
+        profile: None,
+        role: None,
+        channel: Some(rimz::ids::LaneName::trunk()),
+    };
+    assert_eq!(senders, [MessageSender::Human, caller]);
+}
+
+/// Resumes a cohort with a prompt, from the calling agent when `agent_caller`, and returns the
+/// sender of the prompt it delivered.
+fn resume_prompt_sender(agent_caller: bool) -> MessageSender {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -3359,8 +3410,16 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
     crate::common::write_claude_conversation(&env, &env.project_root, "resume-session");
     let workspace = env.resolve_workspace(&env.project_root);
     let shim = crate::common::write_env_dump_shim(&env, "claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let mut resume = traced_rimz(&env, "resume-launch.log");
+    if agent_caller {
+        resume
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "launch-session")
+            .env("RIMZ_AGENT_NAME", "planner");
+    }
     run_success(
-        traced_rimz(&env, "resume-launch.log")
+        resume
             .current_dir(&env.project_root)
             .env("PATH", crate::common::path_with_front(&shim))
             .env("ZELLIJ_PANE_ID", "1")
@@ -3418,11 +3477,16 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
             .args(["message", "sweep"]),
         "sweep after registration, without Stop",
     );
-    assert_text_then_enter(&trace, &user_message("say hi"));
+    let delivered = if agent_caller {
+        "Type: AGENT_MESSAGE\nFrom: @planner#main (claude)\nContent:\nsay hi".to_owned()
+    } else {
+        user_message("say hi")
+    };
+    assert_text_then_enter(&trace, &delivered);
     let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].status, MessageStatus::Sent);
-    assert_eq!(messages[0].sender, MessageSender::Human);
+    messages[0].sender.clone()
 }
 
 #[test]
