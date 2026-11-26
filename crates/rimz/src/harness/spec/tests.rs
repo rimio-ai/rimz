@@ -2530,51 +2530,41 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
          [profiles.cdx-base]\ndescription = 'Cdx base'\nagent = 'codex'\ncode-mode = 'off'\n\
          [profiles.cdx-bare]\ndescription = 'Cdx bare'\nagent = 'codex'\n",
     );
-    // Codex renders exactly one of on and off, before the raw args, wherever the setting
-    // came from.
-    let codex_switch = |args: &[String]| {
-        let settings: Vec<_> = args
-            .iter()
+    // Codex renders exactly one of on and off, each `-c` setting before the raw args,
+    // wherever the setting came from.
+    let codex_switch = |args: &[String]| -> Vec<(usize, String)> {
+        args.iter()
             .enumerate()
-            .filter(|(_, arg)| arg.starts_with("features.code_mode="))
+            .filter(|(_, arg)| arg.starts_with("features.code_mode"))
             .map(|(at, arg)| (at, arg.clone()))
-            .collect();
-        assert!(settings.len() <= 1, "{args:?}");
-        settings.into_iter().next()
+            .collect()
     };
+    let named = |settings: &[(usize, String)]| -> Vec<String> {
+        settings.iter().map(|(_, arg)| arg.clone()).collect()
+    };
+    let on = ["features.code_mode_only=true"];
+    let off = ["features.code_mode=false", "features.code_mode_only=false"];
     for (name, want) in [
-        ("cdx", Some("features.code_mode=true")),
-        ("cdx-off", Some("features.code_mode=false")),
-        ("cdx-heir", Some("features.code_mode=true")),
-        ("cdx-auto", None),
+        ("cdx", &on[..]),
+        ("cdx-off", &off[..]),
+        ("cdx-heir", &on[..]),
+        ("cdx-auto", &[][..]),
     ] {
         let cell = profile_cell(name, &profiles).unwrap();
-        let setting = codex_switch(&cell.args);
-        assert_eq!(
-            setting.as_ref().map(|(_, arg)| arg.as_str()),
-            want,
-            "{name}"
-        );
-        if let Some((at, _)) = setting {
+        let settings = codex_switch(&cell.args);
+        assert_eq!(named(&settings), want, "{name}");
+        for (at, _) in settings {
             assert_eq!(cell.args[at - 1], "-c", "{name}: {:?}", cell.args);
             let raw = cell.args.iter().position(|arg| arg == "--raw").unwrap();
             assert!(at < raw, "{name}: {:?}", cell.args);
         }
     }
-    for (name, want) in [
-        ("cdx-base", Some("features.code_mode=true")),
-        ("cdx-bare", Some("features.code_mode=true")),
-    ] {
+    for name in ["cdx-base", "cdx-bare"] {
         let base = resolve_agent_override(Some(name), &profiles, None).unwrap();
         let rebased =
             profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
         assert_eq!(rebased.kind.as_str(), "codex");
-        let setting = codex_switch(&rebased.args);
-        assert_eq!(
-            setting.as_ref().map(|(_, arg)| arg.as_str()),
-            want,
-            "{name}"
-        );
+        assert_eq!(named(&codex_switch(&rebased.args)), on, "{name}");
     }
     let switch = ["--tools", "+codemode"];
     for (name, want) in [

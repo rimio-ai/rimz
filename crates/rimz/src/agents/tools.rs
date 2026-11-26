@@ -541,11 +541,19 @@ mod tests {
         // Codex takes the switch as config argv after any tools list.
         for entries in [Some(read_bash), None] {
             let mut on = launch("codex", entries, false);
-            on.extend(["-c".to_owned(), "features.code_mode=true".to_owned()]);
+            on.extend(["-c".to_owned(), "features.code_mode_only=true".to_owned()]);
             assert_eq!(launch("codex", entries, true), on, "codex {entries:?}");
-            // Off renders its own setting at the same position, over a saved config value.
+            // Off renders both settings at the same position, over saved config values.
             let mut off = launch("codex", entries, false);
-            off.extend(["-c".to_owned(), "features.code_mode=false".to_owned()]);
+            off.extend(
+                [
+                    "-c",
+                    "features.code_mode=false",
+                    "-c",
+                    "features.code_mode_only=false",
+                ]
+                .map(str::to_owned),
+            );
             assert_eq!(
                 launch_in("codex", entries, Some(false)),
                 off,
