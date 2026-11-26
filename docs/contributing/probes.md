@@ -129,6 +129,8 @@ kill "$(cat "$TMPDIR/sshd-probe/sshd.pid")"
 - Print-mode slash commands (`agy -p /usage --output-format json`), `agy plugin validate`, and `agy plugin list` spend no quota.
 - A logged-out `agy -p` waits 60 s and opens a browser unless its environment carries an SSH session variable (`SSH_CONNECTION`, `SSH_TTY`, or `SSH_CLIENT`) and its stdin delivers a newline.
 - Never print the token, a `/usage` response body, or the account email.
+- A provider's raw hook and statusline frames carry that email too (agy's carry an `email` key). Look at a frame only through a filter that drops the `email` key and any value holding `@`, before the first print.
+- agy logs each session under `~/.gemini/antigravity-cli/log` (grep `agent executor error` for a stopped turn), and RimZ archives drained hook events under the workspace's `log/archive/events.*.jsonl`: search both before planning a capture of a provider stop.
 - agy's TUI prints the signed-in account on its start screen, so read a pane capture of it only through a filter that drops every line holding `@`. Apply that filter to agy's output alone: RimZ prints an account as `<kind>@<name>`, so the same filter over `rimz` output drops its account rows and receipts.
 - A check that drives one of agy's full-screen panels (`/tasks`) runs agy in a private tmux session of at least 120 by 30. A subagent's own pane can be one row high, where the panel draws nothing and the keys go in blind.
 - A probe of a bind onto a path that may be missing records the mode of what bubblewrap leaves there, beside what the provider reads from it. Bubblewrap creates a missing file destination as an empty `0444` file (0.11.1), which a later in-place write cannot open.
