@@ -9,7 +9,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
-use crate::common::Env;
+use crate::common::{COMMAND_TIMEOUT, Env};
 
 const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/adapters/pi/extension.ts");
 const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/index.ts");
@@ -1116,7 +1116,7 @@ fn run_setup_pty_args(
     writer.flush().expect("flush setup input");
     drop(writer);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let mut status = None;
     while Instant::now() < deadline {
         if let Some(done) = child.try_wait().expect("poll rimz setup") {
