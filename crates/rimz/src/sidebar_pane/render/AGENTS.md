@@ -7,7 +7,6 @@ Local contract for `crates/rimz/src/sidebar_pane/render/`. Extends [sidebar_pane
 - Measure the painted width of text the renderer did not format itself (a product name, a theme override, an account label) with `text_width` in [`render/layout.rs`](./layout.rs), never `chars().count()`: wide or zero-width characters misplace every cell and click target after them.
 - A line reads its width tier from `RowCtx::tier`, measured on `content_width` (pane width minus 2), and never recomputes `Tier::for_width` from the pane width, so every line in a frame degrades at the same column.
 - A render change updates the frames drawn from the moved `.snap` files in [docs/interface/sidebar.md](../../../../../docs/interface/sidebar.md), the [docs/guide/sidebar.md](../../../../../docs/guide/sidebar.md) sentence that lists the changed line's elements in on-screen order, and, for what a click or key does, that input's row in the interface page's input table.
-- On a card's identity line, a token (a badge, a mark) yields width before the handle does: the handle draws exactly as on a plain card, and the token drops when it does not fit beside it.
 
 ## Tests
 

@@ -291,7 +291,9 @@ impl Lane<'_> {
 }
 
 /// The room's Audit rows, which keep an ended row with its `loop_fire` and end stamp; `None`,
-/// logged, when the store cannot be opened or its rows cannot be read.
+/// logged, when the store cannot be opened or its rows cannot be read. They arrive ordered by
+/// kind and agent id, not by time: pick a group's newest row by its swap epoch, then its
+/// registration.
 pub(super) fn audit_rows(store: Option<&Store>) -> Option<Vec<AgentState>> {
     let Some(store) = store else {
         tracing::debug!("sidebar bookings pass skipped: the room's store cannot be opened");

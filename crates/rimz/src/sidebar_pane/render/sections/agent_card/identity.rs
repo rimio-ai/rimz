@@ -96,7 +96,9 @@ pub(super) fn agent_lead_cell(
 /// drops reasoning, L0 — and any model-less row — keeps just the name; cost always
 /// pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status tone — yellow,
 /// red, blue — with the unread attention effect, not age, drawing the eye to an
-/// unanswered ask.
+/// unanswered ask. A token (a badge, a mark) yields width before the handle does:
+/// the handle draws exactly as on a plain card, and the token drops when it does
+/// not fit beside it.
 pub(super) fn agent_identity_line(
     row_ctx: &RowCtx<'_>,
     row: &SidebarRow,
