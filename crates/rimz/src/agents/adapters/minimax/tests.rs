@@ -543,6 +543,17 @@ fn launch_and_process_identity_match_mcode() {
         definition.spec().launch.compact_command("keep details"),
         Some("/compact keep details".into())
     );
+    assert_eq!(
+        definition
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile),
+        Some(crate::agents::PresetArgMatcher::TextFlag(vec![
+            "--append-system-prompt".into(),
+            "--append-system-prompt-file".into(),
+        ])),
+        "the composed prompt shares the reminder's inline slot"
+    );
     assert_eq!(definition.config_home_env_keys(), ["MINIMAX_DATA_DIR"]);
     assert_eq!(
         definition.skills_home(&BTreeMap::from([("HOME".into(), "/home/test".into())])),
