@@ -444,7 +444,9 @@ pub enum LaunchPlacement {
     Tab,
 }
 
-/// A project row that failed to load is absent from the rows and present in `Self::failed`. A
+/// A row that failed in this project (a project row that failed to load, or a machine row whose
+/// `subagents:` list allows a subagent that did) is absent from the rows and present in
+/// `Self::failed`; a failed kind base keeps its row for the definitions that replace its list. A
 /// reader that looks a launch name up in the rows asks `failed` first, or resolves through
 /// `crates/rimz/src/harness/spec.rs`, so a failed name never resolves to a kind base, a variant, a
 /// command, or a namesake in another table.
@@ -473,17 +475,26 @@ impl ProfilesConfig {
             .map_or(word, |runtime| runtime.kind())
     }
 
-    /// Failure detail when `word` (or its unshadowed alias target, matching [`Self::key`])
-    /// names a failed project row in this table.
+    /// Failure detail when `word` (or its unshadowed alias target, matching [`Self::key`], or
+    /// the kind an unshadowed runtime variant such as `opencode-mini` runs on) names a failed row
+    /// in this table.
     pub(crate) fn failed(&self, word: &str) -> Option<&str> {
-        self.1.get(self.key(word)).map(String::as_str)
+        let key = self.key(word);
+        self.1
+            .get(key)
+            .or_else(|| {
+                crate::agents::find_runtime(key)
+                    .filter(|_| !self.0.contains_key(key))
+                    .and_then(|runtime| self.1.get(runtime.kind()))
+            })
+            .map(String::as_str)
     }
 
-    pub(in crate::config) fn set_failed_project_rows(&mut self, failed: BTreeMap<String, String>) {
+    pub(in crate::config) fn set_failed_rows(&mut self, failed: BTreeMap<String, String>) {
         self.1 = failed;
     }
 
-    pub(in crate::config) fn failed_project_rows(&self) -> &BTreeMap<String, String> {
+    pub(in crate::config) fn failed_rows(&self) -> &BTreeMap<String, String> {
         &self.1
     }
 

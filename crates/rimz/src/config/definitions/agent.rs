@@ -290,6 +290,58 @@ impl DefinitionSource {
         &self.inner.writers
     }
 
+    /// The verdict `finish_profile` gives this definition's `subagents:` list, over the kind base
+    /// `row` runs on, when `subagents` stands in for the names its load checked against.
+    pub(super) fn check_subagents(
+        &self,
+        row: &Profile,
+        subagents: &SubagentCheck,
+    ) -> Result<(), DefinitionErr> {
+        let inner = &self.inner;
+        let mut fm = inner.frontmatter.clone();
+        if let Some(base) = inner.context.shared.bases.get(&row.agent) {
+            fm.inherit_base(base, inner.namespace, lists_agent_tool(&fm));
+        }
+        let Some(listed) = fm.subagents.as_deref() else {
+            return Ok(());
+        };
+        let validator = SubagentValidator {
+            own: Some((subagents, !inner.is_project)),
+            inherited: None,
+            own_names: None,
+        };
+        subagent_list(&inner.path, listed, false, &validator).map(drop)
+    }
+
+    /// This definition with its on-demand builds checking against `context`, the agents context
+    /// of the trusted project it launches in, and a memo of its own.
+    pub(super) fn in_project(&self, context: &Arc<LoadContext>) -> Self {
+        let inner = &self.inner;
+        Self {
+            inner: Arc::new(DefinitionSourceInner {
+                name: inner.name.clone(),
+                path: inner.path.clone(),
+                namespace: inner.namespace,
+                chain: inner.chain.clone(),
+                frontmatter: inner.frontmatter.clone(),
+                writers: inner.writers.clone(),
+                crafts: inner.crafts.clone(),
+                system_prompt_file: inner.system_prompt_file.clone(),
+                args: inner.args.clone(),
+                original_kind: inner.original_kind.clone(),
+                natural_kind: inner.natural_kind.clone(),
+                natural_variant: inner.natural_variant,
+                preference: inner.preference.clone(),
+                runtime_kind: inner.runtime_kind.clone(),
+                built_under: inner.built_under.clone(),
+                seat: inner.seat.clone(),
+                is_project: inner.is_project,
+                context: Arc::clone(context),
+                memo: Mutex::default(),
+            }),
+        }
+    }
+
     /// Whether this row was already built under `base`.
     pub(crate) fn is_built_under(&self, base: BuildBase<'_>) -> bool {
         self.inner.built_under.is_some()
@@ -1849,37 +1901,7 @@ fn finish_profile(
                 "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, so drop whichever this seat does not use",
             ));
         }
-        // A `+` list nothing below added to leaves the field absent, which admits every child.
-        if listed.iter().any(|entry| frontmatter::is_plus(entry)) {
-            profile.subagents = None;
-        } else {
-            // A kind base's names check once the subagents tree has resolved.
-            profile.subagents = Some(if profile.kind_base {
-                names(path, "subagents", listed)?
-            } else if let (Some(own_names), Some((inh_check, inh_implicit))) =
-                (&subagent_validator.own_names, subagent_validator.inherited)
-            {
-                let (own_listed, inh_listed): (Vec<_>, Vec<_>) = listed
-                    .iter()
-                    .cloned()
-                    .partition(|entry| own_names.contains(entry.trim()));
-                if !own_listed.is_empty() {
-                    if let Some((own_check, own_implicit)) = subagent_validator.own {
-                        subagent_names(path, &own_listed, own_check, own_implicit)?;
-                    } else {
-                        names(path, "subagents", &own_listed)?;
-                    }
-                }
-                if !inh_listed.is_empty() {
-                    subagent_names(path, &inh_listed, inh_check, inh_implicit)?;
-                }
-                names(path, "subagents", listed)?
-            } else if let Some((subagents, allow_implicit_general)) = subagent_validator.own {
-                subagent_names(path, listed, subagents, allow_implicit_general)?
-            } else {
-                names(path, "subagents", listed)?
-            });
-        }
+        profile.subagents = subagent_list(path, listed, profile.kind_base, subagent_validator)?;
     }
     let skill_check = match shared.skills.check.as_ref() {
         SkillCheck::Check {
@@ -2062,9 +2084,96 @@ fn finish_profile(
     }
 }
 
+/// The `subagents:` field `finish_profile` lowers `listed` to under `validator`. A `+` list nothing
+/// below added to leaves the field absent, which admits every child, and fails only on a name
+/// that failed to load.
+fn subagent_list(
+    path: &Path,
+    listed: &[String],
+    kind_base: bool,
+    validator: &SubagentValidator<'_>,
+) -> Result<Option<Vec<String>>, DefinitionErr> {
+    if listed.iter().any(|entry| frontmatter::is_plus(entry)) {
+        if let Some((subagents, _)) = validator.own {
+            let added: Vec<String> = listed
+                .iter()
+                .map(|entry| frontmatter::added(entry).to_owned())
+                .collect();
+            refuse_failed(path, &added, subagents)?;
+        }
+        return Ok(None);
+    }
+    // A kind base's names check once the subagents tree has resolved.
+    if kind_base {
+        return names(path, "subagents", listed).map(Some);
+    }
+    if let (Some(own_names), Some((inh_check, inh_implicit))) =
+        (&validator.own_names, validator.inherited)
+    {
+        let (own_listed, inh_listed): (Vec<_>, Vec<_>) = listed
+            .iter()
+            .cloned()
+            .partition(|entry| own_names.contains(entry.trim()));
+        if !own_listed.is_empty() {
+            if let Some((own_check, own_implicit)) = validator.own {
+                subagent_names(path, &own_listed, own_check, own_implicit)?;
+            } else {
+                names(path, "subagents", &own_listed)?;
+            }
+        }
+        if !inh_listed.is_empty() {
+            subagent_names(path, &inh_listed, inh_check, inh_implicit)?;
+        }
+        return names(path, "subagents", listed).map(Some);
+    }
+    match validator.own {
+        Some((subagents, allow_implicit_general)) => {
+            subagent_names(path, listed, subagents, allow_implicit_general).map(Some)
+        }
+        None => names(path, "subagents", listed).map(Some),
+    }
+}
+
+/// A kind base's `subagents:` field once the subagents tree has resolved, from its written
+/// `listed`: a plain list's checked names, or a `+` list's absent field.
+pub(super) fn base_subagents(
+    path: &Path,
+    listed: &[String],
+    subagents: &SubagentCheck,
+) -> Result<Option<Vec<String>>, DefinitionErr> {
+    let validator = SubagentValidator {
+        own: Some((subagents, true)),
+        inherited: None,
+        own_names: None,
+    };
+    subagent_list(path, listed, false, &validator)
+}
+
+/// Refuses the first of `names` that `subagents` records as failed to load.
+fn refuse_failed(
+    path: &Path,
+    names: &[String],
+    subagents: &SubagentCheck,
+) -> Result<(), DefinitionErr> {
+    let Some(failed) = names.iter().find(|name| {
+        (subagents.defined.contains(*name) || subagents.failed.contains(*name))
+            && !subagents.allowed.contains(*name)
+    }) else {
+        return Ok(());
+    };
+    Err(DefinitionErr::new(
+        path,
+        format!("allows subagent '{failed}', which failed to load"),
+    )
+    .with_cause(DefinitionCause::DependsOnFailed {
+        name: failed.clone(),
+        subagent: true,
+    }))
+}
+
 /// A `subagents:` list's names, each a subagent in `subagents.allowed` (those that loaded, and
 /// the `[agents.commands]` names), a kind, or `general`.
-pub(super) fn subagent_names(
+fn subagent_names(
     path: &Path,
     listed: &[String],
     subagents: &SubagentCheck,
@@ -2074,19 +2183,7 @@ pub(super) fn subagent_names(
     for name in &names {
         subagents.check_lookup(name, path)?;
     }
-    if let Some(failed) = names.iter().find(|name| {
-        (subagents.defined.contains(*name) || subagents.failed.contains(*name))
-            && !subagents.allowed.contains(*name)
-    }) {
-        return Err(DefinitionErr::new(
-            path,
-            format!("allows subagent '{failed}', which failed to load"),
-        )
-        .with_cause(DefinitionCause::DependsOnFailed {
-            name: failed.clone(),
-            subagent: true,
-        }));
-    }
+    refuse_failed(path, &names, subagents)?;
     let unknown: Vec<_> = names
         .iter()
         .filter(|name| {

@@ -207,8 +207,9 @@ fn route_model(
         let base_row = renders
             .and_then(|renders| renders.renders.get(kind).cloned())
             .or_else(|| {
-                agents_spec::routed_kind_base(kind, table, fallback)
-                    .filter(|_| !failed_definitions.contains_key(kind))
+                agents_spec::routed_kind_base(kind, table, fallback).filter(|_| {
+                    !failed_definitions.contains_key(kind) && table.failed(kind).is_none()
+                })
             });
         if let Some(mut selected) = base_row {
             selected.model = Some(model_str.to_owned());
@@ -229,6 +230,20 @@ fn route_model(
     cleared.model_tier = None;
     cleared.tier_stamp = None;
     Ok(cleared)
+}
+
+/// A failed tier walk's error, followed by why each excluded kind could not build.
+fn walk_error<'a>(
+    error: super::tiers::TierError,
+    exclusions: impl Iterator<Item = (&'a String, &'a str)>,
+) -> super::tiers::TierError {
+    let reasons: Vec<String> = exclusions
+        .map(|(kind, reason)| format!("{kind}: {reason}"))
+        .collect();
+    if reasons.is_empty() {
+        return error;
+    }
+    super::tiers::TierError(format!("{error}; {}", reasons.join("; ")))
 }
 
 fn route_tier(
@@ -253,12 +268,21 @@ fn route_tier(
                     def.build(profile, Some(build_base), Some(kind), candidate_model)
                 },
             );
-            let pick = table.walk(
-                requested,
-                &preference,
-                |kind| exclusions.get(kind).map(|error| error.message.as_str()),
-                unavailable,
-            )?;
+            let pick = table
+                .walk(
+                    requested,
+                    &preference,
+                    |kind| exclusions.get(kind).map(|error| error.message.as_str()),
+                    unavailable,
+                )
+                .map_err(|error| {
+                    walk_error(
+                        error,
+                        exclusions
+                            .iter()
+                            .map(|(kind, error)| (kind, error.message.as_str())),
+                    )
+                })?;
             let selected = if engine {
                 def.build(
                     profile,
@@ -277,12 +301,22 @@ fn route_tier(
             let Some(mut renders) = profile.definition_renders.clone() else {
                 return Ok(None);
             };
-            let pick = table.walk(
-                requested,
-                &preference,
-                |kind| renders.exclusions.get(kind).map(String::as_str),
-                unavailable,
-            )?;
+            let pick = table
+                .walk(
+                    requested,
+                    &preference,
+                    |kind| renders.exclusions.get(kind).map(String::as_str),
+                    unavailable,
+                )
+                .map_err(|error| {
+                    walk_error(
+                        error,
+                        renders
+                            .exclusions
+                            .iter()
+                            .map(|(kind, reason)| (kind, reason.as_str())),
+                    )
+                })?;
             let mut selected = if let Some(rendered) = renders.renders.get(&pick.kind) {
                 rendered.clone()
             } else if let Some(def) = &profile.definition {
@@ -882,6 +916,7 @@ pub fn load_with_roots(
             auto_compact_default,
             commands: &machine.commands,
             machine_subagent_profiles,
+            machine_agents: &machine.profiles,
             agents: agents_input,
             subagents: subagents_input,
         },
@@ -908,10 +943,15 @@ pub fn load_with_roots(
     };
 
     let mut loaded_repo_profiles = ProfilesConfig::from(resolved.agents);
-    loaded_repo_profiles.set_failed_project_rows(resolved.failed_agents.clone());
+    loaded_repo_profiles.set_failed_rows(resolved.failed_agents.clone());
     let mut profiles = machine.profiles.clone();
+    profiles.0.extend(resolved.machine_agents);
     profiles.0.extend(loaded_repo_profiles.0.clone());
-    for failed_name in resolved.failed_agents.keys() {
+    let mut failed_agents = resolved.failed_agents;
+    failed_agents.extend(resolved.failed_machine_agents);
+    // A failed kind base keeps its row for the definitions that replace its list, and refuses
+    // its own name through the failure record.
+    for failed_name in failed_agents.keys() {
         if profiles
             .0
             .get(failed_name)
@@ -920,7 +960,7 @@ pub fn load_with_roots(
             profiles.0.remove(failed_name);
         }
     }
-    profiles.set_failed_project_rows(resolved.failed_agents);
+    profiles.set_failed_rows(failed_agents);
     let mut subagent_profiles = machine_subagent_profiles.clone();
     subagent_profiles.0.extend(resolved.subagents);
     for failed_name in resolved.failed_subagents.keys() {
@@ -932,7 +972,7 @@ pub fn load_with_roots(
             subagent_profiles.0.remove(failed_name);
         }
     }
-    subagent_profiles.set_failed_project_rows(resolved.failed_subagents);
+    subagent_profiles.set_failed_rows(resolved.failed_subagents);
 
     let mut teams = machine.teams.clone();
     let mut failed_project_teams = BTreeMap::new();
@@ -1056,12 +1096,13 @@ pub fn project_tasks_from_value(
 }
 
 impl LaunchAgents {
-    /// Formatted failure detail for a failed project team, project profile, or machine definition.
+    /// Formatted failure detail for a failed project team, a row that failed in this project, or a
+    /// machine definition.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
         self.failed_project_teams
             .get(name)
-            .or_else(|| self.profiles.failed_project_rows().get(name))
-            .or_else(|| self.subagent_profiles.failed_project_rows().get(name))
+            .or_else(|| self.profiles.failed_rows().get(name))
+            .or_else(|| self.subagent_profiles.failed_rows().get(name))
             .or_else(|| self.failed_definitions.get(name))
             .cloned()
     }
@@ -1071,11 +1112,12 @@ impl LaunchAgents {
         &self.project_definition_errors
     }
 
-    /// Combined machine and project definition failures, with project rows winning collisions.
+    /// Combined machine and project definition failures, with this project's failures winning
+    /// collisions.
     pub(crate) fn all_failed_definitions(&self) -> BTreeMap<String, String> {
         let mut map = self.failed_definitions.clone();
-        map.extend(self.subagent_profiles.failed_project_rows().clone());
-        map.extend(self.profiles.failed_project_rows().clone());
+        map.extend(self.subagent_profiles.failed_rows().clone());
+        map.extend(self.profiles.failed_rows().clone());
         map.extend(self.failed_project_teams.clone());
         map
     }

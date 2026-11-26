@@ -4858,3 +4858,225 @@ fn advisory_project_subagent_shadow_and_kind_named_cause_chain() {
         "caller_k must keep caused-by chain to kind-named failed subagent row: {detail_k}"
     );
 }
+
+/// A machine definition whose `subagents:` list allows a subagent that fails to load in a trusted
+/// project fails in that project, whatever the list's form, and every gate that reads the failure
+/// record refuses it; the same rows outside the project, and rows that do not allow the name,
+/// launch as before.
+#[test]
+fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let untrusted = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    seed_definition_home(home.path());
+    std::fs::create_dir_all(home.path().join("teams")).unwrap();
+    for (file, fields) in [
+        ("subagents/shd.md", "agent: claude"),
+        ("subagents/good.md", "agent: claude"),
+        ("subagents/ok.md", "agent: claude"),
+        ("agents/m1.md", "agent: claude\nsubagents: [shd]"),
+        ("agents/m2.md", "agent: claude\nsubagents: [+shd]"),
+        ("agents/both.md", "agent: claude\nsubagents: [good, shd]"),
+        ("agents/plain.md", "agent: claude"),
+        ("agents/m_ok.md", "agent: claude\nsubagents: [ok, good]"),
+        ("agents/codex.md", "tools: [Read, Skill]\nsubagents: [shd]"),
+        ("agents/on_codex.md", "agent: codex"),
+        ("agents/codex_own.md", "agent: codex\nsubagents: [good]"),
+        ("agents/pi.md", "subagents: [+shd]"),
+        ("agents/opencode.md", "subagents: [shd]"),
+    ] {
+        std::fs::write(
+            home.path().join(file),
+            format!("---\ndescription: {file}\n{fields}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+    for (team, seat) in [("crew", "\n    subagents: [shd]"), ("calm", "")] {
+        std::fs::write(
+            home.path().join(format!("teams/{team}.md")),
+            format!(
+                "---\nleader: lead\nstages: [Build]\nroles:\n  - role: lead\n    agent: plain\n    \
+                 owns: [Build]{seat}\n---\nBuild.\n"
+            ),
+        )
+        .unwrap();
+    }
+    let project_toml = "\
+        [profiles.x]\n\
+        description = \"X\"\n\
+        agent = \"claude\"\n\
+        subagents = [\"kid\"]\n\
+        [profiles.y]\n\
+        description = \"Y\"\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.kid]\n\
+        description = \"K\"\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.ok]\n\
+        description = \"Project ok\"\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.shd]\n\
+        agent = \"claude\"\n";
+    // Every tier runs only codex, whose base lists `shd`, so a walk has no other model.
+    let machine_toml = "[tiers]\nintern = [\"gpt-5.4\"]\njunior = [\"gpt-5.1-codex\"]\n\
+                        senior = [\"gpt-5.5\"]\nprincipal = [\"gpt-5\"]\n";
+    let (machine, launch) =
+        load_trusted_project(home.path(), project.path(), machine_toml, project_toml);
+    let commands = &machine.agents.commands;
+    let resolve = |launch: &LaunchAgents, spec: &str, ov: Option<&str>| {
+        crate::harness::plan::resolve_launch(launch, ProfileScope::Agents, commands, Some(spec), ov)
+            .map(drop)
+            .map_err(|err| err.to_string())
+    };
+    let routed = |spec: &str, tier: Option<super::super::tiers::ModelTier>, model: Option<&str>| {
+        let mut routed = launch.clone();
+        routed
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(spec),
+                tier,
+                model,
+                None,
+                |_, _| None,
+            )
+            .map_err(|err| err.to_string())?;
+        resolve(&routed, spec, None)
+    };
+    let cause = format!(
+        "\ncaused by: {}: [subagents.profiles.shd]: has no non-empty `description:`",
+        project.path().join(".rimz/config.toml").display()
+    );
+    let refusal = |file: &str| {
+        format!(
+            "{}: allows subagent 'shd', which failed to load{cause}",
+            home.path().join(file).display()
+        )
+    };
+    let refused = |launch: &LaunchAgents, spec: &str, ov: Option<&str>, file: &str| {
+        resolve(launch, spec, ov)
+            .err()
+            .filter(|text| text.contains(&refusal(file)))
+            .map(|_| ())
+            .ok_or_else(|| format!("{spec} --agent {ov:?}: {:?}", resolve(launch, spec, ov)))
+    };
+    let cases = [
+        ("m1", None, "agents/m1.md"),
+        ("m2", None, "agents/m2.md"),
+        ("m1", Some("x"), "agents/m1.md"),
+        ("m2", Some("x"), "agents/m2.md"),
+        ("y", Some("m1"), "agents/m1.md"),
+        ("both", None, "agents/both.md"),
+        ("codex", None, "agents/codex.md"),
+        ("on_codex", None, "agents/on_codex.md"),
+        ("crew", None, "teams/crew.md"),
+        ("pi", None, "agents/pi.md"),
+        ("opencode-mini", None, "agents/opencode.md"),
+        ("plain", Some("opencode-mini"), "agents/opencode.md"),
+    ];
+    assert_eq!(
+        cases
+            .iter()
+            .map(|(spec, ov, file)| refused(&launch, spec, *ov, file))
+            .collect::<Vec<_>>(),
+        vec![Ok(()); cases.len()],
+    );
+    let launches = [
+        ("plain", None),
+        ("plain", Some("x")),
+        ("m_ok", None),
+        ("codex_own", None),
+        ("calm", None),
+        ("x", None),
+    ];
+    assert_eq!(
+        launches
+            .iter()
+            .map(|(spec, ov)| resolve(&launch, spec, *ov))
+            .collect::<Vec<_>>(),
+        vec![Ok(()); launches.len()],
+    );
+    let intern = Some(super::super::tiers::ModelTier::Intern);
+    let codex_model = Some("gpt-5.1-codex");
+    let routes = [
+        ("plain", None, codex_model, "agents/plain.md"),
+        ("plain", intern, None, "agents/plain.md"),
+        ("claude", None, codex_model, "agents/codex.md"),
+        ("claude", intern, None, "agents/codex.md"),
+    ];
+    assert_eq!(
+        routes
+            .iter()
+            .map(|(spec, tier, model, file)| {
+                routed(spec, *tier, *model)
+                    .err()
+                    .filter(|text| text.contains(&refusal(file)))
+                    .map(drop)
+                    .ok_or_else(|| {
+                        format!(
+                            "{spec} {tier:?} {model:?}: {:?}",
+                            routed(spec, *tier, *model)
+                        )
+                    })
+            })
+            .collect::<Vec<_>>(),
+        vec![Ok(()); routes.len()],
+    );
+    assert_eq!(routed("codex_own", None, codex_model), Ok(()));
+    let shd = crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Subagents,
+        commands,
+        Some("shd"),
+        None,
+    )
+    .map(drop)
+    .map_err(|err| err.to_string());
+    assert!(
+        shd.as_ref()
+            .is_err_and(|text| text.contains("[subagents.profiles.shd]")),
+        "{shd:?}"
+    );
+    assert_eq!(
+        launch.project_definition_errors().len(),
+        1,
+        "{:?}",
+        launch.project_definition_errors()
+    );
+
+    // Fork, restart, child resume, and the exec wrapper all refuse through `block_failed_launch`.
+    let claude = crate::ids::AgentKind::new_unchecked("claude");
+    for (profile, agent) in [
+        (Some("m1"), None),
+        (Some("y"), Some("m1")),
+        (Some("m2"), None),
+        (Some("opencode-mini"), None),
+        (Some("plain"), Some("opencode-mini")),
+    ] {
+        let record = crate::agents::LaunchRecord {
+            agent: agent.map(str::to_owned),
+            ..Default::default()
+        };
+        let gate = launch
+            .block_failed_launch(&claude, profile, Some(&record), &launch.profiles, None)
+            .map_err(|err| err.to_string());
+        assert!(
+            gate.as_ref().is_err_and(|text| text.contains(&cause)),
+            "{profile:?} --agent {agent:?}: {gate:?}"
+        );
+    }
+
+    std::fs::create_dir_all(untrusted.path().join(".rimz")).unwrap();
+    std::fs::write(untrusted.path().join(".rimz/config.toml"), project_toml).unwrap();
+    for root in [untrusted.path(), outside.path()] {
+        let elsewhere = load_with_roots(&machine, root, home.path()).unwrap();
+        assert_eq!(
+            ["m1", "m2", "both", "codex", "on_codex", "crew"]
+                .map(|spec| resolve(&elsewhere, spec, None)),
+            [const { Ok(()) }; 6],
+            "{}",
+            root.display()
+        );
+    }
+}

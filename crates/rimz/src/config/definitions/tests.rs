@@ -6009,10 +6009,59 @@ fn rimz_grants_every_capability_and_merges_marks_as_mcps_does() {
     );
 }
 
-/// A pending `+` subagents list meets the namespace and delegation refusals a plain list meets,
-/// and a skill named exactly `rimz` is the user's own beside `capabilities:`.
+/// A pending `+` subagents list meets the namespace, delegation, and failed-subagent refusals a
+/// plain list meets, an unknown name in it still loads as absent, and a skill named exactly
+/// `rimz` is the user's own beside `capabilities:`.
 #[test]
 fn plus_subagents_meet_the_plain_refusals_and_a_bare_rimz_skill_is_the_users() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "subagents/broken.md",
+        "agent: pi\neffort: +1",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Bash]\nsubagents: [+broken]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/typo.md",
+        "agent: claude\ntools: [Bash]\nsubagents: [+typo]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/codex.md",
+        "subagents: [+broken]",
+        "Base.",
+    );
+    let loaded = clean_but(root.path(), &root.path().join("subagents/broken.md"));
+    let refusal = "allows subagent 'broken', which failed to load".to_owned();
+    assert_eq!(
+        loaded
+            .errors
+            .iter()
+            .map(|error| (error.path.clone(), error.message.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (root.path().join("agents/codex.md"), refusal.clone()),
+            (root.path().join("agents/probe.md"), refusal)
+        ]
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("codex"));
+    assert_eq!(loaded.agent_profiles.0["typo"].subagents, None);
+    definition(
+        root.path(),
+        "agents/codex.md",
+        "subagents: [+typo]",
+        "Base.",
+    );
+    let loaded = clean_but(root.path(), &root.path().join("subagents/broken.md"));
+    assert_eq!(loaded.agent_profiles.0["codex"].subagents, None);
     for (path, fields, needle) in [
         (
             "subagents/probe.md",
