@@ -137,7 +137,7 @@ This is a mount view, not containment. What it does not do:
 - Each agent's `/tmp` is a different directory, not a private one: any agent in the room can still read and write another's at its host path under the room's state.
 - Processes, networking, and IPC are shared with the rest of the machine.
 - Overlaid skills are bound read-only at their discovery paths, but their sources on the host are unchanged and may still be reachable by another path.
-- No isolation level hides an agent's command line from a same-user `ps`. RimZ passes a composed system prompt by private file for that reason. Pi is the exception: its replacement surface is the `--system-prompt` flag, so a Pi prompt rides the command line, capped at 120 KiB.
+- No isolation level hides an agent's command line from a same-user `ps`. RimZ passes a composed system prompt by private file for that reason. Three agents are the exception: a Pi or OMP prompt rides the command line in `--system-prompt`, their only replacement surface, and a MiniMax Code prompt rides `--append-system-prompt` together with its launch reminders, since MiniMax Code gives that flag and its file form one slot. Each prompt is capped at 120 KiB ([how each agent receives it](../reference/agent-support.md#launch-prompt-replacement)).
 
 Bubblewrap does add one protection: it turns off privilege escalation, so `sudo` and setuid programs cannot elevate inside these panes. Use a host shell for that work.
 

@@ -439,7 +439,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | OpenCode | ✓ | the composed file as `{file:<path>}` in `OPENCODE_CONFIG_CONTENT` `agents.build.system` |
 | Droid | ✗ | Droid only appends. Pass its flag through profile `args` |
-| MiniMax Code | ✗ | appends instead: the composed prompt goes through `--append-system-prompt-file` and launch reminders through `--append-system-prompt`, so MiniMax's native prompt stays. Its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
+| MiniMax Code | ✗ | appends instead: the prompt text and then the launch reminders in one `--append-system-prompt`, the prompt at most 120 KiB, so MiniMax's native prompt stays. Its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
 | Antigravity | ✓ | on a fresh launch, an agent file in RimZ's agy plugin selected by `--agent`, holding the prompt and the launch reminders; a resume keeps the prompt its conversation started with ([mapping](../internals/agents/adapter_antigravity.md#the-agent-file)) |
 | Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
