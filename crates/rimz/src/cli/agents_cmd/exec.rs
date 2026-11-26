@@ -448,7 +448,7 @@ fn launch_and_supervise(
     {
         tracing::debug!(%error, "could not record agent launch warnings");
     }
-    let (program, rest) = process.argv.split_first().ok_or_else(|| {
+    let program = process.argv.first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
     let resume_since = jiff::Timestamp::now();
@@ -470,8 +470,17 @@ fn launch_and_supervise(
             "agent resume start stamp",
         );
     }
+    // Settled before the provider starts, after the stamp revived the card: a continue handed to
+    // the provider on its command line is in flight before the provider can submit it.
+    let continue_args = attach_target.as_ref().map_or_else(Vec::new, |target| {
+        let wake = rewake_resumed(invocation, target, globals.mux, resume_since, resume_prompt);
+        let args = resume_continue_args(invocation, request, target, &wake, resume_prompt);
+        tracing::debug!("resume: wake settled");
+        args
+    });
+    let argv = process.argv_with_provider_args(&continue_args);
     let mut command = Command::new(program);
-    command.args(rest);
+    command.args(&argv[1..]);
     command.envs(&process.env);
     for key in &process.unset {
         command.env_remove(key);
@@ -520,21 +529,6 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
-        let wake = rewake_resumed(invocation, target, globals.mux, resume_since, resume_prompt);
-        let machine_config = crate::cli::machine_config();
-        if let Some(text) =
-            resume_continue_text(request, &wake, &machine_config.resume.auto_continue_text)
-            && let Err(error) = queue_resume_continue(
-                invocation,
-                target,
-                text,
-                resume_prompt,
-                matches!(wake, rimz::harness::team_stage::ResumeWake::Leader),
-            )
-        {
-            tracing::warn!(%error, "could not queue the restarted session's continue");
-        }
-        tracing::debug!("resume: wake settled");
         let resume_launch = request
             .identity
             .launch_id
@@ -2090,7 +2084,7 @@ fn session_bound_to_another_pane(
     })
 }
 
-/// The continue a resumed session takes after spawn: one when the restart asked for it or the
+/// The continue a resumed session takes: one when the restart asked for it or the
 /// session is its team's leader standing in for a board with no open stage; none when a stage
 /// re-wake already stands in for it, under `--no-continue`, or for blank text.
 fn resume_continue_text<'a>(
@@ -2126,19 +2120,63 @@ fn card_last_prompt_at(
     find_agent(&projection.agents, target.0.as_str(), &target.1).map(|agent| agent.last_prompt_at)
 }
 
-/// Queue one system continue for the resumed card at its next turn boundary; the queued-head
-/// delivery spawned after this sends it. `last_prompt_at` is the card's prompt stamp read
-/// before spawn: a card prompted since takes no continue, and the continue is withdrawn once
-/// it is. A leader's continue (`leader`) also yields to a `rimz teams resume` PROMPT queued for
-/// the card (a record with a `team_return`), which a continue would otherwise join in one
-/// batch; other mail, due now or held, leaves it queued beside that mail.
-fn queue_resume_continue(
+/// Settle the continue the resumed card is owed, before its provider spawns, and return the
+/// arguments that hand it to the provider on its resume command line: empty when none is owed,
+/// and when the continue is queued instead (`record_resume_continue`). A failed record warns
+/// and hands the provider nothing, since text no record matches would read as the user's.
+fn resume_continue_args(
+    invocation: &ExecInvocationContext<'_>,
+    request: &rimz::harness::launch::ExecRequest,
+    target: &(AgentKind, AgentSessionId),
+    wake: &rimz::harness::team_stage::ResumeWake,
+    last_prompt_at: Option<Option<jiff::Timestamp>>,
+) -> Vec<String> {
+    let machine_config = crate::cli::machine_config();
+    let Some(text) = resume_continue_text(request, wake, &machine_config.resume.auto_continue_text)
+    else {
+        return Vec::new();
+    };
+    let args = rimz::agents::find_definition(request.kind.as_str())
+        .and_then(|definition| definition.spec().launch.resume_prompt_args(text));
+    let leader = matches!(wake, rimz::harness::team_stage::ResumeWake::Leader);
+    match record_resume_continue(
+        invocation,
+        target,
+        text,
+        last_prompt_at,
+        leader,
+        args.is_some(),
+    ) {
+        Ok(true) => args.unwrap_or_default(),
+        Ok(false) => Vec::new(),
+        Err(error) => {
+            tracing::warn!(%error, "could not record the resumed session's continue");
+            Vec::new()
+        }
+    }
+}
+
+/// Record one system continue for the resumed card, and say whether it goes on the provider's
+/// resume command line. It does when the kind's resume takes a prompt (`argv_slot`), the text
+/// opens no slash command, and no model hold stands on the card (`CardStatus::held`, the hold
+/// the ordered check reads): it is then recorded in flight with no pane write
+/// (`Store::record_argv_prompt`). Otherwise it is queued for the card's next turn boundary,
+/// where the queued-head delivery spawned after the provider sends it, typed with the command
+/// keys a slash-led text needs and held while the model hold stands. `last_prompt_at` is the
+/// card's prompt stamp read before the stamp: a card prompted since takes no continue, and a
+/// queued continue is withdrawn once it is. A leader's continue
+/// (`leader`) also yields to a `rimz teams resume` PROMPT queued for the card (a record with a
+/// `team_return`), which a queued continue would otherwise join in one batch; other mail, due
+/// now or held, leaves a queued continue beside that mail and lets one on the command line go
+/// ahead of it.
+fn record_resume_continue(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     text: &str,
     last_prompt_at: Option<Option<jiff::Timestamp>>,
     leader: bool,
-) -> Result<()> {
+    argv_slot: bool,
+) -> Result<bool> {
     let workspace = invocation.workspace;
     let store = invocation.store()?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
@@ -2146,7 +2184,7 @@ fn queue_resume_continue(
         .context("resumed card is not in the store")?;
     if last_prompt_at.is_some_and(|copy| agent.last_prompt_at > copy) {
         tracing::debug!("resume: the card was prompted since its resume; no continue");
-        return Ok(());
+        return Ok(false);
     }
     if leader
         && store.list_messages()?.iter().any(|message| {
@@ -2154,27 +2192,42 @@ fn queue_resume_continue(
         })
     {
         tracing::debug!("resume: the team resume prompt stands in for the leader's continue");
-        return Ok(());
+        return Ok(false);
     }
-    store.queue_message(
-        &rimz::message::synthetic::SyntheticMessage {
-            agent,
-            text: text.to_owned(),
-            sender: rimz::store::message::MessageSender::System,
-            gate: rimz::store::message::DeliveryGate::Done,
-            premises: last_prompt_at
-                .map(
-                    |last_prompt_at| rimz::store::message::Premise::NotPromptedSince {
-                        last_prompt_at,
-                    },
-                )
-                .into_iter()
-                .collect(),
-        }
-        .record(workspace),
-        &workspace.session_name,
-    )?;
-    Ok(())
+    let now = jiff::Timestamp::now();
+    let on_argv = argv_slot && !rimz::store::message::opens_slash_command(text) && {
+        // The model the delivery check reads: the card with its context sidecar attached.
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace.workspace_id.clone(),
+            projection.agents.clone(),
+            now,
+        )
+        .with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+        let card = find_agent(&snapshot.agents, target.0.as_str(), &target.1).unwrap_or(agent);
+        rimz::harness::CardStatus::new(&store)
+            .held(&snapshot, card, now)
+            .is_none()
+    };
+    let record = rimz::message::synthetic::SyntheticMessage {
+        agent,
+        text: text.to_owned(),
+        sender: rimz::store::message::MessageSender::System,
+        gate: rimz::store::message::DeliveryGate::Done,
+        premises: last_prompt_at
+            .filter(|_| !on_argv)
+            .map(
+                |last_prompt_at| rimz::store::message::Premise::NotPromptedSince { last_prompt_at },
+            )
+            .into_iter()
+            .collect(),
+    }
+    .record(workspace);
+    if on_argv {
+        store.record_argv_prompt(&record, &workspace.session_name)?;
+    } else {
+        store.queue_message(&record, &workspace.session_name)?;
+    }
+    Ok(on_argv)
 }
 
 /// Re-wake a stamped resumed card when it owns its team's open stage, and say what wake it

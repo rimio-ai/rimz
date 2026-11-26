@@ -458,6 +458,23 @@ fn joined_prompt_preserves_leading_dash_and_spaces() {
 }
 
 #[test]
+fn resume_prompt_renders_only_where_the_resume_declares_a_slot() {
+    let flagged = LaunchSpec {
+        resume_prompt: PromptStyle::Flag("--prompt"),
+        ..LaunchSpec::EMPTY
+    };
+    let claude = crate::agents::registry::spec_by_kind("claude").unwrap();
+    assert_eq!(
+        [
+            flagged.resume_prompt_args("-x go"),
+            LaunchSpec::EMPTY.resume_prompt_args("go"),
+            claude.launch.resume_prompt_args("go"),
+        ],
+        [Some(vec!["--prompt".into(), "-x go".into()]), None, None]
+    );
+}
+
+#[test]
 fn prompt_flag_suffix_is_conditional_on_nonempty_prompt() {
     let launch = LaunchSpec {
         program: Some("agent"),

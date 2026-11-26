@@ -728,6 +728,39 @@ impl Store {
         })
     }
 
+    /// Record `message` as `Sent` with no pane write, for a prompt its provider takes on its own
+    /// command line: written before the provider spawns, it is in flight when the provider
+    /// submits it, so that submit confirms it. Left unconfirmed, reconciliation times it out
+    /// rather than typing it (`MessageRecord::on_argv`).
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_argv_prompt(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
+        let now = Timestamp::now();
+        let mut message = message.clone();
+        message.status = MessageStatus::Sent;
+        message.on_argv = true;
+        message.attempts = 1;
+        message.last_attempt_at = Some(now);
+        message.last_sent_at = Some(now);
+        message.updated_at = now;
+        let queued = EventEnvelope::message_event(
+            &MessageRecord {
+                status: MessageStatus::Queued,
+                ..message.clone()
+            },
+            session_name,
+            MessageEventMethod::Queued,
+            None,
+        );
+        let sent =
+            EventEnvelope::message_event(&message, session_name, MessageEventMethod::Sent, None);
+        self.commit_queue(|queue| {
+            queue.upsert(message);
+            queue.stage_event(queued);
+            queue.stage_event(sent);
+            Ok(())
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn queue_message_once(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         self.commit_queue(|queue| {
@@ -1807,9 +1840,12 @@ impl Store {
                     message.retry_after = Some(now + window);
                     return MessageUpdate::SilentRewrite;
                 }
-                if !message.body.resends_unconfirmed() {
-                    message.last_error =
-                        Some("delivery unconfirmed; command not resent".to_owned());
+                if message.on_argv || !message.body.resends_unconfirmed() {
+                    message.last_error = Some(if message.on_argv {
+                        "the provider took this prompt on its command line and did not confirm it; not typed".to_owned()
+                    } else {
+                        "delivery unconfirmed; command not resent".to_owned()
+                    });
                     report.timed_out += 1;
                     MessageUpdate::Finalize {
                         status: MessageStatus::TimedOut,

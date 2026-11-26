@@ -158,6 +158,13 @@ mod tests {
             Some("019ea276")
         );
         assert_eq!(
+            codex_resumed_session_id_from_cmdline(
+                "codex resume sess-1 --no-daemon -c tui.question_esc_back=false -- continue"
+            )
+            .as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(
             codex_resumed_session_id_from_cmdline("codex-aarch64-apple-darwin resume 019ea276")
                 .as_deref(),
             Some("019ea276")

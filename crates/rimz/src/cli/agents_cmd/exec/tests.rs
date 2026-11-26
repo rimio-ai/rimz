@@ -12,7 +12,7 @@ fn design_lane() -> rimz::ids::Lane {
         .expect("lane decodes")
 }
 
-/// A restart that asked for a continue gets one after spawn, and so does a team leader resumed
+/// A restart that asked for a continue gets one, and so does a team leader resumed
 /// while its board has no open stage, unless the stage re-wake stands in for it, the restart
 /// passed `--no-continue`, or the configured text is blank; any other resume gets none.
 #[test]

@@ -294,6 +294,11 @@ fn codex_commands_and_permission_args_match_run_posture() {
         })
     );
 
+    // `codex resume <SESSION_ID> [PROMPT]` submits the prompt once the resumed session attaches.
+    assert_eq!(
+        CodexAdapter.spec().launch.resume_prompt_args("continue"),
+        Some(vec!["--".to_owned(), "continue".to_owned()])
+    );
     let argv = CodexAdapter
         .resume_command("sess-abc", Path::new("/code/query-engine"))
         .expect("codex resumes");

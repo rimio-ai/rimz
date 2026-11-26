@@ -131,6 +131,7 @@ Rules are applied before the hook config is written, so a rules failure cannot l
 | --- | --- |
 | Every launch, resume, pick, and fork | `--no-daemon -c tui.question_esc_back=false` |
 | Resume a session | `codex resume <id> --no-daemon -c tui.question_esc_back=false` |
+| Resume a session owed a continue | the resume command, then `-- <text>`, which Codex submits once the session has resumed; a text that opens a slash command, or a card under a model hold, gets the resume command alone and the continue queued ([messaging.md](../harness/messaging.md#turn-opening-injection-sites)) |
 | Pick a session | `codex resume --no-daemon -c tui.question_esc_back=false`; binding waits for the first prompt's hooks |
 | Fork a session | `codex fork <id> --no-daemon -c tui.question_esc_back=false` |
 | Remote app-server | `--remote X` and `--remote=X` are refused at compile time with "remove --remote from the launch args" |

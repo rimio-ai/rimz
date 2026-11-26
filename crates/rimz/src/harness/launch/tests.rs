@@ -4080,6 +4080,72 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
     assert!(rendered.contains("ANTHROPIC_API_KEY"), "{rendered}");
 }
 
+/// Arguments appended to a compiled process reach the provider as its own trailing arguments
+/// under every wrapping: direct, a login shell, the scoped view, and the hibernation scope.
+#[test]
+fn provider_args_reach_the_provider_under_every_wrapping() {
+    let provider_argv = argv(&["/bin/sh", "-c", "printf '%s|' \"$@\"", "provider"]);
+    let tail = argv(&["--", "-x\nline two"]);
+    let mut process = CompiledAgentProcess {
+        host_skills: None,
+        env_warnings: Vec::new(),
+        mcp_warnings: Vec::new(),
+        unapplied_marks: Vec::new(),
+        settings_artifact: None,
+        provider_argv: provider_argv.clone(),
+        provider_program: "sh".to_owned(),
+        argv: Vec::new(),
+        env: BTreeMap::from([("RIMZ_TEST_WRAPPED".to_owned(), "1".to_owned())]),
+        secret_keys: BTreeSet::new(),
+        reminder: String::new(),
+        unset: BTreeSet::new(),
+        shell: None,
+        wrapping: ProcessWrapping::Direct,
+        session_step_argv: Vec::new(),
+    };
+    let mut printed = Vec::new();
+    for shell in [None, Some("/bin/sh"), Some("/bin/zsh")]
+        .into_iter()
+        .filter(|shell| shell.is_none_or(|shell| Path::new(shell).is_file()))
+    {
+        process.shell = shell.map(PathBuf::from);
+        process.wrapping = if shell.is_some() {
+            ProcessWrapping::LoginShell
+        } else {
+            ProcessWrapping::Direct
+        };
+        process.rebuild_argv();
+        let command = process.argv_with_provider_args(&tail);
+        let output = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .output()
+            .unwrap();
+        printed.push((shell, String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+    assert!(
+        printed
+            .iter()
+            .all(|(_, stdout)| stdout.ends_with("--|-x\nline two|")),
+        "{printed:?}"
+    );
+    let workspace = crate::ids::WorkspaceId::from_project_root(Path::new("/repo"));
+    process.argv = crate::harness::hibernate::scope_argv(
+        &workspace,
+        "codex",
+        &crate::sandbox::bwrap_argv(
+            Path::new("/usr/bin/bwrap"),
+            &crate::sandbox::MountPlan { mounts: Vec::new() },
+            Path::new("/repo"),
+            &process.argv,
+        ),
+    );
+    assert!(
+        process
+            .argv_with_provider_args(&tail)
+            .ends_with(&[provider_argv, tail].concat())
+    );
+}
+
 #[test]
 fn fish_wrapper_uses_argv_without_a_posix_arg0() {
     let wrapped = login_shell_argv_with(
