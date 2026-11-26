@@ -753,6 +753,68 @@ fn a_rest_checked_session_warns_about_unreported_background_work_and_auto_contin
     );
 }
 
+/// A step's agent resolves as a launch with no flags does: a `tier:` definition written on Codex
+/// whose tier lists only a Claude model leads on Claude, so its session warns as Claude does.
+#[test]
+fn a_tiered_step_agent_leads_on_the_kind_its_tier_picks() {
+    let (home, dir) = fixture();
+    let root = home.path().join("home");
+    fs::create_dir_all(root.join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("tiered", "agent: codex\ntier: principal\ntools: [Read]\n"),
+        ("plain", "agent: codex\ntools: [Read]\n"),
+    ] {
+        fs::write(
+            root.join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBody."),
+        )
+        .unwrap();
+    }
+    let definitions = crate::config::definitions::load(
+        &root,
+        crate::config::definitions::SkillCheck::Skip,
+        &crate::config::CommandsConfig::default(),
+        &root.join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    let results = ["tiered", "plain"].map(|agent| {
+        fs::write(
+            dir.join("workflow.toml"),
+            VALID
+                .replace("agent = \"claude\"", &format!("agent = '{agent}'"))
+                .replace(
+                    "lifecycle = \"turn\"",
+                    "lifecycle='session'\nrest-check=['pick']",
+                ),
+        )
+        .unwrap();
+        let report = validate(&dir, &definitions, None);
+        (
+            agent,
+            report
+                .errors
+                .into_iter()
+                .map(|issue| issue.message)
+                .collect::<Vec<_>>(),
+            report
+                .warnings
+                .iter()
+                .any(|issue| issue.message.contains("background reporting")),
+        )
+    });
+    assert_eq!(
+        results,
+        [
+            ("tiered", Vec::<String>::new(), false),
+            ("plain", Vec::new(), true)
+        ],
+    );
+}
+
 #[test]
 fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
     let results = [

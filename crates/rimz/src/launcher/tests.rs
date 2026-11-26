@@ -2647,7 +2647,7 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
                             (k, v, Some(xm), None)
                         } else if x_name.is_some() {
                             let kept = l_own_model.filter(|m| {
-                                crate::config::definitions::keeps_inherited_model(l_orig_kind, k, m)
+                                crate::config::engine::keeps_inherited_model(l_orig_kind, k, m)
                             });
                             (k, v, kept, None)
                         } else {
