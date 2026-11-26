@@ -254,7 +254,7 @@ A condition is met for delivery only once its `met_at` stamp is written (`Messag
 
 [`dispatch()`](../../../crates/rimz/src/message/dispatch.rs) is the one entry point for an owned send.
 
-1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, or an agent sender. After taking the pane lock and waiting out pacing and the typing check, every pane write reads its recipient's row and context once more and decides on that row ([below](#smart-compaction)).
+1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus the agent-context sidecars over a live pane read, whoever sends: the live read attaches rest certificates only, and a limit pause reads from the sidecar (the cached rollup carries them already). After taking the pane lock and waiting out pacing and the typing check, every pane write reads its recipient's row and context once more and decides on that row ([below](#smart-compaction)).
 2. **Choose a snapshot.** A full resolution snapshot costs a multiplexer round trip. When every target parks without a live pane (no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux. This `rollup_only` path is a latency optimization, and correctness never depends on it.
 3. **Resolve targets.** Live agents and live panes combine, so an agent with a bound pane yields one target. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, dispatch removes an agent caller from the resolved set before anything else runs, and no remaining peer is an error.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card, with the watched agent's `launch_id` when it has one, so the condition follows that agent through a restart or molt as a record does; a condition an older binary wrote matches by kind and session or name. A condition already satisfied gets `met_at` at once.
@@ -271,7 +271,7 @@ Each queue write in the walk refreshes the wake stamp inside the store commit, s
 
 `dispatch_decision` parks an explicit resuming recipient in every send mode: steer and interrupt become its next boundary prompt. For any other target it takes the first rule that applies.
 
-1. Steer and interrupt go live when a pane is bound and park otherwise. Interrupt preflights every target before enqueue, and always loads agent-context sidecars for that check. A live pane without a durable bound session, or an awaiting-input row without `--force` refuses the whole send, fan-out included.
+1. Steer and interrupt go live when a pane is bound and park otherwise. Interrupt preflights every target before enqueue. A live pane without a durable bound session, or an awaiting-input row without `--force` refuses the whole send, fan-out included.
 2. A schedule or an unmet condition parks.
 3. A receiver that cannot take a prompt parks with a reason: its effective status, or its native-input wait. Readiness comes from the exact pane binding when there is one, and from the durable card otherwise.
 4. No resolved pane parks.
