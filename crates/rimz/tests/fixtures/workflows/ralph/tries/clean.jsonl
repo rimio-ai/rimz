@@ -1,0 +1,3 @@
+{"result":{"code":0,"stdout":"{\"outcome\":\"built\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"complete"}}
+{"result":{"report":"the goal is built","handle":"opus"}}

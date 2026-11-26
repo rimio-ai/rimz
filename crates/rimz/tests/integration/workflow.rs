@@ -19,6 +19,7 @@ mod memory;
 mod peers;
 mod refusals;
 mod scope;
+mod scripts;
 mod shells;
 mod sleep;
 mod stranded;

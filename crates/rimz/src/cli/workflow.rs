@@ -22,6 +22,7 @@ mod node;
 mod rail;
 mod receipt;
 mod reconcile;
+mod replay;
 mod show;
 mod wait;
 
@@ -279,8 +280,8 @@ enum Command {
             conflicts_with = "loop_fire_json"
         )]
         input: Option<serde_json::Map<String, serde_json::Value>>,
-        /// Try the start node: end the run once that node has answered, naming the route the run
-        /// would take, and wait for it here.
+        /// Run only the start node: end the run once that node has answered, naming the route the
+        /// run would take, and wait for it here.
         #[arg(long, conflicts_with = "loop_fire_json")]
         once: bool,
         /// From an agent: tell it nothing when the run ends, and do not hold it open or show it
@@ -426,6 +427,19 @@ enum Command {
     },
     /// Print the workflow specification's JSON Schema.
     Schema,
+    /// Replay a workflow script over answers written by hand, starting nothing.
+    Try {
+        /// Workflow directory (its `workflow.js`), or one script file.
+        #[arg(value_name = "DIR|FILE")]
+        path: PathBuf,
+        /// The script's global `args`, as JSON.
+        #[arg(long, value_name = "JSON", allow_hyphen_values = true)]
+        args: Option<String>,
+        /// JSON Lines file whose line n answers call n: `{"result": ...}` or
+        /// `{"failure": {"cause": "exit", ...}}`.
+        #[arg(long, value_name = "FILE")]
+        answers: Option<PathBuf>,
+    },
     /// Print TypeScript declarations for the globals of a workflow script.
     Types,
     #[command(hide = true)]
@@ -545,6 +559,11 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
+        Command::Try {
+            path,
+            args,
+            answers,
+        } => replay::run(&path, args.as_deref(), answers.as_deref()),
         Command::Types => Ok(std::io::stdout()
             .lock()
             .write_all(rimz::harness::block::typescript().as_bytes())?),

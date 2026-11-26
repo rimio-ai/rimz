@@ -1,0 +1,8 @@
+{"result":{"code":0,"stdout":"{\"outcome\":\"closed\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"sent\"}\n","output":"/runs/step.log"}}
+{"result":{"readings":{"ci":"failed","pr":"open","pr.mergeable":"mergeable","pr.queue":"none"}}}
+{"result":{"report":"pushed a fix","handle":"fixer"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"sent\"}\n","output":"/runs/step.log"}}
+{"result":{"readings":{"pr":"merged"}}}
+{"result":{"code":0,"stdout":"","output":"/runs/clean.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"none\"}\n","output":"/runs/step.log"}}

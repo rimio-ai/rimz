@@ -44,3 +44,6 @@ status.md
 # Code review artifacts (reviewer findings and their resolutions)
 review.md
 resolution.md
+
+# Test fixtures may carry the scratch names above as real files
+!/crates/rimz/tests/fixtures/**/*.md

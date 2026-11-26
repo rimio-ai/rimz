@@ -1,0 +1,8 @@
+{"result":{"code":0,"stdout":"{\"unitTimeout\":\"2h\",\"teamTimeout\":\"1d\",\"lanes\":[{\"id\":\"l1\",\"units\":[{\"id\":\"u1\",\"kind\":\"solo\",\"worker\":\"opus\"},{\"id\":\"u2\",\"kind\":\"solo\",\"worker\":\"opus\"}]},{\"id\":\"l2\",\"units\":[{\"id\":\"u3\",\"kind\":\"solo\",\"worker\":\"opus\"}]}]}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"blocked","question":"which API?"}}
+{"result":{"outcome":"done"}}
+{"result":{"outcome":"halt"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"landed\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"halted\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"none\"}\n","output":"/runs/step.log"}}
+{"result":{"report":"one lane halted","handle":"opus"}}

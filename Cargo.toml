@@ -101,6 +101,15 @@ kdl = "4.7.1"
 # drifts badly on code and non-English text.
 tiktoken-rs = "0.12"
 
+# Workflow scripts run in an embedded JavaScript engine: QuickJS-NG, compiled in
+# from C, through rquickjs's safe bindings. It caps a pass's heap and time, starts
+# in about a millisecond (a script restarts on every engine pass), and settles
+# promises through a host-pumped job queue. Boa has no heap cap or interrupt in
+# its release, and V8 adds tens of megabytes. Default features only: the bundled
+# bindings cover every release target, so no `bindgen` (libclang), and no
+# `futures`, `macro`, `classes`, or `rust-alloc`.
+rquickjs = "=0.14.0"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"
