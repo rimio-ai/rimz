@@ -25,6 +25,7 @@ Routine reads use a 30-day floor, `transcript::recent_floor`. `read_since` selec
 | Channel discovery (`transcript::channels`, `workspaces_with_channel`) | 30 days |
 | Open-ask lookup, ask materialization, answer deduplication, `rimz answer` confirmation | 30 days |
 | `rimz agents wait`, for a turn's final message (`latest_assistant`) | Buckets from the turn's start |
+| `rimz agents history`, for each turn's sender (`crates/rimz/src/agents/turns.rs::turn_openers`) | Buckets from ten seconds before the first turn's start to five minutes after the last turn's start |
 | Raised attention, for the reply it quotes (`latest_assistant` in `crates/rimz/src/store/raised.rs::prepare_raise` and `observe`) | Buckets from the agent's last prompt (else its registration) when raised, and from the raise time when the ask opens |
 | Hook redo and replay deduplication | Buckets from the ingress frame's timestamp |
 | `rimz agents attribution` | Every bucket |
@@ -52,7 +53,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Answer` | The effective answer: from the native prompt UI, from `rimz answer`, or the first direct human prompt submitted while a question is open | `user` to the agent, folded into its ask card. An orphan uses its recorded question as an answer card, or a plain body when no question text was recorded |
 | `Error` | A hook-decoded provider turn error newly merged into `AgentContext.turn_error` | `@receiver: error text`, styled as an error |
 
-`rimz transcript --json` includes every hidden entry. [`TranscriptEntry::origin`](../../../crates/rimz/src/transcript.rs) is the one read-side origin decision, shared by rendering, thread assembly, and attribution. It derives `EntryOrigin` from `(entry, from)` with no stored origin field, and the first matching row wins:
+`rimz transcript --json` includes every hidden entry. [`TranscriptEntry::origin`](../../../crates/rimz/src/transcript.rs) is the one read-side origin decision, shared by rendering, thread assembly, attribution, and the sender of a headerless turn in `rimz agents history`, which pairs the provider's turn with the entry that opened it (`crates/rimz/src/agents/turns.rs::turn_openers`). The pair needs the same agent, the turn's first-section text after the hook's prompt sanitizing equal to one entry or to the in-order run of entries one submission wrote for a pasted batch (whitespace aside), and an entry from ten seconds before the turn's start to five minutes after it, the lag a later Antigravity lifecycle frame can add. Turns take their entries in time order, each entry once, and a batch is labeled by its first member. It derives `EntryOrigin` from `(entry, from)` with no stored origin field, and the first matching row wins:
 
 | Kind | Stored `from` | Origin |
 | --- | --- | --- |

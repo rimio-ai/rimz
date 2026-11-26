@@ -140,6 +140,129 @@ fn agent_history_folds_keepalives_without_changing_json_turns() {
 }
 
 #[test]
+fn agent_history_takes_a_headerless_turns_sender_from_the_rimz_transcript() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = "history-origin";
+    let session_dir = env.home_root.join(".copilot/session-state").join(session);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let transcript = session_dir.join("events.jsonl");
+    let prompts = [
+        "continue",
+        "continue",
+        "plan the rollout",
+        "the compaction reminder",
+        "first ask\n\ncontinue",
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nread the plan",
+        "read the plan",
+    ];
+    let start = |index: usize| {
+        let offset = [0, 300, 600, 900, 1200, 1500, 1510][index];
+        jiff::Timestamp::from_second(1_704_110_400 + offset).unwrap()
+    };
+    let mut bytes = Vec::new();
+    for (index, prompt) in prompts.iter().enumerate() {
+        for record in [
+            json!({"type":"user.message","timestamp":start(index).to_string(),
+                "data":{"content":prompt}}),
+            json!({"type":"assistant.message",
+                "timestamp":(start(index) + jiff::SignedDuration::from_secs(5)).to_string(),
+                "data":{"content":"acknowledged"}}),
+        ] {
+            serde_json::to_writer(&mut bytes, &record).unwrap();
+            bytes.push(b'\n');
+        }
+    }
+    std::fs::write(&transcript, bytes).unwrap();
+    for (event, payload) in [
+        (
+            "userPromptSubmitted",
+            json!({"sessionId":session,"prompt":"register the session"}),
+        ),
+        (
+            "agentStop",
+            json!({"sessionId":session,"stopReason":"end_turn","transcriptPath":transcript}),
+        ),
+    ] {
+        let output = env.run_copilot_hook(event, &payload.to_string());
+        assert!(output.status.success(), "{output:?}");
+    }
+    let opener = |index: usize, text: &str, from: Option<&str>, session: &str| {
+        let mut entry = agent_entry(
+            "copilot",
+            session,
+            "main",
+            TranscriptKind::Prompt,
+            text,
+            &(start(index) + jiff::SignedDuration::from_millis(200)).to_string(),
+        );
+        entry.from = from.map(str::to_owned);
+        entry
+    };
+    let submission = rimz::ids::EventId::new();
+    let mut lagged = opener(3, "the compaction reminder", Some("rimz"), session);
+    lagged.at += jiff::SignedDuration::from_secs(140);
+    let mut header = opener(5, "read the plan", Some("@planner"), session);
+    header.entry = TranscriptKind::Message;
+    for mut entry in [
+        opener(0, "continue", Some("rimz"), session),
+        opener(1, "continue", None, session),
+        opener(2, "plan the rollout", None, "another-session"),
+        lagged,
+        opener(4, "first ask", None, session),
+        opener(4, "continue", Some("rimz"), session),
+        header,
+    ] {
+        if entry.at > start(4) && entry.at < start(5) {
+            entry.ingress = Some(submission.clone());
+        }
+        append_transcript(&env, entry);
+    }
+
+    let history = |flags: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["agents", "history", session])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let json: serde_json::Value = serde_json::from_str(&history(&["--json"])).unwrap();
+    assert_eq!(
+        json.as_array()
+            .unwrap()
+            .iter()
+            .map(|turn| turn.get("from").cloned())
+            .collect::<Vec<_>>(),
+        [
+            json!("rimz"),
+            json!("user"),
+            json!(null),
+            json!("rimz"),
+            json!("user"),
+            json!("@planner"),
+            json!(null),
+        ]
+        .map(Some),
+        "{json}"
+    );
+    assert_eq!(json[4]["prompt"], prompts[4], "{json}");
+    let human = history(&[]);
+    assert_eq!(
+        human
+            .lines()
+            .skip(1)
+            .take(prompts.len())
+            .map(|row| row.split_whitespace().nth(7).unwrap())
+            .collect::<Vec<_>>(),
+        ["rimz", "user", "-", "rimz", "user", "@planner", "-"],
+        "{human}"
+    );
+}
+
+#[test]
 fn transcript_and_agent_logs_window_old_history_with_an_all_hint() {
     let env = Env::new();
     let now = jiff::Timestamp::now();
