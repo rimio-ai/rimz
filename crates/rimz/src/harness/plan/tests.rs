@@ -2965,7 +2965,11 @@ fn agent_launch_precondition_surfaces_definition_error() {
         (Some("broken.worker"), None),
     ] {
         let error = launch
-            .block_failed_reference(spec, agent_override)
+            .block_failed_reference(
+                crate::config::effective::ProfileScope::Agents,
+                spec,
+                agent_override,
+            )
             .unwrap_err();
         assert_eq!(
             error.to_string(),
@@ -2974,7 +2978,11 @@ fn agent_launch_precondition_surfaces_definition_error() {
     }
     assert!(
         launch
-            .block_failed_reference(Some("never-defined"), None)
+            .block_failed_reference(
+                crate::config::effective::ProfileScope::Agents,
+                Some("never-defined"),
+                None
+            )
             .is_ok()
     );
 }

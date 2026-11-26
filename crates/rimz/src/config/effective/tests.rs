@@ -234,7 +234,7 @@ fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_e
     let actual: Vec<_> = names
         .map(|name| {
             launch
-                .block_failed_profile(name, &profiles)
+                .block_failed_profile(name, ProfileScope::Agents, &profiles)
                 .err()
                 .map(|error| error.to_string())
         })
@@ -4501,8 +4501,6 @@ fn failed_subagent_kind_named_and_override_never_bypass_guard_on_replay_or_seat_
             "description",
         ),
     ] {
-        let own = launch.profiles_for_launch(ProfileScope::Subagents, profile);
-        let fallback = std::ptr::eq(own, &launch.subagent_profiles).then_some(&launch.profiles);
         let record = crate::agents::LaunchRecord {
             agent: record_agent.map(str::to_owned),
             ..Default::default()
@@ -4512,8 +4510,7 @@ fn failed_subagent_kind_named_and_override_never_bypass_guard_on_replay_or_seat_
                 &crate::ids::AgentKind::new_unchecked(kind),
                 profile,
                 Some(&record),
-                own,
-                fallback,
+                ProfileScope::Subagents,
             )
             .expect_err(&format!("{label} must refuse on child resume"));
         assert!(
@@ -5064,7 +5061,7 @@ fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project()
             ..Default::default()
         };
         let gate = launch
-            .block_failed_launch(&claude, profile, Some(&record), &launch.profiles, None)
+            .block_failed_launch(&claude, profile, Some(&record), ProfileScope::Agents)
             .map_err(|err| err.to_string());
         assert!(
             gate.as_ref().is_err_and(|text| text.contains(&cause)),
@@ -5085,4 +5082,258 @@ fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project()
             root.display()
         );
     }
+}
+
+/// The machine-definition fixture of the tests below: `files` written into `home` beside the
+/// seeded kind bases, loaded with `project_toml` trusted and `tiers` the intern row, the only one.
+fn load_definitions_in_project(
+    home: &std::path::Path,
+    project: &std::path::Path,
+    files: &[(&str, &str)],
+    tiers: &str,
+    project_toml: &str,
+) -> (MachineConfig, LaunchAgents) {
+    seed_definition_home(home);
+    for (file, fields) in files {
+        std::fs::write(
+            home.join(file),
+            format!("---\ndescription: {file}\n{fields}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+    let machine_toml =
+        format!("[tiers]\nintern = [{tiers}]\njunior = []\nsenior = []\nprincipal = []\n");
+    load_trusted_project(home, project, &machine_toml, project_toml)
+}
+
+/// A launch, routed first when `tier` is set, reduced to its refusal's first line.
+fn launch_first_line(
+    machine: &MachineConfig,
+    launch: &LaunchAgents,
+    scope: ProfileScope,
+    spec: &str,
+    tier: Option<super::super::tiers::ModelTier>,
+) -> std::result::Result<(), String> {
+    let mut routed = launch.clone();
+    routed
+        .route(
+            &machine.tiers,
+            scope,
+            Some(spec),
+            tier,
+            None,
+            None,
+            |_, _| None,
+        )
+        .map_err(|err| err.to_string())
+        .and_then(|()| {
+            crate::harness::plan::resolve_launch(
+                &routed,
+                scope,
+                &machine.agents.commands,
+                Some(spec),
+                None,
+            )
+            .map(drop)
+            .map_err(|err| err.to_string())
+        })
+        .map_err(|text| text.lines().next().unwrap_or_default().to_owned())
+}
+
+/// A launch reports only the failures of the tables its scope resolves from, tiered or not: a
+/// healthy project subagent launches under `--subagent-profile` beside a same-named machine agent
+/// that fails in the project, and an agents launch names its failed agents file over a failed
+/// project subagent of the same name. A name only the other table holds refuses with that table's
+/// failure, its project row over the machine file it shadows. A spec the launch resolves (a
+/// `-fast` name, a fast cell, a permission-mode cell) launches beside a failed subagent row that
+/// another reading of the spec names. A healthy row in the other table shadows its broken
+/// machine file there, so a launch of that name, or an `--agent` of it, gets the wrong-doorway
+/// refusal rather than that file's error.
+#[test]
+fn a_launch_reads_failures_only_from_the_tables_its_scope_resolves_from() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let (machine, launch) = load_definitions_in_project(
+        home.path(),
+        project.path(),
+        &[
+            ("subagents/shd.md", "agent: claude"),
+            ("agents/bothns.md", "agent: claude\nsubagents: [shd]"),
+            ("agents/twin.md", "agent: nosuch"),
+            ("agents/only_agent.md", "agent: claude\nsubagents: [shd]"),
+            ("subagents/dup.md", "agent: nosuch"),
+            ("agents/fa-fast.md", "agent: claude"),
+            ("agents/fb.md", "agent: claude"),
+            ("subagents/sx.md", "agent: nosuch"),
+            ("agents/ax.md", "agent: nosuch"),
+            ("subagents/sy.md", "agent: nosuch"),
+        ],
+        "\"opus\"",
+        "\
+        [subagents.profiles.shd]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.twin]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.bothns]\n\
+        description = \"Both\"\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.only_sub]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.dup]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.fa]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.fb-fast]\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.claude-yolo]\n\
+        agent = \"claude\"\n\
+        [profiles.sx]\n\
+        description = \"Agent sx\"\n\
+        agent = \"claude\"\n\
+        [profiles.ax]\n\
+        description = \"Agent ax\"\n\
+        agent = \"claude\"\n\
+        [subagents.profiles.sy]\n\
+        description = \"Subagent sy\"\n\
+        agent = \"claude\"\n",
+    );
+    let intern = Some(super::super::tiers::ModelTier::Intern);
+    let agents_file = |name: &str| {
+        home.path()
+            .join(format!("agents/{name}.md"))
+            .display()
+            .to_string()
+    };
+    let twin = format!("{}: follows unknown profile 'nosuch'", agents_file("twin"));
+    let bothns = format!(
+        "{}: allows subagent 'shd', which failed to load",
+        agents_file("bothns")
+    );
+    let only_agent = format!(
+        "{}: allows subagent 'shd', which failed to load",
+        agents_file("only_agent")
+    );
+    let config = project.path().join(".rimz/config.toml");
+    let row = |name: &str| {
+        Err(format!(
+            "{}: [subagents.profiles.{name}]: has no non-empty `description:`",
+            config.display()
+        ))
+    };
+    let into_subagents = "profile `ax` is defined under [agents.profiles], but `rimz subagents` \
+         resolves [subagents.profiles]; move or copy the profile to the expected section";
+    let into_agents = "profile `sy` is defined under [subagents.profiles], but `rimz agents` \
+         resolves [agents.profiles]; launch it with `rimz agents sy --subagent-profile`, or move \
+         or copy the profile to the expected section";
+    let no_tier_row = |name: &str| {
+        format!("{name}: --tier needs a profile definition; model tiers resolve in definitions")
+    };
+    let cases = [
+        (ProfileScope::Subagents, "bothns", Ok(())),
+        (ProfileScope::Agents, "twin", Err(twin)),
+        (ProfileScope::Agents, "bothns", Err(bothns)),
+        (ProfileScope::Agents, "only_sub", row("only_sub")),
+        (ProfileScope::Agents, "fb,only_sub", row("only_sub")),
+        (ProfileScope::Subagents, "only_agent", Err(only_agent)),
+        // The other table's failure is its project row, which shadows the machine file.
+        (ProfileScope::Agents, "dup", row("dup")),
+        // Each spec resolves, beside a failed subagent row named by another reading of it.
+        (ProfileScope::Agents, "fa-fast", Ok(())),
+        (ProfileScope::Agents, "fb-fast", Ok(())),
+        (ProfileScope::Agents, "claude-yolo", Ok(())),
+        (ProfileScope::Agents, "sx", Ok(())),
+        // A healthy row in the other table shadows its broken machine file, so the launch's own
+        // wrong-doorway refusal answers.
+        (
+            ProfileScope::Subagents,
+            "ax",
+            Err(into_subagents.to_owned()),
+        ),
+        (ProfileScope::Agents, "sy", Err(into_agents.to_owned())),
+    ];
+    let (mut outcomes, mut expected) = (Vec::new(), Vec::new());
+    for tier in [None, intern] {
+        for (scope, spec, outcome) in &cases {
+            let first_line = launch_first_line(&machine, &launch, *scope, spec, tier);
+            // The tier walk has no row to route a name from the other table, and says so.
+            let outcome = match (*spec, tier) {
+                ("ax" | "sy", Some(_)) => Err(no_tier_row(spec)),
+                _ => outcome.clone(),
+            };
+            outcomes.push((*spec, tier.is_some(), first_line));
+            expected.push((*spec, tier.is_some(), outcome));
+        }
+    }
+    // An agents launch's `--agent` reads the subagents table only for its failure.
+    let with_agent = |tier| {
+        let mut routed = launch.clone();
+        routed
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("claude"),
+                tier,
+                None,
+                Some("sy"),
+                |_, _| None,
+            )
+            .map_err(|err| err.to_string())
+            .and_then(|()| {
+                crate::harness::plan::resolve_launch(
+                    &routed,
+                    ProfileScope::Agents,
+                    &machine.agents.commands,
+                    Some("claude"),
+                    Some("sy"),
+                )
+                .map(drop)
+                .map_err(|err| err.to_string())
+            })
+            .map_err(|text| text.lines().next().unwrap_or_default().to_owned())
+    };
+    outcomes.push(("claude --agent sy", false, with_agent(None)));
+    outcomes.push(("claude --agent sy", true, with_agent(intern)));
+    expected.push(("claude --agent sy", false, Err(into_agents.to_owned())));
+    expected.push(("claude --agent sy", true, Err(into_agents.to_owned())));
+    let ax_hint = crate::harness::plan::check_subagent_profile_spec(
+        &launch,
+        &machine.agents.commands,
+        Some("ax"),
+    )
+    .map_err(|err| {
+        err.to_string()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    });
+    outcomes.push(("check ax", false, ax_hint));
+    expected.push((
+        "check ax",
+        false,
+        Err(
+            "--subagent-profile takes one profile name defined under [subagents.profiles], and \
+             `ax` is defined only under [agents.profiles]; drop --subagent-profile to launch it"
+                .to_owned(),
+        ),
+    ));
+    assert_eq!(outcomes, expected);
+    // `--subagent-profile` names the failed subagent file over the healthy agents row.
+    assert_eq!(
+        crate::harness::plan::check_subagent_profile_spec(
+            &launch,
+            &machine.agents.commands,
+            Some("sx"),
+        )
+        .map_err(|err| err
+            .to_string()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()),
+        Err(format!(
+            "{}: follows unknown profile 'nosuch'",
+            home.path().join("subagents/sx.md").display()
+        )),
+    );
 }

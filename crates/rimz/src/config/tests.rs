@@ -154,7 +154,11 @@ mod pack_failures {
             result.is_ok(),
             "healthy profile blocked by set failure: {result:?}"
         );
-        assert!(launch.block_failed_reference(Some("good"), None).is_ok());
+        assert!(
+            launch
+                .block_failed_reference(effective::ProfileScope::Agents, Some("good"), None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -209,7 +213,9 @@ mod pack_failures {
         let launch = launch(&dir);
         healthy(&launch);
         for name in ["dependent", "dependent2"] {
-            let failure = launch.block_failed_reference(Some(name), None).unwrap_err();
+            let failure = launch
+                .block_failed_reference(effective::ProfileScope::Agents, Some(name), None)
+                .unwrap_err();
             assert!(
                 failure
                     .to_string()
@@ -233,12 +239,13 @@ mod pack_failures {
         )
         .unwrap();
         let launch = launch(&dir);
-        let result = launch.block_failed_reference(Some("amp"), None);
+        let result =
+            launch.block_failed_reference(effective::ProfileScope::Agents, Some("amp"), None);
         assert!(result.is_ok(), "trait claimed a launch name: {result:?}");
         healthy(&launch);
         assert!(
             launch
-                .block_failed_reference(Some("consumer"), None)
+                .block_failed_reference(effective::ProfileScope::Agents, Some("consumer"), None)
                 .unwrap_err()
                 .to_string()
                 .contains("pack conflict")

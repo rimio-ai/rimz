@@ -740,8 +740,7 @@ fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
 
 fn block_failed_team_prompt(
     launch: &crate::config::effective::LaunchAgents,
-    profiles: &crate::config::ProfilesConfig,
-    fallback: Option<&crate::config::ProfilesConfig>,
+    scope: crate::config::effective::ProfileScope,
     err: &crate::harness::spec::LayoutErr,
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
@@ -754,41 +753,58 @@ fn block_failed_team_prompt(
         .iter()
         .find(|binding| binding.role == *role)
         .expect("team prompt refusal names a prepared role");
-    launch.block_failed_profile(&binding.profile, &launch.profiles)?;
+    launch.block_failed_profile(
+        &binding.profile,
+        crate::config::effective::ProfileScope::Agents,
+        &launch.profiles,
+    )?;
     if let Some(name) = agent_override {
-        launch.block_failed_override(name, profiles, fallback)?;
+        block_failed_override(launch, scope, name)?;
     }
     Ok(())
 }
 
+/// Refuse a failed `--agent` name of a launch in `scope`, read from its table then, on a
+/// subagent launch, the agents table.
+fn block_failed_override(
+    launch: &crate::config::effective::LaunchAgents,
+    scope: crate::config::effective::ProfileScope,
+    name: &str,
+) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
+    let fallback =
+        (scope == crate::config::effective::ProfileScope::Subagents).then_some(&launch.profiles);
+    launch.block_failed_override(name, scope, launch.profiles_for(scope), fallback)
+}
+
 fn block_failed_kind_bases(
     launch: &crate::config::effective::LaunchAgents,
-    profiles: &crate::config::ProfilesConfig,
-    fallback: Option<&crate::config::ProfilesConfig>,
+    scope: crate::config::effective::ProfileScope,
     layout: &LayoutSpec,
     spec: Option<&str>,
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
+    let profiles = launch.profiles_for(scope);
     if let Some(name) = spec.map(str::trim).filter(|name| {
         crate::agents::find_runtime(name).is_some() || profiles.0.contains_key(*name)
     }) {
-        launch.block_failed_profile(name, profiles)?;
+        launch.block_failed_profile(name, scope, profiles)?;
     }
     if let Some(name) = agent_override {
-        launch.block_failed_override(name, profiles, fallback)?;
+        block_failed_override(launch, scope, name)?;
     }
-    let cell_profiles = if spec
+    let cell_scope = if spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .is_some()
     {
-        &launch.profiles
+        crate::config::effective::ProfileScope::Agents
     } else {
-        profiles
+        scope
     };
     for cell in layout.agent_cells() {
         launch.block_failed_profile(
             cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()),
-            cell_profiles,
+            cell_scope,
+            launch.profiles_for(cell_scope),
         )?;
     }
     Ok(())
@@ -796,7 +812,8 @@ fn block_failed_kind_bases(
 
 /// Refuse a `--subagent-profile` spec that is not one `[subagents.profiles]` name, before
 /// anything resolves: under the subagent scope `resolve_launch` still resolves teams, roles,
-/// kinds, commands, and built-in cells. A name nothing defines passes, for resolution to
+/// kinds, commands, and built-in cells. A name with no healthy subagent row refuses with the
+/// failure a subagent launch of it reads, and a name nothing defines passes, for resolution to
 /// report.
 pub fn check_subagent_profile_spec(
     launch: &crate::config::effective::LaunchAgents,
@@ -808,9 +825,6 @@ pub fn check_subagent_profile_spec(
     let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
         bail!("{TAKES}; name one (`rimz subagents profiles` lists them)");
     };
-    if let Some(detail) = launch.subagent_profiles.failed(spec) {
-        bail!("{detail}");
-    }
     if launch
         .subagent_profiles
         .0
@@ -819,6 +833,11 @@ pub fn check_subagent_profile_spec(
     {
         return Ok(());
     }
+    launch.block_failed_reference(
+        crate::config::effective::ProfileScope::Subagents,
+        Some(spec),
+        None,
+    )?;
     let what = if launch.teams.0.contains_key(spec) {
         "is a team"
     } else if launch.teams.role_spec(spec).is_some() {
@@ -872,8 +891,8 @@ pub fn resolve_launch(
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell(_)) => {
             launch.block_untrusted_reference(scope, spec, commands)?;
-            launch.block_failed_reference(spec, agent_override)?;
-            launch.block_failed_reference(unknown_cell(&err), None)?;
+            launch.block_failed_reference(scope, spec, agent_override)?;
+            launch.block_failed_reference(scope, unknown_cell(&err), None)?;
             if let Some(name) = spec
                 .map(str::trim)
                 .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
@@ -883,7 +902,7 @@ pub fn resolve_launch(
             return Err(err.into());
         }
         Err(err @ crate::harness::spec::LayoutErr::UnknownAgentOverride { .. }) => {
-            launch.block_failed_reference(None, agent_override)?;
+            launch.block_failed_reference(scope, None, agent_override)?;
             if let Some(name) = agent_override
                 .map(str::trim)
                 .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
@@ -893,14 +912,14 @@ pub fn resolve_launch(
             return Err(err.into());
         }
         Err(err) => {
-            block_failed_team_prompt(launch, profiles, fallback, &err, agent_override)?;
+            block_failed_team_prompt(launch, scope, &err, agent_override)?;
             if let Some(name) = agent_override {
-                launch.block_failed_override(name, profiles, fallback)?;
+                block_failed_override(launch, scope, name)?;
             }
             return Err(err.into());
         }
     };
-    block_failed_kind_bases(launch, profiles, fallback, &layout, spec, agent_override)?;
+    block_failed_kind_bases(launch, scope, &layout, spec, agent_override)?;
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);

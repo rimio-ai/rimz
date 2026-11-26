@@ -282,18 +282,11 @@ fn prepare_child_resume(
     let launch = crate::config::effective::load(&machine, &workspace.project_root)?;
     launch.block_set_failure()?;
     let scope = ProfileScope::for_launch(child.profile_scope, child.is_launched_child());
-    let (resolved_scope, own) = scope.resolve_launch(
-        child.profile.as_deref(),
-        &launch.profiles,
-        &launch.subagent_profiles,
-    );
-    let fallback = (resolved_scope == ProfileScope::Subagents).then_some(&launch.profiles);
     launch.block_failed_launch(
         &child.kind,
         child.profile.as_deref(),
         child.record.as_deref(),
-        own,
-        fallback,
+        scope,
     )?;
     let posture = child_posture(child, &launch);
     if let Some(reason) = &posture.degraded {

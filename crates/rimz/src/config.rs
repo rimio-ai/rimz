@@ -436,6 +436,8 @@ pub struct ConfigNotices {
     pub definition_errors: Vec<definitions::DefinitionErr>,
     pub definition_warnings: Vec<crate::packs::Problem>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
+    /// [`definitions::LoadedDefinitions::failed_trees`].
+    pub failed_trees: BTreeMap<String, effective::ProfileScope>,
     /// Scoped setting labels silently running on the host off Linux, for doctor only.
     pub scoped_fallbacks: Vec<String>,
     pub skipped_loop_tasks: BTreeMap<String, String>,
@@ -952,6 +954,7 @@ impl MachineConfig {
         self.consensus_pieces = loaded.consensus_pieces;
         self.definition_contexts = loaded.contexts;
         notices.failed_definitions = loaded.failed;
+        notices.failed_trees = loaded.failed_trees;
         notices.definition_errors.extend(loaded.errors);
         notices.definition_warnings.extend(loaded.warnings);
         if let Err(error) = validate_agents_file(&self.agents, &self.subagents, agents_home) {
