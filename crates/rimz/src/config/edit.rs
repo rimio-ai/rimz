@@ -496,7 +496,11 @@ impl ConfigEditor {
         );
         let rendered = new_doc.to_string();
         validate_merged_text(path, &rendered, self.files.agents_home())?;
-        write(path, rendered.as_bytes())?;
+        // An already-merged file stays in place: each durable rewrite costs fsyncs that a
+        // loaded host can hold for seconds, on every `rimz setup` run.
+        if rendered != old_text {
+            write(path, rendered.as_bytes())?;
+        }
         Ok(FileMergeOutcome {
             path: path.to_path_buf(),
             action: MergeAction::Merged { kept },
