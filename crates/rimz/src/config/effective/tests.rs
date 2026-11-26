@@ -4875,6 +4875,12 @@ fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project()
         )
         .unwrap();
     }
+    std::fs::write(
+        home.path().join("teams/lay.md"),
+        "---\nleader: lead\nstages: [Build]\nlayout: \"lead,m1\"\nroles:\n  - role: lead\n    \
+         agent: plain\n    owns: [Build]\n---\nBuild.\n",
+    )
+    .unwrap();
     for (team, seat) in [("crew", "\n    subagents: [shd]"), ("calm", "")] {
         std::fs::write(
             home.path().join(format!("teams/{team}.md")),
@@ -5027,6 +5033,22 @@ fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project()
         "{:?}",
         launch.project_definition_errors()
     );
+    // A machine team with a failed seat leaves the team table, as a project team does, so every
+    // gate that takes a team name refuses it through its failure record.
+    // So does one whose layout cell rests on a failed row, the built-in `peer` (`claude,codex`)
+    // over the failed `codex` base among them.
+    assert_eq!(
+        ["crew", "calm", "lay", "peer"].map(|team| (
+            launch.teams.0.contains_key(team),
+            launch.definition_failure_for(team),
+        )),
+        [
+            (false, Some(refusal("teams/crew.md"))),
+            (true, None),
+            (false, Some(refusal("agents/m1.md"))),
+            (false, Some(refusal("agents/codex.md"))),
+        ],
+    );
 
     // Fork, restart, child resume, and the exec wrapper all refuse through `block_failed_launch`.
     let claude = crate::ids::AgentKind::new_unchecked("claude");
@@ -5054,6 +5076,7 @@ fn machine_definition_allowing_a_failed_project_subagent_fails_in_that_project()
     std::fs::write(untrusted.path().join(".rimz/config.toml"), project_toml).unwrap();
     for root in [untrusted.path(), outside.path()] {
         let elsewhere = load_with_roots(&machine, root, home.path()).unwrap();
+        assert!(elsewhere.teams.0.contains_key("crew"), "{}", root.display());
         assert_eq!(
             ["m1", "m2", "both", "codex", "on_codex", "crew"]
                 .map(|spec| resolve(&elsewhere, spec, None)),
