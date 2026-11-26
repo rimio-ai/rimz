@@ -1159,3 +1159,131 @@ fn reopen_child_succeeds_when_parent_is_hibernated_booked_to_stop_or_mid_turn() 
         assert_eq!(outcome, ReopenChildOutcome::Reopened, "case {case}");
     }
 }
+
+#[test]
+fn resume_resolved_refuses_ended_child_with_failed_project_profile_detail() {
+    const ENV: &str = "RIMZ_TEST_CHILD_RESUME_FAILED_PROJECT_ROW";
+    if std::env::var_os(ENV).is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let rimz_dir = home.path().join(".rimz");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "launcher::child_resume::tests::resume_resolved_refuses_ended_child_with_failed_project_profile_detail",
+                "--nocapture",
+            ])
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &rimz_dir)
+            .env(ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let home = crate::disk::paths::rimz_home();
+    std::fs::create_dir_all(home.join("agents")).unwrap();
+    std::fs::write(
+        home.join("agents/claude.md"),
+        "---\ndescription: Claude base\n---\nClaude house prompt.\n",
+    )
+    .unwrap();
+
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "\
+[subagents.profiles.broken]
+agent = \"claude\"
+
+[subagents.profiles.worker]
+description = \"Worker\"
+agent = \"broken\"
+",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), &home).unwrap();
+
+    let workspace = crate::WorkspaceResolver::resolve_under(project.path(), None, &home).unwrap();
+    let store = Store::open(
+        crate::StatePaths::under(workspace.workspace_id.clone(), &home.join("state")).unwrap(),
+        crate::RuntimePaths::under(workspace.workspace_id.clone(), &home.join("runtime")).unwrap(),
+    )
+    .unwrap();
+    let caller = AgentState::stub("claude", "parent", crate::agents::AgentStatus::Running);
+    let mut child = AgentState::stub("claude", "child", crate::agents::AgentStatus::Success);
+    child.name = Some("otter".to_owned());
+    child.parent_agent_id = Some(caller.agent_id.clone());
+    child.parent_agent_kind = Some(caller.kind.clone());
+    child.launch_depth = Some(1);
+    child.ended_at = Some(Timestamp::now());
+    child.profile_scope = Some(ProfileScope::Subagents);
+
+    let request = || DispatchRequest {
+        target: "@otter".into(),
+        text: "continue".into(),
+        target_scope: None,
+        current_channel: crate::address::AddressContext {
+            channel: None,
+            origin: crate::address::ChannelOrigin::Stamped,
+        },
+        caller: None,
+        sender: crate::store::message::MessageSender::Human,
+        automated: false,
+        allow_fanout: false,
+        mux: None,
+        force: false,
+        auto_compact: None,
+        mode: crate::message::dispatch::DispatchMode::Steer,
+        resuming_recipient: None,
+        reply_wanted: false,
+        premises: crate::store::message::Premise::NONE,
+        about_run: None,
+        selected: Vec::new(),
+    };
+    let mut interaction = crate::launcher::Unattended;
+
+    let config_prefix = format!("{}: ", project.path().join(".rimz/config.toml").display());
+    let mut refuse = |profile: &str| {
+        child.profile = Some(profile.into());
+        let err = resume_resolved(
+            &workspace,
+            &store,
+            &child,
+            &caller,
+            request(),
+            &mut interaction,
+        )
+        .err()
+        .expect("ended child with failing project row must be refused");
+        match err.downcast_ref::<crate::config::effective::EffectiveConfigErr>() {
+            Some(crate::config::effective::EffectiveConfigErr::FailedDefinition(detail)) => {
+                detail.clone()
+            }
+            _ => panic!("expected FailedDefinition from block_failed_launch, got: {err}"),
+        }
+    };
+
+    let direct_detail = refuse("broken");
+    assert!(
+        direct_detail.starts_with(&config_prefix)
+            && direct_detail.contains("[subagents.profiles.broken]")
+            && direct_detail.contains("description"),
+        "expected direct failed-row detail, got: {direct_detail}"
+    );
+
+    let chained_detail = refuse("worker");
+    assert!(
+        chained_detail.starts_with(&config_prefix)
+            && chained_detail.contains("[subagents.profiles.worker]")
+            && chained_detail.contains("caused by:")
+            && chained_detail.contains("[subagents.profiles.broken]")
+            && chained_detail.contains("description"),
+        "expected caused-by failed-row detail, got: {chained_detail}"
+    );
+}
