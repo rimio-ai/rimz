@@ -1123,7 +1123,7 @@ mod tests {
                 message_id: MessageId::parse("msg_0000000000000001").unwrap(),
             },
             Premise::OverHandOffLimit { threshold: 160_000 },
-            Premise::OverCeiling { threshold: 372_000 },
+            Premise::OverCeiling { threshold: 272_000 },
         ];
         assert_eq!(
             premise_labels(&MessageListRow::from_record(message), now),
@@ -1134,7 +1134,7 @@ mod tests {
                 "linked runs not all joined".to_owned(),
                 "msg_0000000000000001 still queued".to_owned(),
                 "still over the 160000-token hand-off limit, cache warm".to_owned(),
-                "open turn still at or over the 372000-token auto-compact ceiling".to_owned(),
+                "open turn still at or over the 272000-token auto-compact ceiling".to_owned(),
             ]
         );
     }

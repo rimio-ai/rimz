@@ -21,7 +21,7 @@ use crate::mux::PaneWriter;
 use crate::mux::typing::{InputSource, TypingRecord, TypingView};
 use crate::sidebar::produce::hosting::HostingErr;
 use crate::store::message::{
-    AutoCompact, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+    AutoCompact, HarnessNotice, MessageBody, MessageRecord, MessageSender, Premise,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -286,6 +286,9 @@ fn interrupt_first(
         });
     }
     writer.press_keys(receiver_keys(head, Some(running)).interrupt)?;
+    if head.premises.iter().any(Premise::ends_at_key) {
+        store.retire_premises_at_key(&head.message_id)?;
+    }
     let window = super::interrupt_confirmation_window_from_env();
     let stopped = wait_for_stop(store, head, running, window)?;
     #[cfg(feature = "testkit")]
@@ -390,6 +393,12 @@ fn write_live(
         interrupted,
         Interrupted::Pressed(_) | Interrupted::Withheld { pressed: true, .. }
     );
+    let mut batch = batch;
+    if send.key_pressed {
+        for message in &mut batch {
+            message.retire_premises_at_key();
+        }
+    }
     let (fresh, batch, interrupt) = match interrupted {
         Interrupted::NoKey => (fresh, batch, InterruptConfirmation::NotChecked),
         // The stop wait outlasts every decision made before the key, so they are made again

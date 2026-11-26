@@ -919,7 +919,7 @@ fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
         "compact".into(),
         Profile {
             auto_compact: Some("272k".into()),
-            ..configured_profile("pi", None, None, None, None, None)
+            ..configured_profile("amp", None, None, None, None, None)
         },
     )]));
     let mut layout = LayoutSpec::single(Cell::Agent(
@@ -935,7 +935,7 @@ fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
         "compact",
         "auto-compact",
         "272000",
-        "pi",
+        "amp",
         "launching without",
     ] {
         assert!(warning.contains(text), "{warning}");
@@ -1048,8 +1048,11 @@ fn compaction_default_follows_the_engine_but_declared_values_warn() {
     );
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     for (name, kind, warnings, value) in [
-        ("inherited", "pi", 0, None),
-        ("declared", "pi", 1, None),
+        // Amp also notes the empty tools list it cannot apply.
+        ("inherited", "amp", 1, None),
+        ("declared", "amp", 2, None),
+        ("inherited", "pi", 0, Some("272000")),
+        ("declared", "pi", 0, Some("272000")),
         ("inherited", "codex", 0, Some("272000")),
         ("declared", "codex", 0, Some("272000")),
     ] {
@@ -1066,7 +1069,7 @@ fn compaction_default_follows_the_engine_but_declared_values_warn() {
         assert_eq!(notices.len(), warnings, "{name} on {kind}: {notices:?}");
         let cell = layout.agent_cells().next().unwrap();
         assert_eq!(cell.auto_compact.as_deref(), value);
-        if kind == "pi" {
+        if kind != "codex" {
             assert!(!cell.args.iter().any(|arg| arg.contains("compact")));
         } else {
             assert!(
@@ -4781,6 +4784,9 @@ fn finalized_launch_records_only_the_configured_enforced_auto_compact_count() {
         ("codex", Some("1M"), "", "", Some(1_000_000), 0),
         ("antigravity", Some("372k"), "", "", Some(372_000), 0),
         ("copilot", Some("200k"), "", "", None, 1),
+        ("pi", Some("200k"), "", "", Some(200_000), 0),
+        ("amp", Some("200k"), "", "", None, 1),
+        ("hermes", Some("200k"), "", "", None, 1),
         ("claude", Some("off"), "", "", None, 0),
         ("claude", None, "--autocompact 100000", "", None, 0),
         (
@@ -4828,10 +4834,10 @@ fn finalized_launch_records_only_the_configured_enforced_auto_compact_count() {
         )
         .unwrap();
         let cell = layout.agent_cells().next().unwrap();
-        if kind == "antigravity" {
+        if matches!(kind, "antigravity" | "pi") {
             assert!(
                 cell.args.is_empty(),
-                "agy renders no argv for auto-compact: {:?}",
+                "a RimZ-enforced kind renders no argv for auto-compact: {:?}",
                 cell.args
             );
         }

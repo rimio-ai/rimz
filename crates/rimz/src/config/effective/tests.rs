@@ -1754,6 +1754,7 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
          [profiles.parent]\ndescription = 'Parent'\nagent = 'codex'\nauto-compact = '200k'\n\
          [profiles.child]\ndescription = 'Child'\nagent = 'parent'\n\
          [profiles.pi-row]\ndescription = 'Pi'\nagent = 'pi'\n\
+         [profiles.amp-row]\ndescription = 'Amp'\nagent = 'amp'\n\
          [profiles.claude-row]\ndescription = 'Claude'\nagent = 'claude'\nauto-compact = '200k'\n\
          [profiles.planner]\ndescription = 'Planner'\nagent = 'claude-row'\n\
          [subagents.profiles.sub-worker]\ndescription = 'Sub worker'\nagent = 'codex'\n",
@@ -1817,7 +1818,14 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
         assert_eq!(
             pi.auto_compact_default
                 .and_then(|d| d.resolve_for_kind(&pi.kind)),
-            None
+            expected_agy
+        );
+        let amp = agents_spec::resolve_profile("amp-row", &effective.profiles).unwrap();
+        assert_eq!(
+            amp.auto_compact_default
+                .and_then(|d| d.resolve_for_kind(&amp.kind)),
+            None,
+            "a kind with no enforcer takes no default"
         );
         let md_bad_reason = machine
             .definition_failure_for("md-bad-ac")

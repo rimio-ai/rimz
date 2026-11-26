@@ -474,7 +474,8 @@ The `auto-compact` field on a profile, kind base, or team role sets the agent's 
 | Claude Code | ✓ | `--autocompact <tokens>`. Needs Claude Code 2.1.221 or later, and Claude caps it at the model's context window |
 | Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`. Codex clamps it to 90% of the raw model window, not the session's usable window (normally 95% of raw). The compaction-scaled card pairs the effective point with the model's maximum capacity. A raw 272k window gives a 244,800-token point and a 258,400-token usable window. |
 | Antigravity | ✓ | RimZ-enforced (no CLI flag): recorded on the launch record, shown on the compaction-scaled card when under the model window, and enforced mid-turn by steering `/compact <continue>` with a 10-minute cool-down. |
-| Every other agent and process plugins | ✗ | skipped with a warning at launch |
+| Pi | ✓ | RimZ-enforced (no CLI flag): recorded and shown as on Antigravity, and enforced mid-turn by pressing Pi's interrupt key, typing its compact command, and sending the continue once the compaction ends, with the same cool-down. |
+| Every other agent | ✗ | skipped with a warning at launch: RimZ enforces a window only on an agent whose interrupt key and stop it has checked |
 
 Profiles without an explicit or inherited `auto-compact` use their kind base's, then the machine [`[harness] auto_compact`](../guide/configuration.md#auto-compaction-ceiling) default: when unset, `272k` on every native-enforced or RimZ-enforced kind. An explicit token count replaces it; `"off"` applies no machine ceiling. This covers Markdown definitions and trusted project TOML profiles. Bare-kind launches get no injected ceiling. A switch with `--agent` applies the unset default to the final enforced kind, and a switch to a provider with no enforcer silently drops this injected default, while a declared value warns instead. The clamps above still apply.
 

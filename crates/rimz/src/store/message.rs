@@ -532,9 +532,10 @@ pub enum Premise {
     /// at rest (`message::premise::broken`); it holds while the receiver's turn is open. It
     /// leaves the record out of the command-validity window.
     OverHandOffLimit { threshold: u64 },
-    /// Holds while the receiver's row holds an open turn and its occupied context reads at or
-    /// over `threshold` tokens: a RimZ-enforced auto-compact ceiling steer, judged in
-    /// `MessageRecord::broken_row_premise`.
+    /// Holds while the receiver's row holds an open turn whose occupied context reads at or over
+    /// `threshold` tokens, until RimZ's own key ends that turn: a RimZ-enforced auto-compact
+    /// ceiling's hard compaction, judged in `MessageRecord::broken_row_premise` and retired at
+    /// the key (`MessageRecord::retire_premises_at_key`).
     OverCeiling { threshold: u64 },
     /// A premise a newer binary wrote, kept verbatim through queue rewrites; it holds.
     #[serde(untagged)]
@@ -544,6 +545,12 @@ pub enum Premise {
 impl Premise {
     /// No premise: written out at a sender whose message stays true until it is delivered.
     pub const NONE: Vec<Self> = Vec::new();
+
+    /// Whether this premise stops being judged once RimZ's own key ends the receiver's turn:
+    /// past that key the stop is RimZ's, and the record waits for the boundary it made.
+    pub(crate) fn ends_at_key(&self) -> bool {
+        matches!(self, Self::OverCeiling { .. })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -724,8 +731,9 @@ pub struct MessageRecord {
     pub follows_command: Option<MessageId>,
     /// For a continue, that its compaction ends the agent's turn now rather than at the turn's
     /// end (`rimz agents compact --hard`): the fold marks it owed past a stop
-    /// (`OwedContinue::past_stop`), and a steer never folds it onto the command's line. A
-    /// requeued copy (`requeue_from`) owes nothing past a stop: its compaction is over.
+    /// (`OwedContinue::past_stop`); a steer folds it onto the command's line only on a
+    /// `CompactInstruction::NextPrompt` kind (`steer_batch_indices`). A requeued copy
+    /// (`requeue_from`) owes nothing past a stop: its compaction is over.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub past_stop: bool,
     /// For a smart-compact command, the occupied-context-token reading the
@@ -1140,7 +1148,8 @@ impl MessageRecord {
     }
 
     /// The first premise `row`, the receiver's live row, shows broken, as the withdrawal reason:
-    /// a lifespan past `now`, a compaction command the row has compacted since it was queued, a
+    /// a lifespan past `now`, a ceiling compaction whose open turn no longer reads at or over its
+    /// line (no row included), a compaction command the row has compacted since it was queued, a
     /// prompt later than the sender's copy, a turn edge after an idle compaction's decision, or a
     /// compaction continue its row no longer owes. The harness
     /// subjects (`about_run`, a fleet digest's joins, a stage visit) are judged on the
@@ -1161,19 +1170,16 @@ impl MessageRecord {
         if let Some(threshold) = self.premises.iter().find_map(|premise| match premise {
             Premise::OverCeiling { threshold } => Some(*threshold),
             _ => None,
+        }) && !row.is_some_and(|row| {
+            row.holds_open_turn()
+                && row
+                    .occupied_context_tokens()
+                    .is_some_and(|tokens| tokens >= threshold)
         }) {
-            let holds = row.is_some_and(|row| {
-                row.holds_open_turn()
-                    && row
-                        .occupied_context_tokens()
-                        .is_some_and(|tokens| tokens >= threshold)
-            });
-            if !holds {
-                return Some(
-                    "turn ended or context fell below the auto-compact ceiling before delivery"
-                        .to_owned(),
-                );
-            }
+            return Some(
+                "turn ended or context fell below the auto-compact ceiling before delivery"
+                    .to_owned(),
+            );
         }
         let row = row?;
         if self.body == MessageBody::Command
@@ -1193,6 +1199,14 @@ impl MessageRecord {
                     if row.last_prompt_at > *last_prompt_at)
             })
             .then(|| "agent was prompted after this message was queued".to_owned())
+    }
+
+    /// Drop the premises that end at RimZ's own key (`Premise::ends_at_key`); `true` when one
+    /// was dropped.
+    pub(crate) fn retire_premises_at_key(&mut self) -> bool {
+        let before = self.premises.len();
+        self.premises.retain(|premise| !premise.ends_at_key());
+        self.premises.len() != before
     }
 
     /// Whether `row` still owes this record as its compaction continue: an older continue
@@ -1719,8 +1733,8 @@ pub(crate) fn delivery_batch_indices(
 
 /// Select the record(s) to claim for an explicit steer of `target_id`. For a compaction command
 /// on a `CompactInstruction::NextPrompt` kind, also claims its queued continue tail even past an
-/// intervening boundary record so the steer folds onto one line, unless the continue is owed past
-/// the stop the steer makes (`MessageRecord::past_stop`), which waits for the compaction to end.
+/// intervening boundary record so the steer folds onto one line, a hard compaction's continue
+/// owed past the stop (`MessageRecord::past_stop`) included.
 pub(in crate::store) fn steer_batch_indices(
     live: &[MessageRecord],
     target_id: &MessageId,
@@ -1741,7 +1755,6 @@ pub(in crate::store) fn steer_batch_indices(
                 && candidate.status == MessageStatus::Queued
                 && candidate.same_card(head.card_ref())
                 && is_command_continue_tail(head, candidate)
-                && !candidate.past_stop
                 && claim_expired(candidate.last_attempt_at, now)
                 && candidate.typing_hold.is_none_or(|hold| hold.until <= now)
         })

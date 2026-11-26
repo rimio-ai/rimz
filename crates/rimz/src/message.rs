@@ -14,7 +14,6 @@ pub mod dispatch;
 pub(crate) mod fire;
 mod premise;
 pub mod send;
-pub mod soft_compact;
 pub mod synthetic;
 pub mod turn_wait;
 

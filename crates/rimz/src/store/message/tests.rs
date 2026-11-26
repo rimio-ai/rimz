@@ -3528,8 +3528,8 @@ fn next_prompt_command_batches_immediate_continue_tail_and_respects_fifo_and_kin
     };
     assert_eq!(
         steer_batch_indices(&[command.clone(), past_stop], &command.message_id, now),
-        Some(vec![0]),
-        "a continue owed past the stop is typed after the compaction, never on its line"
+        Some(vec![0, 1]),
+        "a hard compaction's steer folds the continue owed past its stop onto its line too"
     );
     assert_eq!(
         delivery_batch_indices(
@@ -3683,4 +3683,21 @@ fn over_ceiling_premise_holds_only_open_turn_at_or_above_threshold() {
             "OverCeiling must break on `{case}`, got None"
         );
     }
+
+    let mut retired = record.clone();
+    assert!(retired.retire_premises_at_key());
+    assert!(retired.premises.is_empty(), "{:?}", retired.premises);
+    assert_eq!(
+        retired.broken_row_premise(
+            Some(&make_row(
+                AgentStatus::Success,
+                crate::agents::TurnPhase::Idle,
+                Some(50_000)
+            )),
+            now
+        ),
+        None,
+        "past RimZ's key the command waits for the boundary its stop made"
+    );
+    assert!(!retired.retire_premises_at_key());
 }

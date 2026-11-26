@@ -969,7 +969,11 @@ setup-doc = "README.md"
             let plugin = build_adapter(manifest, adapter.plugin_dir.to_path_buf());
             let def = AgentDefinition::new(plugin);
             assert_eq!(soft_compact_skip(&def), expected);
-            assert_eq!(crate::agents::auto_compact_enforcer(&def), None);
+            assert_eq!(
+                crate::agents::auto_compact_enforcer(&def),
+                None,
+                "a plugin's message keys were never checked against its agent"
+            );
             if let Some(compact) = def.spec().launch.compact_command {
                 assert_eq!(
                     compact.instruction,

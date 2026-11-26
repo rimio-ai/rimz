@@ -143,7 +143,7 @@ fn auto_compact_enforcer_pins_every_builtin() {
             let kind = adapter.spec().kind;
             let enforcer = match kind {
                 "claude" | "codex" => Some(AutoCompactEnforcer::Native),
-                "antigravity" => Some(AutoCompactEnforcer::Rimz),
+                "antigravity" | "pi" => Some(AutoCompactEnforcer::Rimz),
                 _ => None,
             };
             (kind, enforcer)
@@ -237,6 +237,25 @@ fn opencode_compaction_predicts_the_default_ceiling_and_published_capacity() {
         });
         assert_eq!(actual, expected);
     }
+}
+
+#[test]
+fn a_rimz_enforced_ceiling_under_the_window_is_the_compaction_point() {
+    assert_eq!(
+        native_compaction("pi", Some(272_000), 400_000, None, None),
+        Some(NativeCompaction {
+            point: 272_000,
+            capacity: 400_000,
+            raw_window: 400_000,
+            lowered: None,
+        })
+    );
+    assert_eq!(
+        native_compaction("opencode", Some(272_000), 983_010, Some(1_048_576), None)
+            .map(|native| native.point),
+        Some(835_559),
+        "a kind RimZ does not enforce keeps the provider's own point"
+    );
 }
 
 #[test]

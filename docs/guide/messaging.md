@@ -188,7 +188,7 @@ When an agent sends `@all`, RimZ drops that caller and sends to its peers; with 
 
 ## Compact before the message lands
 
-A long turn can hit the context limit mid-message. An agent compacts by itself only once it hits its ceiling (native on Claude and Codex, or steered by RimZ on Antigravity), so a prompt delivered just under that can be cut in half by a compaction firing around it. On an ordinary boundary send to a resting agent, `--smart-compact` sends its compact command ahead of your text once its context is full enough, including the configured summary brief where the command accepts one, so the prompt runs against a fresh window. On Antigravity, a queued compaction command followed directly by its continue folds onto one `/compact <continue>` line at delivery (or when steered into an open turn).
+A long turn can hit the context limit mid-message. An agent compacts by itself only once it hits its ceiling (native on Claude and Codex, or enforced by RimZ on Antigravity and Pi), so a prompt delivered just under that can be cut in half by a compaction firing around it. On an ordinary boundary send to a resting agent, `--smart-compact` sends its compact command ahead of your text once its context is full enough, including the configured summary brief where the command accepts one, so the prompt runs against a fresh window. On Antigravity, a queued compaction command followed directly by its continue folds onto one `/compact <continue>` line at delivery (or when steered into an open turn).
 
 ```sh
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full

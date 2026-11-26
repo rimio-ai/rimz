@@ -1713,7 +1713,7 @@ fn steered_command_with_tail_typing_hold_omits_steer_replay_on_tail() {
 }
 
 #[test]
-fn ceiling_compact_typing_hold_withdraws_both_and_records_held_assist() {
+fn ceiling_compact_typing_hold_withdraws_its_pair_and_records_held_assist() {
     let fixture = Fixture::for_kind("antigravity", true);
     let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%3");
@@ -1783,7 +1783,7 @@ fn ceiling_compact_typing_hold_withdraws_both_and_records_held_assist() {
 
     assert!(
         fixture.env.store().list_messages().unwrap().is_empty(),
-        "typing hold must cancel both command and tail rather than leave either queued"
+        "a ceiling miss that pressed no key leaves nothing queued, so the next pass tries again"
     );
     let history = fixture.env.store().list_message_history().unwrap();
     assert_eq!(history.len(), 2, "{history:?}");
@@ -1811,4 +1811,5 @@ fn ceiling_compact_typing_hold_withdraws_both_and_records_held_assist() {
         .collect();
     assert_eq!(events.len(), 1, "{stats}");
     assert_eq!(events[0]["delivered"], false);
+    assert!(events[0]["error"].is_string(), "{stats}");
 }
