@@ -3,7 +3,6 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::TurnLimitStop;
 use crate::agents::payload::non_empty_trimmed;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -189,11 +188,11 @@ impl StopPayload {
 }
 
 impl StopPayload {
-    /// The provider limit a failed stop names: a string `error` holding one of
+    /// The spent quota a failed stop names: a string `error` holding one of
     /// `QUOTA_STATUSES` whole, as agy 1.5.17 sends for a spent quota. The label is
     /// the provider's sentence once, without the transport prefix or its `Resets in` clause,
     /// and the refill is that clause's Go duration.
-    pub(super) fn limit_stop(&self) -> Option<TurnLimitStop> {
+    pub(super) fn quota_stop(&self) -> Option<QuotaStop> {
         let Some(Value::String(error)) = self.error.as_ref() else {
             return None;
         };
@@ -216,11 +215,20 @@ impl StopPayload {
             .and_then(|(_, after)| after.split_whitespace().next())
             .map(|duration| duration.trim_end_matches(['.', ':']))
             .and_then(go_duration_secs);
-        Some(TurnLimitStop {
+        Some(QuotaStop {
             label,
             refill_in_secs,
         })
     }
+}
+
+/// A stop that names a spent quota, which both `QUOTA_STATUSES` forms code as 429.
+pub(super) struct QuotaStop {
+    /// The provider's sentence naming the quota.
+    pub(super) label: Option<String>,
+    /// Whole seconds, rounded up, from the stop to the refill it names; absent when it names
+    /// none that parses.
+    pub(super) refill_in_secs: Option<u64>,
 }
 
 /// The two gRPC status forms agy puts before a quota message, each matched whole so a status

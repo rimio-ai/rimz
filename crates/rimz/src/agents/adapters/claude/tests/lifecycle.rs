@@ -31,49 +31,35 @@ fn taken_question_summary_uses_first_line_and_extra_count() {
 }
 
 #[test]
-fn stop_failure_lifecycle_matches_the_error_class() {
+fn every_stop_failure_ends_the_turn_errored_with_its_class() {
     use TurnErrorClass::{
         Failed, NotEntitled, PausedOverloaded, PausedRateLimit, PausedSpendLimit,
     };
 
     let cases = [
-        ("api_error", "API Error: Bad Request", Failed, true),
-        ("unclassified", "API Error: Bad Request", Failed, true),
-        ("billing_error", "API Error: Bad Request", NotEntitled, true),
-        (
-            "rate_limit",
-            "API Error: Bad Request",
-            PausedRateLimit,
-            false,
-        ),
-        (
-            "overloaded",
-            "API Error: Bad Request",
-            PausedOverloaded,
-            false,
-        ),
-        (
-            "server_error",
-            "API Error: Bad Request",
-            PausedOverloaded,
-            false,
-        ),
+        ("api_error", "API Error: Bad Request", Failed),
+        ("unclassified", "API Error: Bad Request", Failed),
+        ("billing_error", "API Error: Bad Request", NotEntitled),
+        ("rate_limit", "API Error: Bad Request", PausedRateLimit),
+        ("overloaded", "API Error: Bad Request", PausedOverloaded),
+        ("server_error", "API Error: Bad Request", PausedOverloaded),
         (
             "rate_limit",
             "You've hit your monthly spend limit.",
             PausedSpendLimit,
-            false,
         ),
+        ("api_error", "API Error: Server Error", PausedOverloaded),
+        // The Console usage cap is no spend limit, so its structured verdict stands.
         (
-            "api_error",
-            "API Error: Server Error",
-            PausedOverloaded,
-            false,
+            "billing_error",
+            "You have reached your specified API usage limits. Raise your spend limit in the \
+             Console.",
+            NotEntitled,
         ),
     ];
     let actual: Vec<_> = cases
         .iter()
-        .map(|(error, label, _, _)| {
+        .map(|(error, label, _)| {
             let output = hook_output(
                 &ClaudeAdapter,
                 "StopFailure",
@@ -93,10 +79,10 @@ fn stop_failure_lifecycle_matches_the_error_class() {
         .collect();
     let expected: Vec<_> = cases
         .iter()
-        .map(|(_, _, class, terminal)| {
+        .map(|(_, _, class)| {
             (
                 *class,
-                terminal.then_some(LifecycleSignal::TurnEnded {
+                Some(LifecycleSignal::TurnEnded {
                     errored: true,
                     parked_on_background: false,
                     turn_id: None,

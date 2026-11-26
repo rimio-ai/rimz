@@ -1238,68 +1238,45 @@ fn context_severity_takes_the_worse_of_percent_and_tokens() {
 }
 
 #[test]
-fn effective_turn_error_class_parks_legacy_limit_labels() {
-    let turn_error = |label: &str| AgentTurnError {
-        model: None,
-        ended_turn: false,
-        class: TurnErrorClass::Failed,
-        at: Timestamp::from_second(1_700_000_000).unwrap(),
-        label: Some(label.to_owned()),
-        refill_at: None,
-    };
-
-    assert_eq!(
-        effective_turn_error_class(&turn_error("You've hit your monthly spend limit.")),
-        TurnErrorClass::PausedSpendLimit
-    );
-    assert_eq!(
-        effective_turn_error_class(&turn_error(
-            "You've hit your session limit · resets 10:50am (UTC)"
-        )),
-        TurnErrorClass::PausedRateLimit
-    );
-    assert_eq!(
-        effective_turn_error_class(&turn_error("API Error: Bad Request")),
-        TurnErrorClass::Failed
-    );
-    // A stored `Failed` marker with overload wording, as plugin agents wrote before their markers
-    // carried a class, never starts arming overload retries.
-    assert_eq!(
-        effective_turn_error_class(&turn_error("API Error: Overloaded")),
-        TurnErrorClass::Failed
-    );
-}
-
-#[test]
-fn effective_turn_error_class_keeps_usage_cap_failed() {
+fn a_failed_marker_displays_failed_whatever_its_label_says() {
     let now = Timestamp::from_second(2_000).unwrap();
-    let error = AgentTurnError {
-        model: None,
-        ended_turn: false,
-        class: TurnErrorClass::Failed,
-        at: Timestamp::from_second(1_010).unwrap(),
-        label: crate::agents::context::cap_turn_error_label(concat!(
+    let mut actual = Vec::new();
+    for label in [
+        "You've hit your monthly spend limit.",
+        "You've hit your session limit · resets 10:50am (UTC)",
+        "quota project not configured",
+        "API Error: Overloaded",
+        concat!(
             "API Error: 400 You have reached your specified API usage limits.",
             " You will regain access on 2026-11-01 at 00:00 UTC."
-        )),
-        refill_at: None,
-    };
-    let mut actual = Vec::new();
-    for status in [AgentStatus::Running, AgentStatus::Failed] {
-        let mut agent = test_agent(status, 1_000);
-        agent.turn_started_at = Some(Timestamp::from_second(990).unwrap());
-        agent.context = Some(AgentContext {
-            turn_error: Some(error.clone()),
-            ..AgentContext::new("claude", error.at)
-        });
-        actual.push((
-            effective_turn_error_class(&error),
-            agent.displayed_turn_error(now).map(|(class, _)| class),
-        ));
+        ),
+    ] {
+        let error = AgentTurnError {
+            model: None,
+            ended_turn: false,
+            class: TurnErrorClass::Failed,
+            at: Timestamp::from_second(1_010).unwrap(),
+            label: crate::agents::context::cap_turn_error_label(label),
+            refill_at: None,
+        };
+        for status in [AgentStatus::Running, AgentStatus::Failed] {
+            let mut agent = test_agent(status, 1_000);
+            agent.turn_started_at = Some(Timestamp::from_second(990).unwrap());
+            agent.context = Some(AgentContext {
+                turn_error: Some(error.clone()),
+                ..AgentContext::new("claude", error.at)
+            });
+            actual.push((
+                label,
+                agent.displayed_turn_error(now).map(|(class, _)| class),
+            ));
+        }
     }
-    assert_eq!(
-        actual,
-        [(TurnErrorClass::Failed, Some(TurnErrorClass::Failed)); 2]
+    assert!(
+        actual
+            .iter()
+            .all(|(_, class)| *class == Some(TurnErrorClass::Failed)),
+        "{actual:?}"
     );
 }
 

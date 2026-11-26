@@ -498,7 +498,6 @@ upward-dependencies = [
 # HookContextReply::event names the post-tool event the hook feed claims a deadline rung on (+1).
 # DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
 # notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
-# TurnLimitStop carries a provider stop report's limit from the adapter to the run fold (+1).
 # LaunchCapability::supports_resume answers reopenability in snapshot projection without binary I/O (+1).
 # AgentState::kept_verdict and KeptVerdict carry a reopened row's verdict from the fold to the
 # subagent projection (+2).
@@ -510,7 +509,7 @@ upward-dependencies = [
 # its reply, which only the adapter can tell from the payload (+1).
 # reminder_skip and its facade export let the reminder pass, doctor and the launch plan agree on
 # which kinds take no mid-turn reminder, a missing hook-context reply included (+2).
-surface-budget = 1390
+surface-budget = 1389
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -8860,11 +8859,6 @@ reason = "Returned by emblem_for from private emblems; the root re-export is its
 kind = "item"
 key = "agents::BackgroundShellReport"
 reason = "A public HookOutput field exposes this private background_shell type; the root re-export is its only public path (pass 31b)."
-
-[[verdict]]
-kind = "item"
-key = "agents::TurnLimitStop"
-reason = "A public AgentLifecycleObservation field exposes this private observation type; the root re-export is its only public path."
 
 [[verdict]]
 kind = "item"

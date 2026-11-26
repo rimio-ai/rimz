@@ -574,7 +574,6 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         background_shells: None,
         background_scripts: None,
         script_ask: false,
-        limit_stop: None,
     }
 }
 

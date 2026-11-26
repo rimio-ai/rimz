@@ -393,8 +393,8 @@ pub fn ended_team_runs<'a, 'agents>(
 
 impl<'a> FleetRuns<'a> {
     /// A run held open for its provider's refill: `run::claim_limit_hold` stores the
-    /// hold, and the child's next turn, a newer limit stop or a reopen clears it; a
-    /// terminal run keeps it.
+    /// hold, and the child's next turn, a newer pausing stop (a limit or an overload)
+    /// or a reopen clears it; a terminal run keeps it.
     pub fn is_held(run: &RunRecord) -> bool {
         !run.status.is_terminal() && run.limit_hold.is_some()
     }

@@ -1844,19 +1844,17 @@ fn fold_lifecycle(
     }
     let stop_changed = fold_stopped_turn(record, &observation.signal, now);
     if let Some(disposition) = observation.signal.terminal_disposition() {
-        let limit_park = record.stopped_turn.is_none()
+        // A limit or an overload pauses the turn rather than ending it, so the run of any kind
+        // that closes on a turn end waits for a retry, its deadline, process exit, or the user.
+        let paused = record.stopped_turn.is_none()
             && matches!(
                 observation.signal,
                 LifecycleSignal::TurnEnded { errored: true, .. }
             )
-            && record.subagent
-            && record.report_to == ReportTo::Launcher
-            && turn_error.is_some_and(|error| {
-                crate::agents::state::effective_turn_error_class(error).is_limit()
-            });
+            && turn_error.is_some_and(|error| error.class.pauses_turn());
         // A Stop replayed after the child went back to work belongs to the
         // earlier turn and must not overwrite the live turn's metadata or hold.
-        if limit_park
+        if paused
             && record
                 .turn_opened_at
                 .is_some_and(|opened| observed_at < opened)
@@ -1866,17 +1864,20 @@ fn fold_lifecycle(
         if let Some(path) = observation.transcript_path.as_ref() {
             record.transcript_path = Some(path.clone());
         }
-        if let Some(message) = last_message {
+        // A pausing end's message that is only its own error text (as some providers send the
+        // error as the final message) is no answer, so a retry that ends with no text leaves none.
+        let error_text = |message: &str| turn_error.is_some_and(|error| error.is_own_text(message));
+        if let Some(message) = last_message.filter(|message| !(paused && error_text(message))) {
             set_turn_message(record, message);
         }
         if record.stopped_turn.is_some() && !matches!(observation.signal, LifecycleSignal::Ended) {
             record.status = RunStatus::Running;
             return LifecycleFold::Updated;
         }
-        if limit_park {
+        if paused {
             record.status = RunStatus::Running;
             // Clear prior interrupt/park stamps so expire_interrupt and
-            // settle_stranded_park do not settle the limit-parked run.
+            // settle_stranded_park do not settle the paused run.
             record.interrupted_at = None;
             record.parked_at = None;
             record.parked_on = None;
@@ -1911,16 +1912,6 @@ fn fold_lifecycle(
             TerminalDisposition::Failed => RunStatus::Failed,
             TerminalDisposition::Canceled => RunStatus::Canceled,
         };
-        if record.status == RunStatus::Failed
-            && let Some(stop) = observation.limit_stop.as_ref()
-        {
-            let failure = stop_limit_failure(stop, observed_at);
-            if record.failure_tail.is_none() {
-                record.failure_tail =
-                    capped_failure_tail(&super::park_notice::failure_tail(&failure));
-            }
-            record.limit_failure = Some(failure);
-        }
         record.completed_at = Some(now);
         record.parked_at = None;
         record.parked_on = None;
@@ -1974,30 +1965,6 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
-}
-
-/// The limit failure of a provider stop observed at `stopped_at`: its refill is that time plus
-/// the distance the stop named, never the fold's clock, so a replayed stop computes the same one.
-fn stop_limit_failure(
-    stop: &crate::agents::TurnLimitStop,
-    stopped_at: Timestamp,
-) -> crate::store::run::LimitFailure {
-    use crate::store::run::LimitFailureCause;
-
-    let refill_at = stop.refill_in_secs.and_then(|secs| {
-        stopped_at
-            .checked_add(std::time::Duration::from_secs(secs))
-            .ok()
-    });
-    crate::store::run::LimitFailure {
-        cause: if refill_at.is_some() {
-            LimitFailureCause::RefillKnown
-        } else {
-            LimitFailureCause::RefillUnknown
-        },
-        refill_at,
-        label: stop.label.clone(),
-    }
 }
 
 /// Give the turn opening at `now` the run's whole timeout again: `deadline_at`
@@ -2056,11 +2023,11 @@ fn stamp_turn_start(record: &mut RunRecord, observed_at: Timestamp) -> bool {
 }
 
 /// End a provider-limit hold on the child's first in-turn signal or newer
-/// limit-errored turn end observed after the park: a hook received at or before
-/// the stop or the activity naming the park is the stopped turn's own, applied
-/// late, and keeps the hold. A resume or newer park before the reset gives the
-/// unused rest of the held span back to both deadline stamps. Returns whether a
-/// hold was ended.
+/// errored turn end that pauses (a limit or an overload) observed after the
+/// park: a hook received at or before the stop or the activity naming the park
+/// is the stopped turn's own, applied late, and keeps the hold. A resume or
+/// newer park before the reset gives the unused rest of the held span back to
+/// both deadline stamps. Returns whether a hold was ended.
 fn end_limit_hold(record: &mut RunRecord, observed_at: Timestamp, now: Timestamp) -> bool {
     let Some(hold) = record
         .limit_hold

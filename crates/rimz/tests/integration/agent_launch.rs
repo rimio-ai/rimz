@@ -3742,7 +3742,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
         context.turn_error = Some(rimz::agents::AgentTurnError {
             model: None,
             ended_turn: false,
-            class: rimz::agents::TurnErrorClass::Failed,
+            class: rimz::agents::TurnErrorClass::PausedRateLimit,
             at,
             label: Some("Usage limit reached".to_owned()),
             refill_at: None,
@@ -3765,8 +3765,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
     notify();
     assert!(queued().is_empty(), "a working child is left alone");
 
-    // Lifecycle D < heartbeat H < marker M. The legacy `failed` class reads as
-    // a limit only through the label mapping.
+    // Lifecycle D < heartbeat H < marker M.
     let parked_at = heartbeat();
     assert!(
         parked_at > child_activity(),

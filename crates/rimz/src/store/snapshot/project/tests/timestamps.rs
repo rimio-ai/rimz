@@ -1881,7 +1881,7 @@ fn a_limit_refused_prompt_keeps_the_cache_clock_on_the_last_real_request() {
 }
 
 #[test]
-fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_that_ran() {
+fn a_limit_refusal_left_running_keeps_the_record_of_the_last_request_that_ran() {
     use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
     let at = |secs: i64| epoch() + std::time::Duration::from_secs(secs.unsigned_abs());
     let lifecycle = |secs: i64, prompt: Option<&str>, signal: serde_json::Value| {
@@ -1897,9 +1897,9 @@ fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_th
         None,
         json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
     );
-    // The last turn that ran: a prompt at 10, a tool at 18, the Stop at 20. Claude's
-    // `StopFailure` opens no turn end, so the refused prompt at 100 leaves the row running
-    // with a limit marker newer than its last activity.
+    // The last turn that ran: a prompt at 10, a tool at 18, the Stop at 20. A refusal that ends
+    // no turn leaves the refused prompt at 100 running with a limit marker newer than its last
+    // activity.
     let refused = [started(10), ended, started(100)];
     let view = |events: &[EventEnvelope],
                 tool: i64,

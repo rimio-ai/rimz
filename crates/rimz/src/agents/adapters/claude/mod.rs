@@ -1321,14 +1321,8 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 .last_assistant_message
                 .as_deref()
                 .and_then(crate::agents::context::cap_turn_error_label);
-            Some(AgentTurnError {
-                model: None,
-                ended_turn: false,
-                class: statusline::classify_api_error(Some(error), None, label.as_deref()),
-                at: Timestamp::now(),
-                label,
-                refill_at: None,
-            })
+            let verdict = statusline::api_error_verdict(Some(error), None, label.as_deref());
+            Some(AgentTurnError::classified(Timestamp::now(), label, verdict))
         })
         .or_else(|| {
             terminal_tail
@@ -1854,13 +1848,12 @@ fn map_claude_lifecycle_signal(
             ),
             turn_id: None,
         }),
-        ClaudeHook::StopFailure(_) => turn_error
-            .filter(|error| !crate::agents::state::effective_turn_error_class(error).pauses_turn())
-            .map(|_| LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-                turn_id: None,
-            }),
+        // The run fold decides whether the errored end holds the run open on a pausing class.
+        ClaudeHook::StopFailure(_) => turn_error.map(|_| LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        }),
         ClaudeHook::PermissionRequest(request) => spec
             .blocking_tool_kind(request.tool_name.as_deref())
             .is_none()

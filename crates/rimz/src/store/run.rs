@@ -279,11 +279,10 @@ pub struct LimitHold {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LimitFailure {
     pub cause: LimitFailureCause,
-    /// The refill read for the park, or the one a provider's stop report named, from the stop's
-    /// recorded time; set for `BeyondHoldLimit` and `RefillKnown` only.
+    /// The refill read for the park; set for `BeyondHoldLimit` and `RefillKnown` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refill_at: Option<Timestamp>,
-    /// The provider's message, when the limit marker or the stop report carried one.
+    /// The provider's message, when the limit marker carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
@@ -466,9 +465,9 @@ pub struct RunRecord {
     /// The provider-limit park this run is held through. Set with the deadline
     /// shift when the park is classified, and replaced by a claim for a later
     /// activity, which shifts only by what this hold's span does not cover.
-    /// Cleared by the first in-turn signal or newer limit-errored turn end
-    /// (which pulls an early resume's unused hold back) and by a reopen; a
-    /// terminal write keeps it.
+    /// Cleared by the first in-turn signal or newer pausing errored turn end
+    /// (a limit or an overload, which pulls an early resume's unused hold back)
+    /// and by a reopen; a terminal write keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_hold: Option<LimitHold>,
     /// When this run's parent was told the launched child went silent.

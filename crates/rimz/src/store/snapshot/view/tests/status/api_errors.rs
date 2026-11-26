@@ -277,7 +277,7 @@ fn model_scoped_limit_marker_stays_paused_past_its_window_reset() {
 }
 
 #[test]
-fn legacy_session_limit_marker_parks_while_budget_is_spent() {
+fn a_failed_class_session_limit_marker_reads_failed_while_budget_is_spent() {
     let session = agent("claude", "session-limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1")
@@ -292,8 +292,8 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
     let row = row(&snapshot, "session-limited");
     assert_eq!(
         row.status(),
-        Some(AgentStatus::Paused),
-        "older sidecars with a failed-class session-limit marker still render as parked"
+        Some(AgentStatus::Failed),
+        "a marker's stamped class is final, whatever limit wording its label carries"
     );
     assert_eq!(
         row.turn_error_label(),

@@ -3980,34 +3980,39 @@ mod parked {
     }
 
     #[test]
-    fn rate_limit_stop_failure_keeps_the_run_and_waiter_open() {
-        let env = Env::new();
-        if env.skip_if_sandboxed() {
-            return;
+    fn pausing_stop_failure_keeps_the_run_and_waiter_open() {
+        for (error, label) in [
+            ("rate_limit", "You've hit your usage limit"),
+            ("overloaded", "API Error: Overloaded"),
+        ] {
+            let env = Env::new();
+            if env.skip_if_sandboxed() {
+                return;
+            }
+            let fixture = Fixture::new(env);
+            fixture.hook_payload(json!({
+                "hook_event_name": "StopFailure",
+                "session_id": "provider-session",
+                "error": error,
+                "last_assistant_message": label,
+                "cwd": fixture.env.project_root,
+            }));
+            let record = fixture.record();
+            assert_eq!(record.status, RunStatus::Running, "{error}");
+            assert_eq!(record.completed_at, None, "{error}");
+            fixture.runtime.block_on(async {
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_millis(30),
+                        fixture.waiter.wait_terminal(&fixture.store, None, None),
+                    )
+                    .await
+                    .is_err(),
+                    "paused run released its caller: {error}"
+                );
+            });
+            assert_eq!(fixture.record(), record, "{error}");
         }
-        let fixture = Fixture::new(env);
-        fixture.hook_payload(json!({
-            "hook_event_name": "StopFailure",
-            "session_id": "provider-session",
-            "error": "rate_limit",
-            "last_assistant_message": "You've hit your usage limit",
-            "cwd": fixture.env.project_root,
-        }));
-        let record = fixture.record();
-        assert_eq!(record.status, RunStatus::Running);
-        assert_eq!(record.completed_at, None);
-        fixture.runtime.block_on(async {
-            assert!(
-                tokio::time::timeout(
-                    Duration::from_millis(30),
-                    fixture.waiter.wait_terminal(&fixture.store, None, None),
-                )
-                .await
-                .is_err(),
-                "paused run released its caller"
-            );
-        });
-        assert_eq!(fixture.record(), record);
     }
 
     #[test]

@@ -445,6 +445,5 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         background_shells: None,
         background_scripts: None,
         script_ask: false,
-        limit_stop: None,
     }
 }

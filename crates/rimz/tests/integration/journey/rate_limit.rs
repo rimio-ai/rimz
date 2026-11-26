@@ -74,10 +74,14 @@ fn rate_limit_recovery_renders_park_and_reset_countdown() {
 
     room.publish_rate_limits(&rate_cache(0, future(5 * 3600)));
     feed_statusline(&room, "sess-limit", &transcript, 100, past(60));
-    let screen = room.wait_for(|s| running_row(s, "claude") && s.contains("⏸︎ 0"), SETTLE);
+    // The StopFailure ended the turn errored, and this statusline push reads a transcript tail
+    // with no API-error line, which drops the stored marker: a raw `failed` row with no marker
+    // reads `failed`.
+    let failed = |s: &str| s.contains("! claude") && s.contains("⏸︎ 0") && !running_row(s, "claude");
+    let screen = room.wait_for(failed, SETTLE);
     assert!(
-        running_row(&screen, "claude") && screen.contains("⏸︎ 0"),
-        "after the spent window resets the row resumes running and the paused tally clears:\n{screen}"
+        failed(&screen),
+        "once the marker is dropped the row reads failed and the paused tally clears:\n{screen}"
     );
 }
 

@@ -252,9 +252,6 @@ impl AgentState {
         let after_ping = self
             .ping_opened_at
             .is_some_and(|opened| marker.at >= opened);
-        (super::state::effective_turn_error_class(marker).is_limit()
-            && after_ping
-            && marker.at > self.last_activity)
-            .then_some(marker)
+        (marker.class.is_limit() && after_ping && marker.at > self.last_activity).then_some(marker)
     }
 }

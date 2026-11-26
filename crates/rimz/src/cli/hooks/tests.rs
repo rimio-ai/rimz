@@ -2991,7 +2991,7 @@ fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
         "a second limit Stop ends the older hold"
     );
 
-    // 2. Non-limit error settles Failed; ReportTo::Nobody settles Failed even on quota.
+    // 2. Non-limit error settles Failed; a quota stop holds a ReportTo::Nobody run too.
     let non_limit_run = create_antigravity_child_run(&store, "agy-non-limit");
     let non_limit_env = std::collections::BTreeMap::from([(
         "RIMZ_RUN_ID".to_owned(),
@@ -3026,11 +3026,8 @@ fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
             nobody_settled.status,
             nobody_settled.limit_failure.map(|failure| failure.cause)
         ),
-        (
-            RunStatus::Failed,
-            Some(rimz::store::run::LimitFailureCause::RefillKnown)
-        ),
-        "run with ReportTo::Nobody fails with the typed limit"
+        (RunStatus::Running, None),
+        "run with ReportTo::Nobody stays open with no typed limit"
     );
 
     // 3. Provider-native Antigravity child's quota Stop writes no marker to either sidecar.
@@ -6257,20 +6254,31 @@ fn a_stream_reply_line_answers_only_its_own_frame() {
 }
 
 #[test]
-fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_replay() {
+fn an_antigravity_quota_stop_holds_a_detached_run_and_a_403_fails_it_on_apply_and_replay() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::run::RunStatus;
 
-    let payload: serde_json::Value = serde_json::from_str(include_str!(
+    let quota_stop: serde_json::Value = serde_json::from_str(include_str!(
         "../../agents/adapters/antigravity/tests/fixtures/quota_stop.json"
     ))
     .unwrap();
-    let agent_id = payload["conversationId"].as_str().unwrap();
+    // A 403 is a failure, whatever quota wording its sentence carries.
+    let mut forbidden = quota_stop.clone();
+    forbidden["error"] = serde_json::json!(
+        "transport error (PermissionDenied, HTTP 403): quota project not configured"
+    );
+    let agent_id = quota_stop["conversationId"].as_str().unwrap();
     let stop_at: jiff::Timestamp = "2026-11-25T18:22:48.276839Z".parse().unwrap();
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
-    for replay in [false, true] {
+    for (payload, held, replay) in [
+        (&quota_stop, true, false),
+        (&quota_stop, true, true),
+        (&forbidden, false, false),
+        (&forbidden, false, true),
+    ] {
         let (_dir, store) = hooks_test_store();
         let workspace = hooks_test_workspace(Some("main"));
-        // A detached run is outside the limit hold, so the stop fails it with the typed limit.
+        // A detached run is outside the limit hold bookkeeping, but the pausing stop holds it.
         let mut run = create_antigravity_child_run(&store, agent_id);
         run.report_to = rimz::store::run::ReportTo::Nobody;
         rimz::harness::run::create(store.paths(), &run).unwrap();
@@ -6291,9 +6299,7 @@ fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_re
             )]),
         };
         let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
-        let mut decoded = adapter
-            .decode_hook_in("Stop", &payload, &frame.env)
-            .unwrap();
+        let mut decoded = adapter.decode_hook_in("Stop", payload, &frame.env).unwrap();
         if replay {
             // The first attempt appended the lifecycle and died before the run fold.
             scoped
@@ -6318,7 +6324,7 @@ fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_re
                 &scoped,
                 adapter,
                 &mut decoded,
-                &payload,
+                payload,
                 rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
                 &hooks_test_globals(),
                 &recovered,
@@ -6326,24 +6332,20 @@ fn an_antigravity_quota_stop_fails_a_detached_run_with_the_limit_on_apply_and_re
         })
         .unwrap();
         let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
-        let refill_at = stop_at + std::time::Duration::from_secs(438_294);
-        let label = "Individual quota reached. Please upgrade your subscription to increase your \
-                     limits.";
+        let status = if held {
+            RunStatus::Running
+        } else {
+            RunStatus::Failed
+        };
         assert_eq!(
-            (settled.status, settled.limit_failure, settled.failure_tail),
             (
-                rimz::store::run::RunStatus::Failed,
-                Some(rimz::store::run::LimitFailure {
-                    cause: rimz::store::run::LimitFailureCause::RefillKnown,
-                    refill_at: Some(refill_at),
-                    label: Some(label.to_owned()),
-                }),
-                Some(format!(
-                    "stopped on a provider limit: \"{label}\"; it refills at {}",
-                    rimz::utils::time::format_local_timestamp(refill_at)
-                )),
+                settled.status,
+                settled.completed_at.is_some(),
+                settled.limit_failure,
+                settled.failure_tail
             ),
-            "replay={replay}"
+            (status, !held, None, None),
+            "held={held} replay={replay}"
         );
     }
 }

@@ -385,7 +385,6 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         background_shells: None,
         background_scripts: None,
         script_ask: false,
-        limit_stop: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),

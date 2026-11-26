@@ -4186,130 +4186,6 @@ fn a_reopen_clears_a_hold_and_rearms_from_the_timeout() {
 }
 
 #[test]
-fn a_limit_stop_fails_its_run_in_one_write_and_never_over_a_settled_or_claimed_run() {
-    use crate::agents::TurnLimitStop;
-    use crate::store::run::{LimitFailure, LimitFailureCause};
-
-    let stop_at: Timestamp = "2026-11-25T18:22:48Z".parse().unwrap();
-    let label = "Individual quota reached.";
-    let failed_stop = |limit_stop| {
-        let mut observation = AgentLifecycleObservation::new(
-            Some("child".into()),
-            LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-                turn_id: None,
-            },
-        );
-        observation.limit_stop = limit_stop;
-        observation
-    };
-    let fold_at = |paths: &StatePaths, run_id: &RunId, observation: &AgentLifecycleObservation| {
-        record_lifecycle_at(
-            paths,
-            run_id,
-            "antigravity",
-            observation,
-            None,
-            None,
-            Some(stop_at),
-            || None,
-        )
-        .unwrap()
-    };
-    let known = Some(TurnLimitStop {
-        label: Some(label.to_owned()),
-        refill_in_secs: Some(3600),
-    });
-    let refill_at = stop_at + Duration::from_secs(3600);
-    let known_tail = format!(
-        "stopped on a provider limit: \"{label}\"; it refills at {}",
-        crate::utils::time::format_local_timestamp(refill_at)
-    );
-    for (limit_stop, expected, tail) in [
-        (
-            known.clone(),
-            Some(LimitFailure {
-                cause: LimitFailureCause::RefillKnown,
-                refill_at: Some(refill_at),
-                label: Some(label.to_owned()),
-            }),
-            Some(known_tail.as_str()),
-        ),
-        (
-            Some(TurnLimitStop {
-                label: None,
-                refill_in_secs: None,
-            }),
-            Some(LimitFailure {
-                cause: LimitFailureCause::RefillUnknown,
-                refill_at: None,
-                label: None,
-            }),
-            Some("stopped on a provider limit"),
-        ),
-        (None, None, None),
-    ] {
-        let (_dir, paths, record) = setup_for("antigravity");
-        let settled = fold_at(&paths, &record.run_id, &failed_stop(limit_stop))
-            .expect("the failed stop settles the run");
-        assert_eq!(
-            (
-                settled.status,
-                &settled.limit_failure,
-                settled.failure_tail.as_deref()
-            ),
-            (RunStatus::Failed, &expected, tail),
-            "the cause and its sentence land in the write that fails the run"
-        );
-        assert_eq!(load(&paths, &record.run_id).unwrap(), settled);
-    }
-
-    // A tail stored before the stop keeps its words; the cause still lands.
-    let (_dir, paths, mut record) = setup_for("antigravity");
-    record.failure_tail = Some("earlier reason".to_owned());
-    create(&paths, &record).unwrap();
-    let settled = fold_at(&paths, &record.run_id, &failed_stop(known.clone()))
-        .expect("the failed stop settles the run");
-    assert_eq!(
-        (
-            settled.failure_tail.as_deref(),
-            settled.limit_failure.map(|failure| failure.cause)
-        ),
-        (Some("earlier reason"), Some(LimitFailureCause::RefillKnown))
-    );
-
-    // A run already settled keeps its status and its own cause.
-    let (_dir, paths, mut record) = setup_for("antigravity");
-    record.status = RunStatus::Completed;
-    record.completed_at = Some(record.started_at);
-    create(&paths, &record).unwrap();
-    assert!(fold_at(&paths, &record.run_id, &failed_stop(known.clone())).is_none());
-    let stored = load(&paths, &record.run_id).unwrap();
-    assert_eq!(
-        (stored.status, stored.limit_failure),
-        (RunStatus::Completed, None)
-    );
-
-    // A workflow attempt's stopped turn claims the stop: the run stays open and uncaused.
-    let (_dir, paths, mut record) = setup_for("antigravity");
-    record.workflow = Some(crate::agents::WorkflowAttemptRef {
-        run: crate::ids::WorkflowRunId::new(),
-        seq: 1,
-        role: crate::agents::WorkflowAttemptRole::Step,
-    });
-    record.status = RunStatus::Running;
-    create(&paths, &record).unwrap();
-    assert!(fold_at(&paths, &record.run_id, &failed_stop(known)).is_none());
-    let stored = load(&paths, &record.run_id).unwrap();
-    assert_eq!(
-        (stored.status, stored.limit_failure),
-        (RunStatus::Running, None)
-    );
-    assert!(stored.stopped_turn.is_some());
-}
-
-#[test]
 fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     use crate::store::run::{LimitFailure, LimitFailureCause};
 
@@ -6137,7 +6013,7 @@ fn antigravity_parked_turn_compaction_keeps_row_parked_acks_compact_once_and_set
 }
 
 #[test]
-fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
+fn fold_lifecycle_holds_runs_on_pausing_errored_turn_ends() {
     use crate::agents::{AgentTurnError, TurnErrorClass};
     use crate::store::run::{LimitHold, ParkCause, ReportTo};
 
@@ -6176,12 +6052,7 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
         record.parked_at = Some(record.started_at + Duration::from_secs(6));
         record.parked_on = Some(ParkCause::Message);
         let at = record.started_at + Duration::from_secs(30);
-        let mut obs = errored_end(Some("/tmp/child.jsonl"));
-        // The hold wins over the typed failure an Antigravity quota Stop also carries.
-        obs.limit_stop = Some(crate::agents::TurnLimitStop {
-            label: Some("Individual quota reached".to_owned()),
-            refill_in_secs: Some(3600),
-        });
+        let obs = errored_end(Some("/tmp/child.jsonl"));
         let err = marker(class, at, "Individual quota reached");
         assert_eq!(
             fold_lifecycle(
@@ -6349,8 +6220,7 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
         assert_eq!(record.status, RunStatus::Completed);
     }
 
-    // Cases that still settle Failed: Ended signal, non-limit marker, overload marker, no marker,
-    // non-subagent run, and ReportTo::Nobody.
+    // Cases that still settle Failed: Ended signal, non-pausing marker, and no marker.
     let at = Timestamp::from_second(1_700_000_000).unwrap();
     let rate_limit = marker(
         TurnErrorClass::PausedRateLimit,
@@ -6363,6 +6233,8 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
         "upstream server overloaded",
     );
     let fatal = marker(TurnErrorClass::Failed, at, "invalid tool schema");
+    // An adapter's `Failed` verdict is final, whatever limit wording its label carries.
+    let worded_fatal = marker(TurnErrorClass::Failed, at, "quota project not configured");
     for (case, signal, err, subagent, report_to) in [
         (
             "Ended even with limit marker",
@@ -6386,25 +6258,18 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
             ReportTo::Launcher,
         ),
         (
-            "overload marker",
+            "fatal marker with quota wording on a child",
             errored_end(None).signal,
-            Some(&overload),
+            Some(&worded_fatal),
             true,
             ReportTo::Launcher,
         ),
         (
-            "non-subagent run",
+            "fatal marker with quota wording on a print run",
             errored_end(None).signal,
-            Some(&rate_limit),
+            Some(&worded_fatal),
             false,
             ReportTo::Launcher,
-        ),
-        (
-            "report_to Nobody",
-            errored_end(None).signal,
-            Some(&rate_limit),
-            true,
-            ReportTo::Nobody,
         ),
     ] {
         let (_dir, _paths, mut record) = held_candidate();
@@ -6418,5 +6283,89 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
             "{case}"
         );
         assert_eq!(record.status, RunStatus::Failed, "{case}");
+    }
+
+    // Every run that closes on a turn end holds on a limit or an overload marker, with or without
+    // a deadline: a second pausing end after a retry holds it again, and a clean end completes it.
+    // A pausing end whose message is its own error text (as Qwen and Qoder send it) stores no
+    // answer, so a clean end with no text after the retry leaves none.
+    let observed = |signal| AgentLifecycleObservation::new(Some("child".into()), signal);
+    let retry = observed(LifecycleSignal::TurnStarted { turn_id: None });
+    let clean_end = observed(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    });
+    for (case, subagent, report_to, deadline, loop_attempt) in [
+        ("child", true, ReportTo::Launcher, true, false),
+        ("report_to Nobody", true, ReportTo::Nobody, true, false),
+        (
+            "print with a deadline",
+            false,
+            ReportTo::Launcher,
+            true,
+            false,
+        ),
+        (
+            "print without a deadline",
+            false,
+            ReportTo::Launcher,
+            false,
+            false,
+        ),
+        ("loop attempt", false, ReportTo::Launcher, false, true),
+    ] {
+        for err in [&rate_limit, &overload] {
+            let (_dir, _paths, mut record) = held_candidate();
+            let kind = record.kind.clone();
+            record.subagent = subagent;
+            record.report_to = report_to;
+            if !deadline {
+                record.deadline_at = None;
+                record.deadline_notice_at = None;
+            }
+            record.loop_fire =
+                loop_attempt.then(|| crate::ids::FireId::new(&crate::ids::TaskId::new()));
+            let class = err.class;
+            let started = record.started_at;
+            let after = |secs| started + Duration::from_secs(secs);
+            let (first, resumed, second, done) = (after(10), after(20), after(30), after(40));
+            for (obs, err, at) in [
+                (&errored_end(None), Some(err), first),
+                (&retry, None, resumed),
+                (&errored_end(None), Some(err), second),
+            ] {
+                let message = err.and_then(|err| err.label.clone());
+                fold_lifecycle(&mut record, kind.as_str(), obs, message, err, at, at, None);
+                assert_eq!(
+                    (
+                        record.status,
+                        record.completed_at,
+                        record.last_message.as_deref()
+                    ),
+                    (RunStatus::Running, None, None),
+                    "{case} {class:?} at {at}"
+                );
+            }
+            assert_eq!(
+                fold_lifecycle(
+                    &mut record,
+                    kind.as_str(),
+                    &clean_end,
+                    None,
+                    None,
+                    done,
+                    done,
+                    None
+                ),
+                LifecycleFold::NewlyTerminal,
+                "{case} {class:?}"
+            );
+            assert_eq!(
+                (record.status, record.last_message),
+                (RunStatus::Completed, None),
+                "{case} {class:?}"
+            );
+        }
     }
 }
