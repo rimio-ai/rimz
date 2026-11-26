@@ -125,6 +125,7 @@ fn resting_script_displays_running_without_changing_delivery_status() {
             id: "toolu_script".into(),
             description: Some("Run the suite".into()),
             started_at: ago(60),
+            held_by: None,
         });
     let snapshot = room_with_agent_panes(vec![session]);
     assert_eq!(

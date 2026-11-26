@@ -454,6 +454,7 @@ fn pre_tool_use_with_a_script_report_reaches_the_fold_and_a_plain_one_stays_drop
             id: "toolu_script".to_owned(),
             description: Some("Run the suite".to_owned()),
             started_at: jiff::Timestamp::now(),
+            held_by: None,
         },
     });
     assert!(
@@ -470,6 +471,28 @@ fn pre_tool_use_with_a_script_report_reaches_the_fold_and_a_plain_one_stays_drop
         find_agent(&agents, "claude", &AgentSessionId::from("sess-1")).expect("folded agent");
     assert_eq!(agent.background_scripts.len(), 1);
     assert_eq!(agent.background_scripts[0].id, "toolu_script");
+    assert_eq!(agent.background_scripts[0].held_by, None);
+
+    let mut script_asks = observation(LifecycleSignal::AwaitingInput {
+        kind: crate::agents::AskKind::Question,
+        ask_id: Some(crate::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
+        detail: Some("Ship it?".to_owned()),
+        extra_questions: 0,
+        native_key: Some("repl_e3d5".to_owned()),
+    });
+    script_asks.script_ask = true;
+    append(&script_asks, "PreToolUse");
+    let agents = snapshot::catch_up_rollup(store.paths())
+        .expect("rollup")
+        .1
+        .to_vec();
+    let agent =
+        find_agent(&agents, "claude", &AgentSessionId::from("sess-1")).expect("folded agent");
+    assert_eq!(
+        agent.background_scripts[0].held_by.as_deref(),
+        Some("repl_e3d5"),
+        "{agent:#?}"
+    );
 }
 
 #[test]

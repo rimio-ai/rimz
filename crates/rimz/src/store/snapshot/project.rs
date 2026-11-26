@@ -1424,6 +1424,17 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if !snapshot && let Some(report) = &input.observation.background_scripts {
         report.apply(&mut state.background_scripts);
     }
+    if !snapshot
+        && input.observation.script_ask
+        && let Some(key) = state
+            .open_ask
+            .as_ref()
+            .and_then(|ask| ask.native_key.as_ref())
+    {
+        for script in &mut state.background_scripts {
+            script.held_by = Some(key.clone());
+        }
+    }
     state.trim_ended_text();
     state
 }

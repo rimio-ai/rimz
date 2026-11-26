@@ -23,6 +23,11 @@ pub struct BackgroundScript {
     pub description: Option<String>,
     /// When RimZ first saw the script, not when the provider started it.
     pub started_at: Timestamp,
+    /// The native key of an ask a call inside a script raised while this one was
+    /// listed. The script waits on that ask while it stays open, so it is not
+    /// running work then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_by: Option<String>,
 }
 
 /// What one hook proves about a session's background scripts.
@@ -62,6 +67,7 @@ mod tests {
             id: id.to_owned(),
             description: Some(format!("run {id}")),
             started_at: Timestamp::from_second(started_at).unwrap(),
+            held_by: None,
         }
     }
 

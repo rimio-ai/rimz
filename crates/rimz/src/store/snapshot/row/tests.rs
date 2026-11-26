@@ -872,6 +872,7 @@ fn card_description_running_names_the_oldest_shown_script() {
         id: id.to_owned(),
         description: description.map(ToOwned::to_owned),
         started_at: row_time() - jiff::SignedDuration::from_secs(age),
+        held_by: None,
     };
     let mut agent = AgentState::stub("claude", "session", AgentStatus::Idle);
     agent.background_scripts = vec![
