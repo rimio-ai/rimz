@@ -847,13 +847,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         append_system_prompt_files: request.append_system_prompt_files.clone(),
         team_prompt: request.team_prompt.clone(),
     };
-    let composed = prompt_compose::read_system_prompt(&request.kind, &prompt_sources)?;
     let agent_file_flag = match adapter
         .spec()
         .launch
         .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
     {
-        Some(crate::agents::PresetArgMatcher::AgentFile(flag)) if composed.is_some() => {
+        Some(crate::agents::PresetArgMatcher::AgentFile(flag)) if !prompt_sources.is_empty() => {
             // The composed prompt replaces any agent the profile selected, on every action.
             crate::agents::PresetArgMatcher::AgentFile(flag.clone())
                 .remove_occurrences(request.action.extra_args_mut());
@@ -1123,6 +1122,13 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 .map(|warning| LaunchPlanWarning::McpWording(warning.to_string())),
         );
     }
+    // The served set chooses the Board writes fragment, so the prompt composes only now.
+    let board = if mcp_capabilities.contains(&crate::mcp::catalog::Capability::Blackboard) {
+        super::team_prompt::BoardWrites::Tools
+    } else {
+        super::team_prompt::BoardWrites::Shell
+    };
+    let composed = prompt_compose::read_system_prompt(&request.kind, &prompt_sources, board)?;
     let (composed, rewritten) = match composed {
         Some(text) => {
             let has = reminders.rimz_capabilities(&request);
@@ -1344,6 +1350,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         rendered_tools: request.tools.as_deref(),
                         code_mode: request.identity.params.code_mode,
                         served: &reminders.mcp_served(&request),
+                        always: request.default_always(&mcp_capabilities),
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")

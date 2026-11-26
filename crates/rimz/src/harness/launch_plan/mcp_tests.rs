@@ -1286,6 +1286,222 @@ fn unapplied(plan: &LaunchPlan) -> Vec<String> {
         .collect()
 }
 
+/// A launch of `kind` carrying the built-in consensus layer, as a staged team seat does.
+fn seat(kind: &str, mcps: Option<&[&str]>) -> ExecRequest {
+    let mut request = launch(kind, mcps, &[]);
+    request.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: PathBuf::from("/defs/seat.md"),
+        text: "Base.\n".to_owned(),
+    });
+    request.team_prompt = Some(crate::harness::team_prompt::TeamPrompt {
+        consensus: crate::harness::team_prompt::Consensus::BuiltIn,
+        files: vec![crate::config::PromptSource::Text {
+            origin: PathBuf::from("/defs/pipeline.md"),
+            text: "Pipeline.\n".to_owned(),
+        }],
+    });
+    request
+}
+
+/// A launch carrying a consensus layer loads its served board tools up front, beside a blanket
+/// `rimz:deferred` too, unless its own `rimz-blackboard` entry carries a mark; it adds no
+/// warning on any kind, and a launch without the layer keeps its marks.
+#[test]
+fn a_consensus_launch_loads_the_board_tools_up_front() {
+    let room = Room::new();
+    let claude = |request: &ExecRequest| {
+        let plan = room.compile(&switches(true, true), request);
+        let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
+        (
+            entry.get("alwaysLoad").and_then(serde_json::Value::as_bool),
+            entry["args"].clone(),
+            mcp_warnings(&plan),
+        )
+    };
+    let no_warnings = Vec::<String>::new();
+    for (request, always_load, args) in [
+        (
+            seat("claude", None),
+            None,
+            serde_json::json!(["mcp", "serve", "--always", "rimz-blackboard"]),
+        ),
+        (
+            seat("claude", Some(&["rimz:deferred"])),
+            None,
+            serde_json::json!(["mcp", "serve", "--always", "rimz-blackboard"]),
+        ),
+        (
+            seat(
+                "claude",
+                Some(&["rimz:deferred", "rimz-blackboard:deferred"]),
+            ),
+            Some(false),
+            serde_json::json!(["mcp", "serve", "--deferred", "rimz-blackboard"]),
+        ),
+        (
+            seat("claude", Some(&["rimz-lsp"])),
+            None,
+            serde_json::json!(["mcp", "serve", "--only", "rimz-lsp"]),
+        ),
+        (
+            launch("claude", Some(&["rimz:deferred"]), &[]),
+            Some(false),
+            serde_json::json!(["mcp", "serve"]),
+        ),
+    ] {
+        assert_eq!(
+            claude(&request),
+            (always_load, args, no_warnings.clone()),
+            "{:?}",
+            request.mcps
+        );
+    }
+    let served = |request: &ExecRequest| {
+        let plan = room.compile(&switches(true, true), request);
+        assert_eq!(mcp_warnings(&plan), no_warnings);
+        plan.process().env.get("RIMZ_MCP_SERVE").cloned()
+    };
+    let deferred = "rimz-lsp:deferred,rimz-wait:deferred,rimz-subagents:deferred,\
+                    rimz-agents:deferred,rimz-teams:deferred,rimz-workflow:deferred,\
+                    rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,\
+                    rimz-notes:deferred";
+    assert_eq!(
+        served(&seat("antigravity", Some(&["rimz:deferred"]))),
+        Some(format!("{deferred},rimz-blackboard:always"))
+    );
+    assert_eq!(
+        served(&seat("antigravity", Some(&["rimz-blackboard:deferred"]))),
+        Some("rimz-blackboard:deferred".to_owned())
+    );
+    assert_eq!(
+        served(&seat("antigravity", Some(&["rimz-lsp"]))),
+        Some("rimz-lsp".to_owned())
+    );
+    let opencode_loads = |request: &ExecRequest| {
+        let plan = room.compile(&switches(true, true), request);
+        assert_eq!(mcp_warnings(&plan), no_warnings);
+        plan.process()
+            .env
+            .get("RIMZ_LAUNCH_MCP_TOOLS")
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap())
+    };
+    let native_board =
+        Some(serde_json::json!({"blackboard_flip": "native", "blackboard_record": "native"}));
+    assert_eq!(opencode_loads(&seat("opencode", None)), native_board);
+    assert_eq!(
+        opencode_loads(&seat("opencode", Some(&["rimz:deferred"]))),
+        native_board
+    );
+    assert_eq!(
+        opencode_loads(&seat("opencode", Some(&["rimz-blackboard:deferred"]))),
+        None
+    );
+    assert_eq!(opencode_loads(&seat("opencode", Some(&["rimz-lsp"]))), None);
+    let mut opencode_code_mode = seat("opencode", None);
+    opencode_code_mode.identity.params.code_mode = Some(true);
+    assert_eq!(
+        opencode_loads(&opencode_code_mode),
+        Some(serde_json::json!({"blackboard_flip": "pinned", "blackboard_record": "pinned"}))
+    );
+    let pi_exposure = |request: &ExecRequest| {
+        let plan = room.compile(&switches(true, true), request);
+        assert_eq!(mcp_warnings(&plan), no_warnings);
+        plan.process()
+            .env
+            .get("RIMZ_PI_MCP_EXPOSURE")
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap())
+    };
+    assert_eq!(
+        pi_exposure(&seat("pi", None)),
+        Some(serde_json::json!({
+            "toolExposure": {"blackboard_flip": "direct", "blackboard_record": "direct"}
+        }))
+    );
+    assert_eq!(
+        pi_exposure(&seat("pi", Some(&["*", "rimz:deferred"]))),
+        Some(serde_json::json!({
+            "exposure": "deferred",
+            "toolExposure": {"blackboard_flip": "direct", "blackboard_record": "direct"}
+        }))
+    );
+    assert_eq!(
+        pi_exposure(&seat("pi", Some(&["*", "rimz-blackboard:deferred"]))),
+        Some(serde_json::json!({
+            "toolExposure": {"blackboard_flip": "deferred", "blackboard_record": "deferred"}
+        }))
+    );
+    served(&seat("codex", None));
+    served(&seat("codex", Some(&["rimz:deferred"])));
+    served(&seat("qwen", None));
+}
+
+/// The Board writes fragment follows the consensus directly, built in or a file, and names the
+/// blackboard tools exactly when the launch serves them.
+#[test]
+fn the_board_writes_fragment_follows_the_consensus_by_what_the_launch_serves() {
+    use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, BoardWrites};
+    let room = Room::new();
+    let composed = |machine: &str, request: &ExecRequest| {
+        room.compile(machine, request).prompt.composed.unwrap()
+    };
+    let after = |consensus: &str, fragment: BoardWrites| {
+        format!(
+            "{}\n\n{}\n\nPipeline.\n",
+            consensus.trim_end(),
+            fragment.text().trim_end()
+        )
+    };
+    // The launch rewrites the consensus's `rimz(x)` by reach; its last paragraph names none.
+    let built_in = BUILT_IN_CONSENSUS.trim_end().rsplit("\n\n").next().unwrap();
+    let on = switches(true, true);
+    // A non-fresh Antigravity launch serves its tools through the launch env, so it gets the
+    // tools fragment too.
+    let mut resumed = seat("antigravity", None);
+    resumed.action = ExecAction::Resume {
+        session_id: "conversation".to_owned(),
+        extra_args: Vec::new(),
+    };
+    for (machine, request, fragment) in [
+        (&on, seat("claude", None), BoardWrites::Tools),
+        (
+            &on,
+            seat("codex", Some(&["rimz-blackboard"])),
+            BoardWrites::Tools,
+        ),
+        (&on, seat("antigravity", None), BoardWrites::Tools),
+        (&on, resumed, BoardWrites::Tools),
+        (&on, seat("opencode", None), BoardWrites::Tools),
+        (&on, seat("pi", None), BoardWrites::Tools),
+        (&on, seat("claude", Some(&["rimz-lsp"])), BoardWrites::Shell),
+        (&on, seat("claude", Some(&[])), BoardWrites::Shell),
+        (
+            &switches(true, false),
+            seat("claude", None),
+            BoardWrites::Shell,
+        ),
+        (&on, seat("qwen", None), BoardWrites::Shell),
+    ] {
+        let text = composed(machine, &request);
+        let label = format!("{} {:?} {:?}", request.kind, request.mcps, request.action);
+        assert!(text.starts_with("Base.\n\n# Team consensus\n"), "{label}");
+        assert!(text.ends_with(&after(built_in, fragment)), "{label}");
+        assert_eq!(text.matches("## Board writes").count(), 1, "{label}");
+    }
+    let file = room.project.path().join("consensus.md");
+    std::fs::write(&file, "Our consensus.\n").unwrap();
+    let mut own = seat("claude", None);
+    if let Some(layer) = own.team_prompt.as_mut() {
+        layer.consensus = crate::harness::team_prompt::Consensus::File(file);
+    }
+    assert_eq!(
+        composed(&on, &own),
+        format!("Base.\n\n{}", after("Our consensus.", BoardWrites::Tools))
+    );
+    let mut alone = seat("claude", None);
+    alone.team_prompt = None;
+    assert_eq!(composed(&on, &alone), "Base.\n");
+}
+
 /// The plan's MCP warnings, whichever key they name: the launch's own MCP warnings (carried as
 /// `LaunchEnv`), the wording warnings, and a kind's refusal of an `mcps` list.
 fn mcp_warnings(plan: &LaunchPlan) -> Vec<String> {

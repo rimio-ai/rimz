@@ -11,6 +11,23 @@ use crate::config::Team;
 /// The consensus every staged team runs under unless `consensus-file` replaces it.
 pub const BUILT_IN_CONSENSUS: &str = include_str!("team_consensus.md");
 
+/// How a member writes the board, composed directly after the consensus: through the
+/// blackboard tools where the launch serves them, else through the shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BoardWrites {
+    Tools,
+    Shell,
+}
+
+impl BoardWrites {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Tools => include_str!("team_board_tools.md"),
+            Self::Shell => include_str!("team_board_shell.md"),
+        }
+    }
+}
+
 /// The consensus piece a team listing `reflect` receives when no home or pack
 /// trait claims that name.
 pub const SHIPPED_REFLECT: &str = include_str!("team_reflect.md");
@@ -148,5 +165,22 @@ mod tests {
         assert!(BUILT_IN_CONSENSUS.contains("rimz(message)"));
         assert!(!SHIPPED_REFLECT.contains("rimz(reflect)"));
         assert!(SHIPPED_REFLECT.contains("skill(rimz-reflect)"));
+    }
+
+    /// The consensus names no way to write the board: its Board writes fragment does.
+    #[test]
+    fn the_consensus_leaves_board_writes_to_its_fragment() {
+        for word in ["rimz teams", "blackboard_", "--steer"] {
+            assert!(!BUILT_IN_CONSENSUS.contains(word), "{word}");
+        }
+        assert!(BUILT_IN_CONSENSUS.contains("(Board writes, below, says how)"));
+        for (fragment, names) in [
+            (BoardWrites::Tools, ["blackboard_flip", "blackboard_record"]),
+            (BoardWrites::Shell, ["rimz teams flip", "rimz teams record"]),
+        ] {
+            let text = fragment.text();
+            assert!(text.starts_with("## Board writes\n\n"), "{text}");
+            assert!(names.iter().all(|name| text.contains(name)), "{text}");
+        }
     }
 }

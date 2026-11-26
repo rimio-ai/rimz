@@ -877,6 +877,9 @@ pub(super) struct SeatEdits {
 /// The capability every Markdown team seat's built-in consensus names (`rimz(message)`).
 const CONSENSUS_SKILL: &str = "rimz-message";
 
+/// The capability whose tools the Board writes fragment after the consensus names.
+const BOARD_CAPABILITY: &str = "rimz-blackboard";
+
 #[derive(Clone, Copy, Default)]
 struct SeatSkillEdits {
     added_consensus: bool,
@@ -902,27 +905,29 @@ impl SeatEdits {
             if !self.leader {
                 capabilities.retain(|entry| entry.trim() != "ask");
             }
-            // Every Markdown team runs the built-in consensus, which names `rimz(message)`.
-            // Beside `capabilities:`, RimZ capabilities go only in the grant, even beside
-            // `skills: []` where adding one implies `Skill`.
-            if !capabilities.iter().any(|entry| {
-                matches!(
-                    frontmatter::marked_name(entry),
-                    CONSENSUS_SKILL | SERVER_NAME
-                )
-            }) {
-                capabilities.push(CONSENSUS_SKILL.to_owned());
+            // Every Markdown team runs the built-in consensus, which names `rimz(message)`,
+            // and its Board writes fragment, which names the blackboard tools (a project TOML
+            // team may replace the consensus with `consensus-file`, and its seats get no seat
+            // edits). Beside `capabilities:`, RimZ capabilities go only in the grant, even
+            // beside `skills: []` where adding one implies `Skill`.
+            for granted in [CONSENSUS_SKILL, BOARD_CAPABILITY] {
+                if !capabilities.iter().any(|entry| {
+                    let name = frontmatter::marked_name(entry);
+                    name == granted || name == SERVER_NAME
+                }) {
+                    capabilities.push(granted.to_owned());
+                }
             }
         } else {
-            if let Some(mcps) = &mut fm.mcps
-                && !mcps.iter().any(|entry| {
-                    matches!(
-                        frontmatter::marked_name(entry),
-                        CONSENSUS_SKILL | SERVER_NAME | "*"
-                    )
-                })
-            {
-                mcps.push(CONSENSUS_SKILL.to_owned());
+            if let Some(mcps) = &mut fm.mcps {
+                for granted in [CONSENSUS_SKILL, BOARD_CAPABILITY] {
+                    if !mcps.iter().any(|entry| {
+                        let name = frontmatter::marked_name(entry);
+                        name == granted || matches!(name, SERVER_NAME | "*")
+                    }) {
+                        mcps.push(granted.to_owned());
+                    }
+                }
             }
             if let Some(skills) = &fm.skills
                 && !skills.iter().any(|skill| skill.trim() == CONSENSUS_SKILL)

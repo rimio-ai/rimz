@@ -7305,9 +7305,11 @@ fn built_in_base_launch(
     .unwrap();
     finalize(&mut layout, preset, &[])?;
     let cell = layout.agent_cells().next().unwrap().clone();
+    // Shell, as a launch that serves no blackboard tools composes it.
     let composed = crate::harness::prompt_compose::read_system_prompt(
         &cell.kind,
         &SystemPromptSources::from_cell(&cell),
+        crate::harness::team_prompt::BoardWrites::Shell,
     )
     .unwrap();
     Ok((cell, composed))

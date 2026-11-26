@@ -566,8 +566,9 @@ struct McpEdit {
 
 impl McpEdit {
     /// The record and loads for the marks the launch applies: `code-mode off`, or auto with
-    /// `rimz:always`, makes the record native; per tool, `:always` is native under auto and
-    /// pinned under on, and a capability's own mark wins over the `rimz` mark.
+    /// `rimz:always`, makes the record native; per tool, `:always` (or `launch.always` for an
+    /// unmarked capability) is native under auto and pinned under on, and a capability's own mark
+    /// wins over the `rimz` mark.
     fn new(launch: &McpLaunch<'_>) -> Self {
         use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
         let entries = launch.mcps.unwrap_or_default();
@@ -579,6 +580,10 @@ impl McpEdit {
                         .find(|entry| entry.capability() == Some(capability))
                 })
                 .and_then(crate::config::McpName::mode)
+                .or_else(|| {
+                    (capability.is_some() && capability == launch.always)
+                        .then_some(LoadMode::Always)
+                })
                 .or_else(|| {
                     entries
                         .iter()

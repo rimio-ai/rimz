@@ -7150,6 +7150,7 @@ fn routine_rimz_settings_union_idempotence_and_refusal() {
                     rendered_tools: None,
                     code_mode: None,
                     served: &[],
+                    always: None,
                 },
                 (root.path(), root.path()),
                 &mut args,

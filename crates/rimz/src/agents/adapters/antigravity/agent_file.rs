@@ -298,6 +298,7 @@ mod tests {
                     rendered_tools: None,
                     code_mode: None,
                     served: &[],
+                    always: None,
                 },
             })
             .unwrap();
