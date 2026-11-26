@@ -215,7 +215,7 @@ impl<'a> LaunchCompactPolicy<'a> {
             .is_some();
         if explicit
             && let Some(adapter) = crate::agents::find_definition(&cell.kind)
-            && let Some(reason) = crate::agents::soft_compact_skip(adapter)
+            && let Some(reason) = crate::agents::reminder_skip(adapter)
         {
             warnings.push(LaunchFinalizeWarning::SmartCompactSkipped {
                 profile: profile.to_owned(),
@@ -245,6 +245,9 @@ impl<'a> LaunchCompactPolicy<'a> {
                 enforcer,
             });
         } else if explicit
+            && crate::agents::find_definition(&cell.kind)
+                .and_then(crate::agents::reminder_skip)
+                .is_none()
             && let Some(second @ AutoCompact::Tokens(second_tokens)) =
                 crate::harness::soft_compact::second_line(line)
             && second_tokens >= window
@@ -1389,7 +1392,7 @@ impl fmt::Display for LaunchFinalizeWarning {
                 reason,
             } => write!(
                 formatter,
-                "warning: `{profile}` smart-compact {line}: {agent} skips the smart-compaction reminder ({reason})"
+                "warning: `{profile}` smart-compact {line}: {agent} skips the mid-turn smart-compaction reminder ({reason})"
             ),
             Self::SmartCompactNativeWindow {
                 profile,

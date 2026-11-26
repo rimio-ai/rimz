@@ -1041,7 +1041,7 @@ pub(super) fn collect_soft_compact_skips(
         .filter(|row| row.detected)
         .filter_map(|row| {
             let definition = rimz::agents::find_definition(&row.kind)?;
-            let reason = rimz::agents::soft_compact_skip(definition)?;
+            let reason = rimz::agents::reminder_skip(definition)?;
             Some(super::model::SoftCompactSkipRow {
                 kind: row.kind.clone(),
                 reason,

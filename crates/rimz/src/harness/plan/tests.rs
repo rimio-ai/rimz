@@ -2381,21 +2381,21 @@ fn finalized_smart_compact_warns_only_for_explicit_skipping_seats() {
             "coder",
             Agents,
             vec![
-                "warning: `coder` smart-compact 200000 tokens: amp skips the smart-compaction reminder (no compact command)",
+                "warning: `coder` smart-compact 200000 tokens: amp skips the mid-turn smart-compaction reminder (no compact command)",
             ],
         ),
         (
             "forge.reviewer",
             Agents,
             vec![
-                "warning: `coder` smart-compact 70%: amp skips the smart-compaction reminder (no compact command)",
+                "warning: `coder` smart-compact 70%: amp skips the mid-turn smart-compaction reminder (no compact command)",
             ],
         ),
         (
             "coder",
             Subagents,
             vec![
-                "warning: `coder` smart-compact 60%: kiro skips the smart-compaction reminder (no compaction signal)",
+                "warning: `coder` smart-compact 60%: kiro skips the mid-turn smart-compaction reminder (no compaction signal)",
             ],
         ),
         ("muted", Agents, vec![]),
@@ -2499,6 +2499,14 @@ fn finalized_smart_compact_compares_only_effective_token_windows() {
             "line {line:?}, native {native:?}"
         );
     }
+    // A kind that skips the reminder warns of that alone, never of a second reminder.
+    let config = "[harness]\nauto_compact = 'off'\n[agents.profiles.coder]\nagent = 'antigravity'\nsmart-compact = '240k'\nauto-compact = '250k'\n";
+    assert_eq!(
+        finalized_smart_compact_warnings(config, "coder", Agents, None),
+        vec![
+            "warning: `coder` smart-compact 240000 tokens: antigravity skips the mid-turn smart-compaction reminder (no hook context)",
+        ]
+    );
 }
 
 #[test]
@@ -2509,6 +2517,7 @@ fn finalized_smart_compact_names_rimz_when_ceiling_is_rimz_enforced() {
     assert_eq!(
         finalized_smart_compact_warnings(config, "coder", Agents, None),
         vec![
+            "warning: `coder` smart-compact 300000 tokens: antigravity skips the mid-turn smart-compaction reminder (no hook context)",
             "warning: `coder` smart-compact 300000 tokens is at or above its auto-compact 250000 tokens; RimZ compacts first",
         ]
     );

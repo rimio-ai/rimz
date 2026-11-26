@@ -2313,12 +2313,12 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         note(
             w,
             Health::Neutral,
-            &format!("smart-compaction reminder skipped: {skipped}"),
+            &format!("mid-turn smart-compaction reminder skipped: {skipped}"),
         )?;
         detail(
             w,
             palette::faint(),
-            "mid-turn compaction uses only the provider's own window",
+            "only the mid-turn reminder is off; an auto-compact ceiling still compacts where the provider or RimZ enforces one",
         )?;
     }
 

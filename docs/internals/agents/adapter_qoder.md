@@ -38,7 +38,7 @@ Some launch text and profile settings never reach Qoder:
 | --- | --- |
 | system-prompt replacement | refused: `presets` declares no system-prompt matcher |
 | auto-compact, fast, and code mode | skipped with a launch warning: `presets` declares no switches for them |
-| hook-context replies, including the deadline stop rung | not sent: `hook_context` is `None`, so a supervised run's stop rung goes through the pane (`crates/rimz/src/harness/deadline.rs::stop_due_by_pane`) |
+| hook-context replies, including the deadline stop rung | not sent: `hook_context` is `None`, so a supervised run's stop rung goes through the pane (`crates/rimz/src/harness/deadline.rs::stop_due_by_pane`) and Qoder takes no smart-compaction reminder (`agents::reminder_skip`) |
 | per-turn prompt context | not sent: `prompt_context` is `false` |
 | a profile's tool rules | dropped with a launch warning (`ToolRules::Unsupported`) |
 | a profile's `skills` list on the host | warns and runs unrestricted (`HostSkills::Unsupported`). Under scoped isolation the view applies the list ([sandbox.md](../sandbox.md)) |

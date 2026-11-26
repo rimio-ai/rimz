@@ -474,6 +474,28 @@ fn soft_compact_participation_pins_every_builtin_skip_and_reason() {
             ("qoder", "no live context reading".into()),
         ]
     );
+    let mut unreminded: Vec<_> = BUILTINS
+        .iter()
+        .filter_map(|definition| {
+            reminder_skip(definition).map(|reason| (definition.spec().kind, reason.to_string()))
+        })
+        .collect();
+    unreminded.sort_unstable();
+    assert_eq!(
+        unreminded,
+        [
+            ("amp", "no compact command".into()),
+            ("antigravity", "no hook context".into()),
+            ("hermes", "no compaction signal".into()),
+            ("kimi", "no hook context".into()),
+            ("kiro", "no compaction signal".into()),
+            ("minimax", "no live context reading".into()),
+            ("muse", "no compaction signal".into()),
+            ("omp", "no hook context".into()),
+            ("qoder", "no live context reading".into()),
+        ],
+        "the mid-turn reminder rides the hook-context reply"
+    );
 }
 
 #[test]

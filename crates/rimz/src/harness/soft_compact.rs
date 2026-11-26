@@ -99,7 +99,7 @@ pub(crate) fn second_line(line: AutoCompact) -> Option<AutoCompact> {
 /// above its line, each rung once per compaction epoch (a claimed rung 2 spends rung 1), with a
 /// continue to follow a self-compaction (blank continue text withholds it) and no compaction
 /// open, unprompted since, or owed a continue. A kind
-/// [`soft_compact_skip`](crate::agents::soft_compact_skip) names never gets one. Rung 2 sits at
+/// [`reminder_skip`](crate::agents::reminder_skip) names never gets one. Rung 2 sits at
 /// `second_line` and never fires at or past the row's auto-compact ceiling. On a kind whose
 /// `Capabilities::lifecycle_reports_fill` is true, the first reminder past a spent mark's epoch
 /// also requires a fold-observed low-water reading under the seat's line; when every other
@@ -141,7 +141,7 @@ pub fn reminder_due(
     } else {
         1
     };
-    if crate::agents::soft_compact_skip(definition).is_some()
+    if crate::agents::reminder_skip(definition).is_some()
         || !threshold.triggered(agent)
         || rung <= spent
         || !agent.holds_open_turn()
