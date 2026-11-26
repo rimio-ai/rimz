@@ -375,6 +375,12 @@ pub(super) fn wrap(body: &str) -> String {
     wrap_rimz_block(RimzBlock::SystemReminder, body)
 }
 
+/// Wraps a context block a hook reply attaches mid-turn (a deadline rung, the smart-compaction
+/// reminder), so it reads as RimZ's and not the user's.
+pub fn wrap_hook_context(body: &str) -> String {
+    wrap(body)
+}
+
 /// Child policy for adapters that require a user-prompt fallback.
 pub fn subagent_reminder() -> String {
     wrap(SUBAGENT_REMINDER_BODY)

@@ -13,6 +13,8 @@ use rimz::ids::AgentSessionId;
 use rimz::store::event::EventEnvelope;
 use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
 
+#[cfg(target_os = "linux")]
+use crate::common::spawn_sibling_codex;
 use crate::common::{CommandTimeoutExt, Env, canonical};
 
 #[test]
@@ -665,63 +667,6 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
             .any(|event| event.params_value()["event_name"] == "PermissionRequest"),
         "the static ladder resolves the nested repo's own workspace",
     );
-}
-
-/// A fake in-pane `codex` carrying the room's pin: a sleeper script whose
-/// kernel `comm` is the script name `codex`, parked at `cwd` with the pin in
-/// its environment — the sibling process a daemon-routed hook recovers from.
-/// Killed on drop so a failing assertion never leaks the sleeper. Each
-/// sibling owns its script directory: a shared path would let the next
-/// spawn's write truncate a script `sh` has exec'd but not yet read.
-#[cfg(target_os = "linux")]
-struct SiblingAgent {
-    child: std::process::Child,
-    _script_dir: tempfile::TempDir,
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for SiblingAgent {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path, args: &[&str]) -> SiblingAgent {
-    let script_dir = tempfile::tempdir_in(&env.home_root).expect("sibling script dir");
-    // Plain `sleep` (no `exec`) keeps the interpreter — and so the `codex`
-    // comm — alive for the scan.
-    let script = crate::common::write_path_shim(script_dir.path(), "codex", "sleep 30");
-    let child = std::process::Command::new(&script)
-        .args(args)
-        .current_dir(cwd)
-        .env(rimz::workspace::ENV_WORKSPACE_ID, env.workspace_id.as_str())
-        .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn sibling codex");
-
-    // `spawn` returns at fork; wait for the exec so the kernel comm reads
-    // `codex` before the hook scans /proc.
-    let sibling = SiblingAgent {
-        child,
-        _script_dir: script_dir,
-    };
-    let comm_path = format!("/proc/{}/comm", sibling.child.id());
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match std::fs::read_to_string(&comm_path) {
-            Ok(comm) if comm.trim() == "codex" => break,
-            _ => {
-                assert!(std::time::Instant::now() < deadline, "sibling never exec'd");
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-    }
-    sibling
 }
 
 /// The room store's events log, or a panic naming which of the other

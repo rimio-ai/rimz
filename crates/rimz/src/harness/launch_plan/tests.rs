@@ -4800,6 +4800,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                             | "RIMZ_MCP_CWD"
                     )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
+                        && *key != crate::harness::launch::ENV_SELF_COMPACT_TOOL
                         && *key != crate::harness::launch::ENV_AGENT_MODEL
                         && *key != crate::harness::launch::ENV_TEAM
                         && *key != crate::harness::launch::ENV_AGENT_ROLE

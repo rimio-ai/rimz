@@ -288,19 +288,20 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
     None
 }
 
-/// Compose the smart-compaction reminder: an agent whose work ends in this turn finishes and
-/// rests, and one with work left writes it down and runs `rimz agents compact @me`; `None` when
-/// the adapter has no native compaction command.
-pub fn compact_reminder(agent: &AgentState) -> Option<String> {
-    let spec = spec_by_kind(agent.kind.as_str())?;
-    spec.launch.compact_command.is_some().then(|| {
-        concat!(
-            "Your context is getting high. If this turn finishes your work, just finish and rest. ",
-            "Otherwise, at a good stopping point, before you start anything new, write down what ",
-            "is left to do, then compact yourself: run `rimz agents compact @me`."
-        )
-        .to_owned()
-    })
+/// Compose the smart-compaction reminder body: an agent whose work ends in this turn finishes
+/// and rests, and one with work left writes it down and compacts itself, through
+/// `mcp(self_compact)` when its launch serves that tool and `rimz agents compact @me` otherwise.
+pub fn compact_reminder(self_compact_tool: bool) -> String {
+    let compact = if self_compact_tool {
+        "`mcp(self_compact)`"
+    } else {
+        "`rimz agents compact @me`"
+    };
+    format!(
+        "Your context is getting high. If this turn finishes your work, just finish and rest. \
+         Otherwise, take a pause and write down what is left to do, then compact yourself: run \
+         {compact} and end your turn."
+    )
 }
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.

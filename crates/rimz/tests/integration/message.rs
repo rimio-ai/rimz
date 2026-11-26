@@ -12573,6 +12573,7 @@ fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
     captured.insert("ZELLIJ_PANE_ID".into(), "3".into());
     let sent_at = message_by_id(&env, &message_id).last_sent_at.unwrap();
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
@@ -13177,6 +13178,7 @@ fn recover_pending_confirmation(recovery_command: &[&str]) {
     crate::common::append_frame(
         &env,
         rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::ids::EventId::new(),

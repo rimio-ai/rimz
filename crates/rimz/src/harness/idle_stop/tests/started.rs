@@ -1084,6 +1084,7 @@ fn pending_ingress_holds_without_a_row() {
     let (dir, store) = fixture();
     let (agent, _) = rested();
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: crate::ids::EventId::new(),

@@ -13,6 +13,8 @@ pub(super) struct OpencodeHookPayload {
     pub session_id: Option<String>,
     pub request_id: Option<String>,
     pub on_screen: Option<bool>,
+    /// Set by `index.ts` on the `tool_after` whose reply it reads; `tui.ts` never sets it.
+    pub reads_reply: Option<bool>,
     pub parent_session_id: Option<String>,
     pub prompt: Option<String>,
     pub title: Option<String>,

@@ -57,6 +57,10 @@ pub const ENV_TEAM: &str = "RIMZ_TEAM";
 /// cleared on every other launch so a nested launch never inherits it. Read by
 /// the prompt-submit hook.
 pub const ENV_RUNTIME_ENV: &str = "RIMZ_RUNTIME_ENV";
+/// `1` on a launch whose MCP server serves `self_compact`, so the smart-compaction reminder a
+/// post-tool hook attaches names that tool; cleared on every other launch so a nested launch
+/// never inherits it.
+pub const ENV_SELF_COMPACT_TOOL: &str = "RIMZ_SELF_COMPACT_TOOL";
 /// The inline multi-agent launch cohort this agent belongs to. Team launches
 /// use [`ENV_TEAM`] as their cohort key; inline layouts use this generated id.
 pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
@@ -1563,6 +1567,15 @@ fn compile_agent_process_with_extra_env(
     } else {
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
+    }
+    if reminders
+        .mcp_capabilities(request)
+        .contains(&crate::mcp::catalog::Capability::Control)
+    {
+        env.insert(ENV_SELF_COMPACT_TOOL.to_owned(), "1".to_owned());
+    } else {
+        env.remove(ENV_SELF_COMPACT_TOOL);
+        unset.insert(ENV_SELF_COMPACT_TOOL.to_owned());
     }
     if request.identity.params.fast == Some(true)
         && adapter.spec().launch.presets.fast == crate::agents::definition::FastSwitch::ExtensionEnv

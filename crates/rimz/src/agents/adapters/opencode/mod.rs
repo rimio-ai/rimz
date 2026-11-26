@@ -7,8 +7,9 @@
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
 //! `permission.asked` and `form.created` events. The plugin reads RimZ's stdout
-//! only for a supervised run's deadline rung on `tool_after`, which it adds
-//! to the system text of that turn's later model requests. Native reply bus events record
+//! only on a root `tool_after`, which it marks `reads_reply`: the hook context
+//! there (a supervised run's deadline rung, the smart-compaction reminder) joins
+//! the system text of that turn's later model requests. Native reply bus events record
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
 //! A root `session_idle` after a plan-agent turn derives a native plan-approval
 //! wait that the next prompt clears after the user switches modes in the TUI.
@@ -19,6 +20,8 @@
 //! Full-TUI shared-service clients use `tui.ts` instead: the selected conversation
 //! carries an on-screen stamp, arrivals report state without lifecycle edges,
 //! and background tabs report native asks, replies and deletion of an ask's session.
+//! The client half discards the feed's stdout, so its `tool_after` claims no
+//! smart-compaction reminder.
 
 mod account;
 mod database;
@@ -631,6 +634,12 @@ fn parse_inline_config(
 }
 
 impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
+    /// Only the server plugin (`index.ts`) reads a reply, and it marks the `tool_after` it
+    /// awaits; the shared-service client (`tui.ts`) discards the feed's stdout.
+    fn reads_hook_reply(&self, payload: &Value) -> bool {
+        decode_or_default::<payloads::OpencodeHookPayload>(payload).reads_reply == Some(true)
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parsed: payloads::OpencodeHookPayload = decode_or_default(payload);
         let state_snapshot = matches!(event_name, "client_idle" | "client_running");

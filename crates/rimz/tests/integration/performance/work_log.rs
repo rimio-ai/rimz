@@ -63,6 +63,7 @@ fn ingress(env: &Env, index: usize, mut payload: Value, command: &Command) -> Ho
         })
         .collect();
     HookIngress {
+        soft_compact_claim: None,
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".into(),
         event_id: EventId::new(),

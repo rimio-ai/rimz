@@ -730,7 +730,7 @@ fn run_apply(recover_from: Option<String>, with_lifetime_lock: bool) -> Result<(
     } else {
         None
     };
-    let frame: HookIngress =
+    let mut frame: HookIngress =
         serde_json::from_reader(io::Cursor::new(prefix).chain(io::stdin().lock()))?;
     let root = frame_root(&frame)?;
     let store = open_room(&root)?;
@@ -753,6 +753,15 @@ fn run_apply(recover_from: Option<String>, with_lifetime_lock: bool) -> Result<(
             rimz::store::event::EventKind::AgentLifecycle(_)
         )
     });
+    // A claim the crashed attempt already recorded is not recorded again.
+    if recovered.iter().any(|event| {
+        matches!(
+            event.kind(),
+            rimz::store::event::EventKind::AgentSoftCompactClaimed(_)
+        )
+    }) {
+        frame.soft_compact_claim = None;
+    }
     let attempt = match (redo, replay) {
         (_, true) => hook_drain::FrameAttempt::Replay,
         (true, false) => hook_drain::FrameAttempt::Redo,
@@ -886,6 +895,12 @@ fn process_frame(
         workspace.workspace_id == store.paths().workspace_id,
         "hook frame resolved outside its ingress room"
     );
+    // A replayed frame already recorded its claim before the crashed attempt's lifecycle.
+    if let Some(claim) = &frame.soft_compact_claim
+        && !hook_drain::is_replay()
+    {
+        record_reminder_claim(store, &workspace.session_name, &frame.source, claim);
+    }
     let payload: Value = if frame.payload.trim().is_empty() {
         Value::Null
     } else {
@@ -922,6 +937,45 @@ fn process_frame(
         &globals,
         recovered,
     )
+}
+
+/// Records a smart-compaction reminder a hook claimed and attached: the claim event the fold
+/// reads to spend its rung, and the assist record. A failed append leaves the rung unspent in the
+/// fold. The host's armed record keeps it from arming again only while the reminder stays due: a
+/// pass that finds it not due (a turn end, a wait on the user, a capacity block) removes the
+/// record, and the rung can arm again later in the epoch.
+fn record_reminder_claim(
+    store: &Store,
+    session_name: &str,
+    kind: &rimz::ids::AgentKind,
+    claim: &rimz::store::event::SoftCompactClaim,
+) {
+    use rimz::harness::assist_log::{Assist, AssistRecord};
+
+    let event = rimz::store::event::EventEnvelope::agent_soft_compact_claimed(
+        store.paths().workspace_id.clone(),
+        session_name,
+        kind,
+        claim,
+    );
+    let error = store.append_event(&event).err().map(|error| {
+        warn!(%error, agent = %claim.agent_id, "hooks apply: failed to record the reminder claim");
+        error.to_string()
+    });
+    rimz::harness::assist_log::append(&AssistRecord {
+        at: hook_drain::frame_timestamp(),
+        assist: Assist::SoftCompact {
+            kind: kind.clone(),
+            agent_id: claim.agent_id.clone(),
+            label: claim.label.clone(),
+            threshold: claim.threshold,
+            occupied_tokens: claim.occupied_tokens,
+            message_id: None,
+            rung: Some(claim.rung),
+            delivered: true,
+            error,
+        },
+    });
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
@@ -1046,7 +1100,9 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
     let queued = agent
         .queued_hook_payload(&event_name, &payload)
         .and_then(|queued| serde_json::to_string(&queued).ok());
+    let reminder = claim_reminder(&store, agent, ingress_owner.kind, &event_name, &payload);
     let frame = HookIngress {
+        soft_compact_claim: reminder.clone(),
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".to_owned(),
         event_id: EventId::new(),
@@ -1097,9 +1153,16 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
                 if inline != rimz::agents::HookReply::Silent {
                     reply = inline;
                 }
-                let rung = attach_deadline_context(&store, agent, &event_name, &payload);
-                if rung != rimz::agents::HookReply::Silent {
-                    reply = rung;
+                let context = attach_context(
+                    &store,
+                    agent,
+                    ingress_owner.kind,
+                    &event_name,
+                    &payload,
+                    reminder.as_ref(),
+                );
+                if context != rimz::agents::HookReply::Silent {
+                    reply = context;
                 }
                 return emit_reply(&reply);
             }
@@ -1126,15 +1189,29 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
             }
             Err(error) => debug!(%error, "hooks feed: prompt context was late"),
         }
-        let rung = attach_deadline_context(&store, agent, &event_name, &payload);
-        if rung != rimz::agents::HookReply::Silent {
-            reply = rung;
+        let context = attach_context(
+            &store,
+            agent,
+            ingress_owner.kind,
+            &event_name,
+            &payload,
+            reminder.as_ref(),
+        );
+        if context != rimz::agents::HookReply::Silent {
+            reply = context;
         }
         return emit_reply(&reply);
     }
-    let rung = attach_deadline_context(&store, agent, &event_name, &payload);
-    if rung != rimz::agents::HookReply::Silent {
-        reply = rung;
+    let context = attach_context(
+        &store,
+        agent,
+        ingress_owner.kind,
+        &event_name,
+        &payload,
+        reminder.as_ref(),
+    );
+    if context != rimz::agents::HookReply::Silent {
+        reply = context;
     }
     if let Some(connection) = sandbox_connection {
         if let Err(error) = connection.nudge(through) {
@@ -1151,63 +1228,119 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
     emit_reply(&reply)
 }
 
-fn attach_deadline_context(
-    store: &Store,
-    agent: &AgentDefinition,
-    event: &str,
-    payload: &Value,
-) -> rimz::agents::HookReply {
-    let Some(shape) = agent
+/// Whether `event` is the adapter's hook-context reply event fired for the root agent: a native
+/// subagent's payload carries a non-empty `agent_id`.
+fn root_context_event(agent: &AgentDefinition, event: &str, payload: &Value) -> bool {
+    agent
         .spec()
         .capabilities
         .hook_context
-        .filter(|reply| reply.event() == event)
-    else {
-        return rimz::agents::HookReply::Silent;
-    };
-    if payload
-        .get("agent_id")
+        .is_some_and(|reply| reply.event() == event)
+        && !payload
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+}
+
+fn payload_session(payload: &Value) -> Option<&str> {
+    payload
+        .get("session_id")
+        .or_else(|| payload.get("sessionId"))
+        .or_else(|| payload.get("conversation_id"))
+        .or_else(|| payload.get("conversationId"))
         .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty())
-    {
+}
+
+/// Takes the smart-compaction reminder the host pass armed for this hook's agent, from a carrier
+/// that reads the reply. The take is the claim: the caller carries it on the ingress frame for
+/// the apply side to record, and [`attach_context`] renders it. A daemon-owned hook's
+/// environment belongs to the daemon, so it claims by the payload's session key alone.
+fn claim_reminder(
+    store: &Store,
+    agent: &AgentDefinition,
+    owner: rimz::RuntimeOwnerKind,
+    event: &str,
+    payload: &Value,
+) -> Option<rimz::store::event::SoftCompactClaim> {
+    if !root_context_event(agent, event, payload) || !agent.reads_hook_reply(payload) {
+        return None;
+    }
+    let launch_id = (owner != rimz::RuntimeOwnerKind::Daemon)
+        .then(|| hook_drain::env_value(rimz::harness::launch::ENV_AGENT_ID))
+        .flatten();
+    rimz::harness::soft_compact::claim_pending(
+        store.runtime_paths(),
+        &agent.spec().kind_id(),
+        launch_id.as_deref(),
+        payload_session(payload),
+    )
+}
+
+/// The hook-context reply for the root agent's post-tool event: the supervised run's deadline
+/// rung it claims and the claimed smart-compaction `reminder`, each its own wrapped block in one
+/// reply, the rung first. A daemon-owned hook's reminder names the bare compact command, since the
+/// daemon's environment says nothing of this session's tools.
+fn attach_context(
+    store: &Store,
+    agent: &AgentDefinition,
+    owner: rimz::RuntimeOwnerKind,
+    event: &str,
+    payload: &Value,
+    reminder: Option<&rimz::store::event::SoftCompactClaim>,
+) -> rimz::agents::HookReply {
+    use rimz::harness::launch_reminders::wrap_hook_context;
+
+    if !root_context_event(agent, event, payload) {
         return rimz::agents::HookReply::Silent;
     }
-    let Some(run_id) =
-        hook_drain::env_value("RIMZ_RUN_ID").and_then(|id| rimz::RunId::parse(&id).ok())
-    else {
-        return rimz::agents::HookReply::Silent;
-    };
     let mut decoded = HookOutput::new(rimz::agents::ClassifiedHook {
         class: AgentHookClass::Unknown,
         ask_kind: None,
         event_name: event.to_owned(),
     });
-    if let Err(error) = rimz::harness::run::claim_rung(
-        store.paths(),
-        &run_id,
-        jiff::Timestamp::now(),
-        |record, rung| {
-            if matches!(rung, rimz::harness::deadline::Rung::Stop { .. }) && !shape.carries_stop() {
-                return false;
-            }
-            let session = payload
-                .get("session_id")
-                .or_else(|| payload.get("sessionId"))
-                .or_else(|| payload.get("conversation_id"))
-                .or_else(|| payload.get("conversationId"))
-                .and_then(Value::as_str);
-            if record
-                .agent_id
-                .as_deref()
-                .zip(session)
-                .is_some_and(|(owner, session)| owner != session)
-            {
-                return false;
-            }
-            agent.attach_hook_context(&mut decoded, &rung.text())
-        },
-    ) {
+    let carries_stop = agent
+        .spec()
+        .capabilities
+        .hook_context
+        .is_some_and(|reply| reply.carries_stop());
+    let mut blocks = Vec::new();
+    if let Some(run_id) =
+        hook_drain::env_value("RIMZ_RUN_ID").and_then(|id| rimz::RunId::parse(&id).ok())
+        && let Err(error) = rimz::harness::run::claim_rung(
+            store.paths(),
+            &run_id,
+            jiff::Timestamp::now(),
+            |record, rung| {
+                if matches!(rung, rimz::harness::deadline::Rung::Stop { .. }) && !carries_stop {
+                    return false;
+                }
+                if record
+                    .agent_id
+                    .as_deref()
+                    .zip(payload_session(payload))
+                    .is_some_and(|(owner, session)| owner != session)
+                {
+                    return false;
+                }
+                let block = wrap_hook_context(&rung.text());
+                let attached = agent.attach_hook_context(&mut decoded, &block);
+                if attached {
+                    blocks.push(block);
+                }
+                attached
+            },
+        )
+    {
         warn!(%run_id, %error, "hooks feed: failed to claim deadline context");
+    }
+    if reminder.is_some() {
+        let self_compact_tool = owner != rimz::RuntimeOwnerKind::Daemon
+            && hook_drain::env_value(rimz::harness::launch::ENV_SELF_COMPACT_TOOL).as_deref()
+                == Some("1");
+        blocks.push(wrap_hook_context(&rimz::agents::compact_reminder(
+            self_compact_tool,
+        )));
+        agent.attach_hook_context(&mut decoded, &blocks.join("\n\n"));
     }
     decoded.reply().clone()
 }

@@ -265,6 +265,7 @@ fn append_rest_report(
         None
     };
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: rimz::proc::boot_id(),
         schema_version: "1".to_owned(),
         event_id: rimz::EventId::new(),

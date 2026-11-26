@@ -109,6 +109,7 @@ fn idle_stop_turn(
     let before = std::fs::read(&store.paths().idle_stop_requests).unwrap();
     let payload = serde_json::json!({"session_id": id, "prompt": prompt});
     let mut frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
@@ -268,6 +269,7 @@ fn failed_idle_stop_withdrawal_keeps_the_rest_of_the_frame() {
     }
     let payload = serde_json::json!({"session_id": id, "prompt": "keep working"});
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
@@ -1004,6 +1006,7 @@ fn in_turn_compaction_close_with_prompt_delivers_tail_acknowledges_command_and_w
             .unwrap();
 
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::ids::EventId::new(),
@@ -1111,6 +1114,7 @@ fn mid_turn_harness_prompt_preserves_open_turn_and_shows_final_reply_in_all_text
     };
     let apply = |store: &Store, event_name: &str, payload: &serde_json::Value, mut decoded| {
         let frame = rimz::store::ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::ids::EventId::new(),

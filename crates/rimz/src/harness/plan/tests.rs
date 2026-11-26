@@ -2464,6 +2464,15 @@ fn finalized_smart_compact_compares_only_effective_token_windows() {
                 "warning: `coder` smart-compact 258000 tokens is at or above its auto-compact 200000 tokens; the provider compacts first",
             ],
         ),
+        (
+            Some("190k"),
+            Some("200k"),
+            vec![
+                "warning: `coder` smart-compact's second reminder at 209000 tokens is at or above its auto-compact 200000 tokens; only the first fires",
+            ],
+        ),
+        // The fallback line's second reminder past a native window warns nothing.
+        (None, Some("280k"), vec![]),
         (Some("150k"), Some("200k"), vec![]),
         (Some("70%"), Some("200k"), vec![]),
         (Some("200k"), Some("70%"), vec![]),

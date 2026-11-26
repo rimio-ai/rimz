@@ -250,6 +250,7 @@ fn hook_driven_raised_closes_have_no_operator_actor_even_in_an_agent_process() {
     ask.value.state = rimz::agents::state::RaisedAskState::Armed;
     rimz::store::raised::raise(store.paths(), ask).unwrap();
     let frame = rimz::store::ingress::HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),

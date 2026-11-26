@@ -284,7 +284,6 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
             | "run-command"
             | "auto-continue"
             | "idle-compact"
-            | "soft-compact"
             | "ceiling-compact"
             | "idle-stop"
             | "hibernate"

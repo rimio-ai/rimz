@@ -1492,6 +1492,7 @@ fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, appl
     let window = sent.body.delivery_window();
     let now = sent_at + window;
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),
@@ -1620,6 +1621,7 @@ fn stale_sent_ingress_ignores_frame_stamped_during_deferral() {
         message.retry_after = Some(deadline);
     });
     let frame = HookIngress {
+        soft_compact_claim: None,
         boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),

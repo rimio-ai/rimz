@@ -23,7 +23,6 @@ mod mark;
 mod molt;
 mod orphan_subagent;
 mod park_notice;
-mod soft_compact;
 use rimz::launcher::placement;
 mod refresh;
 mod refresh_context;
@@ -985,8 +984,6 @@ enum AgentsSubcmd {
     #[command(hide = true)]
     IdleCompact(HelperRequestArgs<IdleCompactRequest>),
     #[command(hide = true)]
-    SoftCompact(HelperRequestArgs<rimz::harness::soft_compact::SoftCompactRequest>),
-    #[command(hide = true)]
     CeilingCompact(HelperRequestArgs<rimz::harness::soft_compact::CeilingCompactRequest>),
     /// Hidden helper the producer spawns to stop an agent whose
     /// `stop --when-idle` request is due.
@@ -1160,7 +1157,6 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::RunCommand(args)) => return run_command::run(args, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
-        Some(AgentsSubcmd::SoftCompact(args)) => return soft_compact::run(args.request),
         Some(AgentsSubcmd::CeilingCompact(args)) => return ceiling_compact::run(args.request),
         Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
         Some(AgentsSubcmd::MoltClose(args)) => return molt::run_molt_close(args.request),

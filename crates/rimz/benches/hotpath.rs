@@ -418,6 +418,7 @@ mod latency {
             // The view reaps older paneless roots in the same worktree, even with distinct pids.
             env.insert("TMUX_PANE".into(), format!("%{}", index + 1));
             ingress::HookIngress {
+                soft_compact_claim: None,
                 boot_id: rimz::proc::boot_id(),
                 schema_version: "1".into(),
                 event_id: EventId::new(),

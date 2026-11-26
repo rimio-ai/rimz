@@ -149,6 +149,7 @@ fn leader_turn_checks_debt_and_per_run_ingress_under_the_workspace_lock() {
                 | "waking and later ingress"
         ) {
             let frame = HookIngress {
+                soft_compact_claim: None,
                 boot_id: None,
                 schema_version: "1".into(),
                 event_id: crate::ids::EventId::new(),

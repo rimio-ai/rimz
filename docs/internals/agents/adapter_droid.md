@@ -51,7 +51,7 @@ The spec-mode exit approval uses the same tool confirmation and the same `permis
 
 ### Hook replies
 
-The neutral reply is empty stdout with exit status zero, so Droid's own UI keeps control. The one non-empty reply is a supervised deadline rung on `PostToolUse` (`hook_context` is `HookContextReply::HookSpecificOutput { event_name: false }`), which writes `{"hookSpecificOutput":{"additionalContext":"..."}}`. Every other event takes no deadline context.
+The neutral reply is empty stdout with exit status zero, so Droid's own UI keeps control. The one non-empty reply is hook context on a root `PostToolUse`, a supervised deadline rung or the smart-compaction reminder (`hook_context` is `HookContextReply::HookSpecificOutput { event_name: false }`), which writes `{"hookSpecificOutput":{"additionalContext":"..."}}`. Every other event takes no hook context.
 
 ### Install
 

@@ -190,6 +190,7 @@ fn reminder_rearms_only_in_a_new_compaction_epoch() {
     let mut candidate = agent();
     candidate.soft_compact = Some(SoftCompactMark {
         compactions: Some(0),
+        rung: Some(2),
         ..SoftCompactMark::default()
     });
     assert_eq!(
@@ -205,7 +206,7 @@ fn reminder_rearms_only_in_a_new_compaction_epoch() {
     candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(20_000);
     assert_eq!(
         verdict(&candidate, AutoCompact::Tokens(100_000)),
-        ReminderVerdict::Due,
+        ReminderVerdict::Due(2),
         "a mid-turn compaction with a low-water reading under the line opens a new epoch"
     );
     candidate.usage.total_tokens = Some(20_000);
@@ -216,14 +217,15 @@ fn reminder_rearms_only_in_a_new_compaction_epoch() {
     );
 }
 
+/// Runs one host pass, then claims what it armed for each row by its session key, as a root
+/// post-tool hook without `RIMZ_AGENT_ID` would.
 fn produce(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
-    spawned: bool,
-) -> Vec<SoftCompactRequest> {
+) -> Vec<SoftCompactClaim> {
     produce_with_diag(
         snapshot,
         runtime,
@@ -231,7 +233,6 @@ fn produce(
         config,
         policy,
         &DiagSink::disabled(),
-        spawned,
     )
 }
 
@@ -242,29 +243,28 @@ fn produce_with_diag(
     config: &MachineConfig,
     policy: &SeatPolicy,
     diag: &DiagSink,
-    spawned: bool,
-) -> Vec<SoftCompactRequest> {
-    let mut requests = Vec::new();
-    compact_agents_with(
-        snapshot,
-        runtime,
-        capacities,
-        config,
-        policy,
-        diag,
-        || snapshot.now,
-        |request| {
-            requests.push(request.clone());
-            spawned
-        },
-    );
-    requests
+) -> Vec<SoftCompactClaim> {
+    compact_agents(snapshot, runtime, capacities, config, policy, diag);
+    snapshot
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            claim_pending(runtime, &agent.kind, None, Some(agent.agent_id.as_str()))
+        })
+        .collect()
+}
+
+fn line_config(line: AutoCompact) -> MachineConfig {
+    let mut config = MachineConfig::default();
+    config.harness.smart_compact = Some(line);
+    config
 }
 
 #[test]
 fn producer_uses_each_seats_line_including_a_pane_backed_child() {
     let dir = tempfile::tempdir().unwrap();
     let mut candidate = agent();
+    candidate.usage.total_tokens = Some(105_000);
     candidate.profile = Some("coder".to_owned());
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
@@ -284,29 +284,43 @@ fn producer_uses_each_seats_line_including_a_pane_backed_child() {
             .unwrap(),
     );
     let fire = |seat: &AgentState| {
-        produce(
+        let claims = produce(
             &snapshot(seat),
             &runtime,
             &RoomCapacities::default(),
             &config,
             &policy,
-            false,
-        )
+        );
+        // Each case starts unarmed: a claim the fold has not read keeps its rung armed.
+        let _ = std::fs::remove_dir_all(runtime.live_path("soft-compact"));
+        claims
     };
-    let requests = fire(&candidate);
-    assert_eq!(requests.len(), 1, "the seat overrides the 258k fallback");
-    assert_eq!(requests[0].workspace_id, runtime.workspace_id);
-    assert_eq!(requests[0].agent_id, candidate.agent_id);
-    assert_eq!(requests[0].kind, candidate.kind);
-    assert_eq!(requests[0].pane_id, PaneId::from_parts(MuxName::Tmux, "%1"));
-    assert_eq!(requests[0].step, SoftCompactStep::WrapUp);
-    assert!(!requests[0].label.is_empty());
+    let claims = fire(&candidate);
+    assert_eq!(
+        claims,
+        [SoftCompactClaim {
+            agent_id: candidate.agent_id.clone(),
+            compactions: 0,
+            rung: 1,
+            threshold: AutoCompact::Tokens(100_000),
+            label: claims[0].label.clone(),
+            occupied_tokens: Some(105_000),
+        }],
+        "the seat overrides the 258k fallback"
+    );
+    assert!(
+        claims[0]
+            .label
+            .as_ref()
+            .is_some_and(|label| !label.is_empty())
+    );
 
     candidate.parent_agent_id = Some("parent".into());
     assert!(fire(&candidate).is_empty(), "a provider child is skipped");
     candidate.launch_depth = Some(1);
+    candidate.usage.total_tokens = Some(115_000);
     assert_eq!(fire(&candidate).len(), 1, "a launched child participates");
-    candidate.usage.total_tokens = Some(105_000);
+    candidate.usage.total_tokens = Some(109_000);
     assert!(fire(&candidate).is_empty(), "the child uses its own table");
     candidate.launch_depth = None;
     candidate.parent_agent_id = None;
@@ -315,56 +329,147 @@ fn producer_uses_each_seats_line_including_a_pane_backed_child() {
     assert!(fire(&candidate).is_empty(), "the role's off wins");
     candidate.team = None;
     candidate.profile = None;
-    assert!(fire(&candidate).is_empty(), "the fallback is above 105k");
+    assert!(fire(&candidate).is_empty(), "the fallback is above 109k");
     candidate.usage.total_tokens = Some(258_000);
     assert_eq!(fire(&candidate).len(), 1);
 }
 
 #[test]
-fn producer_pacing_survives_passes_but_does_not_hold_a_new_epoch() {
+fn producer_arms_each_rung_once_and_clears_a_stale_pending() {
     let dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-    let mut config = MachineConfig::default();
-    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
-    let mut candidate = agent();
-    let fire = |seat: &AgentState, now| {
-        let mut snapshot = snapshot(seat);
-        snapshot.now = ts(now);
-        produce(
-            &snapshot,
+    let config = line_config(AutoCompact::Tokens(100_000));
+    let pass = |seat: &AgentState| {
+        compact_agents(
+            &snapshot(seat),
             &runtime,
             &RoomCapacities::default(),
             &config,
             &SeatPolicy::default(),
-            true,
-        )
+            &DiagSink::disabled(),
+        );
     };
-    assert_eq!(fire(&candidate, 20).len(), 1);
-    assert!(fire(&candidate, 79).is_empty());
-    assert_eq!(fire(&candidate, 80).len(), 1, "a missed reminder can retry");
-    candidate.compaction_count = 1;
-    let requests = fire(&candidate, 81);
-    assert_eq!(requests.len(), 1, "a new epoch is independent");
-    assert_eq!(requests[0].step, SoftCompactStep::WrapUp);
+    let claim = |seat: &AgentState| {
+        claim_pending(&runtime, &seat.kind, None, Some(seat.agent_id.as_str()))
+            .map(|claim| (claim.compactions, claim.rung))
+    };
+    let mut candidate = agent();
+    candidate.usage.total_tokens = Some(105_000);
+    pass(&candidate);
+    pass(&candidate);
+    assert_eq!(claim(&candidate), Some((0, 1)), "rung 1 at the line");
+    assert_eq!(claim(&candidate), None, "a second hook attaches nothing");
+    pass(&candidate);
+    assert_eq!(
+        claim(&candidate),
+        None,
+        "a claim the fold has not read yet arms nothing again"
+    );
     candidate.soft_compact = Some(SoftCompactMark {
-        compactions: Some(1),
-        continue_owed: None,
+        compactions: Some(0),
+        rung: Some(1),
         ..SoftCompactMark::default()
     });
-    assert!(
-        fire(&candidate, 200).is_empty(),
-        "a sent reminder settles its epoch"
+    candidate.usage.total_tokens = Some(110_000);
+    pass(&candidate);
+    assert_eq!(
+        claim(&candidate),
+        Some((0, 2)),
+        "rung 2 at 110% of the line"
+    );
+    candidate.soft_compact.as_mut().unwrap().rung = Some(2);
+    candidate.usage.total_tokens = Some(150_000);
+    pass(&candidate);
+    assert_eq!(claim(&candidate), None, "both rungs spent in this epoch");
+
+    // An armed rung nobody claimed is removed once the epoch moves under the line.
+    candidate.compaction_count = 1;
+    candidate.soft_compact = None;
+    pass(&candidate);
+    candidate.compaction_count = 2;
+    candidate.usage.total_tokens = Some(20_000);
+    pass(&candidate);
+    assert_eq!(claim(&candidate), None, "a stale pending is removed");
+    candidate.usage.total_tokens = Some(130_000);
+    pass(&candidate);
+    assert_eq!(
+        claim(&candidate),
+        Some((2, 2)),
+        "a jump past both lines arms one reminder at rung 2"
     );
 }
 
 #[test]
-fn producer_retries_a_failed_spawn_and_paces_cards_independently() {
+fn claim_pending_takes_once_by_launch_or_session_key() {
     let dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-    let mut config = MachineConfig::default();
-    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
+    let config = line_config(AutoCompact::Tokens(100_000));
+    let mut candidate = agent();
+    candidate.launch_id = Some("launch-1".into());
+    let pass = |seat: &AgentState| {
+        compact_agents(
+            &snapshot(seat),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &SeatPolicy::default(),
+            &DiagSink::disabled(),
+        );
+    };
+    pass(&candidate);
+    assert!(
+        claim_pending(&runtime, &candidate.kind, Some("launch-2"), Some("session")).is_none(),
+        "another launch of the same session key finds nothing"
+    );
+    assert!(
+        claim_pending(
+            &runtime,
+            &candidate.kind,
+            Some("launch-1"),
+            Some("native-child")
+        )
+        .is_none(),
+        "a native child sharing the launch's env takes nothing"
+    );
+    assert_eq!(
+        claim_pending(&runtime, &candidate.kind, Some("launch-1"), None)
+            .map(|claim| claim.agent_id),
+        Some(candidate.agent_id.clone()),
+        "the launch id finds the row when the payload names no session"
+    );
+    assert!(
+        claim_pending(&runtime, &candidate.kind, Some("launch-1"), Some("session")).is_none(),
+        "taken once"
+    );
+
+    // A launched agent whose hook env carries no launch id finds it by the session key.
+    std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+    pass(&candidate);
+    assert!(claim_pending(&runtime, &candidate.kind, Some(""), Some("session")).is_some());
+
+    // A pending file that cannot be read attaches nothing and is not retried.
+    std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+    pass(&candidate);
+    let dir = runtime.live_path("soft-compact");
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with("-pending.json") {
+            std::fs::write(&path, "not json").unwrap();
+        }
+    }
+    assert!(claim_pending(&runtime, &candidate.kind, Some("launch-1"), None).is_none());
+    assert!(claim_pending(&runtime, &candidate.kind, Some("launch-1"), None).is_none());
+    assert!(claim_pending(&runtime, &candidate.kind, None, None).is_none());
+}
+
+#[test]
+fn producer_arms_cards_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let config = line_config(AutoCompact::Tokens(100_000));
     let policy = SeatPolicy::default();
     let mut candidate = agent();
     assert_eq!(
@@ -374,23 +479,9 @@ fn producer_retries_a_failed_spawn_and_paces_cards_independently() {
             &RoomCapacities::default(),
             &config,
             &policy,
-            false
         )
         .len(),
         1
-    );
-    assert_eq!(
-        produce(
-            &snapshot(&candidate),
-            &runtime,
-            &RoomCapacities::default(),
-            &config,
-            &policy,
-            true
-        )
-        .len(),
-        1,
-        "a failed spawn consumes no pacing window"
     );
     candidate.agent_id = "another-card".into();
     assert_eq!(
@@ -400,7 +491,6 @@ fn producer_retries_a_failed_spawn_and_paces_cards_independently() {
             &RoomCapacities::default(),
             &config,
             &policy,
-            true
         )
         .len(),
         1,
@@ -415,23 +505,122 @@ fn producer_sends_nothing_with_the_line_off_or_blank_continue_text() {
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     let snapshot = snapshot(&agent());
     let produced = |config: &MachineConfig| {
-        produce(
+        let claims = produce(
             &snapshot,
             &runtime,
             &RoomCapacities::default(),
             config,
             &SeatPolicy::default(),
-            false,
-        )
+        );
+        let _ = std::fs::remove_dir_all(runtime.live_path("soft-compact"));
+        claims
     };
-    let mut config = MachineConfig::default();
-    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
+    let mut config = line_config(AutoCompact::Tokens(100_000));
     assert_eq!(produced(&config).len(), 1);
     config.resume.auto_continue_text = " \n ".to_owned();
     assert!(produced(&config).is_empty(), "blank continue text");
     config.resume.auto_continue_text = "continue".to_owned();
     config.harness.smart_compact = Some(AutoCompact::Tokens(200_000));
     assert!(produced(&config).is_empty(), "below the line");
+}
+
+#[test]
+fn second_rung_fires_at_ten_percent_past_the_line_below_the_ceiling() {
+    assert_eq!(
+        second_line(AutoCompact::Tokens(200_000)),
+        Some(AutoCompact::Tokens(220_000))
+    );
+    assert_eq!(
+        second_line(AutoCompact::Percent(70)),
+        Some(AutoCompact::Percent(77))
+    );
+    assert_eq!(
+        second_line(AutoCompact::Percent(90)),
+        Some(AutoCompact::Percent(99))
+    );
+    assert_eq!(second_line(AutoCompact::Percent(91)), None, "past 100%");
+    for (line, second) in [(5, 6), (9, 10), (10, 11)] {
+        assert_eq!(
+            second_line(AutoCompact::Percent(line)),
+            Some(AutoCompact::Percent(second)),
+            "a small percent line keeps a second line above it"
+        );
+    }
+    assert_eq!(
+        second_line(AutoCompact::Tokens(5)),
+        Some(AutoCompact::Tokens(6))
+    );
+
+    let mut candidate = agent();
+    let line = AutoCompact::Tokens(100_000);
+    candidate.usage.total_tokens = Some(105_000);
+    assert_eq!(verdict(&candidate, line), ReminderVerdict::Due(1));
+    candidate.usage.total_tokens = Some(110_000);
+    assert_eq!(
+        verdict(&candidate, line),
+        ReminderVerdict::Due(2),
+        "a fill past both lines owes one reminder, at rung 2"
+    );
+    candidate.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        ..SoftCompactMark::default()
+    });
+    assert_eq!(
+        verdict(&candidate, line),
+        ReminderVerdict::Due(2),
+        "a legacy wrap-up spent rung 1 only"
+    );
+    candidate.usage.total_tokens = Some(105_000);
+    assert_eq!(verdict(&candidate, line), ReminderVerdict::NotDue);
+    candidate.soft_compact.as_mut().unwrap().rung = Some(2);
+    candidate.usage.total_tokens = Some(200_000);
+    assert_eq!(
+        verdict(&candidate, line),
+        ReminderVerdict::NotDue,
+        "a claimed rung 2 spends the epoch"
+    );
+    candidate.compaction_count = 1;
+    candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(20_000);
+    assert_eq!(
+        verdict(&candidate, line),
+        ReminderVerdict::Due(2),
+        "a compaction re-arms both rungs"
+    );
+
+    // Rung 2 at or past the row's auto-compact ceiling never fires.
+    let mut capped = agent();
+    capped.usage.total_tokens = Some(115_000);
+    capped.record = Some(Box::new(crate::agents::LaunchRecord {
+        auto_compact: Some(110_000),
+        ..Default::default()
+    }));
+    assert_eq!(verdict(&capped, line), ReminderVerdict::Due(1));
+    capped.soft_compact = Some(SoftCompactMark {
+        compactions: Some(0),
+        rung: Some(1),
+        ..SoftCompactMark::default()
+    });
+    assert_eq!(verdict(&capped, line), ReminderVerdict::NotDue);
+
+    // Percent lines take the same rungs over the resolved window.
+    let mut pct = agent();
+    pct.usage.context_window = Some(200_000);
+    pct.usage.fresh_input_tokens = Some(150_000);
+    assert_eq!(
+        verdict(&pct, AutoCompact::Percent(70)),
+        ReminderVerdict::Due(1)
+    );
+    pct.usage.fresh_input_tokens = Some(154_000);
+    assert_eq!(
+        verdict(&pct, AutoCompact::Percent(70)),
+        ReminderVerdict::Due(2)
+    );
+    pct.usage.fresh_input_tokens = Some(198_000);
+    assert_eq!(
+        verdict(&pct, AutoCompact::Percent(95)),
+        ReminderVerdict::Due(1),
+        "no second line past 100%"
+    );
 }
 
 /// A 5-hour window on `agent`'s login at `used`%, resetting at 500 s.
@@ -459,13 +648,13 @@ fn a_spent_window_withholds_the_reminder_until_the_reset_and_paces_nothing() {
     let policy = SeatPolicy::default();
     let wrapping = agent();
     let pacing = || std::fs::read_dir(runtime.live_path("soft-compact")).is_ok();
-    for (case, seat, step) in [("reminder", &wrapping, SoftCompactStep::WrapUp)] {
+    for (case, seat, step) in [("reminder", &wrapping, 2)] {
         let steps = |now: i64, capacities: &RoomCapacities<'_>| {
             let mut snapshot = snapshot(seat);
             snapshot.now = ts(now);
-            produce(&snapshot, &runtime, capacities, &config, &policy, true)
+            produce(&snapshot, &runtime, capacities, &config, &policy)
                 .into_iter()
-                .map(|request| request.step)
+                .map(|claim| claim.rung)
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -543,7 +732,7 @@ fn a_spent_window_withholds_the_reminder_until_the_reset_and_paces_nothing() {
         let mut snapshot = snapshot(&opus);
         snapshot.now = ts(20);
         assert!(
-            produce(&snapshot, &runtime, &capped, &config, &policy, true).is_empty(),
+            produce(&snapshot, &runtime, &capped, &config, &policy).is_empty(),
             "{case}: the model's own sub-cap, even with usable paid extra usage"
         );
     }
@@ -708,13 +897,13 @@ fn fill_guard_verdicts_cover_guarded_percent_token_unguarded_clear_and_continuat
         candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(99_999);
         assert_eq!(
             verdict(&candidate, AutoCompact::Tokens(100_000)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: under token line"
         );
         candidate.soft_compact.as_mut().unwrap().low_water_tokens = Some(139_999);
         assert_eq!(
             verdict(&candidate, AutoCompact::Percent(70)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: under percent line"
         );
 
@@ -729,7 +918,7 @@ fn fill_guard_verdicts_cover_guarded_percent_token_unguarded_clear_and_continuat
         candidate.soft_compact.as_mut().unwrap().low_water_pct = Some(69);
         assert_eq!(
             verdict(&candidate, AutoCompact::Percent(70)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: under percent-only line"
         );
 
@@ -752,19 +941,19 @@ fn fill_guard_verdicts_cover_guarded_percent_token_unguarded_clear_and_continuat
         candidate.soft_compact = Some(SoftCompactMark::default());
         assert_eq!(
             verdict(&candidate, AutoCompact::Tokens(100_000)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: continuation mark re-arms without low-water"
         );
         candidate.soft_compact = None;
         assert_eq!(
             verdict(&candidate, AutoCompact::Tokens(100_000)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: cleared mark re-arms without low-water"
         );
     }
 
     // Unguarded participating kinds re-arm on the count alone.
-    for kind in ["antigravity", "droid", "qwen"] {
+    for kind in ["droid", "grok", "qwen"] {
         let mut candidate = agent();
         candidate.kind = AgentKind::new_unchecked(kind);
         candidate.compaction_count = 1;
@@ -774,7 +963,7 @@ fn fill_guard_verdicts_cover_guarded_percent_token_unguarded_clear_and_continuat
         });
         assert_eq!(
             verdict(&candidate, AutoCompact::Tokens(100_000)),
-            ReminderVerdict::Due,
+            ReminderVerdict::Due(2),
             "{kind}: unguarded kind re-arms on count alone"
         );
     }
@@ -811,7 +1000,6 @@ fn host_pass_records_one_contained_diagnostic_per_agent_and_count_when_guard_wit
             &config,
             &policy,
             &DiagSink::disabled(),
-            true,
         )
         .is_empty()
     );
@@ -828,7 +1016,6 @@ fn host_pass_records_one_contained_diagnostic_per_agent_and_count_when_guard_wit
                 &config,
                 &policy,
                 &diag,
-                true,
             )
             .is_empty()
         );
@@ -875,7 +1062,6 @@ fn host_pass_records_one_contained_diagnostic_per_agent_and_count_when_guard_wit
             &config,
             &policy,
             &diag,
-            true,
         )
         .is_empty()
     );
@@ -928,7 +1114,6 @@ fn guard_cache_or_diag_failures_leave_verdict_unchanged_without_panicking() {
             &config,
             &policy,
             &diag,
-            true,
         )
         .is_empty()
     );
@@ -949,7 +1134,6 @@ fn guard_cache_or_diag_failures_leave_verdict_unchanged_without_panicking() {
             &config,
             &policy,
             &diag,
-            true,
         )
         .is_empty()
     );
@@ -1056,6 +1240,7 @@ fn ceiling_due_checks_every_condition_and_excludes_native_and_unsupported_kinds(
         low_water_tokens: None,
         low_water_pct: None,
         continue_owed: None,
+        rung: None,
     });
     assert_eq!(
         check(&spent_without_low_water),

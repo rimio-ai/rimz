@@ -499,6 +499,7 @@ impl Room {
         env.insert("RIMZ_AGENT_PID".into(), self.agents[index].pid.to_string());
         env.insert("TMUX_PANE".into(), self.agents[index].id.clone());
         let frame = ingress::HookIngress {
+            soft_compact_claim: None,
             boot_id: rimz::proc::boot_id(),
             schema_version: "1".into(),
             event_id: EventId::new(),

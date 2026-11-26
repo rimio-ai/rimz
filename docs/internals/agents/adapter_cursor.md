@@ -71,7 +71,7 @@ A displaced user statusline goes to a RimZ-owned sidecar, `~/.rimz/cursor-status
 
 ### Replies
 
-Every catalog event answers with `{}`, Cursor's documented neutral JSON (`HookCapability::payload_hook_reply`). The one exception is a supervised run's deadline rung: a `postToolUse` from the run's own session can carry the rung text as `{"additional_context":"..."}`, the `TopLevel` shape the spec's `hook_context` declares (`crates/rimz/src/cli/hooks.rs::attach_deadline_context`, [deadline ladder](../harness/subagents.md#the-deadline-ladder)).
+Every catalog event answers with `{}`, Cursor's documented neutral JSON (`HookCapability::payload_hook_reply`). The one exception is hook context on a root `postToolUse`: a supervised run's deadline rung, from the run's own session, or the smart-compaction reminder comes back as `{"additional_context":"..."}`, the `TopLevel` shape the spec's `hook_context` declares (`crates/rimz/src/cli/hooks.rs::attach_context`, [deadline ladder](../harness/subagents.md#the-deadline-ladder), [mid-turn reminder](../harness/messaging.md#mid-turn-reminder)).
 
 ### Conversation switches and exit
 

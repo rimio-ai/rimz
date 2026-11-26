@@ -237,6 +237,7 @@ await test("step usage and mapped native events", async () => {
   await f.emit("session.tool.input.started", { sessionID: "A", assistantMessageID: "step", id: "tool", name: "bash" });
   await f.emit("session.tool.failed", { sessionID: "A", assistantMessageID: "step", id: "tool" });
   assert.equal(last().hook_event_name, "tool_after"); assert.equal(last().tool_name, "bash");
+  assert.equal(last().reads_reply, undefined, "the client half reads no feed reply");
   assert.equal(last().total_tokens, 195); assert.equal(last().is_error, true);
   await f.emit("session.tool.success", { sessionID: "A", assistantMessageID: "step", id: "unknown" });
   assert.equal(last().tool_name, undefined);
