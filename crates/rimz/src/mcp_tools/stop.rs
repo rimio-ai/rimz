@@ -1,7 +1,7 @@
 //! `stop`: end one thing the caller started, by its id, through the library function the
 //! command of the same job calls: the tree stop of `rimz agents stop`, `rimz subagents stop`, and
-//! `rimz teams stop`, the cancel of `rimz wait cancel` and `rimz workflow cancel`, and a
-//! schedule's removal that lets each run it started finish.
+//! `rimz teams stop`, the cancel of `rimz shell cancel`, `rimz watch cancel` and
+//! `rimz workflow cancel`, and a schedule's removal that lets each run it started finish.
 
 use std::str::FromStr;
 
@@ -14,7 +14,7 @@ use super::start::TaskKind;
 use crate::harness::schedule::arm::TaskName;
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::launches::Launch;
-use crate::harness::schedule::wait::{self, CancelTarget};
+use crate::harness::schedule::wait::{self, CancelTarget, WaitKind};
 use crate::launcher::context::resolve_me;
 use crate::launcher::stop::{TreeStop, stop_resolved, stop_subagents};
 use crate::mcp::catalog::StopArgs;
@@ -144,11 +144,18 @@ pub(super) fn stop(tools: &Tools, args: &StopArgs) -> Result<Answer, Failure> {
         Named::Wait {
             target: Some(target),
         } => {
-            let task = TaskName::from_str(name)
-                .map_err(|err| Failure::new(format!("invalid wait name `{name}`: {err}")))?;
+            let task = TaskName::from_str(name).map_err(|err| {
+                Failure::new(format!("invalid {} name `{name}`: {err}", kind.as_str()))
+            })?;
+            let wait_kind = if kind == TaskKind::Shell {
+                WaitKind::Shell
+            } else {
+                WaitKind::Watch
+            };
             let canceled = wait::cancel(
                 &super::wait::wait_room(&room, &snapshot),
                 target,
+                wait_kind,
                 CancelTarget::Name(task),
             );
             match canceled {

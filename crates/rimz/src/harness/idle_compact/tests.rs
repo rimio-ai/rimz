@@ -393,6 +393,7 @@ fn predicate_skips_busy_parked_compacting_and_child_agents() {
         name: "wait-command".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo xtask gate".to_owned(),
+            label: None,
         },
         armed_at: Some(ts(6_000)),
     });

@@ -24,6 +24,7 @@ fn resting_command_wait_uses_the_delegating_head() {
             name: "command".into(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".into(),
+                label: None,
             },
             armed_at: Some(fixed_now()),
         });
@@ -56,6 +57,7 @@ fn command_wait_snapshot(unread: bool) -> SidebarSnapshot {
         name: "command".into(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".into(),
+            label: None,
         },
         armed_at: Some(fixed_now()),
     });
@@ -893,6 +895,7 @@ fn background_scripts_join_the_shells_and_the_count_past_the_threshold() {
         name: "command".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "make check".to_owned(),
+            label: None,
         },
         armed_at: Some(fixed_now()),
     }];
@@ -914,7 +917,7 @@ fn background_scripts_join_the_shells_and_the_count_past_the_threshold() {
         .iter()
         .position(|line| line.contains("⧖ waits (4)"))
         .unwrap_or_else(|| panic!("{rows:#?}"));
-    assert!(rows[stats + 1].contains(&shell_lead(&theme, "command · make")));
+    assert!(rows[stats + 1].contains(&shell_lead(&theme, "shell · make")));
     assert!(rows[stats + 3].contains(&shell_lead(&theme, "shell · Run the test suite")));
     assert!(rows[stats + 5].contains(&shell_lead(&theme, "shell · long sleep")));
     assert!(rows[stats + 5].ends_with(&format!(
@@ -1064,6 +1067,7 @@ fn pending_waits_line_counts_armed_waits() {
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "make check".to_owned(),
+                label: None,
             },
             armed_at: Some(fixed_now()),
         },
@@ -1122,7 +1126,7 @@ fn pending_waits_line_counts_armed_waits() {
     assert!(
         !collapsed_text
             .iter()
-            .any(|line| line.contains("◷ timer · in") || line.contains("command · make"))
+            .any(|line| line.contains("◷ timer · in") || line.contains("shell · make"))
     );
     assert_snapshot(
         "pending_waits_line",
@@ -1154,7 +1158,7 @@ fn pending_waits_line_counts_armed_waits() {
             && expanded[selected_stats].contains("$0.42")
     );
     assert!(expanded[selected_stats + 1].contains("◷ timer · in 12m"));
-    assert!(expanded[selected_stats + 2].contains(&shell_lead(&theme, "command · make")));
+    assert!(expanded[selected_stats + 2].contains(&shell_lead(&theme, "shell · make")));
     assert!(expanded[selected_stats + 3].contains("      make check"));
     // The finished child pages in below the waits.
     assert!(expanded[selected_stats + 4].contains("inspect the renderer"));
@@ -1283,15 +1287,10 @@ fn wait_entries_show_trigger_program_and_command() {
         },
         PendingWait {
             class: crate::agents::PendingWaitClass::Working,
-            name: "pid".to_owned(),
-            trigger: PendingWaitTrigger::Pid { pid: 16776 },
-            armed_at: Some(fixed_now() - Duration::from_secs(180)),
-        },
-        PendingWait {
-            class: crate::agents::PendingWaitClass::Working,
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "/usr/bin/cargo xtask gate --name foo_test".to_owned(),
+                label: None,
             },
             armed_at: Some(fixed_now() - Duration::from_secs(240)),
         },
@@ -1314,9 +1313,8 @@ fn wait_entries_show_trigger_program_and_command() {
         .unwrap();
     for (offset, label, seconds, elapsed) in [
         (0, "◷ timer · in 12m".to_owned(), 1080, "18m"),
-        (1, shell_lead(&theme, "pid · 16776"), 180, "3m"),
-        (2, shell_lead(&theme, "command · cargo"), 240, "4m"),
-        (4, "⌁ signal · pr.merged".to_owned(), 3600, "1h"),
+        (1, shell_lead(&theme, "shell · cargo"), 240, "4m"),
+        (3, "⌁ signal · pr.merged".to_owned(), 3600, "1h"),
     ] {
         assert!(
             rows[start + offset].contains(&label),
@@ -1343,10 +1341,9 @@ fn wait_entries_show_trigger_program_and_command() {
             theme.muted().fg
         );
     }
-    assert_eq!(rows.len(), start + 5, "only the command takes two lines");
-    assert!(rows[start + 3].contains("      cargo xtask gate --name foo_test"));
-    assert!(!rows.iter().any(|line| line.contains("kill -0")));
-    assert!(!rows[start + 2].contains("/usr/bin"));
+    assert_eq!(rows.len(), start + 4, "only the shell takes two lines");
+    assert!(rows[start + 2].contains("      cargo xtask gate --name foo_test"));
+    assert!(!rows[start + 1].contains("/usr/bin"));
     assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 25));
     let cost_rolls = CostRolls::default();
     let lead_style = theme.styled(Component::WaitHeader, Modifier::empty());
@@ -1354,30 +1351,27 @@ fn wait_entries_show_trigger_program_and_command() {
     for phase in [0, 7] {
         let ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
         let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
-        for offset in [1, 2] {
-            let lead = &block.lines[start + offset].spans[2];
-            assert_eq!(
-                lead.content,
-                role_glyph(&theme, AnimationRole::Working, phase)
-            );
-            assert_eq!(lead.style.fg, lead_style.fg);
-            assert_eq!(lead.style.add_modifier, lead_style.add_modifier);
-        }
-        frames.push(block.lines[start..=start + 4].to_vec());
+        let lead = &block.lines[start + 1].spans[2];
+        assert_eq!(
+            lead.content,
+            role_glyph(&theme, AnimationRole::Working, phase)
+        );
+        assert_eq!(lead.style.fg, lead_style.fg);
+        assert_eq!(lead.style.add_modifier, lead_style.add_modifier);
+        frames.push(block.lines[start..=start + 3].to_vec());
     }
     assert_eq!(frames[0][0], frames[1][0], "a timer lead is static");
-    assert_eq!(frames[0][4], frames[1][4], "a signal lead is static");
-    assert_ne!(frames[0][1], frames[1][1], "a pid wait animates");
-    assert_ne!(frames[0][2], frames[1][2], "a command wait animates");
+    assert_eq!(frames[0][3], frames[1][3], "a signal lead is static");
+    assert_ne!(frames[0][1], frames[1][1], "a shell animates");
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
-    assert!(narrow_text[start + 4].contains("⌁ signal"));
-    assert!(narrow_text[start + 4].ends_with("1h▐"));
-    assert!(narrow_text[start + 2].contains(&shell_lead(&theme, "command")));
-    assert!(!narrow_text[start + 2].contains("foo_test"));
+    assert!(narrow_text[start + 3].contains("⌁ signal"));
+    assert!(narrow_text[start + 3].ends_with("1h▐"));
+    assert!(narrow_text[start + 1].contains(&shell_lead(&theme, "shell")));
+    assert!(!narrow_text[start + 1].contains("foo_test"));
     assert!(
-        narrow[start..=start + 4]
+        narrow[start..=start + 3]
             .iter()
             .all(|line| line.width() == 24)
     );
@@ -1386,9 +1380,8 @@ fn wait_entries_show_trigger_program_and_command() {
     let advanced = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(advanced[start].contains("◷ timer · due"));
     assert!(advanced[start].ends_with("30m▐"));
-    assert!(advanced[start + 1].ends_with("15m▐"));
-    assert!(advanced[start + 4].ends_with("1h▐"));
-    assert!(advanced[start + 2].ends_with("16m▐"));
+    assert!(advanced[start + 3].ends_with("1h▐"));
+    assert!(advanced[start + 1].ends_with("16m▐"));
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
@@ -1409,12 +1402,13 @@ fn wait_entries_show_trigger_program_and_command() {
         )[0]
         .as_agent_mut()
         .unwrap()
-        .pending_waits[2]
+        .pending_waits[1]
             .trigger = PendingWaitTrigger::Command {
             command: command.to_owned(),
+            label: None,
         };
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
-        assert!(wrapped[start + 3].contains(detail));
+        assert!(wrapped[start + 2].contains(detail));
     }
 }
 
@@ -1465,7 +1459,7 @@ fn wait_entry_without_armed_at_has_no_clock() {
 }
 
 #[test]
-fn check_and_file_waits_have_type_specific_detail_lines() {
+fn shell_waits_draw_as_shells_headed_by_label_else_command() {
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -1477,35 +1471,19 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
     parent.pending_waits = vec![
         PendingWait {
             class: crate::agents::PendingWaitClass::Working,
-            name: "check".to_owned(),
-            trigger: PendingWaitTrigger::Check {
+            name: "shell-bare".to_owned(),
+            trigger: PendingWaitTrigger::Command {
                 command: "/usr/bin/test -f ready".to_owned(),
+                label: None,
             },
             armed_at: None,
         },
         PendingWait {
             class: crate::agents::PendingWaitClass::Working,
-            name: "negated".to_owned(),
-            trigger: PendingWaitTrigger::Check {
+            name: "shell-labeled".to_owned(),
+            trigger: PendingWaitTrigger::Command {
                 command: "! systemctl is-active --quiet abyssal-verify-boros".to_owned(),
-            },
-            armed_at: None,
-        },
-        PendingWait {
-            class: crate::agents::PendingWaitClass::Sleeping,
-            name: "file".to_owned(),
-            trigger: PendingWaitTrigger::File {
-                path: "app.log".into(),
-                grep: None,
-            },
-            armed_at: None,
-        },
-        PendingWait {
-            class: crate::agents::PendingWaitClass::Sleeping,
-            name: "match".to_owned(),
-            trigger: PendingWaitTrigger::File {
-                path: "app.log".into(),
-                grep: Some("ready".to_owned()),
+                label: Some("verify boros".to_owned()),
             },
             armed_at: None,
         },
@@ -1515,14 +1493,15 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
     let rows = line_texts(&group_lines(&snapshot, &theme, 0));
     let start = rows
         .iter()
-        .position(|line| line.contains("check · test"))
-        .unwrap();
+        .position(|line| line.contains("shell · test"))
+        .unwrap_or_else(|| panic!("{rows:#?}"));
     assert!(rows[start + 1].contains("      test -f ready"));
-    assert!(rows[start + 2].contains("check · systemctl"));
+    assert!(
+        rows[start + 2].contains("shell · verify boros"),
+        "{rows:#?}"
+    );
     assert!(rows[start + 3].contains("      ! systemctl is-active --quiet abyssal"));
-    assert!(rows[start + 4].contains("file · app.log changes"));
-    assert!(rows[start + 5].contains("file · app.log matches `ready`"));
-    assert_eq!(rows.len(), start + 6);
+    assert_eq!(rows.len(), start + 4);
 }
 
 #[test]
@@ -1600,6 +1579,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "make check".to_owned(),
+                label: None,
             },
             armed_at: Some(fixed_now()),
         },
@@ -1642,7 +1622,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
             .iter()
             .any(|line| line.contains("wakes after make check"))
     );
-    assert!(!collapsed.iter().any(|line| line.contains("command · make")));
+    assert!(!collapsed.iter().any(|line| line.contains("shell · make")));
 
     let lines = group_lines(&snapshot, &theme, 0);
     let rows = line_texts(&lines);
@@ -1650,7 +1630,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
         .iter()
         .position(|line| line.contains("◷ timer · in 12m"))
         .unwrap();
-    assert!(rows[timer + 1].contains(&shell_lead(&theme, "command · make")));
+    assert!(rows[timer + 1].contains(&shell_lead(&theme, "shell · make")));
     assert!(rows[timer + 3].contains(&shell_lead(&theme, "shell · Run the test suite")));
     assert!(rows[timer + 3].ends_with(&format!(
         "{}  5m▐",

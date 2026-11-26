@@ -3768,7 +3768,7 @@ fn sandbox_matching_owned_pack_links_need_no_view_but_stale_links_do() {
 fn scoped_skill_view_withholds_the_rimz_skills_a_grant_leaves_out() {
     let env = Env::new();
     let root = env.home_root.join(".claude/skills");
-    let names = ["commit", "rimz-lsp", "rimz-wait"];
+    let names = ["commit", "rimz-lsp", "rimz-watch"];
     for name in names {
         std::fs::create_dir_all(root.join(name)).unwrap();
         std::fs::write(root.join(name).join("SKILL.md"), format!("{name}\n")).unwrap();
@@ -3805,7 +3805,7 @@ fn scoped_skill_view_withholds_the_rimz_skills_a_grant_leaves_out() {
         [
             "commit\n",
             "rimz-lsp\n",
-            "---\ndisable-model-invocation: true\n---\nrimz-wait\n"
+            "---\ndisable-model-invocation: true\n---\nrimz-watch\n"
         ]
     );
 }
@@ -3925,7 +3925,7 @@ fn scoped_view_hides_each_skill_whose_mcp_tools_the_launch_registers() {
     .unwrap();
     let machine = rimz::config::MachineConfig::default();
     let vars = environment(&env);
-    let names = ["commit", "rimz-lsp", "rimz-wait"];
+    let names = ["commit", "rimz-lsp", "rimz-watch"];
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (kind, root) in [("claude", ".claude/skills"), ("codex", ".agents/skills")] {
@@ -3940,8 +3940,8 @@ fn scoped_view_hides_each_skill_whose_mcp_tools_the_launch_registers() {
         }
         let root = root.canonicalize().unwrap();
         for (listed, mcps, off, hidden) in [
-            (false, None, false, &["rimz-lsp", "rimz-wait"][..]),
-            (true, None, false, &["rimz-lsp", "rimz-wait"][..]),
+            (false, None, false, &["rimz-lsp", "rimz-watch"][..]),
+            (true, None, false, &["rimz-lsp", "rimz-watch"][..]),
             (true, Some(&["rimz-lsp"][..]), false, &["rimz-lsp"][..]),
             (false, Some(&[][..]), false, &[][..]),
             (false, None, true, &[][..]),
@@ -4252,7 +4252,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
         grant: Some(&[]),
     };
     assert!(skill_argv(&env, &environment(&env), rootless).is_ok());
-    let grant: Vec<rimz::config::RimzEntry> = vec!["rimz-wait".parse().unwrap()];
+    let grant: Vec<rimz::config::RimzEntry> = vec!["rimz-watch".parse().unwrap()];
     let granted = || SkillInputs {
         kind: "plugin",
         home: Some(root.clone()),
@@ -4261,7 +4261,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
         callable: None,
         grant: Some(&grant),
     };
-    for name in ["rimz-wait", "native"] {
+    for name in ["rimz-watch", "native"] {
         std::fs::create_dir_all(root.join(name)).unwrap();
         std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
     }
@@ -4269,7 +4269,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
     // A skill withheld under a grant refuses only once the inventory holds it.
     let withheld = ["rimz-ask"];
     let asking: Vec<rimz::config::RimzEntry> =
-        vec!["rimz-wait".parse().unwrap(), "rimz-ask".parse().unwrap()];
+        vec!["rimz-watch".parse().unwrap(), "rimz-ask".parse().unwrap()];
     let withholding = || SkillInputs {
         withheld: &withheld,
         grant: Some(&asking),

@@ -11,7 +11,7 @@ The room emits these families:
 - `trunk.moved`, `worktree.created`, `worktree.removed`.
 - `agent.started|idle|waiting|failed|ended`: one agent's lifecycle.
 - `team.idle`, `team.ended`: the whole team settles. `team.waiting`, `team.failed`: one member waits or errors. `team.stage`: the team hands a stage off.
-- `wait.<name>`: a `wait` watch settles or checks in.
+- `shell.<name>`: a `shell` command exits or checks in.
 
 A lowercase dotted name in any other family is a signal anything can send once the project has a room, open or closed: `rimz events emit deploy.finished --json '{"env":"prod"}'`.
 
@@ -32,4 +32,4 @@ Only the whole value `'*'` is a wildcard: it matches any payload that carries th
 
 `ci` and `pr` signals come from the room's forge poll. It polls each linked worktree of the project with a pane in the room, and each checkout whose `ci` or `pr` state a live condition task or an active workflow reads. A `ci` or `pr` signal booking whose `match` names a `branch` literally (not `'*'`) holds that branch in the poll; any other signal booking adds nothing to it.
 
-The poll's first read of a checkout records its state and emits nothing, so a state that already holds then, such as a red CI, never arrives as a signal. For a branch no polled checkout holds, or a state that may already hold, use a `when` trigger (`ci[feat-x]=failed`, guide `rimz-wait/conditions`).
+The poll's first read of a checkout records its state and emits nothing, so a state that already holds then, such as a red CI, never arrives as a signal. For a branch no polled checkout holds, or a state that may already hold, use a `when` trigger (`ci[feat-x]=failed`, guide `rimz-watch/conditions`).

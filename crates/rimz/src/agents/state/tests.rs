@@ -95,6 +95,7 @@ fn silent_child_excludes_rested_unprompted_and_nonworking_children() {
                 name: "wait-command".to_owned(),
                 trigger: PendingWaitTrigger::Command {
                     command: "cargo test".to_owned(),
+                    label: None,
                 },
                 armed_at: Some(child.last_activity),
             }),
@@ -277,6 +278,7 @@ fn hibernation_preserves_real_status_and_armed_waits() {
             name: "watch".into(),
             trigger: PendingWaitTrigger::Command {
                 command: "true".into(),
+                label: None,
             },
             armed_at: None,
         });
@@ -560,6 +562,7 @@ fn effective_status_projects_pending_wait_to_sleeping() {
         name: "watch".into(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".into(),
+            label: None,
         },
         armed_at: None,
     };
@@ -628,6 +631,7 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
         name: "timer".into(),
         trigger: PendingWaitTrigger::Command {
             command: "sleep 60".into(),
+            label: None,
         },
         armed_at: None,
     });
@@ -717,17 +721,11 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             "wakes now",
         ),
         (
-            PendingWaitTrigger::Pid { pid: 16776 },
-            "pid",
-            "16776",
-            None,
-            "wakes after pid 16776",
-        ),
-        (
             PendingWaitTrigger::Command {
                 command: "/usr/bin/cargo test".into(),
+                label: None,
             },
-            "command",
+            "shell",
             "cargo",
             Some("cargo test"),
             "wakes after cargo test",
@@ -735,58 +733,32 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         (
             PendingWaitTrigger::Command {
                 command: "/usr/bin/cargo test \\\n  --workspace".into(),
+                label: None,
             },
-            "command",
+            "shell",
             "cargo",
             Some("cargo test \\ --workspace"),
             "wakes after cargo test \\ --workspace",
         ),
         (
-            PendingWaitTrigger::Check {
-                command: "/usr/bin/nc -z localhost 3000".into(),
+            PendingWaitTrigger::Command {
+                command: "/usr/bin/cargo test".into(),
+                label: Some("run the suite".into()),
             },
-            "check",
-            "nc",
-            Some("nc -z localhost 3000"),
-            "wakes after nc -z localhost 3000",
-        ),
-        (
-            PendingWaitTrigger::Check {
-                command: "! systemctl is-active --quiet abyssal-verify-boros".into(),
-            },
-            "check",
-            "systemctl",
-            Some("! systemctl is-active --quiet abyssal-verify-boros"),
-            "wakes after ! systemctl is-active --quiet abyssal-verify-boros",
+            "shell",
+            "run the suite",
+            Some("cargo test"),
+            "wakes after cargo test",
         ),
         (
             PendingWaitTrigger::Command {
                 command: String::new(),
+                label: None,
             },
-            "command",
+            "shell",
             "",
             None,
             "wakes after ",
-        ),
-        (
-            PendingWaitTrigger::File {
-                path: "/repo/logs/app.log".into(),
-                grep: None,
-            },
-            "file",
-            "app.log changes",
-            None,
-            "wakes when app.log changes",
-        ),
-        (
-            PendingWaitTrigger::File {
-                path: "/repo/logs/app.log".into(),
-                grep: Some("listening on".into()),
-            },
-            "file",
-            "app.log matches `listening on`",
-            None,
-            "wakes when app.log matches `listening on`",
         ),
         (
             PendingWaitTrigger::Signal {
@@ -801,24 +773,6 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         assert_eq!(trigger.kind_word(), kind);
         assert_eq!(trigger.headline(now), headline);
         assert_eq!(trigger.detail().as_deref(), detail);
-        if matches!(trigger, PendingWaitTrigger::Pid { .. }) {
-            assert_eq!(
-                serde_json::to_value(&trigger).unwrap(),
-                serde_json::json!({"kind": "pid", "pid": 16776})
-            );
-        }
-        if let PendingWaitTrigger::File { grep: Some(_), .. } = &trigger {
-            assert_eq!(
-                serde_json::to_value(&trigger).unwrap(),
-                serde_json::json!({"kind": "file", "path": "/repo/logs/app.log", "grep": "listening on"})
-            );
-        }
-        if let PendingWaitTrigger::Check { command } = &trigger {
-            assert_eq!(
-                serde_json::to_value(&trigger).unwrap(),
-                serde_json::json!({"kind": "check", "command": command})
-            );
-        }
         let wait = PendingWait {
             class: crate::agents::PendingWaitClass::Sleeping,
             name: "calm-fox".into(),
@@ -1501,6 +1455,7 @@ fn rowless_card_keeps_parked_phase_beside_success_sleeping_and_running() {
         name: "build".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
+            label: None,
         },
         armed_at: Some(Timestamp::from_second(1_010).unwrap()),
     });

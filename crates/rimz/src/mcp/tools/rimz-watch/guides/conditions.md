@@ -16,14 +16,14 @@ For a `schedule` booking, `window` terms read the provider of the agent the book
 
 A window term fires at the window's reset when it is spent, and at once when enough is left. Use 50 to 80, not 100, which a spend before the check can miss.
 
-`key=a,b` matches either value, and `key!=a,b` matches a known reading outside them. Terms combine with `!`, `&&`, `||`, and parentheses. Each line below is one `wait` call's arguments:
+`key=a,b` matches either value, and `key!=a,b` matches a known reading outside them. Terms combine with `!`, `&&`, `||`, and parentheses. Each line below is one `watch` call's arguments:
 
-    {"trigger": "when", "value": "pr[feat-a]=merged && pr[feat-b]=merged", "label": "start the integration"}
-    {"trigger": "when", "value": "pr.review=approved,changes_requested", "label": "merge or answer the review"}
-    {"trigger": "when", "value": "window.5h.left>=60", "label": "start the storage refactor"}
+    {"when": "pr[feat-a]=merged && pr[feat-b]=merged", "label": "start the integration"}
+    {"when": "pr.review=approved,changes_requested", "label": "merge or answer the review"}
+    {"when": "window.5h.left>=60", "label": "start the storage refactor"}
 
-On Gitea, `pr.queue` always reads `none`, and `pr.review` and `pr.mergeable` stay unknown while the PR is open, so a wait that needs one of them never fires before the PR closes.
+On Gitea, `pr.queue` always reads `none`, and `pr.review` and `pr.mergeable` stay unknown while the PR is open, so a watch that needs one of them never fires before the PR closes.
 
-For a state no term reads, poll the forge's own CLI with a `check` wait.
+For a state no term reads, poll the forge's own CLI in a loop inside `shell`.
 
 The forge terms (`ci`, `pr`, `pr.<field>`) come from the room's forge poll, so a wake can trail the forge by up to five minutes, and a PR already merged when you arm fires only after the next poll.

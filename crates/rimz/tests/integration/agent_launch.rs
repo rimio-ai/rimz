@@ -2636,7 +2636,7 @@ fn arm_owed_to_planner(env: &Env) {
         )
         .unwrap();
     let output = crate::common::wait::agent_wait(env)
-        .args(["wait", "--in", "30m"])
+        .args(["watch", "pr=merged"])
         .bounded_output()
         .unwrap();
     assert!(
@@ -6868,7 +6868,8 @@ fn explain_shows_the_grant_of_the_launch() {
     let lsp = "mcp(lsp)";
     let native_reach = [
         ("rimz-lsp", lsp),
-        ("rimz-wait", "mcp(wait)"),
+        ("rimz-shell", "mcp(shell)"),
+        ("rimz-watch", "mcp(watch)"),
         ("rimz-subagents", "mcp(subagent)"),
         ("rimz-agents", "mcp(agent)"),
         ("rimz-teams", "mcp(team)"),
@@ -7173,7 +7174,8 @@ fn explain_prints_the_plan_without_side_effects() {
         "callable": [],
         "hidden": [
           "rimz-lsp",
-          "rimz-wait",
+          "rimz-shell",
+          "rimz-watch",
           "rimz-subagents",
           "rimz-agents",
           "rimz-teams",
@@ -7887,11 +7889,11 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
     env.record(&env.project_root);
     let provider_home = env.home_root.join(".claude");
     std::fs::create_dir_all(provider_home.join("projects")).unwrap();
-    let skill = provider_home.join("skills/rimz-wait");
+    let skill = provider_home.join("skills/rimz-watch");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(
         skill.join("SKILL.md"),
-        "---\nname: rimz-wait\ndescription: Wait for a command\n---\nWait.\n",
+        "---\nname: rimz-watch\ndescription: Wait for a command\n---\nWait.\n",
     )
     .unwrap();
     std::fs::write(
@@ -7903,7 +7905,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
         &env,
         "subagents",
         "researcher",
-        "description: Research\nagent: claude\nskills: [rimz-wait]\ntools: [Read, Skill]",
+        "description: Research\nagent: claude\nskills: [rimz-watch]\ntools: [Read, Skill]",
         "Research the assigned task.",
     );
     let workspace = env.resolve_workspace(&env.project_root);
@@ -7966,7 +7968,8 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
             serde_json::json!([]),
             serde_json::json!([
                 "rimz-lsp",
-                "rimz-wait",
+                "rimz-shell",
+                "rimz-watch",
                 "rimz-workflow",
                 "rimz-message",
                 "rimz-control",
@@ -13227,7 +13230,11 @@ fn unreachable_rimz_reference_warns_on_stderr_and_card_and_the_agent_starts() {
     let shim = write_env_dump_shim(&env, "codex");
     let probe = env.home_root.join("reference-provider-env");
     let prompt = env.home_root.join("reference-prompt.md");
-    std::fs::write(&prompt, "Wait with rimz(wait); hand off with rimz(nope).\n").unwrap();
+    std::fs::write(
+        &prompt,
+        "Watch with rimz(watch); hand off with rimz(nope).\n",
+    )
+    .unwrap();
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&EventEnvelope::new(
@@ -13275,7 +13282,7 @@ fn unreachable_rimz_reference_warns_on_stderr_and_card_and_the_agent_starts() {
     assert!(
         !card.iter().any(|warning| warning
             .as_str()
-            .is_some_and(|text| text.contains("rimz(wait)"))),
+            .is_some_and(|text| text.contains("rimz(watch)"))),
         "{report}"
     );
 }

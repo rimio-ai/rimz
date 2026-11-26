@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
+use super::ScheduleErr;
 use super::catalog::{LoadedTask, TaskSource};
-use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
 use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
 use crate::harness::signal::{SignalSelector, default_signal_match_key};
@@ -37,7 +37,8 @@ impl std::fmt::Display for TaskName {
 }
 
 pub enum DeliveryName {
-    MintWait,
+    /// A self wait's name, minted from its kind's prefix (`shell-`, `watch-`) and a petname.
+    Mint,
     Named(TaskName),
 }
 
@@ -47,14 +48,14 @@ pub enum SubscriptionLifetime {
 }
 
 pub enum DeliveryTrigger {
+    /// `check_in` is a self watch's one still-running notice, due that long after it arms.
     Condition {
         expr: crate::harness::when::WhenExpr,
         hold: Option<Duration>,
         lifetime: SubscriptionLifetime,
+        check_in: Option<Duration>,
     },
-    Delay(Duration),
-    /// `on` is the row's delivery polarity: the user's `--on` for a command,
-    /// `any` for a polled spec, whose watcher emits only once its condition holds.
+    /// `on` is the row's delivery polarity, the shell's `--on`.
     Watch {
         spec: WatchSpec,
         on: CheckOn,
@@ -65,7 +66,6 @@ pub enum DeliveryTrigger {
         matches: BTreeMap<String, String>,
         lifetime: SubscriptionLifetime,
     },
-    Clock(ParsedSchedule),
 }
 
 pub enum DeliveryPrompt {
@@ -123,7 +123,7 @@ pub fn arm_delivery(
     let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
         .map_err(|err| ArmFailure::State(err.into()))?;
     let name = match &name {
-        DeliveryName::MintWait => None,
+        DeliveryName::Mint => None,
         DeliveryName::Named(name) => Some(name.0.as_str()),
     };
     if let Some(name) = name
@@ -177,7 +177,7 @@ pub fn arm_delivery(
             command
                 .arg("--root")
                 .arg(&workspace.project_root)
-                .args(["wait", "watch", &name])
+                .args(["shell", "watcher", &name])
                 .current_dir(&workspace.project_root)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -185,7 +185,7 @@ pub fn arm_delivery(
                 .process_group(0);
             // The watcher runs the agent's own command, which writes where the
             // agent was told its temp files live.
-            crate::child_process::spawn_detached_reaped_as_agent(&mut command, "wait-watch")?;
+            crate::child_process::spawn_detached_reaped_as_agent(&mut command, "shell-watcher")?;
             Ok(())
         };
         spawn().map_err(ArmFailure::Watcher)
@@ -398,6 +398,53 @@ fn release_session(
     .map_err(|err| err.to_string())
 }
 
+/// Why a stored pid, check, or file wait is retired: this RimZ no longer runs one.
+pub(super) const LEGACY_WAIT_RETIRED: &str = "retired: RimZ no longer watches a pid, a check, or \
+     a file; run the wait as a command with `rimz shell`";
+
+/// Retire each stored pid, check, or file wait with a canceled history row saying why, so the
+/// rest of the room's rows load and fire; a failure only warns. Each row's record goes first,
+/// under the row's task record (bound now for a row that never fired, and retired), so
+/// `rimz loop logs` finds it by name and a stop between the two leaves the record.
+fn retire_legacy_waits(
+    paths: &crate::disk::paths::StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    project_root: &Path,
+) {
+    for (name, entry) in super::instances::legacy_waits(paths) {
+        let binding = super::task_record::Binding::for_task(
+            &name,
+            super::catalog::TaskSource::Instance,
+            project_root,
+        );
+        let task_id = super::task_record_store::mutate(|records| {
+            let (id, _) = records.bind(&binding);
+            records.retire(&binding.key(), Timestamp::now());
+            id
+        })
+        .inspect_err(|err| {
+            tracing::warn!(task = name, error = %err, "retire: retiring the task record");
+        })
+        .ok();
+        let mut record = super::run_log::LoopRunRecord::new(
+            &name,
+            super::run_log::LoopRunResult::Canceled,
+            super::run_log::LoopRunMode::Scheduled,
+            0,
+        );
+        record.task_id = task_id;
+        record.error = Some(LEGACY_WAIT_RETIRED.to_owned());
+        super::run_log::record_stopped(project_root, &record, Some(super::TaskKind::WakeUp));
+        if let Err(err) = super::instances::remove(paths, &name, Some(&entry)) {
+            tracing::warn!(task = name, error = %err, "retire: removing a legacy wait");
+            continue;
+        }
+        if let Err(err) = super::signal::stop_watcher(runtime, &name) {
+            tracing::warn!(task = name, error = %err, "retire: stopping the watcher");
+        }
+    }
+}
+
 /// Retire every instance row in this workspace pinned to a durably ended
 /// session, whoever ended it.
 ///
@@ -425,6 +472,7 @@ fn retire_ended_sessions_in(
     project_root: &Path,
     agents: impl FnOnce() -> crate::store::runtime::AuditRows,
 ) -> Result<usize, RetireFailure> {
+    retire_legacy_waits(paths, runtime, project_root);
     let mut pinned = super::instances::pinned_sessions(&paths.root);
     let raised = crate::store::raised::read(paths);
     pinned.extend(
@@ -545,7 +593,7 @@ fn ended_pinned_sessions<'a, 'agents>(
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryScopeFailure {
     #[error(
-        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Pass --match branch=<name>, --match path=<worktree-path>, or --match branch='*' for every checkout RimZ watches, or watch it with: rimz wait --run 'gh run watch --exit-status'"
+        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Pass --match branch=<name>, --match path=<worktree-path>, or --match branch='*' for every checkout RimZ watches, or watch it with: rimz shell -- gh run watch --exit-status"
     )]
     RootCheckout,
     #[error("team.* waits need a team member; pass --match instance=<team#channel>")]
@@ -624,8 +672,7 @@ fn build_entry(
 ) -> Result<(DeliveryName, LoadedTask), ArmFailure> {
     let self_wait = matches!(spec.provenance, DeliveryProvenance::SelfWait { .. });
     let one_shot = match &spec.trigger {
-        DeliveryTrigger::Delay(_) | DeliveryTrigger::Watch { .. } => true,
-        DeliveryTrigger::Clock(parsed) => matches!(parsed.schedule, Schedule::Instant(_)),
+        DeliveryTrigger::Watch { .. } => true,
         DeliveryTrigger::Condition { hold, lifetime, .. } => {
             hold.is_none() && matches!(lifetime, SubscriptionLifetime::Once)
         }
@@ -635,8 +682,8 @@ fn build_entry(
         && (!one_shot || !matches!(spec.prompt, DeliveryPrompt::None) || spec.deadline.is_some())
     {
         return Err(ArmFailure::InvalidProvenance(
-            "self waits require a delay, a one-shot time, a once condition without a hold, or a \
-             watched command, without a prompt",
+            "self waits require a once condition without a hold, or a watched command, without \
+             a prompt",
         ));
     }
     if matches!(spec.provenance, DeliveryProvenance::Team(_))
@@ -673,11 +720,12 @@ fn build_entry(
         DeliveryPrompt::None => {}
         DeliveryPrompt::Inline(prompt) => entry.prompt = Some(prompt),
     }
-    let delay = match spec.trigger {
+    match spec.trigger {
         DeliveryTrigger::Condition {
             expr,
             hold,
             lifetime,
+            check_in,
         } => {
             if expr.window_spans().next().is_some() {
                 entry.provider = entry.wait.as_ref().map(|target| target.kind.clone());
@@ -685,19 +733,12 @@ fn build_entry(
             entry.when = Some(vec![expr.to_string()]);
             entry.hold = hold.map(duration_label);
             entry.repeat = matches!(lifetime, SubscriptionLifetime::Standing);
-            None
-        }
-        DeliveryTrigger::Delay(delay) => {
-            entry.fire_at = Some(
-                super::delayed_instant(delay, now).map_err(|err| ArmFailure::State(err.into()))?,
-            );
-            Some(duration_label(delay))
+            entry.timeout = check_in.map(duration_label);
         }
         DeliveryTrigger::Watch { spec, on, timeout } => {
             entry.watch = Some(spec);
             entry.on = Some(on);
             entry.timeout = timeout.map(duration_label);
-            None
         }
         // Only a team binding arms a signal, and its `team` makes the row standing.
         DeliveryTrigger::Signal {
@@ -711,28 +752,18 @@ fn build_entry(
             )?;
             entry.signal = Some(selector.to_string());
             entry.matches = (!matches.is_empty()).then_some(matches);
-            None
         }
-        DeliveryTrigger::Clock(parsed) => {
-            match parsed.schedule {
-                Schedule::Instant(at) => entry.fire_at = Some(at),
-                Schedule::Cron(cron) => entry.cron = Some(cron.source),
-                Schedule::Interval(interval) => {
-                    entry.every = Some(format!("{}m", interval.minutes))
-                }
-            }
-            None
-        }
-    };
+    }
     if self_wait {
         entry.wait_meta = Some(WaitMeta {
             armed_at: now,
-            delay,
+            delay: None,
             reader,
+            joined_until: None,
         });
     }
     let name = match &spec.name {
-        DeliveryName::MintWait => "wait",
+        DeliveryName::Mint => super::pending::WaitKind::of(&entry).as_str(),
         DeliveryName::Named(name) => &name.0,
     };
     let task = LoadedTask::new(name, entry, TaskSource::Instance);

@@ -50,10 +50,8 @@ pub(super) fn compose_wait(
         }
     }
     if checkin {
-        body.push_str(&format!("\n\nStop it: rimz wait cancel {name}"));
-        if let Some(delay) = &task.timeout {
-            body.push_str(&format!("\nAnother check-in: rimz wait --in {delay}"));
-        }
+        let verb = crate::harness::schedule::pending::WaitKind::of(task).verb();
+        body.push_str(&format!("\n\nStop it: {verb} cancel {name}"));
     }
     if let Evidence::Condition(condition) = &evidence {
         for (key, reading) in &condition.readings {

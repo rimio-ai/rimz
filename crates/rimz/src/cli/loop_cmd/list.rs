@@ -1465,12 +1465,7 @@ fn trigger_text(
                 parts.join(" · ")
             }
             Trigger::Condition { expr, .. } => format!("when {expr}"),
-            Trigger::Watch(spec) => match spec {
-                WatchSpec::Command(_) => "on command exit".into(),
-                WatchSpec::Pid { pid } => format!("on pid {pid} exit"),
-                WatchSpec::File { file, .. } => format!("on file {}", checkout_name(file)),
-                WatchSpec::Check { .. } => "on check".into(),
-            },
+            Trigger::Watch(WatchSpec::Command(_)) => "on command exit".into(),
             Trigger::Schedule(_) => {
                 let mut head = parsed.describe();
                 if state == TaskState::WaitsForRoom {

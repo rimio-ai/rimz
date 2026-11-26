@@ -3851,7 +3851,7 @@ mod parked {
         }
 
         fn arm(&self) -> String {
-            wait_ok(&self.env, &["wait", "--in", "5m"]);
+            wait_ok(&self.env, &["watch", "pr=merged"]);
             let tasks = wait_instances(&self.env);
             assert_eq!(tasks.0.len(), 1);
             tasks.0.into_keys().next().expect("armed wait name")
@@ -4026,7 +4026,7 @@ mod parked {
         fixture.hook("Stop", "");
         fixture.assert_parked();
         let message = fixture.wake(HarnessNotice::Wait);
-        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        wait_ok(&fixture.env, &["watch", "cancel", &name]);
         assert!(wait_instances(&fixture.env).0.is_empty());
         // With the row gone, the published wake alone must hold the fold.
         fixture.hook("Stop", "");
@@ -4045,7 +4045,7 @@ mod parked {
         fixture.hook_replying("Stop", "", "FINDINGS");
         fixture.assert_parked();
         let message = fixture.wake(HarnessNotice::Wait);
-        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        wait_ok(&fixture.env, &["watch", "cancel", &name]);
         fixture
             .store
             .record_sent_batch(std::slice::from_ref(&message), "rimz-test")
@@ -4084,7 +4084,7 @@ mod parked {
             "hook_event_name": "PreToolUse",
             "session_id": "provider-session",
             "tool_name": "Bash",
-            "tool_input": {"command": format!("rimz wait cancel {name}")},
+            "tool_input": {"command": format!("rimz watch cancel {name}")},
             "tool_use_id": "cancel-wait",
             "cwd": fixture.env.project_root,
         }));
@@ -4092,7 +4092,7 @@ mod parked {
         assert_eq!(running.parked_at, None);
         assert_eq!(running.parked_answer.as_deref(), Some("FINDINGS"));
         assert_eq!(running.status, RunStatus::Running);
-        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        wait_ok(&fixture.env, &["watch", "cancel", &name]);
         assert_eq!(
             settle_stranded_park(&fixture.store, &stale, None).expect("first stale check"),
             ParkCheck::Stranded(at)
@@ -4146,7 +4146,7 @@ mod parked {
         let name = fixture.arm();
         fixture.hook("Stop", "");
         let parked = fixture.assert_parked();
-        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        wait_ok(&fixture.env, &["watch", "cancel", &name]);
         assert!(wait_instances(&fixture.env).0.is_empty());
         assert!(
             fixture

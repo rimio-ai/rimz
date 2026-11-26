@@ -1667,7 +1667,7 @@ fn child_host_skill_views_withhold_delegation_without_configuring_a_list() {
 fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
     let project = tempfile::tempdir().unwrap();
     let library = project.path().join("agents/skills");
-    for name in ["commit", "rimz-lsp", "rimz-wait"] {
+    for name in ["commit", "rimz-lsp", "rimz-watch"] {
         std::fs::create_dir_all(library.join(name)).unwrap();
         std::fs::write(library.join(name).join("SKILL.md"), "skill\n").unwrap();
     }
@@ -1718,7 +1718,7 @@ fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
         }
     }
     let null = serde_json::Value::Null;
-    let wait = serde_json::json!(["rimz-wait"]);
+    let wait = serde_json::json!(["rimz-watch"]);
     assert_eq!(
         actual,
         [

@@ -847,6 +847,219 @@ fn condition_replacement_resets_fired_and_hold_state() {
     }
 }
 
+/// A `when` self wait checks in once, `timeout` after it arms, while it has not fired; a
+/// re-armed row checks in again, and a loop row never does.
+/// A watch's first tick past its check-in time reads no condition (it stamps the row), so it
+/// sends no check-in; the next tick finds the condition met and fires the wake alone.
+#[test]
+fn a_watch_past_its_check_in_sends_none_before_a_tick_reads_it_unmet() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
+    let now = zdt(2026, 6, 24, 8, 30, 0);
+    let tasks = one(loaded_from(
+        TaskEntry {
+            root: root.path().to_owned(),
+            when: Some(vec!["team.stage=Done".to_owned()]),
+            timeout: Some("30m".to_owned()),
+            wait: Some(crate::config::TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: "session".into(),
+                handle: "@coder".to_owned(),
+            }),
+            wait_meta: Some(crate::config::WaitMeta {
+                armed_at: seconds_before(now.timestamp(), 40 * 60),
+                delay: None,
+                reader: None,
+                joined_until: None,
+            }),
+            ..TaskEntry::default()
+        },
+        TaskSource::Instance,
+    ));
+    let tick = || {
+        fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        )
+    };
+    let sent = || -> BTreeMap<String, Timestamp> {
+        crate::disk::atomic::read_json_cache(&check_in_path(&runtime))
+    };
+    let first = tick();
+    let sent_first = sent();
+    let second = tick();
+    assert_eq!(
+        (first, sent_first, second, sent()),
+        (
+            Vec::<String>::new(),
+            BTreeMap::new(),
+            vec![NAME.to_owned()],
+            BTreeMap::new()
+        )
+    );
+}
+
+#[test]
+fn a_watch_checks_in_once_at_its_due_time() {
+    let now = zdt(2026, 6, 24, 8, 30, 0);
+    let armed_at = seconds_before(now.timestamp(), 30 * 60);
+    let watch = |timeout: &str, armed_at: Timestamp| {
+        loaded_from(
+            TaskEntry {
+                root: PathBuf::from("/repo"),
+                when: Some(vec!["pr=merged".to_owned()]),
+                timeout: Some(timeout.to_owned()),
+                wait: Some(crate::config::TaskTarget {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    session: "session".into(),
+                    handle: "@coder".to_owned(),
+                }),
+                wait_meta: Some(crate::config::WaitMeta {
+                    armed_at,
+                    delay: None,
+                    reader: None,
+                    joined_until: None,
+                }),
+                ..TaskEntry::default()
+            },
+            TaskSource::Instance,
+        )
+    };
+    let fired = WhenState {
+        fingerprint: Some((
+            "pr=merged".to_owned(),
+            None,
+            watch("30m", armed_at).entry().run_dir(),
+        )),
+        since: armed_at,
+        fired: true,
+    };
+    let loop_row = loaded(TaskEntry {
+        when: Some(vec!["pr=merged".to_owned()]),
+        args: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        ..TaskEntry::default()
+    });
+    let earlier = seconds_before(armed_at, 60);
+    let paused = BTreeMap::from([(
+        watch("30m", armed_at).key(NAME),
+        until(seconds_before(now.timestamp(), -60)),
+    )]);
+    for (case, task, stamped, arming, states, sent, due) in [
+        ("due", watch("30m", armed_at), true, None, None, None, true),
+        (
+            "early",
+            watch("31m", armed_at),
+            true,
+            None,
+            None,
+            None,
+            false,
+        ),
+        (
+            "sent",
+            watch("30m", armed_at),
+            true,
+            None,
+            None,
+            Some(armed_at),
+            false,
+        ),
+        (
+            "re-armed",
+            watch("30m", armed_at),
+            true,
+            None,
+            None,
+            Some(earlier),
+            true,
+        ),
+        (
+            "unseen",
+            watch("30m", armed_at),
+            false,
+            None,
+            None,
+            None,
+            false,
+        ),
+        (
+            "paused",
+            watch("30m", armed_at),
+            true,
+            Some(&paused),
+            None,
+            None,
+            false,
+        ),
+        (
+            "fired",
+            watch("30m", armed_at),
+            true,
+            None,
+            Some(fired.clone()),
+            None,
+            false,
+        ),
+        ("loop row", loop_row.clone(), true, None, None, None, false),
+        // A clock stepped back reads no time since arming, not its absolute value.
+        (
+            "clock behind",
+            watch("30m", seconds_before(now.timestamp(), -40 * 60)),
+            true,
+            None,
+            None,
+            None,
+            false,
+        ),
+    ] {
+        let (names, next) = check_ins(
+            &one(task),
+            &if stamped {
+                one(Verdict {
+                    truth: Some(false),
+                    readings: BTreeMap::new(),
+                    unread: BTreeMap::new(),
+                })
+            } else {
+                BTreeMap::new()
+            },
+            arming.unwrap_or(&BTreeMap::new()),
+            &states.map(one).unwrap_or_default(),
+            &sent.map(one).unwrap_or_default(),
+            now.timestamp(),
+        );
+        assert_eq!(
+            names,
+            if due {
+                vec![(NAME.to_owned(), armed_at)]
+            } else {
+                Vec::new()
+            },
+            "{case}"
+        );
+        // A due check-in joins the sent ones only once its fire starts.
+        let kept = sent == Some(armed_at);
+        assert_eq!(
+            next,
+            if kept { one(armed_at) } else { BTreeMap::new() },
+            "{case}"
+        );
+    }
+}
+
 fn condition_tick(
     hold: Option<&str>,
     stamp: Option<Timestamp>,
@@ -1937,6 +2150,7 @@ fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
             armed_at: prior,
             delay: None,
             reader: Some("armer".to_owned()),
+            joined_until: None,
         }),
         ..watch.entry().clone()
     });

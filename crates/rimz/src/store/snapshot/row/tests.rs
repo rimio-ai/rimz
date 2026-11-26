@@ -835,6 +835,7 @@ fn card_description_running_uses_working_wait_ahead_of_timer() {
                 name: "gate".into(),
                 trigger: crate::agents::PendingWaitTrigger::Command {
                     command: "cargo xtask gate".into(),
+                    label: None,
                 },
                 armed_at: Some(row_time()),
                 class: crate::agents::PendingWaitClass::Working,
@@ -912,6 +913,7 @@ fn card_description_running_names_the_oldest_shown_script() {
         name: "gate".into(),
         trigger: crate::agents::PendingWaitTrigger::Command {
             command: "cargo xtask gate".into(),
+            label: None,
         },
         armed_at: Some(row_time()),
         class: crate::agents::PendingWaitClass::Working,

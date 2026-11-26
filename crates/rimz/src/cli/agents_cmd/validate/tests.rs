@@ -792,7 +792,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "reaches",
             "agents",
             "tools: [Bash, Skill]\n",
-            "Use rimz(wait), `rimz(chat)`, and rimz(lsp).",
+            "Use rimz(watch), `rimz(chat)`, and rimz(lsp).",
         ),
         (
             "quoted",
@@ -810,7 +810,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "shut",
             "agents",
             "tools: [Bash]\nmcps: [github]\n",
-            "Use rimz(wait) and rimz(chat).",
+            "Use rimz(watch) and rimz(chat).",
         ),
         // Claude's preset holds the Skill tool.
         ("preset", "agents", "tools: [default]\n", "Use rimz(chat)."),
@@ -824,7 +824,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "child",
             "subagents",
             "tools: [Bash, Skill]\n",
-            "Use rimz(subagents), rimz(agents), rimz(teams), and rimz(wait).",
+            "Use rimz(subagents), rimz(agents), rimz(teams), and rimz(watch).",
         ),
     ] {
         std::fs::write(
@@ -856,8 +856,8 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
         [
             "agents/shut.md: profile shut: rimz(chat) names `rimz-chat`, which this \
              profile cannot reach: its tools leave out Skill",
-            "agents/shut.md: profile shut: rimz(wait) names `rimz-wait`, which this profile \
-             cannot reach: its mcps leave out rimz-wait; its tools leave out Skill",
+            "agents/shut.md: profile shut: rimz(watch) names `rimz-watch`, which this profile \
+             cannot reach: its mcps leave out rimz-watch; its tools leave out Skill",
             "agents/unknown.md: profile unknown: rimz(nope) names `rimz-nope`, which is neither \
              a RimZ capability nor a skill on disk for claude",
             "agents/unlisted.md: profile unlisted: rimz(chat) names `rimz-chat`, which \
@@ -881,8 +881,8 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "agents/reaches.md: profile reaches: rimz(lsp) names `rimz-lsp`, which this profile \
              cannot reach: the machine's rimz-mcp-server is off; no rimz-lsp skill is on disk for \
              claude",
-            "agents/reaches.md: profile reaches: rimz(wait) names `rimz-wait`, which this \
-             profile cannot reach: the machine's rimz-mcp-server is off; no rimz-wait skill is on \
+            "agents/reaches.md: profile reaches: rimz(watch) names `rimz-watch`, which this \
+             profile cannot reach: the machine's rimz-mcp-server is off; no rimz-watch skill is on \
              disk for claude",
         ]
     );
@@ -925,10 +925,10 @@ fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
     let mut profile = profile.clone();
     profile.tools = profile
         .tools
-        .map(|tools| tools.with_rimz(vec!["rimz-wait".parse().unwrap()]));
+        .map(|tools| tools.with_rimz(vec!["rimz-watch".parse().unwrap()]));
     let machine = rimz::config::MachineConfig::default();
     let reasons = |name| shut_out(&machine, "claude", &profile, false, name);
-    assert_eq!(reasons("rimz-wait"), (Vec::new(), Vec::new()));
+    assert_eq!(reasons("rimz-watch"), (Vec::new(), Vec::new()));
     let left_out = vec!["its capabilities leave out rimz-message".to_owned()];
     assert_eq!(reasons("rimz-message"), (left_out.clone(), left_out));
     // A `rimz-*` skill alone is the skills list's to admit, whatever the grant names.
@@ -971,7 +971,7 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
         (
             "cap-skill",
             "capabilities: [read, rimz-lsp]\nskills: []\n",
-            "Use skill(rimz-lsp) and skill(rimz-wait).",
+            "Use skill(rimz-lsp) and skill(rimz-watch).",
         ),
         (
             "cap-skill-unlisted",
@@ -1018,8 +1018,8 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
             "agents/cap-skill-unlisted.md: profile cap-skill-unlisted: rimz(lsp) names `rimz-lsp`, \
              which this profile cannot reach: its mcps leave out rimz-lsp; its skills leave out \
              rimz-lsp",
-            "agents/cap-skill.md: profile cap-skill: rimz(wait) names `rimz-wait`, which this \
-             profile cannot reach: its capabilities leave out rimz-wait",
+            "agents/cap-skill.md: profile cap-skill: rimz(watch) names `rimz-watch`, which this \
+             profile cannot reach: its capabilities leave out rimz-watch",
             "agents/listed.md: profile listed: skill(rebase) names `rebase`, which this profile \
              cannot reach: its skills leave out rebase",
             "agents/listed.md: profile listed: skill(rimz-reflect) names `rimz-reflect`, which \
@@ -1037,8 +1037,8 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
             "agents/cap-skill-unlisted.md: profile cap-skill-unlisted: rimz(lsp) names `rimz-lsp`, \
              which this profile cannot reach: its mcps leave out rimz-lsp; its skills leave out \
              rimz-lsp",
-            "agents/cap-skill.md: profile cap-skill: rimz(wait) names `rimz-wait`, which this \
-             profile cannot reach: its capabilities leave out rimz-wait",
+            "agents/cap-skill.md: profile cap-skill: rimz(watch) names `rimz-watch`, which this \
+             profile cannot reach: its capabilities leave out rimz-watch",
             "agents/listed.md: profile listed: skill(rebase) names `rebase`, which this profile \
              cannot reach: its skills leave out rebase",
             "agents/listed.md: profile listed: skill(rimz-reflect) names `rimz-reflect`, which \

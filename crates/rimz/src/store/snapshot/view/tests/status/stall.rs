@@ -20,6 +20,7 @@ fn wait_and_shell_lifts_are_exempt_from_the_foreground_stall_window() {
                 name: "gate".into(),
                 trigger: crate::agents::PendingWaitTrigger::Command {
                     command: "cargo xtask gate".into(),
+                    label: None,
                 },
                 armed_at: Some(ago(3600)),
                 class: crate::agents::PendingWaitClass::Working,

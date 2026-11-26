@@ -1,14 +1,15 @@
-//! `rimz wait` — self waits, room wake-ups, and scoped cancellation over the loop scheduler.
+//! `rimz shell` and `rimz watch`: an agent's own waits over the loop scheduler, each with its
+//! own `list` and `cancel`.
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use rimz::config::CheckOn;
 use rimz::harness::ancestry::CallerIdentity;
 use rimz::harness::schedule::arm::TaskName;
-use rimz::harness::schedule::wait::{self, WaitRequest, WaitRoom};
+use rimz::harness::schedule::wait::{self, WaitKind, WaitRequest, WaitRoom, WaitTrigger};
 use rimz::store::snapshot::SidebarSnapshot;
 
 use super::{Ctx, GlobalFlags};
@@ -16,131 +17,192 @@ use super::{Ctx, GlobalFlags};
 mod add;
 mod cancel;
 mod list;
-mod watch;
+mod watcher;
 
 #[derive(Debug, Args)]
 #[command(
     args_conflicts_with_subcommands = true,
-    after_help = "Only an agent arms or cancels a wait, and the wake comes back to that agent. \
-With no flag but `--json`, `rimz wait` lists your waits."
+    after_help = "Only an agent starts or cancels a shell, and its outcome comes back to that \
+agent. With no command, `rimz shell` lists your shells."
 )]
-pub struct WaitCommand {
+pub struct ShellCommand {
     #[command(subcommand)]
-    command: Option<WaitSubcmd>,
+    command: Option<ShellSubcmd>,
     #[command(flatten)]
-    wait: WaitArgs,
+    shell: ShellArgs,
 }
 
 #[derive(Debug, Subcommand)]
-enum WaitSubcmd {
-    /// List your own waits, or the whole room from a user shell.
+enum ShellSubcmd {
+    /// List your own shells, or the whole room's from a user shell.
     #[command(alias = "ls")]
-    List {
-        /// Print the rows as JSON, subscriptions included.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Cancel one wait or subscription by name, or all your waits; stops a watched command.
-    #[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
-    Cancel {
-        /// The wait or subscription name, as `rimz wait list` prints it.
-        name: Option<TaskName>,
-        /// Cancel only waits you armed with `rimz wait`, leaving subscriptions intact.
-        #[arg(long)]
-        all: bool,
-        /// Print what was canceled and what remains as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run a watched command and emit its outcome.
+    List(ListArgs),
+    /// Cancel one shell by name, or all your shells; stops its command.
+    Cancel(CancelArgs),
+    /// Run a shell's command and emit its outcome.
     #[command(hide = true)]
-    Watch { name: String },
+    Watcher { name: String },
 }
 
-#[derive(Debug, Default, Args)]
-struct WaitArgs {
-    /// Short description: one line of 1 to 60 characters after trimming.
-    #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
-    label: Option<String>,
-    /// Wake once after this delay, rounded up to the next minute.
-    #[arg(long = "in", value_name = "DURATION", value_parser = parse_in)]
-    in_after: Option<Duration>,
-    /// Wake once at this time: `HH:MM` (today, else tomorrow), `<weekday> HH:MM`, or
-    /// `YYYY-MM-DD HH:MM`.
-    #[arg(long, value_name = "TIME")]
-    at: Option<String>,
-    /// Wake once a state expression such as `pr=merged` reads true; repeated clauses are ANDed.
-    #[arg(long, value_name = "EXPR")]
-    when: Vec<String>,
-    /// Wait for this existing process to disappear; its exit status is not available.
-    #[arg(long, value_name = "PID", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
-    pid: Option<u32>,
-    /// Run this shell command repeatedly until it succeeds (or fails, with --on fail).
-    #[arg(long, value_name = "COMMAND")]
-    check: Option<String>,
-    /// Run this shell command once through sh -c and wake with its outcome.
-    #[arg(long, value_name = "COMMAND")]
-    run: Option<String>,
-    /// Sleep this long between --check runs (default: 1s).
-    #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
-    every: Option<Duration>,
-    /// Wait for this file to change: created, deleted, written, or replaced.
-    #[arg(
-        long,
-        value_name = "PATH",
-        value_parser = clap::builder::TypedValueParser::map(
-            clap::builder::OsStringValueParser::new(),
-            std::path::PathBuf::from,
-        )
-    )]
-    file: Option<std::path::PathBuf>,
-    /// With --file, wait for a new line containing this literal text.
-    #[arg(long, value_name = "PATTERN")]
-    grep: Option<String>,
-    /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
-    #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
-    on: Option<String>,
-    /// Send one still-running message after this long; never stops the watch. Default 30m, or
-    /// none while cache keepalive pings the agent.
-    #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
-    check_in: Option<Duration>,
-    #[arg(long, hide = true, value_name = "DURATION")]
-    timeout: Option<String>,
-    /// Print the receipt as JSON, or the list when no other flag is given.
+#[derive(Debug, Args)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    after_help = "Only an agent arms or cancels a watch, and the wake comes back to that agent. \
+With no expression, `rimz watch` lists your watches."
+)]
+pub struct WatchCommand {
+    #[command(subcommand)]
+    command: Option<WatchSubcmd>,
+    #[command(flatten)]
+    watch: WatchArgs,
+}
+
+#[derive(Debug, Subcommand)]
+enum WatchSubcmd {
+    /// List your own watches, or the whole room's from a user shell.
+    #[command(alias = "ls")]
+    List(ListArgs),
+    /// Cancel one watch by name, or all your watches.
+    Cancel(CancelArgs),
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    /// Print the rows as JSON.
     #[arg(long)]
     json: bool,
 }
 
-pub fn run(args: WaitCommand, globals: &GlobalFlags) -> Result<()> {
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
+struct CancelArgs {
+    /// The name, as `list` prints it.
+    name: Option<TaskName>,
+    /// Cancel every one you armed.
+    #[arg(long)]
+    all: bool,
+    /// Print what was canceled and what remains as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+/// The options every wait takes but `--check-in`, whose help each verb words for itself.
+#[derive(Debug, Default, Args)]
+struct WaitOptions {
+    /// Short description: one line of 1 to 60 characters after trimming.
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
+    label: Option<String>,
+    /// Print the receipt as JSON, or the list when given nothing to wait on.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Default, Args)]
+struct ShellArgs {
+    /// Deliver for a failed, successful, or any outcome (default: any).
+    #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
+    on: Option<String>,
+    #[command(flatten)]
+    options: WaitOptions,
+    /// Send one still-running message after this long; never stops the command. Default 30m,
+    /// or none while cache keepalive pings the agent.
+    #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+    check_in: Option<Duration>,
+    /// The command, run once through `sh -c` at the checkout's root: one word as written,
+    /// several as that argv, each quoted for sh.
+    #[arg(last = true, value_name = "COMMAND")]
+    command: Vec<String>,
+}
+
+#[derive(Debug, Default, Args)]
+struct WatchArgs {
+    #[command(flatten)]
+    options: WaitOptions,
+    /// Send one still-not-met message after this long; never stops the watch. Default 30m, or
+    /// none while cache keepalive pings the agent.
+    #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+    check_in: Option<Duration>,
+    /// The condition to wake on, such as `pr=merged` or `ci=passed,failed`.
+    #[arg(value_name = "EXPR")]
+    when: Option<String>,
+}
+
+pub fn run_shell(args: ShellCommand, globals: &GlobalFlags) -> Result<()> {
+    let kind = WaitKind::Shell;
     match args.command {
-        Some(WaitSubcmd::List { json }) => list::run(json, globals),
-        Some(WaitSubcmd::Cancel { name, all, json }) => cancel::run(name, all, json, globals),
-        Some(WaitSubcmd::Watch { name }) => watch::run(&name, globals),
-        None if args.wait.is_empty() => list::run(args.wait.json, globals),
-        None => add::run(args.wait, globals),
+        Some(ShellSubcmd::List(list)) => list::run(kind, list.json, globals),
+        Some(ShellSubcmd::Cancel(cancel)) => cancel::run(kind, cancel, globals),
+        Some(ShellSubcmd::Watcher { name }) => watcher::run(&name, globals),
+        None if args.shell.command.is_empty() && args.shell.is_bare() => {
+            list::run(kind, args.shell.options.json, globals)
+        }
+        None => {
+            let ShellArgs {
+                on,
+                options,
+                check_in,
+                command,
+            } = args.shell;
+            // clap restricts --on to these three values.
+            let on = match on.as_deref() {
+                Some("fail") => CheckOn::Fail,
+                Some("success") => CheckOn::Success,
+                _ => CheckOn::Any,
+            };
+            let command = match command.as_slice() {
+                [word] => word.clone(),
+                // Process arguments cannot carry the NUL byte, the only input shlex refuses.
+                words => shlex::try_join(words.iter().map(String::as_str))
+                    .expect("argv words carry no NUL byte"),
+            };
+            let trigger = WaitTrigger::Shell { command, on };
+            add::run(options.request(trigger, check_in), options.json, globals)
+        }
     }
 }
 
-/// `--in` read as every `in` value is: a delay greater than zero.
-fn parse_in(raw: &str) -> std::result::Result<Duration, String> {
-    rimz::harness::schedule::parse_delay(raw).map_err(|err| err.to_string())
+pub fn run_watch(args: WatchCommand, globals: &GlobalFlags) -> Result<()> {
+    let kind = WaitKind::Watch;
+    match args.command {
+        Some(WatchSubcmd::List(list)) => list::run(kind, list.json, globals),
+        Some(WatchSubcmd::Cancel(cancel)) => cancel::run(kind, cancel, globals),
+        None => match args.watch.when {
+            None if args.watch.options.is_bare() && args.watch.check_in.is_none() => {
+                list::run(kind, args.watch.options.json, globals)
+            }
+            when => {
+                let trigger = WaitTrigger::Watch {
+                    when: when.unwrap_or_default(),
+                };
+                add::run(
+                    args.watch.options.request(trigger, args.watch.check_in),
+                    args.watch.options.json,
+                    globals,
+                )
+            }
+        },
+    }
 }
 
-impl WaitArgs {
-    fn is_empty(&self) -> bool {
-        self.in_after.is_none()
-            && self.at.is_none()
-            && self.when.is_empty()
-            && self.pid.is_none()
-            && self.check.is_none()
-            && self.run.is_none()
-            && self.every.is_none()
-            && self.file.is_none()
-            && self.grep.is_none()
-            && self.on.is_none()
-            && self.check_in.is_none()
-            && self.timeout.is_none()
-            && self.label.is_none()
+impl WaitOptions {
+    /// Whether no option but `--json` is set.
+    fn is_bare(&self) -> bool {
+        self.label.is_none()
+    }
+
+    fn request(&self, trigger: WaitTrigger, check_in: Option<Duration>) -> WaitRequest {
+        WaitRequest {
+            label: self.label.clone(),
+            trigger,
+            check_in,
+        }
+    }
+}
+
+impl ShellArgs {
+    /// Whether no option but `--json` is set.
+    fn is_bare(&self) -> bool {
+        self.on.is_none() && self.check_in.is_none() && self.options.is_bare()
     }
 }
 
@@ -154,29 +216,5 @@ fn room<'a>(ctx: &'a Ctx, snapshot: &'a SidebarSnapshot) -> WaitRoom<'a> {
         store: &ctx.store,
         snapshot,
         sidebar_fresh: rimz::sidebar::fresh_sidebar_present,
-    }
-}
-
-impl WaitArgs {
-    fn into_request(self) -> WaitRequest {
-        WaitRequest {
-            label: self.label,
-            in_after: self.in_after,
-            at: self.at,
-            when: self.when,
-            pid: self.pid,
-            check: self.check,
-            run: self.run,
-            every: self.every,
-            file: self.file,
-            grep: self.grep,
-            // clap restricts --on to these three values.
-            on: self.on.as_deref().map(|on| match on {
-                "fail" => CheckOn::Fail,
-                "success" => CheckOn::Success,
-                _ => CheckOn::Any,
-            }),
-            check_in: self.check_in,
-        }
     }
 }

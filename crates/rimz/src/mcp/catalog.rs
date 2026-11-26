@@ -22,7 +22,8 @@ pub const SERVER_NAME: &str = "rimz";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
     Lsp,
-    Wait,
+    Shell,
+    Watch,
     Subagents,
     Agents,
     Teams,
@@ -36,9 +37,10 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 13] = [
         Self::Lsp,
-        Self::Wait,
+        Self::Shell,
+        Self::Watch,
         Self::Subagents,
         Self::Agents,
         Self::Teams,
@@ -56,7 +58,13 @@ impl Capability {
     pub fn starts_things(self) -> bool {
         matches!(
             self,
-            Self::Wait | Self::Subagents | Self::Agents | Self::Teams | Self::Workflow | Self::Loop
+            Self::Shell
+                | Self::Watch
+                | Self::Subagents
+                | Self::Agents
+                | Self::Teams
+                | Self::Workflow
+                | Self::Loop
         )
     }
 
@@ -70,7 +78,8 @@ impl Capability {
     pub fn name(self) -> &'static str {
         match self {
             Self::Lsp => "rimz-lsp",
-            Self::Wait => "rimz-wait",
+            Self::Shell => "rimz-shell",
+            Self::Watch => "rimz-watch",
             Self::Subagents => "rimz-subagents",
             Self::Agents => "rimz-agents",
             Self::Teams => "rimz-teams",
@@ -130,7 +139,8 @@ pub fn serve_args(only: &[Capability]) -> Vec<String> {
 #[derive(Debug)]
 pub enum Call {
     Lsp(LspArgs),
-    Wait(WaitArgs),
+    Shell(ShellArgs),
+    Watch(WatchArgs),
     Subagent(SubagentArgs),
     Agent(AgentArgs),
     Team(TeamArgs),
@@ -255,7 +265,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 20] = [
+pub static TOOLS: [Tool; 21] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -269,16 +279,28 @@ pub static TOOLS: [Tool; 20] = [
         parse: |arguments| parse::<LspArgs>(arguments).map(Call::Lsp),
     },
     Tool {
-        name: "wait",
-        capability: Some(Capability::Wait),
+        name: "shell",
+        capability: Some(Capability::Shell),
         purpose: Purpose::Start,
         read_only: false,
-        command: "wait",
+        command: "shell",
         declared: &[],
         verbs: &[],
-        schema: schema::<WaitArgs>,
+        schema: schema::<ShellArgs>,
         output: Some(start_schema),
-        parse: |arguments| parse::<WaitArgs>(arguments).map(Call::Wait),
+        parse: |arguments| parse::<ShellArgs>(arguments).map(Call::Shell),
+    },
+    Tool {
+        name: "watch",
+        capability: Some(Capability::Watch),
+        purpose: Purpose::Start,
+        read_only: false,
+        command: "watch",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<WatchArgs>,
+        output: Some(start_schema),
+        parse: |arguments| parse::<WatchArgs>(arguments).map(Call::Watch),
     },
     Tool {
         name: "subagent",
@@ -403,7 +425,8 @@ pub static TOOLS: [Tool; 20] = [
             "agents stop",
             "subagents stop",
             "teams stop",
-            "wait cancel",
+            "shell cancel",
+            "watch cancel",
             "workflow cancel",
         ],
         verbs: &[],
@@ -845,49 +868,47 @@ impl LspArgs {
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum WaitOn {
+pub enum ShellOn {
     Fail,
     Success,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum WaitTrigger {
-    Run,
-    Check,
-    File,
-    Pid,
-    When,
-    In,
-    At,
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WaitArgs {
-    /// What fires the wait.
-    pub trigger: WaitTrigger,
-    /// The trigger's argument: a command, path, PID, expression, duration, or time.
-    pub value: String,
-    /// `file` only: fire on the first new complete line holding this literal, case-sensitive text.
-    pub grep: Option<String>,
-    /// `check` only: sleep between runs (default `1s`; use `30s` when polling another host).
-    pub every: Option<String>,
-    /// `run`: wake only on this outcome (default either; `fail` for a server left running).
-    /// `check`: `fail` polls until it fails.
-    pub on: Option<WaitOn>,
-    /// What you will do on waking, 1 to 60 characters; give one to `when`, `in`, or `at`, whose
-    /// wake carries only what fired.
+pub struct ShellArgs {
+    /// The whole command as one string, run once through POSIX `sh -c` at the checkout's root
+    /// with stdin closed, stdout and stderr going to the shell's output file.
+    pub command: String,
+    /// Wake only on this outcome (default either; `fail` for a server left running).
+    pub on: Option<ShellOn>,
+    /// What you will do on waking, 1 to 60 characters.
     pub label: Option<String>,
-    /// `run`, `check`, `file`, or `pid`: one still-running notice after this long, whatever `on`
-    /// says (never a stop); set one longer than the watch should take when it could hang.
+    /// One still-running notice after this long, whatever `on` says (never a stop); 30m when
+    /// absent, or none while cache keepalive pings you. Set one longer than the command should
+    /// take when it could hang.
     pub check_in: Option<String>,
-    /// Checkout to arm in; defaults to the session's start directory. `run` and `check` run at
-    /// that checkout's root; a relative `file` resolves from `cwd`.
+    /// Checkout to run in; defaults to the session's start directory.
     pub cwd: Option<PathBuf>,
 }
 
-impl ToolArgs for WaitArgs {}
+impl ToolArgs for ShellArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WatchArgs {
+    /// A condition, firing once it reads true, already true when set included.
+    pub when: String,
+    /// What you will do on waking, 1 to 60 characters; the wake carries only what fired.
+    pub label: Option<String>,
+    /// One still-not-met notice after this long (never a stop); 30m when absent, or none while
+    /// cache keepalive pings you.
+    pub check_in: Option<String>,
+    /// Checkout to arm in, whose branch bare forge terms read; defaults to the session's start
+    /// directory.
+    pub cwd: Option<PathBuf>,
+}
+
+impl ToolArgs for WatchArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1416,7 +1437,8 @@ pub enum StartedKind {
     Team,
     Workflow,
     Schedule,
-    Wait,
+    Shell,
+    Watch,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1678,7 +1700,7 @@ fn tasks_schema() -> Value {
 }
 
 /// What `join` answers: the result of a thing that is done, that one still
-/// runs, or for a schedule or a wait how its outcome comes.
+/// runs, or for a schedule or a watch how its outcome comes.
 fn join_schema() -> Value {
     object(
         serde_json::json!({

@@ -468,9 +468,16 @@ fn capability_names_round_trip_and_become_only_arguments() {
     );
     let names = |only: &[Capability]| tools_for(only).map(|tool| tool.name).collect::<Vec<_>>();
     assert_eq!(
-        names(&[Capability::Wait]),
-        ["wait", "tasks", "join", "stop", "guide"]
+        names(&[Capability::Shell]),
+        ["shell", "tasks", "join", "stop"]
     );
+    assert_eq!(
+        names(&[Capability::Watch]),
+        ["watch", "tasks", "join", "stop", "guide"]
+    );
+    assert!(Capability::Shell.starts_things() && Capability::Watch.starts_things());
+    assert!(TOOLS.iter().all(|tool| tool.name != "wait"));
+    assert_eq!(Capability::from_name("rimz-wait"), None);
     assert_eq!(
         names(&[Capability::Subagents]),
         ["subagent", "tasks", "join", "stop", "guide"]
@@ -522,25 +529,28 @@ fn calls_carry_their_arguments_as_data() {
     assert_eq!(lsp.targets, ["--help", "Store"]);
     assert!(lsp.no_tests && !lsp.all);
     assert_eq!(lsp.limit, Some(5));
-    let Call::Wait(wait) = call(
-        "wait",
-        json!({"trigger": "run", "value": "--version; echo $(id)", "on": "fail", "check_in": "5m"}),
+    let Call::Shell(shell) = call(
+        "shell",
+        json!({"command": "--version; echo $(id)", "on": "fail", "check_in": "5m"}),
     ) else {
-        panic!("a wait call");
+        panic!("a shell call");
     };
-    assert_eq!(wait.trigger, WaitTrigger::Run);
-    assert_eq!(wait.value, "--version; echo $(id)");
-    assert_eq!(wait.check_in.as_deref(), Some("5m"));
+    assert_eq!(shell.command, "--version; echo $(id)");
+    assert_eq!(shell.check_in.as_deref(), Some("5m"));
+    let Call::Watch(watch) = call("watch", json!({"when": "--help && $(id)"})) else {
+        panic!("a watch call");
+    };
+    assert_eq!(watch.when, "--help && $(id)");
     let Call::Stop(stop) = call("stop", json!({"id": "--all"})) else {
         panic!("a stop call");
     };
     assert_eq!(stop.id, "--all");
-    let Call::Join(join) = call("join", json!({"id": "wait:$(id)", "timeout": "-1s"})) else {
+    let Call::Join(join) = call("join", json!({"id": "shell:$(id)", "timeout": "-1s"})) else {
         panic!("a join call");
     };
     assert_eq!(
         (join.id.as_str(), join.timeout.as_deref()),
-        ("wait:$(id)", Some("-1s"))
+        ("shell:$(id)", Some("-1s"))
     );
     let Call::Subagent(subagent) = call(
         "subagent",
@@ -639,12 +649,12 @@ fn data_tools_list_an_object_output_schema() {
         }
     }
     assert_eq!(
-        tool("wait").output_schema().unwrap()["required"],
+        tool("shell").output_schema().unwrap()["required"],
         json!(["id", "status", "stop", "report"])
     );
     assert_eq!(
         tool("subagent").output_schema(),
-        tool("wait").output_schema()
+        tool("watch").output_schema()
     );
     let subagent = tool("subagent").listing(&Wording::built_in());
     assert_eq!(
@@ -752,20 +762,16 @@ fn arguments_outside_the_schema_shape_are_refused() {
     for (name, arguments) in [
         ("lsp", json!({"verb": "rename", "targets": []})),
         ("lsp", json!({"verb": "def"})),
-        ("wait", json!({"trigger": "sleep", "value": "5m"})),
-        ("wait", json!({"trigger": "pid", "value": 42})),
-        (
-            "wait",
-            json!({"trigger": "in", "value": "5m", "timeout": "5m"}),
-        ),
+        ("shell", json!({"command": 42})),
+        ("watch", json!({"when": "pr=merged", "timeout": "5m"})),
         ("tasks", json!({"kind": "native"})),
         ("tasks", json!({"all": true})),
         ("join", json!({"timeout": "4m"})),
-        ("stop", json!({"id": "wait:a", "all": true})),
+        ("stop", json!({"id": "shell:a", "all": true})),
         ("self_tune", json!({"setting": "budget"})),
         ("self_molt", json!({"agent": "codex"})),
         ("notes", json!({"kind": "log", "title": 7})),
-        ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
+        ("shell", json!({"command": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
         ("blackboard_flip", json!({"stage": "Review"})),
         (
@@ -924,16 +930,14 @@ fn schemas_are_inline_objects_without_null_types() {
             "check"
         ])
     );
-    let wait = tool("wait").listing(&Wording::built_in());
+    let shell = tool("shell").listing(&Wording::built_in());
     assert_eq!(
-        wait["inputSchema"]["properties"]["on"]["enum"],
+        shell["inputSchema"]["properties"]["on"]["enum"],
         json!(["fail", "success"])
     );
-    assert_eq!(
-        wait["inputSchema"]["properties"]["trigger"]["enum"],
-        json!(["run", "check", "file", "pid", "when", "in", "at"])
-    );
-    assert_eq!(wait["inputSchema"]["required"], json!(["trigger", "value"]));
+    assert_eq!(shell["inputSchema"]["required"], json!(["command"]));
+    let watch = tool("watch").listing(&Wording::built_in());
+    assert_eq!(watch["inputSchema"]["required"], json!(["when"]));
     let guide = tool("guide").listing(&Wording::built_in());
     assert_eq!(guide["inputSchema"]["required"], json!(["name"]));
 }
@@ -1015,31 +1019,28 @@ fn the_full_listing_is_the_served_text() {
     assert!(!text.contains("## wait"), "{text}");
 }
 
-/// Without a trigger, `rimz wait` lists the waits and exits 0, which would
+/// Without a trigger, `rimz shell` and `rimz watch` list their rows and exit 0, which would
 /// read as a wake armed; modifiers alone are no trigger.
 #[test]
-fn a_wait_needs_one_trigger_and_its_value() {
-    for (arguments, missing) in [
-        (json!({}), "trigger"),
-        (json!({"value": "5m"}), "trigger"),
-        (json!({"trigger": "in"}), "value"),
-        (json!({"label": "x"}), "trigger"),
+fn a_shell_needs_its_command_and_a_watch_its_expression() {
+    for (name, arguments, missing) in [
+        ("shell", json!({}), "command"),
+        ("shell", json!({"label": "x", "on": "fail"}), "command"),
+        ("shell", json!({"command": "make", "on": "any"}), "`any`"),
         (
-            json!({"every": "1m", "grep": "x", "on": "fail", "check_in": "5m"}),
-            "trigger",
+            "shell",
+            json!({"command": "make", "file": "app.log"}),
+            "file",
         ),
-        (json!({"when": ["pr=merged"]}), "when"),
+        ("watch", json!({}), "when"),
+        ("watch", json!({"when": ["pr=merged"]}), "expected a string"),
+        ("watch", json!({"when": "pr=merged", "on": "fail"}), "on"),
     ] {
-        let err = tool("wait").call(arguments.clone()).expect_err("refused");
-        assert!(err.to_string().contains(missing), "{arguments}: {err}");
-    }
-    for trigger in ["run", "check", "file", "pid", "when", "in", "at"] {
-        let Call::Wait(wait) = call("wait", json!({"trigger": trigger, "value": "v"})) else {
-            panic!("a wait call");
-        };
-        let parsed: WaitTrigger = serde_json::from_value(json!(trigger)).unwrap();
-        assert_eq!(wait.trigger, parsed);
-        assert_eq!(wait.value, "v");
+        let err = tool(name).call(arguments.clone()).expect_err("refused");
+        assert!(
+            err.to_string().contains(missing),
+            "{name} {arguments}: {err}"
+        );
     }
 }
 
@@ -1091,7 +1092,7 @@ fn ambiguous_or_empty_arguments_are_refused() {
         (tune.setting, tune.value),
         (Some(TuneSetting::KeepWarm), None)
     );
-    for arguments in [json!({}), json!({"id": "wait:w", "timeout": 5})] {
+    for arguments in [json!({}), json!({"id": "shell:w", "timeout": 5})] {
         assert!(tool("join").call(arguments.clone()).is_err(), "{arguments}");
     }
 }

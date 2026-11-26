@@ -451,6 +451,7 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
     let kept = [
         file(&reader, "wait-recent.output", false),
         file(&reader, "wait-live.output", true),
+        file(&reader, "shell-live.output", true),
         file(&reader, "fresh.output", false),
         file(&reader, "recorded.output", true),
         file(&reader, "recorded.2.output", true),
@@ -458,6 +459,7 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
     ];
     let removed = [
         file(&reader, "wait-old.output", true),
+        file(&reader, "shell-old.output", true),
         file(&reader, "orphan.output", true),
         file(&emptied, "orphan.1234.output", true),
     ];
@@ -471,11 +473,11 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
     run.agent_name = Some("recorded".to_owned());
     run.status = crate::store::run::RunStatus::Completed;
     crate::store::run::write(&paths.runs_dir, &run).unwrap();
-    let watcher = |name: &str| Ok(name == "wait-live");
+    let watcher = |name: &str| Ok(["wait-live", "shell-live"].contains(&name));
     let mut preview = GcReport::default();
     collect_out(&paths, &watcher, &mut Sweep::new(true), &mut preview).unwrap();
-    assert_eq!(preview.sidecar_files_removed, 3);
-    assert_eq!(preview.wait_outputs_removed, 1);
+    assert_eq!(preview.sidecar_files_removed, 4);
+    assert_eq!(preview.wait_outputs_removed, 2);
     assert_eq!(preview.dirs_removed, 1);
     assert!(removed.iter().all(|path| path.exists()));
     let mut actual = GcReport::default();

@@ -10,7 +10,7 @@ fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
         "Type: SWAP_BRIEFING\nFrom: @rimz\nContent:\nThis is a fresh session of the same agent; \
          the earlier conversation is gone, and RimZ kept what was outstanding for it.\n\
          - 1 subagent still running (@otter); their results come to you: `rimz subagents list`\n\
-         - 1 wait still armed for you (ci-green): `rimz wait list`\n\
+         - 1 wait still armed for you (ci-green): `rimz shell list`, `rimz watch list`\n\
          - 2 messages queued for your next turn: `rimz message list`\n\
          Sent into the earlier session and not yet confirmed as read; RimZ sends a \
          message again, a command it does not:\n\
@@ -33,7 +33,7 @@ fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
 fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
     use crate::harness::schedule::arm::{
         ArmOutcome, DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec,
-        DeliveryTrigger, arm_delivery,
+        DeliveryTrigger, SubscriptionLifetime, arm_delivery,
     };
     let dir = tempfile::tempdir().unwrap();
     let workspace = crate::WorkspaceResolver::resolve(dir.path(), None).unwrap();
@@ -88,10 +88,15 @@ fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
     let ArmOutcome::Armed { name: own, .. } = arm_delivery(
         &workspace,
         DeliverySpec {
-            name: DeliveryName::MintWait,
+            name: DeliveryName::Mint,
             label: None,
             target,
-            trigger: DeliveryTrigger::Delay(std::time::Duration::from_secs(600)),
+            trigger: DeliveryTrigger::Condition {
+                expr: crate::harness::when::WhenExpr::parse(&["pr=merged".to_owned()]).unwrap(),
+                hold: None,
+                lifetime: SubscriptionLifetime::Once,
+                check_in: None,
+            },
             prompt: DeliveryPrompt::None,
             provenance: DeliveryProvenance::SelfWait { reader: None },
             deadline: None,
@@ -114,7 +119,7 @@ fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
             .filter(|line| line.starts_with("- "))
             .collect::<Vec<_>>(),
         [format!(
-            "- 1 wait still armed for you ({own}): `rimz wait list`"
+            "- 1 wait still armed for you ({own}): `rimz shell list`, `rimz watch list`"
         )],
         "rows armed: {names:?}"
     );

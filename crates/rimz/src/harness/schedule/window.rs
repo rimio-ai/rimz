@@ -1,5 +1,5 @@
 //! The add-time window check: whether a window condition can read its provider's windows
-//! before the run, for both `loop add` paths and `rimz wait`.
+//! before the run, for both `loop add` paths and `rimz watch`.
 
 use std::path::Path;
 

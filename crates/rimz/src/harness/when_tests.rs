@@ -1775,8 +1775,8 @@ fn the_conditions_guide_names_every_key_the_evaluator_reads() {
     let wording = crate::mcp::wording::Wording::built_in();
     let guide = wording
         .guide(
-            &[crate::mcp::catalog::Capability::Wait],
-            "rimz-wait/conditions",
+            &[crate::mcp::catalog::Capability::Watch],
+            "rimz-watch/conditions",
         )
         .expect("the conditions guide");
     let mut named: Vec<&str> = guide
@@ -1792,9 +1792,9 @@ fn the_conditions_guide_names_every_key_the_evaluator_reads() {
     assert_eq!(named, read);
     let wait = crate::mcp::catalog::TOOLS
         .iter()
-        .find(|tool| tool.name == "wait")
+        .find(|tool| tool.name == "watch")
         .map(|tool| wording.description(tool).text())
         .unwrap_or_default();
-    assert!(wait.contains("`rimz-wait/conditions`"), "{wait}");
+    assert!(wait.contains("`rimz-watch/conditions`"), "{wait}");
     assert!(!wait.contains("`pr.queue`"), "{wait}");
 }

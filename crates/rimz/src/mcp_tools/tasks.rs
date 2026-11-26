@@ -174,19 +174,18 @@ impl Sources<'_> {
             RowKey::Wait(name) => {
                 // The started list holds every wait that wakes the caller; a stop or join takes
                 // only one it armed, by the rule `owned::resolve` applies.
-                if let Some(entry) = self.catalog.visible().get(name).map(|task| task.entry())
+                let entry = self.catalog.visible().get(name).map(|task| task.entry());
+                if let Some(entry) = entry
                     && let Some(target) = &entry.wait
                     && !self.owners.armed_wait(entry, target, &self.catalog)
                 {
                     return None;
                 }
-                (
-                    TaskKind::Wait,
-                    name.clone(),
-                    "running",
-                    self.label(name),
-                    row.since,
-                )
+                let kind = match entry.map(super::owned::wait_kind) {
+                    Some(crate::harness::schedule::wait::WaitKind::Shell) => TaskKind::Shell,
+                    _ => TaskKind::Watch,
+                };
+                (kind, name.clone(), "running", self.label(name), row.since)
             }
         };
         Some((

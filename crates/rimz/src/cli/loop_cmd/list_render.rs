@@ -583,7 +583,7 @@ fn wake_ups(
     if rows.is_empty() {
         return Ok(());
     }
-    let counts = wake_view::counts(rows.iter().map(|row| row.owner_class()));
+    let counts = wake_view::counts(None, rows.iter().map(|row| row.owner_class()));
     let need_you = rows.iter().filter(|row| row.attention.is_some()).count();
     let health = if need_you == 0 {
         "all healthy".into()

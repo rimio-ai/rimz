@@ -78,11 +78,62 @@ pub(super) fn insert(paths: &StatePaths, name: &str, entry: &TaskEntry) -> Resul
 
 pub(super) fn remove(paths: &StatePaths, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
     mutate(paths, |tasks| {
-        if expected.is_some_and(|entry| tasks.get(name) != Some(entry)) {
+        if expected.is_some_and(|entry| !same_row(tasks.get(name), entry)) {
             return Ok((false, false));
         }
         let removed = tasks.remove(name).is_some();
         Ok((removed, removed))
+    })
+}
+
+/// Whether `stored` is the row `expected` was read as, a join claim written since aside.
+fn same_row(stored: Option<&TaskEntry>, expected: &TaskEntry) -> bool {
+    let unclaimed = |entry: &TaskEntry| {
+        let mut entry = entry.clone();
+        if let Some(meta) = &mut entry.wait_meta {
+            meta.joined_until = None;
+        }
+        entry
+    };
+    stored.is_some_and(|stored| unclaimed(stored) == unclaimed(expected))
+}
+
+/// Set or drop the join claim on shell `name`'s row; `false` once the row is gone.
+pub(super) fn claim_join(paths: &StatePaths, name: &str, until: Option<Timestamp>) -> Result<bool> {
+    mutate(paths, |tasks| {
+        let Some(meta) = tasks
+            .get_mut(name)
+            .and_then(|entry| entry.wait_meta.as_mut())
+        else {
+            return Ok((false, false));
+        };
+        let changed = meta.joined_until != until;
+        meta.joined_until = until;
+        Ok((true, changed))
+    })
+}
+
+/// Remove `name` if it is still the row `expected` was read as and a join's claim on it is
+/// ahead of `now`: the claimed outcome goes to the join, not to a message.
+pub(super) fn take_joined(
+    paths: &StatePaths,
+    name: &str,
+    expected: &TaskEntry,
+    now: Timestamp,
+) -> Result<bool> {
+    mutate(paths, |tasks| {
+        let claimed = tasks.get(name).is_some_and(|entry| {
+            same_row(Some(entry), expected)
+                && entry
+                    .wait_meta
+                    .as_ref()
+                    .and_then(|meta| meta.joined_until)
+                    .is_some_and(|until| until > now)
+        });
+        if claimed {
+            tasks.remove(name);
+        }
+        Ok((claimed, claimed))
     })
 }
 
@@ -192,11 +243,12 @@ pub(super) fn insert_delivery(
         return Ok((name.clone(), true));
     }
     let mut name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
+        let prefix = super::pending::WaitKind::of(entry).as_str();
         let petname = crate::agents::petname::mint(|name| {
-            let name = format!("wait-{name}");
+            let name = format!("{prefix}-{name}");
             tasks.contains_key(&name) || taken.contains(&name)
         });
-        format!("wait-{petname}")
+        format!("{prefix}-{petname}")
     });
     if entry.loop_task.is_some() {
         let prefix = name
@@ -251,6 +303,45 @@ pub(super) fn retire_session(
         let changed = !retired.is_empty();
         Ok((retired, changed))
     })
+}
+
+/// The `watch` key sets of the waits an older RimZ stored and this one no longer runs: a pid, a
+/// check, and a file, each sorted.
+const LEGACY_WATCHES: [&[&str]; 6] = [
+    &["pid"],
+    &["check", "every", "on"],
+    &["file"],
+    &["file", "grep"],
+    &["file", "mark"],
+    &["file", "grep", "mark"],
+];
+
+/// Whether `entry` is a stored pid, check, or file wait, which this RimZ no longer runs: a
+/// refused wait row whose `watch` has exactly the keys of one of [`LEGACY_WATCHES`]. Any other
+/// refused row is a newer RimZ's, kept for it.
+fn is_legacy_wait(entry: &TaskEntry) -> bool {
+    let Some(refused) = &entry.refused else {
+        return false;
+    };
+    let Some(watch) = refused
+        .raw
+        .get("watch")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let mut keys = watch.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+    refused.raw.get("wait").is_some() && LEGACY_WATCHES.contains(&keys.as_slice())
+}
+
+/// Every legacy wait row ([`is_legacy_wait`]), read without the lock.
+pub(super) fn legacy_waits(paths: &StatePaths) -> Vec<(String, TaskEntry)> {
+    load_from(&paths.root)
+        .0
+        .into_iter()
+        .filter(|(_, entry)| is_legacy_wait(entry))
+        .collect()
 }
 
 /// Every distinct session an instance row in this workspace is pinned to.

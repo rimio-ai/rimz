@@ -56,6 +56,9 @@ impl Fire<'_> {
         if let Some(done) = self.prepare_watch()? {
             return Ok(TaskFirePlan::Done(done));
         }
+        if let Some(done) = self.prepare_joined()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
         let target = delivery.target.clone();
         if catalog::delivery_holder(&self.entry.resolved_root(), &target)?.is_none() {
             if self.mode == LoopRunMode::Scheduled {
@@ -97,6 +100,31 @@ impl Fire<'_> {
                 DeliveryIntent::Wait
             },
         }))
+    }
+
+    /// A shell's terminal outcome a live join claims: the row is consumed and the outcome
+    /// recorded as joined, and no message is sent. A check-in passes on, claim or not.
+    fn prepare_joined(&mut self) -> Result<Option<TaskFireFinished>> {
+        let terminal = self.watch_spec().is_some()
+            && self
+                .watch_outcome()
+                .is_some_and(|watch| watch.verdict.is_terminal());
+        if !terminal
+            || self.mode != LoopRunMode::Scheduled
+            || !self.catalog.consume_joined(&self.name, Timestamp::now())?
+        {
+            return Ok(None);
+        }
+        let supersedes = self.superseded_check_ins();
+        let mut finished = self.record_terminal_with(
+            LoopRunResult::Joined,
+            LoopRunPresentation::default(),
+            TaskFireNotice::None,
+            None,
+            |_| {},
+        );
+        finished.supersedes = supersedes;
+        Ok(Some(finished))
     }
 
     /// The first scope gate that refuses a delivery, in ladder order; every one reads the
@@ -155,13 +183,15 @@ impl Fire<'_> {
         }
     }
 
-    /// Message ids of this arming's earlier check-ins, which a watch's
-    /// terminal fire makes stale; empty for every other delivery.
+    /// Message ids of this arming's earlier check-ins, which a shell's or a self wait's final
+    /// fire makes stale (a fire with a terminal verdict, or a condition's with none); empty
+    /// for a check-in and every other delivery.
     fn superseded_check_ins(&self) -> Vec<MessageId> {
-        let terminal = self
+        let checked_in = self.watch_spec().is_some() || self.entry.wait_meta.is_some();
+        let final_fire = self
             .watch_outcome()
-            .is_some_and(|outcome| outcome.verdict.is_terminal());
-        if self.watch_spec().is_none() || !terminal {
+            .is_none_or(|outcome| outcome.verdict.is_terminal());
+        if !checked_in || !final_fire {
             return Vec::new();
         }
         let armed_at = self.entry.wait_meta.as_ref().map(|meta| meta.armed_at);

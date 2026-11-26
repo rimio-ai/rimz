@@ -118,7 +118,7 @@ esac"#,
         let log = env.home_root.join("resolution-calls.log");
         let mut command = agent_wait(&env);
         command
-            .args(["--mux", "tmux", "wait", "list"])
+            .args(["--mux", "tmux", "shell", "list"])
             .env("PATH", &bin)
             .env("RIMZ_TEST_RESOLUTION_LOG", &log)
             .env("RIMZ_TEST_RESOLUTION_MODE", mode)
@@ -135,7 +135,7 @@ esac"#,
         );
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "@planner#main · no waits\n",
+            "@planner#main · no shells\n",
             "{mode}"
         );
         let records = env.diag_records(&session);

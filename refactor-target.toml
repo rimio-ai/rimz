@@ -542,7 +542,9 @@ upward-dependencies = [
 # read by auto-continue's recovery and the child limit reading (+1).
 # RenderedModel::name replaces RenderedModel's name field, so the sidebar drops child words
 # whole when an identity line does not fit (+1).
-surface-budget = 1410
+# The shell/watch split adds the wait-row vocabulary (a row's verb, a command's label) that
+# the card's cancel command and the keepalive text share (+2).
+surface-budget = 1412
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2703,7 +2705,14 @@ path = "crates/rimz/src/harness"
 # the CLI so the blackboard MCP tools flip as `rimz teams flip` does (+17).
 # `team_stage::refuse_shared_board` is the one-cohort-per-board rule both flip paths read (+1).
 # CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
-surface-budget = 1406
+# The shell/watch split: `WaitKind` names a row's kind for arming, listing, ids and the
+# check-in footer; `ShellJoin` and `named_records_since` let `join shell:` claim an outcome
+# from the MCP server (+11).
+# team_stage::ResumeWake tells the exec wrapper which wake a resumed member is owed, and
+# spec::is_cell_word is shared with config::effective's cell-word check (+2).
+# `ShellJoin::target` and `ShellJoin::last_outcome` let a join claim only for the shell's own
+# agent and answer a shell that has already exited (+2).
+surface-budget = 1421
 
 [[verdict]]
 kind = "item"

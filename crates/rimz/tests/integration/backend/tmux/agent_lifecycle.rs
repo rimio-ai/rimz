@@ -1461,7 +1461,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", launch_id)
             .env("RIMZ_AGENT_NAME", "planner")
-            .args(["--mux", "tmux", "wait", "--run", "printf self-wait-marker"])
+            .args(["--mux", "tmux", "shell", "--", "printf self-wait-marker"])
             .bounded_output()
             .expect("arm live self wait");
         assert!(
@@ -2066,7 +2066,7 @@ fn default_restart_resumes_the_agent_through_the_real_wrapper() {
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", launch.as_str())
         .env("RIMZ_AGENT_NAME", &handle)
-        .args(["--mux", "tmux", "wait", "--in", "30m"])
+        .args(["--mux", "tmux", "watch", "pr=merged"])
         .bounded_output()
         .expect("arm the agent's self wait");
     assert!(

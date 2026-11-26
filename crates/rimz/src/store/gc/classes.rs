@@ -704,7 +704,9 @@ fn collect_out(
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
             continue;
         };
-        let is_wait = name.starts_with("wait-");
+        let is_wait = crate::agents::petname::WAIT_NAME_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix));
         let live = if is_wait {
             watcher_is_live(name).map_err(|source| GcErr::Io {
                 path: path.clone(),

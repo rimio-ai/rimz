@@ -612,7 +612,7 @@ fn all_groups() -> Started {
         RowKind::Wait,
         "wait-gate",
         "sleeping",
-        Some("rimz wait cancel wait-gate"),
+        Some("rimz shell cancel wait-gate"),
     );
     wait.detail = vec!["wakes after cargo xtask gate".to_owned()];
     Started {
@@ -650,7 +650,7 @@ fn started_section_heads_each_group_with_rows_and_drops_empty_ones() {
         section,
         "Started\n\
          \x20 would hold a stop\n\
-         \x20   wait      wait-gate         sleeping  2m ago · wakes after cargo xtask gate  rimz wait cancel wait-gate\n\
+         \x20   wait      wait-gate         sleeping  2m ago · wakes after cargo xtask gate  rimz shell cancel wait-gate\n\
          \x20   message   msg_1             queued    2m ago                                 rimz message cancel msg_1\n\
          \x20   run       run_1             running   2m ago\n\
          \x20 close with it\n\
@@ -747,7 +747,7 @@ fn show_json_carries_started_only_when_it_has_rows() {
             "status": "sleeping",
             "since": "1970-01-01T00:58:00Z",
             "detail": ["wakes after cargo xtask gate"],
-            "command": "rimz wait cancel wait-gate",
+            "command": "rimz shell cancel wait-gate",
         })
     );
     assert_eq!(json["started"]["closing"][0]["kind"], "subagent");

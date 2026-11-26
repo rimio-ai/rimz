@@ -179,6 +179,7 @@ fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
         presentation: LoopRunPresentation::default(),
         transition: RunTransition::Recorded,
         notice,
+        supersedes: Vec::new(),
     };
     let skipped = skip_or_error(
         finished(

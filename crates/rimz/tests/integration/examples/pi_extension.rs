@@ -896,7 +896,7 @@ for (const loaded of [refused, bare]) {{
         );
     };
     let served = [
-        ("RIMZ_MCP_SERVE", "rimz-lsp:always,rimz-wait"),
+        ("RIMZ_MCP_SERVE", "rimz-lsp:always,rimz-watch"),
         ("RIMZ_MCP_CWD", "/work/tree"),
         (
             "RIMZ_PI_MCP_EXPOSURE",

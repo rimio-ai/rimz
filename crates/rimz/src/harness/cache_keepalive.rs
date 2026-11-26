@@ -282,7 +282,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> St
                     });
                 }
             }
-            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
+            PendingWaitTrigger::Command { .. } => {
                 facts.push(trigger.detail().unwrap_or_default());
                 facts.extend(elapsed);
             }
@@ -297,10 +297,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> St
                 });
                 facts.extend(elapsed);
             }
-            PendingWaitTrigger::Pid { .. }
-            | PendingWaitTrigger::Condition { .. }
-            | PendingWaitTrigger::File { .. }
-            | PendingWaitTrigger::Signal { .. } => {
+            PendingWaitTrigger::Condition { .. } | PendingWaitTrigger::Signal { .. } => {
                 facts.push(format!("{} {}", trigger.kind_word(), trigger.headline(now)));
                 facts.extend(elapsed);
             }

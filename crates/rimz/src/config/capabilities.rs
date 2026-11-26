@@ -127,7 +127,7 @@ mod tests {
             ("rimz-lsp", "rimz-lsp", None),
             (" rimz-reflect ", "rimz-reflect", None),
             ("rimz-lsp:deferred", "rimz-lsp", Some(LoadMode::Deferred)),
-            ("rimz-wait : always", "rimz-wait", Some(LoadMode::Always)),
+            ("rimz-watch : always", "rimz-watch", Some(LoadMode::Always)),
             ("rimz:deferred", "rimz", Some(LoadMode::Deferred)),
         ] {
             let entry: RimzEntry = input.parse().unwrap();

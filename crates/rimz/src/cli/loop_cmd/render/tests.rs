@@ -1762,6 +1762,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         transcript_path: None,
         last_message: None,
         target: None,
+        wakes: None,
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,

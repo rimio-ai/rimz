@@ -44,7 +44,7 @@ pub struct DoctorArgs {
     /// and message failure), and measure disk use for STORAGE and TEMP UNITS by walking the RimZ
     /// home. STORAGE adds per-folder room entries and warns above 150,000 in unswept folders.
     /// The bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
-    /// The audit can take minutes; an agent runs it under rimz wait --run.
+    /// The audit can take minutes; an agent runs it under rimz shell.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.

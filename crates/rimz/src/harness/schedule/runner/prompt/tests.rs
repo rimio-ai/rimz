@@ -21,6 +21,7 @@ fn meta(_handle: &str) -> WaitMeta {
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
         reader: None,
+        joined_until: None,
     }
 }
 
@@ -144,128 +145,6 @@ fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
 }
 
 #[test]
-fn polled_waits_name_their_spec_and_never_claim_no_output() {
-    let meta = meta("@coder#feat-x");
-    for (spec, headline) in [
-        (
-            crate::config::WatchSpec::Pid { pid: 42 },
-            "waited on pid 42",
-        ),
-        (
-            crate::config::WatchSpec::Check {
-                check: "nc -z localhost 3000".to_owned(),
-                every: "1s".to_owned(),
-                on: crate::config::CheckOn::Success,
-            },
-            "waited on check `nc -z localhost 3000`",
-        ),
-        (
-            crate::config::WatchSpec::File {
-                file: "/repo/app.log".into(),
-                grep: None,
-                mark: None,
-            },
-            "waited on file /repo/app.log",
-        ),
-    ] {
-        let task = TaskEntry {
-            watch: Some(spec),
-            timeout: Some("5m".to_owned()),
-            ..task()
-        };
-        for (verdict, label, footer) in [
-            (
-                WatchVerdict::Met {
-                    elapsed_ms: 3_000,
-                    line: None,
-                },
-                "met after 3s",
-                "",
-            ),
-            (
-                WatchVerdict::NotMet {
-                    elapsed_ms: 300_000,
-                },
-                "still not met after 5m · still watching",
-                "\n\nStop it: rimz wait cancel wait-test\nAnother check-in: rimz wait --in 5m",
-            ),
-        ] {
-            for (bytes, segment) in [
-                (0, ""),
-                (
-                    20,
-                    " · output: /state/out/planner/wait-test.output (<1k tokens, 1 line)",
-                ),
-            ] {
-                let signal = Signal {
-                    watch: Some(WatchOutcome {
-                        verdict: verdict.clone(),
-                        output: String::new(),
-                        output_path: Some("/state/out/planner/wait-test.output".into()),
-                        summary: FileSummary {
-                            bytes,
-                            lines: bytes.min(1),
-                            tokens: bytes / 4,
-                        },
-                    }),
-                    ..signal("wait.test", serde_json::json!({}))
-                };
-                assert_eq!(
-                    compose_wait(
-                        "wait-test",
-                        &task,
-                        Some(&meta),
-                        Evidence::Signal(&signal),
-                        "",
-                        now(),
-                    ),
-                    format!("{headline}\n{label}{segment} [wait-test]{footer}")
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn file_grep_wait_inlines_the_matched_line() {
-    let task = TaskEntry {
-        watch: Some(crate::config::WatchSpec::File {
-            file: "/repo/app.log".into(),
-            grep: Some("listening".to_owned()),
-            mark: None,
-        }),
-        ..task()
-    };
-    let signal = Signal {
-        watch: Some(WatchOutcome {
-            verdict: WatchVerdict::Met {
-                elapsed_ms: 42_000,
-                line: Some("listening on :3000".to_owned()),
-            },
-            output: "listening on :3000".to_owned(),
-            output_path: Some("/state/out/planner/wait-test.output".into()),
-            summary: FileSummary {
-                bytes: 19,
-                lines: 1,
-                tokens: 5,
-            },
-        }),
-        ..signal("wait.test", serde_json::json!({}))
-    };
-    assert_eq!(
-        compose_wait(
-            "wait-test",
-            &task,
-            None,
-            Evidence::Signal(&signal),
-            "",
-            now()
-        ),
-        "waited on file /repo/app.log for `listening`\nmet after 42s: `listening on :3000` · output: /state/out/planner/wait-test.output (<1k tokens, 1 line) [wait-test]"
-    );
-}
-
-#[test]
 fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
     for timeout in [None, Some("1s"), Some("12m")] {
         let task = TaskEntry {
@@ -293,9 +172,6 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                 }),
                 ..signal("wait.test", serde_json::json!({}))
             };
-            let next = timeout
-                .map(|delay| format!("\nAnother check-in: rimz wait --in {delay}"))
-                .unwrap_or_default();
             let path = if output.is_empty() {
                 " · no output"
             } else {
@@ -311,11 +187,43 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m · still watching{path} [wait-test]\n\nStop it: rimz wait cancel wait-test{next}"
+                    "waited on `cargo test`\nstill running after 30m · still watching{path} [wait-test]\n\nStop it: rimz shell cancel wait-test"
                 )
             );
         }
     }
+}
+
+#[test]
+fn a_watch_check_in_names_its_condition_and_how_to_stop_it() {
+    let task = TaskEntry {
+        when: Some(vec!["pr=merged".to_owned()]),
+        timeout: Some("30m".to_owned()),
+        ..task()
+    };
+    let signal = Signal {
+        watch: Some(WatchOutcome {
+            verdict: WatchVerdict::NotMet {
+                elapsed_ms: 1_800_000,
+            },
+            output: String::new(),
+            output_path: None,
+            summary: FileSummary::default(),
+        }),
+        ..signal("watch.watch-test", serde_json::json!({}))
+    };
+    assert_eq!(
+        compose_wait(
+            "watch-test",
+            &task,
+            Some(&meta("@coder")),
+            Evidence::Signal(&signal),
+            "",
+            now()
+        ),
+        "waited on pr=merged\nstill not met after 30m · still watching [watch-test]\n\nStop it: \
+         rimz watch cancel watch-test"
+    );
 }
 
 #[test]

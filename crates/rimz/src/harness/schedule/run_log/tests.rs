@@ -305,6 +305,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         transcript_path: None,
         last_message: None,
         target: None,
+        wakes: None,
         cost_usd: None,
         input_tokens: None,
         output_tokens: None,
@@ -312,12 +313,71 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
     }
 }
 
+/// Only a record whose fire consumed the row ends a self wait's arming: a gate or an overlap
+/// that saw the exit leaves the row to fire again.
+#[test]
+fn only_a_consuming_terminal_record_ends_an_arming() {
+    use LoopRunResult::*;
+    let ends = |result, watch: Option<WatchVerdict>| {
+        let mut record = record("shell-otter", 1, result);
+        record.watch = watch;
+        record.ends_arming()
+    };
+    let exited = || {
+        Some(WatchVerdict::Exited {
+            code: Some(0),
+            elapsed_ms: 10,
+        })
+    };
+    let read: Vec<_> = [
+        Delivered,
+        Joined,
+        CheckSkipped,
+        TargetGone,
+        BudgetSkipped,
+        Overlapped,
+        Errored,
+    ]
+    .into_iter()
+    .map(|result| (result, ends(result, exited())))
+    .chain([
+        (
+            Delivered,
+            ends(Delivered, Some(WatchVerdict::NotMet { elapsed_ms: 10 })),
+        ),
+        (Delivered, ends(Delivered, None)),
+    ])
+    .collect();
+    assert_eq!(
+        read,
+        [
+            (Delivered, true),
+            (Joined, true),
+            (CheckSkipped, true),
+            (TargetGone, true),
+            (BudgetSkipped, false),
+            (Overlapped, false),
+            (Errored, false),
+            (Delivered, false),
+            (Delivered, false),
+        ]
+    );
+    let mut canceled = record("shell-otter", 1, Canceled);
+    assert!(!canceled.ends_arming(), "a stopped run ends no arming");
+    canceled.wakes = Some(crate::config::TaskTarget {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: "launch-session".into(),
+        handle: "@otter".into(),
+    });
+    assert!(canceled.ends_arming(), "a shell's cancel ends its arming");
+}
+
 #[test]
 fn acting_polarity_preserves_show_membership() {
     use LoopRunResult::*;
     for (results, expected) in [
         (
-            vec![Completed, Delivered, Launched],
+            vec![Completed, Delivered, Joined, Launched],
             Some(RunPolarity::Good),
         ),
         (

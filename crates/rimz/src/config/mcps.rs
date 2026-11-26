@@ -162,10 +162,10 @@ impl fmt::Display for McpName {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum McpListErr {
     #[error(
-        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, \
-         rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
-         rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or one of your own MCP servers, \
-         each name with an optional `:always` or `:deferred`"
+        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-shell, \
+         rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, \
+         rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or one of your own \
+         MCP servers, each name with an optional `:always` or `:deferred`"
     )]
     InvalidName(String),
     #[error(
@@ -245,7 +245,7 @@ mod tests {
             ("*", "*", None),
             ("github:always", "github", Some(LoadMode::Always)),
             ("rimz:deferred", "rimz", Some(LoadMode::Deferred)),
-            (" rimz-wait:always ", "rimz-wait", Some(LoadMode::Always)),
+            (" rimz-watch:always ", "rimz-watch", Some(LoadMode::Always)),
         ] {
             let entry: McpName = input.parse().unwrap();
             assert_eq!((entry.name(), entry.mode()), (name, mode), "{input}");
@@ -287,9 +287,10 @@ mod tests {
         assert_eq!(
             "github:eager".parse::<McpName>().unwrap_err().to_string(),
             "invalid mcps entry `github:eager`: list `*`, `rimz`, a RimZ capability \
-             (rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, \
-             rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or \
-             one of your own MCP servers, each name with an optional `:always` or `:deferred`"
+             (rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, \
+             rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, \
+             rimz-blackboard), or one of your own MCP servers, each name with an optional \
+             `:always` or `:deferred`"
         );
         assert_eq!(
             parse_mcp_list(&["github".to_owned(), "github".to_owned()]).unwrap_err(),

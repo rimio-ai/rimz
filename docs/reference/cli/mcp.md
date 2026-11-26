@@ -26,7 +26,8 @@ Each tool call but `guide`'s does the job of one `rimz` command, inside the serv
 | Capability | Tool | Arguments | Command |
 | --- | --- | --- | --- |
 | `rimz-lsp` | `lsp` | `verb` (`def`, `hover`, `refs`, `callers`, `callees`, `impl`, `symbols`, `find`, `show`, `check`), `targets[]`; optional `all`, `no_tests`, `external`, `limit`, `full`, `fix`, `hints`, `server` (ignored by `check`), `cwd` | `rimz lsp <verb> [flags] -- <targets>` |
-| `rimz-wait` | `wait` | `trigger` (`run`, `check`, `file`, `pid`, `when`, `in`, `at`) and its `value`, a string; optional `grep`, `every`, `on` (`fail`, `success`), `label`, `check_in`, `cwd` | `rimz wait --<trigger>=<value> ...` |
+| `rimz-shell` | `shell` | `command`; optional `on` (`fail`, `success`), `label`, `check_in`, `cwd` | `rimz shell [flags] -- <command>` |
+| `rimz-watch` | `watch` | `when`, one expression; optional `label`, `check_in`, `cwd` | `rimz watch '<expr>' [flags]` |
 | `rimz-subagents` | `subagent` | `profile` and `prompt`, neither blank; optional `description`, `cwd`, `timeout` (a duration), `model`, `effort`, `agent` | `rimz subagents <profile> <prompt> [flags]` |
 | `rimz-agents` | `agent` | `profile` (one seat, never a team) and `prompt`, neither blank; optional `description`, `name`, `agent`, at most one of `worktree`, `from_pr` (a number or URL), and `cwd`, and `fresh` (only with `worktree`) | `rimz agents <profile> --bg --new-tab [flags] <prompt>` |
 | `rimz-teams` | `team` | `team` (a configured team) and `prompt`, neither blank, exactly one of `worktree` and `from_pr` (a number or URL); optional `description` | `rimz teams launch <team> [flags] <prompt>` |

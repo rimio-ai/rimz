@@ -194,6 +194,7 @@ fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo xtask gate".to_owned(),
+                label: None,
             },
             armed_at: Some(ts(900)),
         });

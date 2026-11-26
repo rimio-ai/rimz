@@ -284,21 +284,11 @@ pub enum PendingWaitTrigger {
         #[serde(default)]
         delay: Option<String>,
     },
-    Pid {
-        pid: u32,
-    },
+    /// A shell's command, with the label it was armed with.
     Command {
         command: String,
-    },
-    /// A polled `--check` predicate.
-    Check {
-        command: String,
-    },
-    /// A `--file` watch, optionally for a new line matching `grep`.
-    File {
-        path: std::path::PathBuf,
         #[serde(default)]
-        grep: Option<String>,
+        label: Option<String>,
     },
     Signal {
         selector: String,
@@ -328,13 +318,9 @@ impl PendingWait {
             }
             PendingWaitTrigger::Timer { due, .. } if *due <= now => "wakes now".to_owned(),
             PendingWaitTrigger::Timer { .. } => format!("wakes {headline}"),
-            PendingWaitTrigger::Pid { .. } => {
-                format!("wakes after {} {headline}", self.trigger.kind_word())
-            }
-            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
+            PendingWaitTrigger::Command { .. } => {
                 format!("wakes after {}", self.trigger.detail().unwrap_or_default())
             }
-            PendingWaitTrigger::File { .. } => format!("wakes when {headline}"),
             PendingWaitTrigger::Signal { .. } => format!("wakes on {headline}"),
             PendingWaitTrigger::Condition { .. } => format!("wakes when {headline}"),
         }
@@ -342,16 +328,21 @@ impl PendingWait {
 }
 
 impl PendingWaitTrigger {
+    /// The command that lists and cancels this wait: `shell` for a command, else `watch`.
+    pub(crate) fn verb(&self) -> &'static str {
+        match self {
+            Self::Command { .. } => "shell",
+            _ => "watch",
+        }
+    }
+
     pub(crate) fn kind_word(&self) -> &'static str {
         match self {
             Self::Subagent { .. } => "subagent",
             Self::Team { .. } => "team",
             Self::Workflow { .. } => "workflow",
             Self::Timer { .. } => "timer",
-            Self::Pid { .. } => "pid",
-            Self::Command { .. } => "command",
-            Self::Check { .. } => "check",
-            Self::File { .. } => "file",
+            Self::Command { .. } => "shell",
             Self::Signal { .. } => "signal",
             Self::Condition { .. } => "when",
         }
@@ -387,20 +378,9 @@ impl PendingWaitTrigger {
                     format!("in {}", duration_label(minutes))
                 }
             }
-            Self::Pid { pid } => pid.to_string(),
-            Self::File { path, grep } => {
-                let name = path
-                    .file_name()
-                    .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy());
-                let label = match grep {
-                    Some(grep) => format!("{name} matches `{grep}`"),
-                    None => format!("{name} changes"),
-                };
-                single_line_description(&label).unwrap_or_default()
-            }
-            Self::Command { command } | Self::Check { command } => {
-                crate::proc::command::program_label(command)
-            }
+            Self::Command { command, label } => label
+                .clone()
+                .unwrap_or_else(|| crate::proc::command::program_label(command)),
             Self::Signal { selector, .. } => selector.clone(),
             Self::Condition { when, hold } => match hold {
                 Some(hold) => format!("{when}, for {hold}"),
@@ -413,7 +393,7 @@ impl PendingWaitTrigger {
     /// and every other token kept, separate from the headline.
     pub(crate) fn detail(&self) -> Option<String> {
         match self {
-            Self::Command { command } | Self::Check { command } => {
+            Self::Command { command, .. } => {
                 single_line_description(&crate::proc::command::command_program_basename(command))
             }
             _ => None,

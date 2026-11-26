@@ -609,6 +609,24 @@ impl TaskCatalog {
         })
     }
 
+    /// Consume instance row `name` when a live join claims its outcome, retiring its task
+    /// record as a consumed fire does; `false` when no claim holds.
+    pub(super) fn consume_joined(&self, name: &str, now: jiff::Timestamp) -> Result<bool> {
+        let Some(task) = self
+            .runnable
+            .get(name)
+            .filter(|task| task.source() == TaskSource::Instance)
+        else {
+            return Ok(false);
+        };
+        let paths = StatePaths::for_project_root(&task.entry().resolved_root())?;
+        if !instances::take_joined(&paths, name, task.entry(), now)? {
+            return Ok(false);
+        }
+        retire(&task.binding(name), false)?;
+        Ok(true)
+    }
+
     /// Before a task is replaced: cancel its live runs that have not acted and drop its
     /// waiting triggers, at its new root and at the root it had.
     fn clear_task_state(&self, name: &str, root: &Path) -> Result<()> {

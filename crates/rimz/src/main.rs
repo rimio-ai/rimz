@@ -131,7 +131,7 @@ fn suppresses_repeats_for(args: impl Iterator<Item = OsString>) -> bool {
             (previous.as_deref(), arg.as_deref()),
             (Some("sidebar"), Some("host"))
                 | (Some("hooks"), Some("drain"))
-                | (Some("wait"), Some("watch"))
+                | (Some("shell"), Some("watcher"))
         ) {
             return true;
         }
@@ -213,7 +213,7 @@ mod tests {
             "s",
         ]));
         assert!(suppresses(&["hooks", "drain", "--project-root", "/r"]));
-        assert!(suppresses(&["--root", "/r", "wait", "watch", "build"]));
+        assert!(suppresses(&["--root", "/r", "shell", "watcher", "build"]));
     }
 
     #[test]
@@ -221,8 +221,9 @@ mod tests {
         assert!(!suppresses(&["hooks", "apply"]));
         assert!(!suppresses(&["hooks"]));
         assert!(!suppresses(&["sidebar", "serve"]));
-        assert!(!suppresses(&["wait", "--in", "5m"]));
-        assert!(!suppresses(&["wait", "list"]));
+        assert!(!suppresses(&["shell", "--", "watcher"]));
+        assert!(!suppresses(&["shell", "list"]));
+        assert!(!suppresses(&["watch", "pr=merged"]));
         assert!(!suppresses(&["status"]));
     }
 

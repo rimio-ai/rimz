@@ -13,7 +13,7 @@ use rimz::harness::schedule::arming::ArmState;
 pub(super) use rimz::harness::schedule::wait::{
     ConditionReading, RoomSource, WakeRow, read_condition, runtime_for_root, worktree_name,
 };
-use rimz::harness::schedule::wait::{WakeState, target_agent};
+use rimz::harness::schedule::wait::{WaitKind, WakeState, target_agent};
 use rimz::harness::schedule::{self, DeliveryOwner, TaskActionKind, Trigger, delivery_owner};
 use rimz::harness::when::WhenExpr;
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -110,7 +110,10 @@ pub(super) fn condition_now(
         .unwrap_or_default()
 }
 
-pub(super) fn counts<'a>(owners: impl IntoIterator<Item = DeliveryOwner<'a>>) -> String {
+pub(super) fn counts<'a>(
+    kind: Option<WaitKind>,
+    owners: impl IntoIterator<Item = DeliveryOwner<'a>>,
+) -> String {
     let (mut waits, mut subscriptions) = (0_usize, 0_usize);
     for owner in owners {
         if owner == DeliveryOwner::SelfWait {
@@ -121,7 +124,7 @@ pub(super) fn counts<'a>(owners: impl IntoIterator<Item = DeliveryOwner<'a>>) ->
     }
     let mut parts = Vec::new();
     if waits > 0 {
-        parts.push(wait_count(waits));
+        parts.push(wait_count(kind, waits));
     }
     if subscriptions > 0 {
         parts.push(format!(
@@ -130,21 +133,28 @@ pub(super) fn counts<'a>(owners: impl IntoIterator<Item = DeliveryOwner<'a>>) ->
         ));
     }
     if parts.is_empty() {
-        return "no waits".into();
+        return wait_count(kind, 0);
     }
     parts.join(" · ")
 }
 
-fn wait_count(count: usize) -> String {
-    if count == 0 {
-        "no waits".into()
-    } else {
-        format!("{count} wait{}", if count == 1 { "" } else { "s" })
+/// `count` self waits named by `kind`'s noun, or as waits of every kind when none.
+fn wait_count(kind: Option<WaitKind>, count: usize) -> String {
+    let (one, many) = match kind {
+        Some(WaitKind::Shell) => ("shell", "shells"),
+        Some(WaitKind::Watch) => ("watch", "watches"),
+        None => ("wait", "waits"),
+    };
+    match count {
+        0 => format!("no {many}"),
+        1 => format!("1 {one}"),
+        _ => format!("{count} {many}"),
     }
 }
 
 pub(super) fn write_self(
     out: &mut impl Write,
+    kind: WaitKind,
     agent: &AgentState,
     snapshot: &SidebarSnapshot,
     rows: &[WakeRow],
@@ -176,7 +186,7 @@ pub(super) fn write_self(
     let header = format!(
         "{} · {}",
         rimz::address::named_handle(agent, &rimz::address::addressable_agents(snapshot), true),
-        wait_count(waits.len())
+        wait_count(Some(kind), waits.len())
     );
     if waits.is_empty() && !also.is_empty() {
         writeln!(out, "{header} · also woken by {also}")?;
@@ -378,13 +388,6 @@ fn trigger_names(rows: &[&WakeRow], now: Timestamp) -> String {
                 |_| "invalid trigger".into(),
                 |parsed| match &parsed.trigger {
                     Trigger::Watch(rimz::config::WatchSpec::Command(_)) => "on command exit".into(),
-                    Trigger::Watch(rimz::config::WatchSpec::Pid { pid }) => {
-                        format!("on pid {pid} exit")
-                    }
-                    Trigger::Watch(rimz::config::WatchSpec::Check { .. }) => "on check".into(),
-                    Trigger::Watch(rimz::config::WatchSpec::File { file, .. }) => {
-                        format!("on file {}", checkout_name(file))
-                    }
                     _ => parsed.describe(),
                 },
             );
@@ -540,6 +543,7 @@ mod tests {
         let owner = &snapshot.agents[0];
         write_self(
             &mut out,
+            WaitKind::Shell,
             owner,
             &snapshot,
             &[],
@@ -547,7 +551,10 @@ mod tests {
             snapshot.generated_at,
         )
         .unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "@claude#lane · no waits\n");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "@claude#lane · no shells\n"
+        );
     }
 
     #[test]
@@ -587,6 +594,7 @@ mod tests {
         let mut out = Vec::new();
         write_self(
             &mut out,
+            WaitKind::Watch,
             &snapshot.agents[0],
             &snapshot,
             &[],
@@ -596,7 +604,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "@claude#lane (@round-binder) · no waits\n"
+            "@claude#lane (@round-binder) · no watches\n"
         );
         let mut child = rimz::testkit::agent_state("codex", "child", snapshot.generated_at);
         rimz::testkit::set_lane(&mut child, "lane");

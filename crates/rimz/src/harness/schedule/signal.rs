@@ -6,7 +6,7 @@ pub mod workflow;
 pub(crate) use team::team_lifecycle_signals;
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, Read, Seek, Write};
+use std::io::{Read, Seek};
 
 use anyhow::Context;
 use serde_json::{Map, Value};
@@ -15,7 +15,7 @@ use super::arming;
 use super::catalog::TaskCatalog;
 use super::run_log::check_record;
 use crate::RuntimePaths;
-use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
+use crate::config::{TaskEntry, WatchSpec};
 use crate::disk::lease;
 use crate::disk::paths::StatePaths;
 use crate::harness::check_run::{CheckEcho, WAIT_TAIL_CAP, WatchDeadline, run_command};
@@ -123,7 +123,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
             workspace.project_root.display()
         );
     }
-    let Some(spec) = &task.entry().watch else {
+    let Some(WatchSpec::Command(command)) = &task.entry().watch else {
         anyhow::bail!("wait {name} has no watch");
     };
     let timeout = task_timeout(task.entry())?;
@@ -135,9 +135,9 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let started = std::time::Instant::now();
     let emit = |verdict, output| {
         let signal = Signal {
-            name: format!("wait.{name}")
+            name: format!("shell.{name}")
                 .parse()
-                .expect("generated wait signal name is valid"),
+                .expect("generated shell signal name is valid"),
             payload: Map::new(),
             source: SignalSource::Watch,
             watch: Some(WatchOutcome::measured(verdict, output, &output_path)),
@@ -153,9 +153,6 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         ) {
             tracing::warn!(task = name, error = %err, "firing watched wait");
         }
-    };
-    let WatchSpec::Command(command) = spec else {
-        return poll_watch(spec, &task.entry().run_dir(), &file, timeout, started, emit);
     };
     let outcome = run_command(
         &task.entry().run_dir(),
@@ -177,101 +174,6 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     Ok(())
 }
 
-/// One look at a polled watch's condition.
-enum Probe {
-    Pending,
-    /// `line` is the `--grep` match.
-    Met {
-        line: Option<String>,
-    },
-    /// The predicate itself cannot run (exit 126 or 127).
-    Broken {
-        code: i32,
-    },
-}
-
-/// Probe a polled watch until its condition holds, sleeping between probes and
-/// checking in once, between probes, when `timeout` passes.
-fn poll_watch(
-    spec: &WatchSpec,
-    run_dir: &Path,
-    file: &File,
-    timeout: Option<std::time::Duration>,
-    started: std::time::Instant,
-    emit: impl Fn(WatchVerdict, String),
-) -> anyhow::Result<()> {
-    let every = super::watch_interval(spec).context("wait has no valid polling interval")?;
-    let mut output = String::new();
-    let mut grep_cursor = match spec {
-        WatchSpec::File { mark, .. } => GrepCursor::armed(*mark),
-        _ => GrepCursor::default(),
-    };
-    let mut checked_in = false;
-    loop {
-        let probe = match spec {
-            // `run_watcher` runs a command watch once and never polls it.
-            WatchSpec::Command(_) => unreachable!("a watched command is not polled"),
-            WatchSpec::Pid { pid } => probe_pid(*pid)?,
-            WatchSpec::Check { check, on, .. } => {
-                let (probe, latest) = probe_check(run_dir, check, *on, file)?;
-                output = latest;
-                probe
-            }
-            WatchSpec::File {
-                file: path,
-                grep: None,
-                mark,
-            } => {
-                if FileMark::read(path)? == *mark {
-                    Probe::Pending
-                } else {
-                    Probe::Met { line: None }
-                }
-            }
-            WatchSpec::File {
-                file: path,
-                grep: Some(pattern),
-                ..
-            } => match grep_new_line(path, pattern, &mut grep_cursor)? {
-                None => Probe::Pending,
-                Some(line) => {
-                    let mut out = file;
-                    out.write_all(line.as_bytes())
-                        .and_then(|()| out.write_all(b"\n"))
-                        .context("writing matched line to wait output")?;
-                    output = bounded_line(&line);
-                    Probe::Met {
-                        line: Some(output.clone()),
-                    }
-                }
-            },
-        };
-        let elapsed_ms = elapsed_millis(started);
-        match probe {
-            Probe::Pending => {}
-            Probe::Met { line } => {
-                emit(WatchVerdict::Met { elapsed_ms, line }, output);
-                return Ok(());
-            }
-            Probe::Broken { code } => {
-                emit(
-                    WatchVerdict::Exited {
-                        code: Some(code),
-                        elapsed_ms,
-                    },
-                    output,
-                );
-                return Ok(());
-            }
-        }
-        if !checked_in && timeout.is_some_and(|timeout| started.elapsed() >= timeout) {
-            checked_in = true;
-            emit(WatchVerdict::NotMet { elapsed_ms }, output.clone());
-        }
-        std::thread::sleep(every);
-    }
-}
-
 fn task_timeout(entry: &TaskEntry) -> anyhow::Result<Option<std::time::Duration>> {
     entry
         .timeout
@@ -279,108 +181,6 @@ fn task_timeout(entry: &TaskEntry) -> anyhow::Result<Option<std::time::Duration>
         .map(crate::utils::time::parse_compact_duration)
         .transpose()
         .map_err(|err| anyhow::anyhow!("{err}"))
-}
-
-fn probe_pid(pid: u32) -> anyhow::Result<Probe> {
-    let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
-    Ok(match nix::sys::signal::kill(process, None) {
-        Err(nix::errno::Errno::ESRCH) => Probe::Met { line: None },
-        Ok(()) | Err(_) => Probe::Pending,
-    })
-}
-
-/// Run the predicate once, leaving only this run's output in the wait's file.
-fn probe_check(
-    run_dir: &Path,
-    check: &str,
-    on: CheckOn,
-    file: &File,
-) -> anyhow::Result<(Probe, String)> {
-    file.set_len(0).context("truncating wait output")?;
-    let outcome = run_command(
-        run_dir,
-        check,
-        WatchDeadline::Watch(None),
-        CheckEcho::Tee {
-            file: file.try_clone()?,
-        },
-        &std::collections::BTreeMap::new(),
-        |_, _| {},
-        &mut None,
-    )?;
-    let record = check_record(&outcome);
-    let probe = match record.code {
-        Some(code @ (126 | 127)) => Probe::Broken { code },
-        _ if outcome.passed() == (on == CheckOn::Success) => Probe::Met { line: None },
-        _ => Probe::Pending,
-    };
-    Ok((probe, record.output))
-}
-
-/// Where a `--grep` watch has read to, in which file (`dev`, `ino`).
-#[derive(Default)]
-struct GrepCursor {
-    offset: u64,
-    file: Option<(u64, u64)>,
-}
-
-impl GrepCursor {
-    /// The end of the file as armed, or the start of whatever file appears.
-    fn armed(mark: Option<FileMark>) -> Self {
-        mark.map_or_else(Self::default, |mark| Self {
-            offset: mark.size,
-            file: Some((mark.dev, mark.ino)),
-        })
-    }
-}
-
-/// The first newline-terminated line at or after `cursor` that contains
-/// `pattern`, advancing `cursor` past every complete line read. A different
-/// file at the path, or one shorter than the cursor, is read from the start; an
-/// unterminated last line waits for its newline.
-fn grep_new_line(
-    path: &Path,
-    pattern: &str,
-    cursor: &mut GrepCursor,
-) -> anyhow::Result<Option<String>> {
-    let mut source = match File::open(path) {
-        Ok(source) => source,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err).with_context(|| format!("opening {}", path.display())),
-    };
-    let metadata = source.metadata()?;
-    let size = metadata.len();
-    let file = Some((
-        std::os::unix::fs::MetadataExt::dev(&metadata),
-        std::os::unix::fs::MetadataExt::ino(&metadata),
-    ));
-    if cursor.file != file || size < cursor.offset {
-        *cursor = GrepCursor { offset: 0, file };
-    }
-    source.seek(std::io::SeekFrom::Start(cursor.offset))?;
-    let mut reader = std::io::BufReader::new(source.take(size - cursor.offset));
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let read = reader.read_until(b'\n', &mut line)?;
-        if read == 0 || line.last() != Some(&b'\n') {
-            return Ok(None);
-        }
-        cursor.offset += read as u64;
-        let text = String::from_utf8_lossy(&line[..read - 1]);
-        if text.contains(pattern) {
-            return Ok(Some(text.trim_end_matches('\r').to_owned()));
-        }
-    }
-}
-
-/// `text` cut to its first `WAIT_TAIL_CAP` bytes on a character boundary.
-fn bounded_line(text: &str) -> String {
-    let mut end = text.len().min(WAIT_TAIL_CAP);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
 }
 
 fn elapsed_millis(started: std::time::Instant) -> u64 {
@@ -678,47 +478,6 @@ mod tests {
                 Some(signal)
             );
         }
-    }
-
-    #[test]
-    fn file_grep_reads_complete_lines_from_the_cursor_and_restarts_on_a_new_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.log");
-        let grep = |cursor: &mut GrepCursor| grep_new_line(&path, "ready", cursor).unwrap();
-        assert_eq!(grep(&mut GrepCursor::default()), None);
-        std::fs::write(&path, "ready before arm\nbooting\n").unwrap();
-        let mark = FileMark::read(&path).unwrap();
-        let mut cursor = GrepCursor::armed(mark);
-        let append = |text: &str| {
-            std::fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .unwrap()
-                .write_all(text.as_bytes())
-                .unwrap();
-        };
-        append("still booting\nrea");
-        assert_eq!(grep(&mut cursor), None);
-        assert_eq!(
-            cursor.offset,
-            "ready before arm\nbooting\nstill booting\n".len() as u64
-        );
-        append("dy at last\r\n");
-        assert_eq!(grep(&mut cursor).as_deref(), Some("ready at last"));
-
-        // Truncated in place below the cursor.
-        std::fs::write(&path, "ready \u{fffd}again\n").unwrap();
-        assert_eq!(grep(&mut cursor).as_deref(), Some("ready \u{fffd}again"));
-        assert_eq!(grep(&mut cursor), None);
-
-        // Rotated: a new file at the path, already longer than the cursor.
-        let rotated = dir.path().join("app.log.new");
-        std::fs::write(&rotated, "ready in the new file\n".repeat(4)).unwrap();
-        let mut cursor = GrepCursor::armed(mark);
-        std::fs::rename(&rotated, &path).unwrap();
-        assert!(std::fs::metadata(&path).unwrap().len() > cursor.offset);
-        assert_eq!(grep(&mut cursor).as_deref(), Some("ready in the new file"));
-        assert_eq!(cursor.offset, "ready in the new file\n".len() as u64);
     }
 
     #[test]

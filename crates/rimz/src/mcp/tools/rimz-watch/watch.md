@@ -1,0 +1,3 @@
+Your condition watch: wake once a state outside your shell reads true, without polling it, then go on with other work or end your turn; the wake reaches you as a message, mid-turn or as your next prompt, with your context intact. Reach for it to wait on CI, a pull request, a review, a team stage, or a usage window. To wait on a command, a log, or a process, run it in `shell` instead.
+
+A `when` of `ci=passed,failed` (your checkout's CI settles) or `pr=merged` (its pull request merges) reads the checkout you arm from. For any other condition (another branch, a review verdict, a team stage, a usage-window level, or combined terms), call `guide` with `rimz-watch/conditions`.

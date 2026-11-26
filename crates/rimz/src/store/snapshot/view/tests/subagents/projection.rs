@@ -318,6 +318,7 @@ fn child_stall_uses_the_configured_window_but_not_sleep_or_errors() {
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),
+                label: None,
             },
             armed_at: Some(ago(3_600)),
         });
@@ -924,6 +925,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
         name: "wait-command".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
+            label: None,
         },
         armed_at: Some(ago(60)),
     });

@@ -137,7 +137,7 @@ fn outside_raise_without_text_refuses_an_agent_sleeping_on_a_timer() {
         .rimz()
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", "raised-session")
-        .args(["wait", "--in", "1h"])
+        .args(["watch", "pr=merged"])
         .bounded_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");

@@ -27,9 +27,10 @@ pub struct LaunchSelection {
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{ENV_SERVE} entry `{0}` is not a RimZ capability (rimz-lsp, rimz-wait, rimz-subagents, \
-     rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, \
-     rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named once"
+    "{ENV_SERVE} entry `{0}` is not a RimZ capability (rimz-lsp, rimz-shell, rimz-watch, \
+     rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, \
+     rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named \
+     once"
 )]
 pub struct LaunchEnvErr(String);
 
@@ -85,11 +86,11 @@ mod tests {
     fn a_value_round_trips_and_a_bad_entry_is_named() {
         let served = vec![
             (Capability::Lsp, Some(LoadMode::Always)),
-            (Capability::Wait, None),
+            (Capability::Watch, None),
             (Capability::Notes, Some(LoadMode::Deferred)),
         ];
         let value = render(&served);
-        assert_eq!(value, "rimz-lsp:always,rimz-wait,rimz-notes:deferred");
+        assert_eq!(value, "rimz-lsp:always,rimz-watch,rimz-notes:deferred");
         assert_eq!(parse(&value), Ok(served));
         assert_eq!(
             parse(" rimz-lsp , rimz-control:always"),
@@ -99,7 +100,7 @@ mod tests {
             ])
         );
         for bad in ["rimz", "*", "github", "rimz-lsp:eager", "rimz-lsp:", ""] {
-            let value = format!("rimz-wait,{bad}");
+            let value = format!("rimz-watch,{bad}");
             assert_eq!(parse(&value), Err(LaunchEnvErr(bad.to_owned())), "{value}");
         }
         assert_eq!(
@@ -108,11 +109,10 @@ mod tests {
         );
         assert_eq!(
             LaunchEnvErr("rimz-x".to_owned()).to_string(),
-            "RIMZ_MCP_SERVE entry `rimz-x` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
-             rimz-ask, rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or \
-             `:deferred`, \
-             named once"
+            "RIMZ_MCP_SERVE entry `rimz-x` is not a RimZ capability (rimz-lsp, rimz-shell, \
+             rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, \
+             rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard) with an optional \
+             `:always` or `:deferred`, named once"
         );
     }
 
@@ -131,14 +131,14 @@ mod tests {
         assert_eq!(read(vars(None, Some("/w"))), Ok(None));
         assert_eq!(read(vars(Some(" "), Some("/w"))), Ok(None));
         assert_eq!(
-            read(vars(Some("rimz-wait"), Some("/w"))),
+            read(vars(Some("rimz-watch"), Some("/w"))),
             Ok(Some(LaunchSelection {
-                served: vec![(Capability::Wait, None)],
+                served: vec![(Capability::Watch, None)],
                 cwd: Some(PathBuf::from("/w")),
             }))
         );
         assert_eq!(
-            read(vars(Some("rimz-wait"), Some(""))).map(|read| read.map(|read| read.cwd)),
+            read(vars(Some("rimz-watch"), Some(""))).map(|read| read.map(|read| read.cwd)),
             Ok(Some(None))
         );
     }

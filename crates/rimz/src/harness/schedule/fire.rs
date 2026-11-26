@@ -456,8 +456,11 @@ fn fire_tasks(
     let scoped = scoped_tasks(&tasks, &records, &owned);
     let stamps = read_state(&path);
     let stored_when = last_when_states(runtime);
+    let stored_check_ins: BTreeMap<String, Timestamp> =
+        crate::disk::atomic::read_json_cache(&check_in_path(runtime));
     let mut state = BTreeMap::new();
     let mut when_states = BTreeMap::new();
+    let mut sent_check_ins = BTreeMap::new();
     let mut arming = BTreeMap::new();
     for (key, scope) in &scoped {
         let (task, name, checkout) = (&scope.task, &scope.name, scope.checkout.as_deref());
@@ -466,6 +469,9 @@ fn fire_tasks(
         }
         if let Some(when) = stamped(&stored_when, &records, task, name, checkout) {
             when_states.insert(key.clone(), when.clone());
+        }
+        if let Some(armed_at) = stamped(&stored_check_ins, &records, task, name, checkout) {
+            sent_check_ins.insert(key.clone(), *armed_at);
         }
         if let Some((_, record)) = records.live(&task.key(name))
             && let Some(entry) = record.arming
@@ -570,7 +576,40 @@ fn fire_tasks(
                     .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Condition { .. }))
         });
     }
+    let (due_check_ins, mut sent) = check_ins(
+        &tasks,
+        &verdicts,
+        &arming,
+        &next_when,
+        &sent_check_ins,
+        now.timestamp(),
+    );
     let mut fired = Vec::new();
+    for (key, armed_at) in due_check_ins {
+        let name = &scoped[&key].name;
+        let Some(signal) = when_check_in(&tasks[&key], name, now.timestamp()) else {
+            continue;
+        };
+        if spawn_loop_run(
+            runtime,
+            &tasks[&key],
+            project_root,
+            name,
+            Some((&signal, Timestamp::now())),
+            None,
+            scoped[&key].checkout.as_deref(),
+            host,
+        ) == LaunchOutcome::Started
+        {
+            fired.push(name.clone());
+            sent.insert(key, armed_at);
+        }
+    }
+    if sent != stored_check_ins
+        && let Err(err) = write_temp_then_rename_cache(&check_in_path(runtime), &sent)
+    {
+        tracing::warn!(workspace = %runtime.workspace_id, error = %err, "sidebar: failed to record loop check-ins; a sent one may go again");
+    }
     for (name, action) in actions {
         match action {
             Action::Arm => {}
@@ -613,7 +652,7 @@ fn fire_tasks(
             Action::WatchLost => {
                 let key = name;
                 let name = scoped[&key].name.clone();
-                let signal_name = match format!("wait.{name}").parse() {
+                let signal_name = match format!("shell.{name}").parse() {
                     Ok(signal_name) => signal_name,
                     Err(err) => {
                         tracing::debug!(
@@ -659,6 +698,32 @@ fn fire_tasks(
         }
     }
     fired
+}
+
+/// The signal a `when` self wait's check-in fires with: `watch.<name>`, carrying a not-met
+/// verdict for the time since it armed, which keeps the row.
+fn when_check_in(task: &LoadedTask, name: &str, now: Timestamp) -> Option<Signal> {
+    let armed_at = task.entry().wait_meta.as_ref()?.armed_at;
+    let signal_name = match format!("watch.{name}").parse() {
+        Ok(signal_name) => signal_name,
+        Err(err) => {
+            tracing::debug!(task = %name, error = %err, "check-in with an invalid signal name skipped");
+            return None;
+        }
+    };
+    Some(Signal {
+        name: signal_name,
+        payload: serde_json::Map::new(),
+        source: crate::store::event::SignalSource::Watch,
+        watch: Some(crate::harness::signal::WatchOutcome {
+            verdict: crate::harness::signal::WatchVerdict::NotMet {
+                elapsed_ms: u64::try_from(now.duration_since(armed_at).as_millis()).unwrap_or(0),
+            },
+            output: String::new(),
+            output_path: None,
+            summary: crate::disk::summary::FileSummary::default(),
+        }),
+    })
 }
 
 fn lost_watch_outcome(
@@ -853,6 +918,53 @@ fn plan(
     (actions, next_state, next_when)
 }
 
+/// The `when` self waits whose one check-in is due, each with its arming instant: read unmet
+/// on this tick (`verdicts`), live, not fired, and armed at least their `timeout` ago. Also
+/// answers each row's arming instant whose check-in went, `sent` carried over for the rows
+/// still armed so, which keeps a check-in to once; the caller adds a due one once its fire
+/// starts.
+fn check_ins(
+    tasks: &BTreeMap<String, LoadedTask>,
+    verdicts: &BTreeMap<String, Verdict>,
+    arming_entries: &BTreeMap<String, Arming>,
+    when_states: &BTreeMap<String, WhenState>,
+    sent: &BTreeMap<String, Timestamp>,
+    now: Timestamp,
+) -> (Vec<(String, Timestamp)>, BTreeMap<String, Timestamp>) {
+    let mut due = Vec::new();
+    let mut kept = BTreeMap::new();
+    for (name, task) in tasks {
+        let entry = task.entry();
+        let Some(armed_at) = entry.wait_meta.as_ref().map(|meta| meta.armed_at) else {
+            continue;
+        };
+        if sent.get(name) == Some(&armed_at) {
+            kept.insert(name.clone(), armed_at);
+            continue;
+        }
+        let Some(check_in) = entry
+            .timeout
+            .as_deref()
+            .and_then(|timeout| crate::utils::time::parse_compact_duration(timeout).ok())
+        else {
+            continue;
+        };
+        let unmet = verdicts
+            .get(name)
+            .is_some_and(|verdict| verdict.truth != Some(true));
+        let live = ArmState::resolve(arming_entries.get(&task.key(name)), task.source(), now)
+            == ArmState::Live;
+        let elapsed = now
+            .duration_since(armed_at)
+            .max(jiff::SignedDuration::ZERO)
+            .unsigned_abs();
+        if unmet && live && !latched(task, when_states.get(name)) && elapsed >= check_in {
+            due.push((name.clone(), armed_at));
+        }
+    }
+    (due, kept)
+}
+
 fn fire_at(task: &LoadedTask) -> Option<Timestamp> {
     match &task.trigger().as_ref().ok()?.trigger {
         Trigger::Schedule(schedule) => schedule.schedule.instant(),
@@ -1016,6 +1128,11 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
 
 fn when_state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.lane_path("loop-when.json")
+}
+
+/// The arming instant of each `when` self wait whose check-in went, by row key.
+fn check_in_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.lane_path("loop-check-ins.json")
 }
 
 #[expect(

@@ -166,7 +166,8 @@ pub enum WatchVerdict {
     Running {
         elapsed_ms: u64,
     },
-    /// A polled watch saw its condition; `line` is the `--grep` match.
+    /// A polled watch saw its condition, as an older RimZ's check or file watch recorded it;
+    /// `line` is the line that matched.
     Met {
         elapsed_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
