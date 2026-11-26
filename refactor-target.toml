@@ -510,7 +510,7 @@ upward-dependencies = [
 # reminder_skip and its facade export let the reminder pass, doctor and the launch plan agree on
 # which kinds take no mid-turn reminder, a missing hook-context reply included (+2).
 # system_prompt_appends and tools_ride_prompt read a kind's prompt and tool declarations for the
-# built-in kind base in config::definitions and harness::spec (+2).
+# built-in kind base in config::definitions and harness::plan (+2).
 surface-budget = 1391
 
 [[module]]
