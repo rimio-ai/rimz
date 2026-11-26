@@ -5390,3 +5390,80 @@ fn a_subagents_alias_entry_fails_with_the_failed_row_of_its_kind() {
         ))),
     );
 }
+
+/// A failed tier walk lists the reasons of the kinds it tried and no other, under `--tier` and in a
+/// `tier:` definition's load: on a codex-only tier table, the engine kinds that no tier row
+/// reaches stay out of the error, and a walk that reaches one, through `--agent`, lists it.
+#[test]
+fn a_failed_tier_walk_lists_only_the_kinds_it_tried() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let (machine, launch) = load_definitions_in_project(
+        home.path(),
+        project.path(),
+        &[
+            ("subagents/shd.md", "agent: claude"),
+            ("agents/codex.md", "tools: [Read, Skill]\nsubagents: [shd]"),
+            ("agents/plain.md", "agent: claude"),
+            ("subagents/broken.md", "agent: nosuch"),
+            // A broken base, since a missing one falls back to the built-in kind base.
+            ("agents/opencode.md", "[broken"),
+            (
+                "agents/tiered.md",
+                "agent: codex\ntier: intern\ntools: []\nsubagents: [broken]",
+            ),
+        ],
+        "\"gpt-5.4\"",
+        "[subagents.profiles.shd]\nagent = \"claude\"\n",
+    );
+    let intern = Some(super::super::tiers::ModelTier::Intern);
+    let walk = |spec: &str, family: Option<&str>| {
+        let mut routed = launch.clone();
+        routed
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some(spec),
+                intern,
+                None,
+                family,
+                |_, _| None,
+            )
+            .map_err(|err| err.to_string())
+    };
+    let tried = walk("plain", None).unwrap_err();
+    assert!(
+        tried.starts_with(&format!(
+            "no eligible model at tier intern or above; codex: {}: allows subagent 'shd'",
+            home.path().join("agents/plain.md").display()
+        )) && !tried.contains("; opencode: ")
+            && !tried.contains("; pi: "),
+        "{tried}"
+    );
+    let base = home.path().join("agents/opencode.md");
+    let failed_base = format!("whose kind base {} failed to load", base.display());
+    let engine = walk("plain", Some("opencode")).unwrap_err();
+    assert!(
+        engine.contains(&format!("; opencode: runs on opencode, {failed_base}")),
+        "{engine}"
+    );
+    // The `claude` base row holds renders and no definition, so its walk reads the renders'
+    // exclusions.
+    assert!(launch.profiles.0["claude"].definition.is_none());
+    let renders = walk("claude", Some("opencode")).unwrap_err();
+    assert!(
+        renders.contains(&format!("; opencode: {failed_base}")) && !renders.contains("codex: "),
+        "{renders}"
+    );
+    // A `tier:` definition's load walk lists only the kinds it tried, too.
+    let tiered =
+        launch_first_line(&machine, &launch, ProfileScope::Agents, "tiered", None).unwrap_err();
+    assert!(
+        tiered.starts_with(&format!(
+            "{}: no eligible model at tier intern or above; codex: ",
+            home.path().join("agents/tiered.md").display()
+        )) && !tiered.contains("; opencode: ")
+            && !tiered.contains("; pi: "),
+        "{tiered}"
+    );
+}

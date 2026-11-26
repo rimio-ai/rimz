@@ -212,6 +212,8 @@ impl TierConfig {
         })
     }
 
+    /// Pick the first buildable, available model at `tier` or above. A failed walk names why each
+    /// kind it tried could not build.
     pub(super) fn walk<'a, R>(
         &self,
         tier: ModelTier,
@@ -222,6 +224,7 @@ impl TierConfig {
         let mut first = None;
         let mut skipped = Vec::new();
         let mut build_passes = Vec::new();
+        let mut refused = BTreeMap::new();
         let engine = preference
             .family
             .as_deref()
@@ -247,6 +250,7 @@ impl TierConfig {
                     continue;
                 };
                 if let Some(error) = unbuildable(kind) {
+                    refused.insert(kind.to_owned(), error);
                     build_passes.push(agents::TierUnbuildable {
                         model: model.clone(),
                         error: error.to_owned(),
@@ -287,8 +291,12 @@ impl TierConfig {
                 unbuildable: build_passes,
             });
         }
+        let reasons: String = refused
+            .iter()
+            .map(|(kind, reason)| format!("; {kind}: {reason}"))
+            .collect();
         Err(TierError(format!(
-            "no eligible model at tier {tier} or above"
+            "no eligible model at tier {tier} or above{reasons}"
         )))
     }
 }

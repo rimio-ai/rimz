@@ -231,20 +231,6 @@ fn route_model(
     Ok(cleared)
 }
 
-/// A failed tier walk's error, followed by why each excluded kind could not build.
-fn walk_error<'a>(
-    error: super::tiers::TierError,
-    exclusions: impl Iterator<Item = (&'a String, &'a str)>,
-) -> super::tiers::TierError {
-    let reasons: Vec<String> = exclusions
-        .map(|(kind, reason)| format!("{kind}: {reason}"))
-        .collect();
-    if reasons.is_empty() {
-        return error;
-    }
-    super::tiers::TierError(format!("{error}; {}", reasons.join("; ")))
-}
-
 fn route_tier(
     profile: &Profile,
     base: Option<super::definitions::BuildBase<'_>>,
@@ -267,21 +253,12 @@ fn route_tier(
                     def.build(profile, Some(build_base), Some(kind), candidate_model)
                 },
             );
-            let pick = table
-                .walk(
-                    requested,
-                    &preference,
-                    |kind| exclusions.get(kind).map(|error| error.message.as_str()),
-                    unavailable,
-                )
-                .map_err(|error| {
-                    walk_error(
-                        error,
-                        exclusions
-                            .iter()
-                            .map(|(kind, error)| (kind, error.message.as_str())),
-                    )
-                })?;
+            let pick = table.walk(
+                requested,
+                &preference,
+                |kind| exclusions.get(kind).map(|error| error.message.as_str()),
+                unavailable,
+            )?;
             let selected = if engine {
                 def.build(
                     profile,
@@ -300,22 +277,12 @@ fn route_tier(
             let Some(mut renders) = profile.definition_renders.clone() else {
                 return Ok(None);
             };
-            let pick = table
-                .walk(
-                    requested,
-                    &preference,
-                    |kind| renders.exclusions.get(kind).map(String::as_str),
-                    unavailable,
-                )
-                .map_err(|error| {
-                    walk_error(
-                        error,
-                        renders
-                            .exclusions
-                            .iter()
-                            .map(|(kind, reason)| (kind, reason.as_str())),
-                    )
-                })?;
+            let pick = table.walk(
+                requested,
+                &preference,
+                |kind| renders.exclusions.get(kind).map(String::as_str),
+                unavailable,
+            )?;
             let mut selected = if let Some(rendered) = renders.renders.get(&pick.kind) {
                 rendered.clone()
             } else if let Some(def) = &profile.definition {

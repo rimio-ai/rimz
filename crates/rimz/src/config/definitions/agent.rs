@@ -487,18 +487,8 @@ fn walk_tier_renders(
             |_, _| None::<()>,
         )
         .map_err(|error| {
-            DefinitionErr::new(
-                path,
-                format!(
-                    "{error}; {}",
-                    exclusions
-                        .iter()
-                        .map(|(kind, reason)| format!("{kind}: {}", reason.message))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            )
-            .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
+            DefinitionErr::new(path, error.to_string())
+                .with_cause(blocked.get().cloned().unwrap_or(DefinitionCause::Invalid))
         })?;
     let mut selected = renders
         .get(&pick.kind)
