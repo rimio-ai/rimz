@@ -550,16 +550,16 @@ pub fn tools_list(tools: &[&Tool], modes: &[(Capability, LoadMode)], wording: &W
 }
 
 /// The instructions, then each tool's description and input schema under a
-/// `## <tool>` heading with its size, capability, and load mode: what the
-/// server sends for `tools` of `groups` when `modes` gives their load modes
-/// and `server_wide` the mode of a tool no group's mode covers.
+/// `## <tool>` heading with its size, capability, and the load `load` names
+/// for it: what the server sends for `tools` of `groups` when `modes` gives
+/// their load modes.
 /// The instructions' heading and a tool's line end with `text <path>` for each
 /// part whose text is the user's file.
 pub fn render_listing(
     tools: &[&Tool],
     groups: &[Capability],
     modes: &[(Capability, LoadMode)],
-    server_wide: Option<LoadMode>,
+    load: impl Fn(&Tool) -> &'static str,
     wording: &Wording,
 ) -> String {
     let listing = tools_list(tools, modes, wording);
@@ -582,12 +582,7 @@ pub fn render_listing(
         crate::utils::tokens::estimate(&instructions)
     );
     for (tool, entry) in tools.iter().zip(entries) {
-        let load = modes
-            .iter()
-            .find(|(capability, _)| Some(*capability) == tool.capability)
-            .map(|(_, mode)| *mode)
-            .or(server_wide)
-            .map_or("default", LoadMode::name);
+        let load = load(tool);
         let mark = wording
             .description(tool)
             .path()

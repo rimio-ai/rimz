@@ -948,7 +948,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         let entries = launch.mcps.unwrap_or_default();
         let unapplied = launch.unapplied_marks(
             "Claude takes a load mode only for RimZ's server and its capabilities",
-            launch.code_mode.then_some(
+            (launch.code_mode == Some(true)).then_some(
                 "Claude's code mode offers the model only REPL and Poll, so no MCP tool loads \
                  up front",
             ),

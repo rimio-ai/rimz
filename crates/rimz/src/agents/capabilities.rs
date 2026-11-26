@@ -80,8 +80,8 @@ pub struct McpLaunch<'a> {
     /// The bases of the profile's tools list, which the launch argv's first `--tools` renders; a
     /// later `--tools`, or any without this, is the user's own.
     pub rendered_tools: Option<&'a [String]>,
-    /// The profile turns the provider's code mode on.
-    pub code_mode: bool,
+    /// The launch's code mode: on, off, or auto (`None`).
+    pub code_mode: Option<bool>,
 }
 
 impl McpLaunch<'_> {
@@ -158,6 +158,20 @@ pub struct McpServer {
     /// Every variable the provider is spawned with, for a provider that clears
     /// a server's environment to the names it is given.
     pub env_names: std::collections::BTreeSet<String>,
+}
+
+/// What a launch decided that a provider's final environment edit reads
+/// ([`LaunchCapability::finalize_launch_env`]).
+pub struct LaunchEnvEdit<'a> {
+    pub disable_native_subagents: bool,
+    pub system_prompt_file: Option<&'a Path>,
+    /// The launch's code mode: on, off, or auto (`None`).
+    pub code_mode: Option<bool>,
+    /// Set on an auto launch whose inherited `RIMZ_CODE_MODE_CONFIG` holds this kind's config
+    /// marker, so the member an outer launch wrote can be taken back out.
+    pub release_code_mode: bool,
+    /// RimZ's MCP server and the `mcps` list, for a kind that takes MCP servers.
+    pub mcp: Option<&'a McpLaunch<'a>>,
 }
 
 /// A single-line reason the provider's session preparation refused the launch.
@@ -1060,21 +1074,17 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Apply final environment overrides on every managed launch, reading the
     /// effective login environment after composition. The delegation decision,
-    /// the optional env-config prompt artifact, and a
-    /// [`CodeModeSwitch::Config`](super::definition::CodeModeSwitch::Config) code mode
-    /// share one edit of provider config: `code_mode` is the launch's on, off, or auto.
-    /// `release_code_mode` is set on an auto launch whose inherited `RIMZ_CODE_MODE_CONFIG`
-    /// holds this kind's config marker, so the member an outer launch wrote can be taken back
-    /// out.
+    /// the optional env-config prompt artifact, a
+    /// [`CodeModeSwitch::Config`](super::definition::CodeModeSwitch::Config) code mode, and
+    /// an env-config MCP server share one edit of provider config. A variable the edit drops
+    /// joins `unset`.
     /// Returns warnings in order; the default leaves the environment unchanged.
     fn finalize_launch_env(
         &self,
         _login_env: &BTreeMap<String, String>,
         _env: &mut BTreeMap<String, String>,
-        _disable_native_subagents: bool,
-        _system_prompt_file: Option<&Path>,
-        _code_mode: Option<bool>,
-        _release_code_mode: bool,
+        _unset: &mut std::collections::BTreeSet<String>,
+        _edit: &LaunchEnvEdit<'_>,
     ) -> Vec<String> {
         Vec::new()
     }

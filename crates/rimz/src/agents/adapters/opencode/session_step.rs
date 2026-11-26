@@ -287,6 +287,15 @@ fn helper_env(inherited: &BTreeMap<String, String>) -> BTreeMap<String, String> 
         .and_then(|value| value.as_object().cloned())
         .filter(|object| object.get("policies").is_none_or(Value::is_array))
         .unwrap_or_default();
+    // The launch's own server would start beside the helper; the deny below hides it only on a
+    // release that reads `policies`.
+    if let Some(servers) = config
+        .get_mut("mcp")
+        .and_then(|mcp| mcp.get_mut("servers"))
+        .and_then(Value::as_object_mut)
+    {
+        servers.remove(crate::mcp::catalog::SERVER_NAME);
+    }
     let mut policies = config
         .remove("policies")
         .and_then(|value| value.as_array().cloned())

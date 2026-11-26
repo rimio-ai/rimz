@@ -296,7 +296,7 @@ mod tests {
                     granted: false,
                     login_env: &env,
                     rendered_tools: None,
-                    code_mode: false,
+                    code_mode: None,
                 },
             })
             .unwrap();

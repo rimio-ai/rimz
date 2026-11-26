@@ -1,6 +1,6 @@
 # The MCP server
 
-`rimz mcp serve` gives a Claude, Codex, or Antigravity agent RimZ's own commands as MCP tools. Its user-facing contract (the tools, their arguments, the protocol methods) is the [`rimz mcp` reference](../reference/cli/mcp.md). This page covers how it is built and what it must keep true.
+`rimz mcp serve` gives a Claude, Codex, Antigravity, or OpenCode agent RimZ's own commands as MCP tools. Its user-facing contract (the tools, their arguments, the protocol methods) is the [`rimz mcp` reference](../reference/cli/mcp.md). This page covers how it is built and what it must keep true.
 
 ## Calls run in the server's process
 

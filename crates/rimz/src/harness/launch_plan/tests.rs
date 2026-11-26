@@ -3800,7 +3800,9 @@ fn opencode_file_prompt_reaches_launch_and_resume_as_an_artifact_without_prompt_
     let project = tempfile::tempdir().unwrap();
     let base = project.path().join("base}.md");
     std::fs::write(&base, "base {env:HOME}\n").unwrap();
-    let machine = crate::config::MachineConfig::default();
+    // RimZ's MCP members ride the same value; `mcp_tests` pins them.
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.rimz_mcp_server = false;
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();

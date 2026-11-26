@@ -458,75 +458,339 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         &self,
         login_env: &BTreeMap<String, String>,
         env: &mut BTreeMap<String, String>,
-        disable_native_subagents: bool,
-        system_prompt_file: Option<&Path>,
-        code_mode: Option<bool>,
-        release_code_mode: bool,
+        unset: &mut std::collections::BTreeSet<String>,
+        edit: &LaunchEnvEdit<'_>,
     ) -> Vec<String> {
-        let mut warnings = edit_core_config(
-            login_env,
-            env,
-            disable_native_subagents,
-            system_prompt_file,
-            code_mode,
-            release_code_mode,
-        );
+        let mcp = edit.mcp.map(McpEdit::new).unwrap_or_default();
+        let mut warnings = edit_core_config(login_env, env, edit, &mcp.members);
+        let loads = (!mcp.loads.is_empty()).then(|| Value::Object(mcp.loads).to_string());
+        set_or_unset(env, unset, MCP_TOOL_LOADS_ENV, loads);
+        let members = (!mcp.members.is_empty()).then(|| Value::Object(mcp.members).to_string());
+        set_or_unset(env, unset, MCP_MEMBERS_ENV, members);
         warnings.extend(hide_tabs(login_env, env));
         warnings
     }
+
+    fn takes_mcp_servers(&self) -> bool {
+        true
+    }
+
+    /// The `rimz` record, the list's policies, and the grant rule ride `OPENCODE_CONFIG_CONTENT`
+    /// (`finalize_launch_env`), which compiles before this runs, so this only reports the marks
+    /// the launch cannot apply.
+    fn mcp_server_args(
+        &self,
+        launch: &McpLaunch<'_>,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<
+        (Vec<String>, Vec<UnappliedMark>),
+        crate::agents::skills::LaunchSettingsErr,
+    > {
+        let mut unapplied = launch.unapplied_marks(
+            "OpenCode takes a load mode only for RimZ's server and its capabilities",
+            None,
+        );
+        if launch.server.is_some() && launch.code_mode == Some(false) {
+            let deferred = launch.mcps.unwrap_or_default().iter().filter(|entry| {
+                entry.user_server().is_none()
+                    && entry.mode() == Some(crate::mcp::catalog::LoadMode::Deferred)
+            });
+            unapplied.extend(deferred.map(|entry| {
+                launch.unapplied(
+                    entry,
+                    "code-mode off sends every RimZ tool native, and OpenCode has no tool search \
+                     outside `execute`",
+                )
+            }));
+        }
+        Ok((Vec::new(), unapplied))
+    }
+}
+
+const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+/// The RimZ plugin's per-tool loads (`index.ts`), which it claims once.
+const MCP_TOOL_LOADS_ENV: &str = "RIMZ_LAUNCH_MCP_TOOLS";
+/// The MCP members a launch wrote into `OPENCODE_CONFIG_CONTENT`, so a nested launch can take
+/// them back out.
+const MCP_MEMBERS_ENV: &str = "RIMZ_OPENCODE_MCP_CONFIG";
+
+/// Sets `key` for the launch, or drops it, inherited or not.
+fn set_or_unset(
+    env: &mut BTreeMap<String, String>,
+    unset: &mut std::collections::BTreeSet<String>,
+    key: &str,
+    value: Option<String>,
+) {
+    match value {
+        Some(value) => {
+            env.insert(key.to_owned(), value);
+            unset.remove(key);
+        }
+        None => {
+            env.remove(key);
+            unset.insert(key.to_owned());
+        }
+    }
+}
+
+/// How OpenCode loads one of RimZ's tools, as the RimZ plugin sets its `options.codemode`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolLoad {
+    Native,
+    /// Behind `execute`, its signature always in the initial Code Mode catalog.
+    Pinned,
+    /// Behind `execute`, found through its `search`.
+    Code,
+}
+
+impl ToolLoad {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Pinned => "pinned",
+            Self::Code => "code",
+        }
+    }
+}
+
+/// RimZ's MCP members of one launch's inline config and the plugin's per-tool loads.
+#[derive(Default)]
+struct McpEdit {
+    /// What the launch writes: `server` (the `rimz` record), `policies`, and `permissions`.
+    members: serde_json::Map<String, Value>,
+    /// Each served tool whose load differs from the record's, by its RimZ name.
+    loads: serde_json::Map<String, Value>,
+}
+
+impl McpEdit {
+    /// The record and loads for the marks the launch applies: `code-mode off`, or auto with
+    /// `rimz:always`, makes the record native; per tool, `:always` is native under auto and
+    /// pinned under on, and a capability's own mark wins over the `rimz` mark.
+    fn new(launch: &McpLaunch<'_>) -> Self {
+        use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
+        let entries = launch.mcps.unwrap_or_default();
+        let mark = |capability: Option<Capability>| {
+            capability
+                .and_then(|capability| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.capability() == Some(capability))
+                })
+                .and_then(crate::config::McpName::mode)
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.name() == SERVER_NAME)
+                        .and_then(crate::config::McpName::mode)
+                })
+        };
+        let mut edit = Self::default();
+        if let Some(server) = &launch.server {
+            let native = match launch.code_mode {
+                Some(on) => !on,
+                None => mark(None) == Some(LoadMode::Always),
+            };
+            let default = if native {
+                ToolLoad::Native
+            } else {
+                ToolLoad::Code
+            };
+            // `serve_args` names each served capability after `--only`, and none for all.
+            let only: Vec<Capability> = server
+                .args
+                .windows(2)
+                .filter(|pair| pair[0] == "--only")
+                .filter_map(|pair| Capability::from_name(&pair[1]))
+                .collect();
+            for tool in crate::mcp::catalog::tools_for(&only) {
+                let load = match (launch.code_mode, mark(tool.capability)) {
+                    (Some(false), _) | (None, Some(LoadMode::Always)) => ToolLoad::Native,
+                    (Some(true), Some(LoadMode::Always)) => ToolLoad::Pinned,
+                    _ => ToolLoad::Code,
+                };
+                if load != default {
+                    edit.loads.insert(tool.name.to_owned(), load.name().into());
+                }
+            }
+            let command = std::iter::once(server.command.to_string_lossy().into_owned())
+                .chain(server.args.iter().cloned());
+            let mut record =
+                serde_json::json!({"type": "local", "command": command.collect::<Vec<_>>()});
+            if native {
+                record["codemode"] = false.into();
+            }
+            edit.members.insert("server".to_owned(), record);
+            if server.grant {
+                // One rule per served tool: OpenCode's action for an MCP tool is the server name,
+                // `.` made `_`, then `_<tool>`, so `rimz_*` would also grant a user server
+                // named `rimz_docs` or `rimz.dev`.
+                let rules = crate::mcp::catalog::tools_for(&only)
+                    .map(|tool| {
+                        serde_json::json!({
+                            "action": format!("{SERVER_NAME}_{}", tool.name),
+                            "resource": "*",
+                            "effect": "allow",
+                        })
+                    })
+                    .collect();
+                edit.members
+                    .insert("permissions".to_owned(), Value::Array(rules));
+            }
+        }
+        if crate::config::mcps_limit(launch.mcps) {
+            // The legacy spelling `session_step::helper_env` writes: OpenCode reads top-level
+            // `policies` from v2.0.29 (under `experimental` on v2.0.25 to v2.0.28) and folds
+            // `mcp:<name>` into `mcp.use` from v2.2.3; an older release ignores the key.
+            let policy = |resource: String, effect: &str| serde_json::json!({"action": "integration.use", "resource": resource, "effect": effect});
+            let kept = launch
+                .server
+                .as_ref()
+                .map(|_| SERVER_NAME)
+                .into_iter()
+                .chain(
+                    entries
+                        .iter()
+                        .filter_map(crate::config::McpName::user_server),
+                );
+            let policies = std::iter::once(policy("mcp:*".to_owned(), "deny"))
+                .chain(kept.map(|name| policy(format!("mcp:{name}"), "allow")))
+                .collect();
+            edit.members
+                .insert("policies".to_owned(), Value::Array(policies));
+        }
+        edit
+    }
+}
+
+/// Removes from `config` each MCP member an outer launch wrote, as its `outer` members record
+/// them, returning whether any was there.
+fn take_back_mcp_members(
+    config: &mut serde_json::Map<String, Value>,
+    outer: &serde_json::Map<String, Value>,
+) -> bool {
+    let mut found = false;
+    if let Some(record) = outer.get("server")
+        && let Some(servers) = config
+            .get_mut("mcp")
+            .and_then(|mcp| mcp.get_mut("servers"))
+            .and_then(Value::as_object_mut)
+        && servers.get(crate::mcp::catalog::SERVER_NAME) == Some(record)
+    {
+        servers.remove(crate::mcp::catalog::SERVER_NAME);
+        found = true;
+    }
+    for key in ["policies", "permissions"] {
+        let (Some(Value::Array(written)), Some(Value::Array(list))) =
+            (outer.get(key), config.get_mut(key))
+        else {
+            continue;
+        };
+        if written.is_empty() {
+            continue;
+        }
+        // Policies were written first and the grant rule last (`edit_core_config`).
+        let mut windows = list.windows(written.len());
+        let matches = |window: &[Value]| window == written.as_slice();
+        let start = if key == "policies" {
+            windows.position(matches)
+        } else {
+            windows.rposition(matches)
+        };
+        if let Some(start) = start {
+            list.drain(start..start + written.len());
+            found = true;
+        }
+    }
+    found
 }
 
 /// Writes `OPENCODE_CONFIG_CONTENT` when this launch switches native delegation off,
-/// delivers a system prompt, turns Full Code Mode on or forces it off, or takes back the Full
-/// Code Mode member an outer launch wrote into the inherited value, keeping every other
-/// inherited key.
+/// delivers a system prompt, turns Full Code Mode on or forces it off, writes RimZ's MCP
+/// `members`, or takes back the Full Code Mode or MCP members an outer launch wrote into the
+/// inherited value, keeping every other inherited key.
 /// Otherwise the inherited value, valid or not, passes through untouched.
 fn edit_core_config(
     login_env: &BTreeMap<String, String>,
     env: &mut BTreeMap<String, String>,
-    disable_native_subagents: bool,
-    system_prompt_file: Option<&Path>,
-    code_mode: Option<bool>,
-    release_code_mode: bool,
+    edit: &LaunchEnvEdit<'_>,
+    members: &serde_json::Map<String, Value>,
 ) -> Vec<String> {
-    const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
     const SELECTOR: &str = "-opencode.tool.subagent";
     const FULL_CODE_MODE: &str = "/experimental/full_codemode";
+    let LaunchEnvEdit {
+        disable_native_subagents,
+        system_prompt_file,
+        code_mode,
+        ..
+    } = *edit;
     // A value the launch env sets itself (trusted `[[agents]] env`) is the user's own.
-    let release_code_mode = release_code_mode
-        && !env.contains_key(CONFIG_ENV)
-        && login_env
-            .get(CONFIG_ENV)
-            .and_then(|raw| crate::agents::jsonc::from_slice::<Value>(raw.as_bytes()).ok())
-            .is_some_and(|config| {
-                config
-                    .pointer(FULL_CODE_MODE)
-                    .is_some_and(Value::is_boolean)
-            });
+    let inherited = (!env.contains_key(CONFIG_ENV))
+        .then(|| login_env.get(CONFIG_ENV))
+        .flatten()
+        .and_then(|raw| crate::agents::jsonc::from_slice::<Value>(raw.as_bytes()).ok());
+    let release_code_mode = edit.release_code_mode
+        && inherited.as_ref().is_some_and(|config| {
+            config
+                .pointer(FULL_CODE_MODE)
+                .is_some_and(Value::is_boolean)
+        });
+    let outer_mcp = login_env
+        .get(MCP_MEMBERS_ENV)
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|outer| outer.as_object().cloned())
+        .filter(|outer| {
+            inherited
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|config| take_back_mcp_members(&mut config.clone(), outer))
+        });
     if !disable_native_subagents
         && system_prompt_file.is_none()
         && code_mode.is_none()
         && !release_code_mode
+        && members.is_empty()
+        && outer_mcp.is_none()
     {
         return Vec::new();
     }
-    let mut members: Vec<InlineConfigMember> = Vec::new();
+    let touched = |key: &str| {
+        members.contains_key(key)
+            || outer_mcp
+                .as_ref()
+                .is_some_and(|outer| outer.contains_key(key))
+    };
+    let mut checked: Vec<InlineConfigMember> = Vec::new();
     if disable_native_subagents {
-        members.push(("/plugins", "an array", Value::is_array));
+        checked.push(("/plugins", "an array", Value::is_array));
     }
     if system_prompt_file.is_some() {
-        members.push(("/agents", "an object", Value::is_object));
-        members.push(("/agents/build", "an object", Value::is_object));
+        checked.push(("/agents", "an object", Value::is_object));
+        checked.push(("/agents/build", "an object", Value::is_object));
     }
     if code_mode.is_some() || release_code_mode {
-        members.push(("/experimental", "an object", Value::is_object));
+        checked.push(("/experimental", "an object", Value::is_object));
+    }
+    if touched("server") {
+        checked.push(("/mcp", "an object", Value::is_object));
+        checked.push(("/mcp/servers", "an object", Value::is_object));
+    }
+    if touched("policies") {
+        checked.push(("/policies", "an array", Value::is_array));
+    }
+    if touched("permissions") {
+        checked.push(("/permissions", "an array", Value::is_array));
     }
     let (mut config, warning) = parse_inline_config(
         CONFIG_ENV,
         login_env.get(CONFIG_ENV).map(String::as_str),
-        &members,
+        &checked,
     );
     let mut warnings = Vec::from_iter(warning);
+    if let Some(outer) = &outer_mcp {
+        take_back_mcp_members(&mut config, outer);
+    }
     if disable_native_subagents {
         let mut plugins = match config.remove("plugins") {
             Some(Value::Array(plugins)) => plugins,
@@ -571,6 +835,26 @@ fn edit_core_config(
             .and_then(Value::as_object_mut)
     {
         experimental.remove("full_codemode");
+    }
+    // parse_inline_config admitted each member written here only in the shape it is indexed as,
+    // or absent.
+    if let Some(record) = members.get("server") {
+        config["mcp"]["servers"][crate::mcp::catalog::SERVER_NAME] = record.clone();
+    }
+    // Within one document OpenCode applies the last matching statement: RimZ's policies lead the
+    // list so an inherited top-level statement still decides (one under `experimental.policies`
+    // comes first and does not), and its grant rules close it so they decide.
+    for key in ["policies", "permissions"] {
+        let Some(Value::Array(written)) = members.get(key) else {
+            continue;
+        };
+        match &mut config[key] {
+            Value::Array(list) if key == "policies" => {
+                list.splice(0..0, written.iter().cloned());
+            }
+            Value::Array(list) => list.extend_from_slice(written),
+            absent => *absent = Value::Array(written.clone()),
+        }
     }
     env.insert(CONFIG_ENV.to_owned(), config.to_string());
     warnings
