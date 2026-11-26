@@ -2389,6 +2389,16 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_some()
     }
 
+    /// Whether this recorded agent's session can resume: its session can
+    /// ([`super::registry::session_resumable`]) and it recorded a worktree to resume in.
+    pub fn resumable(&self) -> bool {
+        super::registry::session_resumable(self.kind.as_str(), &self.agent_id)
+            && self
+                .worktree_path
+                .as_deref()
+                .is_some_and(|path| !path.is_empty())
+    }
+
     /// Whether the exec wrapper stamped this row resumed and its provider has reported no
     /// lifecycle since: the stamp stands until the provider's own session start (or any later
     /// hook). Only a kind whose resume reports that start before its first prompt

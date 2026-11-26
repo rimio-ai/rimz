@@ -498,7 +498,8 @@ upward-dependencies = [
 # HookContextReply::event names the event the hook feed claims a deadline rung on (+1).
 # DelegatedWait, DelegatedWaitStart, their agents re-exports, and DelegatedWait::{label,
 # notification_body, start_at, stable_since} carry the waiting-subagent mark written by the ladder (+8).
-# LaunchCapability::supports_resume answers reopenability in snapshot projection without binary I/O (+1).
+# LaunchCapability::supports_resume says whether a kind resumes at all without binary I/O: the
+# default of resumes_session, and the scenario preset's reopen mark (+1).
 # AgentState::kept_verdict and KeptVerdict carry a reopened row's verdict from the fold to the
 # subagent projection (+2).
 # HookOutput::opens_native_subagent lets the hook path parent a native child by its pane at its
@@ -511,7 +512,9 @@ upward-dependencies = [
 # which kinds take no mid-turn reminder, a missing hook-context reply included (+2).
 # system_prompt_appends and tools_ride_prompt read a kind's prompt and tool declarations for the
 # built-in kind base in config::definitions and harness::plan (+2).
-surface-budget = 1391
+# registry::session_resumable, AgentState::resumable and LaunchCapability::resumes_session share
+# one probe-free resumability rule with the snapshot fold, harness and CLI (+3).
+surface-budget = 1394
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -646,6 +649,16 @@ reason = "Launch listings and completion enumerate canonical kinds and their reg
 kind = "item"
 key = "agents::registry::native_compaction"
 reason = "Cards and doctor share the provider-capped point, model capacity and lowered setting without importing private adapters."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::session_resumable"
+reason = "The sidebar fold, cohort and candidate resume, relaunch and CLI receipts share one probe-free resumability rule without importing private adapters."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::resumes_session"
+reason = "Answers whether resume_command would build for a session id without its binary probe, so the snapshot fold can ask it per row."
 
 [[verdict]]
 kind = "item"

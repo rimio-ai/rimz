@@ -1271,7 +1271,7 @@ mod pane_exec {
                 agent.parent_agent_id = parent.map(AgentSessionId::from);
                 agent.launch_depth = depth;
                 let ended = exit_end_target(&[agent], Some(&own), &request).unwrap();
-                let resumable = exited_session_resumable(Some(&ended), Path::new("/code/feature"));
+                let resumable = exited_session_resumable(Some(&ended));
                 let hint = exit_hint(
                     &request,
                     &status,
@@ -1295,14 +1295,13 @@ mod pane_exec {
 
     #[test]
     fn exited_session_resumable_requires_real_id_and_resume_cli() {
-        let cwd = Path::new("/code/feature");
         let codex = EndedSession {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             agent_id: rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
             name: None,
             is_child_session: false,
         };
-        assert!(exited_session_resumable(Some(&codex), cwd));
+        assert!(exited_session_resumable(Some(&codex)));
 
         let provisional = EndedSession {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
@@ -1310,8 +1309,8 @@ mod pane_exec {
             name: None,
             is_child_session: false,
         };
-        assert!(!exited_session_resumable(Some(&provisional), cwd));
-        assert!(!exited_session_resumable(None, cwd));
+        assert!(!exited_session_resumable(Some(&provisional)));
+        assert!(!exited_session_resumable(None));
     }
 
     fn exit_status(code: i32) -> std::process::ExitStatus {

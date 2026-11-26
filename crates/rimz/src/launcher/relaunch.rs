@@ -45,8 +45,7 @@ pub fn relaunch_plan(
 ) -> Result<(crate::harness::launch::ExecAction, Option<&'static str>)> {
     let adapter = crate::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let resume_support = !agent.agent_id.is_provisional()
-        && agent.worktree_path.is_some()
+    let resume_support = agent.resumable()
         && crate::harness::launch::compile_provider_argv(
             adapter,
             agent.kind.as_str(),

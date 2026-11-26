@@ -729,6 +729,13 @@ pub trait LaunchCapability: CoreCapability {
         self.spec().launch.resume.is_some()
     }
 
+    /// Whether [`Self::resume_command`] returns a command for `session_id`, answered
+    /// without building it and without any binary or filesystem probe, so the snapshot
+    /// fold can ask it of every row.
+    fn resumes_session(&self, _session_id: &str) -> bool {
+        self.supports_resume()
+    }
+
     /// The argv that resumes a prior session of this agent by `session_id`,
     /// launched fresh in `cwd` (the agent's worktree). The launcher seeds a
     /// reborn pane with it so a rebirth restores the conversation idle rather

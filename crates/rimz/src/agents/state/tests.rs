@@ -3250,3 +3250,20 @@ fn the_mark_stays_decodable_by_trunk_and_ignores_trunks_mark() {
         "trunk's mark is not this binary's"
     );
 }
+
+#[test]
+fn resumable_needs_a_resumable_session_and_a_recorded_worktree() {
+    let row = |kind: &str, id: &str, worktree: Option<&str>| AgentState {
+        worktree_path: worktree.map(str::to_owned),
+        ..crate::testkit::agent_state(kind, id, Timestamp::UNIX_EPOCH)
+    };
+    let actual = [
+        row("claude", "4b0c-session", Some("/repo/wt")),
+        row("claude", "launch_4b0c", Some("/repo/wt")),
+        row("claude", "4b0c-session", None),
+        row("claude", "4b0c-session", Some("")),
+        row("no-such-provider", "4b0c-session", Some("/repo/wt")),
+    ]
+    .map(|agent| agent.resumable());
+    assert_eq!(actual, [true, false, false, false, false]);
+}

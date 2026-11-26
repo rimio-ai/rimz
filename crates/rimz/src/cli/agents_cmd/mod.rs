@@ -149,12 +149,6 @@ fn read_heartbeat_agents(
     Ok((Arc::unwrap_or_clone(snapshot.agents), now))
 }
 
-fn agent_session_resumable(kind: &AgentKind, agent_id: &AgentSessionId, cwd: &Path) -> bool {
-    !agent_id.is_provisional()
-        && rimz::agents::find_definition(kind.as_str())
-            .is_some_and(|adapter| adapter.resume_command(agent_id, cwd).is_some())
-}
-
 fn resolve_live_or_audit(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,

@@ -78,21 +78,11 @@ pub(in crate::cli) fn resume_worktree_name<'a>(
         .then_some(name)
 }
 
-pub(in crate::cli) fn offers_resume(
-    workspace: &rimz::ResolvedWorkspace,
-    agent: &AgentState,
-) -> bool {
+pub(in crate::cli) fn offers_resume(agent: &AgentState) -> bool {
     !agent.is_provider_subagent()
         && agent.parent_agent_id.is_none()
         && !agent.launch_depth.is_some_and(|depth| depth > 0)
-        && agent_session_resumable(
-            &agent.kind,
-            &agent.agent_id,
-            agent
-                .worktree_path
-                .as_deref()
-                .map_or(workspace.project_root.as_path(), Path::new),
-        )
+        && rimz::agents::registry::session_resumable(agent.kind.as_str(), &agent.agent_id)
 }
 
 pub(in crate::cli) fn resume_command(
@@ -191,7 +181,7 @@ pub(super) fn stop_agent(
             return stop.into_result(&rimz::address::named_handle(live_agent, &peers, true));
         }
         let mut receipt = format!("stopped {label} ({})", live_agent.kind);
-        if offers_resume(workspace, live_agent) {
+        if offers_resume(live_agent) {
             let name = live_agent
                 .name
                 .as_deref()

@@ -333,7 +333,7 @@ fn close(
             failures.push(format!("{err:#}"));
             continue;
         }
-        if !agents_cmd::offers_resume(&ctx.workspace, agent)
+        if !agents_cmd::offers_resume(agent)
             || !rimz::harness::resume::resume_session_present(agent)
         {
             continue;
