@@ -1433,9 +1433,10 @@ fn queue_resume_prompt(
     identities: &[AgentLaunchIdentity],
     prompt: &str,
     leader: usize,
+    sender: crate::store::message::MessageSender,
 ) -> Result<()> {
     use crate::harness::plan::CohortSeed;
-    use crate::store::message::{DeliveryGate, MessageRecord, MessageSender};
+    use crate::store::message::{DeliveryGate, MessageRecord};
     let (kind, agent_id, name, launch) = match &seeds[leader] {
         CohortSeed::Resume(agent) => (
             &agent.kind,
@@ -1466,7 +1467,7 @@ fn queue_resume_prompt(
         DeliveryGate::Done,
     )
     .with_launch_id(launch)
-    .with_sender(MessageSender::Human);
+    .with_sender(sender);
     store.queue_message(&message, session_name)?;
     Ok(())
 }
@@ -2003,6 +2004,8 @@ fn launch_resume_layout(
         .as_deref()
         .filter(|prompt| !prompt.trim().is_empty())
     {
+        let caller = context::resolve_caller(store)?;
+        let channel = context::current_channel(workspace, Some(store));
         queue_resume_prompt(
             store,
             &workspace.session_name,
@@ -2010,6 +2013,7 @@ fn launch_resume_layout(
             launch_batch.identities(),
             prompt,
             crate::harness::spec::prompt_leader(&layout, team)?,
+            context::sender_for(caller.as_ref(), channel.as_deref(), false),
         )?;
     }
     interaction.notice(Notice::ResumeAnnouncement(&plan))?;
