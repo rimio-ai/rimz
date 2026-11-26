@@ -240,7 +240,7 @@ A measurement written into a doc names the trunk commit it was built on and the 
 
 A base and head comparison on one target directory rebuilds RimZ at each switch of tree, over five minutes a time.
 
-1. Build each tree once with `cargo xtask perf --bench hotpath --no-run`.
+1. Build each tree once with `RIMZ_XTASK_TIMEOUT=60m cargo xtask perf --bench hotpath --no-run`: a fresh tree builds cold, past the default timeout.
 2. Copy the binary that its `Executable` line names.
 3. Run the copies (`<copy> --bench <bench>`) in the order base, head, head, base.
 
