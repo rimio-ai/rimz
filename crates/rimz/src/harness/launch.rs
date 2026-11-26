@@ -1672,6 +1672,7 @@ fn compile_agent_process_with_extra_env(
                 mcps: request.mcp_list().as_deref(),
                 granted: request.rimz_capabilities.is_some(),
                 login_env: &skill_env,
+                rendered_tools: request.tools.is_some(),
             },
             (cwd, artifact_dir),
             action.extra_args_mut(),

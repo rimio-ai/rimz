@@ -7147,6 +7147,7 @@ fn routine_rimz_settings_union_idempotence_and_refusal() {
                     mcps: None,
                     granted: false,
                     login_env: &empty_env,
+                    rendered_tools: false,
                 },
                 (root.path(), root.path()),
                 &mut args,
