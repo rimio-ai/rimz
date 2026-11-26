@@ -3,8 +3,10 @@
 //! A refusal record is keyed by login and model and lives in the machine-wide
 //! `model_refusals.v1.json` provider cache beside the rate-limit windows. The
 //! room host's heavy pass writes it (`sidebar::refresh`) once a usage read
-//! shows the account unspent after a limit marker, and raises its success
-//! stamp on the first clean turn on that model and account after it.
+//! confirms a limit marker ([`super::ProviderCapacity::confirms_refusal`]: the
+//! account unspent in the window the marker ran in, for a marker naming no
+//! refill), raises it on any limit marker while it stands, and raises its
+//! success stamp on the first clean turn on that model and account after it.
 //! [`super::ProviderCapacity`] loads a login's records, so every capacity
 //! reader (pings, compaction, launch routing, restart, auto-continue) vetoes
 //! the model while its record stands.
@@ -23,7 +25,9 @@ use super::{AgentState, AgentStatus, AgentTurnError, ProviderCapacity};
 use crate::ids::LoginKey;
 
 /// How long after a limit marker a usage read may first see the account and still confirm the
-/// refusal; a read past it may postdate a reset that explains the marker.
+/// refusal; a read past it may postdate a reset that explains the marker. A read inside it whose
+/// window renewed after the marker postdates such a reset too, and confirms nothing
+/// ([`ProviderCapacity::confirms_refusal`]).
 pub(crate) const CONFIRM_WINDOW: jiff::SignedDuration = jiff::SignedDuration::from_mins(10);
 
 /// One model's refusal on one login.
@@ -101,7 +105,7 @@ impl ModelRefusals {
             let confirmed = stands
                 || capacities
                     .get(&login)
-                    .is_some_and(|capacity| capacity.confirms_refusal(model, marker.at));
+                    .is_some_and(|capacity| capacity.confirms_refusal(model, marker));
             if confirmed {
                 raised |= self.raise_refused(&login, &key, marker.at, marker.label.as_deref());
             }

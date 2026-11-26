@@ -6113,6 +6113,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
             class: TurnErrorClass::PausedOverloaded,
             at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         });
         rimz::store::agent_context::write_record(
             &env.runtime_paths(),

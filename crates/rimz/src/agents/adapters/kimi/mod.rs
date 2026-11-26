@@ -329,6 +329,7 @@ fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Opti
             class: TurnErrorClass::classify_label(label.as_deref()),
             at: Timestamp::now(),
             label,
+            refill_at: None,
         }
     })
 }

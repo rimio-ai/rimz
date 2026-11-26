@@ -102,6 +102,7 @@ fn closed_permissions_do_not_rank_as_waiting() {
                     at: ago(88),
                     label: None,
                     ended_turn: true,
+                    refill_at: None,
                 })
             }
             _ => closed.last_activity = ago(89),

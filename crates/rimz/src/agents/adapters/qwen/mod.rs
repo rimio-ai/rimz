@@ -596,6 +596,7 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
                 class,
                 at: Timestamp::now(),
                 label,
+                refill_at: None,
             }));
         }
         if payload_has_context_observation(payload) {

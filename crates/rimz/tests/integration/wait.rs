@@ -1317,6 +1317,7 @@ fn agents_wait_ends_on_spent_provider_pause() {
         class: TurnErrorClass::PausedRateLimit,
         at,
         label: None,
+        refill_at: None,
     });
     rimz::store::agent_context::write_record(
         &env.runtime_paths(),

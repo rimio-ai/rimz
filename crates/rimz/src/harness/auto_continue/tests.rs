@@ -361,6 +361,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
             class,
             at: ts(error_at),
             label: Some(label.to_owned()),
+            refill_at: None,
         }),
         settle: None,
         permission_settle: None,
@@ -3191,6 +3192,7 @@ mod refusal_fold {
             class: TurnErrorClass::PausedRateLimit,
             at,
             label: Some(SENTENCE.to_owned()),
+            refill_at: None,
         }
     }
 

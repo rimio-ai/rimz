@@ -819,6 +819,7 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
         class: TurnErrorClass::PausedRateLimit,
         at: marker_at,
         label: Some(label.to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     let mut run = RunRecord::new(

@@ -1974,6 +1974,7 @@ fn latest_ask_view_keeps_turn_ended_reserved_pane_out_of_display() {
             class: rimz::agents::TurnErrorClass::PausedOverloaded,
             at: agent.last_activity + jiff::SignedDuration::from_secs(1),
             label: Some("at capacity".to_owned()),
+            refill_at: None,
         }),
         ..Default::default()
     });

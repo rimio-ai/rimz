@@ -348,6 +348,7 @@ mod tests {
             class,
             at: now() - Duration::from_secs(1_919),
             label: Some("Auto mode is unavailable".to_owned()),
+            refill_at: None,
         });
         errored[1].context = Some(context);
         errored

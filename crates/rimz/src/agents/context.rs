@@ -1691,6 +1691,13 @@ pub struct AgentTurnError {
     /// after `/model` re-derives it with the new model id) keeps the first stamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// When the limit the stop names refills: the marker's [`at`](Self::at) plus the refill
+    /// span the provider's own stop report states, on the same clock. Absent when the stop
+    /// names no refill that parses, or the sum overflows; only Antigravity's stop decode
+    /// fills it. A marker that names a refill never confirms a model refusal
+    /// (`ProviderCapacity::confirms_refusal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refill_at: Option<Timestamp>,
 }
 
 impl AgentTurnError {

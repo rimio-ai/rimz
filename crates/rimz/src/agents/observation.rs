@@ -680,8 +680,9 @@ pub struct AgentLifecycleObservation {
     /// leaves the folded list unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_scripts: Option<BackgroundScriptReport>,
-    /// The provider limit a failed turn end names in the provider's own stop report. Only the
-    /// supervised run fold reads it; the agent row ignores it.
+    /// The provider limit a failed turn end names in the provider's own stop report. The
+    /// supervised run fold reads it; the agent row reads its refill only off the turn-error
+    /// marker the adapter builds from the same stop (`AgentTurnError::refill_at`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_stop: Option<TurnLimitStop>,
 }

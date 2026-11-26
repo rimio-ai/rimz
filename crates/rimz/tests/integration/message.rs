@@ -18175,6 +18175,7 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn:
         class,
         at,
         label: Some("provider parked".to_owned()),
+        refill_at: None,
     });
     let record = rimz::agents::context::record::AgentContextRecord::new(kind, agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)

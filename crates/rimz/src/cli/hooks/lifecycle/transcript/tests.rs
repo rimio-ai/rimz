@@ -1670,6 +1670,7 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
                 class: TurnErrorClass::PausedOverloaded,
                 at: now,
                 label: None,
+                refill_at: None,
             }),
             ..AgentContext::new("codex", now)
         },

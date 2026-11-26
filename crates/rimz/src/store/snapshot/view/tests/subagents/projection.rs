@@ -32,6 +32,7 @@ fn turn_ended_waiting_pair(wait_age_secs: i64, class: TurnErrorClass) -> (AgentS
             at: error_at,
             label: Some(CAPACITY_LABEL.to_owned()),
             ended_turn: true,
+            refill_at: None,
         }),
         ..crate::agents::AgentContext::new("codex", error_at)
     });

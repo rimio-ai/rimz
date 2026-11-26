@@ -100,6 +100,7 @@ pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnM
                 class: TurnErrorClass::classify_label(label.as_deref()),
                 at,
                 label,
+                refill_at: None,
             }),
             ..TurnMarkers::default()
         },

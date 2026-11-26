@@ -269,6 +269,7 @@ fn delivery_gates_distinguish_failed_provider_parks_from_fatal_errors() {
                 class,
                 at: failed.turn_started_at.unwrap(),
                 label: None,
+                refill_at: None,
             }),
             ..AgentContext::new("claude", now)
         });
@@ -305,6 +306,7 @@ fn spent_provider_pauses_open_any_but_keep_done_closed_and_resume_raw() {
                 class,
                 at: now,
                 label: None,
+                refill_at: None,
             }),
             ..AgentContext::new("claude", now)
         });
@@ -357,6 +359,7 @@ fn delivery_gates_admit_a_fatal_provider_error_only_on_any() {
             class: TurnErrorClass::Failed,
             at: now,
             label: None,
+            refill_at: None,
         }),
         ..AgentContext::new("claude", now)
     });

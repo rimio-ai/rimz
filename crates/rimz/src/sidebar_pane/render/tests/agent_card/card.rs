@@ -824,6 +824,7 @@ fn render_api_error_dead_turn_card() {
         class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Bad Request".to_owned()),
+        refill_at: None,
     });
     claude.context = Some(context);
     let snapshot = snapshot_with(vec![claude]);

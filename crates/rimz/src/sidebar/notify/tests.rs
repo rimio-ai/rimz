@@ -396,6 +396,7 @@ fn delegated_park_opens_one_unread_episode_and_parent_notification() {
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     let frame = |children: Vec<AgentState>| {

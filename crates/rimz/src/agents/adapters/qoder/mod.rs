@@ -374,6 +374,7 @@ impl HookCapability for QoderAdapter {
                 class,
                 at: Timestamp::now(),
                 label,
+                refill_at: None,
             }));
         }
         if matches!(event, "Stop" | "StopFailure" | "SubagentStop") {

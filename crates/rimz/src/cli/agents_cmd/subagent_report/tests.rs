@@ -1316,6 +1316,7 @@ fn held(name: &str, until: &str) -> (AgentState, RunRecord) {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Usage limit reached".into()),
+        refill_at: None,
     });
     child.context = Some(context);
     let mut record = run(RunStatus::Running);
@@ -1407,6 +1408,7 @@ fn seed_limit_marker(store: &Store, name: &str) {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Usage limit reached".into()),
+        refill_at: None,
     });
     rimz::store::agent_context::write_record(
         store.runtime_paths(),
@@ -1528,6 +1530,7 @@ fn a_raw_failed_held_child_keeps_its_provider_label_in_the_digest() {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Individual quota reached".into()),
+        refill_at: None,
     });
     rimz::store::agent_context::write_record(
         store.runtime_paths(),

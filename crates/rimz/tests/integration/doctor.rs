@@ -738,6 +738,7 @@ fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhausti
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at: Timestamp::now(),
         label: Some("limit reached".into()),
+        refill_at: None,
     });
     rimz::store::agent_context::write(
         &env.runtime_paths(),
@@ -1774,6 +1775,7 @@ fn doctor_json_folds_one_row_per_agent() {
         class: rimz::agents::TurnErrorClass::Failed,
         at: now,
         label: Some("request rejected".into()),
+        refill_at: None,
     });
     rimz::store::agent_context::write(
         &env.runtime_paths(),

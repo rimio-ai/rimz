@@ -1865,6 +1865,7 @@ fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
     refine_turn_death_from_frame(
         &mut capacity,
@@ -1885,6 +1886,7 @@ fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
     refine_turn_death_from_frame(
         &mut usage_limit,
@@ -1916,6 +1918,7 @@ again at 6:35 AM.
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
     refine_turn_death_from_frame(&mut unknown, "⚠ Provider ended turn early\n› \n");
     assert_eq!(unknown.class, crate::agents::TurnErrorClass::Failed);
@@ -1927,6 +1930,7 @@ again at 6:35 AM.
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
     refine_turn_death_from_frame(
         &mut numeric_pane_line,
@@ -1967,6 +1971,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
 
     let spent = capacity(Some(100), Some(future_reset));
@@ -1994,6 +1999,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         class: crate::agents::TurnErrorClass::PausedOverloaded,
         at: now,
         label: Some("Selected model is at capacity.".to_owned()),
+        refill_at: None,
     };
     infer_turn_death_from_spent_window(&mut proven, Some(&spent), now);
     assert_eq!(
@@ -2004,6 +2010,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
             class: crate::agents::TurnErrorClass::PausedOverloaded,
             at: now,
             label: Some("Selected model is at capacity.".to_owned()),
+            refill_at: None,
         }
     );
 }

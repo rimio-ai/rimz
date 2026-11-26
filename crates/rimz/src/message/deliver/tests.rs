@@ -153,6 +153,7 @@ fn spent_receiver(now: Timestamp) -> (AgentState, CardStatus) {
             class: crate::agents::TurnErrorClass::PausedRateLimit,
             at: now,
             label: None,
+            refill_at: None,
         }),
         ..crate::agents::AgentContext::new("claude", now)
     });
@@ -638,6 +639,7 @@ fn refused_ping(model: &str, now: Timestamp, marker_age: Duration) -> AgentState
             class: crate::agents::TurnErrorClass::PausedRateLimit,
             at: now - marker_age,
             label: Some("not available on your plan".to_owned()),
+            refill_at: None,
         }),
         ..crate::agents::AgentContext::new("claude", now - marker_age)
     });
@@ -701,6 +703,23 @@ fn receiver_readiness_holds_a_refused_or_unconfirmed_receiver_at_every_gate_and_
             "a read first seen past the confirm window",
             refused_ping("claude-fable-5-2", now, 12 * minute),
             read_at(now - minute),
+            None,
+        ),
+        (
+            "a stop naming its refill with no read since",
+            {
+                let mut stopped = refused_ping("claude-fable-5-2", now, 2 * minute);
+                let marker = stopped
+                    .context
+                    .as_mut()
+                    .unwrap()
+                    .turn_error
+                    .as_mut()
+                    .unwrap();
+                marker.refill_at = Some(now + 60 * minute);
+                stopped
+            },
+            read_at(now - 30 * minute),
             None,
         ),
         (
@@ -781,6 +800,7 @@ fn leaving_a_refused_model_after_a_failed_limit_turn_opens_the_done_gate() {
             class: crate::agents::TurnErrorClass::PausedRateLimit,
             at: now - 9 * minute,
             label: Some("not available on your plan".to_owned()),
+            refill_at: None,
         }),
         ..crate::agents::AgentContext::new("claude", now - 9 * minute)
     });

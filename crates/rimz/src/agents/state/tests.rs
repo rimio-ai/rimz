@@ -1245,6 +1245,7 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
         class: TurnErrorClass::Failed,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
         label: Some(label.to_owned()),
+        refill_at: None,
     };
 
     assert_eq!(
@@ -1275,6 +1276,7 @@ fn effective_turn_error_class_keeps_usage_cap_failed() {
             "API Error: 400 You have reached your specified API usage limits.",
             " You will regain access on 2026-11-01 at 00:00 UTC."
         )),
+        refill_at: None,
     };
     let mut actual = Vec::new();
     for status in [AgentStatus::Running, AgentStatus::Failed] {
@@ -1311,6 +1313,7 @@ fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
             class,
             at: Timestamp::from_second(at).unwrap(),
             label: Some("provider parked".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("claude", Timestamp::from_second(at).unwrap())
     }
@@ -1635,6 +1638,74 @@ fn rowless_card_drops_parked_phase_on_errors_refusals_left_model_and_interrupts(
             ("refused", AgentStatus::Failed, TurnPhase::Idle),
             ("interrupted", AgentStatus::Idle, TurnPhase::Idle),
             ("native_wait", AgentStatus::Waiting, TurnPhase::Idle),
+        ]
+    );
+}
+
+#[test]
+fn a_limit_marker_fails_the_resting_card_only_on_a_read_that_confirms_a_refusal() {
+    use crate::agents::{ProviderCapacity, RateLimitWindow};
+    let at = |secs: i64| Timestamp::from_second(secs).unwrap();
+    let now = at(1_100);
+    let five_hours = 5 * 3_600;
+    let window = |used, reset: Option<i64>| RateLimitWindow {
+        duration_mins: Some(300),
+        used_percentage: Some(used),
+        resets_at: reset.map(at),
+        observed_at: Some(at(1_050)),
+        ..Default::default()
+    };
+    let cases = [
+        (
+            "a stop naming its refill",
+            Some(at(4_600)),
+            window(99, None),
+        ),
+        (
+            "a window begun after the stop",
+            None,
+            window(10, Some(1_030 + five_hours)),
+        ),
+        (
+            "a window begun before the stop",
+            None,
+            window(40, Some(950 + five_hours)),
+        ),
+        (
+            "a window not started",
+            None,
+            window(0, Some(1_050 + five_hours)),
+        ),
+        ("an undated window", None, window(99, None)),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(case, refill_at, window)| {
+            let mut agent = test_agent(AgentStatus::Success, 1_000);
+            agent.model = Some("claude-opus-4-6".to_owned());
+            agent.ping_opened_at = Some(at(1_005));
+            let mut context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
+            context.turn_error.as_mut().unwrap().refill_at = refill_at;
+            agent.context = Some(context);
+            let demotion = ParkDemotion::new(
+                &BTreeMap::from([(
+                    agent.login_key(),
+                    ProviderCapacity::from_windows(vec![window]),
+                )]),
+                BTreeSet::new(),
+                now,
+            );
+            (case, agent.rowless_card(&demotion, now).0)
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("a stop naming its refill", AgentStatus::Success),
+            ("a window begun after the stop", AgentStatus::Success),
+            ("a window begun before the stop", AgentStatus::Failed),
+            ("a window not started", AgentStatus::Failed),
+            ("an undated window", AgentStatus::Failed),
         ]
     );
 }

@@ -835,6 +835,7 @@ fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
         class: TurnErrorClass::Unknown,
         at,
         label: Some(MESSAGELESS_TASK_COMPLETE_LABEL.to_owned()),
+        refill_at: None,
     }
 }
 
@@ -852,6 +853,7 @@ fn turn_error_from_record(record: &RolloutRecord<'_>) -> Option<AgentTurnError> 
         class,
         at,
         label,
+        refill_at: None,
     })
 }
 
