@@ -290,24 +290,22 @@ fn restart_of_a_session_whose_launch_another_session_holds_refuses() {
     assert!(!replacement_recorded(&env));
 }
 
+/// Antigravity's kind base `agents/antigravity.md`, and one that fails to load.
+const AGY_BASE: &str = "description: antigravity base\ntools: [Read]";
+const BROKEN_AGY_BASE: &str = "description: antigravity base\ntier: senior";
+
 /// Installs Antigravity's hooks and writes the trusted project TOML profile `seat` with
-/// `mcps = []`, which carries no prompt onto Antigravity, and Antigravity's kind base, a prompt
-/// source there, when `prompted`.
-fn write_seat(env: &Env, prompted: bool) {
+/// `mcps = []`, which carries no prompt onto Antigravity, and Antigravity's home kind base from
+/// `base` when given; without one the seat runs on the built-in base.
+fn write_seat(env: &Env, base: Option<&str>) {
     env.install_agent_hooks("antigravity");
     env.write_config(
         &env.project_root,
         "[profiles.seat]\ndescription = \"Seat.\"\nagent = \"amp\"\nmcps = []\n",
     );
     env.rimz().args(["trust", "grant"]).assert().success();
-    if prompted {
-        crate::common::write_definition(
-            env,
-            "agents",
-            "antigravity",
-            "description: antigravity base\ntools: [Read]",
-            "antigravity base.",
-        );
+    if let Some(base) = base {
+        crate::common::write_definition(env, "agents", "antigravity", base, "antigravity base.");
     }
 }
 
@@ -318,35 +316,39 @@ fn seat_launch() -> LaunchParams {
     }
 }
 
-/// A molt of the `seat` agent onto Antigravity without `agents/antigravity.md` is refused before
-/// it reserves the swap or opens a pane; with the kind base it succeeds and records the swap.
+/// A molt of the `seat` agent onto Antigravity whose `agents/antigravity.md` fails to load is
+/// refused before it reserves the swap or opens a pane; on that kind base, or on the built-in one,
+/// it succeeds and records the swap.
 #[test]
-fn molt_onto_antigravity_without_a_base_refuses_before_swap() {
-    let molt = |prompted: bool| {
+fn molt_onto_antigravity_with_a_broken_base_refuses_before_swap() {
+    let molt = |base: Option<&str>| {
         molt_over(
             &[1],
             false,
             seat_launch(),
             &["--agent", "antigravity"],
             |env| {
-                write_seat(env, prompted);
+                write_seat(env, base);
             },
         )
     };
-    let (env, output) = molt(false);
+    let (env, output) = molt(Some(BROKEN_AGY_BASE));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        stderr.contains("whose kind base is missing") && stderr.contains("agents/antigravity.md"),
+        stderr
+            .contains("agents/antigravity.md: sets `tier:`, but a kind base runs on its own kind"),
         "{stderr}"
     );
     let log = mux_log(&env);
     assert!(!log.contains("new-pane"), "{log}");
     assert!(!replacement_recorded(&env));
 
-    let (env, output) = molt(true);
-    assert!(output.status.success(), "{output:?}");
-    assert!(replacement_recorded(&env));
+    for base in [Some(AGY_BASE), None] {
+        let (env, output) = molt(base);
+        assert!(output.status.success(), "{base:?}: {output:?}");
+        assert!(replacement_recorded(&env), "{base:?}");
+    }
 }
 
 /// `agents restart @planner --no-continue` of an Antigravity seat molted from the profile
@@ -403,25 +405,27 @@ fn agy_seat_restart(env: &Env, resumed: bool) -> std::process::Output {
         .unwrap()
 }
 
-/// A restart of an Antigravity seat whose profile cannot build without `agents/antigravity.md`
+/// A restart of an Antigravity seat whose profile `seat` no longer resolves
 /// degrades to bare Antigravity (matching a broken Markdown definition) rather than failing the
 /// restart, whether fresh or resuming a conversation.
 #[test]
-fn restart_of_antigravity_without_a_base_degrades_to_bare() {
+fn restart_of_antigravity_whose_profile_is_gone_degrades_to_bare() {
     let env = Env::new();
-    write_seat(&env, false);
+    env.install_agent_hooks("antigravity");
     let output = agy_seat_restart(&env, false);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{output:?}");
     assert!(
-        stderr.contains("whose kind base is missing")
-            && stderr.contains("launching as bare antigravity"),
+        stderr.contains(
+            "rimz: profile `antigravity` no longer resolves (profile `seat` references unknown \
+             base `seat`); launching as bare antigravity"
+        ),
         "{stderr}"
     );
     assert!(replacement_recorded(&env));
 
     let env = Env::new();
-    write_seat(&env, false);
+    env.install_agent_hooks("antigravity");
     let output = agy_seat_restart(&env, true);
     assert!(output.status.success(), "{output:?}");
     assert!(

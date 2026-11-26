@@ -216,3 +216,59 @@ final AgentState:
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn a_plugin_kind_with_a_prompt_flag_runs_on_the_claude_body_of_the_built_in_base() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let output = env
+        .rimz()
+        .args(["agents", "register", "testbot"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let manifest = env.rimz_home().join("agents.d/testbot/agent.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace("# system-prompt-file-flag", "system-prompt-file-flag"),
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: testbot",
+        "Craft.",
+    );
+    let claude = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/config/definitions/builtin/claude.md"),
+    )
+    .unwrap();
+    let (_, body) = claude.split_once("\n---\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--prompt"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let prompt = String::from_utf8_lossy(&output.stdout);
+    let base_at = prompt.find(body.trim()).expect("the claude.md body");
+    assert!(prompt[base_at..].contains("Craft."), "{prompt}");
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["prompt"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|source| (source["builtin"].as_str(), source.get("path").is_some()))
+            .collect::<Vec<_>>(),
+        [(Some("kind base testbot"), false), (None, true)]
+    );
+}

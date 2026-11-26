@@ -251,6 +251,16 @@ pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
         )
 }
 
+/// Whether `kind` applies a tools list only inside the agent file its system prompt rides.
+pub(crate) fn tools_ride_prompt(kind: &str) -> bool {
+    matches!(definitions(kind).tools, DefinitionTools::RequiredFile(_))
+}
+
+/// Whether a definition's system prompt on `kind` appends to the provider's own prompt.
+pub(crate) fn system_prompt_appends(kind: &str) -> bool {
+    definitions(kind).prompt_appends
+}
+
 /// Whether `kind` runs models named by other providers' vocabularies.
 pub fn runs_other_providers_models(kind: &str) -> bool {
     definitions(kind).runs_other_providers_models

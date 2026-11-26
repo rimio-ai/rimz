@@ -379,6 +379,7 @@ fn profile(agent: &str) -> Profile {
         definition: None,
         kind_defaults: false,
         kind_base: false,
+        built_in_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -4664,5 +4665,48 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
         Some(TuningSource::KindBase(AgentKind::new_unchecked(
             "antigravity"
         )))
+    );
+}
+
+#[test]
+fn explain_names_the_built_in_kind_base_at_the_chain_root_and_marks_its_tuning() {
+    let worker = (
+        "worker",
+        "---\ndescription: Worker\nagent: claude\n---\nCraft.\n",
+    );
+    let built_in = md_defs_raw(&[worker]);
+    let home = md_defs_raw(&[
+        (
+            "claude",
+            "---\ndescription: Claude base\ntools: [Read]\ncode-mode: on\n---\nClaude.\n",
+        ),
+        worker,
+    ]);
+    let explain = |profiles: &ProfilesConfig| {
+        (
+            explain_profile_chain("worker", None, "claude", false, profiles, None),
+            resolve_profile("worker", profiles)
+                .unwrap()
+                .sources
+                .code_mode,
+        )
+    };
+    let claude = || AgentKind::new_unchecked("claude");
+    assert_eq!(
+        [explain(&built_in), explain(&home)],
+        [
+            (
+                vec!["worker".to_owned(), "built-in kind base claude".to_owned()],
+                Some(TuningSource::BuiltInKindBase(claude())),
+            ),
+            (
+                vec!["worker".to_owned(), "claude".to_owned()],
+                Some(TuningSource::KindBase(claude())),
+            ),
+        ]
+    );
+    assert_eq!(
+        TuningSource::BuiltInKindBase(claude()).to_string(),
+        "built-in kind base claude"
     );
 }

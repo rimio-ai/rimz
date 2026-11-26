@@ -396,6 +396,7 @@ fn tier_exclusions_warn_once_per_definition_and_family() {
     std::fs::create_dir(root.path().join("agents")).unwrap();
     for (name, fields) in [
         ("claude", ""),
+        ("codex", "tier: senior\n"),
         ("routed", "tier: junior\ntools: []\n"),
         ("exact", "agent: claude\nmodel: claude-custom\ntools: []\n"),
         ("blocked", "model: astra\ntools: []\n"),
@@ -407,10 +408,13 @@ fn tier_exclusions_warn_once_per_definition_and_family() {
         .unwrap();
     }
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
-    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
-    assert!(loaded.errors[0].path.ends_with("blocked.md"));
-    assert!(loaded.errors[0].message.contains("codex.md"));
-    assert!(loaded.errors[0].message.contains("tier: senior"));
+    let [codex, blocked] = &loaded.errors[..] else {
+        panic!("{:?}", loaded.errors);
+    };
+    assert!(blocked.path.ends_with("blocked.md"));
+    assert!(blocked.message.contains("codex.md"));
+    assert!(blocked.message.contains("tier: senior"));
+    assert!(codex.path.ends_with("agents/codex.md"));
     let warnings = warnings(&loaded, Isolation::Host, &Default::default());
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].path.ends_with("routed.md"));
@@ -1120,7 +1124,7 @@ fn subagent_references_check_allowlists_catalog_commands_aliases_and_children() 
     );
 
     // A `[agents.commands]` key equal to a provider alias matches the catalog directly even when
-    // that provider has no kind base.
+    // that provider has no home kind base.
     let cmd_root = tempfile::tempdir().unwrap();
     std::fs::create_dir(cmd_root.path().join("agents")).unwrap();
     std::fs::write(
@@ -1161,5 +1165,34 @@ fn subagent_references_check_allowlists_catalog_commands_aliases_and_children() 
             "agents/narrow.md: profile narrow: subagent(agy) names `agy`, which this profile \
              cannot reach: its subagents leave out agy",
         ]
+    );
+}
+
+#[test]
+fn notes_name_each_kind_whose_definitions_run_on_the_built_in_base() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", "tools: [Read]\n"),
+        ("on_claude", "agent: claude\n"),
+        ("on_codex", "agent: codex\n"),
+        ("also_codex", "agent: codex\n"),
+        ("on_amp", "agent: amp\n"),
+    ] {
+        let body = if name == "on_amp" { "" } else { "Craft." };
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\n{body}"),
+        )
+        .unwrap();
+    }
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(
+        built_in_base_notes(&loaded, root.path()),
+        [format!(
+            "note: codex definitions run on the built-in kind base; write {} to replace it",
+            root.path().join("agents/codex.md").display()
+        )]
     );
 }

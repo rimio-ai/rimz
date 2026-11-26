@@ -3992,3 +3992,63 @@ fn cohort_resume_same_kind_agent_override_on_tiered_profile_and_kind_base_fallba
     assert_eq!(cell.launch.model.as_deref(), Some("opus"));
     assert_eq!(cell.launch.tier.as_deref(), Some(&fallback_stamp));
 }
+
+#[test]
+fn a_relaunch_on_the_built_in_kind_base_keeps_the_prompt_rule_of_its_launch() {
+    let home = tempfile::tempdir().unwrap();
+    for (path, text) in [
+        (
+            "agents/worker.md",
+            "---\ndescription: Worker\nagent: claude\n---\n",
+        ),
+        (
+            "teams/probe.md",
+            "---\nleader: lead\nstages: [Plan, Review]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]\n  - agent: worker\n    role: judge\n    owns: [Review]\n---\nPipeline.",
+        ),
+    ] {
+        let path = home.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        home.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &crate::config::CommandsConfig::default(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let posture = |profile: &str, team: Option<&str>, role: Option<&str>| {
+        let request = PostureRequest {
+            record: None,
+            profile: Some(profile),
+            kind: &kind,
+            stamped_mode: None,
+            stamped_tier: None,
+        };
+        let posture = resolve_member_posture(
+            request,
+            &loaded.agent_profiles,
+            None,
+            &loaded.teams,
+            team,
+            role,
+        );
+        assert_eq!(posture.degraded, None, "{profile}");
+        posture
+            .launch
+            .system_prompt_file
+            .map(|source| match source {
+                crate::config::PromptSource::Text { text, .. } => text,
+                crate::config::PromptSource::File(path) => panic!("{}", path.display()),
+            })
+    };
+    assert_eq!(posture("worker", None, None), None);
+    let seat = posture("probe.lead", Some("probe"), Some("lead")).unwrap();
+    assert!(
+        seat.starts_with("You are an agent working with the user"),
+        "{seat}"
+    );
+}

@@ -663,6 +663,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &["gpt-"],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
+        prompt_appends: false,
     };
 
 fn host_skill_key(

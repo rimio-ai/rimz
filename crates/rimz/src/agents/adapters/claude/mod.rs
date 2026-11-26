@@ -542,6 +542,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &["claude-"],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
+        prompt_appends: false,
     };
 
 const CLAUDE_AGENT_TYPES: &[&str] = &[

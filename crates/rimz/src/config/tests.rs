@@ -3120,6 +3120,8 @@ fn a_tiered_definition_failure_names_the_root_that_blocks_its_first_model() {
     let worker = write("agents/worker.md", "agent: codex\ntier: senior", "");
     let broken = write("subagents/broken.md", "agent: none", "");
     let base = write("agents/codex.md", "subagents: [broken]", "Base.");
+    // A claude base that fails leaves the senior tier no family to fall back to.
+    write("agents/claude.md", "tier: senior", "Base.");
     let roots = |failure: String| {
         let (first, causes) = failure.split_once('\n').expect(&failure);
         let start = format!("{}: no eligible model at tier senior", worker.display());

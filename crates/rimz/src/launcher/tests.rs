@@ -2363,7 +2363,8 @@ fn launch_and_replay_engine_matrix_matches_one_chain_rule() {
     let repo = tempfile::tempdir().unwrap();
     std::fs::create_dir(home.path().join("agents")).unwrap();
     std::fs::create_dir(home.path().join("teams")).unwrap();
-    // Intentionally omit `agents/antigravity.md` so `antigravity` is a bare kind with no kind base.
+    // Intentionally omit `agents/antigravity.md`: a bare `antigravity` stays native, and a
+    // definition onto it runs on the built-in base.
     for (name, body) in [
         (
             "agents/claude.md",
@@ -2573,13 +2574,8 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
             };
 
             for sel in [Sel::None, Sel::Model, Sel::Tier] {
-                // Skip combinations the loader/router explicitly refuses:
-                // 1. Definition L built onto bare kind `antigravity` (no `agents/antigravity.md`
-                //    kind base).
-                if l_is_def && x_kind == Some("antigravity") && !matches!(sel, Sel::Tier) {
-                    continue;
-                }
-                // 2. `--tier` requires definition L, kind base L, or bare L with definition X.
+                // Skip the combination the router refuses: `--tier` requires definition L, kind
+                // base L, or bare L with definition X.
                 if matches!(sel, Sel::Tier) && l_is_bare && !x_is_def {
                     continue;
                 }

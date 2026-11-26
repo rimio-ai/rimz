@@ -812,40 +812,6 @@ fn project_team_consensus_reports_a_failed_kind_base() {
 }
 
 #[test]
-fn project_team_consensus_without_a_base_refuses_both_team_and_profile() {
-    let env = Env::new();
-    let base = env.rimz_home().join("agents/claude.md");
-    env.write_config(
-        &env.project_root,
-        "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
-         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
-    );
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
-    let shell = crate::common::write_fake_login_shell(&env, "team-base-test-sh", &[]);
-    let path = format!(
-        "{}:{}",
-        agent_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    env.rimz().args(["trust", "grant"]).assert().success();
-    let cfg = env.project_root.join(".rimz/config.toml");
-    for target in ["crew", "worker"] {
-        env.rimz()
-            .args(["agents", "explain", target])
-            .env("SHELL", &shell)
-            .env("PATH", &path)
-            .assert()
-            .code(1)
-            .stderr(
-                contains(cfg.display().to_string())
-                    .and(contains("[profiles.worker]"))
-                    .and(contains(base.display().to_string())),
-            );
-    }
-}
-
-#[test]
 fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
     let env = Env::new();
     crate::common::write_definition(

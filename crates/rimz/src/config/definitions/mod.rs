@@ -6,6 +6,7 @@
 //! `inherit_base`), then resolves and lowers in `agent.rs` (`finish_profile`).
 
 mod agent;
+mod builtin;
 mod catalog;
 pub mod customization;
 pub(crate) mod frontmatter;
@@ -269,27 +270,11 @@ pub enum DefinitionCause {
     Invalid,
 }
 
-/// The tail of every refusal for a definition whose kind base is absent.
-/// Nothing in the tree ships one, so naming the file is not enough: the
-/// message has to say what a kind base is, where to write it, and that an
-/// empty body is refused in turn.
-pub(super) fn missing_kind_base(home: &Path, kind: &str) -> String {
-    let shipped = std::iter::once(kind)
-        .chain(
-            crate::agents::find_definition(kind)
-                .map(|definition| definition.spec().aliases)
-                .unwrap_or_default()
-                .iter()
-                .copied(),
-        )
-        .map(|name| format!("agents/{name}.md"))
-        .collect::<Vec<_>>()
-        .join(" or ");
-    format!(
-        "whose kind base is missing — create {} with a nonempty body, the system prompt every \
-         {kind} definition starts from, or install a provider pack that ships {shipped}",
-        home.join("agents").join(format!("{kind}.md")).display()
-    )
+/// Why a definition cannot run on `kind` for want of a kind base, the tail of a `model ...
+/// cannot run this definition` refusal: only a kind that takes no system prompt goes without
+/// one, since it refuses a kind base file and every other kind falls back to its built-in base.
+pub(super) fn no_kind_base(kind: &str) -> String {
+    format!("{kind} takes no system prompt, so it has no kind base for a definition to run on")
 }
 
 /// The refusal for a kind base whose prompt body is empty, raw or rendered.
@@ -298,6 +283,26 @@ fn empty_kind_base(stem: &str) -> String {
         "kind base has no prompt body — write the system prompt every {stem} definition starts \
          from below the frontmatter"
     )
+}
+
+/// The refusal for a definition on `kind`, which has no home or loaded pack base, while a
+/// recorded pack is broken: it may ship that base, so the built-in one does not stand in.
+fn broken_pack_base(kind: &str, problem: &Problem, home: &Path) -> DefinitionErr {
+    DefinitionErr::new(
+        &problem.path,
+        format!(
+            "{kind} has no home kind base while a recorded pack is broken ({}: {}), so no {kind} \
+             definition falls back to the built-in base; repair or remove that pack, or write {} \
+             as the {kind} kind base",
+            problem.path.display(),
+            problem.message,
+            home.join("agents").join(format!("{kind}.md")).display()
+        ),
+    )
+    .with_cause(DefinitionCause::DependsOnFailed {
+        name: kind.to_owned(),
+        subagent: false,
+    })
 }
 
 /// The tail of every refusal for a definition whose kind base exists but failed to load,
@@ -327,8 +332,9 @@ impl DefinitionErr {
         self
     }
 
-    /// Whether this kind base failure is packs claiming `kind` at once, which a dependent
-    /// repeats whole: no one file is the one to fix.
+    /// Whether this kind base failure is packs claiming `kind` at once, or a broken recorded
+    /// pack holding the built-in base back from `kind`, which a dependent repeats whole: no one
+    /// file is the one to fix.
     fn is_conflict_over(&self, kind: &str) -> bool {
         matches!(
             &self.cause,
@@ -468,7 +474,11 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
 #[derive(Debug, PartialEq, Eq)]
 struct SharedLoadState {
     home: PathBuf,
+    /// Every kind base's frontmatter, a built-in one included.
     bases: BTreeMap<String, AgentFrontmatter>,
+    /// The rows of each built-in kind base in the agents and the subagents namespace, which a
+    /// definition's launch takes as its parent and no profile table lists.
+    built_in: BTreeMap<String, (Profile, Profile)>,
     failed_bases: BTreeMap<String, DefinitionErr>,
     skills: Arc<SkillCatalog>,
     tiers: super::tiers::TierConfig,
@@ -541,6 +551,155 @@ pub struct LoadContexts {
 struct LoadScope<'a> {
     context: &'a Arc<LoadContext>,
     traits: &'a BTreeMap<String, ClaimResolution>,
+}
+
+/// The parts of a load every kind base's rows build against.
+struct BaseLoad<'a> {
+    home: &'a Path,
+    skills: &'a Arc<SkillCatalog>,
+    tiers: &'a super::tiers::TierConfig,
+    auto_compact_default: Option<super::AutoCompactDefault>,
+    traits: &'a BTreeMap<String, ClaimResolution>,
+}
+
+impl BaseLoad<'_> {
+    /// The kind base `name` from its split text, checked as every kind base is, with its row in
+    /// each namespace. A built-in base (`builtin`) may leave its body empty.
+    fn rows(
+        &self,
+        path: &Path,
+        pack: Option<&PackName>,
+        (name, definition): (&str, &crate::agents::AgentDefinition),
+        (yaml, body): (&str, &str),
+        built_in: bool,
+    ) -> Result<(AgentFrontmatter, (Profile, Profile)), DefinitionErr> {
+        let kind = definition.spec().kind;
+        let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
+        fm.check_plus()
+            .map_err(|message| DefinitionErr::new(path, message))?;
+        if fm.tier.is_some() {
+            return Err(DefinitionErr::new(
+                path,
+                "sets `tier:`, but a kind base runs on its own kind; name a model in \
+                 `model:`, or set the tier on a profile",
+            ));
+        }
+        if let Some(agent) = fm.agent.as_deref()
+            && crate::agents::find_definition(agent).is_none_or(|named| named.spec().kind != kind)
+        {
+            let own = std::iter::once(kind)
+                .chain(definition.spec().aliases.iter().copied())
+                .collect::<Vec<_>>()
+                .join(" or ");
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "names `agent: {agent}`, but a kind base runs on its own kind; \
+                     `agent:` may name only {own}"
+                ),
+            ));
+        }
+        if let Some(tier) = fm
+            .model
+            .as_deref()
+            .and_then(super::tiers::ModelTier::from_model)
+        {
+            return Err(DefinitionErr::new(
+                path,
+                format!("model is a tier; name a model, or set `tier: {tier}` on a profile"),
+            ));
+        }
+        if let Some(effort) = fm
+            .effort
+            .as_deref()
+            .filter(|effort| super::tiers::relative_effort(effort))
+        {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "effort {effort} is relative; set an absolute effort or omit it \
+                     for the chosen model's default"
+                ),
+            ));
+        }
+        if !built_in && body.trim().is_empty() {
+            return Err(DefinitionErr::new(path, empty_kind_base(name)));
+        }
+        let tree = Namespace {
+            definitions: BTreeMap::from([(
+                name.to_owned(),
+                Definition {
+                    path: path.to_owned(),
+                    pack: pack.cloned(),
+                    body: body.trim().to_owned(),
+                    frontmatter: fm.clone(),
+                    extras: TomlExtras::default(),
+                },
+            )]),
+            ..Namespace::default()
+        };
+        let context = Arc::new(LoadContext {
+            shared: Arc::new(SharedLoadState {
+                home: self.home.to_owned(),
+                bases: BTreeMap::from([(name.to_owned(), fm.clone())]),
+                built_in: BTreeMap::new(),
+                failed_bases: BTreeMap::new(),
+                skills: Arc::clone(self.skills),
+                tiers: self.tiers.clone(),
+                auto_compact_default: self.auto_compact_default,
+            }),
+            subagents: None,
+        });
+        let scope = LoadScope {
+            context: &context,
+            traits: self.traits,
+        };
+        let row = |namespace: &'static str| {
+            agent::Resolver::new(scope, namespace, [&tree, &tree]).kind_base(name, built_in)
+        };
+        let rows = (row("agents")?, row("subagents")?);
+        Ok((fm, rows))
+    }
+
+    /// The built-in base of every kind that takes a system prompt and has no home or pack base,
+    /// its frontmatter added to `bases`. One that fails to load joins `failed_bases`, and so
+    /// does every such kind while a recorded pack is broken (`broken_pack`), since that pack
+    /// may ship the base the built-in one would stand in for.
+    fn built_ins(
+        &self,
+        bases: &mut BTreeMap<String, AgentFrontmatter>,
+        failed_bases: &mut BTreeMap<String, DefinitionErr>,
+        broken_pack: Option<&Problem>,
+    ) -> BTreeMap<String, (Profile, Profile)> {
+        let mut built_in = BTreeMap::new();
+        for definition in crate::agents::known_kinds().filter_map(crate::agents::find_definition) {
+            let kind = definition.spec().kind;
+            let has_base = bases.keys().chain(failed_bases.keys()).any(|name| {
+                crate::agents::find_definition(name)
+                    .is_some_and(|definition| definition.spec().kind == kind)
+            });
+            let Some(text) = builtin::text(kind).filter(|_| !has_base) else {
+                continue;
+            };
+            if let Some(problem) = broken_pack {
+                failed_bases.insert(kind.to_owned(), broken_pack_base(kind, problem, self.home));
+                continue;
+            }
+            let path = super::PromptSource::built_in_origin(kind);
+            let loaded = frontmatter::split(&path, &text)
+                .and_then(|split| self.rows(&path, None, (kind, definition), split, true));
+            match loaded {
+                Ok((fm, rows)) => {
+                    bases.insert(kind.to_owned(), fm);
+                    built_in.insert(kind.to_owned(), rows);
+                }
+                Err(error) => {
+                    failed_bases.insert(kind.to_owned(), error);
+                }
+            }
+        }
+        built_in
+    }
 }
 
 /// A kind base that loaded, held back until its `subagents:` names check.
@@ -839,94 +998,20 @@ fn load_resolved(
                     .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
                 let (yaml, body) = frontmatter::split(path, &text)?;
                 if let Some(definition) = kind_base {
-                    let kind = definition.spec().kind;
-                    let fm: AgentFrontmatter = frontmatter::parse(path, yaml)?;
-                    fm.check_plus()
-                        .map_err(|message| DefinitionErr::new(path, message))?;
-                    if fm.tier.is_some() {
-                        return Err(DefinitionErr::new(
-                            path,
-                            "sets `tier:`, but a kind base runs on its own kind; name a model in \
-                             `model:`, or set the tier on a profile",
-                        ));
-                    }
-                    if let Some(agent) = fm.agent.as_deref()
-                        && crate::agents::find_definition(agent)
-                            .is_none_or(|named| named.spec().kind != kind)
-                    {
-                        let own = std::iter::once(kind)
-                            .chain(definition.spec().aliases.iter().copied())
-                            .collect::<Vec<_>>()
-                            .join(" or ");
-                        return Err(DefinitionErr::new(
-                            path,
-                            format!(
-                                "names `agent: {agent}`, but a kind base runs on its own kind; \
-                                 `agent:` may name only {own}"
-                            ),
-                        ));
-                    }
-                    if let Some(tier) = fm
-                        .model
-                        .as_deref()
-                        .and_then(super::tiers::ModelTier::from_model)
-                    {
-                        return Err(DefinitionErr::new(
-                            path,
-                            format!(
-                                "model is a tier; name a model, or set `tier: {tier}` on a profile"
-                            ),
-                        ));
-                    }
-                    if let Some(effort) = fm
-                        .effort
-                        .as_deref()
-                        .filter(|effort| super::tiers::relative_effort(effort))
-                    {
-                        return Err(DefinitionErr::new(
-                            path,
-                            format!(
-                                "effort {effort} is relative; set an absolute effort or omit it \
-                                 for the chosen model's default"
-                            ),
-                        ));
-                    }
-                    if body.trim().is_empty() {
-                        return Err(DefinitionErr::new(path, empty_kind_base(name)));
-                    }
-                    let tree = Namespace {
-                        definitions: BTreeMap::from([(
-                            name.clone(),
-                            Definition {
-                                path: path.clone(),
-                                pack: item.pack.clone(),
-                                body: body.trim().to_owned(),
-                                frontmatter: fm.clone(),
-                                extras: TomlExtras::default(),
-                            },
-                        )]),
-                        ..Namespace::default()
-                    };
-                    let own_base = BTreeMap::from([(name.clone(), fm.clone())]);
-                    let base_ctx = Arc::new(LoadContext {
-                        shared: Arc::new(SharedLoadState {
-                            home: agents_home.to_owned(),
-                            bases: own_base,
-                            failed_bases: BTreeMap::new(),
-                            skills: Arc::clone(&catalog),
-                            tiers: tiers.clone(),
-                            auto_compact_default,
-                        }),
-                        subagents: None,
-                    });
-                    let scope = LoadScope {
-                        context: &base_ctx,
+                    let base_load = BaseLoad {
+                        home: agents_home,
+                        skills: &catalog,
+                        tiers,
+                        auto_compact_default,
                         traits: &sources.claims["traits"],
                     };
-                    let row = |namespace: &'static str| {
-                        agent::Resolver::new(scope, namespace, [&tree, &tree]).kind_base(name)
-                    };
-                    let rows = (row("agents")?, row("subagents")?);
+                    let (fm, rows) = base_load.rows(
+                        path,
+                        item.pack.as_ref(),
+                        (name, definition),
+                        (yaml, body),
+                        false,
+                    )?;
                     bases.insert(name.clone(), fm);
                     pending.push(PendingBase {
                         item,
@@ -985,6 +1070,25 @@ fn load_resolved(
             }
         }
     }
+    // A recorded pack that failed to resolve, or to list its `agents/`, may ship a kind base.
+    let broken_pack = packs.problems.first().cloned().or_else(|| {
+        loaded
+            .pack_problems
+            .values()
+            .flatten()
+            .find(|problem| problem.path.ends_with("agents"))
+            .cloned()
+    });
+    // Every kind left without a base takes its built-in one before the probe below, since a
+    // base's child can run on another kind's built-in base.
+    let built_in = BaseLoad {
+        home: agents_home,
+        skills: &catalog,
+        tiers,
+        auto_compact_default,
+        traits: &sources.claims["traits"],
+    }
+    .built_ins(&mut bases, &mut failed_bases, broken_pack.as_ref());
     // A base's `subagents:` names a subagent that loads. A base that names a failed one fails,
     // which fails its kind's subagents in turn, so this settles before either tree resolves.
     // A subagent's first error here predates any refusal its own failure causes.
@@ -997,6 +1101,7 @@ fn load_resolved(
             shared: Arc::new(SharedLoadState {
                 home: agents_home.to_owned(),
                 bases: bases.clone(),
+                built_in: built_in.clone(),
                 failed_bases: failed_bases.clone(),
                 skills: Arc::clone(&catalog),
                 tiers: tiers.clone(),
@@ -1065,21 +1170,33 @@ fn load_resolved(
         .collect();
     let mut exclusions = BTreeMap::new();
     for kind in &families {
-        if loaded.agent_profiles.0.contains_key(*kind) {
+        if loaded.agent_profiles.0.contains_key(*kind) || built_in.contains_key(*kind) {
             continue;
         }
         let message = match failed_bases.get(*kind) {
             Some(error) if error.is_conflict_over(kind) => error.message.clone(),
             Some(error) => failed_kind_base(&error.path),
-            None => missing_kind_base(agents_home, kind),
+            None => no_kind_base(kind),
         };
         exclusions.insert((*kind).to_owned(), message);
     }
-    // Each table's rows route to that table's copy of each base.
-    for profiles in [&mut loaded.agent_profiles, &mut loaded.subagent_profiles] {
+    // Each table's rows route to that table's copy of each family's base, and of each built-in
+    // base, which a `--model` onto its kind takes.
+    for (profiles, subagent) in [
+        (&mut loaded.agent_profiles, false),
+        (&mut loaded.subagent_profiles, true),
+    ] {
         let renders: BTreeMap<_, _> = families
             .iter()
-            .filter_map(|kind| Some(((*kind).to_owned(), profiles.0.get(*kind)?.clone())))
+            .copied()
+            .chain(built_in.keys().map(String::as_str))
+            .filter_map(|kind| {
+                let base = profiles.0.get(kind).or_else(|| {
+                    let rows = built_in.get(kind)?;
+                    Some(if subagent { &rows.1 } else { &rows.0 })
+                })?;
+                Some((kind.to_owned(), base.clone()))
+            })
             .collect();
         for profile in profiles.0.values_mut() {
             profile.definition_renders = Some(super::tiers::DefinitionRenders {
@@ -1103,6 +1220,7 @@ fn load_resolved(
     let shared = Arc::new(SharedLoadState {
         home: agents_home.to_owned(),
         bases,
+        built_in,
         failed_bases,
         skills: Arc::clone(&catalog),
         tiers: tiers.clone(),
@@ -1209,6 +1327,22 @@ fn load_resolved(
 }
 
 impl LoadedDefinitions {
+    /// Each kind at least one definition runs on through its built-in kind base.
+    pub fn built_in_base_kinds(&self) -> BTreeSet<&str> {
+        self.agent_profiles
+            .0
+            .values()
+            .chain(self.subagent_profiles.0.values())
+            .filter(|profile| {
+                profile
+                    .definition
+                    .as_ref()
+                    .is_some_and(|def| def.built_in_base(&profile.agent).is_some())
+            })
+            .map(|profile| profile.agent.as_str())
+            .collect()
+    }
+
     fn list_tuning(&mut self) {
         for row in &mut self.rows {
             let profiles = if row.namespace == "subagents" {

@@ -791,7 +791,7 @@ struct PromptSource<'a> {
     path: Option<&'a Path>,
     /// Names text compiled into RimZ, which has no path.
     #[serde(skip_serializing_if = "Option::is_none")]
-    builtin: Option<&'static str>,
+    builtin: Option<std::borrow::Cow<'static, str>>,
     bytes: u64,
     /// The on-disk inspection copy of built-in text, named in the human
     /// report only; nothing reads it back, so the JSON shape leaves it out.
@@ -922,9 +922,19 @@ impl<'a> ExplainReport<'a> {
                 rimz::config::PromptSource::Text { origin, text } if *origin == reflect_copy => {
                     Ok(PromptSource {
                         path: None,
-                        builtin: Some("consensus piece reflect"),
+                        builtin: Some("consensus piece reflect".into()),
                         bytes: text.len() as u64,
                         copy: Some(origin.clone()).filter(|path| path.is_file()),
+                    })
+                }
+                rimz::config::PromptSource::Text { text, .. }
+                    if let Some(kind) = source.built_in_kind() =>
+                {
+                    Ok(PromptSource {
+                        path: None,
+                        builtin: Some(format!("kind base {kind}").into()),
+                        bytes: text.len() as u64,
+                        copy: None,
                     })
                 }
                 rimz::config::PromptSource::Text { origin, text } => Ok(PromptSource {
@@ -945,7 +955,7 @@ impl<'a> ExplainReport<'a> {
             sources.push(match &team_prompt.consensus {
                 Consensus::BuiltIn => PromptSource {
                     path: None,
-                    builtin: Some("team consensus"),
+                    builtin: Some("team consensus".into()),
                     bytes: BUILT_IN_CONSENSUS.len() as u64,
                     copy: Some(team_prompt::consensus_copy_path(&agents_home))
                         .filter(|path| path.is_file()),
@@ -1187,9 +1197,12 @@ fn write_grant(grant: &GrantReport<'_>, output: &mut impl Write) -> std::io::Res
     rows.render(output)
 }
 
-/// The plan's text row for a tuning value, marked when the kind base supplied it.
+/// The plan's text row for a tuning value, marked when the kind base, a built-in one included,
+/// supplied it.
 fn with_base_mark(value: &str, source: Option<&str>) -> String {
-    match source.filter(|source| source.starts_with("kind base")) {
+    match source.filter(|source| {
+        source.starts_with("kind base") || source.starts_with("built-in kind base")
+    }) {
         Some(source) => format!("{value} ({source})"),
         None => value.to_owned(),
     }
@@ -1552,7 +1565,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     writeln!(output, "\nSystem prompt")?;
     for source in &report.prompt.sources {
         let label = source.path.map_or_else(
-            || format!("built-in {}", source.builtin.unwrap_or_default()),
+            || format!("built-in {}", source.builtin.as_deref().unwrap_or_default()),
             |path| path.display().to_string(),
         );
         match &source.copy {

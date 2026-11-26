@@ -509,7 +509,9 @@ upward-dependencies = [
 # its reply, which only the adapter can tell from the payload (+1).
 # reminder_skip and its facade export let the reminder pass, doctor and the launch plan agree on
 # which kinds take no mid-turn reminder, a missing hook-context reply included (+2).
-surface-budget = 1389
+# system_prompt_appends and tools_ride_prompt read a kind's prompt and tool declarations for the
+# built-in kind base in config::definitions and harness::spec (+2).
+surface-budget = 1391
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1282,7 +1284,9 @@ upward-dependencies = [
 # LoadContexts retains both namespace load contexts on MachineConfig for disk-free project builds (+1).
 # LaunchAgents::{definition_failure_for, project_definition_errors, all_failed_definitions, block_failed_team} and ProfilesConfig::failed carry per-row and per-team project failures across the CLI, room, doctor, harness, resume, and rebirth seams (+4 net with private failed map on ProfilesConfig).
 # MachineConfig::failed_definition_details shares the machine failure map across effective::load_with_roots and rebirth (+1).
-surface-budget = 321
+# LoadedDefinitions::built_in_base_kinds names the kinds on the built-in kind base for `agents validate`,
+# and DefinitionSource::built_in_base hands that base to the launch chain in harness::spec (+2).
+surface-budget = 322
 
 [[verdict]]
 kind = "item"

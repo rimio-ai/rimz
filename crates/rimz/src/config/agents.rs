@@ -29,7 +29,23 @@ impl PromptSource {
             Self::Text { .. } => None,
         }
     }
+
+    /// What a built-in kind base's text carries for its origin, having no path: wherever a
+    /// base's file is named, it reads `built-in kind base <kind>`.
+    pub(crate) fn built_in_origin(kind: &str) -> PathBuf {
+        PathBuf::from(format!("{BUILT_IN_ORIGIN}{kind}"))
+    }
+
+    /// The kind whose built-in kind base this text is, read back from its origin.
+    pub fn built_in_kind(&self) -> Option<&str> {
+        match self {
+            Self::Text { origin, .. } => origin.to_str()?.strip_prefix(BUILT_IN_ORIGIN),
+            Self::File(_) => None,
+        }
+    }
 }
+
+const BUILT_IN_ORIGIN: &str = "built-in kind base ";
 
 impl From<PathBuf> for PromptSource {
     fn from(path: PathBuf) -> Self {
@@ -611,6 +627,10 @@ pub struct Profile {
     /// kind-defaults step below every written value rather than layering as written.
     #[serde(skip)]
     pub kind_base: bool,
+    /// Whether this kind base is the one RimZ ships for its kind, standing where no home or pack
+    /// base does.
+    #[serde(skip)]
+    pub built_in_base: bool,
     #[serde(skip)]
     pub model_tier: Option<super::tiers::TierProvenance>,
     #[serde(skip)]

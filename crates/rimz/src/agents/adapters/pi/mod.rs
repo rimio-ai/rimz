@@ -370,6 +370,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &[],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Optional(render_definition_tools),
+        prompt_appends: false,
     };
 
 fn render_definition_tools(
