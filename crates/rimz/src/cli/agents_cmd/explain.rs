@@ -1378,7 +1378,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
         let value = match value {
             Some(true) => "on",
             Some(false) => "off",
-            None => "unset",
+            None => "auto",
         };
         plan.push(
             label,

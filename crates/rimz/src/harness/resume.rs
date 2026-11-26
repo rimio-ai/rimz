@@ -676,7 +676,7 @@ fn resolve_posture_with_role(
         record.effort = record.effort.or_else(|| cell.launch.effort.clone());
         // Only RimZ's own switch is the record's to replace, and only where it differs
         // from what the profile's `fast` field rendered: a recorded on or off swaps the
-        // switch, a record without `fast` (unset, or written before off was forced)
+        // switch, a record without `fast` (auto, or written before off was forced)
         // strips it, and a switch the profile writes in raw `args` stays where the
         // record and the field agree, as a fresh launch keeps it.
         let fast = record.fast.filter(|_| record.fast != cell.launch.fast);

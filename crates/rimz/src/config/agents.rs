@@ -687,13 +687,13 @@ pub struct Profile {
     pub effort: Option<String>,
     /// Launch in the provider's fast mode (priority serving). On renders the
     /// fast switch and off the provider's off switch where it has one; absent
-    /// takes the kind base's value, while `unset` stops inheritance and the kind
+    /// takes the kind base's value, while `auto` stops inheritance and the kind
     /// base and leaves the provider's default. On on a provider without a fast
     /// switch warns and launches without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<crate::agents::Toggle>,
     /// Launch in the provider's code mode. On and off render the provider's
-    /// switch; absent takes the kind base's value, and `unset`, or absent with
+    /// switch; absent takes the kind base's value, and `auto`, or absent with
     /// none, renders nothing. On on a provider without a code mode warns and
     /// launches without it.
     #[serde(default, rename = "code-mode", skip_serializing_if = "Option::is_none")]
@@ -982,7 +982,7 @@ pub struct RoleBinding {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
-    /// This member's fast mode (on, off, or `unset`); overrides the profile.
+    /// This member's fast mode (on, off, or `auto`); overrides the profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<crate::agents::Toggle>,
     #[serde(default)]

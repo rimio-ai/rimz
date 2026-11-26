@@ -1020,8 +1020,8 @@ pub trait LaunchCapability: CoreCapability {
     /// effective login environment after composition. The delegation decision,
     /// the optional env-config prompt artifact, and a
     /// [`CodeModeSwitch::Config`](super::definition::CodeModeSwitch::Config) code mode
-    /// share one edit of provider config: `code_mode` is the launch's on, off, or unset.
-    /// `release_code_mode` is set on an unset launch whose inherited `RIMZ_CODE_MODE_CONFIG`
+    /// share one edit of provider config: `code_mode` is the launch's on, off, or auto.
+    /// `release_code_mode` is set on an auto launch whose inherited `RIMZ_CODE_MODE_CONFIG`
     /// holds this kind's config marker, so the member an outer launch wrote can be taken back
     /// out.
     /// Returns warnings in order; the default leaves the environment unchanged.

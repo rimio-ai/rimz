@@ -276,8 +276,8 @@ pub struct ResolvedProfile {
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
     pub auto_compact_default: Option<crate::config::AutoCompactDefault>,
-    /// Fast mode as the chain set it. A nearer layer's off or `unset` wins
-    /// over a farther on; on forces the switch, off forces it off, and unset
+    /// Fast mode as the chain set it. A nearer layer's off or `auto` wins
+    /// over a farther on; on forces the switch, off forces it off, and auto
     /// or absent leaves the provider's default.
     pub fast: Option<crate::agents::Toggle>,
     /// Code mode as the chain set it, under the same rule as `fast`.
@@ -460,7 +460,7 @@ impl ResolvedProfile {
         }
     }
 
-    /// A role's own `fast`, on, off, or `unset`, over everything the chain and an `--agent` override set.
+    /// A role's own `fast`, on, off, or `auto`, over everything the chain and an `--agent` override set.
     fn apply_role_fast(&mut self, binding: &RoleBinding) {
         if binding.fast.is_some() {
             self.fast = binding.fast;

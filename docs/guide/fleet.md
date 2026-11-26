@@ -272,7 +272,7 @@ description: Claude, shaped for this machine
 Prefer small, reviewable changes. Name what you are unsure about.
 ```
 
-A base takes a description, a prompt body, and any profile setting every profile on its kind starts from: a setting the profile, or a profile it follows, leaves unset takes the base's value, so one base can give every Claude profile the same tools list. Its `fast`, `code-mode`, `effort`, and `auto-compact` are launch defaults: a value a profile, role, or launch flag writes wins over the base's, and `unset` clears it. The settings one job needs go in the profile beside it, `~/.rimz/agents/planner.md`:
+A base takes a description, a prompt body, and any profile setting every profile on its kind starts from: a setting the profile, or a profile it follows, leaves unset takes the base's value, so one base can give every Claude profile the same tools list. Its `fast`, `code-mode`, `effort`, and `auto-compact` are launch defaults: a value a profile, role, or launch flag writes wins over the base's, and `auto` clears a `fast` or `code-mode` value. The settings one job needs go in the profile beside it, `~/.rimz/agents/planner.md`:
 
 ```markdown
 ---

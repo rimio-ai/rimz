@@ -531,7 +531,7 @@ mod tests {
         for (kind, entries, on, off) in cases {
             assert_eq!(launch(kind, entries, true), on, "{kind} {entries:?} on");
             assert_eq!(launch(kind, entries, false), off, "{kind} {entries:?} off");
-            // Claude's off rides the env and Pi's the final argv, so the tools render as unset.
+            // Claude's off rides the env and Pi's the final argv, so the tools render as auto.
             assert_eq!(
                 launch_in(kind, entries, Some(false)),
                 off,

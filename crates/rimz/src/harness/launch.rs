@@ -1598,7 +1598,7 @@ fn compile_agent_process_with_extra_env(
         &secret_keys,
         ENV_CODE_MODE_ENV,
     );
-    // On and forced off both stamp, so a nested unset launch releases either; off sets
+    // On and forced off both stamp, so a nested auto launch releases either; off sets
     // its value over the user's export and a trusted `[[agents]]` env value alike.
     if let Some(on) = request.identity.params.code_mode {
         let switch = adapter.spec().launch.presets.code_mode;
