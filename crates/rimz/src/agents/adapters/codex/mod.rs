@@ -1380,8 +1380,12 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         _paths: (&Path, &Path),
         extra_args: &mut Vec<String>,
         _artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
-    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+    ) -> std::result::Result<
+        (Vec<String>, Vec<crate::agents::capabilities::UnappliedMark>),
+        crate::agents::skills::LaunchSettingsErr,
+    > {
         let mut warnings = Vec::new();
+        let mut unapplied = Vec::new();
         let listed = launch.mcps.unwrap_or_default();
         let limits = crate::config::mcps_limit(launch.mcps);
         let user_marks: Vec<_> = listed
@@ -1410,36 +1414,29 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         }
         let mut marks = Vec::new();
         for entry in listed.iter().filter(|entry| entry.mode().is_some()) {
-            let not_applied = |reason: String| {
-                format!(
-                    "the {} entry `{entry}` is not applied: {reason}",
-                    launch.key(entry)
-                )
-            };
+            let mut not_applied = |reason: String| unapplied.push(launch.unapplied(entry, reason));
             let name = entry.name();
             if let Some(capability) = entry.capability() {
-                warnings.push(not_applied(format!(
+                not_applied(format!(
                     "Codex takes a load mode per server, so {} loads as the {} server does",
                     capability.name(),
                     crate::mcp::catalog::SERVER_NAME
-                )));
+                ));
             } else if entry.user_server().is_none() {
                 if launch.server.is_none() {
-                    warnings.push(not_applied(
-                        "RimZ's MCP server is off for this launch".into(),
-                    ));
+                    not_applied("RimZ's MCP server is off for this launch".into());
                 }
             } else if name.contains(['.', '=']) {
-                warnings.push(not_applied(
+                not_applied(
                     "a Codex -c override cannot name a server whose name holds a `.` or `=`".into(),
-                ));
+                );
             } else {
                 match &configured {
                     Some(Ok(configured)) if configured.contains(name) => marks.push(entry),
-                    Some(Err(error)) => warnings.push(not_applied(error.to_string())),
-                    _ => warnings.push(not_applied(format!(
+                    Some(Err(error)) => not_applied(error.to_string()),
+                    _ => not_applied(format!(
                         "the account's Codex config defines no MCP server `{name}`"
-                    ))),
+                    )),
                 }
             }
         }
@@ -1492,7 +1489,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 ]);
             }
         }
-        Ok(warnings)
+        Ok((warnings, unapplied))
     }
 
     fn rimz_server_switched_off<'a>(&self, extra_args: &'a [String]) -> Option<(&'a str, &'a str)> {

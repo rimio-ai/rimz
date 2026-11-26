@@ -340,8 +340,10 @@ enum ProcessWrapping {
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
     pub(super) env_warnings: Vec<String>,
-    /// What the adapter's MCP registration could not apply, one line each.
-    pub mcp_warnings: Vec<String>,
+    /// What the adapter's MCP registration warns of: a list it could not apply in full.
+    pub(super) mcp_warnings: Vec<String>,
+    /// Each load mark the launch cannot apply, for `rimz agents explain --mcps` alone.
+    pub unapplied_marks: Vec<crate::agents::capabilities::UnappliedMark>,
     pub(super) settings_artifact: Option<crate::agents::skills::LaunchSettingsArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
@@ -1658,15 +1660,16 @@ fn compile_agent_process_with_extra_env(
             }
         }
     }
-    let mut mcp_warnings = Vec::new();
+    let (mut mcp_warnings, mut unapplied_marks) = (Vec::new(), Vec::new());
     if adapter.takes_mcp_servers() {
-        mcp_warnings = adapter.mcp_server_args(
+        (mcp_warnings, unapplied_marks) = adapter.mcp_server_args(
             &crate::agents::capabilities::McpLaunch {
                 server: mcp_server(reminders, &skill_env, &env),
                 mcps: request.mcp_list().as_deref(),
                 granted: request.rimz_capabilities.is_some(),
                 login_env: &skill_env,
                 rendered_tools: request.tools.is_some(),
+                code_mode: code_mode == Some(true),
             },
             (cwd, artifact_dir),
             action.extra_args_mut(),
@@ -1688,6 +1691,7 @@ fn compile_agent_process_with_extra_env(
         host_skills,
         env_warnings,
         mcp_warnings,
+        unapplied_marks,
         settings_artifact,
         provider_argv,
         provider_program,

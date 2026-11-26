@@ -184,9 +184,10 @@ pub(super) fn plan(input: &AgentFileInput<'_>) -> Result<AgentFile, AgentFileRef
     let hash = hex::encode(Sha256::digest(rest.as_bytes()));
     let name = format!("rimz-{label}-{}", &hash[..12]);
     Ok(AgentFile {
-        warnings: input
-            .mcp
-            .unapplied_marks("Antigravity takes a load mode only for RimZ's capabilities"),
+        unapplied: input.mcp.unapplied_marks(
+            "Antigravity takes a load mode only for RimZ's capabilities",
+            None,
+        ),
         path: plugin.join("agents").join(format!("{name}.md")),
         bytes: format!("---\nname: {name}\n{rest}").into_bytes(),
         name,
@@ -295,6 +296,7 @@ mod tests {
                     granted: false,
                     login_env: &env,
                     rendered_tools: false,
+                    code_mode: false,
                 },
             })
             .unwrap();
