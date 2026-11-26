@@ -966,6 +966,25 @@ fn concurrent_in_process_credits_edits_all_land() {
 }
 
 #[test]
+fn a_credits_edit_skips_without_waiting_while_another_process_holds_the_lock() {
+    let (_dir, runtime) = runtime();
+    // A second open handle conflicts with the edit's own, as another process's would.
+    let _held = crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_credits_lock()).unwrap();
+    let started = std::time::Instant::now();
+    let mut edited = false;
+    let write = edit_credits_cache(&runtime, |_| {
+        edited = true;
+        Some(())
+    });
+
+    assert_eq!(write, CreditsWrite::Skipped);
+    assert!(!edited, "a skipped edit never reads the cache");
+    // A blocking acquire would wait out the lock's 30 s timeout.
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(!runtime.shared_credits_path().exists());
+}
+
+#[test]
 fn realtime_invalidation_and_claim_writers_preserve_lapse() {
     let (_dir, runtime) = runtime();
     let key: LoginKey = "claude@default".parse().unwrap();
