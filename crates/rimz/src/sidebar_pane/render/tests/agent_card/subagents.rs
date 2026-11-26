@@ -27,7 +27,9 @@ fn child_headlines_are_muted_exactly_when_the_entry_has_no_live_pane() {
         child.description = Some("audit the trust hash".to_owned());
         child.turn_error_label = error.then(|| "limit reached".to_owned());
         let rolls = CostRolls::default();
-        let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        let pages = all_paged(&snapshot);
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        ctx.delegation_pages = &pages;
         let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
         let label = if error {
             "limit reached"
@@ -100,7 +102,7 @@ fn child_headline_uses_description_task_then_first_prompt_without_repeating_the_
         let mut wire = serde_json::to_value(&*child).unwrap();
         wire["first_prompt"] = serde_json::json!(prompt);
         *child = serde_json::from_value(wire).unwrap();
-        let lines = group_lines(&snapshot, &Theme::fixed(false), 0);
+        let lines = group_lines_paged(&snapshot, &Theme::fixed(false), 0);
         actual.push(
             lines
                 .iter()
@@ -145,7 +147,7 @@ fn compacting_child_draws_the_compacting_head_unless_its_status_wants_attention(
         child.phase = TurnPhase::Idle;
         child.description = Some("audit the trust hash".to_owned());
         child.compacting = compacting;
-        let lines = group_lines(&snapshot, &theme, 0);
+        let lines = group_lines_paged(&snapshot, &theme, 0);
         let line = lines
             .iter()
             .find(|line| line.to_string().contains("claude · audit the trust hash"))
@@ -217,7 +219,9 @@ fn fast_child_bolt_is_bold_and_still_in_every_status_and_absent_without_a_model(
             let snapshot = fast_child_snapshot(status, stalled);
             for phase in 0..128 {
                 let cost_rolls = CostRolls::default();
-                let ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
+                let pages = all_paged(&snapshot);
+                let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
+                ctx.delegation_pages = &pages;
                 let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
                 let metadata = block
                     .lines
@@ -242,7 +246,7 @@ fn fast_child_bolt_is_bold_and_still_in_every_status_and_absent_without_a_model(
         let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
         fast_children_mut(&mut snapshot)[0].model = None;
         assert!(
-            !group_lines(&snapshot, &theme, 0)
+            !group_lines_paged(&snapshot, &theme, 0)
                 .iter()
                 .any(|line| line.to_string().contains(theme.glyph(GlyphRole::CardFast)))
         );
@@ -421,7 +425,7 @@ fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() 
             child.model = Some("Haiku".to_owned());
             let snapshot = snapshot_with(vec![parent, child]);
             let theme = Theme::fixed(false);
-            let lines = group_lines(&snapshot, &theme, 0);
+            let lines = group_lines_paged(&snapshot, &theme, 0);
             let metadata = lines
                 .iter()
                 .find(|line| line.to_string().contains("Haiku"))
@@ -574,7 +578,7 @@ fn completed_compactions_keep_an_otherwise_metadata_free_finished_child_second_l
     child.compaction_count = 1;
     let snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);
-    let lines = group_lines(&snapshot, &theme, 0);
+    let lines = group_lines_paged(&snapshot, &theme, 0);
     let metadata = lines
         .iter()
         .map(Line::to_string)
@@ -770,7 +774,7 @@ fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
         let mut snapshot = snapshot_with(vec![parent.clone(), child.clone()]);
         snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(ceiling).unwrap();
         let theme = Theme::fixed(false);
-        let lines = group_lines(&snapshot, &theme, 0);
+        let lines = group_lines_paged(&snapshot, &theme, 0);
         let metadata = lines
             .iter()
             .find(|line| line.spans.iter().any(|span| span.content == "Haiku"))
@@ -1059,7 +1063,7 @@ fn pin_delegation(ui: &mut ViewState, row: &SidebarRow, open: bool) {
 }
 
 #[test]
-fn delegation_lists_unfinished_then_the_newest_five_finished_and_counts_the_rest() {
+fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_earlier_line() {
     let mut parent = agent(
         "parent",
         "claude",
@@ -1071,8 +1075,8 @@ fn delegation_lists_unfinished_then_the_newest_five_finished_and_counts_the_rest
     parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(3_600));
     let mut agents = vec![parent];
     // Spawn order task-0..task-8, all inside the parent's turn. task-1 and
-    // task-4 still run; seven finished out of spawn order, so the newest five
-    // list and two count behind the remainder line.
+    // task-4 still run; seven finished out of spawn order and wait behind the
+    // earlier line with the prior-turn child.
     let landed_secs_ago = [300, 0, 60, 780, 0, 600, 1_200, 180, 420];
     for (index, ago) in landed_secs_ago.into_iter().enumerate() {
         let running = matches!(index, 1 | 4);
@@ -1092,11 +1096,13 @@ fn delegation_lists_unfinished_then_the_newest_five_finished_and_counts_the_rest
         child.registered_at = Some(fixed_now() - Duration::from_secs(1_300 - index as u64));
         child.last_activity = fixed_now() - Duration::from_secs(if running { 5 } else { ago });
         child.last_seen = child.last_activity;
+        // The fold stamps a verdict's finish; the paging orders by it.
+        child.finished_at = (!running).then_some(child.last_activity);
         child.subagent_cost_usd = Some(0.10);
         agents.push(child);
     }
-    // Finished before the parent's turn: retained by the projection, but no
-    // row, count, or cost on the card.
+    // Finished before the parent's turn: retained by the projection and paged with
+    // the other finished children, but no count or cost on the line.
     let mut prior = agent(
         "child-prior",
         "claude",
@@ -1164,26 +1170,71 @@ fn delegation_lists_unfinished_then_the_newest_five_finished_and_counts_the_rest
     let [selected, unselected, closed] = screens.as_slice() else {
         unreachable!("three scenarios");
     };
-    let listed = entries(selected);
-    assert_eq!(
-        listed,
-        [
-            "task-1", "task-4", "task-2", "task-7", "task-0", "task-8", "task-5"
-        ]
-    );
-    let lines: Vec<_> = selected.lines().collect();
-    let position = |needle: &str| {
-        lines
-            .iter()
+    assert_eq!(entries(selected), ["task-1", "task-4"]);
+    let position = |screen: &str, needle: &str| {
+        screen
+            .lines()
             .position(|line| line.contains(needle))
-            .unwrap_or_else(|| panic!("{needle} in\n{selected}"))
+            .unwrap_or_else(|| panic!("{needle} in\n{screen}"))
     };
-    let remainder = position("2 more finished");
-    assert_eq!(listed.len() + 2, 9);
-    assert!(position("task-5") < remainder && remainder < position("deploy"));
+    assert!(position(selected, "task-4") < position(selected, "deploy"));
+    assert!(position(selected, "deploy") < position(selected, "▸ +8 earlier"));
     for screen in [unselected, closed] {
         assert!(entries(screen).is_empty(), "{screen}");
-        assert!(!screen.contains("more finished"), "{screen}");
+        assert!(!screen.contains("earlier"), "{screen}");
+    }
+    // Each page shows the next five finished children, newest finish first, under the
+    // in-flight entries and the waits.
+    for (pages, listed, line) in [
+        (
+            1,
+            vec![
+                "task-1", "task-4", "task-2", "task-7", "task-0", "task-8", "task-5",
+            ],
+            Some("▸ +3 more"),
+        ),
+        (
+            2,
+            vec![
+                "task-1",
+                "task-4",
+                "task-2",
+                "task-7",
+                "task-0",
+                "task-8",
+                "task-5",
+                "task-3",
+                "task-6",
+                "task-prior",
+            ],
+            None,
+        ),
+    ] {
+        let ui = ViewState {
+            selected_index: Some(0),
+            toggles: PresentationToggles {
+                delegation_pages: std::collections::BTreeMap::from([paged(row, pages)]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rendered =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 60);
+        assert_eq!(entries(&rendered), listed, "{pages} pages:\n{rendered}");
+        assert!(position(&rendered, "deploy") < position(&rendered, "task-2"));
+        match line {
+            Some(line) => assert!(
+                position(&rendered, "task-5") < position(&rendered, line),
+                "{rendered}"
+            ),
+            None => assert!(
+                !rendered.contains("more") && !rendered.contains("earlier"),
+                "{rendered}"
+            ),
+        }
+        for removed in ["more finished", "more earlier", "later", "more ended"] {
+            assert!(!rendered.contains(removed), "{removed}:\n{rendered}");
+        }
     }
 }
 
@@ -1243,10 +1294,7 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         54,
         23,
@@ -1373,10 +1421,7 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         60,
         20,
@@ -1449,22 +1494,26 @@ fn prior_turn_child_snapshot(parent_status: AgentStatus) -> SidebarSnapshot {
 }
 
 #[test]
-fn prior_turn_children_leave_the_card_while_its_cost_keeps_them() {
+fn prior_turn_children_leave_the_card_until_paged_while_its_cost_keeps_them() {
     let snapshot = prior_turn_child_snapshot(AgentStatus::Running);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert!(row.as_agent().unwrap().sub_agents[0].prior_turn);
     let theme = Theme::fixed(false);
     for selected in [usize::MAX, 0] {
         let lines = line_texts(&group_lines(&snapshot, &theme, selected));
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains("subagents") || line.contains("map sidebar")),
-            "{}",
-            lines.join("\n")
+        let text = lines.join("\n");
+        assert!(!text.contains("map sidebar"), "{text}");
+        // Only the selected card titles its earlier child, bare and unpriced.
+        assert_eq!(
+            lines.iter().any(|line| line
+                .trim_end_matches(['▐', '🮇', ' '])
+                .ends_with("⧉ subagents")),
+            selected == 0,
+            "{text}"
         );
+        assert_eq!(text.contains("▸ +1 earlier"), selected == 0, "{text}");
         // The parent's own cost still carries the launched child's spend.
-        assert!(lines[1].contains("$0.42"), "{}", lines.join("\n"));
+        assert!(lines[1].contains("$0.42"), "{text}");
     }
     for open in [true, false] {
         let mut ui = ViewState {
@@ -1474,7 +1523,8 @@ fn prior_turn_children_leave_the_card_while_its_cost_keeps_them() {
         pin_delegation(&mut ui, row, open);
         let rendered =
             snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 60, 20);
-        assert!(!rendered.contains("subagents"), "{rendered}");
+        assert!(rendered.contains("⧉ subagents"), "{rendered}");
+        assert_eq!(rendered.contains("▸ +1 earlier"), open, "{rendered}");
         assert!(!rendered.contains("map sidebar"), "{rendered}");
     }
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -1492,7 +1542,7 @@ fn prior_turn_children_leave_the_card_while_its_cost_keeps_them() {
 }
 
 #[test]
-fn an_open_pin_with_nothing_to_count_lets_a_quiet_card_go_stale() {
+fn an_open_pin_holds_a_quiet_card_open_only_while_its_section_has_an_entry() {
     let mut snapshot = prior_turn_child_snapshot(AgentStatus::Success);
     snapshot.theme.display.stale_after_secs = 5;
     let row = snapshot.rows_mut().next().unwrap();
@@ -1507,20 +1557,24 @@ fn an_open_pin_with_nothing_to_count_lets_a_quiet_card_go_stale() {
         snapshot_to_screen_with_alert_and_ui(snapshot, None, &ui, &UiState::default(), 60, 20)
     };
     let stale = draw(&snapshot, false);
-    assert_eq!(draw(&snapshot, true), stale);
     assert!(!stale.contains("subagents"), "{stale}");
-    // The same pin opens the section, and so holds the card open, once a
-    // current child gives it something to count.
-    std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-    )[0]
+    // An earlier child is an entry: the pin opens the section and holds the card open.
+    let open = draw(&snapshot, true);
+    assert!(
+        open.contains("⧉ subagents") && open.contains("▸ +1 earlier"),
+        "{open}"
+    );
+    assert_ne!(open, stale);
+    // With nothing in the section, the pin opens nothing and the card goes stale.
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
     .as_agent_mut()
     .unwrap()
-    .sub_agents[0]
-        .prior_turn = false;
-    let open = draw(&snapshot, true);
-    assert!(open.contains("map sidebar"), "{open}");
-    assert_ne!(open, stale);
+    .sub_agents
+    .clear();
+    let empty_stale = draw(&snapshot, false);
+    assert_eq!(draw(&snapshot, true), empty_stale);
+    assert!(!empty_stale.contains("subagents"), "{empty_stale}");
 }
 
 #[test]
@@ -1542,13 +1596,14 @@ fn waits_keep_the_line_and_entries_without_a_current_child() {
     let lines = line_texts(&group_lines(&snapshot, &Theme::fixed(false), 0));
     let text = lines.join("\n");
     assert!(
-        text.contains("⧖ waits (1)") && !text.contains("subagents"),
+        text.contains("⧉ subagents · ⧖ waits (1)") && !text.contains("subagents ("),
         "{text}"
     );
     assert!(
         text.contains("deploy") && !text.contains("map sidebar"),
         "{text}"
     );
+    assert!(lines.last().unwrap().contains("▸ +1 earlier"), "{text}");
 }
 
 #[test]
@@ -1586,7 +1641,7 @@ fn prior_turn_children_do_not_widen_the_entry_grid() {
     let mut current = agent(
         "child-now",
         "claude",
-        AgentStatus::Success,
+        AgentStatus::Running,
         None,
         None,
         Some("task-now"),
@@ -1621,14 +1676,14 @@ fn prior_turn_children_do_not_widen_the_entry_grid() {
     ));
     assert_eq!(beside.len(), alone.len() + 1);
     assert_eq!(&beside[..alone.len()], alone.as_slice());
-    assert!(beside.last().unwrap().contains("▸ 1 earlier"));
+    assert!(beside.last().unwrap().contains("▸ +1 earlier"));
     assert!(alone.iter().any(|line| line.contains("Haiku 4.5")));
 }
 
 #[test]
-fn an_open_card_lists_every_current_finished_child_up_to_five() {
-    // Every child finished inside the parent's turn, long ago by the clock:
-    // the open section lists them all with no remainder line.
+fn an_open_card_pages_its_current_finished_children() {
+    // Every child finished inside the parent's turn: the open section counts them on
+    // its line and lists them once paged.
     let mut parent = agent(
         "claude-root",
         "claude",
@@ -1659,10 +1714,18 @@ fn an_open_card_lists_every_current_finished_child_up_to_five() {
         ..Default::default()
     };
     let pane_ui = UiState::default();
-    pin_delegation(&mut ui, &snapshot.worktree_groups[0].rows[0], true);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    pin_delegation(&mut ui, row, true);
     let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
     assert!(text.contains("subagents (3)"), "{text}");
-    assert!(!text.contains("more finished"), "{text}");
+    assert!(text.contains("▸ +3 earlier"), "{text}");
+    assert!(!text.contains("task-"), "{text}");
+    ui.toggles.delegation_pages = std::collections::BTreeMap::from([paged(row, 1)]);
+    let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
+    assert!(
+        !text.contains("earlier") && !text.contains("more"),
+        "{text}"
+    );
     for index in 0..3 {
         assert!(text.contains(&format!("task-{index}")), "{text}");
     }
@@ -1712,10 +1775,7 @@ fn narrow_subagent_line_truncates_description_before_exact_cost() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         34,
         23,
@@ -1759,10 +1819,7 @@ fn metadata_free_finished_subagent_stays_one_line() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         54,
         21,
@@ -2145,10 +2202,7 @@ fn parked_launched_child_stays_unfinished_with_background_marker_and_frozen_cloc
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         54,
         24,
@@ -2357,7 +2411,7 @@ fn prior_child(
 }
 
 #[test]
-fn prior_subagents_fold_closed_open_and_overflow_count_line() {
+fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain() {
     let mut snapshot = snapshot_with(vec![agent(
         "parent",
         "claude",
@@ -2367,15 +2421,15 @@ fn prior_subagents_fold_closed_open_and_overflow_count_line() {
         Some("build feature"),
     )]);
     let base = snapshot.now;
-    let parent_turn = base;
     let row = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0];
     let row_id = row.id.clone();
     let card = row.as_agent_mut().unwrap();
     card.prompt = Some("build feature".to_owned());
-    card.user_turn_started_at = Some(parent_turn);
-    // 12 prior children with distinct rest instants out of order; newest 10 are p12..=p03.
+    card.user_turn_started_at = Some(base);
+    // 12 prior children with distinct rest instants out of order; newest first they run
+    // p12, p11, ..., p01.
     card.sub_agents = (1..=12)
         .map(|n| {
             let secs = if n % 2 == 0 { n * 10 } else { n * 10 - 5 };
@@ -2394,100 +2448,81 @@ fn prior_subagents_fold_closed_open_and_overflow_count_line() {
             )
         })
         .collect();
+    let row = snapshot.worktree_groups[0].rows[0].clone();
 
     let theme = Theme::fixed(false);
     let rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
-    let closed = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
-    let closed_text: Vec<_> = closed.lines.iter().map(Line::to_string).collect();
-    let fold_line_idx = closed_text
-        .iter()
-        .position(|line| line.contains("▸ 12 earlier"))
-        .unwrap_or_else(|| {
-            panic!(
-                "expected closed fold line, got:\n{}",
-                closed_text.join("\n")
-            )
-        });
-    assert_eq!(
-        closed.interactions.target_at(4, fold_line_idx as u16),
-        Some(HitTarget::TogglePriorSubagents {
-            row: row_id.clone()
-        })
-    );
-    assert!(
-        !closed_text.iter().any(|line| line.contains("worker-12")),
-        "closed fold hides prior entries"
-    );
-
-    // Open fold: newest 10 by rested_at first, then "2 more earlier" static count line.
-    let open_map = std::collections::BTreeMap::from([(row_id.clone(), Some(parent_turn))]);
-    let mut ctx_open = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
-    ctx_open.prior_subagents_open = &open_map;
-    let opened = worktree_group_block(&ctx_open, &snapshot.worktree_groups[0], false, None);
-    let open_text: Vec<_> = opened.lines.iter().map(Line::to_string).collect();
-    assert!(
-        open_text.iter().any(|line| line.contains("▾ 12 earlier")),
-        "expected open fold header, got:\n{}",
-        open_text.join("\n")
-    );
-    let listed: Vec<usize> = (1..=12)
-        .filter_map(|n| {
-            open_text
-                .iter()
-                .position(|line| line.contains(&format!("worker-{n:02}")))
-                .map(|pos| (pos, n))
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .map(|(_, n)| n)
-        .collect();
-    assert_eq!(
-        listed.len(),
-        10,
-        "fold lists newest 10 entries: {open_text:?}"
-    );
-    let p12 = open_text
-        .iter()
-        .position(|line| line.contains("worker-12"))
-        .unwrap();
-    let p11 = open_text
-        .iter()
-        .position(|line| line.contains("worker-11"))
-        .unwrap();
-    assert!(p12 < p11, "newest rest instant appears first");
-    assert!(
-        !open_text
-            .iter()
-            .any(|line| line.contains("worker-01") || line.contains("worker-02")),
-        "oldest two sit behind the overflow count line"
-    );
-    let more_idx = open_text
-        .iter()
-        .position(|line| line.contains("2 more earlier"))
-        .expect("overflow count line for remainder");
-    assert_eq!(
-        opened.interactions.target_at(4, more_idx as u16),
-        Some(HitTarget::Row(0)),
-        "overflow count line is static and falls through to the row"
-    );
-    let mut open_view = ViewState {
+    let block_at = |pages: usize| {
+        let map = std::collections::BTreeMap::from_iter((pages > 0).then(|| paged(&row, pages)));
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+        ctx.delegation_pages = &map;
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        let text: Vec<_> = block.lines.iter().map(Line::to_string).collect();
+        (block, text)
+    };
+    let workers = |text: &[String]| -> Vec<usize> {
+        let mut listed: Vec<(usize, usize)> = (1..=12)
+            .filter_map(|n| {
+                text.iter()
+                    .position(|line| line.contains(&format!("worker-{n:02}")))
+                    .map(|pos| (pos, n))
+            })
+            .collect();
+        listed.sort_unstable();
+        listed.into_iter().map(|(_, n)| n).collect()
+    };
+    for (pages, listed, line) in [
+        (0, vec![], Some("▸ +12 earlier")),
+        (1, (8..=12).rev().collect::<Vec<_>>(), Some("▸ +7 more")),
+        (2, (3..=12).rev().collect(), Some("▸ +2 more")),
+        (3, (1..=12).rev().collect(), None),
+    ] {
+        let (block, text) = block_at(pages);
+        let joined = text.join("\n");
+        assert_eq!(workers(&text), listed, "{pages} pages:\n{joined}");
+        assert!(
+            text.iter().any(|line| line
+                .trim_end_matches(['▐', '🮇', ' '])
+                .ends_with("⧉ subagents")),
+            "{pages} pages: an earlier-only card keeps a bare title:\n{joined}"
+        );
+        match line {
+            Some(line) => {
+                let at = text
+                    .iter()
+                    .position(|text| text.contains(line))
+                    .unwrap_or_else(|| panic!("{pages} pages: {line} in\n{joined}"));
+                assert_eq!(at, text.len() - 1, "{pages} pages: the section's last line");
+                assert_eq!(
+                    block.interactions.target_at(4, at as u16),
+                    Some(HitTarget::PageDelegation {
+                        row: row_id.clone()
+                    })
+                );
+            }
+            None => assert!(
+                !joined.contains("earlier") && !joined.contains("more"),
+                "{pages} pages: the line is gone once nothing is hidden:\n{joined}"
+            ),
+        }
+    }
+    let mut paged_view = ViewState {
         selected_index: Some(0),
         ..Default::default()
     };
-    open_view.toggles.prior_subagents_open = open_map.clone();
-    let overflow_screen = snapshot_to_screen_with_alert_and_ui(
+    paged_view.toggles.delegation_pages = std::collections::BTreeMap::from([paged(&row, 1)]);
+    let paged_screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &open_view,
+        &paged_view,
         &UiState::default(),
         54,
         40,
     );
-    assert_snapshot("prior_subagents_fold_open_overflow", overflow_screen);
+    assert_snapshot("delegation_paged_with_more", paged_screen);
 
-    // 10 or fewer prior children omit the overflow count line and align their own
-    // metadata columns independently of the current turn's children.
+    // A paged earlier child shares the current children's grid, and a paneless one that
+    // cannot reopen stays inert.
     let mut small = snapshot;
     let small_card =
         std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut small.worktree_groups)[0].rows)
@@ -2510,24 +2545,31 @@ fn prior_subagents_fold_closed_open_and_overflow_count_line() {
     current_wide.model = Some("claude-opus-4-8".to_owned());
     current_wide.tokens = Some(crate::store::snapshot::SubAgentTokens::Total(1_234_000));
     small_card.sub_agents.push(current_wide);
+    let small_map = std::collections::BTreeMap::from([paged(&row, 1)]);
     let mut ctx_small = test_row_ctx(&small, &theme, 54, 0, 0, &rolls);
-    ctx_small.prior_subagents_open = &open_map;
+    ctx_small.delegation_pages = &small_map;
     let small_opened = worktree_group_block(&ctx_small, &small.worktree_groups[0], false, None);
     let small_text: Vec<_> = small_opened.lines.iter().map(Line::to_string).collect();
-    assert!(small_text.iter().any(|line| line.contains("▾ 3 earlier")));
     assert!(
-        !small_text.iter().any(|line| line.contains("more earlier")),
-        "<= 10 prior children emit no overflow line:\n{}",
+        !small_text
+            .iter()
+            .any(|line| line.contains("earlier") || line.contains("more")),
+        "one page shows all three:\n{}",
         small_text.join("\n")
     );
+    let current_at = small_text
+        .iter()
+        .position(|line| line.contains("current"))
+        .expect("in-flight entry");
     let inert_idx = small_text
         .iter()
         .position(|line| line.contains("task p01"))
-        .expect("inert prior entry");
+        .expect("inert earlier entry");
+    assert!(current_at < inert_idx, "in-flight entries list first");
     assert_eq!(
         small_opened.interactions.target_at(4, inert_idx as u16),
         Some(HitTarget::Row(0)),
-        "inert prior entry falls through to the row"
+        "inert earlier entry falls through to the row"
     );
     let inert_span = small_opened.lines[inert_idx]
         .spans
@@ -2539,28 +2581,34 @@ fn prior_subagents_fold_closed_open_and_overflow_count_line() {
         Some(theme.component(Component::SubagentInert))
     );
     assert!(inert_span.style.add_modifier.contains(Modifier::DIM));
-    let fold_meta = small_text
+    let earlier_meta = small_text
         .iter()
         .find(|line| line.contains("Haiku"))
-        .expect("fold entry metadata line");
-    let fold_haiku_col = fold_meta.find("Haiku").unwrap();
-    let cur_meta = small_text
+        .expect("earlier entry metadata line");
+    let current_meta = small_text
         .iter()
         .find(|line| line.contains("Opus 4.8"))
         .expect("current entry metadata line");
-    let cur_opus_col = cur_meta.find("Opus 4.8").unwrap();
-    assert!(
-        fold_haiku_col < cur_opus_col,
-        "fold aligns its own metadata columns without inheriting current's token column: {fold_meta:?} vs {cur_meta:?}"
+    let column = |line: &str, needle: &str| line.find(needle).map(|at| line[..at].chars().count());
+    assert_eq!(
+        column(earlier_meta, "Haiku"),
+        column(current_meta, "Opus 4.8"),
+        "one grid: {earlier_meta:?} vs {current_meta:?}"
     );
-    let small_screen =
-        snapshot_to_screen_with_alert_and_ui(&small, None, &open_view, &UiState::default(), 54, 28);
-    assert_snapshot("prior_subagents_fold_open_with_inert", small_screen);
+    paged_view.toggles.delegation_pages = small_map;
+    let small_screen = snapshot_to_screen_with_alert_and_ui(
+        &small,
+        None,
+        &paged_view,
+        &UiState::default(),
+        54,
+        28,
+    );
+    assert_snapshot("delegation_paged_with_inert", small_screen);
 }
 
 #[test]
-fn card_with_only_prior_subagents_draws_nothing_unselected_and_fold_when_selected_held_or_expanded()
-{
+fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_held_or_expanded() {
     let mut snapshot = snapshot_with(vec![
         agent(
             "parent",
@@ -2597,40 +2645,32 @@ fn card_with_only_prior_subagents_draws_nothing_unselected_and_fold_when_selecte
 
     let theme = Theme::fixed(false);
     let rolls = CostRolls::default();
+    let text_of = |ctx: &RowCtx<'_>| {
+        worktree_group_block(ctx, &snapshot.worktree_groups[0], false, None)
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
-    // Auto unselected: draws nothing new (no fold line, no subagents header).
-    let ctx_unselected = test_row_ctx(&snapshot, &theme, 54, 1, 0, &rolls);
-    let unselected =
-        worktree_group_block(&ctx_unselected, &snapshot.worktree_groups[0], false, None);
-    let unselected_text: String = unselected
-        .lines
-        .iter()
-        .map(Line::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        !unselected_text.contains("earlier") && !unselected_text.contains("subagents"),
-        "unselected auto card draws nothing new:\n{unselected_text}"
-    );
+    // Unselected in auto and compact density: no title and no earlier line.
+    for density in [
+        crate::config::CardDensityMode::Auto,
+        crate::config::CardDensityMode::Compact,
+    ] {
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, 1, 0, &rolls);
+        ctx.card_density = density;
+        let text = text_of(&ctx);
+        assert!(
+            !text.contains("earlier") && !text.contains("subagents"),
+            "unselected {density:?} card draws nothing new:\n{text}"
+        );
+    }
 
-    // Compact unselected: draws nothing new.
-    let mut ctx_compact = test_row_ctx(&snapshot, &theme, 54, 1, 0, &rolls);
-    ctx_compact.card_density = crate::config::CardDensityMode::Compact;
-    let compact = worktree_group_block(&ctx_compact, &snapshot.worktree_groups[0], false, None);
-    let compact_text: String = compact
-        .lines
-        .iter()
-        .map(Line::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        !compact_text.contains("earlier"),
-        "unselected compact card draws nothing new:\n{compact_text}"
-    );
-
-    // Selected (Auto & Compact), Held (Auto), and Expanded (unselected): draw the fold line,
-    // and still draw no standing `⧉ subagents` header.
-    let held = std::collections::BTreeSet::from([row0_id]);
+    // Selected (auto and compact), held (auto), and expanded (unselected): the bare title
+    // over the earlier line.
+    let held = std::collections::BTreeSet::from([row0_id.clone()]);
     for (label, selected_idx, density, use_held) in [
         (
             "auto selected",
@@ -2657,22 +2697,40 @@ fn card_with_only_prior_subagents_draws_nothing_unselected_and_fold_when_selecte
         if use_held {
             ctx.held_expansions = &held;
         }
-        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
-        let text: String = block
-            .lines
+        let text = text_of(&ctx);
+        let lines: Vec<_> = text.lines().collect();
+        let title = lines
             .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            text.contains("▸ 1 earlier"),
-            "{label}: expected fold line:\n{text}"
+            .position(|line| {
+                line.trim_end_matches(['▐', '🮇', ' '])
+                    .ends_with("⧉ subagents")
+            })
+            .unwrap_or_else(|| panic!("{label}: expected a bare title:\n{text}"));
+        assert_eq!(
+            lines
+                .get(title + 1)
+                .map(|line| line.contains("▸ +1 earlier")),
+            Some(true),
+            "{label}: the earlier line sits under the title:\n{text}"
         );
-        assert!(
-            !text.contains("subagents"),
-            "{label}: prior-only card has no standing subagents line:\n{text}"
-        );
+        assert!(!text.contains("(0)"), "{label}:\n{text}");
     }
+
+    // A pin closing the selected card's section keeps the title to reopen it and drops
+    // the earlier line.
+    let pins = std::collections::BTreeMap::from([(
+        row0_id,
+        DelegationPin {
+            open: false,
+            turn: None,
+        },
+    )]);
+    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    ctx.delegation_overrides = &pins;
+    let closed = text_of(&ctx);
+    assert!(closed.contains("⧉ subagents"), "{closed}");
+    assert!(!closed.contains("earlier"), "{closed}");
+
     let selected_screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -2684,7 +2742,7 @@ fn card_with_only_prior_subagents_draws_nothing_unselected_and_fold_when_selecte
         54,
         22,
     );
-    assert_snapshot("prior_subagents_only_card_selected", selected_screen);
+    assert_snapshot("earlier_only_card_selected", selected_screen);
 }
 
 #[test]
@@ -2728,7 +2786,9 @@ fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
 
     let theme = Theme::fixed(false);
     let rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    let pages = all_paged(&snapshot);
+    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
+    ctx.delegation_pages = &pages;
     let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
     let line_of = |block: &RenderedBlock, needle: &str| {
         block
@@ -2771,10 +2831,7 @@ fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
     }
 
     // Cursor stops include live pane and reopenable child, skip both inert entries.
-    let view = ViewState {
-        selected_index: Some(0),
-        ..Default::default()
-    };
+    let view = paged_view(&snapshot, 0);
     assert_eq!(
         view.entry_stops(&snapshot, 0),
         vec![
@@ -2787,6 +2844,7 @@ fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
     let reopening = std::collections::HashMap::from([("reopen-child".to_owned(), 99_000)]);
     let mut ctx_inflight = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
     ctx_inflight.reopening = &reopening;
+    ctx_inflight.delegation_pages = &pages;
     let inflight = worktree_group_block(&ctx_inflight, &snapshot.worktree_groups[0], false, None);
     assert_eq!(
         inflight
@@ -2808,7 +2866,7 @@ fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
 }
 
 #[test]
-fn card_height_memo_keys_on_prior_subagents_fold_state() {
+fn card_height_memo_keys_on_delegation_pages() {
     let mut snapshot = snapshot_with(vec![agent(
         "parent",
         "claude",
@@ -2821,7 +2879,6 @@ fn card_height_memo_keys_on_prior_subagents_fold_state() {
     let row = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0];
-    let row_id = row.id.clone();
     let card = row.as_agent_mut().unwrap();
     card.prompt = Some("build feature".to_owned());
     card.user_turn_started_at = Some(base);
@@ -2833,6 +2890,7 @@ fn card_height_memo_keys_on_prior_subagents_fold_state() {
         true,
         false,
     )];
+    let row = snapshot.worktree_groups[0].rows[0].clone();
 
     let theme = Theme::fixed(false);
     let ui = UiState::default();
@@ -2852,7 +2910,8 @@ fn card_height_memo_keys_on_prior_subagents_fold_state() {
         None,
         Some(&mut heights),
     );
-    view.toggles.prior_subagents_open.insert(row_id, Some(base));
+    let (row_id, pages) = paged(&row, 1);
+    view.toggles.delegation_pages.insert(row_id, pages);
     let opened = crate::sidebar_pane::render::compose::compose_lines_with_meter(
         &snapshot,
         None,
@@ -2866,7 +2925,7 @@ fn card_height_memo_keys_on_prior_subagents_fold_state() {
     );
     assert!(
         opened.content_height > closed.content_height,
-        "opening the fold grows content height ({} vs {})",
+        "a page of earlier entries grows content height ({} vs {})",
         opened.content_height,
         closed.content_height
     );

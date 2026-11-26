@@ -1,9 +1,8 @@
 //! Booked launches on an agent card: the `▷ booked (N)` half of the section line, the
 //! booked line a resting card keeps while its plan is unfinished, and one entry per
 //! booking. The rows arrive in draw order with their bands, so this module adds no
-//! ordering or health rule: `Later` entries count in `+N later` and `Older` ones in
-//! `K more ended`, both static rows, and an entry takes `⚠` exactly when the loop gave
-//! it a reason. Only the `⚠` segment of the section line takes the warning tone. A
+//! ordering or health rule, and an entry takes `⚠` exactly when the loop gave it a
+//! reason; which entries list is the section's paging rule. Only the `⚠` segment of the section line takes the warning tone. A
 //! fired entry with a live pane targets that pane on both lines; every other entry
 //! selects the card.
 
@@ -20,27 +19,6 @@ pub(super) fn open_plan(agent: &AgentCard) -> bool {
     agent.bookings.iter().any(|booking| !booking.is_finished())
 }
 
-pub(super) struct BookingBands<'a> {
-    /// Every entry needing a fix, fired, or next, in draw order.
-    pub(super) listed: Vec<&'a SidebarBooking>,
-    /// `Later` entries, counted in `+N later`.
-    pub(super) later: usize,
-    /// `Older` entries, counted in `K more ended`.
-    pub(super) older: usize,
-}
-
-pub(super) fn booking_bands(bookings: &[SidebarBooking]) -> BookingBands<'_> {
-    let count = |band: BookingBand| bookings.iter().filter(|entry| entry.band == band).count();
-    BookingBands {
-        listed: bookings
-            .iter()
-            .filter(|entry| !matches!(entry.band, BookingBand::Later | BookingBand::Older))
-            .collect(),
-        later: count(BookingBand::Later),
-        older: count(BookingBand::Older),
-    }
-}
-
 /// The pane a click or the entry cursor focuses: a fired entry's live launch.
 pub(super) fn booking_pane(booking: &SidebarBooking) -> Option<&crate::ids::PaneId> {
     fire(booking)
@@ -55,7 +33,7 @@ pub(super) fn booking_in_motion(booking: &SidebarBooking) -> bool {
         .is_some_and(|live| live.status == AgentStatus::Running)
 }
 
-fn fire(booking: &SidebarBooking) -> Option<&BookingFire> {
+pub(super) fn fire(booking: &SidebarBooking) -> Option<&BookingFire> {
     match &booking.state {
         BookingState::Fired(fire) => Some(fire),
         BookingState::Waiting(_) => None,
@@ -200,7 +178,7 @@ fn summaries(ctx: &RowCtx<'_>, agent: &AgentCard) -> Vec<String> {
             agent
                 .bookings
                 .iter()
-                .find(|booking| booking.band == BookingBand::Next)
+                .find(|booking| booking.band == BookingBand::Next && !after_unfired(booking))
                 .and_then(waiting_reading)
         })
         .flatten();
@@ -217,6 +195,11 @@ fn summaries(ctx: &RowCtx<'_>, agent: &AgentCard) -> Vec<String> {
     summaries.extend(ended_short);
     summaries.dedup();
     summaries
+}
+
+/// A waiting entry that fires after a sibling that has not fired: not the next to fire.
+fn after_unfired(booking: &SidebarBooking) -> bool {
+    matches!(&booking.state, BookingState::Waiting(wait) if wait.after_unfired)
 }
 
 /// What a waiting entry is waiting for, in the summary's words: its blocker's reading

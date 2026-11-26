@@ -798,17 +798,15 @@ pub enum BookingStarts {
 }
 
 /// Where an entry stands in the card's list, which arrives in draw order: every
-/// `NeedsFix` first, then `Fired`, `Next`, `Later` (counted in `+N later`) and `Older`
-/// (counted in `K more ended`). An adopted entry (one its booker, now ended, left to this
-/// card) of band `Fired` or `Next` follows the fired entry whose launch booked it.
+/// `NeedsFix` first, then `Fired` and `Next`. An adopted entry (one its booker, now
+/// ended, left to this card) of band `Fired` or `Next` follows the fired entry whose
+/// launch booked it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BookingBand {
     NeedsFix,
     Fired,
     Next,
-    Later,
-    Older,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -828,6 +826,10 @@ pub struct BookingWait {
     /// `every 30m`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<String>,
+    /// Every unmet term joins a sibling on the card that has not fired: the entry fires
+    /// after it, so it is not the next to fire.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub after_unfired: bool,
 }
 
 /// The blocking term of a waiting condition.
@@ -1157,18 +1159,6 @@ impl AgentCard {
         self.sub_agents.iter().filter(|child| !child.prior_turn)
     }
 
-    /// Prior-round subagents ordered newest rest instant first (`None` last,
-    /// preserving snapshot order on ties).
-    pub(crate) fn prior_sub_agents_newest_first(&self) -> Vec<&SidebarSubAgent> {
-        let mut prior: Vec<&SidebarSubAgent> = self
-            .sub_agents
-            .iter()
-            .filter(|child| child.prior_turn)
-            .collect();
-        prior.sort_by_key(|child| std::cmp::Reverse(child.rested_at));
-        prior
-    }
-
     /// Session cost plus the cost of pane-backed children this session launched.
     pub fn cost_usd(&self) -> Option<f64> {
         crate::agents::spending::sum_optional_cost(
@@ -1476,8 +1466,8 @@ pub struct SidebarSubAgent {
     pub started_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<Timestamp>,
-    /// When the child entered rest, used by the round rule and prior-round
-    /// newest-first ordering.
+    /// When the child entered rest, used by the round rule and, without a finish stamp, by
+    /// the delegation paging's newest-finish-first order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rested_at: Option<Timestamp>,
     pub last_activity: Timestamp,

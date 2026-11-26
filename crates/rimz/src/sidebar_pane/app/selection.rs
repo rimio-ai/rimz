@@ -2,14 +2,16 @@
 //! the transient motion/click browse layer above it, the key/mouse handlers that
 //! act on it, and the typed effects they return to the serve loop.
 
+use std::num::NonZeroUsize;
+
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, DelegationPin, EntryCursor, HitTarget, UiState, ViewState,
-    ViewportIntent, active_dashboard_tab, dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs,
-    selected_agent_kind, selected_sub_provider,
+    BodyFilter, Browse, DashboardTab, DelegationPages, DelegationPin, EntryCursor, HitTarget,
+    UiState, ViewState, ViewportIntent, active_dashboard_tab, dashboard_tab_of_kind,
+    dashboard_tabbed, dashboard_tabs, selected_agent_kind, selected_sub_provider,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
@@ -391,7 +393,7 @@ fn key_outcome(
                 Some(EntryCursor::ReopenSubAgent(id)) => {
                     return effect(InputEffect::ReopenSubAgent(id));
                 }
-                Some(EntryCursor::PriorSubagentsToggle) => {
+                Some(EntryCursor::DelegationPage) => {
                     let Some(row_id) = view
                         .selected_index
                         .and_then(|index| view.visible_roster(snapshot).row(index))
@@ -399,7 +401,7 @@ fn key_outcome(
                     else {
                         return InputOutcome::default();
                     };
-                    toggle_prior_subagents(view, snapshot, row_id);
+                    page_delegation(view, snapshot, row_id);
                     view.request(ViewportIntent::Hold);
                     return InputOutcome::redraw();
                 }
@@ -728,8 +730,8 @@ pub(super) fn handle_mouse_click(
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
-        Some(HitTarget::TogglePriorSubagents { row }) => {
-            toggle_prior_subagents(view, snapshot, row);
+        Some(HitTarget::PageDelegation { row }) => {
+            page_delegation(view, snapshot, row);
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
@@ -771,7 +773,7 @@ pub(super) fn click_focus_pane(
         | HitTarget::ToggleGroup(_)
         | HitTarget::ToggleInactive
         | HitTarget::MoreInactive
-        | HitTarget::TogglePriorSubagents { .. }
+        | HitTarget::PageDelegation { .. }
         | HitTarget::ReopenSubAgent(_)
         | HitTarget::UnreadBanner
         | HitTarget::FocusMarker
@@ -888,10 +890,9 @@ fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: S
     anchor_selection(ui, snapshot);
 }
 
-/// Toggle an agent card's prior-round subagents fold without moving focus.
-/// Keeps the card's selection, and when closing drops a keyboard cursor that
-/// was resting on an entry inside the fold, lands it on the fold line.
-fn toggle_prior_subagents(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
+/// Show five more of an agent card's finished delegation entries without moving focus or
+/// the card's selection. Pages taken in an earlier user turn of the parent start over.
+fn page_delegation(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
     let Some(agent) = snapshot
         .rows()
         .find(|row| row.id == row_id)
@@ -900,29 +901,16 @@ fn toggle_prior_subagents(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id
         return;
     };
     let turn = agent.user_turn_started_at;
-    let selected_same_row = ui
-        .selected_index
-        .and_then(|index| ui.visible_roster(snapshot).row(index))
-        .is_some_and(|row| row.id == row_id);
-    let had_cursor = ui.entry_cursor.is_some();
-    let closing = ui.toggles.prior_subagents_open.get(&row_id) == Some(&turn);
-    if closing {
-        ui.toggles.prior_subagents_open.remove(&row_id);
-    } else {
-        ui.toggles.prior_subagents_open.insert(row_id, turn);
-    }
+    let pages = ui
+        .toggles
+        .delegation_pages
+        .get(&row_id)
+        .filter(|pages| pages.turn == turn)
+        .map_or(NonZeroUsize::MIN, |pages| pages.pages.saturating_add(1));
+    ui.toggles
+        .delegation_pages
+        .insert(row_id, DelegationPages { pages, turn });
     anchor_selection(ui, snapshot);
-    if closing
-        && selected_same_row
-        && had_cursor
-        && ui.entry_cursor.is_none()
-        && let Some(index) = ui.selected_index
-        && ui
-            .entry_stops(snapshot, index)
-            .contains(&EntryCursor::PriorSubagentsToggle)
-    {
-        ui.entry_cursor = Some(EntryCursor::PriorSubagentsToggle);
-    }
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears

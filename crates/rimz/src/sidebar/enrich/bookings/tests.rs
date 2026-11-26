@@ -439,7 +439,7 @@ fn order_bands_siblings_and_adoption() {
             ("adopted", BookingBand::Next),
             ("after-first", BookingBand::Next),
             ("docs", BookingBand::Next),
-            ("gated", BookingBand::Later),
+            ("gated", BookingBand::Next),
         ]
     );
     let BookingState::Waiting(wait) = &list[4].state else {
@@ -473,7 +473,7 @@ fn order_bands_siblings_and_adoption() {
 }
 
 #[test]
-fn ended_entries_past_the_newest_five_fold_older_unless_depended_on() {
+fn every_ended_entry_lists_in_fire_order_however_many_ended() {
     let mut fold = snapshot(vec![agent("booker")]);
     let ended = |task: &str, secs: i64| {
         let mut facts = fired(task, &["booker"], task, ago(100_000));
@@ -509,14 +509,14 @@ fn ended_entries_past_the_newest_five_fold_older_unless_depended_on() {
             ("e2", BookingBand::Fired),
             ("e3", BookingBand::Fired),
             ("e4", BookingBand::Fired),
+            ("e5", BookingBand::Fired),
+            ("e6", BookingBand::Fired),
+            ("e7", BookingBand::Fired),
             ("gap", BookingBand::Fired),
             ("kept", BookingBand::Fired),
             ("needs-kept", BookingBand::Next),
-            ("e5", BookingBand::Older),
-            ("e6", BookingBand::Older),
-            ("e7", BookingBand::Older),
         ],
-        "the five newest ends list however old"
+        "no band hides an ended entry: the renderer's paging does"
     );
     assert!(list.iter().all(|booking| !booking.is_running()));
 }
@@ -581,6 +581,45 @@ fn two_bookings_on_one_chain_share_the_card_and_a_cleared_cache_clears_it() {
     assert!(on_cards(&fold).is_empty());
 }
 
+/// A waiting entry whose every unmet term joins a sibling that has not fired is marked as
+/// firing after it; one with a term of its own, or waiting on a fired sibling, is not.
+#[test]
+fn an_entry_waiting_only_on_unfired_siblings_is_marked_after_them() {
+    let mut fold = snapshot(vec![agent("booker")]);
+    let branched = |facts: BookingFacts, branch: &str| BookingFacts {
+        branch: Some(branch.to_owned()),
+        ..facts
+    };
+    attach(
+        &mut fold,
+        &cache(vec![
+            branched(facts("z", &["booker"]), "z-branch"),
+            branched(fired("f", &["booker"], "f", ago(60)), "f-branch"),
+            waiting_on("a", &["booker"], &["pr[z-branch]"]),
+            waiting_on("b", &["booker"], &["pr[z-branch]", "pr[elsewhere]"]),
+            waiting_on("c", &["booker"], &["pr[f-branch]"]),
+        ]),
+    );
+    let cards = on_cards(&fold);
+    let marked: Vec<_> = cards["booker"]
+        .iter()
+        .map(|booking| {
+            let after = matches!(&booking.state, BookingState::Waiting(wait) if wait.after_unfired);
+            (booking.task.as_str(), after)
+        })
+        .collect();
+    assert_eq!(
+        marked,
+        [
+            ("f", false),
+            ("a", true),
+            ("b", false),
+            ("c", false),
+            ("z", false)
+        ]
+    );
+}
+
 #[test]
 fn the_renderer_fixture_round_trips_on_a_card_in_band_order() {
     let bookings = crate::sidebar::test_support::bookings_in_each_state(now());
@@ -594,8 +633,6 @@ fn the_renderer_fixture_round_trips_on_a_card_in_band_order() {
             BookingBand::Next,
             BookingBand::Fired,
             BookingBand::Next,
-            BookingBand::Later,
-            BookingBand::Older,
         ],
         "every band, with the adopted entry right after its parent's fired one"
     );
@@ -858,7 +895,11 @@ fn a_fire_with_nothing_launched_yet_and_no_end_is_starting() {
         "starting is not finished, treeless or not"
     );
     assert!(!starting.ended_without_pr());
-    assert_eq!(starting.band, BookingBand::Fired, "starting is not older");
+    assert_eq!(
+        starting.band,
+        BookingBand::Fired,
+        "starting draws in the fired band"
+    );
     let BookingState::Fired(fire) = &by_task("ended").state else {
         panic!("fired");
     };

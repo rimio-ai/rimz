@@ -125,8 +125,8 @@ pub(crate) enum Component {
     Compaction,
     /// The `⧉` subagents header.
     SubagentHeader,
-    /// The fold line under a card's delegation entries that opens its prior-round children.
-    PriorSubagentsFold,
+    /// The `▸ +N earlier` / `+M more` line that pages a card's finished delegation entries.
+    DelegationPager,
     /// A paneless subagent entry that cannot be reopened (provider-native, or a launched child
     /// whose recorded session cannot resume).
     SubagentInert,
@@ -275,7 +275,7 @@ impl Component {
         Component::CacheWrite,
         Component::Compaction,
         Component::SubagentHeader,
-        Component::PriorSubagentsFold,
+        Component::DelegationPager,
         Component::SubagentInert,
         Component::SubagentReopening,
         Component::WaitHeader,
@@ -359,7 +359,7 @@ impl Component {
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
             | NeedsYouFilter | BookingWaiting | BookingEnded | EntryLane | EntryTeamTag
-            | EntryStage | CardClosing | PriorSubagentsFold | SubagentReopening => palette.muted,
+            | EntryStage | CardClosing | DelegationPager | SubagentReopening => palette.muted,
         })
     }
 }

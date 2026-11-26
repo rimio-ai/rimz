@@ -7,8 +7,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use jiff::Timestamp;
-
 use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::{
     BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling, BookingStage,
@@ -276,6 +274,11 @@ fn card_list(
                         more: term.more,
                     }),
                     timing: entry.facts.timing.clone(),
+                    after_unfired: !entry.facts.unmet.is_empty()
+                        && entry.facts.unmet.iter().all(|key| {
+                            sibling_for(&entries, index, key)
+                                .is_some_and(|sibling| entries[sibling].fire.is_none())
+                        }),
                 }),
                 Some((fire, members)) => {
                     let depended_on = depended_on(index);
@@ -289,7 +292,7 @@ fn card_list(
                     ))
                 }
             };
-            let band = band(&entries, index, &state);
+            let band = band(entry, &state);
             let booking = SidebarBooking {
                 task: entry.facts.task.clone(),
                 starts: entry.facts.starts.clone(),
@@ -302,7 +305,7 @@ fn card_list(
             (booking, parent(snapshot, rows, &entries, index))
         })
         .collect();
-    order(fold_older(built))
+    order(built)
 }
 
 /// A fired entry's state (D9, D11). It is starting as `starting` rules; finished once its
@@ -336,77 +339,18 @@ fn fired(
     }
 }
 
-/// The band before the ended cap: needs a fix, fired, later when every unmet term
-/// joins an unfired sibling, else next.
-fn band(entries: &[Entry<'_>], index: usize, state: &BookingState) -> BookingBand {
-    let entry = &entries[index];
+/// The band: needs a fix, fired, else next.
+fn band(entry: &Entry<'_>, state: &BookingState) -> BookingBand {
     if entry.facts.needs_fix.is_some() {
-        return BookingBand::NeedsFix;
-    }
-    if matches!(state, BookingState::Fired(_)) {
-        return BookingBand::Fired;
-    }
-    let later = !entry.facts.unmet.is_empty()
-        && entry.facts.unmet.iter().all(|key| {
-            sibling_for(entries, index, key).is_some_and(|sibling| entries[sibling].fire.is_none())
-        });
-    if later {
-        BookingBand::Later
+        BookingBand::NeedsFix
+    } else if matches!(state, BookingState::Fired(_)) {
+        BookingBand::Fired
     } else {
         BookingBand::Next
     }
 }
 
-/// Ended entries a card lists before the rest fold into `Older`: the renderer's cap on
-/// finished subagents (`MAX_FINISHED` in the agent card's bands), which the data plane
-/// cannot import.
-const MAX_LISTED_ENDED: usize = 5;
-
-/// The section's finished rule over ended entries: an entry nothing alive, not starting,
-/// nothing waiting on it, and no unfinished adopted entry below it at any depth, folds
-/// into `Older` past the newest `MAX_LISTED_ENDED` by end time, an end with no time yet
-/// being the newest.
-fn fold_older(
-    mut built: Vec<(SidebarBooking, Option<usize>)>,
-) -> Vec<(SidebarBooking, Option<usize>)> {
-    let mut parents = vec![false; built.len()];
-    for (booking, parent) in &built {
-        if booking.is_finished() {
-            continue;
-        }
-        let mut at = *parent;
-        for _ in 0..built.len() {
-            let Some(index) = at.filter(|index| !parents[*index]) else {
-                break;
-            };
-            parents[index] = true;
-            at = built[index].1;
-        }
-    }
-    let mut ended: Vec<(Option<Timestamp>, usize)> = built
-        .iter()
-        .enumerate()
-        .filter(|(_, (booking, _))| booking.band == BookingBand::Fired)
-        .filter_map(|(index, (booking, _))| match &booking.state {
-            BookingState::Fired(fire)
-                if fire.live.is_none()
-                    && !fire.starting
-                    && !fire.depended_on
-                    && !parents[index] =>
-            {
-                Some((fire.ended_at, index))
-            }
-            _ => None,
-        })
-        .collect();
-    ended.sort_by_key(|entry| std::cmp::Reverse((entry.0.is_none(), entry.0)));
-    for (_, index) in ended.into_iter().skip(MAX_LISTED_ENDED) {
-        built[index].0.band = BookingBand::Older;
-    }
-    built
-}
-
-/// Bands in order: fired in fire order, next and later by name, older newest first. Each
+/// Bands in order: needs a fix, fired in fire order, then next by name. Each
 /// fired entry is followed, depth first, by the adopted fired and next entries its launch
 /// booked; an adopted entry whose parent is not listed fired, or that sits on a cycle of
 /// parents, takes its ordinary place. Every entry is drawn once.
@@ -441,8 +385,6 @@ fn order(built: Vec<(SidebarBooking, Option<usize>)>) -> Vec<SidebarBooking> {
         BookingBand::NeedsFix => 0,
         BookingBand::Fired => 1,
         BookingBand::Next => 2,
-        BookingBand::Later => 3,
-        BookingBand::Older => 4,
     };
     let key = |index: &usize| {
         let booking = &built[*index].0;
@@ -450,8 +392,7 @@ fn order(built: Vec<(SidebarBooking, Option<usize>)>) -> Vec<SidebarBooking> {
             BookingState::Fired(fire) => Some(fire.at),
             BookingState::Waiting(_) => None,
         };
-        let older = (booking.band == BookingBand::Older).then_some(std::cmp::Reverse(fired));
-        (rank(booking.band), older, fired, booking.task.clone())
+        (rank(booking.band), fired, booking.task.clone())
     };
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); built.len()];
     let mut roots = Vec::new();

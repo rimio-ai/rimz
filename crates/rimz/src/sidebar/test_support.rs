@@ -231,12 +231,12 @@ pub(crate) fn status_counts_from_rows(
     counts
 }
 
-/// A card's bookings in every state the renderer draws, in draw order: one needing a
-/// fix, a fired agent running, a fired team running at its stage in its lane (its lead
-/// waiting) followed by the adopted entry that waits `after` it, a fired launch at rest
-/// whose probe found no pull request, a finished one, a waiting entry on a raw term, one on
-/// a timed trigger with no text of its own, one counted `later`, and one counted `older`.
-/// No entry's text repeats its task name.
+/// A card's bookings in every state the renderer draws, in band order: one needing a
+/// fix, a finished launch long ended, a fired agent running, a fired team running at its
+/// stage in its lane (its lead waiting) followed by the adopted entry that waits `after`
+/// it, a fired launch at rest whose probe found no pull request, a finished one, a waiting
+/// entry on a raw term, one on a timed trigger with no text of its own, and one waiting
+/// `after` an unfired sibling. No entry's text repeats its task name.
 pub(crate) fn bookings_in_each_state(
     now: Timestamp,
 ) -> Vec<crate::store::snapshot::SidebarBooking> {
@@ -285,6 +285,9 @@ pub(crate) fn bookings_in_each_state(
     let waiting = |after: Option<(BookingStarts, Option<&str>, SiblingState)>,
                    key: &str,
                    reading: Option<&str>| {
+        let after_unfired = after
+            .as_ref()
+            .is_some_and(|(_, _, state)| *state == SiblingState::Waiting);
         BookingState::Waiting(BookingWait {
             blocker: Some(BookingBlocker {
                 after: after.map(|(starts, lane, state)| BookingSibling {
@@ -298,6 +301,7 @@ pub(crate) fn bookings_in_each_state(
                 more: 0,
             }),
             timing: None,
+            after_unfired,
         })
     };
     vec![
@@ -310,6 +314,21 @@ pub(crate) fn bookings_in_each_state(
                 BookingState::Waiting(BookingWait::default()),
             )
         },
+        described(
+            "spike the old parser",
+            booking(
+                "old-spike",
+                profile("coder"),
+                BookingBand::Fired,
+                fired(
+                    ago(90_000),
+                    None,
+                    Some(ago(86_400)),
+                    BookingPr::Closed { number: Some(1500) },
+                    true,
+                ),
+            ),
+        ),
         described(
             "type the language",
             booking(
@@ -403,6 +422,7 @@ pub(crate) fn bookings_in_each_state(
             BookingState::Waiting(BookingWait {
                 blocker: None,
                 timing: Some("once at 2026-11-14 03:00".to_owned()),
+                after_unfired: false,
             }),
         ),
         described(
@@ -410,26 +430,11 @@ pub(crate) fn bookings_in_each_state(
             booking(
                 "lang-release",
                 profile("coder"),
-                BookingBand::Later,
+                BookingBand::Next,
                 waiting(
                     Some((profile("writer"), None, SiblingState::Waiting)),
                     "pr[lang-docs]",
                     None,
-                ),
-            ),
-        ),
-        described(
-            "spike the old parser",
-            booking(
-                "old-spike",
-                profile("coder"),
-                BookingBand::Older,
-                fired(
-                    ago(90_000),
-                    None,
-                    Some(ago(86_400)),
-                    BookingPr::Closed { number: Some(1500) },
-                    false,
                 ),
             ),
         ),

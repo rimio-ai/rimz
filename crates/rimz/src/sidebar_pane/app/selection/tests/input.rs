@@ -243,6 +243,7 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         .unwrap();
         card.sub_agents[1].pane = Some(child.clone());
         let mut view = ViewState::default();
+        page_in_finished(&mut view, &snapshot);
         let mut ui = UiState::default();
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
@@ -303,6 +304,22 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
     assert_eq!(actual, expected);
 }
 
+/// Pages every card's finished delegation entries in, for a test about a finished child.
+fn page_in_finished(view: &mut ViewState, snapshot: &SidebarSnapshot) {
+    for row in snapshot.rows() {
+        let Some(agent) = row.as_agent() else {
+            continue;
+        };
+        view.toggles.delegation_pages.insert(
+            row.id.clone(),
+            render::DelegationPages {
+                pages: std::num::NonZeroUsize::MIN,
+                turn: agent.user_turn_started_at,
+            },
+        );
+    }
+}
+
 fn delegation_snapshot() -> SidebarSnapshot {
     let mut snapshot = clickable_block_snapshot(&workspace());
     let now = snapshot.now;
@@ -361,6 +378,7 @@ fn j_and_k_walk_live_children_but_skip_paneless_entries() {
         },
         ..Default::default()
     };
+    page_in_finished(&mut view, &snapshot);
     let mut ui = UiState::default();
     let mut actual = Vec::new();
     for action in [
@@ -550,6 +568,7 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         },
         ..Default::default()
     };
+    page_in_finished(&mut ui, &snapshot);
     let mut pane_ui = UiState::default();
     let theme = pane_ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
@@ -942,7 +961,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     let opened = compose(&ui, &pane_ui);
     assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
-    assert!(shows(&opened.lines, "old-child"));
+    assert!(shows(&opened.lines, "▸ +1 earlier"));
     click_delegation_header(
         &mut ui,
         &mut pane_ui,
@@ -984,7 +1003,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     );
     let reopened = compose(&ui, &pane_ui);
     assert!(shows(&reopened.lines, "live-child"));
-    assert!(shows(&reopened.lines, "old-child"));
+    assert!(shows(&reopened.lines, "▸ +1 earlier"));
     let mut ordinals = (0..reopened.interactions.line_count())
         .filter_map(|line| reopened.interactions.row_at_line(line))
         .collect::<Vec<_>>();
@@ -1078,8 +1097,8 @@ fn a_delegation_pin_holds_for_the_parents_turn_and_lapses_when_it_moves() {
         set_turn(&mut snapshot, Some(next_turn));
         assert!(shows_child(&ui, &mut pane_ui, &snapshot));
 
-        // A pin taken in the current turn on a card with nothing current to
-        // count opens nothing, and it drops with its row.
+        // A pin taken in the current turn on a card with only earlier children
+        // opens its section to the earlier line, and it drops with its row.
         set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
         let card = std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -1091,7 +1110,7 @@ fn a_delegation_pin_holds_for_the_parents_turn_and_lapses_when_it_moves() {
         }
         assert_eq!(
             ui.delegation_open(&snapshot, 0),
-            Some((row_id.clone(), false))
+            Some((row_id.clone(), true))
         );
         std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -3305,8 +3324,9 @@ fn a_later_row_reveal_replaces_a_dormant_one_even_with_none() {
     }
 }
 
-#[test]
-fn prior_subagents_fold_click_and_keyboard_toggle_without_moving_focus() {
+/// Row 0 of `delegation_snapshot` with `count` reopenable children of an earlier turn,
+/// rested a minute apart, newest `prior-1`.
+fn earlier_children_snapshot(count: usize) -> (SidebarSnapshot, String) {
     let mut snapshot = delegation_snapshot();
     let base = snapshot.now;
     let row0 = &mut std::sync::Arc::make_mut(
@@ -3316,120 +3336,106 @@ fn prior_subagents_fold_click_and_keyboard_toggle_without_moving_focus() {
     let card = row0.as_agent_mut().unwrap();
     card.prompt = Some("build feature".to_owned());
     card.user_turn_started_at = Some(base);
-    card.sub_agents = vec![
-        serde_json::from_value(serde_json::json!({
-            "id": "prior-1",
-            "kind": "claude",
-            "name": "coder",
-            "status": "success",
-            "last_activity": base,
-            "description": "earlier work",
-            "prior_turn": true,
-            "reopenable": true,
-            "rested_at": base,
-        }))
-        .unwrap(),
-    ];
-
-    let mut view = ViewState::default();
-    let mut ui = UiState::default();
-    let parent_pane = pane_of(&snapshot, 0);
-    reconcile_selection(&mut view, &snapshot, Some(parent_pane.clone()));
-    paint(&mut view, &mut ui, &snapshot, 24);
-
-    // Click fold line -> opens fold, keeps card selection, emits no Focus effect.
-    let fold_pos = ui
-        .interactions
-        .line_for_target(&HitTarget::TogglePriorSubagents {
-            row: row0_id.clone(),
+    card.sub_agents = (1..=count)
+        .map(|n| {
+            let rested = base - std::time::Duration::from_secs(60 * n as u64);
+            serde_json::from_value(serde_json::json!({
+                "id": format!("prior-{n}"),
+                "kind": "claude",
+                "name": "coder",
+                "status": "success",
+                "last_activity": rested,
+                "description": "earlier work",
+                "prior_turn": true,
+                "reopenable": true,
+                "rested_at": rested,
+            }))
+            .unwrap()
         })
-        .expect("fold hit target");
-    let open_outcome = handle_mouse_click(fold_pos.0, fold_pos.1, &mut view, &mut ui, &snapshot);
-    assert!(open_outcome.redraw);
-    assert!(
-        open_outcome.effects.is_empty(),
-        "toggling fold moves no focus: {:?}",
-        open_outcome.effects
-    );
-    assert_eq!(view.selected_index, Some(0));
-    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
-
-    paint(&mut view, &mut ui, &snapshot, 24);
-    // Step down twice: fold line -> prior-1.
-    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
-    assert_eq!(view.entry_cursor, Some(EntryCursor::PriorSubagentsToggle));
-    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
-    assert_eq!(
-        view.entry_cursor,
-        Some(EntryCursor::ReopenSubAgent("prior-1".to_owned()))
-    );
-
-    // Enter on reopenable entry emits InputEffect::ReopenSubAgent.
-    let enter_reopen = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
-    assert_eq!(
-        enter_reopen.effects,
-        vec![InputEffect::ReopenSubAgent("prior-1".to_owned())]
-    );
-
-    // Closing the fold while cursor rests on a fold entry lands cursor on the fold line.
-    let fold_pos = ui
-        .interactions
-        .line_for_target(&HitTarget::TogglePriorSubagents {
-            row: row0_id.clone(),
-        })
-        .expect("open fold hit target");
-    let close_outcome = handle_mouse_click(fold_pos.0, fold_pos.1, &mut view, &mut ui, &snapshot);
-    assert!(close_outcome.effects.is_empty());
-    assert!(!view.toggles.prior_subagents_open.contains_key(&row0_id));
-    assert_eq!(view.selected_index, Some(0));
-    assert_eq!(
-        view.entry_cursor,
-        Some(EntryCursor::PriorSubagentsToggle),
-        "closing fold while cursor rested on fold entry lands cursor on fold line"
-    );
-
-    // Enter on the fold line opens it again with no focus move.
-    let reopen_fold = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
-    assert!(reopen_fold.redraw);
-    assert!(reopen_fold.effects.is_empty());
-    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
+        .collect();
+    (snapshot, row0_id)
 }
 
 #[test]
-fn prior_subagents_fold_closes_when_parent_turn_moves() {
-    let mut snapshot = delegation_snapshot();
+fn the_earlier_line_pages_by_click_and_enter_without_moving_focus() {
+    let (snapshot, row0_id) = earlier_children_snapshot(7);
+    let mut view = ViewState::default();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
+    paint(&mut view, &mut ui, &snapshot, 40);
+    let page_target = HitTarget::PageDelegation {
+        row: row0_id.clone(),
+    };
+    let pages = |view: &ViewState| {
+        view.toggles
+            .delegation_pages
+            .get(&row0_id)
+            .map(|pages| pages.pages.get())
+    };
+
+    // A click shows the first page, keeps the card's selection, and moves no focus.
+    let at = ui
+        .interactions
+        .line_for_target(&page_target)
+        .expect("earlier line");
+    let outcome = handle_mouse_click(at.0, at.1, &mut view, &mut ui, &snapshot);
+    assert!(outcome.redraw);
+    assert!(outcome.effects.is_empty(), "{:?}", outcome.effects);
+    assert_eq!(view.selected_index, Some(0));
+    assert_eq!(pages(&view), Some(1));
+    paint(&mut view, &mut ui, &snapshot, 40);
+
+    // The cursor walks the five paged entries, newest first, then the line.
+    for n in 1..=5 {
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        assert_eq!(
+            view.entry_cursor,
+            Some(EntryCursor::ReopenSubAgent(format!("prior-{n}")))
+        );
+    }
+    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+    assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+
+    // Enter on it shows the last two, and the line is gone with nothing left to show.
+    let outcome = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
+    assert!(outcome.redraw);
+    assert!(outcome.effects.is_empty(), "{:?}", outcome.effects);
+    assert_eq!(view.selected_index, Some(0));
+    assert_eq!(pages(&view), Some(2));
+    paint(&mut view, &mut ui, &snapshot, 40);
+    assert!(ui.interactions.line_for_target(&page_target).is_none());
+    assert_ne!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+    let stops = view.entry_stops(&snapshot, 0);
+    assert!(stops.contains(&EntryCursor::ReopenSubAgent("prior-7".to_owned())));
+}
+
+#[test]
+fn delegation_pages_reset_when_the_parent_turn_moves_or_the_section_closes() {
+    let (mut snapshot, row0_id) = earlier_children_snapshot(7);
     let t0 = snapshot.now;
     let t1 = jiff::Timestamp::from_second(t0.as_second() + 60).unwrap();
-    let row0 = &mut std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-    )[0];
-    let row0_id = row0.id.clone();
-    let card = row0.as_agent_mut().unwrap();
-    card.prompt = Some("build feature".to_owned());
-    card.user_turn_started_at = Some(t0);
-    card.sub_agents = vec![
-        serde_json::from_value(serde_json::json!({
-            "id": "prior-1",
-            "kind": "claude",
-            "name": "coder",
-            "status": "success",
-            "last_activity": t0,
-            "prior_turn": true,
-            "reopenable": true,
-            "rested_at": t0,
-        }))
-        .unwrap(),
-    ];
-
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 40)).unwrap();
     let mut view = ViewState::default();
     let mut pane_ui = UiState::default();
     reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
-    view.toggles
-        .prior_subagents_open
-        .insert(row0_id.clone(), Some(t0));
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
-    assert!(view.toggles.prior_subagents_open.contains_key(&row0_id));
+    let page = |view: &mut ViewState, turn| {
+        view.toggles.delegation_pages.insert(
+            row0_id.clone(),
+            render::DelegationPages {
+                pages: std::num::NonZeroUsize::MIN,
+                turn: Some(turn),
+            },
+        );
+    };
+    let mut draw = |snapshot: &SidebarSnapshot, view: &mut ViewState| {
+        render::draw_to_terminal(&mut terminal, snapshot, None, view, &mut pane_ui).unwrap();
+        view.toggles.delegation_pages.contains_key(&row0_id)
+    };
+    page(&mut view, t0);
+    assert!(
+        draw(&snapshot, &mut view),
+        "an open section keeps its pages"
+    );
 
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -3437,9 +3443,33 @@ fn prior_subagents_fold_closes_when_parent_turn_moves() {
     .as_agent_mut()
     .unwrap()
     .user_turn_started_at = Some(t1);
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut view, &mut pane_ui).unwrap();
     assert!(
-        !view.toggles.prior_subagents_open.contains_key(&row0_id),
-        "advancing parent user_turn_started_at closes the fold"
+        !draw(&snapshot, &mut view),
+        "the parent's next turn closes the pages"
+    );
+
+    // A pin closing the section drops them.
+    page(&mut view, t1);
+    assert!(draw(&snapshot, &mut view));
+    view.toggles.delegation_overrides.insert(
+        row0_id.clone(),
+        render::DelegationPin {
+            open: false,
+            turn: Some(t1),
+        },
+    );
+    assert!(
+        !draw(&snapshot, &mut view),
+        "closing the section closes the pages"
+    );
+
+    // So does the selection leaving, which closes an unpinned section.
+    view.toggles.delegation_overrides.clear();
+    page(&mut view, t1);
+    assert!(draw(&snapshot, &mut view));
+    reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 1)));
+    assert!(
+        !draw(&snapshot, &mut view),
+        "a selection leaving the card closes the pages"
     );
 }

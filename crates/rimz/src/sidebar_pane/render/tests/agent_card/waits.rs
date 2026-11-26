@@ -305,10 +305,7 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
     let screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+        &paged_view(&snapshot, 0),
         &UiState::default(),
         64,
         30,
@@ -1142,7 +1139,7 @@ fn pending_waits_line_counts_armed_waits() {
         ),
     );
 
-    let expanded = line_texts(&group_lines(&snapshot, &theme, 0));
+    let expanded = line_texts(&group_lines_paged(&snapshot, &theme, 0));
     for (resting, selected) in collapsed_text[2..stats].iter().zip(&expanded[2..stats]) {
         assert_eq!(
             resting.chars().skip(1).take(52).collect::<String>(),
@@ -1153,11 +1150,12 @@ fn pending_waits_line_counts_armed_waits() {
     assert!(expanded[stats].contains("▤ 0"));
     let selected_stats = stats + 1;
     assert!(expanded[selected_stats].ends_with("$0.42▐"));
-    assert!(expanded[selected_stats + 1].contains("inspect the renderer"));
-    assert!(expanded[selected_stats + 2].contains("12k"));
-    assert!(expanded[selected_stats + 3].contains("◷ timer · in 12m"));
-    assert!(expanded[selected_stats + 4].contains(&shell_lead(&theme, "command · make")));
-    assert!(expanded[selected_stats + 5].contains("      make check"));
+    assert!(expanded[selected_stats + 1].contains("◷ timer · in 12m"));
+    assert!(expanded[selected_stats + 2].contains(&shell_lead(&theme, "command · make")));
+    assert!(expanded[selected_stats + 3].contains("      make check"));
+    // The finished child pages in below the waits.
+    assert!(expanded[selected_stats + 4].contains("inspect the renderer"));
+    assert!(expanded[selected_stats + 5].contains("12k"));
     assert_eq!(
         expanded.len(),
         selected_stats + 6,
@@ -1207,14 +1205,14 @@ fn pending_waits_line_counts_armed_waits() {
         armed_at: Some(fixed_now()),
     });
     let stats = selected_stats;
-    let with_signal = group_lines(&snapshot, &theme, 0);
+    let with_signal = group_lines_paged(&snapshot, &theme, 0);
     let with_signal_text = line_texts(&with_signal);
     assert!(with_signal_text[stats].contains("⧖ waits (3)"));
     let style = theme.styled(Component::WaitHeader, Modifier::empty());
     for (offset, glyph) in [
-        (3, theme.glyph(GlyphRole::CardWaitTimer).to_owned()),
-        (4, role_glyph(&theme, AnimationRole::Working, 0)),
-        (6, theme.glyph(GlyphRole::CardWaitSignal).to_owned()),
+        (1, theme.glyph(GlyphRole::CardWaitTimer).to_owned()),
+        (2, role_glyph(&theme, AnimationRole::Working, 0)),
+        (4, theme.glyph(GlyphRole::CardWaitSignal).to_owned()),
     ] {
         let lead = with_signal[stats + offset]
             .spans
@@ -1224,9 +1222,9 @@ fn pending_waits_line_counts_armed_waits() {
         assert_eq!(lead.style.fg, style.fg);
         assert_eq!(lead.style.add_modifier, style.add_modifier);
     }
-    assert!(with_signal_text[stats + 6].contains("⌁ signal · pr.merged"));
+    assert!(with_signal_text[stats + 4].contains("⌁ signal · pr.merged"));
     assert!(
-        with_signal_text[stats + 3..=stats + 6]
+        with_signal_text[stats + 1..=stats + 4]
             .iter()
             .all(|line| !line.contains(theme.glyph(GlyphRole::CardWaits)))
     );
@@ -1237,7 +1235,7 @@ fn pending_waits_line_counts_armed_waits() {
     .unwrap()
     .pending_waits
     .clear();
-    let cleared = line_texts(&group_lines(&snapshot, &theme, 0));
+    let cleared = line_texts(&group_lines_paged(&snapshot, &theme, 0));
     assert!(cleared[stats].contains("⧉ subagents (1)"));
     assert!(!cleared.iter().any(|line| line.contains("⧖")));
     let narrow = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 36));

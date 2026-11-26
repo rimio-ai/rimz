@@ -1,46 +1,91 @@
-//! Visibility bands for an open delegation section over the current turn's
-//! children. Unfinished children (any without a `success` or `failed` verdict,
-//! a stalled one, and one parked on background work) come first in spawn order,
-//! uncapped; finished children follow newest finish first, up to
-//! [`MAX_FINISHED`], and the rest are only counted. A child that finishes leaves
-//! the unfinished band for the top of the finished band, and nothing else moves.
+//! The paging rule of an open delegation section. Every in-flight entry lists, unpaged:
+//! a subagent of the current turn without a verdict (a stalled one and one parked on
+//! background work included) in spawn order, and a booking not finished in its draw
+//! order. Every other subagent and booking is finished: none draws until the section's
+//! `▸ +N earlier` line is activated, and each activation shows [`PAGE_SIZE`] more,
+//! newest finish first across the groups, ties kept in group order.
 
-use crate::store::snapshot::SidebarSubAgent;
+use jiff::Timestamp;
+
+use crate::store::snapshot::{SidebarBooking, SidebarSubAgent};
 
 use super::sub_agent_finished;
 
-/// The finished children an open section lists before it only counts the rest.
-const MAX_FINISHED: usize = 5;
+/// The finished entries one activation of the section's earlier line shows.
+const PAGE_SIZE: usize = 5;
 
-pub(super) struct DelegationBands<'a> {
-    /// Every child not yet finished, in the projection's spawn order.
-    pub(super) unfinished: Vec<&'a SidebarSubAgent>,
-    /// The newest finished children, newest finish first.
-    pub(super) finished: Vec<&'a SidebarSubAgent>,
-    /// Finished children beyond the listed ones.
-    pub(super) more_finished: usize,
+/// A finished entry of a delegation section.
+pub(super) enum Finished<'a> {
+    SubAgent(&'a SidebarSubAgent),
+    Booking(&'a SidebarBooking),
 }
 
-/// Classify `children` (spawn-ordered by the projection) into bands. A finished
-/// child's finish instant is `finished_at`, falling back to `last_activity`.
-pub(super) fn delegation_bands<'a>(
-    children: impl IntoIterator<Item = &'a SidebarSubAgent>,
-) -> DelegationBands<'a> {
-    let (mut finished, unfinished): (Vec<_>, Vec<_>) = children
+impl Finished<'_> {
+    /// When the entry finished, `None` for one finished with no end stamp yet: a
+    /// subagent's verdict instant, else its rest instant, else its last activity, and
+    /// a booking's end stamp.
+    fn finished_at(&self) -> Option<Timestamp> {
+        match self {
+            Self::SubAgent(child) => Some(
+                child
+                    .finished_at
+                    .or(child.rested_at)
+                    .unwrap_or(child.last_activity),
+            ),
+            Self::Booking(booking) => super::bookings::fire(booking)?.ended_at,
+        }
+    }
+}
+
+pub(super) struct DelegationEntries<'a> {
+    /// The in-flight subagents, in the projection's spawn order.
+    pub(super) children: Vec<&'a SidebarSubAgent>,
+    /// The in-flight bookings, in the card's draw order.
+    pub(super) bookings: Vec<&'a SidebarBooking>,
+    /// The finished entries the section's pages show, newest finish first.
+    pub(super) shown: Vec<Finished<'a>>,
+    /// The finished entries behind the earlier line.
+    pub(super) hidden: usize,
+}
+
+fn finished_child(child: &SidebarSubAgent) -> bool {
+    child.prior_turn || sub_agent_finished(child)
+}
+
+/// Whether a card's `children` or `bookings` hold a finished entry.
+pub(super) fn has_finished(children: &[SidebarSubAgent], bookings: &[SidebarBooking]) -> bool {
+    children.iter().any(finished_child) || bookings.iter().any(SidebarBooking::is_finished)
+}
+
+/// A card's delegation entries over its `children` and `bookings`, with `pages` pages of
+/// finished entries shown.
+pub(super) fn delegation_entries<'a>(
+    children: &'a [SidebarSubAgent],
+    bookings: &'a [SidebarBooking],
+    pages: usize,
+) -> DelegationEntries<'a> {
+    let (finished_children, children): (Vec<_>, Vec<_>) =
+        children.iter().partition(|child| finished_child(child));
+    let (finished_bookings, bookings): (Vec<_>, Vec<_>) =
+        bookings.iter().partition(|booking| booking.is_finished());
+    let mut finished: Vec<Finished<'_>> = finished_children
         .into_iter()
-        .partition(|child| sub_agent_finished(child));
-    finished.sort_by(|a, b| {
-        b.finished_at
-            .unwrap_or(b.last_activity)
-            .cmp(&a.finished_at.unwrap_or(a.last_activity))
-            .then_with(|| a.id.cmp(&b.id))
+        .map(Finished::SubAgent)
+        .chain(finished_bookings.into_iter().map(Finished::Booking))
+        .collect();
+    finished.sort_by_key(|entry| {
+        let at = entry.finished_at();
+        std::cmp::Reverse((at.is_none(), at))
     });
-    let more_finished = finished.len().saturating_sub(MAX_FINISHED);
-    finished.truncate(MAX_FINISHED);
-    DelegationBands {
-        unfinished,
-        finished,
-        more_finished,
+    let hidden = finished
+        .len()
+        .saturating_sub(pages.saturating_mul(PAGE_SIZE));
+    finished.truncate(finished.len() - hidden);
+    DelegationEntries {
+        children,
+        bookings,
+        shown: finished,
+        hidden,
     }
 }
 
@@ -66,8 +111,37 @@ mod tests {
         .expect("minimal subagent")
     }
 
+    /// A booking whose fire ended `ended_secs_ago` (no end stamp when `None`), finished
+    /// when `finished`.
+    fn booking(task: &str, ended_secs_ago: Option<i64>, finished: bool) -> SidebarBooking {
+        serde_json::from_value(serde_json::json!({
+            "task": task,
+            "starts": {"kind": "profile", "name": "coder"},
+            "band": "fired",
+            "state": {
+                "state": "fired",
+                "at": now() - SignedDuration::from_hours(1),
+                "ended_at": ended_secs_ago.map(|ago| now() - SignedDuration::from_secs(ago)),
+                "pr": {"pr": "unread"},
+                "finished": finished,
+            },
+        }))
+        .expect("minimal booking")
+    }
+
     fn ids(children: &[&SidebarSubAgent]) -> Vec<String> {
         children.iter().map(|child| child.id.clone()).collect()
+    }
+
+    fn shown(entries: &DelegationEntries<'_>) -> Vec<String> {
+        entries
+            .shown
+            .iter()
+            .map(|entry| match entry {
+                Finished::SubAgent(child) => child.id.clone(),
+                Finished::Booking(booking) => booking.task.clone(),
+            })
+            .collect()
     }
 
     fn roster() -> Vec<SidebarSubAgent> {
@@ -89,13 +163,13 @@ mod tests {
             serde_json::from_value(wire).unwrap(),
             child("later", AgentStatus::Success, 60),
         ];
-        let bands = delegation_bands(&children);
-        assert_eq!(ids(&bands.finished), ["later", "early"]);
-        assert_eq!(bands.more_finished, 0);
+        let entries = delegation_entries(&children, &[], 1);
+        assert_eq!(shown(&entries), ["later", "early"]);
+        assert_eq!(entries.hidden, 0);
     }
 
     #[test]
-    fn a_stalled_child_stays_unfinished_however_old() {
+    fn a_stalled_child_stays_in_flight_however_old() {
         let stalled = child("silent", AgentStatus::Failed, 86_400);
         let mut wire = serde_json::to_value(stalled).unwrap();
         wire["stalled"] = serde_json::json!(true);
@@ -103,85 +177,114 @@ mod tests {
             serde_json::from_value(wire).unwrap(),
             child("failed", AgentStatus::Failed, 86_400),
         ];
-        let bands = delegation_bands(&children);
-        assert_eq!(ids(&bands.unfinished), ["silent"]);
-        assert_eq!(ids(&bands.finished), ["failed"]);
+        let entries = delegation_entries(&children, &[], 0);
+        assert_eq!(ids(&entries.children), ["silent"]);
+        assert_eq!(entries.hidden, 1);
     }
 
     #[test]
-    fn unfinished_keep_spawn_order_and_finished_run_newest_first() {
+    fn in_flight_children_keep_spawn_order_and_finished_ones_wait_for_a_page() {
         let children = roster();
-        let bands = delegation_bands(&children);
-        assert_eq!(ids(&bands.unfinished), ["b", "d"]);
-        assert_eq!(ids(&bands.finished), ["c", "f", "e", "a"]);
-        assert_eq!(bands.more_finished, 0);
+        let closed = delegation_entries(&children, &[], 0);
+        assert_eq!(ids(&closed.children), ["b", "d"]);
+        assert!(closed.shown.is_empty());
+        assert_eq!(closed.hidden, 4);
+        let paged = delegation_entries(&children, &[], 1);
+        assert_eq!(ids(&paged.children), ["b", "d"]);
+        assert_eq!(shown(&paged), ["c", "f", "e", "a"]);
+        assert_eq!(paged.hidden, 0);
     }
 
     #[test]
-    fn five_finished_list_whole_and_a_sixth_is_counted() {
-        let finished = |count: usize| {
-            (0..count)
-                .map(|index| {
-                    child(
-                        &format!("f{index}"),
-                        AgentStatus::Success,
-                        i64::try_from(index).unwrap() * 60,
-                    )
-                })
-                .chain([child("live", AgentStatus::Running, 0)])
-                .collect::<Vec<_>>()
-        };
-        let five = finished(5);
-        let bands = delegation_bands(&five);
-        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
-        assert_eq!(bands.more_finished, 0);
-        let six = finished(6);
-        let bands = delegation_bands(&six);
-        assert_eq!(ids(&bands.unfinished), ["live"]);
-        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
-        assert_eq!(bands.more_finished, 1);
-        // Unfinished children are never capped.
-        let many: Vec<_> = (0..12)
-            .map(|index| child(&format!("r{index}"), AgentStatus::Running, 0))
+    fn each_page_shows_five_more_newest_first_and_in_flight_entries_are_never_paged() {
+        let mut children: Vec<_> = (0..12)
+            .map(|index| child(&format!("f{index}"), AgentStatus::Success, index * 60))
             .collect();
-        assert_eq!(delegation_bands(&many).unfinished.len(), 12);
+        children.extend((0..12).map(|index| child(&format!("r{index}"), AgentStatus::Running, 0)));
+        for (pages, listed, hidden) in [(0, 0, 12), (1, 5, 7), (2, 10, 2), (3, 12, 0), (9, 12, 0)] {
+            let entries = delegation_entries(&children, &[], pages);
+            assert_eq!(entries.children.len(), 12, "{pages} pages");
+            assert_eq!(entries.shown.len(), listed, "{pages} pages");
+            assert_eq!(entries.hidden, hidden, "{pages} pages");
+        }
+        let two = delegation_entries(&children, &[], 2);
+        let expected: Vec<String> = (0..10).map(|index| format!("f{index}")).collect();
+        assert_eq!(shown(&two), expected);
+    }
+
+    #[test]
+    fn a_prior_turn_child_is_finished_whatever_its_status_and_sorts_by_its_rest() {
+        let mut idle = serde_json::to_value(child("idle", AgentStatus::Idle, 0)).unwrap();
+        idle["prior_turn"] = serde_json::json!(true);
+        idle["rested_at"] = serde_json::json!(now() - SignedDuration::from_secs(900));
+        let children = vec![
+            serde_json::from_value(idle).unwrap(),
+            child("landed", AgentStatus::Success, 600),
+        ];
+        let entries = delegation_entries(&children, &[], 1);
+        assert!(entries.children.is_empty());
+        assert_eq!(shown(&entries), ["landed", "idle"]);
+    }
+
+    #[test]
+    fn finished_bookings_interleave_by_end_and_an_unstamped_end_reads_newest() {
+        let children = vec![
+            child("sub-old", AgentStatus::Success, 900),
+            child("sub-tie", AgentStatus::Success, 300),
+        ];
+        let bookings = vec![
+            booking("open", Some(60), false),
+            booking("tie", Some(300), true),
+            booking("unstamped", None, true),
+            booking("newer", Some(120), true),
+        ];
+        let entries = delegation_entries(&children, &bookings, 1);
+        assert_eq!(
+            entries
+                .bookings
+                .iter()
+                .map(|booking| booking.task.as_str())
+                .collect::<Vec<_>>(),
+            ["open"]
+        );
+        // On a tie the subagent, earlier in group order, comes first.
+        assert_eq!(
+            shown(&entries),
+            ["unstamped", "newer", "sub-tie", "tie", "sub-old"]
+        );
+        assert!(has_finished(&[], &bookings));
+        assert!(!has_finished(&[], &bookings[..1]));
     }
 
     #[test]
     fn a_child_that_finishes_moves_to_the_top_of_finished_and_nothing_else_moves() {
         let mut children = roster();
-        let before = delegation_bands(&children);
-        let (before_unfinished, before_finished) = (ids(&before.unfinished), ids(&before.finished));
+        let before = delegation_entries(&children, &[], 1);
+        let (before_children, before_shown) = (ids(&before.children), shown(&before));
         children[1] = child("b", AgentStatus::Success, 0);
-        let after = delegation_bands(&children);
+        let after = delegation_entries(&children, &[], 2);
         assert_eq!(
-            ids(&after.unfinished),
-            before_unfinished
+            ids(&after.children),
+            before_children
                 .into_iter()
                 .filter(|id| id != "b")
                 .collect::<Vec<_>>()
         );
-        assert_eq!(ids(&after.finished)[0], "b");
-        assert_eq!(ids(&after.finished)[1..], before_finished[..]);
+        assert_eq!(shown(&after)[0], "b");
+        assert_eq!(shown(&after)[1..], before_shown[..]);
     }
 
     #[test]
-    fn a_parked_child_stays_unfinished_above_finished_and_outside_the_finished_cap() {
+    fn a_parked_child_stays_in_flight_above_the_finished_pages() {
         let mut parked = child("parked", AgentStatus::Success, 1_200);
         parked.phase = crate::agents::TurnPhase::Parked;
         let mut children: Vec<_> = (0..6)
-            .map(|index| {
-                child(
-                    &format!("f{index}"),
-                    AgentStatus::Success,
-                    i64::from(index) * 60,
-                )
-            })
+            .map(|index| child(&format!("f{index}"), AgentStatus::Success, index * 60))
             .collect();
         children.push(parked);
-        let bands = delegation_bands(&children);
-        assert_eq!(ids(&bands.unfinished), ["parked"]);
-        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
-        assert_eq!(bands.more_finished, 1);
+        let entries = delegation_entries(&children, &[], 1);
+        assert_eq!(ids(&entries.children), ["parked"]);
+        assert_eq!(shown(&entries), ["f0", "f1", "f2", "f3", "f4"]);
+        assert_eq!(entries.hidden, 1);
     }
 }

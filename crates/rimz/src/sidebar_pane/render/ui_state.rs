@@ -68,7 +68,8 @@ pub(in crate::sidebar_pane) struct UiState {
 pub(in crate::sidebar_pane) enum EntryCursor {
     SubAgent(PaneId),
     ReopenSubAgent(String),
-    PriorSubagentsToggle,
+    /// The `▸ +N earlier` / `+M more` line closing an open delegation section.
+    DelegationPage,
 }
 
 /// Driver-clock milliseconds since the view context's animation start.
@@ -404,10 +405,18 @@ pub(in crate::sidebar_pane) struct PresentationToggles {
     /// that turn moves or the row leaves the snapshot.
     /// Travels with the view, including a fork's initial state.
     pub(in crate::sidebar_pane) delegation_overrides: BTreeMap<String, DelegationPin>,
-    /// Agent cards whose prior-round subagents fold is open in this view (row id -> the
-    /// parent's `user_turn_started_at` when opened). Returns to closed when that turn moves
-    /// or the row leaves.
-    pub(in crate::sidebar_pane) prior_subagents_open: BTreeMap<String, Option<Timestamp>>,
+    /// Pages of finished delegation entries shown in an agent card's open section in this
+    /// view (row id → pages). Returns to closed when the parent's user turn moves, the row
+    /// leaves, or the section closes.
+    pub(in crate::sidebar_pane) delegation_pages: BTreeMap<String, DelegationPages>,
+}
+
+/// How many pages of an open delegation section's finished entries show, and the
+/// parent's `user_turn_started_at` when the first was opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct DelegationPages {
+    pub(in crate::sidebar_pane) pages: NonZeroUsize,
+    pub(in crate::sidebar_pane) turn: Option<Timestamp>,
 }
 
 /// A delegation section's open/closed choice and the parent's
@@ -682,13 +691,38 @@ impl ViewState {
             super::sections::row_selection_reach(roster, group, index, self.selected_index, &held);
         let expansion = super::sections::CardExpansion::resolve(
             &self.toggles.delegation_overrides,
-            &self.toggles.prior_subagents_open,
+            &self.toggles.delegation_pages,
             snapshot.theme.display.card_density,
             row,
             reach,
             snapshot.now,
         );
         Some((row, expansion))
+    }
+
+    /// Drop the delegation pages of every card that no longer resolves with pages shown:
+    /// its row gone from the visible roster, its section closed by a pin or by the
+    /// selection leaving, no finished entry left, or the parent's user turn moved.
+    pub(super) fn prune_delegation_pages(&mut self, snapshot: &SidebarSnapshot) {
+        if self.toggles.delegation_pages.is_empty() {
+            return;
+        }
+        let roster = self.visible_roster(snapshot);
+        let shown: Vec<String> = self
+            .toggles
+            .delegation_pages
+            .keys()
+            .filter(|id| {
+                roster
+                    .ordinal_of_id(id)
+                    .and_then(|index| self.card_expansion(&roster, snapshot, index))
+                    .is_some_and(|(_, expansion)| expansion.pages > 0)
+            })
+            .cloned()
+            .collect();
+        self.toggles
+            .delegation_pages
+            .retain(|id, _| shown.contains(id));
     }
 
     pub(in crate::sidebar_pane) fn validate_entry_cursor(&mut self, snapshot: &SidebarSnapshot) {
@@ -914,8 +948,14 @@ mod tests {
                     },
                 );
             }),
-            ("prior_subagents_open", |view| {
-                view.toggles.prior_subagents_open.insert("row".into(), None);
+            ("delegation_pages", |view| {
+                view.toggles.delegation_pages.insert(
+                    "row".into(),
+                    DelegationPages {
+                        pages: NonZeroUsize::MIN,
+                        turn: None,
+                    },
+                );
             }),
             ("dashboard_tab", |view| {
                 view.toggles.dashboard_tab = Some(DashboardTab {

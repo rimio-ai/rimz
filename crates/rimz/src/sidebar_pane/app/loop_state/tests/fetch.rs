@@ -1541,6 +1541,33 @@ fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     rig.watch();
     let _ = super::super::super::key_spawn::take_spawned();
+    // The finished child waits behind the earlier line until a click pages it in.
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let page_in = |rig: &mut Rig| {
+        rig.state.pane.dirty = true;
+        let now = rig.state.pane.clock.now();
+        rig.state.paint_now(&mut rig.terminal, now).unwrap();
+        rig.state.pane.click_guard = None;
+        let earlier = rig
+            .state
+            .pane
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::PageDelegation {
+                row: row_id.clone(),
+            })
+            .expect("the earlier line");
+        rig.state
+            .on_wakeup(
+                &mut rig.terminal,
+                Wakeup::MouseClick {
+                    column: earlier.0,
+                    row: earlier.1,
+                },
+            )
+            .unwrap();
+    };
+    page_in(&mut rig);
 
     let click_reopen = |rig: &mut Rig| {
         rig.state.pane.dirty = true;
@@ -1622,6 +1649,7 @@ fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound
     let mut played = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
     played.fold(snapshot, SnapshotSource::Produced);
     played.watch();
+    page_in(&mut played);
     click_reopen(&mut played);
     assert!(marked(&mut played), "mark sets even on play clock");
     assert!(

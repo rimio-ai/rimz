@@ -179,14 +179,15 @@ fn pilot_holds_then_reorders_at_the_loop_freeze_deadline() {
 }
 
 #[test]
-fn pilot_renders_nested_results_countdown_expansion_and_root_unread() {
+fn pilot_renders_nested_children_countdown_expansion_and_root_unread() {
     let scenario = pilot();
     let mut column = Column::new(&scenario, None, None).unwrap();
     let children = text_at(&mut column, &scenario, 6_500);
+    // The running reviewer lists; the finished one waits behind the earlier line.
     assert!(
         children.contains("codex")
-            && children.contains("claude")
-            && children.contains("renderer reviewed"),
+            && children.contains("▸ +1 earlier")
+            && !children.contains("renderer reviewed"),
         "{children}"
     );
     let first = text_at(&mut column, &scenario, 11_000);

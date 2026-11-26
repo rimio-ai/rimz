@@ -211,7 +211,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         let selected = Some(this_row) == ctx.selected_index;
         let expanded = CardExpansion::resolve(
             ctx.delegation_overrides,
-            ctx.prior_subagents_open,
+            ctx.delegation_pages,
             ctx.card_density,
             row,
             super::row_selection_reach(
