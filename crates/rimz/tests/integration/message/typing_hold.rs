@@ -1030,8 +1030,8 @@ fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
         fixture.keepalive_config();
         let ttl = if record_later {
             // `keepalive_config`'s 61 s lifetime under the default 60 s margin: due one second
-            // after the clock's stamp, and warm past any host stall between the release and the
-            // cold check.
+            // after the clock's stamp, and warm for a lifetime past it, so a stall of up to about
+            // a minute before the cold check still finds the record warm.
             Duration::from_secs(61)
         } else {
             // A 10 s lifetime with a 9 s margin: due one second after the clock's stamp.
