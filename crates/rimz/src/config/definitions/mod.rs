@@ -16,8 +16,6 @@ pub mod review;
 mod team;
 mod traits;
 
-#[cfg(test)]
-pub(crate) use super::engine::keeps_inherited_model;
 pub use agent::DefinitionSource;
 pub(in crate::config) use project::{ProjectProfilesInput, resolve_project_profiles};
 pub use traits::ConsensusPieces;
