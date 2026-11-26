@@ -417,14 +417,11 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
             .map(|raw_label| {
                 let label = non_empty_trimmed(raw_label)
                     .map(|label| label.chars().take(160).collect::<String>());
-                AgentTurnError {
-                    model: None,
-                    ended_turn: false,
-                    class: turn_error_class(&canonical, parsed.error.as_deref(), label.as_deref()),
-                    at: Timestamp::now(),
+                AgentTurnError::classified(
+                    Timestamp::now(),
                     label,
-                    refill_at: None,
-                }
+                    turn_error_verdict(&canonical, parsed.error.as_deref()),
+                )
             }),
         );
         let root_id = parsed.session_id.as_deref().and_then(non_empty_trimmed);
@@ -713,15 +710,15 @@ fn notification_ask(payload: &payloads::HookPayload) -> Option<AskKind> {
     }
 }
 
-fn turn_error_class(event_name: &str, error: Option<&str>, label: Option<&str>) -> TurnErrorClass {
+fn turn_error_verdict(event_name: &str, error: Option<&str>) -> Option<TurnErrorClass> {
     match (event_name, error) {
-        ("StopFailure", Some("rate_limit")) => TurnErrorClass::PausedRateLimit,
-        ("StopFailure", Some("server_error")) => TurnErrorClass::PausedOverloaded,
+        ("StopFailure", Some("rate_limit")) => Some(TurnErrorClass::PausedRateLimit),
+        ("StopFailure", Some("server_error")) => Some(TurnErrorClass::PausedOverloaded),
         (
             "StopFailure",
             Some("authentication_failed" | "invalid_request" | "max_output_tokens"),
-        ) => TurnErrorClass::Failed,
-        _ => TurnErrorClass::classify_label(label),
+        ) => Some(TurnErrorClass::Failed),
+        _ => None,
     }
 }
 

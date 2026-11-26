@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::agents::context::{AgentTurnError, TurnErrorClass, TurnSettle, TurnSettleOutcome};
+use crate::agents::context::{AgentTurnError, TurnSettle, TurnSettleOutcome};
 use crate::agents::local_session_cache::StampedPaths;
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 use crate::agents::{
@@ -94,14 +94,7 @@ pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnM
             ..TurnMarkers::default()
         },
         Some(TerminalOutcome::Error(label)) => TurnMarkers {
-            turn_error: Some(AgentTurnError {
-                model: None,
-                ended_turn: false,
-                class: TurnErrorClass::classify_label(label.as_deref()),
-                at,
-                label,
-                refill_at: None,
-            }),
+            turn_error: Some(AgentTurnError::classified(at, label, None)),
             ..TurnMarkers::default()
         },
         None => TurnMarkers {

@@ -361,21 +361,18 @@ impl HookCapability for QoderAdapter {
                 .last_assistant_message
                 .as_deref()
                 .and_then(crate::agents::context::cap_turn_error_label);
-            let class = match hook.error {
-                QoderStopError::RateLimit => TurnErrorClass::PausedRateLimit,
+            let verdict = match hook.error {
+                QoderStopError::RateLimit => Some(TurnErrorClass::PausedRateLimit),
                 QoderStopError::ServerError | QoderStopError::Overloaded => {
-                    TurnErrorClass::PausedOverloaded
+                    Some(TurnErrorClass::PausedOverloaded)
                 }
-                _ => TurnErrorClass::classify_label(label.as_deref()),
+                _ => None,
             };
-            decoded.set_turn_error(Some(AgentTurnError {
-                model: None,
-                ended_turn: false,
-                class,
-                at: Timestamp::now(),
+            decoded.set_turn_error(Some(AgentTurnError::classified(
+                Timestamp::now(),
                 label,
-                refill_at: None,
-            }));
+                verdict,
+            )));
         }
         if matches!(event, "Stop" | "StopFailure" | "SubagentStop") {
             decoded.set_final_message(

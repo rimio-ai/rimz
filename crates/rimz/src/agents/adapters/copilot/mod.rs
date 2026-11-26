@@ -45,8 +45,8 @@ use super::{
     AgentLifecycleObservation, AgentTurnError, AgentUsageSummary, AskKind, HookOutput, HookRouting,
     LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SanitizedPrompt,
     SessionOrigin, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
-    SubagentIdentity, SubagentSpawnInput, TranscriptMessage, TurnErrorClass,
-    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
+    SubagentIdentity, SubagentSpawnInput, TranscriptMessage, optional_payload_string,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -474,14 +474,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                         .and_then(Value::as_i64)
                         .and_then(|millis| Timestamp::from_millisecond(millis).ok())
                         .unwrap_or_else(Timestamp::now);
-                    Some(AgentTurnError {
-                        model: None,
-                        ended_turn: false,
-                        class: TurnErrorClass::classify_label(Some(&label)),
-                        at,
-                        label: Some(label),
-                        refill_at: None,
-                    })
+                    Some(AgentTurnError::classified(at, Some(label), None))
                 })
                 .flatten(),
         );

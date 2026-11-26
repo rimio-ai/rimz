@@ -30,7 +30,7 @@ use super::lifecycle::{LifecycleSignal, ToolEffect};
 use super::{
     AgentLifecycleObservation, AgentTurnError, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
-    RefreshTrigger, Result, SanitizedPrompt, TranscriptStat, TurnErrorClass, non_empty_trimmed,
+    RefreshTrigger, Result, SanitizedPrompt, TranscriptStat, non_empty_trimmed,
     sanitize_user_prompt,
 };
 #[cfg(test)]
@@ -323,14 +323,7 @@ fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Opti
             .into_iter()
             .flatten()
             .find_map(|text| crate::agents::context::cap_turn_error_label(text));
-        AgentTurnError {
-            model: None,
-            ended_turn: false,
-            class: TurnErrorClass::classify_label(label.as_deref()),
-            at: Timestamp::now(),
-            label,
-            refill_at: None,
-        }
+        AgentTurnError::classified(Timestamp::now(), label, None)
     })
 }
 

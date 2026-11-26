@@ -19,8 +19,8 @@ use crate::agents::local_session_cache::{
 };
 use crate::agents::{
     AgentStatus, AgentTurnError, FieldPatch, LocalContextPatch, LocalSessionObservation,
-    LocalSessionProjection, LocalSessionState, TranscriptMessage, TranscriptRole, TurnErrorClass,
-    TurnSettle, TurnSettleOutcome, read_transcript_tail,
+    LocalSessionProjection, LocalSessionState, TranscriptMessage, TranscriptRole, TurnSettle,
+    TurnSettleOutcome, read_transcript_tail,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -731,14 +731,7 @@ pub(super) fn refresh_context(path: &Path) -> LocalContextPatch {
         _ => None,
     };
     let turn_error = match folded.turn {
-        TurnState::Failed(Some(at)) => Some(AgentTurnError {
-            model: None,
-            ended_turn: false,
-            class: TurnErrorClass::Failed,
-            at,
-            label: None,
-            refill_at: None,
-        }),
+        TurnState::Failed(Some(at)) => Some(AgentTurnError::classified(at, None, None)),
         _ => None,
     };
     let mut patch = LocalContextPatch {

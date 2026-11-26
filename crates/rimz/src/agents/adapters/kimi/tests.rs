@@ -5,7 +5,7 @@ use serde_json::json;
 use super::*;
 use crate::agents::lifecycle::{PriorTurnIds, TransitionKind, step};
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
-use crate::agents::{AgentHookClass, AgentStatus};
+use crate::agents::{AgentHookClass, AgentStatus, TurnErrorClass};
 
 #[test]
 fn child_wires_join_fleet_and_seat_spending_sources() {
