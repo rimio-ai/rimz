@@ -1026,6 +1026,7 @@ fn capability_lines_use_short_form_and_reminder_omits_rimz_capabilities_section(
         ("rimz-workflow".to_owned(), "mcp(workflow)".to_owned()),
         ("rimz-loop".to_owned(), "mcp(schedule)".to_owned()),
         ("rimz-message".to_owned(), "mcp(message)".to_owned()),
+        ("rimz-ask".to_owned(), "mcp(ask)".to_owned()),
         ("rimz-control".to_owned(), control),
         ("rimz-notes".to_owned(), "mcp(notes)".to_owned()),
         (
@@ -1256,6 +1257,7 @@ fn resolve_reach_maps_tools_and_skills_to_short_form() {
         resolve_reach("rimz-workflow", Reach::Tools(Capability::Workflow)),
         resolve_reach("rimz-loop", Reach::Tools(Capability::Loop)),
         resolve_reach("rimz-message", Reach::Tools(Capability::Message)),
+        resolve_reach("rimz-ask", Reach::Tools(Capability::Ask)),
         resolve_reach("rimz-control", Reach::Tools(Capability::Control)),
         resolve_reach("rimz-notes", Reach::Tools(Capability::Notes)),
         resolve_reach("rimz-lsp", Reach::Skill),
@@ -1272,6 +1274,7 @@ fn resolve_reach_maps_tools_and_skills_to_short_form() {
             "mcp(workflow)",
             "mcp(schedule)",
             "mcp(message)",
+            "mcp(ask)",
             "mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)",
             "mcp(notes)",
             "skill(rimz-lsp)",

@@ -15,7 +15,7 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 19] = [
+const ALL_TOOLS: [&str; 20] = [
     "lsp",
     "wait",
     "subagent",
@@ -24,6 +24,7 @@ const ALL_TOOLS: [&str; 19] = [
     "workflow",
     "schedule",
     "message",
+    "ask",
     "tasks",
     "join",
     "stop",
@@ -1492,7 +1493,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -1618,7 +1619,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{stderr}"
     );
@@ -2138,6 +2139,82 @@ fn self_stop_answers_what_holds_it_and_control_calls_answer_data() {
     assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
 }
 
+/// `ask` arms a raised ask on its caller with the brief, an errored end drops it, a second call
+/// replaces the first, and a clean end opens the last one with the final reply as its text; an
+/// empty brief arms nothing.
+#[test]
+fn ask_arms_with_the_brief_and_a_clean_end_opens_it_with_the_final_reply() {
+    use rimz::agents::state::RaisedAskState;
+    use rimz::store::raised;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let feed = |event: &str, extra: Value| {
+        let mut payload = json!({"hook_event_name": event, "session_id": "provider-session"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let output = env.run_hook("claude", &payload.to_string());
+        assert!(output.status.success(), "{output:?}");
+    };
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (refused, is_error) = server.answer(1, "ask", json!({"brief": "  "}));
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["error"],
+        json!("invalid arguments: `brief` is empty"),
+        "{refused}"
+    );
+    assert!(raised::read(env.store().paths()).asks.is_empty());
+    let (dropped, is_error) = server.answer(2, "ask", json!({"brief": "Ship now?"}));
+    assert!(!is_error, "{dropped}");
+    feed("StopFailure", json!({"error": "failed"}));
+    assert!(
+        raised::read(env.store().paths()).asks.is_empty(),
+        "an errored end drops the armed ask"
+    );
+    let (first, is_error) = server.answer(3, "ask", json!({"brief": "Ship now?"}));
+    assert!(!is_error, "{first}");
+    let (second, is_error) =
+        server.answer(4, "ask", json!({"brief": "Ship now or after the review?"}));
+    assert!(!is_error, "{second}");
+    assert_eq!(second["status"], json!("armed"), "{second}");
+    assert_ne!(first["id"], second["id"]);
+    let asks = raised::read(env.store().paths()).asks;
+    assert_eq!(asks.len(), 1, "the second call replaces the first");
+    assert_eq!(json!(asks[0].value.ask_id.as_str()), second["id"]);
+    assert_eq!(asks[0].value.state, RaisedAskState::Armed);
+    assert_eq!(asks[0].value.raised_by.as_deref(), Some("@planner#main"));
+    feed(
+        "Stop",
+        json!({"last_assistant_message": "The review found two gaps. Ship now or after it?"}),
+    );
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let ask = snapshot.agents[0]
+        .raised_ask
+        .as_ref()
+        .expect("a clean end opens the armed ask");
+    assert_eq!(json!(ask.ask_id.as_str()), second["id"]);
+    assert_eq!(ask.state, RaisedAskState::Open);
+    assert_eq!(
+        ask.text.as_deref(),
+        Some("The review found two gaps. Ship now or after it?")
+    );
+    assert_eq!(
+        ask.detail().as_deref(),
+        Some("Ship now or after the review?")
+    );
+    let raised: Vec<_> = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "ask.raised")
+        .collect();
+    assert_eq!(raised.len(), 3, "{raised:?}");
+}
+
 #[test]
 fn self_compact_owes_a_continue_by_default_and_honors_no_continue() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
@@ -2542,7 +2619,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Plan"), "{out}");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
@@ -2624,7 +2701,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
@@ -2827,7 +2904,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -2925,7 +3002,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -2940,7 +3017,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );

@@ -164,8 +164,8 @@ pub enum McpListErr {
     #[error(
         "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-wait, \
          rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
-         rimz-control, rimz-notes, rimz-blackboard), or one of your own MCP servers, each name \
-         with an optional `:always` or `:deferred`"
+         rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or one of your own MCP servers, \
+         each name with an optional `:always` or `:deferred`"
     )]
     InvalidName(String),
     #[error(
@@ -288,8 +288,8 @@ mod tests {
             "github:eager".parse::<McpName>().unwrap_err().to_string(),
             "invalid mcps entry `github:eager`: list `*`, `rimz`, a RimZ capability \
              (rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, \
-             rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard), or one of your \
-             own MCP servers, each name with an optional `:always` or `:deferred`"
+             rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or \
+             one of your own MCP servers, each name with an optional `:always` or `:deferred`"
         );
         assert_eq!(
             parse_mcp_list(&["github".to_owned(), "github".to_owned()]).unwrap_err(),

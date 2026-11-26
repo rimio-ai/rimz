@@ -1550,8 +1550,9 @@ fn mcps_inherit_clear_override_on_roles_and_refuse_reserved_names() {
             [format!(
                 "sets `mcps:` with an invalid mcps entry `{shown}`: list `*`, `rimz`, a RimZ \
                  capability (rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, \
-                 rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard), or \
-                 one of your own MCP servers, each name with an optional `:always` or `:deferred`"
+                 rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, \
+                 rimz-blackboard), or one of your own MCP servers, each name with an optional \
+                 `:always` or `:deferred`"
             )]
         );
     }
@@ -5821,7 +5822,7 @@ fn capabilities_refuse_both_keys_unknown_entries_marks_and_rimz_names_in_the_use
     let mark = "but a load mark applies only to `rimz` and a capability with MCP tools (rimz-lsp";
     let skill = "which holds only RimZ's capabilities with MCP tools (rimz-lsp, rimz-wait, \
                  rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, \
-                 rimz-control, rimz-notes, rimz-blackboard), or `rimz` for all of them;";
+                 rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or `rimz` for all of them;";
     for (fields, needle) in [
         (
             "agent: claude\ncapabilities: [bash]\ntools: [Bash]",

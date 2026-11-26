@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
-const BUILT_IN: [(&str, &str); 42] = [
+const BUILT_IN: [(&str, &str); 44] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
     ("tasks.md", include_str!("tools/tasks.md")),
@@ -118,6 +118,11 @@ const BUILT_IN: [(&str, &str); 42] = [
         "rimz-message/message.md",
         include_str!("tools/rimz-message/message.md"),
     ),
+    (
+        "rimz-ask/instructions.md",
+        include_str!("tools/rimz-ask/instructions.md"),
+    ),
+    ("rimz-ask/ask.md", include_str!("tools/rimz-ask/ask.md")),
     (
         "rimz-control/instructions.md",
         include_str!("tools/rimz-control/instructions.md"),

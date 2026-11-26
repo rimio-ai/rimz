@@ -1,0 +1,3 @@
+Mark this turn's reply as a question to the user, not a plain response. Call it when your turn ends on something only the user can answer: a choice that is theirs, a fact you cannot look up, a go-ahead you need. Finish what does not need the answer, call it, write the full question in your final reply, and end your turn. Your card shows you asking, with `brief`, until the user answers in your pane; the answer arrives as your next prompt.
+
+A failed or interrupted turn drops the mark, and a second call replaces the first. It holds the user's attention, so never call it for a question you can settle yourself, one for another agent (use `message`), or a reply that only offers more work.
