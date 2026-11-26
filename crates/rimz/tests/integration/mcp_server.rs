@@ -4941,6 +4941,52 @@ fn a_schedule_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
     server.close();
 }
 
+/// While a definition-set failure stands, the schedule tool's team target refuses every team with
+/// the set's error and books nothing, matching the agent target and launches.
+#[test]
+fn a_schedule_team_refuses_while_definition_set_has_failed() {
+    let env = schedule_room();
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: coder\nstages: [Build]\nroles:\n  - {role: coder, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "crew",
+        "description: Colliding child\nagent: claude\ntools: [Bash]",
+        "Help.",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let expected = json!({"error": format!(
+        "{}: team name `crew` is reserved for an inline profile/command cell; choose another team name",
+        env.agents_home().display()
+    )});
+    for (id, team) in [(1, "crew"), (2, "forge")] {
+        let (refused, is_error) = server.answer(
+            id,
+            "schedule",
+            json!({
+                "name": "nightly",
+                "trigger": "every",
+                "value": "1h",
+                "worktree": "nightly",
+                "tool": "team",
+                "arguments": {"team": team, "prompt": "ship it"},
+                "overlap": "replace",
+            }),
+        );
+        assert!(is_error, "{refused}");
+        assert_eq!(refused, expected);
+    }
+    assert!(loop_rows(&env).is_empty());
+    server.close();
+}
+
 /// What the tool stores for each target kind passes the check `rimz loop add` makes of a fire's
 /// launch, so a booking it accepts fires.
 #[test]

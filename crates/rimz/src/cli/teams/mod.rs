@@ -378,6 +378,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         None => match args.name.filter(|name| !name.trim().is_empty()) {
             Some(name) => {
                 let effective = list::effective_catalog(globals)?;
+                effective.block_set_failure()?;
                 let team = name.split_once('#').map_or(name.as_str(), |(team, _)| team);
                 if !effective.teams.0.contains_key(team)
                     && let Some(detail) = effective.definition_failure_for(team)
@@ -443,7 +444,7 @@ fn launch_team(
 ) -> Result<()> {
     let (name, worktree) = launch_place(name, &launch)?;
     launch.worktree = worktree;
-    ensure_defined(&name, globals)?;
+    ensure_launch_defined(&name, globals)?;
     agents_cmd::run(
         agents_cmd::AgentsArgs::launch_verb(agents_cmd::AgentLaunchArgs {
             spec: Some(name),
@@ -589,7 +590,7 @@ pub(super) fn check_loop_launch(
         root: Some(place.project_root.to_path_buf()),
         color: super::ColorWhen::Auto,
     };
-    ensure_defined(&team, &globals)?;
+    ensure_launch_defined(&team, &globals)?;
     Ok(crate::cli::loop_launch::LoopLaunch {
         worktree,
         prompt: launch
@@ -601,7 +602,22 @@ pub(super) fn check_loop_launch(
 }
 
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
+    ensure_defined_with(name, globals, false)
+}
+
+fn ensure_launch_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
+    ensure_defined_with(name, globals, true)
+}
+
+fn ensure_defined_with(
+    name: &str,
+    globals: &GlobalFlags,
+    block_set: bool,
+) -> Result<rimz::config::TeamsConfig> {
     let effective = list::effective_catalog(globals)?;
+    if block_set {
+        effective.block_set_failure()?;
+    }
     if !effective.teams.0.contains_key(name)
         && let Some(detail) = effective.definition_failure_for(name)
     {
