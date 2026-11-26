@@ -773,6 +773,11 @@ pub struct ExecRequest {
     /// `rimz agents restart` for an interrupted agent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continue_session: bool,
+    /// Whether the resumed session takes no continue of any kind, the one a
+    /// team leader is owed while its board has no open stage included. Set by
+    /// `rimz agents restart --no-continue`; omitted by older binaries.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_continue: bool,
     /// The reminder section composed or replayed for this launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reminder_section: Option<ReminderSection>,
@@ -1062,6 +1067,7 @@ impl ExecRequest {
             subagent: false,
             follow_up_message: None,
             continue_session: false,
+            no_continue: false,
             reminder_section: None,
             identity: ExecIdentity::default(),
         }

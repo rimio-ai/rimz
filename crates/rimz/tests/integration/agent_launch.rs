@@ -204,6 +204,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
@@ -4695,7 +4696,11 @@ fn restart_by_the_parent_sends_it_no_notice_and_a_child_at_rest_gets_no_continue
     );
     let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(!receipt.contains("continue queued"), "{receipt}");
-    assert!(!fixture.replacement_request().continue_session);
+    let request = fixture.replacement_request();
+    assert_eq!(
+        (request.continue_session, request.no_continue),
+        (false, false)
+    );
     assert_eq!(
         fixture.run_now().status,
         rimz::store::run::RunStatus::Running
@@ -4846,7 +4851,15 @@ fn restart_no_continue_on_an_interrupted_child_fails_its_run_before_the_pane_clo
     );
     assert_eq!(run.handed_over_from, None);
     let request = fixture.replacement_request();
-    assert_eq!((request.run_id, request.continue_session), (None, false));
+    assert_eq!(
+        (
+            request.run_id,
+            request.continue_session,
+            request.no_continue
+        ),
+        (None, false, true),
+        "the wrapper is told to send no continue of any kind"
+    );
     assert!(fixture.restart_notices().is_empty());
 }
 
@@ -8746,6 +8759,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             exit_on_run_completion: false,
             subagent: false,
             continue_session: false,
+            no_continue: false,
             follow_up_message: None,
             reminder_section: None,
             identity: ExecIdentity::default(),
@@ -8907,6 +8921,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             exit_on_run_completion: false,
             subagent: false,
             continue_session: false,
+            no_continue: false,
             follow_up_message: None,
             reminder_section: None,
             identity: ExecIdentity::default(),
@@ -9024,6 +9039,7 @@ esac"#,
         exit_on_run_completion: false,
         subagent: false,
         continue_session: true,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
@@ -9233,6 +9249,7 @@ esac"#,
         exit_on_run_completion: true,
         subagent: true,
         continue_session: false,
+        no_continue: false,
         follow_up_message: failed_follow_up,
         reminder_section: None,
         identity: ExecIdentity::default(),

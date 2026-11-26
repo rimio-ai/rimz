@@ -10638,6 +10638,11 @@ reason = "Returned by pub flip (team_stage.rs:223-224); atlas caveat 13 (pass 23
 
 [[verdict]]
 kind = "item"
+key = "harness::team_stage::ResumeWake"
+reason = "Returned by pub rewake_resumed: the exec wrapper reads which wake a resumed member is owed (its stage notice, the leader's continue, or none) to decide its continue."
+
+[[verdict]]
+kind = "item"
 key = "harness::ancestry::LaunchAncestryError"
 reason = "Error type of pub resolve_launch_ancestry (ancestry.rs:152-156); atlas caveat 13 (pass 23b)."
 

@@ -147,6 +147,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             exit_on_run_completion: true,
             subagent: true,
             continue_session: false,
+            no_continue: false,
             follow_up_message: None,
             reminder_section: None,
             identity: rimz::harness::launch::ExecIdentity {

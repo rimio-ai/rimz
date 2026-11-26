@@ -115,6 +115,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 exit_on_run_completion: !keep,
                 subagent: true,
                 continue_session: false,
+                no_continue: false,
                 follow_up_message: None,
                 reminder_section: Some(crate::harness::launch::ReminderSection::Loop(
                     "The original loop fire".into()
