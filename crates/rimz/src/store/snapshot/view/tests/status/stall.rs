@@ -224,8 +224,9 @@ fn parked_agent_settles_immediately_and_keeps_phase() {
 // docs/internals/agents/model.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
 // marker, then a failed marker, then the live-subagent exemption, then settled
-// completion/interruption markers, then the parked settle, then the stalled-
-// running fallback (paused when the kind's window is spent, failed otherwise).
+// completion/interruption markers, then the parked settle, then the no-request
+// alert (needs-you), then the stalled-running fallback (paused when the kind's
+// window is spent, failed otherwise).
 // The single-cause cases each prove one rung; this grid pins the error/stall
 // order by stacking causes, and the turn_complete/turn_interrupted modules pin
 // the settle rungs.
@@ -440,6 +441,116 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
             expect_error_label: false,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "failed marker beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs)
+                    .turn_error(10, "API Error: Bad Request"),
+            ),
+            with_waiting_child: false,
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Failed,
+            expect_error_label: true,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "paused marker beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs)
+                    .limits(spent_windows())
+                    .paused_turn_error(10, "You've hit your usage limit"),
+            ),
+            with_waiting_child: false,
+            with_live_child: false,
+            budget_windows: spent_windows(),
+            expect: AgentStatus::Paused,
+            expect_error_label: true,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "waiting child beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs),
+            ),
+            with_waiting_child: true,
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Waiting,
+            expect_error_label: false,
+            expect_delegated_wait: true,
+        },
+        StatusRung {
+            name: "live child beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs),
+            ),
+            with_waiting_child: false,
+            with_live_child: true,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Running,
+            expect_error_label: false,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "settled completion beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs)
+                    .settle(10, TurnSettleOutcome::Complete),
+            ),
+            with_waiting_child: false,
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Success,
+            expect_error_label: false,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "parked settle beats no-request alert",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs)
+                    .parked(),
+            ),
+            with_waiting_child: false,
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Success,
+            expect_error_label: false,
+            expect_delegated_wait: false,
+        },
+        StatusRung {
+            name: "no-request alert beats stall",
+            agent: records_request_starts(
+                agent("claude", "root", AgentStatus::Running, 0)
+                    .worktree("/repo/main")
+                    .active_ago(stalled_secs)
+                    .turn_started_ago(stalled_secs),
+            ),
+            with_waiting_child: false,
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Waiting,
+            expect_error_label: true,
             expect_delegated_wait: false,
         },
         StatusRung {

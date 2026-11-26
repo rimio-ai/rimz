@@ -374,6 +374,56 @@ fn raised_notifications_use_the_ask_line_and_id_and_alerts_need_you() {
 }
 
 #[test]
+fn a_no_request_alert_over_an_undisplayed_raised_ask_pushes_the_waiting_copy() {
+    use crate::agents::state::{RaisedAsk, RaisedAskState};
+    let held = || {
+        let mut held = agent("held", AgentStatus::Running, false);
+        let opened = held.last_activity - Duration::from_secs(61);
+        held.last_activity = opened;
+        held.turn_started_at = Some(opened);
+        let mut context = crate::agents::AgentContext::new("claude", opened);
+        context.agent_version = Some("2.1.300".to_owned());
+        held.context = Some(context);
+        held
+    };
+    let plain = evaluate_opened(
+        &mut NotificationState::default(),
+        snapshot(vec![held()]),
+        &["held"],
+        &prefs(),
+        100,
+    );
+    let mut raised = held();
+    raised.raised_ask = Some(RaisedAsk {
+        ask_id: AskId::new(),
+        state: RaisedAskState::Open,
+        raised_at: raised.last_activity,
+        basis_at: raised.last_activity,
+        opened_at: None,
+        raised_by: Some("@lead".into()),
+        text: Some("Ready. Which one?".into()),
+        options: vec![],
+    });
+    let raised = snapshot(vec![raised]);
+    let row = &raised.worktree_groups[0].rows[0];
+    assert_eq!(
+        (row.status(), row.as_agent().unwrap().ask_detail.as_deref()),
+        (Some(AgentStatus::Waiting), None),
+        "the running card projects the no-request rung, not the raised ask"
+    );
+    let notifications = evaluate_opened(
+        &mut NotificationState::default(),
+        raised,
+        &["held"],
+        &prefs(),
+        100,
+    );
+    assert_eq!((plain.len(), notifications.len()), (1, 1));
+    assert_eq!(notifications[0].body, plain[0].body);
+    assert_eq!(notify_ask_env(&notifications[0]), "");
+}
+
+#[test]
 fn delegated_park_opens_one_unread_episode_and_parent_notification() {
     use crate::sidebar::read_marks::ReadMarks;
     use crate::sidebar::unread::UnreadEpisodes;

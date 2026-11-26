@@ -370,6 +370,7 @@ static OMP_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: definition::RequestStartRecord::Unrecorded,
     },
     coverage: definition::CoverageAnnotations {
         turn_lifecycle: Concern::Wired { via: "agent_end" },

@@ -9,7 +9,7 @@ use crate::agents::capabilities::*;
 use crate::agents::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    RequestStartRecord, ThreadKey, ToolClassification, UserCoverage,
 };
 use crate::agents::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use crate::ids::AgentSessionId;
@@ -58,6 +58,7 @@ static HERMES_SPEC: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: CoverageAnnotations {
         turn_lifecycle: ConcernCoverage::Wired {

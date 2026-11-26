@@ -85,7 +85,8 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
-        transcript_stat: Some(stat),
+        // A failed read leaves the stat unread, so the next tick reads it again.
+        transcript_stat: parsed.read_error.is_none().then_some(stat),
         spend_fold: FieldPatch::Set(fold),
         model_context_limits_key: None,
     })

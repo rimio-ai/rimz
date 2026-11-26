@@ -176,6 +176,12 @@ pub struct AgentContext {
     /// while no newer request input has landed since, and falls back to the hook estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorded_request_at: Option<Timestamp>,
+    /// The latest rest with no `Stop` that the provider's own records showed, kept past the
+    /// markers that showed it: a later prompt clears an interruption or a turn-ending error,
+    /// and a statusline reading replaces the context without them. See
+    /// [`latest_unstopped_rest`](Self::latest_unstopped_rest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unstopped_rest_at: Option<Timestamp>,
     /// Provider-reported occupancy after compaction, before a measured call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_compaction_tokens: Option<u64>,
@@ -309,6 +315,7 @@ impl Default for AgentContext {
             cost: None,
             last_cache_write: None,
             recorded_request_at: None,
+            unstopped_rest_at: None,
             post_compaction_tokens: None,
             tokens: None,
             model_context_limits: None,
@@ -331,6 +338,26 @@ impl AgentContext {
             observed_at,
             ..Self::default()
         }
+    }
+
+    /// The latest instant the provider's own records showed the main turn at rest with no
+    /// `Stop`: an interruption or completion marker, or a turn-error marker (Claude, the one
+    /// kind recording request starts, writes one only as its turn ends: an API error's death
+    /// certificate or a turn-ending denial), or the stored one those markers left behind. A
+    /// request record before it belongs to a turn already over, so it never counts for a
+    /// later prompt that restamps a turn the fold still reads open.
+    pub fn latest_unstopped_rest(&self) -> Option<Timestamp> {
+        let settled = self
+            .settle
+            .filter(|settle| {
+                matches!(
+                    settle.outcome,
+                    TurnSettleOutcome::Interrupted | TurnSettleOutcome::Complete
+                )
+            })
+            .map(|settle| settle.at);
+        let errored = self.turn_error.as_ref().map(|error| error.at);
+        self.unstopped_rest_at.max(settled).max(errored)
     }
 }
 

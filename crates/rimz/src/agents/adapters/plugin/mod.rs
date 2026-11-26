@@ -30,7 +30,8 @@ use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, CodeModeSwitch, ConcernCoverage,
     CoverageAnnotations, FastSwitch, HookCoverage, LaunchPermissionArgs, LaunchSpec,
     LifecycleAnnotations, LocalSessionDiscovery, PlanLabel, PresetMatchers, PromptStyle,
-    RemoteControlCapability, StaticPresetMatcher, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, StaticPresetMatcher, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
@@ -457,6 +458,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                 pane_sessions: false,
                 background_sessions: false,
             },
+            request_start_record: RequestStartRecord::Unrecorded,
         },
         coverage,
         user_coverage,

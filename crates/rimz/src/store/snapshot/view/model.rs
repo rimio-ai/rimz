@@ -67,9 +67,15 @@ pub fn needs_you(
             fallback = AgentCard {
                 status,
                 phase,
-                turn_error_label: agent
-                    .displayed_turn_error(now)
-                    .and_then(|(_, error)| error.label.clone()),
+                // A waiting nested line's label is its reason (the no-request sentence).
+                turn_error_label: child
+                    .filter(|child| child.status == AgentStatus::Waiting)
+                    .and_then(|child| child.turn_error_label.clone())
+                    .or_else(|| {
+                        agent
+                            .displayed_turn_error(now)
+                            .and_then(|(_, error)| error.label.clone())
+                    }),
                 ..AgentCard::from_agent(agent, now)
             };
             &fallback
@@ -87,7 +93,10 @@ pub fn needs_you(
     {
         return Some(NeedsYou {
             status,
-            reason: card.ask_detail.clone(),
+            reason: card
+                .ask_detail
+                .clone()
+                .or_else(|| card.turn_error_label.clone()),
             since,
         });
     }

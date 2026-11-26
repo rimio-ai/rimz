@@ -2078,3 +2078,118 @@ fn prompt_copy_premise_breaks_only_on_a_real_prompt_after_restart_or_launch_adop
     ];
     assert_eq!(held_after(&adopted, 1), [true, false]);
 }
+
+/// A steer or a background child's start restamps an open turn's start, while its close
+/// and its carry stay at the turn before: `prior_turn_for_next` keeps the carry of a turn
+/// that never closed. The no-request rung bounds a request record by that close.
+#[test]
+fn a_restamp_on_an_open_turn_keeps_the_earlier_close_and_carry() {
+    let at = |secs: i64| Timestamp::from_second(epoch().as_second() + secs).unwrap();
+    for (event_name, restamp) in [
+        ("UserPromptSubmit", json!({"signal": "turn_started"})),
+        ("SubagentStart", json!({"signal": "subagent_started"})),
+    ] {
+        let events = [
+            (1, "UserPromptSubmit", json!({"signal": "turn_started"})),
+            (
+                2,
+                "Stop",
+                json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+            ),
+            (10, "UserPromptSubmit", json!({"signal": "turn_started"})),
+            (20, event_name, restamp),
+        ]
+        .map(|(offset, event_name, signal)| {
+            raw_lifecycle_at(
+                "claude",
+                offset,
+                json!({"agent_id": "root", "event_name": event_name, "signal": signal}),
+            )
+        });
+        let row = reduce_agent_states(&events).remove(0);
+        let prior = serde_json::to_value(row.prior_turn).unwrap();
+        assert_eq!(
+            (
+                row.status,
+                row.turn_started_at,
+                row.turn_ended_at,
+                prior["started_at"].clone(),
+                prior["ended_at"].clone()
+            ),
+            (
+                AgentStatus::Running,
+                Some(at(20)),
+                Some(at(2)),
+                json!(at(1)),
+                json!(at(2))
+            ),
+            "{event_name}"
+        );
+    }
+}
+
+/// A keep-warm ping at rest moves only the ping stamps: the last turn's close stays where
+/// the turn before left it, so the ping's request record is newer than that close.
+#[test]
+fn a_ping_at_rest_moves_only_the_ping_stamps() {
+    let at = |secs: i64| Timestamp::from_second(epoch().as_second() + secs).unwrap();
+    let keepalive = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm.";
+    let events = [
+        (
+            1,
+            "UserPromptSubmit",
+            json!({"signal": "turn_started"}),
+            Some("task"),
+        ),
+        (
+            2,
+            "Stop",
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+            None,
+        ),
+        (
+            10,
+            "UserPromptSubmit",
+            json!({"signal": "turn_started"}),
+            Some(keepalive),
+        ),
+        (
+            12,
+            "Stop",
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+            None,
+        ),
+        (
+            30,
+            "UserPromptSubmit",
+            json!({"signal": "turn_started"}),
+            Some("next"),
+        ),
+    ]
+    .map(|(offset, event_name, signal, prompt)| {
+        raw_lifecycle_at(
+            "claude",
+            offset,
+            json!({
+                "agent_id": "root", "event_name": event_name, "signal": signal, "prompt": prompt,
+            }),
+        )
+    });
+    let row = reduce_agent_states(&events).remove(0);
+    assert_eq!(
+        (
+            row.status,
+            row.turn_started_at,
+            row.turn_ended_at,
+            row.ping_opened_at,
+            row.pinged_at
+        ),
+        (
+            AgentStatus::Running,
+            Some(at(30)),
+            Some(at(2)),
+            Some(at(10)),
+            Some(at(12))
+        )
+    );
+}

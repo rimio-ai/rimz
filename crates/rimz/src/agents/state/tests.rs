@@ -1777,6 +1777,7 @@ fn parked_launched_child_with_listed_shell_projects_running_parked_while_operati
         &ParkDemotion::default(),
         now,
         1_800,
+        60,
         5,
     );
     assert_eq!((status, phase), (AgentStatus::Running, TurnPhase::Parked));
@@ -3288,4 +3289,28 @@ fn resumable_needs_a_resumable_session_and_a_recorded_worktree() {
     ]
     .map(|agent| agent.resumable());
     assert_eq!(actual, [true, false, false, false, false]);
+}
+
+#[test]
+fn a_provider_native_subagent_never_takes_the_no_request_alert() {
+    let opened = Timestamp::from_second(1_000).unwrap();
+    let now = Timestamp::from_second(1_061).unwrap();
+    let mut agent = crate::testkit::agent_state("claude", "child", opened);
+    agent.status = AgentStatus::Running;
+    agent.turn_started_at = Some(opened);
+    let mut context = AgentContext::new("claude", opened);
+    context.agent_version = Some("2.1.300".to_owned());
+    agent.context = Some(context);
+    assert_eq!(
+        unrequested_turn_alert(&agent, AgentStatus::Running, now, 60),
+        Some(Timestamp::from_second(1_060).unwrap()),
+        "the root shape alerts"
+    );
+    agent.parent_agent_id = Some("root".into());
+    assert!(agent.is_provider_subagent());
+    assert_eq!(
+        unrequested_turn_alert(&agent, AgentStatus::Running, now, 60),
+        None,
+        "a native child's requests are not the main thread's, so it never records one"
+    );
 }

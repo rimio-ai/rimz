@@ -32,6 +32,7 @@ pub(super) fn attach_sub_agents_indexed(
     now: Timestamp,
     demotion: &ParkDemotion,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
 ) -> DelegatedChildren {
     let mut delegated_parks = BTreeMap::new();
     let mut delegated_waits = BTreeMap::new();
@@ -99,6 +100,7 @@ pub(super) fn attach_sub_agents_indexed(
                 now,
                 demotion,
                 stalled_after_secs,
+                no_request_after_secs,
             ) else {
                 continue;
             };
@@ -107,11 +109,16 @@ pub(super) fn attach_sub_agents_indexed(
                 && !delegated_waits.contains_key(parent_key)
             {
                 let handle = entry.petname.clone().unwrap_or_else(|| entry.name.clone());
+                // The no-request alert the line shows, so the wait names its reason and start.
+                let alert = child
+                    .no_request_alert(AgentStatus::Running, now, no_request_after_secs)
+                    .filter(|(_, label)| entry.turn_error_label.as_ref() == Some(label));
                 let detail = child
                     .open_ask
                     .as_ref()
                     .and_then(|ask| ask.detail.as_deref())
-                    .and_then(crate::agents::single_line_description);
+                    .and_then(crate::agents::single_line_description)
+                    .or_else(|| alert.as_ref().map(|(_, label)| label.clone()));
                 delegated_waits.insert(
                     parent_key.clone(),
                     DelegatedWait {
@@ -119,7 +126,7 @@ pub(super) fn attach_sub_agents_indexed(
                         kind: entry.kind.clone(),
                         handle,
                         pane: entry.pane.clone(),
-                        start: delegated_wait_start(child),
+                        start: delegated_wait_start(child, alert.map(|(raised_at, _)| raised_at)),
                         detail,
                         own_turn_running: false,
                     },
@@ -151,7 +158,7 @@ pub(super) fn attach_sub_agents_indexed(
     }
 }
 
-fn delegated_wait_start(child: &AgentState) -> DelegatedWaitStart {
+fn delegated_wait_start(child: &AgentState, alert_at: Option<Timestamp>) -> DelegatedWaitStart {
     if let Some(until) = child.permission_review_until() {
         return DelegatedWaitStart::Fixed(until);
     }
@@ -172,7 +179,7 @@ fn delegated_wait_start(child: &AgentState) -> DelegatedWaitStart {
     {
         return DelegatedWaitStart::Refreshed(settle.at);
     }
-    DelegatedWaitStart::Unknown
+    alert_at.map_or(DelegatedWaitStart::Unknown, DelegatedWaitStart::Fixed)
 }
 
 fn launched_child_park(
@@ -296,6 +303,9 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
         crate::config::AttentionConfig::default()
             .stalled_after_secs
             .get(),
+        crate::config::AttentionConfig::default()
+            .no_request_after_secs
+            .get(),
     );
 }
 
@@ -350,6 +360,7 @@ fn project_sub_agent_for_parent(
     now: Timestamp,
     demotion: &ParkDemotion,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
 ) -> Option<SidebarSubAgent> {
     if !child.is_launched_child() {
         let prior_turn = !provider_child_is_current(child, parent_user_turn_started_at, now);
@@ -368,9 +379,18 @@ fn project_sub_agent_for_parent(
             prior_turn,
             demotion,
             stalled_after_secs,
+            no_request_after_secs,
         ));
     }
-    let mut entry = project_sub_agent(child, pane, now, false, demotion, stalled_after_secs);
+    let mut entry = project_sub_agent(
+        child,
+        pane,
+        now,
+        false,
+        demotion,
+        stalled_after_secs,
+        no_request_after_secs,
+    );
     let live_never_started = child.ended_at.is_none()
         && child.last_prompt_at.is_none()
         && child.turn_ended_at.is_none()
@@ -389,7 +409,8 @@ fn project_sub_agent_for_parent(
 }
 
 /// A child `AgentState` projected to the compact summary the parent's expanded
-/// card paints.
+/// card paints. A live launched child takes the row's no-request alert ahead of its silence check, as the
+/// alert outranks the stall on a row.
 fn project_sub_agent(
     child: &AgentState,
     pane: Option<PaneId>,
@@ -397,6 +418,7 @@ fn project_sub_agent(
     prior_turn: bool,
     demotion: &ParkDemotion,
     stalled_after_secs: u32,
+    no_request_after_secs: u32,
 ) -> SidebarSubAgent {
     let name = if child.is_launched_child() {
         child
@@ -420,8 +442,16 @@ fn project_sub_agent(
                 degraded_subagent_label(&child.agent_id)
             })
     };
+    let live_card = (child.is_launched_child() && child.ended_at.is_none())
+        .then(|| child.rowless_card(demotion, now));
+    let no_request = live_card.as_ref().and_then(|(status, ..)| {
+        child
+            .no_request_alert(*status, now, no_request_after_secs)
+            .map(|(_, label)| label)
+    });
     let silent_secs = child
         .silent_child_for(now, stalled_after_secs)
+        .filter(|_| no_request.is_none())
         .map(|(secs, _)| secs);
     let started_at = child.subagent_started_at.or(child.registered_at);
     let tokens = child_tokens(child);
@@ -435,14 +465,16 @@ fn project_sub_agent(
     } else {
         None
     };
-    let (status, phase, turn_error_label) = if let Some(secs) = silent_secs {
+    let (status, phase, turn_error_label) = if let Some(label) = no_request {
+        (AgentStatus::Waiting, TurnPhase::Idle, Some(label))
+    } else if let Some(secs) = silent_secs {
         (
             AgentStatus::Failed,
             TurnPhase::Idle,
             Some(format!("silent {}", format_duration_coarse(secs as i64))),
         )
-    } else if child.is_launched_child() && child.ended_at.is_none() {
-        child.rowless_card(demotion, now)
+    } else if let Some(card) = live_card {
+        card
     } else if child.is_launched_child() {
         // Ended launched children keep their recorded rest status and are never
         // lifted to Running or Sleeping by an attached wait.
@@ -536,6 +568,9 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         prior_turn,
         &ParkDemotion::default(),
         stalled_after_secs,
+        crate::config::AttentionConfig::default()
+            .no_request_after_secs
+            .get(),
     )
 }
 

@@ -355,9 +355,15 @@ impl NotificationState {
                 if overlay {
                     pending.title = format!("RimZ: {} needs you", opened.label);
                     pending.agent.ask_id = None;
+                    // The no-request rung is the one overlay that labels a waiting card, and it
+                    // outranks a raised ask, which projects only on a card at rest.
+                    let projects_raised_ask =
+                        card.is_some_and(|card| card.turn_error_label.is_none());
                     if let Some(alert) = &agent.alert {
                         pending.body.clone_from(&alert.text);
-                    } else if let Some(ask) = &agent.raised_ask {
+                    } else if let Some(ask) = &agent.raised_ask
+                        && projects_raised_ask
+                    {
                         pending.body = ask.detail().unwrap_or_default();
                         pending.agent.ask_id = Some(ask.ask_id.clone());
                     }

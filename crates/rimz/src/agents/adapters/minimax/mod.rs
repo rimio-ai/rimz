@@ -65,6 +65,7 @@ static MINIMAX_SPEC: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: CoverageAnnotations {
         turn_lifecycle: ConcernCoverage::Wired {

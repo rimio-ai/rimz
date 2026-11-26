@@ -192,6 +192,7 @@ impl AgentContextRecord {
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
         context.recorded_request_at = self.context.recorded_request_at;
+        context.unstopped_rest_at = self.context.latest_unstopped_rest();
         context.post_compaction_tokens = self.context.post_compaction_tokens;
         context.permission_settle = self.context.permission_settle;
         let model_context_limits_key = if context.model_context_limits.is_none() {
@@ -336,6 +337,7 @@ impl AgentContextRecord {
         observed_at: Timestamp,
     ) -> bool {
         self.context.source = definition.kind.to_owned();
+        self.context.unstopped_rest_at = self.context.latest_unstopped_rest();
         let cost_replaced = !refresh.context.cost.is_keep();
         refresh.context.apply(&mut self.context, definition);
         if cost_replaced {
@@ -360,6 +362,7 @@ impl AgentContextRecord {
             error.stamp_model(self.context.turn_error.as_ref(), model_id.as_deref());
         }
         context.account = self.stamped_account(context.account, observed_at);
+        self.context.unstopped_rest_at = self.context.latest_unstopped_rest();
         let mut changed = false;
         macro_rules! merge_optional {
             ($field:ident) => {

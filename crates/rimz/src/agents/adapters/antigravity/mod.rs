@@ -39,7 +39,8 @@ use super::AgentHookClass;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, SamePaneSessionPolicy, ThreadKey,
+    ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, PROVIDER_REST_EVENT, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -230,6 +231,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: ANTIGRAVITY_COVERAGE,
     user_coverage: ANTIGRAVITY_USER_COVERAGE,

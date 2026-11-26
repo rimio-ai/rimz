@@ -116,6 +116,7 @@ mod tests {
     const ARCHIVE: u32 = 86_400;
     const WINDOWS: AttentionWindows = AttentionWindows {
         stalled_after_secs: 1_800,
+        no_request_after_secs: 60,
         tool_repeat_attention_after: 20,
         inactive_after_secs: INACTIVE,
         archive_after_secs: ARCHIVE,

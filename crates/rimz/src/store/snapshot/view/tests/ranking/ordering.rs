@@ -1031,6 +1031,7 @@ fn stamp_lifted_attention(row: &mut SidebarRow) {
         age_secs,
         super::super::super::aggregate::AttentionWindows {
             stalled_after_secs: 1,
+            no_request_after_secs: 60,
             tool_repeat_attention_after: 20,
             inactive_after_secs: 100,
             archive_after_secs: 101,

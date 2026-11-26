@@ -242,6 +242,120 @@ fn promoted_permission_opens_after_a_receipt_during_review() {
 }
 
 #[test]
+fn a_no_request_alert_opens_past_the_prompts_focus_receipt_and_notifies_waiting() {
+    let opened = jiff::Timestamp::from_second(1_000).unwrap();
+    let now = jiff::Timestamp::from_second(1_061).unwrap();
+    let mut pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    pane.command = Some("claude".to_owned());
+    pane.cwd = Some("/repo/main".to_owned());
+    let mut agent = crate::testkit::agent_state("claude", "stuck", opened);
+    agent.status = AgentStatus::Running;
+    agent.turn_started_at = Some(opened);
+    agent.worktree_path = Some("/repo/main".to_owned());
+    agent.pane = Some(pane.clone());
+    let mut context = crate::agents::AgentContext::new("claude", opened);
+    context.agent_version = Some("2.1.300".to_owned());
+    agent.context = Some(context);
+    let workspace = crate::ids::WorkspaceId::from_project_root(Path::new("/repo/main"));
+    let mut snapshot = SidebarSnapshot::build_with_agents(workspace, vec![agent], now)
+        .with_live_panes(vec![pane], None);
+    snapshot.panes_produced_at_ms = Some(1);
+    // The user typed the prompt in the pane, so the focus receipt is the prompt's time.
+    let marks = ReadMarks::from_entries([("stuck".to_owned(), opened.as_millisecond())]);
+    let out = UnreadEpisodes::default().reconcile(&mut snapshot, &marks, false);
+    assert_eq!(
+        out.opened
+            .iter()
+            .map(|unread| unread.episode_ms)
+            .collect::<Vec<_>>(),
+        [1_060_000]
+    );
+    let prefs = crate::config::NotificationsPrefs {
+        triggers: vec![crate::config::NotificationTrigger::Waiting],
+        coalesce_ms: 0,
+        ..Default::default()
+    };
+    let sent = crate::sidebar::notify::NotificationState::default().evaluate(
+        &snapshot,
+        &out.opened,
+        &prefs,
+        1_061_000,
+    );
+    assert_eq!(
+        sent.iter()
+            .map(|sent| sent.notification_kind)
+            .collect::<Vec<_>>(),
+        [crate::config::NotificationKind::Waiting]
+    );
+}
+
+#[test]
+fn a_nested_childs_no_request_alert_opens_its_parents_episode_and_notifies() {
+    let opened = jiff::Timestamp::from_second(1_000).unwrap();
+    let now = jiff::Timestamp::from_second(1_061).unwrap();
+    let pane_for = |raw: &str| {
+        let mut pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, raw));
+        pane.command = Some("claude".to_owned());
+        pane.cwd = Some("/repo/main".to_owned());
+        pane
+    };
+    let mut parent = crate::testkit::agent_state("claude", "lead", opened);
+    parent.status = AgentStatus::Running;
+    parent.turn_started_at = Some(opened);
+    parent.worktree_path = Some("/repo/main".to_owned());
+    parent.pane = Some(pane_for("%1"));
+    let mut child = crate::testkit::agent_state("claude", "scout", opened);
+    child.status = AgentStatus::Running;
+    child.turn_started_at = Some(opened);
+    child.worktree_path = Some("/repo/main".to_owned());
+    child.pane = Some(pane_for("%2"));
+    child.launch_depth = Some(1);
+    child.parent_agent_id = Some("lead".into());
+    child.parent_agent_kind = Some(crate::ids::AgentKind::new_unchecked("claude"));
+    let mut context = crate::agents::AgentContext::new("claude", opened);
+    context.agent_version = Some("2.1.300".to_owned());
+    child.context = Some(context);
+    let workspace = crate::ids::WorkspaceId::from_project_root(Path::new("/repo/main"));
+    let mut snapshot = SidebarSnapshot::build_with_agents(workspace, vec![parent, child], now)
+        .with_live_panes(vec![pane_for("%1"), pane_for("%2")], None);
+    snapshot.panes_produced_at_ms = Some(1);
+    // The user was reading the parent when the child's prompt went out.
+    let marks = ReadMarks::from_entries([("lead".to_owned(), opened.as_millisecond())]);
+    let out = UnreadEpisodes::default().reconcile(&mut snapshot, &marks, false);
+    assert_eq!(
+        out.opened
+            .iter()
+            .map(|unread| unread.row_id.as_str())
+            .collect::<Vec<_>>(),
+        ["lead"]
+    );
+    let prefs = crate::config::NotificationsPrefs {
+        triggers: vec![crate::config::NotificationTrigger::Waiting],
+        coalesce_ms: 0,
+        ..Default::default()
+    };
+    let sent = crate::sidebar::notify::NotificationState::default().evaluate(
+        &snapshot,
+        &out.opened,
+        &prefs,
+        1_061_000,
+    );
+    assert_eq!(
+        sent.iter()
+            .map(|sent| sent.notification_kind)
+            .collect::<Vec<_>>(),
+        [crate::config::NotificationKind::Waiting]
+    );
+    assert!(
+        sent[0]
+            .body
+            .ends_with("sent no request to the model 1m after the prompt; look at its pane"),
+        "the push names the child's reason: {}",
+        sent[0].body
+    );
+}
+
+#[test]
 fn later_activity_after_read_opens_a_new_episode() {
     let mut episodes = UnreadEpisodes::default();
     let mut first = snapshot(vec![row("a", AgentStatus::Success, 1_000)]);

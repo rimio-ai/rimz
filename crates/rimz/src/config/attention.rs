@@ -16,6 +16,11 @@ const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
 /// overrides this for the live sidebar projection.
 const DEFAULT_STALL_AFTER_SECS: u32 = 15 * 60;
 
+/// Default window before a `running` agent whose turn has sent no model request is
+/// treated as held in its pane. The per-machine `[agents.attention] no_request_after_secs`
+/// setting overrides this for the live sidebar projection.
+const DEFAULT_NO_REQUEST_AFTER_SECS: u32 = 60;
+
 /// Consecutive identical tool calls before the sidebar annotates a card.
 const DEFAULT_TOOL_REPEAT_WARN_AFTER: u32 = 3;
 
@@ -39,6 +44,9 @@ pub struct AttentionConfig {
     /// before the sidebar projects it to the actionable `!` attention bucket.
     /// Also bounds an unfinished resting stage since its latest member activity or stage start.
     pub stalled_after_secs: NonZeroU32,
+    /// Seconds a `running` agent's turn may go without a model request, on a provider that
+    /// records request starts, before the sidebar projects it to the actionable `?` bucket.
+    pub no_request_after_secs: NonZeroU32,
     /// Consecutive identical tool calls before the sidebar annotates the card.
     pub tool_repeat_warn_after: NonZeroU32,
     /// Consecutive identical tool calls before the sidebar routes attention.
@@ -74,6 +82,8 @@ impl Default for AttentionConfig {
                 .expect("non-zero default active-time grace"),
             stalled_after_secs: NonZeroU32::new(DEFAULT_STALL_AFTER_SECS)
                 .expect("non-zero default stall window"),
+            no_request_after_secs: NonZeroU32::new(DEFAULT_NO_REQUEST_AFTER_SECS)
+                .expect("non-zero default no-request window"),
             tool_repeat_warn_after: NonZeroU32::new(DEFAULT_TOOL_REPEAT_WARN_AFTER)
                 .expect("non-zero default tool-repeat warning threshold"),
             tool_repeat_attention_after: NonZeroU32::new(DEFAULT_TOOL_REPEAT_ATTENTION_AFTER)

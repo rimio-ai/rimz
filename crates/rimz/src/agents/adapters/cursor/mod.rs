@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookContextReply, HookCoverage, LifecycleAnnotations, LocalSessionDiscovery, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    RemoteControlCapability, RequestStartRecord, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::{LifecycleSignal, ToolEffect};
@@ -93,6 +93,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             pane_sessions: false,
             background_sessions: false,
         },
+        request_start_record: RequestStartRecord::Unrecorded,
     },
     coverage: CURSOR_COVERAGE,
     user_coverage: CURSOR_USER_COVERAGE,

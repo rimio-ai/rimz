@@ -566,8 +566,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_launched_card_contract_is_version_122() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 122);
+fn snapshot_no_request_window_contract_is_version_123() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 123);
+}
+
+#[test]
+fn pre_123_no_request_window_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(122);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views published before the no-request window rode the attention config must refold"
+    );
 }
 
 #[test]

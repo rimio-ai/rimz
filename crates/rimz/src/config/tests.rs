@@ -2462,12 +2462,13 @@ fn attention_core_load_matches_full_lenient_recovery_without_definitions() {
     let tuned = AttentionConfig {
         active_grace_secs: 61_u32.try_into().unwrap(),
         stalled_after_secs: 2701_u32.try_into().unwrap(),
+        no_request_after_secs: 91_u32.try_into().unwrap(),
         tool_repeat_warn_after: 4_u32.try_into().unwrap(),
         tool_repeat_attention_after: 31_u32.try_into().unwrap(),
         inactive_after_secs: 3601_u32.try_into().unwrap(),
         archive_after_secs: 7201_u32.try_into().unwrap(),
     };
-    let text = "[agents.attention]\nactive_grace_secs = 61\nstalled_after_secs = 2701\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 31\ninactive_after_secs = 3601\narchive_after_secs = 7201\n";
+    let text = "[agents.attention]\nactive_grace_secs = 61\nstalled_after_secs = 2701\nno_request_after_secs = 91\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 31\ninactive_after_secs = 3601\narchive_after_secs = 7201\n";
     let cases = [
         (None, false, AttentionConfig::default()),
         (Some(text.to_owned()), false, tuned),
@@ -2512,6 +2513,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(config.agents.attention.active_grace_secs.get(), 180);
     assert_eq!(config.agents.attention.stalled_after_secs.get(), 900);
+    assert_eq!(config.agents.attention.no_request_after_secs.get(), 60);
     assert_eq!(config.agents.attention.tool_repeat_warn_after.get(), 3);
     assert_eq!(
         config.agents.attention.tool_repeat_attention_after.get(),
@@ -2523,11 +2525,12 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let tuned = load_no_fragments(&write_named(
         &dir,
         "config.toml",
-        "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 30\narchive_after_secs = 7200\n",
+        "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\nno_request_after_secs = 90\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 30\narchive_after_secs = 7200\n",
     ))
     .expect("load");
     assert_eq!(tuned.agents.attention.active_grace_secs.get(), 60);
     assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
+    assert_eq!(tuned.agents.attention.no_request_after_secs.get(), 90);
     assert_eq!(tuned.agents.attention.tool_repeat_warn_after.get(), 4);
     assert_eq!(tuned.agents.attention.tool_repeat_attention_after.get(), 30);
     assert_eq!(tuned.agents.attention.archive_after_secs.get(), 7200);
