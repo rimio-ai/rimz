@@ -105,7 +105,7 @@ Triage a flake by forcing the state it needs and showing the unfixed tree fail w
 - A forced run that expects more than one test to fail passes `--no-fail-fast`. `cargo xtask test` stops at the first failure and reports the rest as not run.
 - Once a forced run fails on the base and passes on the fix, a base batch only shows whether loaded stress reproduces the flake at all. Run one, started above `nproc`. When it reads 0, run only the fixed batches after it and say the fix rests on the forced proof.
 - Keep that one base batch even then. When the cause was found by elimination, a base batch that reproduces the flake is the only evidence that ties it to that cause.
-- A proof that temporarily edits source awaits its test run to the end before reverting the edit: `cargo xtask test` builds what is on disk when it reaches the compile, and a cold or queued build can outlast a tool timeout.
+- A proof that temporarily edits source awaits its test run to the end before reverting the edit: `cargo xtask test` builds what is on disk when it reaches the compile, and a cold or queued build can outlast a tool timeout. In an agent shell, give the command a timeout past a cold build (an hour, say), and check that it did not move to the background before you revert.
 - A forced run clears a sibling test only of the order its hold reaches. Before you clear one, name the process that races it and hold where that process can still act. A 1 s sleep in the check of a run, before that run's `wait` commit, passed `workflow::peers::a_lost_collection_reports_on_the_next_pass_once`, whose stray advance collects after that commit. A poll of up to 4 s before the `collect_run` of `workflow advance` failed it with `left: 1`, `right: 0`.
 
 ### Where to hold
