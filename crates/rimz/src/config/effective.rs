@@ -125,7 +125,7 @@ pub struct LaunchAgents {
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
     failed_definitions: BTreeMap<String, String>,
-    failed_project_teams: BTreeMap<String, String>,
+    failed_teams: BTreeMap<String, String>,
     project_definition_errors: Vec<String>,
     set_failure: Option<String>,
     repo_sources: AgentSpecSources,
@@ -759,7 +759,7 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
-            failed_project_teams: BTreeMap::new(),
+            failed_teams: BTreeMap::new(),
             project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
@@ -779,7 +779,7 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
-            failed_project_teams: BTreeMap::new(),
+            failed_teams: BTreeMap::new(),
             project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
@@ -970,7 +970,19 @@ pub fn load_with_roots(
     subagent_profiles.set_failed_rows(resolved.failed_subagents);
 
     let mut teams = machine.teams.clone();
-    let mut failed_project_teams = BTreeMap::new();
+    let mut failed_teams = BTreeMap::new();
+    // A machine team with a cell, role or layout, that rests on a row failed in this project
+    // fails on its own name here, as a project team does below. The machine load accepted the
+    // team, so any other error keeps it.
+    teams.0.retain(|team_name, team| {
+        let Err(LayoutErr::FailedProfile(detail)) =
+            agents_spec::validate_team(team_name, team, &profiles, &machine.commands)
+        else {
+            return true;
+        };
+        failed_teams.insert(team_name.clone(), detail);
+        false
+    });
     for (team_name, team) in repo.teams.0 {
         match agents_spec::validate_team(
             &team_name,
@@ -979,11 +991,12 @@ pub fn load_with_roots(
             &CommandsConfig::default(),
         ) {
             Ok(()) => {
+                failed_teams.remove(&team_name);
                 teams.0.insert(team_name, team);
             }
             Err(LayoutErr::FailedProfile(detail)) => {
                 teams.0.remove(&team_name);
-                failed_project_teams.insert(team_name, detail);
+                failed_teams.insert(team_name, detail);
             }
             Err(source) => {
                 return Err(EffectiveConfigErr::Agents {
@@ -1005,7 +1018,7 @@ pub fn load_with_roots(
         subagent_profiles,
         teams,
         failed_definitions,
-        failed_project_teams,
+        failed_teams,
         project_definition_errors,
         set_failure,
         repo_sources,
@@ -1090,10 +1103,11 @@ pub fn project_tasks_from_value(
 }
 
 impl LaunchAgents {
-    /// Formatted failure detail for a failed project team, a row that failed in this project, or a
-    /// machine definition.
+    /// Formatted failure detail for a team that failed in this project (a project team, or a
+    /// machine team with a seat or layout cell that failed here), a row that failed in this
+    /// project, or a machine definition.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
-        self.failed_project_teams
+        self.failed_teams
             .get(name)
             .or_else(|| self.profiles.failed_rows().get(name))
             .or_else(|| self.subagent_profiles.failed_rows().get(name))
@@ -1112,7 +1126,7 @@ impl LaunchAgents {
         let mut map = self.failed_definitions.clone();
         map.extend(self.subagent_profiles.failed_rows().clone());
         map.extend(self.profiles.failed_rows().clone());
-        map.extend(self.failed_project_teams.clone());
+        map.extend(self.failed_teams.clone());
         map
     }
 
@@ -1124,12 +1138,13 @@ impl LaunchAgents {
         }
     }
 
-    /// Refuse a bare team or `team.role` spec naming a failed project team ahead of any profile.
+    /// Refuse a bare team or `team.role` spec naming a team that failed in this project ahead of
+    /// any profile.
     pub(crate) fn block_failed_team(&self, spec: &str) -> Result<()> {
         let spec = spec.trim();
-        if let Some(detail) = self.failed_project_teams.get(spec).or_else(|| {
+        if let Some(detail) = self.failed_teams.get(spec).or_else(|| {
             spec.split_once('.')
-                .and_then(|(team, _)| self.failed_project_teams.get(team))
+                .and_then(|(team, _)| self.failed_teams.get(team))
         }) {
             return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
         }

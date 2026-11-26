@@ -416,6 +416,59 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
     assert!(!loop_config_path(&env).exists(), "nothing was written");
 }
 
+/// A machine team whose seat allows a subagent that fails to load in the trusted project is
+/// refused at add with the seat's refusal, as a project team is; a healthy machine team adds.
+#[test]
+fn loop_add_refuses_a_machine_team_whose_seat_allows_a_failed_project_subagent() {
+    let env = live_room();
+    kinds_fixture(&env);
+    for (namespace, name, fields, body) in [
+        (
+            "subagents",
+            "kid",
+            "description: Kid\nagent: claude\ntools: []",
+            "",
+        ),
+        (
+            "agents",
+            "caller",
+            "description: Caller\nagent: claude\ntools: []\nsubagents: [kid]",
+            "",
+        ),
+        (
+            "teams",
+            "crew",
+            "leader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: caller, owns: [Build]}",
+            "Build.",
+        ),
+    ] {
+        crate::common::write_definition(&env, namespace, name, fields, body);
+    }
+    env.write_config(
+        &env.project_root,
+        "[subagents.profiles.kid]\nagent = 'claude'\n",
+    );
+    loop_ok(&env, &["trust", "grant"]);
+    let (_, error) = loop_fail(
+        &env,
+        &["loop", "add", "t", "--every", "1h", "--team", "crew"],
+    );
+    assert_eq!(
+        error,
+        format!(
+            "error: loop task `t`: --team `crew`: {}: allows subagent 'kid', which failed to load\n  \
+             caused by: {}: [subagents.profiles.kid]: has no non-empty `description:`\n",
+            env.agents_home().join("teams/crew.md").display(),
+            env.project_root.join(".rimz/config.toml").display(),
+        )
+    );
+    assert!(!loop_config_path(&env).exists(), "nothing was written");
+    loop_ok(
+        &env,
+        &["loop", "add", "f", "--every", "1h", "--team", "forge"],
+    );
+}
+
 /// A launch child stand-in behind `RIMZ_BIN`: an `agents`, `teams` or `workflow` launch writes
 /// what it was started with to `seen` and exits with the code in `code`, printing `boom`;
 /// every other `rimz` helper runs the real binary. Every call's argv is appended to
