@@ -446,7 +446,7 @@ fn integration_file_identity_resolves_dangling_directory_links() {
 
 #[test]
 fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
-    let hooks = ["qoder", "codex", "amp", "muse", "kiro"].map(|kind| HookRow {
+    let hooks = ["qoder", "codex", "amp", "muse", "kiro", "antigravity"].map(|kind| HookRow {
         kind: kind.into(),
         detected: kind != "kiro",
         status: HookStatus::Installed,
@@ -455,6 +455,7 @@ fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
         serde_json::to_value(collect_soft_compact_skips(&hooks)).unwrap(),
         serde_json::json!([
             {"kind": "amp", "reason": "no_compact_command"},
+            {"kind": "antigravity", "reason": "no_hook_context"},
             {"kind": "muse", "reason": "no_compaction_signal"},
             {"kind": "qoder", "reason": "no_live_context_reading"},
         ])

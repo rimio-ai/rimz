@@ -156,7 +156,7 @@ pub(crate) use provider_file::create_empty_if_absent as create_empty_provider_fi
 pub use registry::{
     AutoCompactEnforcer, Runtime, SoftCompactSkip, all_definitions, auto_compact_enforcer,
     compact_command, compact_reminder, definition_by_kind, find_definition, find_runtime,
-    known_kinds, message_keys, runtime_names, soft_compact_skip, spec_by_kind,
+    known_kinds, message_keys, reminder_skip, runtime_names, soft_compact_skip, spec_by_kind,
 };
 pub(crate) use registry::{
     ResumeProbe, resumed_session_id_for_root, resumed_session_id_from_cmdline,

@@ -225,6 +225,7 @@ pub enum SoftCompactSkip {
     NoLiveContextReading,
     NoCompactionSignal,
     NoTurnStartHook,
+    NoHookContext,
 }
 
 impl std::fmt::Display for SoftCompactSkip {
@@ -234,6 +235,7 @@ impl std::fmt::Display for SoftCompactSkip {
             Self::NoLiveContextReading => "no live context reading",
             Self::NoCompactionSignal => "no compaction signal",
             Self::NoTurnStartHook => "no turn-start hook",
+            Self::NoHookContext => "no hook context",
         })
     }
 }
@@ -286,6 +288,26 @@ pub fn soft_compact_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip
         return Some(SoftCompactSkip::NoTurnStartHook);
     }
     None
+}
+
+/// Why `definition` takes no mid-turn smart-compaction reminder: a [`soft_compact_skip`] reason,
+/// or no post-tool hook-context reply to carry it (an injected system message carries deadline
+/// warnings only). Only the reminder needs the reply, so the auto-compact
+/// ceiling still reads [`soft_compact_skip`] alone.
+pub fn reminder_skip(definition: &AgentDefinition) -> Option<SoftCompactSkip> {
+    soft_compact_skip(definition).or_else(|| {
+        definition
+            .spec()
+            .capabilities
+            .hook_context
+            .is_none_or(|reply| {
+                matches!(
+                    reply,
+                    crate::agents::definition::HookContextReply::InjectedSystemMessage { .. }
+                )
+            })
+            .then_some(SoftCompactSkip::NoHookContext)
+    })
 }
 
 /// Compose the smart-compaction reminder body: an agent whose work ends in this turn finishes

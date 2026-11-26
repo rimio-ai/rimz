@@ -508,7 +508,9 @@ upward-dependencies = [
 # context carries the stop rung, since an Antigravity injected system message does not (+1).
 # HookCapability::reads_hook_reply lets the feed claim a reminder only from a carrier that reads
 # its reply, which only the adapter can tell from the payload (+1).
-surface-budget = 1388
+# reminder_skip and its facade export let the reminder pass, doctor and the launch plan agree on
+# which kinds take no mid-turn reminder, a missing hook-context reply included (+2).
+surface-budget = 1390
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -683,6 +685,11 @@ reason = "Command and declared context/compaction coverage determine participati
 kind = "item"
 key = "agents::registry::compact_reminder"
 reason = "The post-tool hook composes the self-compaction reminder, naming mcp(self_compact) when the launch serves it and the bare command otherwise."
+
+[[verdict]]
+kind = "item"
+key = "agents::registry::reminder_skip"
+reason = "The reminder pass, doctor and the launch plan read one rule for which kinds take no mid-turn reminder, a missing hook-context reply included."
 
 [[verdict]]
 kind = "item"

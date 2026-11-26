@@ -1516,10 +1516,19 @@ fn soft_compact_skips_are_json_and_uncounted_context_only_when_detected() {
     }];
     let text = strip(|w| render_hooks(w, &report, &mut tally));
     assert!(
-        text.contains("smart-compaction reminder skipped: amp (no compact command)"),
+        text.contains("mid-turn smart-compaction reminder skipped: amp (no compact command)"),
         "{text}"
     );
-    assert!(text.contains("provider's own window"), "{text}");
+    assert!(
+        text.contains(
+            "only the mid-turn reminder is off; an auto-compact ceiling still compacts where the provider or RimZ enforces one"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("each agent's"),
+        "amp enforces no ceiling: {text}"
+    );
     assert_eq!(
         serde_json::to_value(&report).unwrap()["soft_compact_skips"],
         serde_json::json!([{"kind": "amp", "reason": "no_compact_command"}])
