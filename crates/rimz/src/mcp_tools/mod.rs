@@ -10,6 +10,7 @@
 //! started, by an id `start` defines, and only on what `owned` traces back to
 //! the caller.
 
+mod ask;
 mod blackboard;
 mod control;
 mod join;
@@ -99,6 +100,7 @@ impl Runner for Tools {
             Call::Workflow(args) => workflow::start(self, &args),
             Call::Schedule(args) => schedule::book(self, &args),
             Call::Message(args) => message::send(self, &args),
+            Call::Ask(args) => ask::arm(self, &args),
             Call::Tasks(args) => tasks::tasks(self, &args),
             Call::Join(args) => join::join(self, &args, cancelled),
             Call::Stop(args) => stop::stop(self, &args),

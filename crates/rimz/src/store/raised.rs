@@ -24,6 +24,8 @@ pub enum RaisedErr {
     NoReply,
     #[error(transparent)]
     Transcript(#[from] crate::transcript::TranscriptLogErr),
+    #[error(transparent)]
+    Audit(#[from] super::StoreErr),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,6 +214,24 @@ pub fn raise(paths: &StatePaths, ask: Entry<RaisedAsk>) -> Result<(), RaisedErr>
         record.asks.push(ask);
         Ok(())
     })
+}
+
+/// Raise `ask`, then append its `ask.raised` event, naming the raiser as its actor when the
+/// ask records one; answers the ask's id.
+pub fn raise_audited(
+    store: &super::Store,
+    session_name: &str,
+    ask: Entry<RaisedAsk>,
+) -> Result<AskId, RaisedErr> {
+    let (kind, agent_id) = (ask.kind.clone(), ask.agent_id.clone());
+    let ask_id = ask.value.ask_id.clone();
+    let mut params = serde_json::json!({"ask_id": ask_id});
+    if let Some(actor) = &ask.value.raised_by {
+        params["actor"] = serde_json::json!(actor);
+    }
+    raise(store.paths(), ask)?;
+    audit(store, session_name, "ask.raised", &kind, &agent_id, params)?;
+    Ok(ask_id)
 }
 
 #[must_use = "durability barrier; check the result"]

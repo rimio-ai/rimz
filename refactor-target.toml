@@ -4924,7 +4924,9 @@ path = "crates/rimz/src/store"
 # notice premise read one reminder state (+2).
 # The ceiling's `Premise::OverCeiling` is judged with the row premises again, and the delivery
 # path retires it at RimZ's own key through `Store::retire_premises_at_key` (+2).
-surface-budget = 708
+# raised::raise_audited raises an ask and appends its audit event for both the CLI raise and the
+# MCP `ask` tool, so the audit params keep one shape (+1).
+surface-budget = 709
 
 [[verdict]]
 kind = "item"

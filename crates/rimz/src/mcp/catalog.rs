@@ -29,13 +29,14 @@ pub enum Capability {
     Workflow,
     Loop,
     Message,
+    Ask,
     Control,
     Notes,
     Blackboard,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 11] = [
+    pub const ALL: [Capability; 12] = [
         Self::Lsp,
         Self::Wait,
         Self::Subagents,
@@ -44,6 +45,7 @@ impl Capability {
         Self::Workflow,
         Self::Loop,
         Self::Message,
+        Self::Ask,
         Self::Control,
         Self::Notes,
         Self::Blackboard,
@@ -75,6 +77,7 @@ impl Capability {
             Self::Workflow => "rimz-workflow",
             Self::Loop => "rimz-loop",
             Self::Message => "rimz-message",
+            Self::Ask => "rimz-ask",
             Self::Control => "rimz-control",
             Self::Notes => "rimz-notes",
             Self::Blackboard => "rimz-blackboard",
@@ -134,6 +137,7 @@ pub enum Call {
     Workflow(WorkflowArgs),
     Schedule(Box<ScheduleArgs>),
     Message(MessageArgs),
+    Ask(AskArgs),
     Tasks(TasksArgs),
     Join(JoinArgs),
     Stop(StopArgs),
@@ -251,7 +255,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 19] = [
+pub static TOOLS: [Tool; 20] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -347,6 +351,18 @@ pub static TOOLS: [Tool; 19] = [
         schema: schema::<MessageArgs>,
         output: Some(message_schema),
         parse: |arguments| parse::<MessageArgs>(arguments).map(Call::Message),
+    },
+    Tool {
+        name: "ask",
+        capability: Some(Capability::Ask),
+        purpose: Purpose::Ask,
+        read_only: false,
+        command: "asks raise",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<AskArgs>,
+        output: Some(ask_schema),
+        parse: |arguments| parse::<AskArgs>(arguments).map(Call::Ask),
     },
     Tool {
         name: "tasks",
@@ -502,6 +518,7 @@ pub enum Purpose {
     Workflows,
     Schedule,
     Message,
+    Ask,
     Started,
     Yourself,
     Notes,
@@ -519,6 +536,7 @@ impl Purpose {
             Self::Workflows => "run workflows",
             Self::Schedule => "schedule launches",
             Self::Message => "message other agents",
+            Self::Ask => "ask the user",
             Self::Started => "track what you started",
             Self::Yourself => "manage yourself",
             Self::Notes => "keep notes",
@@ -1432,6 +1450,22 @@ impl ToolArgs for StopArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AskArgs {
+    /// The question in one sentence for your card, which cuts it at 160 characters.
+    pub brief: String,
+}
+
+impl ToolArgs for AskArgs {
+    fn refusal(&self) -> Option<String> {
+        self.brief
+            .trim()
+            .is_empty()
+            .then(|| "`brief` is empty".to_owned())
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelfStopArgs {
     /// How long to rest before the pane closes (`s`/`m`/`h`/`d`), or `off` to withdraw the
     /// booking; 3m when absent.
@@ -1668,6 +1702,16 @@ fn stop_schema() -> Value {
             "status": { "type": "string", "enum": ["stopped", "ended"] },
             "still_running": array_of(string()),
             "hint": string(),
+        }),
+        &["id", "status"],
+    )
+}
+
+fn ask_schema() -> Value {
+    object(
+        serde_json::json!({
+            "id": string(),
+            "status": { "type": "string", "enum": ["armed"] },
         }),
         &["id", "status"],
     )

@@ -230,23 +230,10 @@ fn raise(first: Option<String>, text: Option<String>, globals: &GlobalFlags) -> 
         agent,
         is_self,
         text,
-        actor.clone(),
+        actor,
         jiff::Timestamp::now(),
     )?;
-    let ask_id = ask.value.ask_id.clone();
-    raised::raise(ctx.store.paths(), ask)?;
-    let mut params = serde_json::json!({"ask_id": ask_id});
-    if let Some(actor) = actor {
-        params["actor"] = serde_json::json!(actor);
-    }
-    raised::audit(
-        &ctx.store,
-        &ctx.workspace.session_name,
-        "ask.raised",
-        &agent.kind,
-        &agent.agent_id,
-        params,
-    )?;
+    let ask_id = raised::raise_audited(&ctx.store, &ctx.workspace.session_name, ask)?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let handle = rimz::address::named_handle(agent, &peers, true);
     let suffix = if is_self {
