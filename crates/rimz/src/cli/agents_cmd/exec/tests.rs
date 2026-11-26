@@ -12,17 +12,61 @@ fn design_lane() -> rimz::ids::Lane {
         .expect("lane decodes")
 }
 
-/// A restart that asked for a continue gets one after spawn, unless the stage re-wake stands
-/// in for it or the configured text is blank; a restart that did not ask gets none.
+/// A restart that asked for a continue gets one after spawn, and so does a team leader resumed
+/// while its board has no open stage, unless the stage re-wake stands in for it, the restart
+/// passed `--no-continue`, or the configured text is blank; any other resume gets none.
 #[test]
 fn a_restarted_session_takes_one_continue_unless_a_stage_rewake_stands_in() {
+    use rimz::harness::team_stage::ResumeWake;
+    let stage = || {
+        ResumeWake::Stage(Box::new(rimz::harness::team_stage::FlipReceipt {
+            board: PathBuf::from("/repo/.rimz/team/blackboard.md"),
+            from: Some("Build".to_owned()),
+            to: "Build".to_owned(),
+            owner: Some("coder".to_owned()),
+            delivery: rimz::harness::team_stage::Delivery::SelfOwned,
+            compaction: rimz::harness::team_stage::Compaction::Ineligible,
+            signal_event: rimz::ids::EventId::new(),
+        }))
+    };
+    let request = |continue_session, no_continue| {
+        let mut request = minimal_exec_request(
+            "claude",
+            ExecAction::Resume {
+                session_id: "resumed".to_owned(),
+                extra_args: Vec::new(),
+            },
+        );
+        request.continue_session = continue_session;
+        request.no_continue = no_continue;
+        request
+    };
+    let cases = [
+        (request(true, false), ResumeWake::Nobody, " continue\n"),
+        (request(true, false), stage(), "continue"),
+        (request(true, false), ResumeWake::Nobody, "  "),
+        (request(false, false), ResumeWake::Nobody, "continue"),
+        (request(false, false), ResumeWake::Leader, "continue"),
+        (request(true, false), ResumeWake::Leader, "continue"),
+        (request(false, true), ResumeWake::Leader, "continue"),
+        (request(false, false), ResumeWake::Leader, " "),
+    ];
     assert_eq!(
-        resume_continue_text(true, false, " continue\n"),
-        Some("continue")
+        cases
+            .iter()
+            .map(|(request, wake, text)| resume_continue_text(request, wake, text))
+            .collect::<Vec<_>>(),
+        [
+            Some("continue"),
+            None,
+            None,
+            None,
+            Some("continue"),
+            Some("continue"),
+            None,
+            None
+        ]
     );
-    assert_eq!(resume_continue_text(true, true, "continue"), None);
-    assert_eq!(resume_continue_text(true, false, "  "), None);
-    assert_eq!(resume_continue_text(false, false, "continue"), None);
 }
 
 /// A resumed session is bound to exactly one pane at a time, and the
@@ -324,6 +368,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         exit_on_run_completion: false,
         subagent: true,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: Default::default(),
@@ -490,6 +535,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         exit_on_run_completion: false,
         subagent: false,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
@@ -626,6 +672,7 @@ fn bare_exec_args() -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity {
@@ -723,6 +770,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         exit_on_run_completion: true,
         subagent: true,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity {

@@ -12,7 +12,8 @@ use rimz::launcher::swap::{
 };
 
 /// What `rimz agents restart` adds over a bare relaunch. `rimz teams restart` passes none, so
-/// it never continues, hands over a run, checks spend, or briefs a member that comes back fresh.
+/// it never hands over a run, checks spend, or briefs a member that comes back fresh, and the
+/// only continue it brings is the one a resumed leader's wrapper owes it while no stage is open.
 pub(in crate::cli) struct AgentRestart<'a> {
     account: Option<rimz::ids::LoginName>,
     no_continue: bool,
@@ -400,6 +401,7 @@ pub(in crate::cli) fn restart_resolved(
         invocation = with_run(invocation, run);
     }
     invocation.continue_session = continues;
+    invocation.no_continue = restart.as_ref().is_some_and(|restart| restart.no_continue);
     let account = invocation.identity.params.login.clone().unwrap_or_default();
     let backend = rimz::mux::backend_for(old_pane.mux());
     if let Some(warning) = replace(

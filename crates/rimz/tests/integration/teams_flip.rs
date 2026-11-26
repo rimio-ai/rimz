@@ -1546,14 +1546,29 @@ impl Fixture {
         channel: &str,
         checkout: &Path,
     ) -> AgentSessionId {
+        self.ended_seat(kind, role, Some(role), None, channel, checkout)
+    }
+
+    /// [`Self::ended_at_checkout`] for the seat `name` of `role` (none in a roleless team),
+    /// launched from `profile` when one is given.
+    fn ended_seat(
+        &self,
+        kind: &str,
+        name: &str,
+        role: Option<&str>,
+        profile: Option<&str>,
+        channel: &str,
+        checkout: &Path,
+    ) -> AgentSessionId {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
-        let session = AgentSessionId::from(format!("sess-{role}"));
+        let session = AgentSessionId::from(format!("sess-{name}"));
         for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
             let mut observation = AgentLifecycleObservation::new(Some(session.clone()), signal);
-            observation.agent_name = Some(role.to_owned());
+            observation.agent_name = Some(name.to_owned());
             observation.launch = rimz::agents::LaunchParams {
                 team: Some("forge".to_owned()),
-                role: Some(role.to_owned()),
+                role: role.map(ToOwned::to_owned),
+                profile: profile.map(ToOwned::to_owned),
                 lane: Some(crate::common::wait::stamped_lane(
                     &self.env, checkout, channel,
                 )),
@@ -1604,6 +1619,33 @@ impl Fixture {
         session: &AgentSessionId,
         env: &[(&str, &Path)],
     ) -> Wrapper {
+        self.spawn_resume_with(kind, role, session, env, false)
+    }
+
+    /// [`Self::spawn_resume_with_env`], as `rimz agents restart --no-continue` asks when
+    /// `no_continue`.
+    fn spawn_resume_with(
+        &self,
+        kind: &str,
+        role: &str,
+        session: &AgentSessionId,
+        env: &[(&str, &Path)],
+        no_continue: bool,
+    ) -> Wrapper {
+        self.spawn_resume_seat(kind, Some(role), None, session, env, no_continue)
+    }
+
+    /// [`Self::spawn_resume_with`] for a seat of `role` (none in a roleless team), launched
+    /// from `profile` when one is given.
+    fn spawn_resume_seat(
+        &self,
+        kind: &str,
+        role: Option<&str>,
+        profile: Option<&str>,
+        session: &AgentSessionId,
+        env: &[(&str, &Path)],
+        no_continue: bool,
+    ) -> Wrapper {
         let shims = self.env.home_root.join("provider-shims");
         // The wrapper's informational `--version` probe gets a prompt failure (an unknown
         // version) instead of a provider that sleeps through the probe's timeout.
@@ -1624,6 +1666,7 @@ impl Fixture {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             continue_session: false,
+            no_continue,
             follow_up_message: None,
             reminder_section: None,
             skills: None,
@@ -1644,7 +1687,8 @@ impl Fixture {
         };
         request.identity.params = rimz::agents::LaunchParams {
             team: Some("forge".to_owned()),
-            role: Some(role.to_owned()),
+            role: role.map(ToOwned::to_owned),
+            profile: profile.map(ToOwned::to_owned),
             lane: Some(crate::common::wait::stamped_lane(
                 &self.env,
                 &self.env.project_root,
@@ -3522,6 +3566,153 @@ fn resume_skips_a_stage_delivered_after_its_attempt_began() {
     assert_eq!(stages.len(), 1, "{stages:#?}");
     assert_eq!(stages[0].status, MessageStatus::Delivered);
     assert!(fixture.signals().is_empty(), "{:#?}", fixture.signals());
+}
+
+/// A resumed member is owed one wake: the owner of the open stage its notice, the leader one
+/// continue while no stage is open, and nobody anything at `Done` or on another role's stage.
+/// `--no-continue` takes the leader's continue away, and so does a prompt already queued for
+/// it, as a `rimz teams resume` PROMPT is, so the PROMPT is its one prompt.
+#[test]
+fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
+    let stage = || MessageSender::Harness {
+        notice: HarnessNotice::Stage,
+    };
+    let no_stage = "# Work\n\n## Progress log\n";
+    let review = BOARD.replace("Stage: Build (@coder)", "Stage: Review (@reviewer)");
+    let done = BOARD.replace("Stage: Build (@coder)", "Stage: Done");
+    let cases = [
+        (no_stage, "coder", false, false),
+        (no_stage, "reviewer", false, false),
+        (&review, "coder", false, false),
+        (&review, "reviewer", false, false),
+        (&done, "coder", false, false),
+        (no_stage, "coder", true, false),
+        (no_stage, "coder", false, true),
+    ];
+    let mut woken = Vec::new();
+    for (board, role, no_continue, prompted) in cases {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.board(), board).unwrap();
+        let session = fixture.ended("claude", role);
+        if prompted {
+            let prompt = rimz::store::message::MessageRecord::new_for_card(
+                fixture.env.workspace_id.clone(),
+                AgentKind::new_unchecked("claude"),
+                session.clone(),
+                Some(role.to_owned()),
+                "say hi".to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_sender(MessageSender::Human);
+            let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+            fixture
+                .env
+                .store()
+                .queue_message(&prompt, &workspace.session_name)
+                .unwrap();
+        }
+        let _wrapper = fixture.spawn_resume_with("claude", role, &session, &[], no_continue);
+        fixture.wrapper_log_until("resume: wake settled");
+        let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+        woken.push(
+            live.iter()
+                .chain(&history)
+                .map(|message| (message.agent_name.clone(), message.sender.clone()))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let name = |role: &str| Some(role.to_owned());
+    assert_eq!(
+        woken,
+        [
+            vec![(name("coder"), MessageSender::System)],
+            Vec::new(),
+            Vec::new(),
+            vec![(name("reviewer"), stage())],
+            Vec::new(),
+            Vec::new(),
+            vec![(name("coder"), MessageSender::Human)],
+        ]
+    );
+}
+
+/// A team with no roles is led by the cell its `leader` names, the seat a `rimz teams resume`
+/// PROMPT is addressed to: resumed while no stage is open, that seat takes the continue and the
+/// other member nothing.
+#[test]
+fn a_roleless_teams_named_leader_takes_the_resume_continue() {
+    let mut woken = Vec::new();
+    for (name, profile) in [("lead", "mate"), ("other", "hand")] {
+        let fixture = Fixture::new();
+        // A team definition file always lists roles; only project config declares a roleless one,
+        // whose profiles run on a kind base with a tools list.
+        crate::common::write_definition(
+            &fixture.env,
+            "agents",
+            "claude",
+            "description: Claude base\ntools: []",
+            "Follow instructions.",
+        );
+        std::fs::remove_file(crate::common::write_definition(
+            &fixture.env,
+            "teams",
+            "forge",
+            CONFIG,
+            "Complete the work.",
+        ))
+        .unwrap();
+        fixture.env.write_config(
+            &fixture.env.project_root,
+            "[profiles.hand]\ndescription = 'Hand'\nagent = 'claude'\n\
+             [profiles.mate]\ndescription = 'Mate'\nagent = 'claude'\n\
+             [agents.teams.forge]\nlayout = 'hand,mate'\nleader = 'mate'\n",
+        );
+        success(
+            fixture
+                .env
+                .rimz()
+                .args(["trust", "grant"])
+                .output()
+                .unwrap(),
+        );
+        let session = fixture.ended_seat(
+            "claude",
+            name,
+            None,
+            Some(profile),
+            "feature-team",
+            &fixture.env.project_root,
+        );
+        let _wrapper =
+            fixture.spawn_resume_seat("claude", None, Some(profile), &session, &[], false);
+        fixture.wrapper_log_until("resume: wake settled");
+        let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+        woken.push(
+            live.iter()
+                .chain(&history)
+                .map(|message| (message.agent_name.clone(), message.sender.clone()))
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(
+        woken,
+        [
+            vec![(Some("lead".to_owned()), MessageSender::System)],
+            Vec::new()
+        ]
+    );
+}
+
+/// A leader's first launch is no return: its registration queues no continue while the board
+/// has no open stage.
+#[test]
+fn a_leaders_first_launch_queues_no_continue() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.board(), "# Work\n\n## Progress log\n").unwrap();
+    fixture.seed("coder", None);
+    fixture.hook("coder", "SessionStart", None);
+    let messages = fixture.env.store().list_messages().unwrap();
+    assert!(messages.is_empty(), "{messages:#?}");
 }
 
 #[test]

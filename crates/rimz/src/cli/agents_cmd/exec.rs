@@ -520,16 +520,21 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
-        let rewoken = rewake_resumed(invocation, target, globals.mux, resume_since, resume_prompt);
+        let wake = rewake_resumed(invocation, target, globals.mux, resume_since, resume_prompt);
         let machine_config = crate::cli::machine_config();
-        if let Some(text) = resume_continue_text(
-            request.continue_session,
-            rewoken,
-            &machine_config.resume.auto_continue_text,
-        ) && let Err(error) = queue_resume_continue(invocation, target, text, resume_prompt)
+        if let Some(text) =
+            resume_continue_text(request, &wake, &machine_config.resume.auto_continue_text)
+            && let Err(error) = queue_resume_continue(
+                invocation,
+                target,
+                text,
+                resume_prompt,
+                matches!(wake, rimz::harness::team_stage::ResumeWake::Leader),
+            )
         {
             tracing::warn!(%error, "could not queue the restarted session's continue");
         }
+        tracing::debug!("resume: wake settled");
         let resume_launch = request
             .identity
             .launch_id
@@ -2085,10 +2090,21 @@ fn session_bound_to_another_pane(
     })
 }
 
-/// The continue a restarted session takes after spawn: none unless the restart asked for
-/// one, none when a stage re-wake already stands in for it, and none for blank text.
-fn resume_continue_text(continue_session: bool, rewoken: bool, text: &str) -> Option<&str> {
-    continue_text(text).filter(|_| continue_session && !rewoken)
+/// The continue a resumed session takes after spawn: one when the restart asked for it or the
+/// session is its team's leader standing in for a board with no open stage; none when a stage
+/// re-wake already stands in for it, under `--no-continue`, or for blank text.
+fn resume_continue_text<'a>(
+    request: &rimz::harness::launch::ExecRequest,
+    wake: &rimz::harness::team_stage::ResumeWake,
+    text: &'a str,
+) -> Option<&'a str> {
+    use rimz::harness::team_stage::ResumeWake;
+    let owed = match wake {
+        ResumeWake::Stage(_) => false,
+        ResumeWake::Leader => true,
+        ResumeWake::Nobody => request.continue_session,
+    };
+    continue_text(text).filter(|_| owed && !request.no_continue)
 }
 
 /// The configured continue text, trimmed; blank text sends no continue, so a restart reads it
@@ -2113,12 +2129,14 @@ fn card_last_prompt_at(
 /// Queue one system continue for the resumed card at its next turn boundary; the queued-head
 /// delivery spawned after this sends it. `last_prompt_at` is the card's prompt stamp read
 /// before spawn: a card prompted since takes no continue, and the continue is withdrawn once
-/// it is.
+/// it is. A leader's continue (`leader`) also yields to a prompt already queued for the card,
+/// such as a `rimz teams resume` PROMPT, which a continue would otherwise join in one batch.
 fn queue_resume_continue(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     text: &str,
     last_prompt_at: Option<Option<jiff::Timestamp>>,
+    leader: bool,
 ) -> Result<()> {
     let workspace = invocation.workspace;
     let store = invocation.store()?;
@@ -2127,6 +2145,15 @@ fn queue_resume_continue(
         .context("resumed card is not in the store")?;
     if last_prompt_at.is_some_and(|copy| agent.last_prompt_at > copy) {
         tracing::debug!("resume: the card was prompted since its resume; no continue");
+        return Ok(());
+    }
+    if leader
+        && store.list_messages()?.iter().any(|message| {
+            message.body == rimz::store::message::MessageBody::Prompt
+                && agent.card_ref().matches(message.card_ref())
+        })
+    {
+        tracing::debug!("resume: a prompt queued for the leader stands in for its continue");
         return Ok(());
     }
     store.queue_message(
@@ -2150,17 +2177,19 @@ fn queue_resume_continue(
     Ok(())
 }
 
-/// Re-wake a stamped resumed card when it owns its team's open stage, and say whether a
-/// Stage notice now stands for it. `since` precedes the provider's start, so a Stage notice
-/// it already took counts, and so does `last_prompt_at`, the card's prompt stamp read then.
+/// Re-wake a stamped resumed card when it owns its team's open stage, and say what wake it
+/// is owed; a failed read is logged and owes none. `since` precedes the provider's start, so a
+/// Stage notice it already took counts, and so does `last_prompt_at`, the card's prompt stamp
+/// read then.
 fn rewake_resumed(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     mux: Option<rimz::ids::MuxName>,
     since: jiff::Timestamp,
     last_prompt_at: Option<Option<jiff::Timestamp>>,
-) -> bool {
-    let rewoken = invocation.store().and_then(|store| {
+) -> rimz::harness::team_stage::ResumeWake {
+    use rimz::harness::team_stage::ResumeWake;
+    let wake = invocation.store().and_then(|store| {
         Ok(rimz::harness::team_stage::rewake_resumed(
             invocation.workspace,
             &store,
@@ -2172,14 +2201,18 @@ fn rewake_resumed(
             last_prompt_at,
         )?)
     });
-    match rewoken {
-        Ok(Some(receipt)) => {
+    match wake {
+        Ok(ResumeWake::Stage(receipt)) => {
             tracing::debug!(delivery = ?receipt.delivery, "resume: re-woke team stage owner");
-            true
+            ResumeWake::Stage(receipt)
         }
-        Ok(None) => {
+        Ok(ResumeWake::Leader) => {
+            tracing::debug!("resume: no team stage is open; the leader takes the continue");
+            ResumeWake::Leader
+        }
+        Ok(ResumeWake::Nobody) => {
             tracing::debug!("resume: no team stage to re-wake");
-            false
+            ResumeWake::Nobody
         }
         Err(err) => {
             tracing::warn!(
@@ -2188,7 +2221,7 @@ fn rewake_resumed(
                 error = %err,
                 "could not re-wake the resumed team stage owner",
             );
-            false
+            ResumeWake::Nobody
         }
     }
 }

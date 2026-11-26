@@ -461,6 +461,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
             exit_on_run_completion: false,
             subagent: false,
             continue_session: false,
+            no_continue: false,
             follow_up_message: None,
             reminder_section: expected,
             identity: crate::harness::launch::ExecIdentity {

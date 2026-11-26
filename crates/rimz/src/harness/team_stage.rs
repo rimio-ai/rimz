@@ -400,6 +400,18 @@ impl RewakeCause {
     }
 }
 
+/// What [`with_rewake`] found for a member.
+enum Rewake<T> {
+    /// A Stage notice was queued for the member.
+    Woken(T),
+    /// No stage is open: the team owns no stages, its board is unlinked or another team's, or
+    /// the board has no `Stage:` line.
+    Closed,
+    /// A stage is open and this member is not to be woken: `Done`, another role's stage, or a
+    /// notice or prompt already covers it.
+    Skipped,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn with_rewake<T>(
     workspace: &ResolvedWorkspace,
@@ -413,29 +425,29 @@ fn with_rewake<T>(
     now: Timestamp,
     cause: RewakeCause,
     apply: impl FnOnce(&StageOpening<'_>, &'static str) -> Result<T, FlipErr>,
-) -> Result<Option<T>, FlipErr> {
+) -> Result<Rewake<T>, FlipErr> {
     if team.owned_stages().next().is_none() {
-        return Ok(None);
+        return Ok(Rewake::Closed);
     }
     // The board lock serializes the check below with the enqueue, so a wrapper and a
     // registration racing for one member cannot both find it un-woken.
     let locked = match LockedBoard::open(store, worktree, Some(team_name)) {
         Ok(board) => board,
         Err(super::board::BoardErr::Unlinked(_) | super::board::BoardErr::WrongTeam { .. }) => {
-            return Ok(None);
+            return Ok(Rewake::Closed);
         }
         Err(error) => return Err(error.into()),
     };
     let board = locked.path.clone();
     let text = &locked.text;
     let Some(stage) = parse_board_stage(text) else {
-        return Ok(None);
+        return Ok(Rewake::Closed);
     };
     if stage.name == DONE_STAGE
         || team.owner_of(&stage.name) != member.role.as_deref()
         || member.role.is_none()
     {
-        return Ok(None);
+        return Ok(Rewake::Skipped);
     }
     let (live, history) = store.list_messages_and_history()?;
     let newest_notice = live
@@ -445,14 +457,14 @@ fn with_rewake<T>(
         .map(|record| record.enqueued_at)
         .max();
     if cause.prompted(member, newest_notice, now) {
-        return Ok(None);
+        return Ok(Rewake::Skipped);
     }
     if cause.already_woken(&live, &history, member, now) {
-        return Ok(None);
+        return Ok(Rewake::Skipped);
     }
     let owner = resolve_owner(team_name, team, &stage.name)?;
     let Ok(instance) = TeamInstanceId::new(team_name, member.lane_name()) else {
-        return Ok(None);
+        return Ok(Rewake::Skipped);
     };
     let premises = stage_visit(&locked.worktree, text)
         .into_iter()
@@ -488,16 +500,32 @@ fn with_rewake<T>(
             RewakeCause::Registration => "registration",
         },
     )
-    .map(Some)
+    .map(Rewake::Woken)
 }
 
-/// Re-wake a resumed root team member whose role owns the board's open stage, unless a Stage
-/// notice for its card is still queued or was delivered at or after `since`, which the exec
-/// wrapper captures before its provider could start, or the member was prompted after
+/// What a resumed root team member's re-wake leaves for the exec wrapper to do.
+#[derive(Debug)]
+pub enum ResumeWake {
+    /// A Stage notice was queued for the member, which owns the board's open stage.
+    Stage(Box<FlipReceipt>),
+    /// No stage is open and the member holds its team's leader seat
+    /// ([`super::spec::leads_team`]): the wrapper queues it the resume continue.
+    Leader,
+    /// Nothing is owed to the member: another role owns the open stage, the board is at
+    /// `Done`, a notice or prompt already covers it, or it is no root team member.
+    Nobody,
+}
+
+/// Decide the one wake a resumed root team member is owed, so that a team coming back wakes
+/// one member. A member whose role owns the board's open stage gets a Stage notice, unless a
+/// Stage notice for its card is still queued or was delivered at or after `since`, which the
+/// exec wrapper captures before its provider could start, or the member was prompted after
 /// `last_prompt_at`, its prompt stamp read at the same moment (`None` when that read failed).
-/// The notice is withdrawn once the member is prompted or the stage visit ends. The wrapper
-/// calls it on every resume, after the resume stamp has revived the card; a team that no
-/// longer loads is logged and re-wakes nobody.
+/// The notice is withdrawn once the member is prompted or the stage visit ends. While no stage
+/// is open, the member in the seat that leads the team ([`super::spec::leads_team`], the seat a
+/// launch prompt goes to) is answered [`ResumeWake::Leader`]. The wrapper calls it on every
+/// resume, after the resume stamp has revived the card; a team that no longer loads is logged
+/// and wakes nobody.
 #[allow(clippy::too_many_arguments)]
 pub fn rewake_resumed(
     workspace: &ResolvedWorkspace,
@@ -508,29 +536,29 @@ pub fn rewake_resumed(
     now: Timestamp,
     since: Timestamp,
     last_prompt_at: Option<Option<Timestamp>>,
-) -> Result<Option<FlipReceipt>, FlipErr> {
+) -> Result<ResumeWake, FlipErr> {
     let audit = store.runtime_projection(crate::store::runtime::RuntimeScope::Audit)?;
     let Some(member) =
         find_agent(&audit.agents, kind, agent_id).filter(|member| member.parent_agent_id.is_none())
     else {
-        return Ok(None);
+        return Ok(ResumeWake::Nobody);
     };
     let (Some(name), Some(worktree)) = (member.team.as_deref(), member.worktree_path.as_deref())
     else {
-        return Ok(None);
+        return Ok(ResumeWake::Nobody);
     };
     let team = match load_member_team(workspace, name) {
         Ok(team) => team,
         Err(err) => {
             warn!(error = %err, "resume: failed to load team configuration");
-            return Ok(None);
+            return Ok(ResumeWake::Nobody);
         }
     };
     let members = cohort_members(&audit.agents, member)
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
-    with_rewake(
+    let rewake = with_rewake(
         workspace,
         store,
         name,
@@ -556,7 +584,20 @@ pub fn rewake_resumed(
                 signal_event,
             })
         },
-    )
+    )?;
+    Ok(match rewake {
+        Rewake::Woken(receipt) => ResumeWake::Stage(Box::new(receipt)),
+        Rewake::Closed
+            if super::spec::leads_team(
+                &team,
+                member.role.as_deref(),
+                Some(member.profile.as_deref().unwrap_or(member.kind.as_str())),
+            ) =>
+        {
+            ResumeWake::Leader
+        }
+        Rewake::Closed | Rewake::Skipped => ResumeWake::Nobody,
+    })
 }
 
 /// The live members of `member`'s team cohort on its channel.
@@ -757,10 +798,10 @@ fn react_lifecycle(
                     open_stage(opening, completed).map(|(_, delivery)| delivery)
                 },
             ) {
-                Ok(Some(delivery)) => {
+                Ok(Rewake::Woken(delivery)) => {
                     debug!(?delivery, "lifecycle: re-woke team stage owner");
                 }
-                Ok(None) => {}
+                Ok(Rewake::Closed | Rewake::Skipped) => {}
                 Err(err) => {
                     warn!(error = %err, "lifecycle: failed to re-wake team stage owner");
                 }
@@ -1302,7 +1343,7 @@ mod tests {
             },
         )
         .unwrap();
-        (result.is_none(), called)
+        (!matches!(result, Rewake::Woken(())), called)
     }
 
     #[test]

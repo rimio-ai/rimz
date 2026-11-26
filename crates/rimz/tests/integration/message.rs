@@ -8902,6 +8902,7 @@ fn assert_parent_follow_up_case(
         exit_on_run_completion: true,
         subagent: true,
         continue_session: false,
+        no_continue: false,
         follow_up_message: Some(message.message_id.clone()),
         reminder_section: None,
         identity: ExecIdentity::default(),

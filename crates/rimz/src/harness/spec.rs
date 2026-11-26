@@ -1313,27 +1313,17 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
         _ => {}
     }
 
-    if let Some(team) = team {
-        if let Some(leader) = team.leader.as_deref() {
-            let index = if team.roles.is_empty() {
-                agent_cells
-                    .iter()
-                    .position(|cell| prompt_leader_token(cell) == Some(leader))
-            } else {
-                agent_cells
-                    .iter()
-                    .position(|cell| cell.launch.role.as_deref() == Some(leader))
-            };
-            // Team validation proves a configured leader is present exactly once.
-            return Ok(index.expect("validated team leader is placed in the resolved layout"));
-        }
-        if let Some(first_role) = team.roles.first() {
-            // Team validation proves every declared role is placed exactly once.
-            return Ok(agent_cells
-                .iter()
-                .position(|cell| cell.launch.role.as_deref() == Some(first_role.role.as_str()))
-                .expect("validated first team role is placed in the resolved layout"));
-        }
+    if let Some(team) = team
+        && (team.leader.is_some() || !team.roles.is_empty())
+    {
+        // Team validation proves a configured leader, and every declared role, is placed
+        // exactly once.
+        return Ok(agent_cells
+            .iter()
+            .position(|cell| {
+                leads_team(team, cell.launch.role.as_deref(), prompt_leader_token(cell))
+            })
+            .expect("validated team leader is placed in the resolved layout"));
     }
 
     let first = agent_cells[0];
@@ -1351,6 +1341,17 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
         });
     }
     Ok(0)
+}
+
+/// Whether the seat of `role` launched as `token` (its profile, else its kind) leads `team`, the
+/// seat [`prompt_leader`] gives a team's launch prompt: a team with roles is led by its
+/// [`Team::leader_role`], and a roleless one by the cell its `leader` names. A roleless team
+/// with no `leader` has no seat that leads it by name.
+pub fn leads_team(team: &Team, role: Option<&str>, token: Option<&str>) -> bool {
+    if team.roles.is_empty() {
+        return team.leader.is_some() && team.leader.as_deref() == token;
+    }
+    role.is_some() && role == team.leader_role()
 }
 
 fn prompt_leader_token(cell: &AgentCell) -> Option<&str> {

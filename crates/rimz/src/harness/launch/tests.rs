@@ -504,6 +504,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity::default(),
@@ -3229,6 +3230,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         exit_on_run_completion: true,
         subagent: true,
         continue_session: false,
+        no_continue: false,
         follow_up_message: None,
         reminder_section: None,
         identity: ExecIdentity {
