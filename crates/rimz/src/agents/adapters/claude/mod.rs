@@ -697,16 +697,18 @@ fn render_definition_tools(
 
 /// The server-level `alwaysLoad` for RimZ's `--mcp-config` entry: the mark on
 /// `rimz`, except that a deferred server stays unset while a capability is
-/// marked always, since a server-level `false` overrides a tool's own `true`.
-fn server_always_load(mcps: Option<&[crate::config::McpName]>) -> Option<bool> {
-    let entries = mcps?;
+/// marked always or loads up front by default, since a server-level `false`
+/// overrides a tool's own `true`.
+fn server_always_load(launch: &crate::agents::capabilities::McpLaunch<'_>) -> Option<bool> {
+    let entries = launch.mcps?;
     let always = crate::mcp::catalog::LoadMode::Always;
-    match crate::config::server_mark(mcps)? {
+    match crate::config::server_mark(launch.mcps)? {
         crate::mcp::catalog::LoadMode::Always => Some(true),
         crate::mcp::catalog::LoadMode::Deferred => {
-            let capability_always = entries
-                .iter()
-                .any(|entry| entry.capability().is_some() && entry.mode() == Some(always));
+            let capability_always = launch.always.is_some()
+                || entries
+                    .iter()
+                    .any(|entry| entry.capability().is_some() && entry.mode() == Some(always));
             (!capability_always).then_some(false)
         }
     }
@@ -999,7 +1001,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
                 "command": server.command,
                 "args": args,
             });
-            if let Some(always) = server_always_load(launch.mcps) {
+            if let Some(always) = server_always_load(launch) {
                 entry["alwaysLoad"] = always.into();
             }
             let config =

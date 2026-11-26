@@ -823,8 +823,11 @@ fn project_team_consensus_composes_the_kind_base() {
         std::env::var("PATH").unwrap_or_default()
     );
     env.rimz().args(["trust", "grant"]).assert().success();
+    // The Board writes fragment follows the replaced consensus, and the seat, which no seat edit
+    // reaches, loads the blackboard tools it names up front.
     let composed = format!(
-        "Kind base.\n\nConsensus text.\n\n{}\n\nHouse rules.\n\nPipeline.",
+        "Kind base.\n\nConsensus text.\n\n## Board writes\n\nFlip with `blackboard_flip` and \
+         record with `blackboard_record`.\n\n{}\n\nHouse rules.\n\nPipeline.",
         rimz::harness::team_prompt::SHIPPED_REFLECT.trim()
     );
     for target in ["crew", "crew.lead"] {
@@ -838,7 +841,8 @@ fn project_team_consensus_composes_the_kind_base() {
                 contains("--system-prompt-file")
                     .and(contains(composed.as_str()))
                     .and(contains(consensus.display().to_string()))
-                    .and(contains("built-in consensus piece reflect")),
+                    .and(contains("built-in consensus piece reflect"))
+                    .and(contains(r#""--always","rimz-blackboard""#)),
             );
     }
 }

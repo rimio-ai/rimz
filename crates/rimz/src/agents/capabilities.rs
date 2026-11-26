@@ -85,16 +85,25 @@ pub struct McpLaunch<'a> {
     /// Each capability RimZ's server serves the launch, with its load mark; empty when it
     /// serves none.
     pub served: &'a [crate::mcp::launch_env::Served],
+    /// A served capability the launch loads up front though the list marks it nowhere
+    /// (`ExecRequest::default_always`); a provider that cannot load one capability up front
+    /// leaves it as the server loads.
+    pub always: Option<crate::mcp::catalog::Capability>,
 }
 
 impl McpLaunch<'_> {
     /// `--always <capability>` or `--deferred <capability>` for each capability the list
-    /// marks, the `rimz mcp serve` flags that set its tools' load mode.
+    /// marks, and `--always` for [`Self::always`], the `rimz mcp serve` flags that set its
+    /// tools' load mode.
     pub(super) fn capability_mark_args(&self) -> Vec<String> {
         self.mcps
             .unwrap_or_default()
             .iter()
             .filter_map(|entry| Some((entry.capability()?, entry.mode()?)))
+            .chain(
+                self.always
+                    .map(|capability| (capability, crate::mcp::catalog::LoadMode::Always)),
+            )
             .flat_map(|(capability, mode)| {
                 [format!("--{}", mode.name()), capability.name().to_owned()]
             })

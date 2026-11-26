@@ -9,7 +9,7 @@ use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{PresetArgMatcher, PresetField};
 use crate::config::PromptSource;
 use crate::disk::paths::RuntimePaths;
-use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, Consensus, TeamPrompt};
+use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, BoardWrites, Consensus, TeamPrompt};
 use crate::ids::AgentKind;
 
 pub(super) const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
@@ -91,11 +91,13 @@ pub enum PromptComposeErr {
     Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
-/// Read and compose the system prompt sources for `kind`, validating adapter
-/// support and base presence without materializing an artifact yet.
+/// Read and compose the system prompt sources for `kind`, with `board`'s fragment after a
+/// consensus, validating adapter support and base presence without materializing an artifact
+/// yet.
 pub(super) fn read_system_prompt(
     kind: &AgentKind,
     sources: &SystemPromptSources,
+    board: BoardWrites,
 ) -> Result<Option<String>, PromptComposeErr> {
     if sources.is_empty() {
         return Ok(None);
@@ -108,7 +110,7 @@ pub(super) fn read_system_prompt(
         .launch
         .preset_arg_matcher(PresetField::SystemPromptFile)
         .ok_or(PromptComposeErr::Unsupported { agent })?;
-    read_composed(sources, agent).map(Some)
+    read_composed(sources, agent, board).map(Some)
 }
 
 /// Materialize an already-composed (and optionally rewritten) system prompt and
@@ -182,7 +184,7 @@ pub(super) fn plan_system_prompt(
     sources: &SystemPromptSources,
     runtime: &RuntimePaths,
 ) -> Result<SystemPromptPlan, PromptComposeErr> {
-    let composed = read_system_prompt(kind, sources)?;
+    let composed = read_system_prompt(kind, sources, BoardWrites::Shell)?;
     materialize_system_prompt(kind, sources, composed, false, runtime)
 }
 
@@ -212,7 +214,8 @@ pub(super) fn validate_text_prompt_size(
     if !matches!(matcher, PresetArgMatcher::TextFlag(_)) {
         return Ok(());
     }
-    let contents = read_composed(sources, agent)?;
+    // The shell fragment is the longer one, so a prompt that fits with it fits with either.
+    let contents = read_composed(sources, agent, BoardWrites::Shell)?;
     ensure_text_prompt_size(agent, &contents)
 }
 
@@ -285,6 +288,7 @@ fn read_prompt(path: &Path) -> Result<String, PromptComposeErr> {
 fn read_composed(
     sources: &SystemPromptSources,
     agent: &'static str,
+    board: BoardWrites,
 ) -> Result<String, PromptComposeErr> {
     let base = sources
         .system_prompt_file
@@ -306,6 +310,7 @@ fn read_composed(
             Consensus::BuiltIn => BUILT_IN_CONSENSUS.to_owned(),
             Consensus::File(path) => read_prompt(path)?,
         });
+        pieces.push(board.text().to_owned());
         for path in &team_prompt.files {
             pieces.push(read_source(path)?);
         }
@@ -439,8 +444,8 @@ mod tests {
             team_prompt: None,
         };
         assert_eq!(
-            read_composed(&texts, "claude").unwrap(),
-            read_composed(&files, "claude").unwrap()
+            read_composed(&texts, "claude", BoardWrites::Shell).unwrap(),
+            read_composed(&files, "claude", BoardWrites::Shell).unwrap()
         );
         texts.append_system_prompt_files.clear();
         let runtime =
@@ -627,8 +632,9 @@ mod tests {
         assert_eq!(
             built_in.composed,
             Some(format!(
-                "base\n\nfragment\n\n{}\n\npipeline\n",
-                BUILT_IN_CONSENSUS.trim_end()
+                "base\n\nfragment\n\n{}\n\n{}\n\npipeline\n",
+                BUILT_IN_CONSENSUS.trim_end(),
+                BoardWrites::Shell.text().trim_end()
             ))
         );
         assert!(built_in.artifact.is_some());
@@ -639,8 +645,11 @@ mod tests {
         }
         let replaced = plan_system_prompt(&claude, &sources, &runtime).expect("replaced layer");
         assert_eq!(
-            replaced.composed.as_deref(),
-            Some("base\n\nconsensus\n\npipeline\n")
+            replaced.composed,
+            Some(format!(
+                "base\n\nconsensus\n\n{}\n\npipeline\n",
+                BoardWrites::Shell.text().trim_end()
+            ))
         );
         assert!(replaced.artifact.is_some());
     }
@@ -655,7 +664,7 @@ mod tests {
         )
         .expect("base");
         let sources = SystemPromptSources {
-            system_prompt_file: Some(base.into()),
+            system_prompt_file: Some(base.clone().into()),
             append_system_prompt_files: Vec::new(),
             team_prompt: Some(TeamPrompt {
                 consensus: Consensus::BuiltIn,
@@ -664,6 +673,14 @@ mod tests {
         };
         let err = validate_text_prompt_size(&AgentKind::new_unchecked("pi"), &sources)
             .expect_err("layer pushes the prompt over the limit");
+        assert!(matches!(err, PromptComposeErr::TooLarge { .. }));
+        // A base that fits beside the consensus alone does not fit beside its Board writes
+        // fragment too: the check counts the longer, shell, fragment.
+        let consensus = BUILT_IN_CONSENSUS.trim_end().len() + "\n\n\n".len();
+        std::fs::write(&base, "x".repeat(TEXT_PROMPT_LIMIT - consensus)).expect("base");
+        assert!(BoardWrites::Shell.text().len() > BoardWrites::Tools.text().len());
+        let err = validate_text_prompt_size(&AgentKind::new_unchecked("pi"), &sources)
+            .expect_err("the fragment pushes the prompt over the limit");
         assert!(matches!(err, PromptComposeErr::TooLarge { .. }));
     }
 

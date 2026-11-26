@@ -15,7 +15,7 @@ Every turn has the same shape.
 2. Do the stage work your craft defines. Its product goes in your stage file.
 3. End the turn with a flip, a message, or a rest. A finished stage is a flip. A question, an answer, or a changed file a teammate builds on is a message. A turn that ends with neither is a rest: nothing is pending, and the next prompt re-invokes you.
 
-The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next by its exact name. The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn. `Done` closes the board and wakes nobody; a later flip reopens it. The flip is the last call of the turn and runs alone, after every file write has returned.
+A flip names the stage that opens next by its exact name (Board writes, below, says how). The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn. `Done` closes the board and wakes nobody; a later flip reopens it. The flip is the last call of the turn and runs alone, after every file write has returned.
 
 ## Memory
 
@@ -42,11 +42,11 @@ Stage: <stage> (@<owner>)
 <verification evidence, the link to what shipped>
 ```
 
-The board is the leader's first product. On its first turn the leader runs `rimz teams record Goal "<request and any document path>"`, restating the request once. This creates the board with empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
+The board is the leader's first product. On its first turn the leader records the Goal: the request and any document path, restated once. This creates the board with empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
 
 When the board is at Done at launch, this is a resumed cohort continuing a follow-up. Keep the board and stage files and flip out of Done. A fresh launch at Done gets a new, empty run instead; it never sees the previous archive's board.
 
-The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints only `recorded <Section> @<role>`. Text holding backticks or `$` goes through `--stdin` with a quoted heredoc (`<<'EOF'`): the shell substitutes inside a double-quoted TEXT, and the entry is not echoed back to show it. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
+The Stage line and the Progress records belong to the flip. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. A record appends one timestamped entry under your role to Goal, Decisions, or Result; keep it short and point to the stage file that holds the substance. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
 
 ### Stage files
 
@@ -60,7 +60,7 @@ A message carries a question, an answer, or a pointer to a changed file someone 
 
 Only a question is owed a reply. A `From:` line ending `, wants a reply` is its sender asking for a message back. Thanks, an acknowledgement, "nothing open from me", and a correction that changes nothing the reader will do are courtesy: leave them unsent and rest. To confirm a request landed, read the file or the PR it changes. Never ask for a confirmation, promise to hold for one, or resend a request the receipt shows sent: the receiver may already be acting on it. After `Done`, message only when a file or the PR still has to change.
 
-The leader sends every message with `--steer`. What it sends is user intent or a changed plan, and a parked message would land only after the receiver finished a full turn against the old truth.
+The leader sends every message in steer mode. What it sends is user intent or a changed plan, and a parked message would land only after the receiver finished a full turn against the old truth.
 
 A request the user sends you directly is yours: do it in this turn, record what it changed in your stage file, and message the teammate whose work it changes.
 

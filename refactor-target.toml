@@ -6013,7 +6013,9 @@ allowed-dependencies = [
 # ExecRequest is the one reader of a `capabilities:` grant: skill_callable, served_marks,
 # mcp_list, and skill_grant serve the reminder, the plan, and both skill enforcers (+4).
 # ENV_SELF_COMPACT_TOOL tells the hook-context hook its launch serves the self-compaction tool (+1).
-surface-budget = 67
+# ExecRequest::default_always is the one consensus-layer load rule that served_marks and both
+# McpLaunch builders read (+1).
+surface-budget = 68
 
 [[verdict]]
 kind = "item"

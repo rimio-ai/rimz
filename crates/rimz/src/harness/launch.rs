@@ -884,8 +884,44 @@ impl ExecRequest {
     }
 
     /// Each capability the grant, or else the `mcps` selection, serves, with its load mark: its
-    /// own entry's, else the `rimz` entry's.
+    /// own entry's, else `always` for the one [`Self::default_always`] names, else the `rimz`
+    /// entry's.
     pub(super) fn served_marks(
+        &self,
+    ) -> Vec<(
+        crate::mcp::catalog::Capability,
+        Option<crate::mcp::catalog::LoadMode>,
+    )> {
+        let up_front = self.default_always(&crate::mcp::catalog::Capability::ALL);
+        self.listed_marks()
+            .into_iter()
+            .map(|(capability, mode)| match up_front {
+                Some(always) if always == capability => {
+                    (capability, Some(crate::mcp::catalog::LoadMode::Always))
+                }
+                _ => (capability, mode),
+            })
+            .collect()
+    }
+
+    /// `rimz-blackboard` when `served` holds it, the launch carries a consensus layer, whose
+    /// Board writes fragment names its tools, and no entry of the launch's own marks it: the
+    /// launch loads those tools up front.
+    pub(super) fn default_always(
+        &self,
+        served: &[crate::mcp::catalog::Capability],
+    ) -> Option<crate::mcp::catalog::Capability> {
+        let board = crate::mcp::catalog::Capability::Blackboard;
+        let marked = self.mcp_list().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.capability() == Some(board) && entry.mode().is_some())
+        });
+        (self.team_prompt.is_some() && !marked && served.contains(&board)).then_some(board)
+    }
+
+    /// [`Self::served_marks`] as the lists alone mark them.
+    fn listed_marks(
         &self,
     ) -> Vec<(
         crate::mcp::catalog::Capability,
@@ -1680,6 +1716,7 @@ fn compile_agent_process_with_extra_env(
             rendered_tools: request.tools.as_deref(),
             code_mode,
             served: &served,
+            always: request.default_always(&reminders.mcp_capabilities(request)),
         });
     let env_warnings = adapter.finalize_launch_env(
         &skill_env,
