@@ -82,7 +82,7 @@ Every builder that runs `rimz` or creates a mux server scrubs the ambient sessio
 - A hook that ends, interrupts, or compacts a turn, and `SessionStart`, spawns a detached `message deliver` for the agent's queued head, with the hook's own environment. The test cannot await that child, so give each message one deliverer, in one of two ways.
 - The test delivers the message, and queues it only after such a hook (`message::sweep_delivers_queued_harness_records_to_the_agents_current_pane_in_order`).
 - Or the hook delivers it. The hook carries the `zellij-trace` shim, the test's trace log, the pane fixture, and `RIMZ_MESSAGE_SETTLE_MS=0`. The test waits until the trace holds that message's paste followed by its submit key (`common::wait_for_text_then_enter`, or `common::wait_for_text_then_key` for a kind that submits with another key), and never delivers or sweeps it itself (`message::boundary_auto_compact_defers_prompt_until_compaction_ends`).
-- The same holds for a resume wrapper's detached deliverer (`teams_flip::resumed_lazy_leader_gets_its_resume_prompt_then_its_stage`).
+- The same holds for a resume wrapper's detached deliverer (`teams_flip::resumed_lazy_leader_gets_its_resume_prompt_alone`).
 - On a live tmux pane, a receiver that appends each line it reads stands in for the trace, since a line lands only after Enter (`backend::tmux::team_stage::flip_and_registration_rewake_reach_receiver_after_done`).
 - Waiting on `Sent` is not enough: a deliver records `Sent` before it presses the submit keys.
 - A shim alone does not remove the race. The child still takes the claim, so a deliver from the test finds the message claimed and stops without sending.

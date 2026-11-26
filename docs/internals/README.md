@@ -37,7 +37,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, the prompt-cache keepalive, the shared turn reader, scheduling, sender notices, storage and audit, the inbox verbs, channels, and the timing knobs. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds and origins, hook writers, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
 | [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, lifecycle hooks and signals, dirty and landed status, landing on the comparison branch, removal, and every caller that triggers it. |
-| [teams.md](./harness/teams.md) | Team boards, stages, and reports: the run archive behind `.rimz/team`, the memory listing, the stage board and its readers, `rimz teams record` and `flip`, the resume re-wake, and `TEAM_REPORT` settlement. |
+| [teams.md](./harness/teams.md) | Team boards, stages, and reports: the run archive behind `.rimz/team`, the memory listing, the stage board and its readers, `rimz teams record` and `flip`, the one wake a team gets when it comes back, and `TEAM_REPORT` settlement. |
 | [trust.md](./harness/trust.md) | Project trust: the trust states, the hashed executable surface and what stays outside it, launch-time enforcement, every way a grant is made, the stale-grant diff, the trust records, provider folder trust, and adding a command-running field. |
 
 ## The sidebar

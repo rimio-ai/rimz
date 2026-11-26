@@ -908,7 +908,8 @@ enum AgentsSubcmd {
         /// Run this agent on another account of its provider; the room's selection is unchanged.
         #[arg(long, value_name = "NAME")]
         account: Option<rimz::ids::LoginName>,
-        /// Reopen an agent stopped mid-turn at rest instead of sending it a continue.
+        /// Reopen the agent at rest: no continue for a turn it stopped mid-way, nor a
+        /// team leader's with no stage open.
         #[arg(long)]
         no_continue: bool,
     },
