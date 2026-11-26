@@ -1057,6 +1057,25 @@ impl Store {
         })
     }
 
+    /// Retire the premises of the open record `message_id` that end at RimZ's own key
+    /// (`MessageRecord::retire_premises_at_key`), once that key has ended the receiver's turn.
+    #[must_use = "durability barrier; check the result"]
+    pub(crate) fn retire_premises_at_key(&self, message_id: &MessageId) -> Result<()> {
+        self.commit_queue(|queue| {
+            let Some(mut message) = queue
+                .get(message_id)
+                .filter(|message| message.status.is_open())
+            else {
+                return Ok(());
+            };
+            if message.retire_premises_at_key() {
+                message.updated_at = Timestamp::now();
+                queue.upsert(message);
+            }
+            Ok(())
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn queue_boundary_message(
         &self,

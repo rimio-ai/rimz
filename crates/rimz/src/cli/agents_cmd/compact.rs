@@ -6,6 +6,7 @@ use std::io::Write;
 use anyhow::Result;
 use rimz::address::{addressable_agents, named_handle};
 use rimz::message::compact::{CompactAsk, ReceiptOutcome, SoftBecause, compact_agent as compact};
+use rimz::store::message::MessageStatus;
 
 use crate::cli::{GlobalFlags, ctx::Ctx, render, send};
 
@@ -50,6 +51,18 @@ pub(super) fn compact_agent(
     match receipt.outcome {
         ReceiptOutcome::Sent { continues: false } => {
             writeln!(render::out(), "compacting {handle} ({message_id})")?;
+        }
+        // A kind whose command takes the continue as its next prompt sent it on the same line.
+        ReceiptOutcome::Sent { continues: true }
+            if ctx.store.list_messages()?.iter().any(|record| {
+                record.follows_command.as_ref() == Some(&message_id)
+                    && record.status == MessageStatus::Sent
+            }) =>
+        {
+            writeln!(
+                render::out(),
+                "compacting {handle} now ({message_id}) with its continue on the same line"
+            )?;
         }
         ReceiptOutcome::Sent { continues: true } => writeln!(
             render::out(),

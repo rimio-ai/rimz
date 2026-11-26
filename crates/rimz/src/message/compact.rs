@@ -61,7 +61,8 @@ impl CompactErr {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum CompactOutcome {
-    /// The command was typed at once; `continues` when its continue stays queued behind it.
+    /// The command was typed at once; `continues` when its continue stays queued behind it or,
+    /// on a kind whose command takes the continue as its next prompt, was steered on its line.
     Sent {
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         continues: bool,
@@ -84,7 +85,10 @@ pub struct CompactRequest<'a> {
     /// holds an open turn and the command queues; `None` owes none.
     pub continue_text: Option<String>,
     /// End `agent`'s open turn now for the compaction instead of waiting for its end: the
-    /// continue is owed past the stop and stays queued when the command is typed at once.
+    /// continue is owed past the stop, and stays queued when the command is typed at once, unless
+    /// the command takes it as its next prompt and carries it on the same line. An `automated`
+    /// request's attempt that types nothing and pressed no key withdraws both, since its caller
+    /// tries again on its next pass.
     pub hard: bool,
 }
 
@@ -273,49 +277,17 @@ pub fn compact_agent(
                     "{handle}: compaction {message_id} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it"
                 );
             }
-            if let Some((continues, replaced)) = join_waiting(
+            if let Some(outcome) = join(
                 workspace,
                 store,
                 agent,
                 &message_id,
+                &pane_id,
                 continue_text.clone(),
                 hard,
             )
             .map_err(refused)?
             {
-                let outcome = if hard {
-                    // A miss that pressed no key leaves what a join without `--hard` leaves: the
-                    // continue it replaced.
-                    let restore = replaced.map(|follower| {
-                        continue_record(workspace, agent, &message_id, follower.text)
-                    });
-                    match attempt(workspace, store, agent, &message_id, &pane_id, hard)
-                        .map_err(refused)?
-                    {
-                        Attempted::Typed => ReceiptOutcome::Sent { continues },
-                        Attempted::Untyped { pressed } => match untyped_fate(
-                            workspace,
-                            store,
-                            &message_id,
-                            hard,
-                            pressed,
-                            restore.as_ref(),
-                        )
-                        .map_err(refused)?
-                        {
-                            Untyped::Waiting => ReceiptOutcome::Joined {
-                                continues: if pressed {
-                                    continues
-                                } else {
-                                    restore.is_some()
-                                },
-                            },
-                            Untyped::Delivered => ReceiptOutcome::Sent { continues },
-                        },
-                    }
-                } else {
-                    ReceiptOutcome::Joined { continues }
-                };
                 return Ok(CompactReceipt {
                     message_id,
                     outcome,
@@ -348,6 +320,91 @@ pub fn compact_agent(
         outcome: outcome.into(),
         soft_because,
     })
+}
+
+/// Join `agent`'s compaction `command_id`, waiting `Queued`, as `join_waiting` does, and when
+/// `hard` attempt it into the open turn now; a miss that pressed no key leaves what a join
+/// without `hard` leaves, the continue it replaced included. `None` when the command left
+/// `Queued` before the join's commit.
+fn join(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentState,
+    command_id: &MessageId,
+    pane_id: &PaneId,
+    continue_text: Option<String>,
+    hard: bool,
+) -> Result<Option<ReceiptOutcome>> {
+    let Some((continues, replaced)) =
+        join_waiting(workspace, store, agent, command_id, continue_text, hard)?
+    else {
+        return Ok(None);
+    };
+    if !hard {
+        return Ok(Some(ReceiptOutcome::Joined { continues }));
+    }
+    let restore =
+        replaced.map(|follower| continue_record(workspace, agent, command_id, follower.text));
+    let Attempted::Untyped { pressed } =
+        attempt(workspace, store, agent, command_id, pane_id, hard)?
+    else {
+        return Ok(Some(ReceiptOutcome::Sent { continues }));
+    };
+    Ok(Some(
+        match untyped_fate(
+            workspace,
+            store,
+            command_id,
+            hard,
+            pressed,
+            restore.as_ref(),
+        )? {
+            Untyped::Waiting => ReceiptOutcome::Joined {
+                continues: if pressed {
+                    continues
+                } else {
+                    restore.is_some()
+                },
+            },
+            Untyped::Delivered => ReceiptOutcome::Sent { continues },
+        },
+    ))
+}
+
+/// Hard-compact `agent` at the auto-compact ceiling RimZ enforces on it, as `request` (automated
+/// and hard) asks: join the agent's own compaction when one waits for its turn end free of
+/// premises, as a person's `--hard` joins one, else queue `request`'s and attempt it. Returns the
+/// command attempted and whether it was typed now (`ReceiptOutcome::Sent`). A queued compaction
+/// that carries premises (an idle or hand-off compaction) refuses, as `refuse_repeat` does.
+pub fn compact_at_ceiling(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    request: CompactRequest<'_>,
+) -> Result<(MessageId, ReceiptOutcome)> {
+    let agent = request.agent;
+    if let Err(CompactErr::Pending {
+        message_id,
+        status: MessageStatus::Queued,
+    }) = refuse_repeat(store, agent, Timestamp::now())
+        && store.list_messages()?.iter().any(|queued| {
+            queued.message_id == message_id
+                && queued.premises.is_empty()
+                && queued.idle_since.is_none()
+        })
+        && let Some(outcome) = join(
+            workspace,
+            store,
+            agent,
+            &message_id,
+            &request.pane_id,
+            request.continue_text.clone(),
+            true,
+        )?
+    {
+        return Ok((message_id, outcome));
+    }
+    let message_id = request.message_id.clone();
+    Ok((message_id, send_compact(workspace, store, request)?.into()))
 }
 
 /// Join `agent`'s compaction `command_id`, waiting `Queued`: queue `continue_text` behind it
@@ -440,6 +497,19 @@ pub fn send_compact(
     else {
         return sent();
     };
+    if request.hard && request.automated && !pressed {
+        let reason = store
+            .list_messages()?
+            .into_iter()
+            .find(|live| live.message_id == message.message_id)
+            .and_then(|live| live.last_error)
+            .unwrap_or_else(|| format!("compaction {} was not typed at once", message.message_id));
+        let tail = continuation.as_ref().map(|tail| &tail.message_id);
+        store.withdraw_messages(&workspace.session_name, |live| {
+            (live.message_id == message.message_id || Some(&live.message_id) == tail)
+                .then(|| reason.clone())
+        })?;
+    }
     match untyped_fate(
         workspace,
         store,
@@ -524,7 +594,9 @@ fn untyped_fate(
 
 /// Attempt the queued compaction `command_id` now: at the boundary, or, when `hard`, into
 /// `agent`'s open turn, ending it, as a steer where the kind's command steers
-/// (`CompactCommand::steer_checked`) and an interrupt elsewhere. A miss leaves it queued.
+/// (`CompactCommand::steer_checked`), carrying its continue on the same line where the command
+/// takes it as its next prompt (`steer_batch_indices`), and an interrupt elsewhere. A miss leaves
+/// it queued.
 fn attempt(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -555,7 +627,7 @@ fn attempt(
 /// The continue for the compaction command `command_id` on `agent`'s card: a system prompt at
 /// the `Done` gate, which the fold marks owed (`SoftCompactMark::continue_owed`) once queued and
 /// delivery withdraws once that mark clears or the command ends unsent.
-pub(super) fn continue_record(
+fn continue_record(
     workspace: &ResolvedWorkspace,
     agent: &AgentState,
     command_id: &MessageId,

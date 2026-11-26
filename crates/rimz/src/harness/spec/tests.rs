@@ -4549,7 +4549,8 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
     std::fs::write(
         project.path().join(".rimz/config.toml"),
         "[profiles.toml_claude]\ndescription = 'TOML Claude'\nagent = 'claude'\n\
-         [profiles.toml_agy]\ndescription = 'TOML Agy'\nagent = 'antigravity'\n",
+         [profiles.toml_agy]\ndescription = 'TOML Agy'\nagent = 'antigravity'\n\
+         [profiles.toml_amp]\ndescription = 'TOML Amp'\nagent = 'amp'\n",
     )
     .unwrap();
     crate::trust::grant_with_roots(project.path(), root.path()).unwrap();
@@ -4567,7 +4568,12 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             None,
             Some("272000"),
         ),
-        (Some(AutoCompactDefault::BuiltIn), "md_pi", None, None),
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "md_pi",
+            None,
+            Some("272000"),
+        ),
         (
             Some(AutoCompactDefault::BuiltIn),
             "md_claude",
@@ -4590,7 +4596,7 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some(AutoCompactDefault::BuiltIn),
             "md_agy",
             Some("pi"),
-            None,
+            Some("272000"),
         ),
         (
             Some(AutoCompactDefault::BuiltIn),
@@ -4604,6 +4610,14 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some("claude"),
             Some("272000"),
         ),
+        // A switch onto a kind with no enforcer drops the injected default.
+        (
+            Some(AutoCompactDefault::BuiltIn),
+            "toml_agy",
+            Some("amp"),
+            None,
+        ),
+        (Some(AutoCompactDefault::BuiltIn), "toml_amp", None, None),
         (
             Some(AutoCompactDefault::Tokens(300_000)),
             "md_claude",
@@ -4620,13 +4634,14 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some(AutoCompactDefault::Tokens(300_000)),
             "md_pi",
             None,
-            None,
+            Some("300000"),
         ),
         (None, "md_claude", None, None),
         (None, "md_agy", None, None),
         // Kind bases and bare launches get no machine default on any kind.
         (Some(AutoCompactDefault::BuiltIn), "claude", None, None),
         (Some(AutoCompactDefault::BuiltIn), "antigravity", None, None),
+        (Some(AutoCompactDefault::BuiltIn), "pi", None, None),
     ];
 
     let mut actual = Vec::new();

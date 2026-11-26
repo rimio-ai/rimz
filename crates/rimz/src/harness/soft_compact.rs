@@ -100,7 +100,8 @@ pub(crate) fn second_line(line: AutoCompact) -> Option<AutoCompact> {
 /// continue to follow a self-compaction (blank continue text withholds it) and no compaction
 /// open, unprompted since, or owed a continue. A kind
 /// [`reminder_skip`](crate::agents::reminder_skip) names never gets one. Rung 2 sits at
-/// `second_line` and never fires at or past the row's auto-compact ceiling. On a kind whose
+/// `second_line` and never fires at or past the row's auto-compact ceiling, and neither rung fires
+/// at or past a ceiling RimZ enforces, which compacts the turn itself. On a kind whose
 /// `Capabilities::lifecycle_reports_fill` is true, the first reminder past a spent mark's epoch
 /// also requires a fold-observed low-water reading under the seat's line; when every other
 /// condition holds and that guard alone says no, returns [`ReminderVerdict::WithheldByGuard`].
@@ -148,6 +149,7 @@ pub fn reminder_due(
         || agent.is_compacting(now)
         || agent.compaction_unprompted(now)
         || agent.soft_compact_in_flight()
+        || rimz_ceiling_reached(agent, definition).is_some()
     {
         return ReminderVerdict::NotDue;
     }
@@ -443,19 +445,8 @@ pub fn ceiling_due(
         return None;
     }
     let definition = crate::agents::definition_by_kind(agent.kind.as_str()).ok()?;
-    if crate::agents::auto_compact_enforcer(definition)
-        != Some(crate::agents::AutoCompactEnforcer::Rimz)
-    {
-        return None;
-    }
-    let ceiling = agent
-        .record
-        .as_ref()
-        .and_then(|record| record.auto_compact)?;
-    if !agent
-        .occupied_context_tokens()
-        .is_some_and(|tokens| tokens >= ceiling)
-        || !agent.holds_open_turn()
+    let ceiling = rimz_ceiling_reached(agent, definition)?;
+    if !agent.holds_open_turn()
         || agent.is_compacting(now)
         || agent.compaction_unprompted(now)
         || agent
@@ -465,6 +456,33 @@ pub fn ceiling_due(
         return None;
     }
     (!compaction_blocked()).then_some(ceiling)
+}
+
+/// The auto-compact ceiling RimZ enforces on `agent` once its occupied context reads at or over
+/// it: the line its launch recorded, on a kind whose enforcer is RimZ, while that line sits below
+/// the model's window (where `agents::native_compaction` draws it), or the window is unknown.
+fn rimz_ceiling_reached(
+    agent: &AgentState,
+    definition: &crate::agents::AgentDefinition,
+) -> Option<u64> {
+    if crate::agents::auto_compact_enforcer(definition)
+        != Some(crate::agents::AutoCompactEnforcer::Rimz)
+    {
+        return None;
+    }
+    let ceiling = agent
+        .record
+        .as_ref()
+        .and_then(|record| record.auto_compact)
+        .filter(|ceiling| {
+            agent
+                .resolved_context_window()
+                .is_none_or(|window| *ceiling < window)
+        })?;
+    agent
+        .occupied_context_tokens()
+        .is_some_and(|tokens| tokens >= ceiling)
+        .then_some(ceiling)
 }
 
 fn spawn_ceiling_compact(runtime: &RuntimePaths, request: &CeilingCompactRequest) -> bool {

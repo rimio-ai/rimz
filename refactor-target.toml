@@ -3698,25 +3698,20 @@ upward-dependencies = [
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
-# soft_compact exposes its module and its delivery outcome to the ceiling helper.
 # TurnWaitView::soft_compact_in_flight shares owed-continue debt without another queue read (+1).
 # InputWait carries native-input refusal reasons from the write decision to CLI receipts (+1).
 # InterruptConfirmation::warning and interrupt_withheld_detail give the CLI receipts and the MCP
 # message tool one wording for an unconfirmed or withheld interrupt (+2).
-# `soft_compact::send_ceiling_compact` exposes the enforced ceiling steer to the CLI helper (+1).
 # compact::CompactAsk and compact::SoftBecause carry a hard request in from the CLI and MCP
 # callers and its fallback reason out to the receipt (+2).
-surface-budget = 95
+# The ceiling helper hard-compacts through compact::send_compact, so message::soft_compact, its
+# ReminderOutcome, and send_ceiling_compact are gone (-3).
+surface-budget = 92
 
 [[verdict]]
 kind = "item"
 key = "message::InputWait"
 reason = "Pane writes, dispatch and CLI receipts share human-input and automatic-review refusals."
-
-[[verdict]]
-kind = "item"
-key = "message::soft_compact"
-reason = "The smart-compaction reminder's queue and delivery choreography belongs beside other message sends."
 
 [[verdict]]
 kind = "item"
@@ -3732,11 +3727,6 @@ reason = "A wait stamps its start at entry and resolves its caller at the first 
 kind = "item"
 key = "message::announce::Announcement"
 reason = "The count and senders of the prompts that stopped a wait carry to the one stderr line both CLI scenes print, never the message text."
-
-[[verdict]]
-kind = "item"
-key = "message::soft_compact::ReminderOutcome"
-reason = "The ceiling helper records whether its steer reached the pane, including a miss's reason."
 
 [[verdict]]
 kind = "item"
@@ -4903,7 +4893,9 @@ path = "crates/rimz/src/store"
 # SidebarLaunched carries a card's launched agents and teams from the launched lane to the renderer (+1).
 # run::ResultReminder and RunRecord::pending_result_reminder: the fold, the strand check, and the
 # notice premise read one reminder state (+2).
-surface-budget = 706
+# The ceiling's `Premise::OverCeiling` is judged with the row premises again, and the delivery
+# path retires it at RimZ's own key through `Store::retire_premises_at_key` (+2).
+surface-budget = 708
 
 [[verdict]]
 kind = "item"

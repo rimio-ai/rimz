@@ -482,45 +482,92 @@ impl Fixture {
     }
 }
 
-/// A person's hard request to a busy agent of a steering kind types the command alone now and
-/// presses send-now; its continue stays queued past the stop and is typed once the compaction rests
-/// the row, which a steered command does with no turn end, its compaction closing on the manual
-/// trigger.
+/// A person's hard request to a busy agent of a steering kind whose command takes its brief on
+/// the same line types the command alone now and presses send-now; its continue stays queued past
+/// the stop and is typed once the compaction rests the row, which a steered command does with no
+/// turn end, its compaction closing on the manual trigger.
 #[test]
 fn a_hard_request_steers_the_command_into_a_busy_agent_and_continues_it_after() {
-    for kind in ["claude", "antigravity"] {
-        let fixture = Fixture::new(kind);
-        let output = fixture.person_compact(&["--hard"]).output().unwrap();
-        assert!(output.status.success(), "{kind}: {output:?}");
-        let (command, continuation) = fixture.command_and_continue();
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim_end(),
-            format!(
-                "compacting {} now ({}), then continues it if nothing else is waiting",
-                fixture.named(),
-                command.message_id
-            )
-        );
-        assert_eq!(
-            (command.status, continuation.status, continuation.past_stop),
-            (MessageStatus::Sent, MessageStatus::Queued, true),
-            "{kind}"
-        );
-        assert!(
-            fixture
-                .agent()
-                .ends_turn_for_compaction(jiff::Timestamp::now()),
-            "{kind}"
-        );
-        let trace = fixture.trace();
-        let typed = trace
-            .iter()
-            .position(|line| is_compact_command(line))
-            .unwrap_or_else(|| panic!("{kind}: no command typed: {trace:?}"));
-        assert_eq!(keys_after(&trace, typed), send_now_keys(kind), "{kind}");
-        assert!(!trace.iter().any(|line| is_paste(line, "keep going")));
-        fixture.compact_and_continue(&continuation, Some(false));
-    }
+    let kind = "claude";
+    let fixture = Fixture::new(kind);
+    let output = fixture.person_compact(&["--hard"]).output().unwrap();
+    assert!(output.status.success(), "{kind}: {output:?}");
+    let (command, continuation) = fixture.command_and_continue();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format!(
+            "compacting {} now ({}), then continues it if nothing else is waiting",
+            fixture.named(),
+            command.message_id
+        )
+    );
+    assert_eq!(
+        (command.status, continuation.status, continuation.past_stop),
+        (MessageStatus::Sent, MessageStatus::Queued, true),
+        "{kind}"
+    );
+    assert!(
+        fixture
+            .agent()
+            .ends_turn_for_compaction(jiff::Timestamp::now()),
+        "{kind}"
+    );
+    let trace = fixture.trace();
+    let typed = trace
+        .iter()
+        .position(|line| is_compact_command(line))
+        .unwrap_or_else(|| panic!("{kind}: no command typed: {trace:?}"));
+    assert_eq!(keys_after(&trace, typed), send_now_keys(kind), "{kind}");
+    assert!(!trace.iter().any(|line| is_paste(line, "keep going")));
+    fixture.compact_and_continue(&continuation, Some(false));
+}
+
+/// Asserts `trace` steered Antigravity's compaction as one line, `/compact <continue>`, and
+/// pressed its send-now keys after it, with no separate paste of the continue.
+fn assert_folded_steer(trace: &[String]) {
+    let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
+    let command_at = trace
+        .iter()
+        .position(|line| line.ends_with(&format!("{write_prefix}/compact ")))
+        .unwrap_or_else(|| panic!("expected command segment: {trace:?}"));
+    let tail_at = trace
+        .iter()
+        .position(|line| line.ends_with(&format!("{write_prefix}keep going")))
+        .unwrap_or_else(|| panic!("expected folded continue segment: {trace:?}"));
+    assert_eq!(tail_at, command_at + 1, "{trace:?}");
+    assert_eq!(
+        keys_after(trace, tail_at),
+        send_now_keys("antigravity"),
+        "{trace:?}"
+    );
+    assert!(
+        !trace.iter().any(|line| is_paste(line, "keep going")),
+        "{trace:?}"
+    );
+}
+
+/// A person's hard request to a busy Antigravity, whose command takes the continue as its next
+/// prompt, steers `/compact <continue>` as one line with its send-now keys: the continue rides the
+/// command's line, and nothing is left to type after the compaction.
+#[test]
+fn a_hard_request_steers_a_next_prompt_kind_the_command_and_continue_as_one_line() {
+    let fixture = Fixture::new("antigravity");
+    let output = fixture.person_compact(&["--hard"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let (command, continuation) = fixture.command_and_continue();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format!(
+            "compacting {} now ({}) with its continue on the same line",
+            fixture.named(),
+            command.message_id
+        )
+    );
+    assert_eq!(
+        (command.status, continuation.status, continuation.past_stop),
+        (MessageStatus::Sent, MessageStatus::Sent, true)
+    );
+    assert_folded_steer(&fixture.trace());
 }
 
 /// A person's hard request to a busy Codex presses its interrupt keys and types nothing until its
@@ -2202,7 +2249,7 @@ fn next_prompt_kind_folds_command_and_continue_at_turn_end_and_on_steer() {
 }
 
 #[test]
-fn ceiling_compact_helper_enforces_or_withdraws_pair_and_records_assist() {
+fn ceiling_compact_helper_hard_compacts_only_while_its_premise_holds_and_records_assist() {
     let stamp_ceiling = |fixture: &Fixture, ceiling: u64| {
         let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
         let owner = rimz::store::runtime::process_owner(
@@ -2257,34 +2304,20 @@ fn ceiling_compact_helper_enforces_or_withdraws_pair_and_records_assist() {
         command
     };
 
-    // 1. Due on fresh state: queues and steers folded line with send_now, records Sent on both,
-    //    attaches OverCeiling premise, and logs a delivered ceiling_compact assist under compacts.
+    // 1. Due on fresh state: hard-compacts through the same path a person's `--hard` takes,
+    //    steering the folded line with send_now, records Sent on both with the ceiling's premise
+    //    on the command, and logs a delivered ceiling_compact assist under compacts.
     {
         let fixture = Fixture::new("antigravity");
         stamp_ceiling(&fixture, 100_000);
         run_success(&mut ceiling_cmd(&fixture), "ceiling compact helper");
 
-        let trace = fixture.trace();
-        let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
-        assert!(
-            trace
-                .iter()
-                .any(|line| line.ends_with(&format!("{write_prefix}/compact "))),
-            "expected command segment: {trace:?}"
-        );
-        let tail_at = trace
-            .iter()
-            .position(|line| line.ends_with(&format!("{write_prefix}keep going")))
-            .unwrap_or_else(|| panic!("expected folded continue segment: {trace:?}"));
-        assert_eq!(
-            keys_after(&trace, tail_at),
-            vec!["13".to_owned(), "27\t109".to_owned()],
-            "enforced ceiling steer presses send_now: {trace:?}"
-        );
-
+        assert_folded_steer(&fixture.trace());
         let (command, continuation) = fixture.command_and_continue();
-        assert_eq!(command.status, MessageStatus::Sent);
-        assert_eq!(continuation.status, MessageStatus::Sent);
+        assert_eq!(
+            (command.status, continuation.status, continuation.past_stop),
+            (MessageStatus::Sent, MessageStatus::Sent, true)
+        );
         assert!(command.automated);
         assert_eq!(
             command.premises,
@@ -2356,49 +2389,160 @@ fn ceiling_compact_helper_enforces_or_withdraws_pair_and_records_assist() {
         assert_eq!(fixture.stats()["events"].as_array().unwrap().len(), 0);
     }
 
-    // 4. Premise broken before typing (turn ended OR context dropped below ceiling): withdraws
-    //    both command and tail (neither left Queued), types nothing, and records a held assist.
-    for drop_context in [false, true] {
-        let fixture = Fixture::new("antigravity");
+    // 4. A kind whose command does not steer: the interrupt key, then, once the stop it made
+    //    shows, the command typed into the rested row, since the premise ends at RimZ's key; the
+    //    continue owed past that stop is typed after the compaction.
+    {
+        let fixture = Fixture::new("pi");
         stamp_ceiling(&fixture, 100_000);
-        let before = DeliveryRendezvous::new(
-            &fixture.env,
-            if drop_context {
-                "ceiling-drop-ctx"
-            } else {
-                "ceiling-turn-end"
-            },
-        );
+        let started = Instant::now();
         let child = ceiling_cmd(&fixture)
-            .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+            .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut release = before.arrive();
-        if drop_context {
-            fixture.context(50_000);
-        } else {
-            fixture.end_turn();
+        while !fixture.trace().iter().any(|line| is_escape_key(line)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{:?}",
+                fixture.trace()
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
-        release.write_all(&[1]).unwrap();
+        fixture.end_turn();
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert!(
-            fixture.trace().iter().all(|line| is_mux_read(line)),
-            "broken premise types nothing: {:?}",
-            fixture.trace()
-        );
-        assert!(
-            fixture.env.store().list_messages().unwrap().is_empty(),
-            "neither command nor tail stays queued"
-        );
+        let trace = fixture.trace();
+        let escape = trace.iter().position(|line| is_escape_key(line));
+        let typed = trace.iter().position(|line| is_compact_command(line));
+        assert!(escape.is_some() && typed > escape, "{trace:?}");
         let (command, continuation) = fixture.command_and_continue();
-        assert_eq!(command.status, MessageStatus::Canceled);
-        assert_eq!(continuation.status, MessageStatus::Canceled);
+        assert_eq!(
+            (command.status, continuation.status, continuation.past_stop),
+            (MessageStatus::Sent, MessageStatus::Queued, true)
+        );
+        assert!(command.premises.is_empty(), "{:?}", command.premises);
+        assert!(
+            fixture
+                .agent()
+                .ends_turn_for_compaction(jiff::Timestamp::now())
+        );
         let stats = fixture.stats();
-        assert_eq!(stats["rollup"]["compacts"], 0);
-        assert_eq!(stats["rollup"]["held"]["compacts"], 1);
+        assert_eq!(stats["rollup"]["compacts"], 1, "{stats}");
+        fixture.lifecycle(LifecycleSignal::Compacting);
+        fixture.lifecycle(LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+            echo: false,
+        });
+        fixture.context(20_000);
+        fixture.deliver(&continuation.message_id);
+        assert_eq!(
+            fixture.status_of(&continuation.message_id),
+            MessageStatus::Sent
+        );
+    }
+
+    // 5. The premise breaks before RimZ's first key (the turn ends, or the reading falls below
+    //    the line, while the write waits for the pane lock): nothing is pressed or typed, neither
+    //    command nor continue stays queued, and the assist records the miss.
+    for kind in ["antigravity", "pi"] {
+        for drop_context in [false, true] {
+            let fixture = Fixture::new(kind);
+            stamp_ceiling(&fixture, 100_000);
+            let before = DeliveryRendezvous::new(
+                &fixture.env,
+                if drop_context {
+                    "ceiling-drop-ctx"
+                } else {
+                    "ceiling-turn-end"
+                },
+            );
+            let child = ceiling_cmd(&fixture)
+                .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before.path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut release = before.arrive();
+            if drop_context {
+                fixture.context(50_000);
+            } else {
+                fixture.end_turn();
+            }
+            release.write_all(&[1]).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{kind}: {output:?}");
+            assert!(
+                fixture.trace().iter().all(|line| is_mux_read(line)),
+                "{kind}: a broken premise presses and types nothing: {:?}",
+                fixture.trace()
+            );
+            assert!(
+                fixture.env.store().list_messages().unwrap().is_empty(),
+                "{kind}: neither command nor continue stays queued"
+            );
+            let (command, continuation) = fixture.command_and_continue();
+            assert_eq!(
+                (command.status, continuation.status),
+                (MessageStatus::Canceled, MessageStatus::Canceled),
+                "{kind}"
+            );
+            let stats = fixture.stats();
+            assert_eq!(stats["rollup"]["compacts"], 0, "{kind}: {stats}");
+            assert_eq!(stats["rollup"]["held"]["compacts"], 1, "{kind}: {stats}");
+            let error = stats["events"][0]["error"].as_str().unwrap_or_default();
+            assert!(
+                error.contains("auto-compact ceiling"),
+                "{kind}: the assist names the broken premise: {stats}"
+            );
+        }
+    }
+
+    // 6. The agent's own compaction already waits for its turn end: the ceiling hard-attempts
+    //    that command, folding the continue onto its line, queues nothing of its own, and records
+    //    the firing against the agent's command.
+    {
+        let fixture = Fixture::new("antigravity");
+        stamp_ceiling(&fixture, 100_000);
+        fixture.compact(&[]);
+        let (own, _) = fixture.command_and_continue();
+        assert_eq!(own.status, MessageStatus::Queued);
+        run_success(
+            &mut ceiling_cmd(&fixture),
+            "ceiling joins the agent's own compaction",
+        );
+        assert_folded_steer(&fixture.trace());
+        let records = fixture.records();
+        assert_eq!(records.len(), 3, "{records:?}");
+        assert_eq!(fixture.status_of(&own.message_id), MessageStatus::Sent);
+        let followers = |past_stop: bool| {
+            records
+                .iter()
+                .filter(|record| {
+                    record.follows_command.as_ref() == Some(&own.message_id)
+                        && record.past_stop == past_stop
+                })
+                .map(|record| record.status)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (followers(true), followers(false)),
+            (vec![MessageStatus::Sent], vec![MessageStatus::Canceled]),
+            "the join's continue, owed past RimZ's stop, replaced the agent's own: {records:?}"
+        );
+        let stats = fixture.stats();
+        assert_eq!(stats["rollup"]["compacts"], 1, "{stats}");
+        let ceiling_events: Vec<_> = stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["assist"] == "ceiling_compact")
+            .collect();
+        assert_eq!(ceiling_events.len(), 1, "{stats}");
+        assert_eq!(ceiling_events[0]["delivered"], true);
+        assert_eq!(ceiling_events[0]["message_id"], own.message_id.as_str());
     }
 }
 

@@ -1179,6 +1179,7 @@ fn ceiling_due_checks_every_condition_and_excludes_native_and_unsupported_kinds(
         ..Default::default()
     }));
     candidate.usage.total_tokens = Some(372_000);
+    candidate.usage.context_window = Some(1_000_000);
 
     let check = |row: &AgentState| ceiling_due(&snapshot(row), row, "continue", now, || false);
 
@@ -1246,13 +1247,40 @@ fn ceiling_due_checks_every_condition_and_excludes_native_and_unsupported_kinds(
             a.kind = AgentKind::new_unchecked("claude");
             a
         }),
-        ("unsupported pi", {
+        ("native-enforced codex", {
             let mut a = candidate.clone();
-            a.kind = AgentKind::new_unchecked("pi");
+            a.kind = AgentKind::new_unchecked("codex");
+            a
+        }),
+        ("no compact command amp", {
+            let mut a = candidate.clone();
+            a.kind = AgentKind::new_unchecked("amp");
+            a
+        }),
+        ("no compaction signal hermes", {
+            let mut a = candidate.clone();
+            a.kind = AgentKind::new_unchecked("hermes");
+            a
+        }),
+        ("model window below the level", {
+            let mut a = candidate.clone();
+            a.usage.context_window = Some(200_000);
             a
         }),
     ] {
         assert_eq!(check(&changed), None, "{name}");
+    }
+    let mut pi = candidate.clone();
+    pi.kind = AgentKind::new_unchecked("pi");
+    assert_eq!(check(&pi), Some(372_000), "pi has no native window");
+    for kind in ["copilot", "kimi", "omp", "droid"] {
+        let mut row = candidate.clone();
+        row.kind = AgentKind::new_unchecked(kind);
+        assert_eq!(
+            check(&row),
+            None,
+            "{kind}'s message keys were never checked"
+        );
     }
 
     let mut at_cooldown = candidate.clone();
@@ -1352,4 +1380,74 @@ fn ceiling_due_checks_every_condition_and_excludes_native_and_unsupported_kinds(
         },
     );
     assert_eq!(fired.len(), 2, "new compaction epoch bypasses prior pacing");
+}
+
+/// One crossing gets one compaction: a reading past both the smart-compaction line and a
+/// RimZ-enforced level arms no reminder, so the hard compaction the ceiling fires is not followed
+/// by a reminder to compact again; one armed below the level and not yet claimed is taken back
+/// once the reading reaches it.
+#[test]
+fn a_reading_past_the_line_and_the_level_together_gets_the_ceiling_alone() {
+    let now = ts(10_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let line = AutoCompact::Tokens(258_000);
+    let config = line_config(line);
+    let pass = |seat: &AgentState| {
+        let mut snap = snapshot(seat);
+        snap.now = now;
+        compact_agents(
+            &snap,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &SeatPolicy::default(),
+            &DiagSink::disabled(),
+        );
+        let mut fired = 0;
+        enforce_ceiling_agents_with(
+            &snap,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            || now,
+            |_| {
+                fired += 1;
+                true
+            },
+        );
+        fired
+    };
+    let claimed = |seat: &AgentState| {
+        claim_pending(&runtime, &seat.kind, None, Some(seat.agent_id.as_str())).is_some()
+    };
+    let mut candidate = agent();
+    candidate.kind = AgentKind::new_unchecked("antigravity");
+    candidate.record = Some(Box::new(crate::agents::LaunchRecord {
+        auto_compact: Some(272_000),
+        ..Default::default()
+    }));
+
+    candidate.usage.total_tokens = Some(280_000);
+    assert_eq!(pass(&candidate), 1, "the ceiling fires once");
+    assert_eq!(verdict(&candidate, line), ReminderVerdict::NotDue);
+    assert!(!claimed(&candidate), "no reminder rides on the crossing");
+
+    let mut later = candidate.clone();
+    later.agent_id = "later".into();
+    later.usage.total_tokens = Some(260_000);
+    assert_eq!(pass(&later), 0);
+    later.usage.total_tokens = Some(280_000);
+    assert_eq!(pass(&later), 1);
+    assert!(
+        !claimed(&later),
+        "a reminder armed below the level is taken back once the reading reaches it"
+    );
+
+    candidate.kind = AgentKind::new_unchecked("claude");
+    assert!(
+        verdict(&candidate, line).is_due(),
+        "a native window leaves the reminder as it was"
+    );
 }

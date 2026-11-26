@@ -252,26 +252,25 @@ impl std::fmt::Display for SoftCompactSkip {
 pub enum AutoCompactEnforcer {
     /// The provider CLI enforces the ceiling through its native window switch.
     Native,
-    /// RimZ watches occupied context and steers a folded compaction with continuation.
+    /// RimZ watches occupied context and hard-compacts a busy agent at the ceiling, on a kind
+    /// whose message keys were checked against the agent.
     Rimz,
 }
 
 /// Derive who enforces an `auto-compact` ceiling on `definition`, or `None` when
-/// neither the provider nor RimZ can enforce one.
+/// neither the provider nor RimZ can enforce one. RimZ enforces it where the provider has no
+/// native window, the kind takes part in compaction ([`soft_compact_skip`] is `None`), and its
+/// message keys were checked against the agent ([`MessageKeys::implemented`]), since enforcing
+/// interrupts a busy agent with a key that must stop it and a stop its decoder must report.
+///
+/// [`MessageKeys::implemented`]: super::MessageKeys::implemented
 pub fn auto_compact_enforcer(definition: &AgentDefinition) -> Option<AutoCompactEnforcer> {
-    let launch = definition.spec().launch;
+    let launch = &definition.spec().launch;
     if launch.presets.auto_compact.is_some() {
         return Some(AutoCompactEnforcer::Native);
     }
-    let compact = launch.compact_command?;
-    if compact.instruction == super::CompactInstruction::NextPrompt
-        && compact.steer_checked
-        && soft_compact_skip(definition).is_none()
-        && launch.message_keys.implemented
-    {
-        return Some(AutoCompactEnforcer::Rimz);
-    }
-    None
+    (launch.message_keys.implemented && soft_compact_skip(definition).is_none())
+        .then_some(AutoCompactEnforcer::Rimz)
 }
 
 /// Derive reminder participation from the adapter's declared command and coverage.

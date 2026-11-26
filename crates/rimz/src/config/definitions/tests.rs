@@ -2837,7 +2837,7 @@ fn runtime_resolution_aliases_and_defaults() {
             resolved
                 .auto_compact_default
                 .and_then(|default| default.resolve_for_kind(kind)),
-            if kind == "pi" { None } else { Some(272_000) }
+            Some(272_000)
         );
         assert!(profile.append_system_prompt_files.is_empty());
     }
@@ -3784,12 +3784,13 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
             )
             .unwrap();
             let want = match (kind, default) {
-                ("claude" | "codex" | "antigravity", Some(AutoCompactDefault::BuiltIn)) => {
+                ("claude" | "codex" | "antigravity" | "pi", Some(AutoCompactDefault::BuiltIn)) => {
                     Some(272_000)
                 }
-                ("claude" | "codex" | "antigravity", Some(AutoCompactDefault::Tokens(n))) => {
-                    Some(n)
-                }
+                (
+                    "claude" | "codex" | "antigravity" | "pi",
+                    Some(AutoCompactDefault::Tokens(n)),
+                ) => Some(n),
                 _ => None,
             };
             actual.push((
