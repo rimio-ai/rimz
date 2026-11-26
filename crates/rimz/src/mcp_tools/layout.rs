@@ -149,6 +149,7 @@ fn caller_room(
 
 /// `team` launches only a configured team, and names the valid ones when it is not.
 fn require_team(effective: &LaunchAgents, team: &str) -> Result<(), Failure> {
+    effective.block_set_failure().map_err(anyhow::Error::from)?;
     let teams = &effective.teams;
     if teams.0.contains_key(team) {
         return Ok(());

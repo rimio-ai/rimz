@@ -310,6 +310,7 @@ fn launch(
                 ))
             })?;
             let effective = effective::load(&strict, root).map_err(anyhow::Error::from)?;
+            effective.block_set_failure().map_err(anyhow::Error::from)?;
             if !effective.teams.0.contains_key(team_name) {
                 if let Some(detail) = effective.definition_failure_for(team_name) {
                     return Err(Failure::new(detail));

@@ -530,6 +530,40 @@ fn loop_add_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
     );
 }
 
+/// While a definition-set failure stands (here a home team named like a home subagent profile),
+/// `loop add --team` refuses every team with the set's error and writes nothing, matching launches.
+#[test]
+fn loop_add_team_refuses_while_definition_set_has_failed() {
+    let env = live_room();
+    kinds_fixture(&env);
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Build.",
+    );
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "crew",
+        "description: Colliding child\nagent: codex\ntools: [Bash]",
+        "Help.",
+    );
+    for team in ["crew", "forge"] {
+        let (_, error) = loop_fail(&env, &["loop", "add", "t", "--every", "1h", "--team", team]);
+        assert_eq!(
+            error,
+            format!(
+                "error: loop task `t`: --team `{team}`: {}: team name `crew` is reserved for an \
+                 inline profile/command cell; choose another team name\n",
+                env.agents_home().display(),
+            )
+        );
+    }
+    assert!(!loop_config_path(&env).exists(), "nothing was written");
+}
+
 /// A launch child stand-in behind `RIMZ_BIN`: an `agents`, `teams` or `workflow` launch writes
 /// what it was started with to `seen` and exits with the code in `code`, printing `boom`;
 /// every other `rimz` helper runs the real binary. Every call's argv is appended to
