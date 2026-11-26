@@ -455,7 +455,7 @@ fn soft_compact_skips_list_only_detected_kinds_with_their_reasons() {
         serde_json::to_value(collect_soft_compact_skips(&hooks)).unwrap(),
         serde_json::json!([
             {"kind": "amp", "reason": "no_compact_command"},
-            {"kind": "antigravity", "reason": "no_hook_context"},
+            {"kind": "antigravity", "reason": "hook_context_cannot_carry"},
             {"kind": "muse", "reason": "no_compaction_signal"},
             {"kind": "qoder", "reason": "no_live_context_reading"},
         ])
