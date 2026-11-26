@@ -326,7 +326,7 @@ fn assert_kind_launches(env: &Env, kind: &str) {
         rimz::config::effective::ProfileScope::Agents,
         &machine.agents.commands,
         Some("peer"),
-        None,
+        &rimz::config::Selection::default(),
     )
     .expect("the built-in peer team can still launch both kinds");
     assert_eq!(peer.layout.agent_cells().count(), 2);

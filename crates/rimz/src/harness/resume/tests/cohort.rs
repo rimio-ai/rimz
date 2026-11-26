@@ -106,6 +106,7 @@ fn live_team_seats_are_refilled_without_planning_a_team_tab() {
             &teams,
             &profiles,
             &commands,
+            &crate::config::Selection::default(),
             Some(Path::new("/repo")),
             &WORKSPACE,
             |_| true,
@@ -157,6 +158,7 @@ fn an_ended_parked_row_never_claims_the_seat_a_live_member_refills() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -315,6 +317,7 @@ fn failed_team_restore_warnings(
         teams,
         profiles,
         commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -361,6 +364,7 @@ fn team_restore_forwards_skipped_field_warnings_into_recovery() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -417,6 +421,7 @@ fn recorded_team_restore_keeps_role_layers() {
             &teams,
             &profiles,
             &commands,
+            &crate::config::Selection::default(),
             Some(Path::new("/repo")),
             &WORKSPACE,
             |_| true,
@@ -1832,18 +1837,31 @@ fn channel_hold_table() {
 fn team_restore_routes_fresh_seats_before_planning() {
     let root = tempfile::tempdir().unwrap();
     let (teams, mut profiles, commands) = team_configs();
-    let mut routed = routed_profile(None);
-    routed.model_tier = Some(crate::config::tiers::TierProvenance {
-        tier: crate::config::tiers::ModelTier::Senior,
-        fell_back: false,
-    });
-    routed
-        .definition_renders
-        .as_mut()
-        .unwrap()
-        .renders
-        .insert("claude".into(), profile("claude"));
-    profiles.0.insert("claude-plan".into(), routed);
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        (
+            "claude-plan",
+            "agent: claude\ntier: senior\ntools: [Read]\n",
+        ),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Probe\n{fields}---\nCraft."),
+        )
+        .unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &commands,
+        &root.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    profiles.0.extend(loaded.agent_profiles.0);
     let mut machine = crate::config::MachineConfig::default();
     machine.agents.teams = teams;
     machine.agents.profiles = profiles;
@@ -1861,6 +1879,7 @@ fn team_restore_routes_fresh_seats_before_planning() {
             &config.teams,
             &config.profiles,
             &config.commands,
+            &config.selection,
             Some(Path::new("/repo")),
             &WORKSPACE,
             |_| true,
@@ -2131,6 +2150,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -2380,6 +2400,7 @@ fn team_restore_does_not_reopen_a_placeholder_only_board() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(root.path()),
         &WORKSPACE,
         |_| true,
@@ -3111,6 +3132,7 @@ fn a_team_restore_tab_at_trunk_is_labelled_main() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -3174,6 +3196,7 @@ fn team_restore_tabs_seed_every_declared_role() {
             &teams,
             &profiles,
             &commands,
+            &crate::config::Selection::default(),
             Some(Path::new("/repo")),
             &WORKSPACE,
             |_| true,
@@ -3232,6 +3255,7 @@ fn a_resumed_cohort_seat_carries_its_rows_lane() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -3258,6 +3282,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,
@@ -3663,6 +3688,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
         &teams,
         &profiles,
         &commands,
+        &crate::config::Selection::default(),
         Some(Path::new("/repo")),
         &WORKSPACE,
         |_| true,

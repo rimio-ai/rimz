@@ -7274,7 +7274,7 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     assert_eq!(once, twice);
     assert_eq!(once.append_system_prompt_files.len(), 3);
 
-    // Bare/kind-base runtime bases stay idempotent via `built_under`.
+    // A build under a bare or kind-base runtime base gives the same render on every call.
     let codex_rt = crate::agents::find_runtime("codex").unwrap();
     let under_rt = loaded.agent_profiles.0["child"]
         .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
@@ -8050,7 +8050,7 @@ fn toml_extras_system_prompt_file_and_append_order_through_chain_and_override() 
         .definition
         .as_ref()
         .unwrap()
-        .build(child, Some(BuildBase::Profile(over)), None, None)
+        .build(Some(BuildBase::Profile(over)), None, None)
         .unwrap();
     assert_eq!(child_under_x.system_prompt_file.as_ref(), Some(&p_base));
     assert_eq!(
@@ -8063,7 +8063,7 @@ fn toml_extras_system_prompt_file_and_append_order_through_chain_and_override() 
         .definition
         .as_ref()
         .unwrap()
-        .build(plain, Some(BuildBase::Profile(over)), None, None)
+        .build(Some(BuildBase::Profile(over)), None, None)
         .unwrap();
     assert_eq!(plain_under_x.system_prompt_file.as_ref(), Some(&x_base));
     assert_eq!(plain_under_x.append_system_prompt_files, vec![x_app, l_app]);
@@ -8132,7 +8132,7 @@ fn toml_extras_prompt_files_refused_on_promptless_provider() {
         .definition
         .as_ref()
         .unwrap()
-        .build(claude_prompt, None, Some("cursor"), None)
+        .build(None, Some("cursor"), None)
         .unwrap_err();
     assert!(
         err.message.contains("takes no system prompt"),
@@ -8211,7 +8211,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(claude_row, None, Some("codex"), None)
+        .build(None, Some("codex"), None)
         .unwrap();
     assert_eq!(rebuilt_codex.args, None);
 
@@ -8219,7 +8219,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(claude_row, None, None, Some("sol"))
+        .build(None, None, Some("sol"))
         .unwrap();
     assert_eq!(rebuilt_by_model.agent, "codex");
     assert_eq!(rebuilt_by_model.args, None);
@@ -8231,7 +8231,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(child_codex, None, Some("claude"), None)
+        .build(None, Some("claude"), None)
         .unwrap();
     assert_eq!(child_on_claude.args.as_deref(), Some("--claude-flag"));
 
@@ -8244,7 +8244,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(claude_row, Some(BuildBase::Profile(x_codex)), None, None)
+        .build(Some(BuildBase::Profile(x_codex)), None, None)
         .unwrap();
     assert_eq!(l_under_x_codex.agent, "codex");
     assert_eq!(l_under_x_codex.args.as_deref(), Some("--x-codex"));
@@ -8254,7 +8254,7 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .definition
         .as_ref()
         .unwrap()
-        .build(claude_row, Some(BuildBase::Profile(x_claude)), None, None)
+        .build(Some(BuildBase::Profile(x_claude)), None, None)
         .unwrap();
     assert_eq!(l_under_x_claude.agent, "claude");
     assert_eq!(l_under_x_claude.args.as_deref(), Some("--claude-flag"));

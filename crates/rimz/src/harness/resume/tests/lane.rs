@@ -177,6 +177,7 @@ fn closed_lane_warns_when_its_team_cannot_restore() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })
@@ -349,6 +350,7 @@ fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })
@@ -434,6 +436,7 @@ fn fresh_lane_materializes_new_team_launches() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })
@@ -746,6 +749,7 @@ fn split_team_restore(root: &Path) -> LaneRestoreConfig {
         profiles,
         subagent_profiles: ProfilesConfig::default(),
         commands,
+        selection: crate::config::Selection::default(),
         failed_definitions: BTreeMap::new(),
     }
 }
@@ -1283,6 +1287,7 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
                     profiles,
                     subagent_profiles: ProfilesConfig::default(),
                     commands,
+                    selection: crate::config::Selection::default(),
                     failed_definitions: BTreeMap::new(),
                 })
             })
@@ -1338,6 +1343,7 @@ fn lane_restore_gives_a_team_and_a_standalone_agent_in_one_channel_distinct_tabs
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })
@@ -1373,6 +1379,7 @@ fn lane_all_closed_drops_launched_children_of_team_and_flat_roots() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })
@@ -1578,6 +1585,7 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
                 profiles,
                 subagent_profiles: ProfilesConfig::default(),
                 commands,
+                selection: crate::config::Selection::default(),
                 failed_definitions: BTreeMap::new(),
             })
         })

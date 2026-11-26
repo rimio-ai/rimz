@@ -10,6 +10,7 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::agents::{self, TierSkip, TierSkipReason, TierStamp, Variant};
 
@@ -19,9 +20,114 @@ use super::tiers::{ModelTier, Routing, TierConfig, TierPreference};
 #[cfg(test)]
 mod tests;
 
+/// Why a model on a kind cannot take a launch now, or `None` when it can.
+type Availability = dyn Fn(&str, &str) -> Option<TierSkipReason> + Send + Sync;
+
+/// What a launch asks of every agent cell it starts: `--agent`, `--model`, `--tier`, the tier
+/// table they walk, and which models can take a launch now. The default is a launch with no
+/// flags that reads every model as available.
+#[derive(Clone, Default)]
+pub struct Selection {
+    agent: Option<String>,
+    model: Option<String>,
+    tier: Option<ModelTier>,
+    tiers: TierConfig,
+    availability: Option<Arc<Availability>>,
+}
+
+impl std::fmt::Debug for Selection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Selection")
+            .field("agent", &self.agent)
+            .field("model", &self.model)
+            .field("tier", &self.tier)
+            .field("availability", &self.availability.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Selection {
+    /// A launch with no flags over `tiers`.
+    pub fn new(tiers: &TierConfig) -> Self {
+        Self {
+            tiers: tiers.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// Sets `--agent`; a blank value is none.
+    #[must_use]
+    pub fn agent(mut self, agent: Option<&str>) -> Self {
+        self.agent = nonblank(agent);
+        self
+    }
+
+    /// Sets `--model`; a blank value is none.
+    #[must_use]
+    pub fn model(mut self, model: Option<&str>) -> Self {
+        self.model = nonblank(model);
+        self
+    }
+
+    #[must_use]
+    pub fn tier(mut self, tier: Option<ModelTier>) -> Self {
+        self.tier = tier;
+        self
+    }
+
+    /// Sets which models can take a launch now.
+    #[must_use]
+    pub fn availability(
+        mut self,
+        unavailable: impl Fn(&str, &str) -> Option<TierSkipReason> + Send + Sync + 'static,
+    ) -> Self {
+        self.availability = Some(Arc::new(unavailable));
+        self
+    }
+
+    pub fn agent_name(&self) -> Option<&str> {
+        self.agent.as_deref()
+    }
+
+    pub fn model_flag(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    pub fn tier_flag(&self) -> Option<ModelTier> {
+        self.tier
+    }
+
+    pub(crate) fn tiers(&self) -> &TierConfig {
+        &self.tiers
+    }
+
+    /// The same launch with `--agent`, `--model` and `--tier` dropped, for the cells a launch
+    /// builds but does not start.
+    #[must_use]
+    pub(crate) fn without_flags(&self) -> Self {
+        Self {
+            agent: None,
+            model: None,
+            tier: None,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn unavailable(&self, kind: &str, model: &str) -> Option<TierSkipReason> {
+        self.availability.as_ref()?(kind, model)
+    }
+}
+
+fn nonblank(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 /// The engine a definition, a launch or a resume runs on.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Engine {
+pub(crate) struct Engine {
     pub kind: String,
     pub variant: Option<&'static Variant>,
     pub model: Model,
@@ -31,7 +137,7 @@ pub(super) struct Engine {
 
 /// Where an engine's model comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Model {
+pub(crate) enum Model {
     /// A written line, a flag, a tier entry or a launch record names it.
     Named(String),
     /// Nothing names one: the final kind's base model fills it, then the provider's default.
@@ -49,7 +155,7 @@ impl Model {
         model.map_or(Self::FromBase, |model| Self::Named(model.to_owned()))
     }
 
-    pub(super) fn named(&self) -> Option<&str> {
+    pub(crate) fn named(&self) -> Option<&str> {
         match self {
             Self::Named(model) => Some(model),
             Self::FromBase | Self::Unset => None,
@@ -59,7 +165,7 @@ impl Model {
 
 /// Why no engine could be chosen.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum EngineErr {
+pub(crate) enum EngineErr {
     /// The written lines or the flags contradict each other.
     #[error("{0}")]
     Conflict(String),
@@ -109,12 +215,12 @@ impl EngineErr {
 }
 
 /// Builds a launch under a kind and variant with a model (`None`: the kind base's).
-pub(super) type Build<'a, T> =
+pub(crate) type Build<'a, T> =
     dyn FnMut(&str, Option<&'static Variant>, Option<&str>) -> Result<T, DefinitionErr> + 'a;
 
 /// What one choice is told about the world. `T` is what a build yields, handed back with the
 /// engine it was built under.
-pub(super) struct Probe<'a, T> {
+pub(crate) struct Probe<'a, T> {
     /// Builds the launch under a kind and variant with a model (`None`: the kind base's), or
     /// says why it cannot.
     pub build: &'a mut Build<'a, T>,
@@ -136,7 +242,7 @@ pub(super) struct Lines<'a> {
 
 /// One side of a launch: the launched name L, or the `--agent` value X.
 #[derive(Clone, Debug)]
-pub(super) struct Side<'a> {
+pub(crate) struct Side<'a> {
     /// The name as the user gave it, for messages.
     pub name: &'a str,
     /// The kind and variant it runs on with no flag.
@@ -152,11 +258,7 @@ pub(super) struct Side<'a> {
 
 impl<'a> Side<'a> {
     /// A bare provider name: no file and no written lines.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "launch routing builds sides in a later step")
-    )]
-    pub(super) fn bare(name: &'a str, kind: &'a str, variant: Option<&'static Variant>) -> Self {
+    pub(crate) fn bare(name: &'a str, kind: &'a str, variant: Option<&'static Variant>) -> Self {
         Self {
             name,
             kind,
@@ -173,10 +275,12 @@ impl<'a> Side<'a> {
     }
 }
 
-/// A fresh launch: L, X, and the `--model` and `--tier` flags.
-pub(super) struct Launch<'a> {
+/// A fresh launch: L, X, the model the launched team role writes, and the `--model` and
+/// `--tier` flags.
+pub(crate) struct Launch<'a> {
     pub l: Side<'a>,
     pub x: Option<Side<'a>>,
+    pub role: Option<&'a str>,
     pub model: Option<&'a str>,
     pub tier: Option<ModelTier>,
 }
@@ -225,7 +329,7 @@ pub(crate) fn keeps_inherited_model(from_kind: &str, to_kind: &str, model: &str)
 /// The kind a team seat runs on: a model its role writes moves it to the model's provider
 /// unless the agent runs every provider's models, and a model its chain wrote moves it unless
 /// the agent keeps that model.
-pub(super) fn seat_kind<'a>(
+pub(crate) fn seat_kind<'a>(
     agent_kind: &'a str,
     model: Option<&str>,
     role_writes_model: bool,
@@ -295,7 +399,8 @@ pub(super) fn file<T>(
     }
 }
 
-fn check_flags(
+/// Refuses flags that contradict each other or `--agent`.
+pub(crate) fn check_flags(
     x: Option<&Side<'_>>,
     model: Option<&str>,
     tier: Option<ModelTier>,
@@ -317,9 +422,10 @@ fn check_flags(
 
 /// A fresh launch's engine, flags first: `--tier` walks under X's family, else L's preference;
 /// `--model` runs on X's kind, else moves a launch that names a file to the model's provider;
-/// then X's written engine, then L's tier, then X's kind with L's model where that kind keeps
-/// it. The chosen engine is built through `probe`.
-pub(super) fn launch<T>(
+/// then X's written engine; then the role's model, on X's kind where that kind keeps it from the
+/// kind the role moves the seat to, else on that kind; then L's tier, then X's kind with L's model
+/// where that kind keeps it. The chosen engine is built through `probe`.
+pub(crate) fn launch<T>(
     req: &Launch<'_>,
     tiers: &TierConfig,
     probe: &mut Probe<'_, T>,
@@ -355,6 +461,16 @@ pub(super) fn launch<T>(
             return walk_tier(tiers, tier, &x.preference, x.kind, x.variant, probe);
         }
         (x.kind, Model::written(x.model))
+    } else if let Some(model) = req.role.filter(|model| {
+        req.x.as_ref().is_none_or(|x| {
+            keeps_inherited_model(seat_kind(req.l.kind, Some(model), true), x.kind, model)
+        })
+    }) {
+        let kind = req
+            .x
+            .as_ref()
+            .map_or_else(|| seat_kind(req.l.kind, Some(model), true), |x| x.kind);
+        (kind, Model::Named(model.to_owned()))
     } else if let Some(tier) = req.l.tier {
         return walk_tier(
             tiers,
@@ -417,6 +533,7 @@ pub(super) fn resume<T>(
         let fresh = Launch {
             l: req.l.clone(),
             x: Some(x.clone()),
+            role: None,
             model: None,
             tier: None,
         };

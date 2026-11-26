@@ -100,7 +100,7 @@ fn mini_runtime_is_listed_without_permission_or_fast_suffixes() {
     let profiles = ProfilesConfig::default();
     let commands = CommandsConfig::default();
     let actual = ["opencode-mini-yolo", "opencode-mini-fast"].map(|name| {
-        let result = parse_cell(name, &profiles, &commands, None);
+        let result = parse_cell(name, &profiles, &commands, CellBase::none());
         let Err(LayoutErr::UnknownCell(error)) = result else {
             return false;
         };
@@ -321,7 +321,13 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
                 )
             };
             let team: Team = toml::from_str(&raw).unwrap();
-            let result = prepare_team("mill", &team, &ProfilesConfig::default(), None);
+            let result = prepare_team(
+                "mill",
+                &team,
+                &ProfilesConfig::default(),
+                CellBase::none(),
+                None,
+            );
             assert!(result.is_err(), "invalid while {value} must be refused");
             let error = result.err().unwrap().to_string();
             assert!(error.contains("mill") && error.contains(value), "{error}");
@@ -335,13 +341,28 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
         "keep-warm = {while = 'off'}\nroles = [{role = 'lead', profile = 'claude'}]",
     ] {
         let team: Team = toml::from_str(raw).unwrap();
-        let result = prepare_team("mill", &team, &ProfilesConfig::default(), None);
+        let result = prepare_team(
+            "mill",
+            &team,
+            &ProfilesConfig::default(),
+            CellBase::none(),
+            None,
+        );
         assert!(result.is_err(), "an unstaged team has no board");
         assert!(result.err().unwrap().to_string().contains("no board"));
     }
     for clause in ["team.stage=Plan", "team.stage!=Done"] {
         let team: Team = toml::from_str(&format!("leader = 'lead'\nstages = ['Plan']\nkeep-warm = {{while = '{clause}'}}\nroles = [{{role = 'lead', profile = 'claude', owns = ['Plan']}}]")).unwrap();
-        assert!(prepare_team("mill", &team, &ProfilesConfig::default(), None).is_ok());
+        assert!(
+            prepare_team(
+                "mill",
+                &team,
+                &ProfilesConfig::default(),
+                CellBase::none(),
+                None
+            )
+            .is_ok()
+        );
     }
     for value in ["team.stage!=Done", "ci=passed", "off"] {
         let profiles: ProfilesConfig = toml::from_str(&format!(
@@ -992,7 +1013,9 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
         matches: BTreeMap::new(),
         prompt: None,
     });
-    let validate = |team: &Team| prepare_team("forge", team, &no_profiles(), None).map(|_| ());
+    let validate = |team: &Team| {
+        prepare_team("forge", team, &no_profiles(), CellBase::none(), None).map(|_| ())
+    };
     assert_eq!(validate(&declared), Ok(()));
     let repeated = declared.roles[1].signals[0].clone();
     declared.roles[1].signals.push(repeated);
@@ -2142,20 +2165,30 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
         };
         let base = resolve_agent_override(Some(target), &profiles, None).unwrap();
         let configured = team(vec![binding.clone()]);
-        let prepared = prepare_team("forge", &configured, &profiles, base.as_ref())
-            .map(|team| {
-                let resolved = &team.roles[0].resolved;
-                (
-                    resolved.launch.mode,
-                    resolved.launch.effort.clone(),
-                    resolved.fast.and_then(Toggle::enabled),
-                )
-            })
-            .map_err(|error| error.to_string());
-        let replayed =
-            profile_cell_with_base_override("worker", &profiles, base.as_ref(), Some(&binding))
-                .map(|cell| (cell.launch.mode, cell.launch.effort, cell.launch.fast))
-                .map_err(|error| error.to_string());
+        let prepared = prepare_team(
+            "forge",
+            &configured,
+            &profiles,
+            CellBase::under(base.as_ref()),
+            None,
+        )
+        .map(|team| {
+            let resolved = &team.roles[0].resolved;
+            (
+                resolved.launch.mode,
+                resolved.launch.effort.clone(),
+                resolved.fast.and_then(Toggle::enabled),
+            )
+        })
+        .map_err(|error| error.to_string());
+        let replayed = profile_cell_with_base_override(
+            "worker",
+            &profiles,
+            CellBase::under(base.as_ref()),
+            Some(&binding),
+        )
+        .map(|cell| (cell.launch.mode, cell.launch.effort, cell.launch.fast))
+        .map_err(|error| error.to_string());
         actual.push((prepared, replayed));
         let launch = Ok((
             final_mode,
@@ -2183,7 +2216,9 @@ fn virtual_cells_render_only_their_own_permission_posture_with_kind_defaults() {
         "claude-ask",
         "claude-ask-fast",
     ] {
-        let Cell::Agent(cell) = parse_cell(word, &profiles, &no_commands(), None).unwrap() else {
+        let Cell::Agent(cell) =
+            parse_cell(word, &profiles, &no_commands(), CellBase::none()).unwrap()
+        else {
             panic!("expected an agent cell");
         };
         actual.push((
@@ -2561,8 +2596,13 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
     }
     for name in ["cdx-base", "cdx-bare"] {
         let base = resolve_agent_override(Some(name), &profiles, None).unwrap();
-        let rebased =
-            profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
+        let rebased = profile_cell_with_base_override(
+            "tooled",
+            &profiles,
+            CellBase::under(base.as_ref()),
+            None,
+        )
+        .unwrap();
         assert_eq!(rebased.kind.as_str(), "codex");
         assert_eq!(named(&codex_switch(&rebased.args)), on, "{name}");
     }
@@ -2630,7 +2670,8 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
     // L's written code-mode wins over a replacement base's value on another kind too.
     let base = resolve_agent_override(Some("base"), &profiles, None).unwrap();
     let rebased =
-        profile_cell_with_base_override("tooled", &profiles, base.as_ref(), None).unwrap();
+        profile_cell_with_base_override("tooled", &profiles, CellBase::under(base.as_ref()), None)
+            .unwrap();
     assert_eq!(rebased.kind.as_str(), "pi");
     assert_eq!(rebased.launch.code_mode, Some(true));
     assert!(
@@ -3361,7 +3402,13 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
     let empty_profiles = no_profiles();
     let preflight = |candidate: &Team, base: Option<&str>, default| {
         let base_override = resolve_agent_override(base, &empty_profiles, None)?;
-        let prepared = prepare_team("forge", candidate, &empty_profiles, base_override.as_ref())?;
+        let prepared = prepare_team(
+            "forge",
+            candidate,
+            &empty_profiles,
+            CellBase::under(base_override.as_ref()),
+            None,
+        )?;
         validate_flip_compact("forge", &prepared, default)
     };
     let mut candidate = team(vec![role("coder", "claude")]);
@@ -4108,7 +4155,7 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             ..role("coder", "toml")
         };
         let configured = team(vec![binding.clone()]);
-        let seat = prepare_team("forge", &configured, &profiles, None)
+        let seat = prepare_team("forge", &configured, &profiles, CellBase::none(), None)
             .map(|team| {
                 let resolved = &team.roles[0].resolved;
                 (
@@ -4118,9 +4165,10 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
                 )
             })
             .map_err(|error| error.to_string());
-        let replayed = profile_cell_with_base_override("toml", &profiles, None, Some(&binding))
-            .map(|cell| (cell.launch.fast, cell.launch.code_mode, cell.launch.effort))
-            .map_err(|error| error.to_string());
+        let replayed =
+            profile_cell_with_base_override("toml", &profiles, CellBase::none(), Some(&binding))
+                .map(|cell| (cell.launch.fast, cell.launch.code_mode, cell.launch.effort))
+                .map_err(|error| error.to_string());
         actual.push((seat, replayed));
         let launch = Ok((want_fast, Some(true), Some(want_effort.to_owned())));
         expected.push((launch.clone(), launch));
@@ -4354,7 +4402,7 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
     let replay_lead = profile_cell_with_base_override(
         &lead_binding.profile,
         &profiles,
-        base_astra.as_ref(),
+        CellBase::under(base_astra.as_ref()),
         Some(lead_binding),
     )
     .expect("replay forge.lead --agent astra");
@@ -4384,13 +4432,19 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
         ..role("coder", "toml_l")
     };
     let toml_team = team(vec![toml_binding.clone()]);
-    let prepared = prepare_team("toml_t", &toml_team, &profiles, base_astra.as_ref())
-        .expect("fresh toml team");
+    let prepared = prepare_team(
+        "toml_t",
+        &toml_team,
+        &profiles,
+        CellBase::under(base_astra.as_ref()),
+        None,
+    )
+    .expect("fresh toml team");
     let fresh_toml = &prepared.roles[0].resolved;
     let replay_toml = profile_cell_with_base_override(
         "toml_l",
         &profiles,
-        base_astra.as_ref(),
+        CellBase::under(base_astra.as_ref()),
         Some(&toml_binding),
     )
     .expect("replay toml team");
@@ -4406,9 +4460,13 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
     assert!(!replay_toml.args.iter().any(|arg| arg == "--claude-only"));
 
     // TOML L under Markdown X: takes X's model, keeps L's effort, drops raw args across kind switch.
-    let toml_l_cell =
-        profile_cell_with_base_override("toml_l", &profiles, base_astra.as_ref(), None)
-            .expect("toml_l --agent astra");
+    let toml_l_cell = profile_cell_with_base_override(
+        "toml_l",
+        &profiles,
+        CellBase::under(base_astra.as_ref()),
+        None,
+    )
+    .expect("toml_l --agent astra");
     assert_eq!(toml_l_cell.kind.as_str(), "codex");
     assert_eq!(toml_l_cell.launch.model.as_deref(), Some("astra"));
     assert_eq!(toml_l_cell.launch.effort.as_deref(), Some("low"));
@@ -4424,9 +4482,13 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
 
     // Multi-hop TOML X under Markdown L: X's resolved runtime and written model replace L's.
     let base_toml_x = resolve_agent_override(Some("toml_x"), &profiles, None).unwrap();
-    let multi_toml =
-        profile_cell_with_base_override("child", &profiles, base_toml_x.as_ref(), None)
-            .expect("child --agent toml_x");
+    let multi_toml = profile_cell_with_base_override(
+        "child",
+        &profiles,
+        CellBase::under(base_toml_x.as_ref()),
+        None,
+    )
+    .expect("child --agent toml_x");
     assert_eq!(multi_toml.kind.as_str(), "codex");
     assert_eq!(multi_toml.launch.model.as_deref(), Some("sol"));
     assert_eq!(multi_toml.launch.effort.as_deref(), Some("low"));
@@ -4435,8 +4497,13 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
     let plain_child = profile_cell("child", &profiles).unwrap();
     for ancestor in ["child", "parent"] {
         let base = resolve_agent_override(Some(ancestor), &profiles, None).unwrap();
-        let same =
-            profile_cell_with_base_override("child", &profiles, base.as_ref(), None).unwrap();
+        let same = profile_cell_with_base_override(
+            "child",
+            &profiles,
+            CellBase::under(base.as_ref()),
+            None,
+        )
+        .unwrap();
         assert_eq!(same.kind, plain_child.kind);
         assert_eq!(same.launch.model, plain_child.launch.model);
         assert_eq!(same.launch.effort, plain_child.launch.effort);
@@ -4591,7 +4658,13 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
         );
         let profiles = launch.profiles;
         let base = resolve_agent_override(agent_override, &profiles, None).unwrap();
-        let cell = profile_cell_with_base_override(target, &profiles, base.as_ref(), None).unwrap();
+        let cell = profile_cell_with_base_override(
+            target,
+            &profiles,
+            CellBase::under(base.as_ref()),
+            None,
+        )
+        .unwrap();
         actual.push((
             default,
             target,
@@ -4655,6 +4728,29 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
         Some(TuningSource::KindBase(AgentKind::new_unchecked(
             "antigravity"
         )))
+    );
+}
+
+/// A kind-base name that runs on another kind ends its explained chain in that kind's base, as
+/// its launch layers do.
+#[test]
+fn explain_chain_of_a_kind_base_name_ends_in_the_kind_it_runs_on() {
+    let profiles = md_defs_raw(&[
+        (
+            "claude",
+            "---\ndescription: Claude base\ntools: [Read]\n---\nClaude.\n",
+        ),
+        (
+            "codex",
+            "---\ndescription: Codex base\ntools: [Read]\n---\nCodex.\n",
+        ),
+    ]);
+    assert_eq!(
+        [
+            explain_profile_chain("claude", None, "codex", false, &profiles, None),
+            explain_profile_chain("claude", None, "claude", false, &profiles, None),
+        ],
+        [vec!["claude", "codex"], vec!["claude"]]
     );
 }
 

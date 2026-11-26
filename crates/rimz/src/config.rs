@@ -43,6 +43,7 @@ mod display;
 mod edit;
 pub mod effective;
 pub(crate) mod engine;
+pub use engine::Selection;
 mod gc;
 mod glyphs;
 mod harness;

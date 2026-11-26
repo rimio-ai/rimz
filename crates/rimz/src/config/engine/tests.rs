@@ -154,6 +154,7 @@ fn launch_of<'a>(l: Side<'a>, x: Option<Side<'a>>) -> Launch<'a> {
     Launch {
         l,
         x,
+        role: None,
         model: None,
         tier: None,
     }
@@ -438,6 +439,94 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
                 launch(&req, t, p)
             }),
             "codex/-/astra/senior",
+        ),
+        (
+            "launch: --tier on a bare name walks under its kind's family",
+            world().run(|t, p| {
+                let req = Launch {
+                    tier: Some(Senior),
+                    ..launch_of(Side::bare("claude", "claude", None), None)
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/opus/senior",
+        ),
+        (
+            "launch: a role's model of another provider moves L there",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    ..launch_of(def("rev", "claude", Some("sonnet"), None), None)
+                };
+                launch(&req, t, p)
+            }),
+            "codex/-/astra/-",
+        ),
+        (
+            "launch: a role's model yields to --model",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    model: Some("sonnet"),
+                    ..launch_of(def("rev", "claude", None, None), None)
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/sonnet/-",
+        ),
+        (
+            "launch: a role's model yields to --tier",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    tier: Some(Senior),
+                    ..launch_of(def("rev", "claude", None, None), None)
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/opus/senior",
+        ),
+        (
+            "launch: a role's model X's kind does not keep gives way to L's lines",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    ..launch_of(
+                        def("rev", "codex", None, None),
+                        Some(Side::bare("claude", "claude", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/base/-",
+        ),
+        (
+            "launch: a role's model under X of L's own kind is judged from the kind it moves to",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    ..launch_of(
+                        def("lead", "claude", None, None),
+                        Some(Side::bare("claude", "claude", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/base/-",
+        ),
+        (
+            "launch: a role's model under X of the kind it moves to stays",
+            world().run(|t, p| {
+                let req = Launch {
+                    role: Some("astra"),
+                    ..launch_of(
+                        def("lead", "claude", None, None),
+                        Some(Side::bare("codex", "codex", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "codex/-/astra/-",
         ),
         (
             "launch: --tier under a model client keeps X's variant",

@@ -65,6 +65,9 @@ pub struct LaneRestoreConfig {
     pub profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub commands: CommandsConfig,
+    /// A launch with no flags under the room's tier availability, which each member's cell is
+    /// chosen under.
+    pub selection: crate::config::Selection,
     failed_definitions: BTreeMap<String, String>,
 }
 
@@ -73,7 +76,10 @@ impl LaneRestoreConfig {
     pub fn load(
         machine: &crate::config::MachineConfig,
         project_root: &Path,
-        unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
+        unavailable: impl Fn(&str, &str) -> Option<crate::agents::TierSkipReason>
+        + Send
+        + Sync
+        + 'static,
     ) -> anyhow::Result<Self> {
         Self::load_with_roots(
             machine,
@@ -87,25 +93,19 @@ impl LaneRestoreConfig {
         machine: &crate::config::MachineConfig,
         project_root: &Path,
         config_root: &Path,
-        unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
+        unavailable: impl Fn(&str, &str) -> Option<crate::agents::TierSkipReason>
+        + Send
+        + Sync
+        + 'static,
     ) -> anyhow::Result<Self> {
-        let mut launch =
-            crate::config::effective::load_with_roots(machine, project_root, config_root)?;
-        launch.route(
-            &machine.tiers,
-            crate::config::effective::ProfileScope::Agents,
-            None,
-            None,
-            None,
-            None,
-            unavailable,
-        )?;
+        let launch = crate::config::effective::load_with_roots(machine, project_root, config_root)?;
         let failed_definitions = launch.all_failed_definitions();
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,
             subagent_profiles: launch.subagent_profiles,
             commands: machine.agents.commands.clone(),
+            selection: crate::config::Selection::new(&machine.tiers).availability(unavailable),
             failed_definitions,
         })
     }
@@ -143,6 +143,7 @@ impl<'a> LaneResumeRequest<'a> {
             runtime: self.runtime,
             profiles: &restore.profiles,
             subagent_profiles: &restore.subagent_profiles,
+            selection: &restore.selection,
             max: self.max,
             logins: self.logins,
             catalog: self.catalog,
@@ -487,9 +488,25 @@ pub fn resolve_posture(
     profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
 ) -> ResumePosture {
+    resolve_posture_under(
+        request,
+        profiles,
+        fallback,
+        &crate::config::Selection::default(),
+    )
+}
+
+/// [`resolve_posture`] under the room's tier availability, which a definition with no
+/// recorded engine walks its tiers under.
+pub(crate) fn resolve_posture_under(
+    request: PostureRequest<'_>,
+    profiles: &ProfilesConfig,
+    fallback: Option<&ProfilesConfig>,
+    selection: &crate::config::Selection,
+) -> ResumePosture {
     ResumePosture::degrade_to_bare(
         request,
-        resolve_posture_with_role(request, profiles, fallback, None, None),
+        resolve_posture_with_role(request, profiles, fallback, None, None, selection),
     )
 }
 
@@ -514,7 +531,14 @@ pub fn resolve_member_posture(
         .unzip();
     ResumePosture::degrade_to_bare(
         request,
-        resolve_posture_with_role(request, profiles, fallback, binding, team),
+        resolve_posture_with_role(
+            request,
+            profiles,
+            fallback,
+            binding,
+            team,
+            &crate::config::Selection::default(),
+        ),
     )
 }
 
@@ -534,6 +558,7 @@ fn resolve_posture_with_role(
     fallback: Option<&ProfilesConfig>,
     role: Option<&crate::config::RoleBinding>,
     team: Option<(&str, &crate::config::Team)>,
+    selection: &crate::config::Selection,
 ) -> Result<ResumeLaunchPosture, PostureDegrade> {
     if request.profile.is_none() && request.record.is_none() {
         return Ok(bare_posture(request.stamped_mode, request.kind));
@@ -648,6 +673,7 @@ fn resolve_posture_with_role(
                 base.as_ref(),
                 role,
                 replay,
+                selection,
             )
         });
     let mut cell = match resolved {
@@ -1881,6 +1907,7 @@ fn plan_closed_lane(
         &restore.teams,
         &restore.profiles,
         &restore.commands,
+        &restore.selection,
         Some(request.project_root),
         request.workspace_id,
         &path_exists,
@@ -2179,6 +2206,7 @@ fn plan_team_restore_tabs(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
+    selection: &crate::config::Selection,
     project_root: Option<&Path>,
     workspace_id: &WorkspaceId,
     worktree_exists: impl Fn(&Path) -> bool,
@@ -2217,7 +2245,7 @@ fn plan_team_restore_tabs(
             "members resume as individual sessions without the team's layout and prompt layers"
         };
         let layout = if teams.0.contains_key(&team) {
-            crate::harness::spec::resolve_team(&team, teams, profiles, commands)
+            crate::harness::spec::resolve_team_under(&team, teams, profiles, commands, selection)
                 .map_err(|error| error.to_string())
         } else {
             Err(missing_team_cause(&team, definition_failure_for(&team)))
@@ -2346,6 +2374,7 @@ pub(super) fn split_team_and_flat(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
+    selection: &crate::config::Selection,
     project_root: Option<&Path>,
     workspace_id: &WorkspaceId,
     worktree_exists: impl Fn(&Path) -> bool,
@@ -2362,6 +2391,7 @@ pub(super) fn split_team_and_flat(
         teams,
         profiles,
         commands,
+        selection,
         project_root,
         workspace_id,
         worktree_exists,
@@ -2429,6 +2459,8 @@ pub struct ResumeContext<'a> {
     pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
     pub subagent_profiles: &'a ProfilesConfig,
+    /// A launch with no flags under the room's tier availability.
+    pub selection: &'a crate::config::Selection,
     pub max: usize,
     /// The room's current account selection; sessions whose account is outside
     /// its history pool are skipped.
@@ -2566,12 +2598,17 @@ impl SplitMemberRestore<'_> {
         fallback: Option<&ProfilesConfig>,
     ) -> (ResumePosture, Option<SplitMemberWarning>) {
         let identity = &candidate.identity;
+        let selection = &self.restore.selection;
         let Some((name, role)) = identity.team.as_deref().zip(identity.role.as_deref()) else {
-            return (resolve_posture(request, profiles, fallback), None);
+            return (
+                resolve_posture_under(request, profiles, fallback, selection),
+                None,
+            );
         };
         let Some((team, binding)) = member_binding(&self.restore.teams, name, role) else {
             let warning = self.warning(identity, name, self.unbound_cause(name, role));
-            return (resolve_posture(request, profiles, fallback), Some(warning));
+            let solo = resolve_posture_under(request, profiles, fallback, selection);
+            return (solo, Some(warning));
         };
         match resolve_posture_with_role(
             request,
@@ -2579,6 +2616,7 @@ impl SplitMemberRestore<'_> {
             fallback,
             Some(binding),
             Some((name, team)),
+            selection,
         ) {
             Ok(launch) => (
                 ResumePosture {
@@ -2588,7 +2626,7 @@ impl SplitMemberRestore<'_> {
                 None,
             ),
             Err(reason) => {
-                let solo = resolve_posture(request, profiles, fallback);
+                let solo = resolve_posture_under(request, profiles, fallback, selection);
                 // A solo posture that degrades too warns for itself, and a team
                 // notice would only repeat the broken profile.
                 let warning = solo
@@ -2732,7 +2770,10 @@ fn plan_resume_candidates_detailed(
         } else if single.is_some_and(|options| options.overrides.agent.is_some()) {
             (ResumePosture::default(), None)
         } else {
-            (resolve_posture(request, profiles, fallback), None)
+            (
+                resolve_posture_under(request, profiles, fallback, ctx.selection),
+                None,
+            )
         };
         let mut launch_warnings = Vec::new();
         if let Some(options) = single {
@@ -3352,6 +3393,7 @@ fn restore_resume_cell(
                     target_kind,
                     ..Default::default()
                 },
+                &crate::config::Selection::default(),
             )
         };
         // A tier with no model of the session's kind walks to another one, or to none.
@@ -3390,6 +3432,7 @@ fn restore_resume_cell(
             fallback,
             role,
             None,
+            &crate::config::Selection::default(),
         )?
     } else {
         ResumeLaunchPosture::from(&*cell)

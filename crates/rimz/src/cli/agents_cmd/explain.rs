@@ -61,7 +61,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()?;
     let machine = cli::machine_config();
     cli::report_unknown_config_keys(&machine)?;
-    let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
+    let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
     let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace, store.as_ref());
@@ -146,10 +146,6 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             Some((&runtime, &state)),
         )?;
         warnings.extend(finalized.warnings.iter().map(ToString::to_string));
-        match scope {
-            ProfileScope::Agents => effective.profiles = finalized.profiles,
-            ProfileScope::Subagents => effective.subagent_profiles = finalized.profiles,
-        }
         let resolved = finalized.resolved;
         let count = resolved.layout.agent_cells().count();
         let cell_count: usize = resolved

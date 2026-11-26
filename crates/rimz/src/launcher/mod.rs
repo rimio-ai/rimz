@@ -556,7 +556,6 @@ pub fn prepare_layout(
         Ok(())
     };
     let FinalizedLaunch {
-        profiles: _,
         resolved,
         preset: _preset,
         warnings,
@@ -854,7 +853,7 @@ fn resident_leader(request: &LayoutRequest, leader: &LeaderRun) -> bool {
         crate::config::effective::ProfileScope::Agents,
         &request.context.machine.agents.commands,
         request.launch.spec.as_deref(),
-        None,
+        &crate::config::Selection::new(&request.context.machine.tiers),
     )
     .is_ok_and(|resolved| resolved.team_name.is_some())
 }

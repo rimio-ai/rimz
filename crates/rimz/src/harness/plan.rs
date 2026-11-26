@@ -776,6 +776,37 @@ fn block_failed_override(
     launch.block_failed_override(name, scope, launch.profiles_for(scope), fallback)
 }
 
+/// Refuse a failed name the spec reads, the spec itself and then each of its cells, ahead of the
+/// refusal its resolution gave: cells resolve in order, so a tier walk on one would otherwise
+/// answer over the failed file of a cell after it.
+fn block_failed_spec_words(
+    launch: &crate::config::effective::LaunchAgents,
+    scope: crate::config::effective::ProfileScope,
+    spec: Option<&str>,
+) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
+    let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
+        return Ok(());
+    };
+    for word in spec_words(spec) {
+        launch.block_failed_reference(scope, Some(word), None)?;
+    }
+    Ok(())
+}
+
+/// The words a launch names: the spec whole, then each of its cells.
+fn spec_words(spec: &str) -> impl Iterator<Item = &str> {
+    let cells = crate::harness::spec::parse_layout_structure(spec)
+        .map(|layout| {
+            layout
+                .columns
+                .into_iter()
+                .flat_map(|column| column.cells)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    std::iter::once(spec).chain(cells)
+}
+
 fn block_failed_kind_bases(
     launch: &crate::config::effective::LaunchAgents,
     scope: crate::config::effective::ProfileScope,
@@ -784,7 +815,9 @@ fn block_failed_kind_bases(
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
     let profiles = launch.profiles_for(scope);
-    if let Some(name) = spec.map(str::trim).filter(|name| {
+    // A failed row refuses the launches whose words name it: the spec and each of its cells.
+    let spec = spec.map(str::trim).filter(|spec| !spec.is_empty());
+    for name in spec.into_iter().flat_map(spec_words).filter(|name| {
         crate::agents::find_runtime(name).is_some() || profiles.0.contains_key(*name)
     }) {
         launch.block_failed_profile(name, scope, profiles)?;
@@ -800,12 +833,18 @@ fn block_failed_kind_bases(
     } else {
         scope
     };
+    let table = launch.profiles_for(cell_scope);
     for cell in layout.agent_cells() {
-        launch.block_failed_profile(
-            cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()),
-            cell_scope,
-            launch.profiles_for(cell_scope),
-        )?;
+        let kind = cell.kind.as_str();
+        let name = match cell.launch.profile.as_deref() {
+            Some(profile) => profile,
+            // A cell with no profile runs on its kind's base, whose failure is the only one it
+            // reads: a written, built-in or absent base alike, never a failed row named after
+            // the kind, which the words above refuse where the launch names it.
+            None if table.failed_base(kind).is_some() => kind,
+            None => continue,
+        };
+        launch.block_failed_profile(name, cell_scope, table)?;
     }
     Ok(())
 }
@@ -867,8 +906,9 @@ pub fn resolve_launch(
     scope: crate::config::effective::ProfileScope,
     commands: &crate::config::CommandsConfig,
     spec: Option<&str>,
-    agent_override: Option<&str>,
+    selection: &crate::config::Selection,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    let agent_override = selection.agent_name();
     launch.block_set_failure()?;
     if let Some(raw) = spec.map(str::trim).filter(|raw| !raw.is_empty())
         && !commands.0.contains_key(raw)
@@ -885,7 +925,7 @@ pub fn resolve_launch(
         fallback,
         commands,
         &launch.teams,
-        agent_override,
+        selection,
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
@@ -911,7 +951,16 @@ pub fn resolve_launch(
             }
             return Err(err.into());
         }
+        // A `--tier` walk under an `--agent` that resolved names why each kind it tried
+        // failed, that agent's own failure included, so no failure record answers over it.
+        Err(err @ crate::harness::spec::LayoutErr::Engine(_))
+            if selection.tier_flag().is_some() =>
+        {
+            block_failed_spec_words(launch, scope, spec)?;
+            return Err(err.into());
+        }
         Err(err) => {
+            block_failed_spec_words(launch, scope, spec)?;
             block_failed_team_prompt(launch, scope, &err, agent_override)?;
             if let Some(name) = agent_override {
                 block_failed_override(launch, scope, name)?;
@@ -920,6 +969,13 @@ pub fn resolve_launch(
         }
     };
     block_failed_kind_bases(launch, scope, &layout, spec, agent_override)?;
+    if selection.tier_flag().is_some() && layout.agent_cells().next().is_none() {
+        return Err(crate::harness::spec::LayoutErr::Engine(format!(
+            "--tier needs an agent cell, and `{}` launches none",
+            spec.unwrap_or_default().trim()
+        ))
+        .into());
+    }
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);
@@ -1082,7 +1138,7 @@ pub fn plan_supervised_launch(
     parent_isolation: Option<crate::config::Isolation>,
     workspace: &crate::workspace::ResolvedWorkspace,
     machine_config: &crate::config::MachineConfig,
-    mut effective: crate::config::effective::LaunchAgents,
+    effective: crate::config::effective::LaunchAgents,
     login: impl Fn(&AgentKind) -> crate::store::writer::LaunchLogin,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> Result<SupervisedLaunch> {
@@ -1126,24 +1182,16 @@ pub fn plan_supervised_launch(
         jiff::Timestamp::now(),
         login,
     );
-    effective.route(
-        &machine_config.tiers,
-        scope,
-        Some(&spec),
-        request.tier,
-        request.model.as_deref(),
-        request.agent.as_deref(),
-        |kind, model| {
-            // An explicit account pin binds the provider too, without availability fallback.
-            if matches!(request.login, crate::store::writer::LaunchLogin::Pinned(_)) {
-                None
-            } else {
-                availability.unavailable(kind, model)
-            }
-        },
-    )?;
-    let agent_base = request.agent.as_deref();
-    let mut resolved = resolve_launch(&effective, scope, commands, Some(&spec), agent_base)?;
+    let mut selection = crate::config::Selection::new(&machine_config.tiers)
+        .agent(request.agent.as_deref())
+        .model(request.model.as_deref())
+        .tier(request.tier);
+    // An explicit account pin binds the provider too, without availability fallback.
+    if !matches!(request.login, crate::store::writer::LaunchLogin::Pinned(_)) {
+        selection =
+            selection.availability(move |kind, model| availability.unavailable(kind, model));
+    }
+    let mut resolved = resolve_launch(&effective, scope, commands, Some(&spec), &selection)?;
     reject_prompt_that_looks_like_spec(
         Some(&spec),
         Some(&request.prompt),
@@ -1200,7 +1248,7 @@ pub fn plan_supervised_launch(
                 scope,
                 resolved.team_name.as_deref(),
             )),
-            agent_base,
+            agent_base: request.agent.as_deref(),
             permission_mode: Some(permission_mode),
             isolation,
             preset: &preset,

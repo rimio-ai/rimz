@@ -14,6 +14,8 @@ static NO_ACCOUNTS: std::sync::LazyLock<LoginCatalog> =
     std::sync::LazyLock::new(LoginCatalog::default);
 static NO_SUBAGENT_PROFILES: std::sync::LazyLock<ProfilesConfig> =
     std::sync::LazyLock::new(ProfilesConfig::default);
+static NO_FLAGS: std::sync::LazyLock<crate::config::Selection> =
+    std::sync::LazyLock::new(crate::config::Selection::default);
 static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
     std::sync::LazyLock::new(|| WorkspaceId::from_project_root(Path::new("/repo")));
 static RUNTIME_ROOT: std::sync::LazyLock<tempfile::TempDir> =
@@ -280,6 +282,7 @@ fn ctx<'a>(
         runtime: &RUNTIME,
         profiles,
         subagent_profiles: &NO_SUBAGENT_PROFILES,
+        selection: &NO_FLAGS,
         max,
         logins: &NO_LOGINS,
         catalog: &NO_ACCOUNTS,
@@ -567,6 +570,7 @@ fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
         profiles: ProfilesConfig::default(),
         subagent_profiles: ProfilesConfig::default(),
         commands: CommandsConfig::default(),
+        selection: crate::config::Selection::default(),
         failed_definitions: BTreeMap::new(),
     })
 }

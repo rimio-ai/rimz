@@ -350,8 +350,12 @@ fn resume_selected(
         &machine,
         Timestamp::now(),
     );
+    let availability = std::sync::Arc::new(availability);
     let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
-    let config = LaneRestoreConfig::load(&machine, &workspace.project_root, &unavailable)?;
+    let shared = std::sync::Arc::clone(&availability);
+    let config = LaneRestoreConfig::load(&machine, &workspace.project_root, move |kind, model| {
+        shared.unavailable(kind, model)
+    })?;
     let resume_ctx = ResumeContext {
         in_place: placement == Placement::SamePane,
         project_root: Some(&workspace.project_root),
@@ -360,6 +364,7 @@ fn resume_selected(
         runtime: ctx.runtime(),
         profiles: &config.profiles,
         subagent_profiles: &config.subagent_profiles,
+        selection: &config.selection,
         max: machine.resume.max,
         logins: &logins,
         catalog: &catalog,
@@ -592,9 +597,11 @@ pub(super) fn resume_lane(
                 &machine_config,
                 jiff::Timestamp::now(),
             );
-            LaneRestoreConfig::load(&machine_config, &workspace.project_root, |kind, model| {
-                availability.unavailable(kind, model)
-            })
+            LaneRestoreConfig::load(
+                &machine_config,
+                &workspace.project_root,
+                move |kind, model| availability.unavailable(kind, model),
+            )
             .map_err(|error| LaneResumeError::RestoreConfig {
                 message: error.to_string(),
             })

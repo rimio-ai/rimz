@@ -748,7 +748,7 @@ fn restart_posture_keeps_a_team_role_childs_agent_profile() {
         crate::config::effective::ProfileScope::Subagents,
         &machine.agents.commands,
         Some("forge.reviewer"),
-        None,
+        &crate::config::Selection::default(),
     )
     .unwrap();
     let cell = resolved.layout.agent_cells().next().unwrap();

@@ -892,34 +892,24 @@ pub fn launch_groups(
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let resolved = (|| -> anyhow::Result<_> {
         let machine = crate::config::MachineConfig::load_lenient();
-        let mut effective = crate::config::effective::load(&machine, &workspace.project_root)?;
-        let availability = account.is_none().then(|| {
-            crate::harness::plan::LaunchAvailability::read(
+        let effective = crate::config::effective::load(&machine, &workspace.project_root)?;
+        let mut selection = crate::config::Selection::new(&machine.tiers);
+        if account.is_none() {
+            let availability = crate::harness::plan::LaunchAvailability::read(
                 &runtime,
                 &state,
                 &machine,
                 Timestamp::now(),
-            )
-        });
-        effective.route(
-            &machine.tiers,
-            crate::config::effective::ProfileScope::Agents,
-            Some(agent),
-            None,
-            None,
-            None,
-            |kind, model| {
-                availability
-                    .as_ref()
-                    .and_then(|usage| usage.unavailable(kind, model))
-            },
-        )?;
+            );
+            selection =
+                selection.availability(move |kind, model| availability.unavailable(kind, model));
+        }
         Ok(crate::harness::plan::resolve_launch(
             &effective,
             crate::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             Some(agent),
-            None,
+            &selection,
         )?)
     })()
     .map_err(|error| WorkflowErr::Refused(error.to_string()))?;

@@ -1888,7 +1888,7 @@ mod launch_options {
             rimz::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             Some("codex"),
-            Some("ghost"),
+            &rimz::config::Selection::default().agent(Some("ghost")),
         )
         .expect_err("unknown");
         let message = err.to_string();
@@ -2174,7 +2174,7 @@ mod launch_options {
             rimz::config::effective::ProfileScope::Agents,
             &machine.agents.commands,
             args.launch.spec.as_deref(),
-            None,
+            &rimz::config::Selection::default(),
         )
         .expect("resolve warning-capable layout");
 

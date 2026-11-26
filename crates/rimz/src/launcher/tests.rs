@@ -123,8 +123,6 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
 
 #[test]
 fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
-    use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
-
     let root = tempfile::tempdir().unwrap();
     let state = crate::StatePaths::for_project_root(root.path()).unwrap();
     let runtime = crate::RuntimePaths::for_state(&state).unwrap();
@@ -136,32 +134,28 @@ fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
         .unwrap(),
         ..Default::default()
     };
-    let mut profile: crate::config::Profile =
-        toml::from_str("agent = 'claude'\nmodel = 'sonnet'\n").unwrap();
-    profile.model_tier = Some(TierProvenance {
-        tier: ModelTier::Junior,
-        fell_back: false,
-    });
-    profile.definition_renders = Some(DefinitionRenders {
-        preference: TierPreference {
-            model: Some("sonnet".into()),
-            family: Some("claude".into()),
-        },
-        renders: [
-            (
-                "claude".into(),
-                toml::from_str("agent = 'claude'\nmodel = 'sonnet'\n").unwrap(),
-            ),
-            (
-                "codex".into(),
-                toml::from_str("agent = 'codex'\nmodel = 'sol'\n").unwrap(),
-            ),
-        ]
-        .into(),
-        exclusions: Default::default(),
-        effort: None,
-    });
-    machine.agents.profiles.0.insert("worker".into(), profile);
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("worker", "agent: claude\ntier: junior\ntools: [Read]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Probe\n{fields}---\nCraft."),
+        )
+        .unwrap();
+    }
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_accounts_path(),
         &crate::agents::account::AccountsCache {
@@ -212,6 +206,14 @@ fn explicit_account_keeps_the_tier_provider_and_stamps_every_agent_cell() {
         for cell in cells {
             assert_eq!(cell.kind.as_str(), kind, "account {login:?}");
             assert_eq!(cell.launch.model.as_deref(), Some(model));
+            assert_eq!(
+                cell.launch
+                    .tier
+                    .as_ref()
+                    .map(|stamp| (stamp.tier, stamp.model.as_str())),
+                Some((crate::config::tiers::ModelTier::Junior, model)),
+                "account {login:?}"
+            );
             assert_eq!(cell.launch.login, overrides.login);
         }
     }
@@ -1418,26 +1420,20 @@ fn one_chain_rule_and_tier_fallback_through_direct_entry() {
 
     // Tier fallback under --agent X: codex unavailable falls back to claude while keeping astra's
     // non-engine lines (mode: plan, craft) and recording astra.
-    let mut fallback_effective = effective.clone();
-    fallback_effective
-        .route(
-            &machine.tiers,
-            crate::config::effective::ProfileScope::Agents,
-            Some("tiered"),
-            Some(crate::config::tiers::ModelTier::Senior),
-            None,
-            Some("astra"),
-            |kind, _| (kind == "codex").then_some(crate::agents::TierSkipReason::LoggedOut),
-        )
-        .expect("tier fallback under astra");
+    let fallback = crate::config::Selection::new(&machine.tiers)
+        .agent(Some("astra"))
+        .tier(Some(crate::config::tiers::ModelTier::Senior))
+        .availability(|kind, _| {
+            (kind == "codex").then_some(crate::agents::TierSkipReason::LoggedOut)
+        });
     let resolved_fb = crate::harness::plan::resolve_launch(
-        &fallback_effective,
+        &effective,
         crate::config::effective::ProfileScope::Agents,
         &machine.agents.commands,
         Some("tiered"),
-        Some("astra"),
+        &fallback,
     )
-    .expect("resolve fallback");
+    .expect("tier fallback under astra");
     let fb_cell = resolved_fb.layout.agent_cells().next().unwrap();
     assert_eq!(fb_cell.kind.as_str(), "claude");
     assert_eq!(
@@ -1561,7 +1557,7 @@ fn bare_kind_with_markdown_override_and_routing_keeps_override_lines_and_tuning_
             Some("mdp"),
             cell.kind.as_str(),
             false,
-            &bare_tier.profiles,
+            &effective.profiles,
             None,
         ),
         vec!["claude", "mdp", "codex"]
@@ -2548,20 +2544,6 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
                 },
             };
 
-            let l_is_def = matches!(
-                l,
-                LForm::Markdown | LForm::MdSeat | LForm::Toml | LForm::TomlSeat
-            );
-            let x_is_def = matches!(
-                x,
-                XForm::MdModel
-                    | XForm::MdTier
-                    | XForm::MdPlain
-                    | XForm::TomlModel
-                    | XForm::Ancestor
-            ) || (matches!(x, XForm::SelfL) && l_is_def);
-            let l_is_bare = matches!(l, LForm::BareKind);
-
             // Expected X kind, variant, and engine write.
             let (x_kind, x_variant, x_model, x_tier): (
                 Option<&str>,
@@ -2602,11 +2584,6 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
             };
 
             for sel in [Sel::None, Sel::Model, Sel::Tier] {
-                // Skip the combination the router refuses: `--tier` requires definition L, kind
-                // base L, or bare L with definition X.
-                if matches!(sel, Sel::Tier) && l_is_bare && !x_is_def {
-                    continue;
-                }
                 // Pick a `--model` compatible with X's kind (or L's kind when X is None).
                 let model_flag = match sel {
                     Sel::Model => Some(match x_kind.unwrap_or(l_orig_kind) {
