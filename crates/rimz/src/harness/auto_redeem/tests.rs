@@ -2571,6 +2571,7 @@ fn limit_stopped_agent(
             class,
             at: ts(1_700_000_000) - Duration::from_secs(30),
             label: Some("limit".to_owned()),
+            refill_at: None,
         }),
         observed_at: ts(1_700_000_000) - Duration::from_secs(30),
         ..Default::default()

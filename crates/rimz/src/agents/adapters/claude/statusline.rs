@@ -306,6 +306,7 @@ fn detect_resting_turn_outcome(
             ),
             at,
             label,
+            refill_at: None,
         }));
     }
     if entry_type == Some("user")
@@ -399,6 +400,7 @@ fn turn_ending_denial(
         },
         at,
         label: tool_result_label(refusal.unwrap_or(newest)),
+        refill_at: None,
     }
 }
 

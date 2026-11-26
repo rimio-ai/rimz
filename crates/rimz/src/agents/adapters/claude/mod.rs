@@ -1327,6 +1327,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 class: statusline::classify_api_error(Some(error), None, label.as_deref()),
                 at: Timestamp::now(),
                 label,
+                refill_at: None,
             })
         })
         .or_else(|| {

@@ -530,6 +530,7 @@ fn merge_turn_error_skips_identical_marker() {
         class: TurnErrorClass::PausedRateLimit,
         at: Timestamp::from_second(1_700_000_000).unwrap(),
         label: Some("You've hit your usage limit".to_owned()),
+        refill_at: None,
     };
 
     assert!(
@@ -591,6 +592,7 @@ fn turn_error(class: TurnErrorClass, label: &str, at: i64) -> AgentTurnError {
         class,
         at: Timestamp::from_second(at).unwrap(),
         label: Some(label.to_owned()),
+        refill_at: None,
     }
 }
 

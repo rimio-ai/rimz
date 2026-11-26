@@ -3745,6 +3745,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
             class: rimz::agents::TurnErrorClass::Failed,
             at,
             label: Some("Usage limit reached".to_owned()),
+            refill_at: None,
         });
         rimz::store::agent_context::write_record(
             &env.runtime_paths(),
@@ -3910,6 +3911,7 @@ fn limit_held_child_lets_its_settled_sibling_report_with_its_held_line() {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Usage limit reached".to_owned()),
+        refill_at: None,
     });
     rimz::store::agent_context::write_record(
         &env.runtime_paths(),
@@ -4101,6 +4103,7 @@ fn raw_failed_limit_parked_child_is_held_failed_beyond_horizon_and_keeps_label_i
             class: rimz::agents::TurnErrorClass::PausedRateLimit,
             at: marker_at,
             label: Some(label.to_owned()),
+            refill_at: None,
         });
         rimz::store::agent_context::write_record(
             &env.runtime_paths(),
@@ -5077,6 +5080,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Usage limit reached".to_owned()),
+        refill_at: None,
     });
     rimz::store::agent_context::write_record(
         &env.runtime_paths(),
@@ -5223,6 +5227,7 @@ fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_ref
             class: rimz::agents::TurnErrorClass::PausedRateLimit,
             at,
             label: Some("Usage limit reached".to_owned()),
+            refill_at: None,
         });
         rimz::store::agent_context::write_record(
             &env.runtime_paths(),

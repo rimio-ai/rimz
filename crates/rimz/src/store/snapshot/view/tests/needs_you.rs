@@ -75,6 +75,7 @@ fn card_projection_status_honors_card_and_rowless_demotion() {
         class: TurnErrorClass::PausedRateLimit,
         at: now + jiff::SignedDuration::from_secs(1),
         label: Some("limit reached".into()),
+        refill_at: None,
     });
     state.context = Some(context);
     let demotion = ParkDemotion::default();

@@ -49,6 +49,7 @@ fn died(second: i64) -> AgentTurnError {
         class: TurnErrorClass::PausedOverloaded,
         at: at(second),
         label: Some("API Error: Overloaded".into()),
+        refill_at: None,
     }
 }
 

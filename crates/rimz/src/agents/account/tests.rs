@@ -5,7 +5,11 @@ use jiff::SignedDuration;
 #[test]
 fn capacity_requires_a_read_after_the_marker_and_confirms_through_the_deadline() {
     let model = "fable";
-    let marker = Timestamp::from_second(2_000_000_000).unwrap();
+    let stop = crate::agents::AgentTurnError {
+        at: Timestamp::from_second(2_000_000_000).unwrap(),
+        ..Default::default()
+    };
+    let marker = stop.at;
     let deadline = marker + crate::agents::model_refusal::CONFIRM_WINDOW;
     for (observed, since, confirms) in [
         (marker, false, false),
@@ -24,11 +28,90 @@ fn capacity_requires_a_read_after_the_marker_and_confirms_through_the_deadline()
             "{observed}"
         );
         assert_eq!(
-            capacity.confirms_refusal(model, marker),
+            capacity.confirms_refusal(model, &stop),
             confirms,
             "{observed}"
         );
     }
+}
+
+#[test]
+fn a_stop_naming_its_refill_or_a_window_begun_after_it_confirms_no_refusal() {
+    let at = Timestamp::from_second(2_000_000_000).unwrap();
+    let secs = |secs: i64| at + SignedDuration::from_secs(secs);
+    let observed = secs(300);
+    let five_hours = SignedDuration::from_hours(5);
+    let window = |used, resets_at| RateLimitWindow {
+        duration_mins: Some(300),
+        used_percentage: Some(used),
+        resets_at,
+        observed_at: Some(observed),
+        ..Default::default()
+    };
+    let stop = |refill_at| crate::agents::AgentTurnError {
+        at,
+        refill_at,
+        ..Default::default()
+    };
+    let cases = [
+        (
+            "a refill named, the window at 99%",
+            stop(Some(secs(3_600))),
+            window(99, None),
+        ),
+        (
+            "a window begun after the stop",
+            stop(None),
+            window(10, Some(secs(240) + five_hours)),
+        ),
+        (
+            "a window begun before the stop",
+            stop(None),
+            window(40, Some(secs(-60) + five_hours)),
+        ),
+        (
+            "a window not started",
+            stop(None),
+            window(0, Some(observed + five_hours)),
+        ),
+        ("an undated window", stop(None), window(99, None)),
+        (
+            "a reset crossed since the stop",
+            stop(None),
+            window(40, Some(secs(120))),
+        ),
+        (
+            "a 31-day fixed period, the stop on its first day",
+            stop(None),
+            RateLimitWindow {
+                duration_mins: Some(30 * 24 * 60),
+                fixed_period: true,
+                ..window(
+                    5,
+                    Some(secs(-12 * 3_600) + SignedDuration::from_hours(31 * 24)),
+                )
+            },
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(case, stop, window)| {
+            let capacity = ProviderCapacity::from_windows(vec![window]);
+            (case, capacity.confirms_refusal("fable", &stop))
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("a refill named, the window at 99%", false),
+            ("a window begun after the stop", false),
+            ("a window begun before the stop", true),
+            ("a window not started", true),
+            ("an undated window", true),
+            ("a reset crossed since the stop", false),
+            ("a 31-day fixed period, the stop on its first day", true),
+        ]
+    );
 }
 
 #[test]
@@ -1203,6 +1286,7 @@ fn refusal_records_round_trip_veto_stand_and_clear_across_model_shapes() {
                 class: TurnErrorClass::PausedRateLimit,
                 at,
                 label: Some("model refused".to_owned()),
+                refill_at: None,
             }),
             ..AgentContext::new("claude", at)
         });

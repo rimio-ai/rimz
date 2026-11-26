@@ -68,6 +68,7 @@ fn refused_ping(id: &str, at: i64) -> AgentState {
             class: TurnErrorClass::PausedRateLimit,
             at: ts(at),
             label: Some(SENTENCE.to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("claude", ts(at))
     });
@@ -189,6 +190,60 @@ fn a_read_that_does_not_confirm_records_nothing() {
         pass(&runtime, &[refused_ping("sess", 110)], 800);
         assert_eq!(record(&runtime), None, "{case}");
     }
+}
+
+#[test]
+fn a_quota_stop_records_no_refusal_and_a_dated_window_from_before_it_still_does() {
+    let five_hours = 5 * 3_600;
+    let dated = |used, reset| RateLimitWindow {
+        resets_at: Some(ts(reset)),
+        ..window(300, used, 200)
+    };
+    let cases = [
+        (
+            "a stop naming its refill",
+            Some(ts(3_600)),
+            window(300, 99, 200),
+        ),
+        (
+            "a window begun after the stop",
+            None,
+            dated(10, 130 + five_hours),
+        ),
+        (
+            "a window begun before the stop",
+            None,
+            dated(40, 50 + five_hours),
+        ),
+        ("a window not started", None, dated(0, 200 + five_hours)),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(case, refill_at, window)| {
+            let (_dir, runtime) = runtime();
+            write_windows(&runtime, vec![window]);
+            let mut agent = refused_ping("sess", 110);
+            agent
+                .context
+                .as_mut()
+                .unwrap()
+                .turn_error
+                .as_mut()
+                .unwrap()
+                .refill_at = refill_at;
+            pass(&runtime, &[agent], 210);
+            (case, record(&runtime).is_some())
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("a stop naming its refill", false),
+            ("a window begun after the stop", false),
+            ("a window begun before the stop", true),
+            ("a window not started", true),
+        ]
+    );
 }
 
 #[test]

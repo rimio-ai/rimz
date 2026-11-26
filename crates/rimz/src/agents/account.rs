@@ -30,7 +30,10 @@ use serde::{Deserialize, Serialize};
 
 use super::model_refusal::{ModelRefusal, ModelRefusals};
 use super::{AgentAccount, RoomLoginSet, find_definition};
-use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
+use super::{
+    AgentRateLimits, AgentTurnError, ProviderAccountScope, RateLimitWindow,
+    context::RateLimitWindowKey,
+};
 use crate::RuntimePaths;
 use crate::ids::LoginKey;
 
@@ -997,21 +1000,30 @@ impl ProviderCapacity {
     }
 
     /// Whether a usage read confirms that the provider refuses `model` on this login, from a
-    /// limit marker `at`: every covering window (the unscoped duration windows and the model's
-    /// sub-caps) was observed after `at` and no later than
-    /// [`super::model_refusal::CONFIRM_WINDOW`] after it, and none reads spent. A login with no
-    /// windows never confirms.
-    pub(crate) fn confirms_refusal(&self, model: &str, at: Timestamp) -> bool {
+    /// limit `marker` that names no refill: every covering window (the unscoped duration
+    /// windows and the model's sub-caps) was observed after the marker's `at` and no later than
+    /// [`super::model_refusal::CONFIRM_WINDOW`] after it, none reads spent, and none was
+    /// renewed after `at` (`renewed_after`), a window the stopped turn never ran in: its reset
+    /// crossed between `at` and the read, or a started sliding window that began after `at`
+    /// (a fixed period's start is not dated). A marker naming its refill is a quota stop, and a
+    /// login with no windows never confirms.
+    pub(crate) fn confirms_refusal(&self, model: &str, marker: &AgentTurnError) -> bool {
+        let at = marker.at;
         let Ok(deadline) = at.checked_add(super::model_refusal::CONFIRM_WINDOW) else {
             return false;
         };
+        if marker.refill_at.is_some() {
+            return false;
+        }
         let mut covering = self.covering_windows(Some(model)).peekable();
         covering.peek().is_some()
             && covering.all(|window| {
                 !window.is_spent()
-                    && window
-                        .observed_at
-                        .is_some_and(|observed| observed > at && observed <= deadline)
+                    && window.observed_at.is_some_and(|observed| {
+                        observed > at
+                            && observed <= deadline
+                            && !renewed_after(window, observed, at)
+                    })
             })
     }
 
@@ -1191,6 +1203,29 @@ impl std::str::FromStr for WindowSpan {
 
 fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
     window.is_spent() && window.resets_at.is_none_or(|reset| reset > now)
+}
+
+/// Whether `window`, read at `observed`, is a window renewed after `at`: its reset falls after
+/// `at` and no later than the read, so it refilled in between, or it is a started sliding window
+/// whose reset minus its duration is later than `at`. A window that has not started cannot be
+/// dated by its start (the provider slides its reset ahead until the first billable token), nor
+/// can a fixed period (its nominal duration is not its length) or a window with no duration, so
+/// none of these reads as renewed unless its reset was crossed.
+fn renewed_after(window: &RateLimitWindow, observed: Timestamp, at: Timestamp) -> bool {
+    let Some(reset) = window.resets_at else {
+        return false;
+    };
+    if reset > at && reset <= observed {
+        return true;
+    }
+    let Some(mins) = window.duration_mins else {
+        return false;
+    };
+    !window.fixed_period
+        && !window.not_started(observed)
+        && reset
+            .checked_sub(jiff::SignedDuration::from_secs(i64::from(mins) * 60))
+            .is_ok_and(|start| start > at)
 }
 
 /// Producer-published per-provider rate-limit windows.

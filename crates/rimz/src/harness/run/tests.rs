@@ -6147,6 +6147,7 @@ fn fold_lifecycle_holds_admitted_subagent_run_on_limit_errored_turn_end() {
         class,
         at,
         label: Some(label.to_owned()),
+        refill_at: None,
     };
     let errored_end = |path: Option<&str>| {
         let mut obs = AgentLifecycleObservation::new(

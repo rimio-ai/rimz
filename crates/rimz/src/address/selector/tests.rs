@@ -89,6 +89,7 @@ fn rate_limited(agent: &mut AgentState) {
         class: TurnErrorClass::PausedRateLimit,
         at: now(),
         label: Some("Usage limit reached".to_owned()),
+        refill_at: None,
     });
     agent.context = Some(context);
 }

@@ -1775,6 +1775,7 @@ fn a_limit_refused_prompt_keeps_the_cache_clock_on_the_last_real_request() {
                 class,
                 at: at(secs),
                 label: None,
+                refill_at: None,
             }),
             ..Default::default()
         });
@@ -1916,6 +1917,7 @@ fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_th
                 class,
                 at: at(marker),
                 label: None,
+                refill_at: None,
             }),
             ..Default::default()
         });

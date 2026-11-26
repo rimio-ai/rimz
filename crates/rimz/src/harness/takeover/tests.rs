@@ -347,6 +347,7 @@ fn provider_turn_errors_settle_failures_but_keep_pauses_open() {
                 class,
                 at: now(),
                 label: None,
+                refill_at: None,
             }),
             ..AgentContext::new("claude", now())
         });
@@ -371,6 +372,7 @@ fn spent_provider_pauses_stop_but_recoverable_pauses_block_takeover() {
             class: TurnErrorClass::PausedOverloaded,
             at: now(),
             label: None,
+            refill_at: None,
         }),
         ..AgentContext::new("claude", now())
     });

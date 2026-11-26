@@ -575,6 +575,7 @@ fn turn_error_survives_unobserved_statusline_push_and_clears_when_observed() {
         class: TurnErrorClass::PausedRateLimit,
         at: marker_at,
         label: Some("Individual quota reached".into()),
+        refill_at: None,
     };
 
     // Hook marker lands before the first statusline push (so no model stamp yet).

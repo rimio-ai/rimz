@@ -426,6 +426,7 @@ fn delegated_park_reports_paused_without_parent_turn_error() {
         class: TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     parent.pane = Some(pane.clone());
@@ -556,6 +557,7 @@ fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
         class: TurnErrorClass::Failed,
         at: now,
         label: Some("boom".to_owned()),
+        refill_at: None,
     });
     state.context = Some(context);
     let row = SidebarRow {
@@ -626,6 +628,7 @@ fn rowless_spent_child_reports_failed_with_provider_error() {
         class: TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("usage limit reached".to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     let demotion = rimz::agents::ParkDemotion::new(

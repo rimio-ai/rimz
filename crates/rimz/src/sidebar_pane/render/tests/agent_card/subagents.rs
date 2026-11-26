@@ -859,6 +859,7 @@ fn paused_child_parks_parent_head_and_pet() {
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: fixed_now(),
         label: Some("usage limit reached".to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     let snapshot = snapshot_with(vec![parent, child]);
@@ -981,6 +982,7 @@ fn paused_child_headline_stays_in_live_band() {
         class: crate::agents::TurnErrorClass::PausedRateLimit,
         at: fixed_now(),
         label: Some("usage limit\nreached".to_owned()),
+        refill_at: None,
     });
     paused.context = Some(context);
     let mut running = paused.clone();

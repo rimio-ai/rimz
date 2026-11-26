@@ -1565,6 +1565,7 @@ fn paused_agent_reads_as_a_static_pause() {
             class: TurnErrorClass::PausedOverloaded,
             at: now - Duration::from_secs(10),
             label: Some("API Error: Overloaded".to_owned()),
+            refill_at: None,
         }),
         ..claude_context(now)
     });

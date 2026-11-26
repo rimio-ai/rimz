@@ -71,6 +71,7 @@ fn turn_ending_capacity_error_releases_root_permission() {
             at: ago(83),
             label: Some(label.to_owned()),
             ended_turn: true,
+            refill_at: None,
         }),
         ..Default::default()
     });

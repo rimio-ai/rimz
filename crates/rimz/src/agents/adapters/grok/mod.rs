@@ -423,6 +423,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                     class: turn_error_class(&canonical, parsed.error.as_deref(), label.as_deref()),
                     at: Timestamp::now(),
                     label,
+                    refill_at: None,
                 }
             }),
         );

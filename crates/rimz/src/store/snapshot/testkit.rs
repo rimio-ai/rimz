@@ -259,6 +259,7 @@ impl AgentStateFx for AgentState {
             class: TurnErrorClass::Failed,
             at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
             label: Some(label.to_owned()),
+            refill_at: None,
         });
         self
     }
@@ -270,6 +271,7 @@ impl AgentStateFx for AgentState {
             class,
             at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
             label: Some(label.to_owned()),
+            refill_at: None,
         });
         self
     }

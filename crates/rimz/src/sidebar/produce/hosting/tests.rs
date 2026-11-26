@@ -353,6 +353,7 @@ fn two_live_holders_are_ordered_by_their_rest_certificates_as_the_resolver_order
             class: crate::agents::TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..crate::agents::AgentContext::new("claude", error_at)
     };

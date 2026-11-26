@@ -480,6 +480,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                         class: TurnErrorClass::classify_label(Some(&label)),
                         at,
                         label: Some(label),
+                        refill_at: None,
                     })
                 })
                 .flatten(),

@@ -273,6 +273,7 @@ fn warm_auto_continue_over_200_agents_reads_no_unchanged_park_bytes() {
                 class: TurnErrorClass::PausedOverloaded,
                 at: now,
                 label: None,
+                refill_at: None,
             });
             agent.context = Some(context);
             assert!(agent.displayed_turn_error(now).is_some());

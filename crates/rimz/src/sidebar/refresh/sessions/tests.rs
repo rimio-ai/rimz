@@ -155,6 +155,7 @@ fn codex_turn_death_without_pane_infers_spent_window() {
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
 
     let original = error.clone();
@@ -189,6 +190,7 @@ fn codex_turn_death_retry_is_bounded_to_generic_recent_codex_markers() {
         class: crate::agents::TurnErrorClass::Unknown,
         at: now,
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
 
     assert!(codex_turn_death_retry_due("codex", &marker, now));
@@ -230,6 +232,7 @@ fn codex_turn_death_retry_merges_refined_marker() {
         class: crate::agents::TurnErrorClass::Unknown,
         at,
         label: Some("turn ended with no final message".to_owned()),
+        refill_at: None,
     };
     let mut record = crate::agents::context::record::AgentContextRecord::new(
         "codex",

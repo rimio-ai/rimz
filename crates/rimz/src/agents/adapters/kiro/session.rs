@@ -737,6 +737,7 @@ pub(super) fn refresh_context(path: &Path) -> LocalContextPatch {
             class: TurnErrorClass::Failed,
             at,
             label: None,
+            refill_at: None,
         }),
         _ => None,
     };

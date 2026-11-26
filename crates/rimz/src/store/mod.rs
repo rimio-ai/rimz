@@ -600,6 +600,7 @@ mod tests {
                 class: TurnErrorClass::PausedOverloaded,
                 at: error_at,
                 label: Some("server_overloaded".to_owned()),
+                refill_at: None,
             }),
             ..AgentContext::new("claude", error_at)
         };

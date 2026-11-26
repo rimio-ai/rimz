@@ -1250,6 +1250,7 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at,
         label: Some("Usage limit reached".to_owned()),
+        refill_at: None,
     });
     parked.context = Some(context);
     let mut unlabelled = parked.clone();
@@ -1331,6 +1332,7 @@ fn parked_child_report(demotion: &rimz::agents::ParkDemotion) -> ChildReport {
         class: rimz::agents::TurnErrorClass::PausedRateLimit,
         at: now,
         label: Some("Usage limit reached".to_owned()),
+        refill_at: None,
     });
     child.context = Some(context);
     let run = child_run(&child, rimz::store::run::RunStatus::Running, now);
@@ -1720,6 +1722,7 @@ fn child_list_and_nested_entry(
             class,
             at: now,
             label: label.map(str::to_owned),
+            refill_at: None,
         });
         let record =
             rimz::agents::context::record::AgentContextRecord::new("claude", "child", context);

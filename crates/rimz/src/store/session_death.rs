@@ -471,6 +471,7 @@ mod tests {
                     class,
                     at,
                     label: None,
+                    refill_at: None,
                 }),
                 ..AgentContext::new("codex", at)
             });
@@ -505,6 +506,7 @@ mod tests {
                 class: TurnErrorClass::PausedOverloaded,
                 at: older.last_activity,
                 label: None,
+                refill_at: None,
             }),
             ..AgentContext::new("codex", older.last_activity)
         });

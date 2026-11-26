@@ -226,6 +226,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", error_at)
     };
@@ -801,6 +802,7 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
             class: TurnErrorClass::PausedRateLimit,
             at: error_at,
             label: Some("Usage limit reached".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", error_at)
     };

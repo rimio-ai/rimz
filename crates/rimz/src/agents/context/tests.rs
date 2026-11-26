@@ -720,6 +720,7 @@ fn turn_error_class_round_trips_and_defaults_to_failed() {
             class,
             at: Timestamp::from_second(1_700_000_000).unwrap(),
             label: Some(label.to_owned()),
+            refill_at: None,
         };
         let value = serde_json::to_value(&error).unwrap();
         assert_eq!(value["class"], wire);
@@ -753,6 +754,21 @@ fn turn_error_end_fact_is_optional_and_round_trips() {
         assert_eq!(
             value.get("ended_turn"),
             ended_turn.then_some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentTurnError>(value).unwrap(),
+            error
+        );
+    }
+    assert_eq!(error.refill_at, None, "older markers need no refill_at key");
+    for refill_at in [None, Some(Timestamp::from_second(1_700_003_600).unwrap())] {
+        error.refill_at = refill_at;
+        let value = serde_json::to_value(&error).unwrap();
+        assert_eq!(
+            value.get("refill_at"),
+            refill_at
+                .map(|refill| serde_json::json!(refill.to_string()))
+                .as_ref()
         );
         assert_eq!(
             serde_json::from_value::<AgentTurnError>(value).unwrap(),
@@ -994,6 +1010,7 @@ fn a_turn_error_marker_keeps_the_model_it_landed_on_across_every_writer() {
         class: TurnErrorClass::PausedRateLimit,
         at: Timestamp::from_second(at).unwrap(),
         label: Some("You've hit your limit".to_owned()),
+        refill_at: None,
     };
     let push = |model: &str, at: i64| AgentContext {
         model_id: Some(model.to_owned()),

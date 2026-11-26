@@ -3240,6 +3240,7 @@ fn agent_with_turn_error(
         class,
         at,
         label: Some(label.to_owned()),
+        refill_at: None,
     });
     agent.context = Some(context);
     agent

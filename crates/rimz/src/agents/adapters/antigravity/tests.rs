@@ -717,6 +717,12 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
             Some(SENTENCE)
         )
     );
+    let refill_after = |marker: &crate::agents::AgentTurnError| {
+        marker
+            .refill_at
+            .map(|refill| refill.duration_since(marker.at).as_secs())
+    };
+    assert_eq!(refill_after(marker), Some(121 * 3600 + 44 * 60 + 54));
 
     let transport = "generating and executing: transport error (ResourceExhausted, HTTP 429): ";
     let twice = |resets: &str| {
@@ -749,6 +755,12 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
         );
         let observation = hook_observation(&AntigravityAdapter, "Stop", &payload).unwrap();
         assert_eq!(observation.limit_stop, limit(refill), "{error}");
+        let decoded = hook_output(&AntigravityAdapter, "Stop", &payload);
+        assert_eq!(
+            decoded.turn_error().and_then(refill_after),
+            refill.map(|secs| i64::try_from(secs).unwrap()),
+            "{error}"
+        );
         assert!(
             matches!(
                 observation.signal,
@@ -757,6 +769,19 @@ fn quota_stops_carry_a_typed_provider_limit_and_a_limit_marker() {
             "{error}"
         );
     }
+
+    let past_the_clock = with(
+        &captured,
+        [("error", json!(twice(" Resets in 100000000h.")))],
+    );
+    let observation = hook_observation(&AntigravityAdapter, "Stop", &past_the_clock).unwrap();
+    assert_eq!(observation.limit_stop, limit(Some(360_000_000_000)));
+    let decoded = hook_output(&AntigravityAdapter, "Stop", &past_the_clock);
+    assert_eq!(
+        decoded.turn_error().map(|marker| marker.refill_at),
+        Some(None),
+        "a refill past the clock's range names none"
+    );
 
     for (reason, error) in [
         ("ERROR", json!("rate limit reached; retry later")),

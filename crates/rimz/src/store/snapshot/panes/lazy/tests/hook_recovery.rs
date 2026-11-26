@@ -528,6 +528,7 @@ fn certificate_dead_occupied_pane_binds_without_focus() {
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", error_at)
     });
@@ -563,6 +564,7 @@ fn certificate_dead_primary_does_not_hide_a_live_occupied_owner() {
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", error_at)
     });

@@ -36,6 +36,7 @@ fn mark(child: &mut AgentState, class: TurnErrorClass, label: Option<&str>) {
         class,
         at,
         label: label.map(str::to_owned),
+        refill_at: None,
     });
     child.context = Some(context);
 }

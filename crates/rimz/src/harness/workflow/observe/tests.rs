@@ -56,6 +56,7 @@ fn errored(mut agent: AgentState, secs: u64, class: TurnErrorClass) -> AgentStat
             class,
             at: ago(secs),
             label: Some("provider".into()),
+            refill_at: None,
         }),
         ..AgentContext::default()
     });

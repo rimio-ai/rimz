@@ -1079,7 +1079,8 @@ struct DecodedLifecycleFields {
 
 /// The marker for a string `Stop.error`, classified on the whole message and labelled with the
 /// provider's sentence when the stop names a limit, so the card shows the quota rather than the
-/// transport prefix.
+/// transport prefix. The marker carries the refill the stop names, so the quota stop confirms
+/// no model refusal.
 fn antigravity_turn_error(
     message: &str,
     limit_stop: Option<&crate::agents::TurnLimitStop>,
@@ -1095,12 +1096,18 @@ fn antigravity_turn_error(
         .and_then(|limit| limit.label.as_deref())
         .and_then(crate::agents::context::cap_turn_error_label)
         .unwrap_or(message);
+    let at = Timestamp::now();
+    let refill_at = limit_stop
+        .and_then(|limit| limit.refill_in_secs)
+        .and_then(|secs| i64::try_from(secs).ok())
+        .and_then(|secs| at.checked_add(jiff::SignedDuration::from_secs(secs)).ok());
     Some(AgentTurnError {
         model: None,
         ended_turn: false,
         class,
-        at: Timestamp::now(),
+        at,
         label: Some(label),
+        refill_at,
     })
 }
 

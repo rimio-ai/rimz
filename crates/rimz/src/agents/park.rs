@@ -108,9 +108,10 @@ impl ParkDemotion {
     /// for its login and current model (the record's label), or its newest input is a limit
     /// marker on that model that is confirmed (the marker's): no later than the record's
     /// refusal, standing or cleared, so the refused agent stays failed until its own next turn,
-    /// or confirmed by the login's usage read now (`ProviderCapacity::confirms_refusal`), the
-    /// read the next heavy pass turns into the record, so the agent is refused from that read
-    /// rather than from the record's write.
+    /// or confirmed by the login's usage read now (`ProviderCapacity::confirms_refusal`, never
+    /// for a marker naming its refill or from a window renewed after the marker), the read the
+    /// next heavy pass turns into the record, so the agent is refused from that read rather
+    /// than from the record's write.
     pub fn refused<'a>(
         &'a self,
         agent: &'a AgentState,
@@ -133,7 +134,7 @@ impl ParkDemotion {
         }
         let marker = agent.newest_limit_marker(now)?;
         let confirmed = record.is_some_and(|record| marker.at <= record.refused_at)
-            || capacity.confirms_refusal(model, marker.at);
+            || capacity.confirms_refusal(model, marker);
         (marker_on(marker, model) && confirmed).then_some(marker.label.as_deref())
     }
 
@@ -165,7 +166,7 @@ impl ParkDemotion {
     /// success has since cleared or the next heavy pass has yet to write), or its newest input is
     /// a limit marker on its current model under ten minutes old (`CONFIRM_WINDOW`) that no
     /// usage read has seen the account since. A login with no usage windows can never confirm,
-    /// so its marker holds nothing.
+    /// and no read confirms a marker naming its refill, so neither marker holds anything.
     pub fn held(
         &self,
         agent: &AgentState,
@@ -217,7 +218,7 @@ impl ParkDemotion {
             .capacities
             .get(&agent.login_key())?
             .read_since(Some(current), marker.at)?;
-        (marker_on(marker, current) && now < until && !read_since)
+        (marker.refill_at.is_none() && marker_on(marker, current) && now < until && !read_since)
             .then_some(ModelHold::Unconfirmed { until })
     }
 

@@ -673,6 +673,7 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
             class: TurnErrorClass::PausedOverloaded,
             at: error_at,
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", error_at)
     };
@@ -770,6 +771,7 @@ fn stale_provider_certificate_does_not_reap_the_owner() {
             class: TurnErrorClass::PausedOverloaded,
             at: now - Duration::from_secs(3),
             label: Some("server_overloaded".to_owned()),
+            refill_at: None,
         }),
         ..AgentContext::new("codex", now - Duration::from_secs(3))
     };

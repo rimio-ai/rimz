@@ -638,6 +638,7 @@ mod tests {
                         class: rimz::agents::TurnErrorClass::PausedOverloaded,
                         at: now + jiff::SignedDuration::from_secs(1),
                         label: Some("overloaded".into()),
+                        refill_at: None,
                     });
                     agent.context = Some(context);
                     agent

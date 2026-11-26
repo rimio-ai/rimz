@@ -266,6 +266,7 @@ fn failed_card_description_keeps_error_over_stale_ask() {
         class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Bad request".to_owned()),
+        refill_at: None,
     });
     let snapshot = snapshot_with(vec![asker]);
     assert_eq!(
@@ -298,6 +299,7 @@ fn render_paused_turn_card_quotes_provider_reason_in_italics() {
         class: TurnErrorClass::PausedOverloaded,
         at: fixed_now() - Duration::from_secs(10),
         label: Some("API Error: Overloaded".to_owned()),
+        refill_at: None,
     });
     claude.context = Some(context);
     let snapshot = snapshot_with(vec![claude]);
