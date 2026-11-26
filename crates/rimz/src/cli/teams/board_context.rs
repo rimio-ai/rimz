@@ -46,20 +46,9 @@ pub(super) fn resolve<'a>(
         }
         bail!("no matching live or held team cohort in {place}");
     }
-    let cohort = match candidates.as_slice() {
-        [cohort] => cohort,
-        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team() == first.team()) => bail!(
-            "team `{}` has multiple live cohorts in worktree {} in lanes {}; stop the extra cohorts with `rimz teams stop {}#<lane>` before flipping",
-            first.team(),
-            place,
-            candidates
-                .iter()
-                .map(|cohort| format!("#{}", cohort.channel()))
-                .collect::<Vec<_>>()
-                .join(", "),
-            first.team()
-        ),
-        _ => bail!(
+    rimz::harness::team_stage::refuse_shared_board(&candidates, &place)?;
+    let [cohort] = candidates.as_slice() else {
+        bail!(
             "multiple live team cohorts in worktree {}; select a team with --team <name>: {}",
             place,
             candidates
@@ -67,7 +56,7 @@ pub(super) fn resolve<'a>(
                 .map(|cohort| cohort.instance.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        ),
+        );
     };
     let checkout = cohort
         .board_checkout()

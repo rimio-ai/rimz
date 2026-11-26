@@ -1028,6 +1028,10 @@ fn capability_lines_use_short_form_and_reminder_omits_rimz_capabilities_section(
         ("rimz-message".to_owned(), "mcp(message)".to_owned()),
         ("rimz-control".to_owned(), control),
         ("rimz-notes".to_owned(), "mcp(notes)".to_owned()),
+        (
+            "rimz-blackboard".to_owned(),
+            "mcp(blackboard_flip), mcp(blackboard_record)".to_owned(),
+        ),
     ];
     assert_eq!(actual, [served.clone(), served]);
 }

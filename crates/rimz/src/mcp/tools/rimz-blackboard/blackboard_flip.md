@@ -1,0 +1,1 @@
+Hand your finished stage to the next one, or close the run with `Done`. Make it your turn's last call, after every file write has returned. A flip to a stage you own wakes nobody: carry on in this turn.

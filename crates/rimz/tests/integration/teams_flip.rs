@@ -1207,6 +1207,281 @@ fn done_flip_stops_checkout_server_but_review_does_not() {
     broker.wait().unwrap();
 }
 
+/// The blackboard tools write the caller's own cohort board, found from its recorded launch,
+/// from a server whose process directory is outside the room, and a flip answers the stage it
+/// opened with that stage's owner: `@role`, `you` for the caller, none at `Done`.
+#[test]
+fn blackboard_tools_write_the_callers_board_from_outside_the_room() {
+    let fixture = Fixture::new();
+    fixture.seed("reviewer", None);
+    // A seat's name differs from its role, and the record answer names only the role.
+    fixture.seed_launched("apt-spire", Some("coder"), None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let mut coder = fixture.serve("apt-spire", outside.path());
+    assert_eq!(
+        coder.answer(
+            1,
+            "blackboard_record",
+            json!({"section": "decisions", "text": "Parse with nom."}),
+        ),
+        (json!("recorded Decisions @coder"), false)
+    );
+    assert_eq!(
+        coder.answer(
+            2,
+            "blackboard_flip",
+            json!({"stage": "Review", "note": "Built."}),
+        ),
+        (json!({"stage": "Review", "owner": "@reviewer"}), false)
+    );
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    assert!(board.contains("Parse with nom."), "{board}");
+    assert!(board.contains("Stage: Review (@reviewer)"), "{board}");
+    assert_eq!(fixture.signals().len(), 1);
+    assert_eq!(
+        coder.answer(
+            3,
+            "blackboard_flip",
+            json!({"stage": "Build", "note": "One more pass."}),
+        ),
+        (json!({"stage": "Build", "owner": "you"}), false)
+    );
+    assert_eq!(
+        coder.answer(
+            4,
+            "blackboard_flip",
+            json!({"stage": "Done", "note": "Shipped."}),
+        ),
+        (json!({"stage": "Done"}), false)
+    );
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    assert!(board.contains("Stage: Done\n"), "{board}");
+    assert_eq!(fixture.signals().len(), 3);
+}
+
+/// A tool flip refuses, as the command does, while another live cohort of the caller's team
+/// shares its board's checkout, and writes nothing.
+#[test]
+fn a_blackboard_flip_refuses_a_board_another_cohort_of_its_team_shares() {
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    fixture.seed_member(
+        "claude",
+        "duplicate-coder",
+        "coder",
+        None,
+        "duplicate-channel",
+        &fixture.env.project_root,
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let (failure, is_error) = fixture.serve("coder", outside.path()).answer(
+        1,
+        "blackboard_flip",
+        json!({"stage": "Review", "note": "Built."}),
+    );
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({"error": format!(
+            "team `forge` has multiple live cohorts in worktree {} in lanes #duplicate-channel, \
+            #feature-team; stop the extra cohorts with `rimz teams stop forge#<lane>` before \
+            flipping",
+            fixture.env.project_root.display()
+        )})
+    );
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+    let signals = fixture.signals();
+    assert!(signals.is_empty(), "{signals:#?}");
+}
+
+/// A caller with no recorded launch, or on no live team, is refused with the shell command that
+/// writes a board, and nothing is written.
+#[test]
+fn blackboard_tools_refuse_a_caller_on_no_live_team() {
+    let fixture = Fixture::new();
+    fixture.seed("coder", None);
+    fixture.seed_launched("boss", None, None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    for (caller, error) in [
+        ("ghost", "the calling agent has no recorded launch"),
+        ("boss", "the calling agent is on no live team"),
+    ] {
+        let mut server = fixture.serve(caller, outside.path());
+        assert_eq!(
+            server.answer(
+                1,
+                "blackboard_flip",
+                json!({"stage": "Review", "note": "Built."}),
+            ),
+            (
+                json!({"error": error, "hint": "flip with `rimz teams flip <Stage> \"<note>\"`"}),
+                true
+            )
+        );
+        assert_eq!(
+            server.answer(
+                2,
+                "blackboard_record",
+                json!({"section": "goal", "text": "A goal."}),
+            ),
+            (
+                json!({
+                    "error": error,
+                    "hint": "record with `rimz teams record <Goal|Decisions|Result> \"<text>\"`",
+                }),
+                true
+            )
+        );
+    }
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+    assert!(fixture.signals().is_empty());
+}
+
+/// A tool flip that wrote the board and then could not deliver answers the library's error as
+/// the command prints it.
+#[test]
+fn a_blackboard_flip_whose_delivery_failed_answers_the_library_error() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.running("reviewer", None);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    std::fs::remove_file(fixture.env.agent_config_path("claude")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (failure, is_error) = fixture.serve("coder", outside.path()).answer(
+        1,
+        "blackboard_flip",
+        json!({"stage": "Review", "note": "review ready"}),
+    );
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure,
+        json!({"error": "completed board, signal; queued delivery requires claude hooks so \
+            messages can deliver at turn boundaries; run `rimz hooks install claude`; re-run \
+            `rimz teams flip 'forge#feature-team' Review \"<progress note>\"` to repeat the \
+            signal and delivery"})
+    );
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Stage: Review (@reviewer)")
+    );
+}
+
+/// A tool flip into `Done` sends the leader's `TEAM_REPORT` to the launcher, and a tool flip out
+/// of it reopens the team run so the next `Done` reports again, as the command's flips do.
+#[test]
+fn blackboard_flips_report_the_team_at_done_and_reopen_it_after() {
+    let fixture = Fixture::new();
+    fixture.seed_launched("boss", None, None);
+    fixture.seed_launched("reviewer", Some("reviewer"), Some("boss"));
+    // The fixture's seats share one owner process, so the last seeded seat is the live caller.
+    fixture.seed_launched("coder", Some("coder"), Some("boss"));
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let store = fixture.env.store();
+    let leader = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.name.as_deref() == Some("coder"))
+        .unwrap();
+    rimz::harness::run::create_peer_prompt(
+        store.paths(),
+        &leader,
+        None,
+        rimz::agents::registry::definition_by_kind("claude").unwrap(),
+        "Ship the feature.",
+        &fixture.env.project_root,
+        rimz::store::run::ReportTo::Launcher,
+    )
+    .unwrap()
+    .expect("the prompted leader of an agent-launched team holds a team run");
+    let instance = "forge#feature-team"
+        .parse::<rimz::ids::TeamInstanceId>()
+        .unwrap();
+    let answer = |text: &str| {
+        let open = rimz::harness::run::open_team_run_for(store.paths(), &instance)
+            .unwrap()
+            .expect("an open team run");
+        rimz::harness::run::record_assistant_message(
+            store.paths(),
+            &open.run_id,
+            "claude",
+            &leader.agent_id,
+            text.to_owned(),
+        )
+        .unwrap();
+    };
+    let team_reports = || {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.sender
+                    == MessageSender::Harness {
+                        notice: HarnessNotice::TeamReport,
+                    }
+            })
+            .collect::<Vec<_>>()
+    };
+    let outside = tempfile::tempdir().unwrap();
+    let mut coder = fixture.serve("coder", outside.path());
+    answer("Shipped: PR #1.");
+    assert_eq!(
+        coder.answer(
+            1,
+            "blackboard_flip",
+            json!({"stage": "Done", "note": "Finished."}),
+        ),
+        (json!({"stage": "Done"}), false)
+    );
+    let reports = team_reports();
+    assert_eq!(reports.len(), 1, "{reports:#?}");
+    assert_eq!(reports[0].agent_id.as_str(), "boss");
+    assert_eq!(reports[0].gate, DeliveryGate::Done);
+    assert!(
+        reports[0]
+            .text
+            .starts_with("Team forge#feature-team reached Done; its leader reports:\n- @coder: "),
+        "{}",
+        reports[0].text
+    );
+    assert!(
+        rimz::harness::run::open_team_run_for(store.paths(), &instance)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        coder.answer(
+            2,
+            "blackboard_flip",
+            json!({"stage": "Review", "note": "One more pass."}),
+        ),
+        (json!({"stage": "Review", "owner": "@reviewer"}), false)
+    );
+    assert!(
+        rimz::harness::run::open_team_run_for(store.paths(), &instance)
+            .unwrap()
+            .is_some(),
+        "the flip out of Done reopens the team run"
+    );
+    answer("Fixed the review finding.");
+    assert_eq!(
+        coder.answer(
+            3,
+            "blackboard_flip",
+            json!({"stage": "Done", "note": "Finished again."}),
+        ),
+        (json!({"stage": "Done"}), false)
+    );
+    assert_eq!(team_reports().len(), 2, "every Done reports");
+}
+
 struct Fixture {
     env: Env,
     panes: PathBuf,
@@ -1917,6 +2192,37 @@ impl Fixture {
             })
             .collect::<Vec<_>>();
         self.env.write_pane_fixture(&panes);
+    }
+
+    /// A `rimz-blackboard` server for the launch of `caller`, started in `outside` with a launch
+    /// directory in the room that is not the board's checkout.
+    fn serve(&self, caller: &str, outside: &Path) -> crate::mcp_server::McpServer {
+        let start = self.env.project_root.join("src");
+        std::fs::create_dir_all(&start).unwrap();
+        let mut command = self.env.rimz();
+        command
+            .current_dir(outside)
+            .args(["mcp", "serve", "--launch-env"])
+            .env("RIMZ_MCP_SERVE", "rimz-blackboard")
+            .env("RIMZ_MCP_CWD", &start)
+            // A launch carries its room's pin, which names the room from any directory.
+            .env(rimz::workspace::ENV_WORKSPACE_ID, self.env.workspace_id.as_str())
+            .env(rimz::workspace::ENV_PROJECT_ROOT, &self.env.project_root)
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace)
+            .env("RIMZ_TEST_PANE_LIST", &self.panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(
+                rimz::harness::launch::ENV_AGENT_ID,
+                format!("launch_{caller}"),
+            );
+        let mut server = crate::mcp_server::McpServer::spawn(command);
+        server.initialize();
+        server
     }
 
     fn flip(&self, to: &str, caller: Option<&str>, note: Option<&str>) -> Output {

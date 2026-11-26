@@ -586,6 +586,8 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
             "rimz_self_tune",
             "rimz_self_molt",
             "rimz_notes",
+            "rimz_blackboard_flip",
+            "rimz_blackboard_record",
             "rimz_guide",
         ]
     );
@@ -620,7 +622,9 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
         "--only",
         "rimz-control",
         "--only",
-        "rimz-notes"
+        "rimz-notes",
+        "--only",
+        "rimz-blackboard"
     ]);
     for request in [child, judge] {
         assert_eq!(
@@ -741,7 +745,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes,rimz-blackboard";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -785,7 +789,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     ));
     let marks = "rimz-lsp:always,rimz-wait:deferred,rimz-subagents:deferred,rimz-agents:deferred,\
                  rimz-teams:deferred,rimz-workflow:deferred,rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,\
-                 rimz-notes:deferred";
+                 rimz-notes:deferred,rimz-blackboard:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -828,7 +832,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes",
+            "rimz-lsp:always,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes,rimz-blackboard",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -893,7 +897,7 @@ fn pi_serves_through_the_launch_env_with_its_exposures() {
         room.ambient.insert(key.into(), "caller".into());
     }
     let cwd = room.project.path().display().to_string();
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes,rimz-blackboard";
     let compile = |mcps: Option<&[&str]>, code_mode: Option<bool>, tools: bool| {
         let mut request = launch("pi", mcps, &[]);
         request.identity.params.code_mode = code_mode;
@@ -1622,7 +1626,8 @@ fn a_child_and_a_judge_are_served_no_capability_that_launches() {
                     Capability::Workflow,
                     Capability::Message,
                     Capability::Control,
-                    Capability::Notes
+                    Capability::Notes,
+                    Capability::Blackboard
                 ],
                 "{kind}"
             );
@@ -1820,7 +1825,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
         Some(
             "rimz-lsp,rimz-wait,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,\
-             rimz-notes"
+             rimz-notes,rimz-blackboard"
         )
     );
 }

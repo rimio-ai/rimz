@@ -42,7 +42,7 @@ pub trait Runner: Send + Sync {
 pub enum Answer {
     /// A data tool's answer, which fits the tool's output schema.
     Data(Map<String, Value>),
-    /// The answer of a tool that answers text: `lsp` and `guide`.
+    /// The answer of a tool with no output schema: `lsp`, `blackboard_record`, and `guide`.
     Text(String),
     /// The call could not do its job.
     Failure(Failure),

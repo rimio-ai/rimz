@@ -268,6 +268,15 @@ pub struct CohortFlip {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CohortFlipErr {
+    #[error(
+        "team `{team}` has multiple live cohorts in worktree {place} in lanes {}; stop the extra cohorts with `rimz teams stop {team}#<lane>` before flipping",
+        lanes.join(", ")
+    )]
+    SharedBoard {
+        team: String,
+        place: String,
+        lanes: Vec<String>,
+    },
     #[error(transparent)]
     Machine(#[from] crate::config::ConfigErr),
     /// The room's config failed to load, or refuses the team while the project is untrusted.
@@ -279,6 +288,29 @@ pub enum CohortFlipErr {
     NoRole,
     #[error(transparent)]
     Flip(#[from] FlipErr),
+}
+
+/// Refuse a flip of the board at `place` while `cohorts`, the live cohorts working on it, are
+/// several of one team: the board holds one stage, and every other cohort would read a stage it
+/// never handed off.
+pub fn refuse_shared_board(
+    cohorts: &[crate::address::TeamCohort<'_>],
+    place: &str,
+) -> Result<(), CohortFlipErr> {
+    let [first, rest @ ..] = cohorts else {
+        return Ok(());
+    };
+    if rest.is_empty() || rest.iter().any(|cohort| cohort.team() != first.team()) {
+        return Ok(());
+    }
+    Err(CohortFlipErr::SharedBoard {
+        team: first.team().to_owned(),
+        place: place.to_owned(),
+        lanes: cohorts
+            .iter()
+            .map(|cohort| format!("#{}", cohort.channel()))
+            .collect(),
+    })
 }
 
 /// Flip the cohort's board under the team as the room's config now defines it, refused while

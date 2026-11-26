@@ -310,7 +310,7 @@ pub(super) struct PromptRewrite {
     pub unreachable: BTreeSet<String>,
 }
 
-/// Rewrite each `rimz(x)` and each `skill(rimz-x)` for one of the ten MCP
+/// Rewrite each `rimz(x)` and each `skill(rimz-x)` for one of the eleven MCP
 /// capabilities in `text` to this launch's short form (`mcp(<tool>)` or
 /// `skill(<name>)`). Unreachable references stay written as the author wrote
 /// them and are recorded in `unreachable` as their short capability name `x`.
