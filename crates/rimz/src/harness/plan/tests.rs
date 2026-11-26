@@ -2222,6 +2222,7 @@ fn configured_profile(
         definition: None,
         kind_defaults: false,
         kind_base: false,
+        built_in_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -3488,7 +3489,9 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         &Default::default(),
         None,
     );
-    let missing_base_err = crate::harness::spec::resolve_spec_with_agent_override(
+    // Without a base the bodyless seat runs on the built-in one, whose body carries the grant
+    // into Antigravity's agent file.
+    let built_in_layout = crate::harness::spec::resolve_spec_with_agent_override(
         Some("readseat"),
         &loaded_without_base.agent_profiles,
         &loaded_without_base.agent_profiles,
@@ -3496,13 +3499,16 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
         &Default::default(),
         Some("antigravity"),
     )
-    .expect_err("Markdown profile without antigravity kind base must refuse at layout")
-    .to_string();
-    assert!(
-        missing_base_err.contains("antigravity")
-            && missing_base_err.contains("kind base is missing"),
-        "{missing_base_err}"
+    .expect("a seat on the built-in antigravity base resolves");
+    let built_in_cell = built_in_layout.agent_cells().next().unwrap();
+    assert_eq!(
+        built_in_cell
+            .system_prompt_file
+            .as_ref()
+            .map(|source| source.origin()),
+        Some(Path::new("built-in kind base antigravity"))
     );
+    assert!(built_in_cell.tools.is_some());
     let identity = [AgentLaunchIdentity {
         launch_id: None,
         kind: AgentKind::new_unchecked("antigravity"),
@@ -3543,7 +3549,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
     assert_eq!(cell.tools.as_deref(), Some(&["Read".to_owned()][..]));
     assert_eq!(
         compile(&bodyless, None),
-        Err("antigravity applies a `tools` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/antigravity.md` or another prompt source, or remove `tools`".to_owned())
+        Err("antigravity applies a `tools` list only through the agent file its system prompt rides, and this launch has no system prompt; write the home kind base `agents/antigravity.md` or another prompt source, or remove `tools`".to_owned())
     );
     assert_eq!(compile(&bodyless, Some(&resumed)), Ok(()));
 
@@ -3553,7 +3559,7 @@ fn fresh_antigravity_tools_without_a_prompt_refuse_at_layout() {
     let limited = switched("limited", true);
     assert_eq!(
         compile(&limited, None),
-        Err("antigravity applies a `mcps` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/antigravity.md` or another prompt source, or remove `mcps`".to_owned())
+        Err("antigravity applies a `mcps` list only through the agent file its system prompt rides, and this launch has no system prompt; write the home kind base `agents/antigravity.md` or another prompt source, or remove `mcps`".to_owned())
     );
     assert_eq!(compile(&limited, Some(&resumed)), Ok(()));
     assert_eq!(compile(&switched("everything", true), None), Ok(()));
@@ -7159,7 +7165,7 @@ fn one_chain_rule_and_handoff_examples_through_supervised_entry() {
         "{err:#}"
     );
 
-    // Missing kind base for --model M outside the tier table refuses naming L, M, kind, and reason.
+    // Without an antigravity base, --model M outside the tier table takes the built-in one.
     std::fs::remove_file(root.path().join("agents/antigravity.md")).unwrap();
     let defs_no_agy = crate::config::definitions::load(
         root.path(),
@@ -7183,10 +7189,106 @@ fn one_chain_rule_and_handoff_examples_through_supervised_entry() {
         machine: &machine_no_agy,
     }
     .run(root.path());
-    let no_agy_err = no_agy
-        .expect_err("missing antigravity base must refuse")
-        .to_string();
-    for fragment in ["finder", "neon", "antigravity", "kind base is missing"] {
-        assert!(no_agy_err.contains(fragment), "{no_agy_err}");
-    }
+    let no_agy = no_agy.expect("--model onto the built-in antigravity base launches");
+    assert_eq!(
+        planned_cell(&no_agy)
+            .system_prompt_file
+            .as_ref()
+            .map(|source| source.origin()),
+        Some(Path::new("built-in kind base antigravity"))
+    );
+}
+
+/// The finalized launch of `spec` over definitions under `root`, which ships no kind base of
+/// its own, and the system prompt that launch composes.
+fn built_in_base_launch(
+    root: &Path,
+    spec: &str,
+    preset: &crate::agents::LaunchPreset,
+) -> std::result::Result<(AgentCell, Option<String>), LaunchFinalizeError> {
+    let loaded = crate::config::definitions::load(
+        root,
+        crate::config::definitions::SkillCheck::Skip,
+        &Default::default(),
+        &root.join("config.toml"),
+        &Default::default(),
+        None,
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+        Some(spec),
+        &loaded.agent_profiles,
+        &loaded.agent_profiles,
+        &Default::default(),
+        &loaded.teams,
+        None,
+    )
+    .unwrap();
+    finalize(&mut layout, preset, &[])?;
+    let cell = layout.agent_cells().next().unwrap().clone();
+    let composed = crate::harness::prompt_compose::read_system_prompt(
+        &cell.kind,
+        &SystemPromptSources::from_cell(&cell),
+    )
+    .unwrap();
+    Ok((cell, composed))
+}
+
+#[test]
+fn a_minimax_definition_and_seat_on_the_built_in_base_send_only_their_own_prompt_text() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("agents")).unwrap();
+    std::fs::create_dir_all(root.path().join("teams")).unwrap();
+    std::fs::write(
+        root.path().join("agents/mm.md"),
+        "---\ndescription: Probe.\nagent: minimax\n---\nCraft.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("teams/probe.md"),
+        "---\ndescription: Probe.\nleader: lead\nstages: [Plan, Review]\nroles:\n  - agent: mm\n    \
+         role: lead\n    owns: [Plan]\n  - agent: mm\n    role: judge\n    owns: [Review]\n---\n\
+         Pipeline.",
+    )
+    .unwrap();
+    let (cell, composed) = built_in_base_launch(root.path(), "mm", &Default::default())
+        .expect("a crafted minimax definition on the built-in base launches");
+    assert!(cell.tools.is_some(), "the built-in grant applies");
+    assert_eq!(composed.as_deref(), Some("Craft.\n"));
+    let (seat, composed) = built_in_base_launch(root.path(), "probe", &Default::default())
+        .expect("a minimax seat on the built-in base launches");
+    assert!(seat.team_prompt.is_some(), "the seat takes its team layer");
+    let composed = composed.unwrap();
+    assert!(
+        composed.starts_with("Craft.\n\n") && composed.ends_with("\nPipeline.\n"),
+        "{composed}"
+    );
+}
+
+#[test]
+fn a_launch_prompt_file_composes_onto_the_built_in_body_of_a_bodyless_definition() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Probe.\nagent: claude\n---\n",
+    )
+    .unwrap();
+    let extra = root.path().join("extra.md");
+    std::fs::write(&extra, "Extra.").unwrap();
+    let embedded = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config/definitions/builtin/claude.md"),
+    )
+    .unwrap();
+    let body = embedded.split_once("\n---\n").unwrap().1.trim();
+    let preset = crate::agents::LaunchPreset {
+        append_system_prompt_files: vec![extra],
+        ..Default::default()
+    };
+    let (_, composed) = built_in_base_launch(root.path(), "worker", &preset)
+        .expect("a prompt flag on a bodyless built-in definition launches");
+    assert_eq!(composed, Some(format!("{body}\n\nExtra.\n")));
+    let (cell, composed) = built_in_base_launch(root.path(), "worker", &Default::default())
+        .expect("the bodyless definition launches without the flag");
+    assert_eq!((cell.system_prompt_file, composed), (None, None));
 }

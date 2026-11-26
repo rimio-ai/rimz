@@ -751,6 +751,7 @@ fn resolve_posture_with_role(
             reason: err.to_string(),
         })?;
     }
+    crate::harness::plan::drop_lone_built_in_base(&mut cell);
     if let Err(err) =
         crate::harness::plan::validate_finalized_cell(&cell, find_definition(cell.kind.as_str()))
     {
@@ -3459,7 +3460,12 @@ fn restore_resume_cell(
             && posture.effort.is_some()
             && !matches!(
                 posture.tuning.effort,
-                Some(TuningSource::KindBase(_) | TuningSource::BuiltIn | TuningSource::Recorded)
+                Some(
+                    TuningSource::KindBase(_)
+                        | TuningSource::BuiltInKindBase(_)
+                        | TuningSource::BuiltIn
+                        | TuningSource::Recorded
+                )
             );
         if !keep_override_effort {
             let base = crate::harness::spec::kind_base_for(kind.as_str(), profiles, None, fallback)

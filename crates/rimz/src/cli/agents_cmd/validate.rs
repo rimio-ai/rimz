@@ -97,6 +97,9 @@ pub(super) fn run(json: bool) -> Result<()> {
                 rimz::packs::one_line(&warning.message)
             )?;
         }
+        for note in built_in_base_notes(&loaded, &home) {
+            writeln!(out, "{note}")?;
+        }
     }
     if !loaded.errors.is_empty() {
         bail!("{} definition error(s)", loaded.errors.len());
@@ -129,6 +132,21 @@ fn load(
         }
     }
     loaded
+}
+
+/// One line per kind whose definitions run on the built-in kind base, naming the home file that
+/// replaces it.
+fn built_in_base_notes(loaded: &LoadedDefinitions, home: &Path) -> Vec<String> {
+    loaded
+        .built_in_base_kinds()
+        .into_iter()
+        .map(|kind| {
+            format!(
+                "note: {kind} definitions run on the built-in kind base; write {} to replace it",
+                home.join("agents").join(format!("{kind}.md")).display()
+            )
+        })
+        .collect()
 }
 
 #[derive(serde::Serialize)]

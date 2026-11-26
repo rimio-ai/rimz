@@ -131,7 +131,6 @@ pub struct LaunchAgents {
     repo_sources: AgentSpecSources,
     state: TrustState,
     config_path: PathBuf,
-    agents_home: PathBuf,
 }
 
 fn default_tier_preference(profile: &Profile) -> super::tiers::TierPreference {
@@ -153,7 +152,7 @@ fn default_tier_preference(profile: &Profile) -> super::tiers::TierPreference {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "routes one profile row under an optional override base and reports missing kind bases"
+    reason = "routes one profile row under an optional override base and reports why no kind base stands"
 )]
 fn route_model(
     profile: &Profile,
@@ -164,7 +163,6 @@ fn route_model(
     table: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
     failed_definitions: &BTreeMap<String, String>,
-    agents_home: &Path,
 ) -> std::result::Result<Profile, super::tiers::TierError> {
     let implied = crate::agents::definition_model_kind(model_str);
     if let Some(def) = &profile.definition {
@@ -221,7 +219,7 @@ fn route_model(
             .and_then(|renders| renders.exclusions.get(kind))
             .or_else(|| failed_definitions.get(kind))
             .cloned()
-            .unwrap_or_else(|| super::definitions::missing_kind_base(agents_home, kind));
+            .unwrap_or_else(|| super::definitions::no_kind_base(kind));
         return Err(super::tiers::TierError(format!(
             "{role}: model '{model_str}' ({kind}) cannot run this definition: {reason}"
         )));
@@ -609,7 +607,6 @@ impl LaunchAgents {
                         dest_table,
                         (dest_scope == ProfileScope::Subagents).then_some(&self.profiles),
                         &self.failed_definitions,
-                        &self.agents_home,
                     )?;
                     updates.insert((dest_scope, dest_name.to_owned()), selected);
                     continue;
@@ -768,7 +765,6 @@ pub fn load_with_roots(
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
-            agents_home: config_root.to_path_buf(),
         });
     }
 
@@ -789,7 +785,6 @@ pub fn load_with_roots(
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
-            agents_home: config_root.to_path_buf(),
         });
     };
     let mut repo =
@@ -1016,7 +1011,6 @@ pub fn load_with_roots(
         repo_sources,
         state: report.state,
         config_path,
-        agents_home: config_root.to_path_buf(),
     })
 }
 

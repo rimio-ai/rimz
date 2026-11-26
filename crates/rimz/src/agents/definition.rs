@@ -756,6 +756,9 @@ pub(super) struct DefinitionSpec {
     /// rendered beside an agent of this kind).
     pub home_series: Option<&'static str>,
     pub tools: DefinitionTools,
+    /// Whether the system prompt a definition sends appends to the provider's own prompt
+    /// rather than replacing it.
+    pub(crate) prompt_appends: bool,
 }
 
 impl DefinitionSpec {
@@ -768,6 +771,7 @@ impl DefinitionSpec {
         foreign_prefixes: &[],
         home_series: None,
         tools: DefinitionTools::Unsupported,
+        prompt_appends: false,
     };
 }
 

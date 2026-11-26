@@ -315,7 +315,8 @@ fn tier_frontmatter_refusals_explain_the_fix() {
 #[test]
 fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
     let root = fixture();
-    std::fs::remove_file(root.path().join("agents/codex.md")).unwrap();
+    let broken = "---\ndescription: Broken.\ntier: senior\n---\nBase.";
+    write(root.path(), "agents/codex.md", broken);
     definition(
         root.path(),
         "agents/probe.md",
@@ -330,9 +331,16 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         &crate::config::tiers::TierConfig::default(),
         Some(crate::config::AutoCompactDefault::BuiltIn),
     );
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .all(|error| error.path.ends_with("agents/codex.md")),
+        "{:?}",
+        loaded.errors
+    );
     assert_eq!(loaded.agent_profiles.0["probe"].agent, "claude");
-    std::fs::remove_file(root.path().join("agents/claude.md")).unwrap();
+    write(root.path(), "agents/claude.md", broken);
     let loaded = load(
         root.path(),
         SkillCheck::Skip,
@@ -348,19 +356,23 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("; ");
-    assert!(
-        message.contains("codex")
-            && message.contains("claude")
-            && message.contains("base is missing")
-            && message.contains("or install a provider pack that ships agents/codex.md"),
-        "{message}"
-    );
+    for base in ["codex", "claude"] {
+        let failed = format!(
+            "whose kind base {} failed to load; fix that file",
+            root.path().join(format!("agents/{base}.md")).display()
+        );
+        assert!(message.contains(&failed), "{message}");
+    }
 }
 
 #[test]
 fn listed_concrete_model_refuses_its_unbuildable_family_with_a_tier_hint() {
     let root = fixture();
-    std::fs::remove_file(root.path().join("agents/claude.md")).unwrap();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Broken.\ntier: senior\n---\nBase.",
+    );
     definition(
         root.path(),
         "agents/exact.md",
@@ -381,7 +393,7 @@ fn listed_concrete_model_refuses_its_unbuildable_family_with_a_tier_hint() {
         .iter()
         .find(|error| error.path.ends_with("agents/exact.md"))
         .unwrap();
-    for fragment in ["claude", "base is missing", "claude.md", "tier: senior"] {
+    for fragment in ["claude", "failed to load", "claude.md", "tier: senior"] {
         assert!(error.message.contains(fragment), "{error}");
     }
 }
@@ -2530,30 +2542,6 @@ fn a_conflicting_consensus_piece_claim_refuses_the_team() {
     drop(packs);
 }
 
-#[test]
-fn even_a_bodyless_seat_needs_its_runtime_base() {
-    let root = team_fixture();
-    definition(root.path(), "agents/worker.md", "agent: pi", "");
-    std::fs::remove_file(root.path().join("agents/pi.md")).unwrap();
-    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
-    let loaded = load(
-        root.path(),
-        SkillCheck::Skip,
-        &CommandsConfig::default(),
-        &root.path().join("config.toml"),
-        &crate::config::tiers::TierConfig::default(),
-        Some(crate::config::AutoCompactDefault::BuiltIn),
-    );
-    assert!(!loaded.agent_profiles.0.contains_key("worker"));
-    assert!(loaded.teams.0.is_empty());
-    let base = root.path().join("agents/pi.md");
-    assert!(loaded.errors.iter().any(|error| {
-        error.path.ends_with("agents/worker.md")
-            && error.message.contains("kind base is missing")
-            && error.message.contains(&base.display().to_string())
-    }));
-}
-
 fn fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for kind in ["claude", "codex", "pi"] {
@@ -3326,13 +3314,7 @@ fn antigravity_definitions_take_a_base_a_craft_body_tools_and_team_seats() {
         "agent: antigravity\ntools: [Bash]",
         "Craft.",
     );
-    error(
-        root.path(),
-        &format!(
-            "runs on antigravity, whose kind base is missing — create {} with a nonempty body",
-            root.path().join("agents/antigravity.md").display()
-        ),
-    );
+    assert!(clean(root.path()).agent_profiles.0.contains_key("worker"));
     definition(
         root.path(),
         "agents/antigravity.md",
@@ -3589,58 +3571,18 @@ fn team_tier_overlay_can_move_a_bodyless_non_prompt_definition_to_a_prompt_kind(
 }
 
 #[test]
-fn prompt_taking_kinds_require_their_base_body_or_not() {
+fn kind_bases_take_alias_files_and_refuse_a_body_that_renders_empty() {
     let root = tempfile::tempdir().unwrap();
     assert!(clean(root.path()).errors.is_empty());
     // amp takes no system prompt, so a bodyless definition needs no base.
     definition(root.path(), "agents/runner.md", "agent: amp", "");
     assert!(clean(root.path()).agent_profiles.0.contains_key("runner"));
-    std::fs::remove_file(root.path().join("agents/runner.md")).unwrap();
-    definition(
-        root.path(),
-        "agents/fable.md",
-        "model: fable\ntools: [Bash]",
-        "",
-    );
-    let missing = format!(
-        "runs on claude, whose kind base is missing — create {} with a nonempty body, \
-         the system prompt every claude definition starts from, or install a provider pack that \
-         ships agents/claude.md",
-        root.path().join("agents/claude.md").display()
-    );
-    error(root.path(), &missing);
-    definition(
-        root.path(),
-        "agents/fable.md",
-        "model: fable\ntools: [Bash]",
-        "Craft.",
-    );
-    error(root.path(), &missing);
-    let root = tempfile::tempdir().unwrap();
-    assert!(clean(root.path()).errors.is_empty());
     definition(root.path(), "agents/runner.md", "agent: opencode", "");
-    let missing = format!(
-        "runs on opencode, whose kind base is missing — create {} with a nonempty body, \
-         the system prompt every opencode definition starts from, or install a provider pack \
-         that ships agents/opencode.md",
-        root.path().join("agents/opencode.md").display(),
-    );
-    error(root.path(), &missing);
     definition(root.path(), "agents/opencode.md", "", "OpenCode base.");
     let loaded = clean(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("runner"));
-    // The missing-base fix names every file name the kind's base may take.
     definition(root.path(), "agents/mm.md", "agent: minimax", "");
-    error(
-        root.path(),
-        &format!(
-            "runs on minimax, whose kind base is missing — create {} with a nonempty body, the \
-             system prompt every minimax definition starts from, or install a provider pack \
-             that ships agents/minimax.md or agents/mcode.md",
-            root.path().join("agents/minimax.md").display(),
-        ),
-    );
     // A base file named by an alias is its kind's base: it satisfies and fills one.
     definition(root.path(), "agents/mcode.md", "budget: 5", "MiniMax base.");
     let loaded = clean(root.path());
@@ -7178,11 +7120,6 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
     let amp_rt = crate::agents::find_runtime("amp").unwrap();
     for (label, call, needle) in [
         (
-            "missing kind base",
-            loaded.agent_profiles.0["parent"].build_under(None, None, Some("neon")),
-            "whose kind base is missing",
-        ),
-        (
             "missing required tools",
             loaded.agent_profiles.0["no_tools"].build_under(
                 Some(BuildBase::Runtime(codex_rt)),
@@ -7238,12 +7175,12 @@ fn build_under_idempotence_ancestors_no_disk_read_equality_and_errors() {
         );
     }
     // Ask a failing build a second time to prove it does not poison or change.
-    let repeat_err = loaded.agent_profiles.0["parent"]
-        .build_under(None, None, Some("neon"))
+    let repeat_err = loaded.agent_profiles.0["no_tools"]
+        .build_under(Some(BuildBase::Runtime(codex_rt)), None, None)
         .unwrap()
         .unwrap_err();
     assert!(
-        repeat_err.message.contains("whose kind base is missing"),
+        repeat_err.message.contains("lists neither"),
         "{:?}",
         repeat_err.message
     );
@@ -8297,4 +8234,401 @@ fn toml_extras_invalid_args_shell_quoting_refused() {
         "{:?}",
         loaded.errors
     );
+}
+
+/// The embedded base RimZ ships for `kind`, as the crate holds it: frontmatter, then body.
+fn embedded_base(kind: &str) -> (String, String) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("src/config/definitions/builtin/{kind}.md"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (yaml, body) = frontmatter::split(&path, &text).unwrap();
+    (yaml.to_owned(), body.trim().to_owned())
+}
+
+/// The cell `spec` launches, under an optional `--agent`, as finalized past
+/// `validate_finalized_cell`.
+fn launch_cell(
+    loaded: &LoadedDefinitions,
+    spec: &str,
+    agent: Option<&str>,
+) -> crate::harness::spec::AgentCell {
+    let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+        Some(spec),
+        &loaded.agent_profiles,
+        &loaded.agent_profiles,
+        &CommandsConfig::default(),
+        &loaded.teams,
+        agent,
+    )
+    .unwrap();
+    finalize_layout(&mut layout);
+    layout.agent_cells().next().unwrap().clone()
+}
+
+fn finalize_layout(layout: &mut crate::harness::spec::LayoutSpec) {
+    crate::harness::plan::finalize_launch_layout(
+        layout,
+        crate::harness::plan::LaunchFinalizeOptions {
+            smart_compact: None,
+            agent_base: None,
+            permission_mode: None,
+            isolation: None,
+            preset: &Default::default(),
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+            machine_config: None,
+        },
+    )
+    .unwrap();
+}
+
+/// The prompt `name` launches with: its system prompt text, then each appended text.
+fn launch_prompt(loaded: &LoadedDefinitions, name: &str) -> (Option<String>, Vec<String>) {
+    let cell = launch_cell(loaded, name, None);
+    prompt_texts(&cell.system_prompt_file, &cell.append_system_prompt_files)
+}
+
+fn prompt_texts(
+    system: &Option<PromptSource>,
+    appended: &[PromptSource],
+) -> (Option<String>, Vec<String>) {
+    let text = |source: &PromptSource| match source {
+        PromptSource::Text { text, .. } => text.clone(),
+        PromptSource::File(path) => panic!("built-in bases carry text, not {}", path.display()),
+    };
+    (
+        system.as_ref().map(text),
+        appended.iter().map(text).collect(),
+    )
+}
+
+#[test]
+fn definitions_with_no_home_or_pack_base_run_on_the_built_in_one() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in [
+        "claude",
+        "codex",
+        "antigravity",
+        "opencode",
+        "pi",
+        "omp",
+        "qwen",
+        "minimax",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!("agent: {kind}"),
+            "Craft.",
+        );
+        definition(
+            root.path(),
+            "agents/granted.md",
+            &format!("agent: {kind}\ncapabilities: [bash, read, write, ask, web, rimz]"),
+            "Craft.",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
+        );
+        if !loaded.errors.is_empty() {
+            actual.push((
+                kind,
+                None,
+                Vec::new(),
+                false,
+                None,
+                format!("{:?}", loaded.errors),
+            ));
+            expected.push((kind, None, Vec::new(), true, None, String::new()));
+            continue;
+        }
+        let (worker, granted) = (
+            launch_cell(&loaded, "worker", None),
+            launch_cell(&loaded, "granted", None),
+        );
+        let (system, appended) = prompt_texts(
+            &worker.system_prompt_file,
+            &worker.append_system_prompt_files,
+        );
+        actual.push((
+            kind,
+            system,
+            appended,
+            worker.tools.is_some() && worker.tools == granted.tools,
+            worker.launch.code_mode,
+            format!("{:?}", loaded.errors),
+        ));
+        let body = match kind {
+            "minimax" => Some(String::new()),
+            "omp" | "qwen" => Some(embedded_base("claude").1),
+            _ => Some(embedded_base(kind).1),
+        };
+        let code_mode = matches!(kind, "claude" | "codex" | "pi").then_some(true);
+        expected.push((
+            kind,
+            body,
+            vec!["Craft.".to_owned()],
+            true,
+            code_mode,
+            "[]".to_owned(),
+        ));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn every_built_in_kind_base_loads_as_a_home_base_would() {
+    let empty = tempfile::tempdir().unwrap();
+    assert!(clean(empty.path()).errors.is_empty());
+    for kind in ["claude", "codex", "antigravity", "opencode", "pi"] {
+        let (yaml, body) = embedded_base(kind);
+        assert!(
+            yaml.contains("capabilities: [bash, read, write, ask, web, rimz]"),
+            "{kind}: {yaml}"
+        );
+        let root = tempfile::tempdir().unwrap();
+        write(
+            root.path(),
+            &format!("agents/{kind}.md"),
+            &format!("---\n{yaml}\n---\n{body}\n"),
+        );
+        let loaded = clean(root.path());
+        assert!(loaded.agent_profiles.0[kind].kind_base, "{kind}");
+    }
+}
+
+#[test]
+fn a_bodyless_antigravity_definition_on_the_built_in_base_sends_its_body_and_grant() {
+    let root = tempfile::tempdir().unwrap();
+    definition(root.path(), "agents/worker.md", "agent: antigravity", "");
+    let loaded = clean(root.path());
+    assert_eq!(
+        launch_prompt(&loaded, "worker"),
+        (Some(embedded_base("antigravity").1), Vec::new())
+    );
+    assert!(
+        launch_cell(&loaded, "worker", None).tools.is_some(),
+        "the grant rides the body's agent file"
+    );
+}
+
+#[test]
+fn a_bodyless_definition_on_the_built_in_base_keeps_the_native_prompt_outside_a_team() {
+    let root = tempfile::tempdir().unwrap();
+    definition(root.path(), "agents/worker.md", "agent: claude", "");
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = clean(root.path());
+    assert_eq!(launch_prompt(&loaded, "worker"), (None, Vec::new()));
+    assert!(
+        launch_cell(&loaded, "worker", None).tools.is_some(),
+        "the grant still applies"
+    );
+    let mut spec = crate::harness::spec::resolve_team(
+        "probe",
+        &loaded.teams,
+        &loaded.agent_profiles,
+        &CommandsConfig::default(),
+    )
+    .unwrap();
+    finalize_layout(&mut spec);
+    let seats: Vec<_> = spec
+        .agent_cells()
+        .map(|cell| {
+            (
+                prompt_texts(&cell.system_prompt_file, &[]).0,
+                cell.team_prompt.is_some() || !cell.append_system_prompt_files.is_empty(),
+            )
+        })
+        .collect();
+    assert_eq!(seats, vec![(Some(embedded_base("claude").1), true); 2]);
+}
+
+#[test]
+fn a_home_or_pack_base_replaces_the_built_in_one_for_its_kind_only() {
+    let home = tempfile::tempdir().unwrap();
+    definition(
+        home.path(),
+        "agents/claude.md",
+        "tools: [Read]",
+        "Home claude.",
+    );
+    for kind in ["claude", "codex", "pi"] {
+        definition(
+            home.path(),
+            &format!("agents/on_{kind}.md"),
+            &format!("agent: {kind}"),
+            "Craft.",
+        );
+    }
+    let pack = linked_pack(home.path(), "crew");
+    write(
+        pack.path(),
+        "agents/pi.md",
+        "---\ndescription: Base\n---\nPack pi.",
+    );
+    let loaded = clean(home.path());
+    let craft = || vec!["Craft.".to_owned()];
+    assert_eq!(
+        ["claude", "codex", "pi"].map(|kind| launch_prompt(&loaded, &format!("on_{kind}"))),
+        [
+            (Some("Home claude.".to_owned()), craft()),
+            (Some(embedded_base("codex").1), craft()),
+            (Some("Pack pi.".to_owned()), craft()),
+        ]
+    );
+    // A home base that fails still fails its dependents, naming its own file.
+    definition(
+        home.path(),
+        "agents/claude.md",
+        "tier: senior",
+        "Home claude.",
+    );
+    error(
+        home.path(),
+        &format!(
+            "runs on claude, whose kind base {} failed to load; fix that file",
+            home.path().join("agents/claude.md").display()
+        ),
+    );
+    drop(pack);
+}
+
+#[test]
+fn the_built_in_base_adds_no_row_and_leaves_bare_kind_launches_native() {
+    let root = tempfile::tempdir().unwrap();
+    definition(root.path(), "agents/worker.md", "agent: claude", "Craft.");
+    let loaded = clean(root.path());
+    for kind in crate::agents::known_kinds() {
+        assert!(
+            !loaded.agent_profiles.0.contains_key(kind)
+                && !loaded.subagent_profiles.0.contains_key(kind)
+                && !loaded.rows.iter().any(|row| row.name == kind),
+            "{kind} gained a row"
+        );
+    }
+    for kind in ["claude", "codex", "pi"] {
+        let bare = launch_cell(&loaded, kind, None);
+        assert_eq!(
+            (
+                bare.system_prompt_file,
+                bare.append_system_prompt_files,
+                bare.tools,
+                bare.launch.code_mode,
+                bare.launch.fast
+            ),
+            (None, Vec::new(), None, None, None),
+            "{kind}"
+        );
+    }
+    let catalog = crate::harness::subagent_policy::catalog(
+        Some("worker"),
+        None,
+        Some("claude"),
+        crate::config::effective::ProfileScope::Agents,
+        &loaded.agent_profiles,
+        &loaded.subagent_profiles,
+        &CommandsConfig::default(),
+    );
+    assert!(
+        matches!(
+            catalog,
+            crate::harness::subagent_policy::SubagentCatalog::Disabled
+        ),
+        "{catalog:?}"
+    );
+}
+
+#[test]
+fn overrides_and_tiers_onto_a_kind_with_only_the_built_in_base_resolve() {
+    let root = tempfile::tempdir().unwrap();
+    definition(root.path(), "agents/worker.md", "agent: claude", "Craft.");
+    definition(root.path(), "agents/tiered.md", "tier: senior", "Craft.");
+    let loaded = clean(root.path());
+    let routed = launch_cell(&loaded, "worker", Some("codex"));
+    assert_eq!(routed.kind.as_str(), "codex");
+    assert_eq!(
+        prompt_texts(
+            &routed.system_prompt_file,
+            &routed.append_system_prompt_files
+        ),
+        (Some(embedded_base("codex").1), vec!["Craft.".to_owned()])
+    );
+    let renders = loaded.agent_profiles.0["tiered"]
+        .definition_renders
+        .as_ref()
+        .unwrap();
+    assert!(renders.exclusions.is_empty(), "{:?}", renders.exclusions);
+    assert!(!renders.renders.is_empty());
+}
+
+#[test]
+fn a_home_base_whose_subagents_name_a_child_on_another_kinds_built_in_base_loads() {
+    let root = tempfile::tempdir().unwrap();
+    definition(
+        root.path(),
+        "agents/claude.md",
+        "tools: [Read]\nsubagents: [helper]",
+        "Home claude.",
+    );
+    definition(root.path(), "subagents/helper.md", "agent: codex", "Help.");
+    let loaded = clean(root.path());
+    assert_eq!(
+        loaded.agent_profiles.0["claude"].subagents.as_deref(),
+        Some(["helper".to_owned()].as_slice())
+    );
+    assert!(loaded.subagent_profiles.0.contains_key("helper"));
+}
+
+#[test]
+fn a_broken_recorded_pack_keeps_every_kind_off_the_built_in_base() {
+    let home = tempfile::tempdir().unwrap();
+    definition(home.path(), "agents/worker.md", "agent: claude", "Craft.");
+    let pack = linked_pack(home.path(), "crew");
+    write(pack.path(), "rimz-packs.toml", "[[pack]\n");
+    let problem = crate::packs::resolve(home.path()).problems.remove(0);
+    error(
+        home.path(),
+        &format!(
+            "claude has no home kind base while a recorded pack is broken ({}: {}), so no \
+             claude definition falls back to the built-in base; repair or remove that pack, or \
+             write {} as the claude kind base",
+            problem.path.display(),
+            problem.message,
+            home.path().join("agents/claude.md").display()
+        )
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" "),
+    );
+}
+
+#[test]
+fn an_agent_override_from_a_kind_base_onto_a_kind_on_the_built_in_base_takes_that_base() {
+    let root = tempfile::tempdir().unwrap();
+    definition(
+        root.path(),
+        "agents/claude.md",
+        "tools: [Read]",
+        "Home claude.",
+    );
+    let loaded = clean(root.path());
+    let routed = launch_cell(&loaded, "claude", Some("antigravity"));
+    assert_eq!(
+        (
+            routed.kind.as_str(),
+            prompt_texts(&routed.system_prompt_file, &[]).0,
+            routed.tools.is_some()
+        ),
+        ("antigravity", Some(embedded_base("antigravity").1), true)
+    );
+    let bare = launch_cell(&loaded, "codex", Some("antigravity"));
+    assert_eq!((bare.system_prompt_file, bare.tools), (None, None));
 }

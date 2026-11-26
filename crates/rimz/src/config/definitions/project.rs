@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use super::frontmatter::AgentFrontmatter;
 use super::{
-    CommandsConfig, Definition, DefinitionCause, DefinitionErr, LoadContext, LoadContexts,
-    LoadScope, Namespace, Profile, ProfilesConfig, SharedLoadState, SkillCatalog, SkillCheck,
-    SubagentCheck, TeamsConfig, TomlExtras, agent, check_definition_name, frontmatter,
+    BaseLoad, CommandsConfig, Definition, DefinitionCause, DefinitionErr, LoadContext,
+    LoadContexts, LoadScope, Namespace, Profile, ProfilesConfig, SharedLoadState, SkillCatalog,
+    SkillCheck, SubagentCheck, TeamsConfig, TomlExtras, agent, check_definition_name, frontmatter,
 };
 
 /// Project TOML rows and machine context handed from `config::effective::load_with_roots`.
@@ -269,10 +269,21 @@ fn fallback_contexts(input: &ProjectProfilesInput<'_>) -> LoadContexts {
         input.agents_home,
         &packs,
     ));
+    let mut bases = BTreeMap::new();
+    let mut failed_bases = BTreeMap::new();
+    let built_in = BaseLoad {
+        home: input.agents_home,
+        skills: &catalog,
+        tiers: input.tiers,
+        auto_compact_default: input.auto_compact_default,
+        traits: &BTreeMap::new(),
+    }
+    .built_ins(&mut bases, &mut failed_bases, None);
     let shared = Arc::new(SharedLoadState {
         home: input.agents_home.to_owned(),
-        bases: BTreeMap::new(),
-        failed_bases: BTreeMap::new(),
+        bases,
+        built_in,
+        failed_bases,
         skills: catalog,
         tiers: input.tiers.clone(),
         auto_compact_default: input.auto_compact_default,

@@ -199,6 +199,7 @@ struct KindBase {
     auto_compact: Option<String>,
     fast: Option<crate::agents::Toggle>,
     code_mode: Option<crate::agents::Toggle>,
+    built_in: bool,
 }
 
 /// Where a launch tuning value came from, as the resolution that set it records it.
@@ -210,6 +211,8 @@ pub enum TuningSource {
     Role(String),
     /// The final kind's base definition, below every written value.
     KindBase(AgentKind),
+    /// The kind base RimZ ships for the final kind, standing where no home or pack base does.
+    BuiltInKindBase(AgentKind),
     /// The built-in effort a definition profile takes for its kind and model.
     BuiltIn,
     /// The machine's `[harness] auto_compact`.
@@ -225,7 +228,10 @@ pub enum TuningSource {
 impl TuningSource {
     /// The kind-defaults step's own fill, cleared when a role override or `--agent` override fills again.
     fn is_kind_default(source: &Option<Self>) -> bool {
-        matches!(source, Some(Self::KindBase(_) | Self::BuiltIn))
+        matches!(
+            source,
+            Some(Self::KindBase(_) | Self::BuiltInKindBase(_) | Self::BuiltIn)
+        )
     }
 }
 
@@ -235,6 +241,7 @@ impl std::fmt::Display for TuningSource {
             Self::Profile(name) => write!(f, "profile {name}"),
             Self::Role(role) => write!(f, "role {role}"),
             Self::KindBase(kind) => write!(f, "kind base {kind}"),
+            Self::BuiltInKindBase(kind) => write!(f, "built-in kind base {kind}"),
             Self::BuiltIn => f.write_str("built-in default"),
             Self::MachineDefault => f.write_str("machine default"),
             Self::Flag(flag) => f.write_str(flag),
@@ -328,6 +335,7 @@ impl ResolvedProfile {
                 auto_compact: layer.auto_compact.clone(),
                 fast: layer.fast,
                 code_mode: layer.code_mode,
+                built_in: layer.built_in_base,
             };
         }
         let written = !layer.kind_base;
@@ -400,7 +408,14 @@ impl ResolvedProfile {
     /// definition profile takes for its final kind and model.
     fn fill_kind_defaults(&mut self) {
         let base = &self.kind_base;
-        let from_base = || Some(TuningSource::KindBase(self.kind.clone()));
+        let from_base = || {
+            let kind = self.kind.clone();
+            Some(if base.built_in {
+                TuningSource::BuiltInKindBase(kind)
+            } else {
+                TuningSource::KindBase(kind)
+            })
+        };
         if self.fast.is_none() && base.fast.is_some() {
             self.fast = base.fast;
             self.sources.fast = from_base();
@@ -1168,7 +1183,7 @@ fn resolve_spec(
 }
 
 #[cfg(test)]
-pub(super) fn resolve_spec_with_agent_override(
+pub(crate) fn resolve_spec_with_agent_override(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     team_profiles: &ProfilesConfig,
@@ -1707,8 +1722,15 @@ pub fn explain_profile_chain(
     }) else {
         return Vec::new();
     };
-    chain.names.push(chain.kind);
+    chain.names.push(chain.kind.clone());
     dedup_first(&mut chain.names);
+    if chain.built_in() {
+        for name in &mut chain.names {
+            if *name == chain.kind {
+                *name = format!("built-in kind base {}", chain.kind);
+            }
+        }
+    }
     chain.names
 }
 
@@ -1894,6 +1916,12 @@ struct LaunchChain<'a> {
     variant: Option<&'static crate::agents::Variant>,
     original_kind: String,
     dropped_model: Option<String>,
+}
+
+impl LaunchChain<'_> {
+    fn built_in(&self) -> bool {
+        self.layers.iter().any(|entry| entry.profile.built_in_base)
+    }
 }
 
 /// Engine choice for bare and kind-base launches: replay target kind, else routed kind, else X's
@@ -2189,19 +2217,39 @@ fn launch_layers<'a>(req: ChainRequest<'a>) -> Result<LaunchChain<'a>> {
         _ => bare_or_kind_base_launch_layers(key, root, bare_runtime, &req, &mut chain)?,
     }
 
-    if !chain.layers.iter().any(|entry| entry.name == chain.kind)
-        && let Some(base) = kind_base_for(
+    if !chain.layers.iter().any(|entry| entry.name == chain.kind) {
+        let base = kind_base_for(
             &chain.kind,
             req.own,
             req.base_override.and_then(|x| x.table),
             req.fallback,
         )
-    {
-        chain.layers.push(layer(
-            chain.kind.clone(),
-            strip_direct_only(Cow::Borrowed(base), req.subagent_scope),
-        ));
-        chain.names.push(chain.kind.clone());
+        .map(Cow::Borrowed)
+        .or_else(|| {
+            let def = chain
+                .layers
+                .iter()
+                .find_map(|entry| entry.profile.definition.as_ref())?;
+            Some(Cow::Owned(def.built_in_base(&chain.kind)?.clone()))
+        })
+        .or_else(|| {
+            // A kind base launched under `--agent` adds no layer of its own, but its renders
+            // hold the built-in base of the kind it moves onto, as `--model` routing reads them.
+            root.filter(|profile| profile.kind_base)?
+                .definition_renders
+                .as_ref()?
+                .renders
+                .get(&chain.kind)
+                .filter(|base| base.built_in_base)
+                .map(Cow::Borrowed)
+        });
+        if let Some(base) = base {
+            chain.layers.push(layer(
+                chain.kind.clone(),
+                strip_direct_only(base, req.subagent_scope),
+            ));
+            chain.names.push(chain.kind.clone());
+        }
     }
     dedup_first(&mut chain.names);
     Ok(chain)

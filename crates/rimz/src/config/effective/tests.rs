@@ -1521,6 +1521,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         definition: None,
         kind_defaults: false,
         kind_base: false,
+        built_in_base: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -2504,23 +2505,11 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
             let Ok(launch) = loaded else {
                 continue;
             };
-            if !has_base {
-                let crew_err = launch
-                    .definition_failure_for("crew")
-                    .expect("crew fails when worker lacks kind base");
-                let worker_err = launch
-                    .definition_failure_for("worker")
-                    .expect("worker fails without kind base");
-                assert!(
-                    crew_err.contains(&base_path.display().to_string()),
-                    "{crew_err}"
-                );
-                assert!(
-                    worker_err.contains(&base_path.display().to_string()),
-                    "{worker_err}"
-                );
-                continue;
-            }
+            let origin = if has_base {
+                base_path.clone()
+            } else {
+                std::path::PathBuf::from("built-in kind base claude")
+            };
             let layout = crate::harness::spec::resolve_team(
                 "crew",
                 &launch.teams,
@@ -2531,7 +2520,7 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
             let cell = layout.agent_cells().next().unwrap();
             assert_eq!(
                 cell.system_prompt_file.as_ref().map(|s| s.origin()),
-                Some(base_path.as_path())
+                Some(origin.as_path())
             );
             let prompt = cell.team_prompt.as_ref().unwrap();
             if layer.starts_with("consensus-file") {
@@ -2873,7 +2862,7 @@ fn tier_routes_read_an_alias_launch_word_as_its_kind() {
 }
 
 #[test]
-fn kind_base_model_route_onto_missing_non_tier_base_refuses() {
+fn kind_base_model_route_onto_a_kind_with_only_the_built_in_base_takes_it() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
     std::fs::write(
@@ -2884,7 +2873,7 @@ fn kind_base_model_route_onto_missing_non_tier_base_refuses() {
     let machine =
         MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
     let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
-    let err = launch
+    launch
         .route(
             &machine.tiers,
             ProfileScope::Agents,
@@ -2894,12 +2883,15 @@ fn kind_base_model_route_onto_missing_non_tier_base_refuses() {
             None,
             |_, _| None,
         )
-        .expect_err("claude kind base routed to missing antigravity base must refuse");
-    let text = err.to_string();
-    assert!(
-        text.contains("claude: model 'neon' (antigravity) cannot run this definition:")
-            && text.contains("whose kind base is missing"),
-        "{text}"
+        .expect("claude kind base routes onto the built-in antigravity base");
+    let routed = &launch.profiles.0["claude"];
+    assert_eq!(
+        (
+            routed.agent.as_str(),
+            routed.built_in_base,
+            routed.model.as_deref()
+        ),
+        ("antigravity", true, Some("neon"))
     );
 
     // A bare kind with no base row of its own stays accepted as before.
@@ -3317,7 +3309,7 @@ subagents = ["+codex"]
         );
     }
 
-    // Row 3: missing machine kind base gives missing_kind_base text (before tools check).
+    // Row 3: with no machine kind base, the row takes its tools from the built-in one.
     let home3 = tempdir().unwrap();
     let project3 = tempdir().unwrap();
     let (m3, l3) = load_trusted_project(
@@ -3326,15 +3318,14 @@ subagents = ["+codex"]
         "",
         "[profiles.a]\ndescription = 'a'\nagent = 'claude'\n",
     );
-    assert_row_refused(
-        &m3,
+    crate::harness::plan::resolve_launch(
         &l3,
         ProfileScope::Agents,
-        project3.path(),
-        "profiles",
-        "a",
-        "whose kind base is missing",
-    );
+        &m3.agents.commands,
+        Some("a"),
+        None,
+    )
+    .expect("a row on the built-in claude base launches");
 
     // Rows 8, 9, and 14 (RimZ capability in skills beside capabilities base).
     let home4 = tempdir().unwrap();
@@ -3890,15 +3881,7 @@ fn project_config_loads_without_machine_load_contexts() {
     assert!(machine.definition_contexts.is_none());
     let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
     assert!(launch.profiles.0.contains_key("promptless"));
-    assert_row_refused(
-        &machine,
-        &launch,
-        ProfileScope::Agents,
-        project.path(),
-        "profiles",
-        "needs_base",
-        "whose kind base is missing",
-    );
+    assert!(launch.profiles.0["needs_base"].tools.is_some());
 }
 
 #[test]

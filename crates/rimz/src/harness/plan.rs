@@ -1489,7 +1489,7 @@ pub enum LaunchFinalizeError {
     )]
     MissingSystemPromptBase { agent: &'static str },
     #[error(
-        "{agent} applies a `{field}` list only through the agent file its system prompt rides, and this launch has no system prompt; add the kind base `agents/{agent}.md` or another prompt source, or remove `{field}`"
+        "{agent} applies a `{field}` list only through the agent file its system prompt rides, and this launch has no system prompt; write the home kind base `agents/{agent}.md` or another prompt source, or remove `{field}`"
     )]
     ListNeedsAgentFile {
         agent: &'static str,
@@ -1682,6 +1682,7 @@ pub(super) fn finalize_agent_cell(
             cell.launch.model.as_deref(),
         )?;
     }
+    drop_lone_built_in_base(cell);
     validate_finalized_cell(cell, adapter)?;
     cell.args.extend(options.passthrough.iter().cloned());
     if let Some(budget) = options.budget {
@@ -1983,6 +1984,22 @@ fn reconcile_preset_args(
         remove_occurrences(&mut cell.args, &occurrences);
     }
     Ok(())
+}
+
+/// The one rule for when a built-in kind base's body is sent, decided once the launch's prompt
+/// flags and team layer are known: only beneath a prompt that composes onto it, or on a kind
+/// that applies its tools only inside the file that prompt rides. Alone, it would replace the
+/// provider's own prompt with RimZ's, so the launch sends none.
+pub(super) fn drop_lone_built_in_base(cell: &mut AgentCell) {
+    if cell
+        .system_prompt_file
+        .as_ref()
+        .is_some_and(|base| base.built_in_kind().is_some())
+        && !SystemPromptSources::from_cell(cell).composes()
+        && !crate::agents::tools_ride_prompt(cell.kind.as_str())
+    {
+        cell.system_prompt_file = None;
+    }
 }
 
 fn validate_system_prompt_support(

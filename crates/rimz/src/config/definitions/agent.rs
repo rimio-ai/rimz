@@ -342,6 +342,17 @@ impl DefinitionSource {
         }
     }
 
+    /// The built-in kind base of `kind` as a row of this definition's namespace, where no home
+    /// or pack base stands for that kind.
+    pub(crate) fn built_in_base(&self, kind: &str) -> Option<&Profile> {
+        let rows = self.inner.context.shared.built_in.get(kind)?;
+        Some(if self.inner.namespace == "subagents" {
+            &rows.1
+        } else {
+            &rows.0
+        })
+    }
+
     /// Whether this row was already built under `base`.
     pub(crate) fn is_built_under(&self, base: BuildBase<'_>) -> bool {
         self.inner.built_under.is_some()
@@ -866,6 +877,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         definition: None,
         kind_defaults: false,
         kind_base: false,
+        built_in_base: false,
         tools: None,
         model_tier: None,
         tier_stamp: None,
@@ -1654,7 +1666,7 @@ impl Resolver<'_> {
 
     /// The kind base `name` as its row in this resolver's namespace: validated as a profile of
     /// its kind, less the fields the namespace refuses, its rendered body the system prompt.
-    pub(super) fn kind_base(&self, name: &str) -> Result<Profile, DefinitionErr> {
+    pub(super) fn kind_base(&self, name: &str, built_in: bool) -> Result<Profile, DefinitionErr> {
         let definition = &self.tree.definitions[name];
         let fm = definition.frontmatter.clone().for_namespace(self.namespace);
         let mut craft_state = CraftState::Pending {
@@ -1691,11 +1703,20 @@ impl Resolver<'_> {
             &mut craft_state,
         )?;
         profile.system_prompt_file = profile.append_system_prompt_files.pop();
+        profile.built_in_base = built_in;
         if profile.system_prompt_file.is_none() {
-            return Err(DefinitionErr::new(
-                &definition.path,
-                super::empty_kind_base(name),
-            ));
+            if !built_in {
+                return Err(DefinitionErr::new(
+                    &definition.path,
+                    super::empty_kind_base(name),
+                ));
+            }
+            // An appending kind's built-in base has no body, yet stands as the base its
+            // definitions' crafts and team text compose onto.
+            profile.system_prompt_file = Some(PromptSource::Text {
+                origin: definition.path.clone(),
+                text: String::new(),
+            });
         }
         // Its tuning fills below written values at launch, so it sets no definition defaults.
         profile.kind_defaults = false;
@@ -1835,22 +1856,9 @@ fn finish_profile(
         }
         None => None,
     };
-    // Prompt-taking kinds need their base even when the definition adds no craft.
-    let missing_base = (takes_system_prompt && !shared.bases.contains_key(kind)).then(|| {
-        DefinitionErr::new(
-            path,
-            format!(
-                "runs on {kind}, {}",
-                super::missing_kind_base(&shared.home, kind)
-            ),
-        )
-    });
     if lowered.is_none() && fm.tools.is_none() && agents::tools_required(kind) && !profile.kind_base
     {
         // A project row takes its tools from the base alone.
-        if is_project && let Some(error) = missing_base {
-            return Err(error);
-        }
         let message = if is_project {
             format!(
                 "runs on {kind}, which requires a tools list; add `capabilities:` or `tools:` to \
@@ -2078,10 +2086,7 @@ fn finish_profile(
         };
         return Err(DefinitionErr::new(path, message));
     }
-    match missing_base {
-        Some(error) => Err(error),
-        None => Ok(profile),
-    }
+    Ok(profile)
 }
 
 /// The `subagents:` field `finish_profile` lowers `listed` to under `validator`. A `+` list nothing

@@ -293,7 +293,11 @@ fn read_composed(
     if !sources.composes() {
         return read_source(base);
     }
-    let mut pieces = vec![read_source(base)?];
+    // An appending kind's built-in base is empty: what composes onto it stands alone.
+    let mut pieces: Vec<String> = Some(read_source(base)?)
+        .filter(|base| !base.is_empty())
+        .into_iter()
+        .collect();
     for path in &sources.append_system_prompt_files {
         pieces.push(read_source(path)?);
     }

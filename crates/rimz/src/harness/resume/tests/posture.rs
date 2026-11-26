@@ -2287,7 +2287,8 @@ fn project_kind_named_rows_never_stand_in_for_machine_kind_bases() {
             .map_err(|error| error.to_string())
     };
     // Machine `agents/codex.md` stays the codex kind base (`effort: high`), unaffected by the
-    // failed `[profiles.codex]` row; routing onto missing `antigravity.md` refuses.
+    // failed `[profiles.codex]` row; routing onto antigravity takes its built-in base, never the
+    // failed `[profiles.antigravity]` row.
     let (launch, (stored, _)) =
         route(ProfileScope::Agents, "sol").expect("routes onto machine codex.md");
     let fresh = crate::harness::spec::resolve_profile("claude", &launch.profiles).unwrap();
@@ -2316,8 +2317,16 @@ fn project_kind_named_rows_never_stand_in_for_machine_kind_bases() {
     assert_eq!(posture.launch.effort.as_deref(), Some("high"));
     assert_eq!(posture.launch.system_prompt_file, fresh.system_prompt_file);
 
-    let missing_agy = route(ProfileScope::Agents, "neon").map(|_| ()).unwrap_err();
-    assert!(missing_agy.contains("antigravity.md"), "{missing_agy}");
+    let (built_in_agy, _) = route(ProfileScope::Agents, "neon").expect("routes onto built-in");
+    let routed = &built_in_agy.profiles.0["claude"];
+    assert_eq!(
+        (
+            routed.agent.as_str(),
+            routed.built_in_base,
+            routed.effort.as_deref()
+        ),
+        ("antigravity", true, None)
+    );
 
     // Direct launches of the failed kind-named project rows refuse with the rename fix.
     for kind in ["codex", "antigravity"] {
