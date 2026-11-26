@@ -2331,7 +2331,7 @@ fn project_kind_named_rows_never_stand_in_for_machine_kind_bases() {
     // Direct launches of the failed kind-named project rows refuse with the rename fix.
     for kind in ["codex", "antigravity"] {
         let err = launch
-            .block_failed_profile(kind, &launch.profiles)
+            .block_failed_profile(kind, ProfileScope::Agents, &launch.profiles)
             .unwrap_err()
             .to_string();
         assert!(

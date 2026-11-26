@@ -320,8 +320,7 @@ fn fork_posture(
         &seed.kind,
         seed.launch.profile.as_deref(),
         seed.launch.record.as_deref(),
-        profiles,
-        fallback,
+        scope,
     )?;
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {

@@ -35,6 +35,7 @@ use super::{
     AgentSpecSources, CommandsConfig, DefinitionOrigin, Profile, ProfileSource, ProfilesConfig,
     TeamsConfig,
 };
+use crate::config::effective::ProfileScope;
 use crate::packs::{ClaimResolution, ItemFate, PackItem, PackName, Problem, ResolvedPacks};
 use frontmatter::AgentFrontmatter;
 
@@ -238,6 +239,9 @@ pub struct LoadedDefinitions {
     pub sources: AgentSpecSources,
     pub errors: Vec<DefinitionErr>,
     pub failed: BTreeMap<String, BTreeSet<PathBuf>>,
+    /// The scope whose tree alone declares each failed name it holds; a name both trees declare,
+    /// a kind base, a team, or a team seat fails in both tables.
+    pub failed_trees: BTreeMap<String, ProfileScope>,
     pub rows: Vec<DefinitionRow>,
     pub pack_items: Vec<PackItem>,
     pub warnings: Vec<crate::packs::Problem>,
@@ -1310,6 +1314,21 @@ fn load_resolved(
             && !loaded.subagent_profiles.0.contains_key(name)
             && !loaded.teams.0.contains_key(name)
     });
+    let declares = |tree: &Namespace, name: &str| {
+        tree.definitions.contains_key(name) || tree.failed.contains(name)
+    };
+    loaded.failed_trees = loaded
+        .failed
+        .keys()
+        .filter(|name| crate::agents::find_definition(name).is_none())
+        .filter_map(
+            |name| match (declares(&agents, name), declares(&subagents, name)) {
+                (true, false) => Some((name.clone(), ProfileScope::Agents)),
+                (false, true) => Some((name.clone(), ProfileScope::Subagents)),
+                _ => None,
+            },
+        )
+        .collect();
     let owned: BTreeSet<_> = loaded.failed.values().flatten().collect();
     for error in &mut loaded.errors {
         if !owned.contains(&error.path)

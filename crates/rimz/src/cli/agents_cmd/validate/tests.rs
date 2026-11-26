@@ -717,7 +717,11 @@ fn validation_keeps_good_rows_and_collects_definition_errors() {
         rimz::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
     for name in loaded.failed.keys() {
         let error = effective
-            .block_failed_reference(Some(name), None)
+            .block_failed_reference(
+                rimz::config::effective::ProfileScope::Agents,
+                Some(name),
+                None,
+            )
             .unwrap_err();
         let detail = loaded
             .errors

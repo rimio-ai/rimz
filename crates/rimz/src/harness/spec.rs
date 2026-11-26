@@ -2549,7 +2549,7 @@ fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfi
     role.is_some() && is_cell_word(cell, profiles, commands)
 }
 
-pub(super) fn is_cell_word(
+pub(crate) fn is_cell_word(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,

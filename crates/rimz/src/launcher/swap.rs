@@ -696,8 +696,7 @@ pub fn restart_posture(
         &agent.kind,
         agent.profile.as_deref(),
         agent.record.as_deref(),
-        profiles,
-        fallback,
+        scope,
     )?;
     let posture = member_posture(agent, profiles, fallback, &launch.teams);
     let warning = match &posture.degraded {

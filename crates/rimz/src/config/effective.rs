@@ -125,6 +125,7 @@ pub struct LaunchAgents {
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
     failed_definitions: BTreeMap<String, String>,
+    failed_trees: BTreeMap<String, ProfileScope>,
     failed_teams: BTreeMap<String, String>,
     project_definition_errors: Vec<String>,
     set_failure: Option<String>,
@@ -416,6 +417,7 @@ impl LaunchAgents {
                             }
                             self.block_failed_override(
                                 family_str,
+                                scope,
                                 self.profiles_for(scope),
                                 fallback,
                             )
@@ -491,14 +493,27 @@ impl LaunchAgents {
                 if let Some(raw) = launched_profile {
                     self.block_failed_team(raw)
                         .map_err(|err| super::tiers::TierError(err.to_string()))?;
-                    self.block_failed_profile(raw, self.profiles_for(scope))
+                    self.block_failed_profile(raw, scope, self.profiles_for(scope))
                         .map_err(|err| super::tiers::TierError(err.to_string()))?;
                 }
-                self.block_failed_reference(launched_profile, family)
+                // As on the untiered path, the failure records answer only for a name the launch
+                // cannot resolve; an `--agent` name that reaches here resolved.
+                let unresolved = launched_profile
+                    .map(str::trim)
+                    .filter(|raw| !self.resolves(scope, raw));
+                self.block_failed_reference(scope, unresolved, None)
                     .map_err(|err| super::tiers::TierError(err.to_string()))?;
                 for (target_scope, name, _) in &targets {
-                    self.block_failed_profile(name, self.profiles_for(*target_scope))
-                        .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                    self.block_failed_profile(
+                        name,
+                        *target_scope,
+                        self.profiles_for(*target_scope),
+                    )
+                    .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                    if !self.resolves(*target_scope, name) {
+                        self.block_failed_reference(*target_scope, Some(name), None)
+                            .map_err(|err| super::tiers::TierError(err.to_string()))?;
+                    }
                 }
                 if let Some((team_name, None)) = &team_target
                     && let Some(team) = self.teams.0.get(team_name)
@@ -508,7 +523,7 @@ impl LaunchAgents {
                         agents_spec::inline_layout_profile_targets(layout, &self.profiles)
                     {
                         if !team.roles.iter().any(|binding| binding.role == name) {
-                            self.block_failed_profile(&name, &self.profiles)
+                            self.block_failed_profile(&name, ProfileScope::Agents, &self.profiles)
                                 .map_err(|err| super::tiers::TierError(err.to_string()))?;
                         }
                     }
@@ -710,6 +725,7 @@ pub fn load_with_roots(
 ) -> Result<LaunchAgents> {
     let machine_config = machine;
     let failed_definitions = machine.failed_definition_details();
+    let failed_trees = machine.notices.failed_trees.clone();
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
     let mut lsp_servers = machine.lsp.servers.clone();
@@ -759,6 +775,7 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
+            failed_trees,
             failed_teams: BTreeMap::new(),
             project_definition_errors: Vec::new(),
             set_failure,
@@ -779,6 +796,7 @@ pub fn load_with_roots(
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
             failed_definitions,
+            failed_trees,
             failed_teams: BTreeMap::new(),
             project_definition_errors: Vec::new(),
             set_failure,
@@ -1018,6 +1036,7 @@ pub fn load_with_roots(
         subagent_profiles,
         teams,
         failed_definitions,
+        failed_trees,
         failed_teams,
         project_definition_errors,
         set_failure,
@@ -1151,15 +1170,21 @@ impl LaunchAgents {
         Ok(())
     }
 
-    /// Refuse a name, team seat prefix, or unshadowed terminal kind when its definition failed.
-    pub(crate) fn block_failed_profile(&self, name: &str, profiles: &ProfilesConfig) -> Result<()> {
+    /// Refuse a name, team seat prefix, or unshadowed terminal kind when its definition failed,
+    /// reading `profiles` as the table of `scope`.
+    pub(crate) fn block_failed_profile(
+        &self,
+        name: &str,
+        scope: ProfileScope,
+        profiles: &ProfilesConfig,
+    ) -> Result<()> {
         let name = name.trim();
         if let Some(detail) = profiles.failed(name) {
             return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
         }
         self.block_failed_team(name)?;
         if !profiles.0.contains_key(name) {
-            if let Some(detail) = self.failed_definitions.get(name).or_else(|| {
+            if let Some(detail) = self.machine_failure(scope, name).or_else(|| {
                 name.split_once('.')
                     .and_then(|(team, _)| self.failed_definitions.get(team))
             }) {
@@ -1183,10 +1208,12 @@ impl LaunchAgents {
         Ok(())
     }
 
-    /// Refuse failed definitions or kind bases referenced by `name`, checking `own` then `fallback`.
+    /// Refuse failed definitions or kind bases referenced by `name`, checking `own`, the table of
+    /// `scope`, then `fallback`, the agents table.
     pub(crate) fn block_failed_override(
         &self,
         name: &str,
+        scope: ProfileScope,
         own: &ProfilesConfig,
         fallback: Option<&ProfilesConfig>,
     ) -> Result<()> {
@@ -1194,69 +1221,150 @@ impl LaunchAgents {
         if let Some(detail) = own.failed(name) {
             return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
         }
-        let table = if own.0.contains_key(own.key(name)) {
-            own
+        let (scope, table) = if own.0.contains_key(own.key(name)) {
+            (scope, own)
         } else if let Some(fb) = fallback {
             if let Some(detail) = fb.failed(name) {
                 return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
             }
             if fb.0.contains_key(fb.key(name)) {
-                fb
+                (ProfileScope::Agents, fb)
             } else {
-                own
+                (scope, own)
             }
         } else {
-            own
+            (scope, own)
         };
-        self.block_failed_profile(name, table)
+        self.block_failed_profile(name, scope, table)
     }
 
-    /// Refuse failed definitions consumed by a launch, leaving legacy bare rows alone.
+    /// Refuse failed definitions consumed by a launch in `scope`, leaving legacy bare rows alone:
+    /// the profile is read from the table `scope` resolves it from, and the recorded `--agent`
+    /// from that table then, on a subagent launch, the agents table.
     pub fn block_failed_launch(
         &self,
         kind: &crate::ids::AgentKind,
         profile: Option<&str>,
         record: Option<&crate::agents::LaunchRecord>,
-        profiles: &ProfilesConfig,
-        fallback: Option<&ProfilesConfig>,
+        scope: ProfileScope,
     ) -> Result<()> {
+        let (table_scope, profiles) =
+            scope.resolve_launch(profile, &self.profiles, &self.subagent_profiles);
+        let fallback = (scope == ProfileScope::Subagents).then_some(&self.profiles);
         if let Some(name) = profile.or_else(|| record.map(|_| kind.as_str())) {
-            self.block_failed_profile(name, profiles)?;
+            self.block_failed_profile(name, table_scope, profiles)?;
         }
         if let Some(agent) = record.and_then(|record| record.agent.as_deref()) {
-            self.block_failed_override(agent, profiles, fallback)?;
+            self.block_failed_override(agent, table_scope, profiles, fallback)?;
         }
         Ok(())
     }
 
-    /// Refuse unresolved names whose definitions failed to load.
+    /// Refuse names whose definitions failed to load, asking first the tables `scope` resolves
+    /// them from: a spec's teams and `scope`'s table, and an `--agent` name's table then the
+    /// agents table on a subagent launch. A healthy row there ends the lookup ahead of the machine
+    /// failure record; a name they lack refuses with the other table's failure by that name. A
+    /// launch asks this only for a name it does not resolve.
     pub fn block_failed_reference(
         &self,
+        scope: ProfileScope,
         spec: Option<&str>,
         agent_override: Option<&str>,
     ) -> Result<()> {
-        let spec = spec.map(str::trim);
+        let fallback = (scope == ProfileScope::Subagents).then_some(ProfileScope::Agents);
+        let spec = spec.map(str::trim).filter(|spec| !spec.is_empty());
         let spec_cell = spec.and_then(|spec| spec.split_once(':').map(|(cell, _)| cell));
         let spec_fast = spec_cell
             .or(spec)
             .and_then(|name| name.strip_suffix("-fast"))
             .filter(|base| !base.is_empty());
-        for name in [
-            spec,
-            spec_cell,
-            spec_fast,
-            agent_override.map(str::trim),
-            spec.and_then(|spec| spec.split_once('.').map(|(team, _)| team)),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|name| !name.is_empty())
+        if let Some(spec) = spec {
+            self.block_failed_team(spec)?;
+        }
+        let other = scope.other();
+        for name in [spec, spec_cell, spec_fast].into_iter().flatten() {
+            self.block_failed_row(name, &[scope], Some(other))?;
+        }
+        if let Some(name) = agent_override
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
         {
-            if let Some(detail) = self.definition_failure_for(name) {
-                return Err(EffectiveConfigErr::FailedDefinition(detail));
-            }
+            // A subagent launch's `--agent` already reads the agents table as its fallback.
+            let unread = (scope == ProfileScope::Agents).then_some(other);
+            let scopes: Vec<_> = std::iter::once(scope).chain(fallback).collect();
+            self.block_failed_row(name, &scopes, unread)?;
+        }
+        if let Some(team) = spec.and_then(|spec| spec.split_once('.').map(|(team, _)| team))
+            && let Some(detail) = self.failed_definitions.get(team)
+        {
+            return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
         }
         Ok(())
+    }
+
+    /// Refuse `name` when the first table of `scopes` that holds it holds a failure, or when none
+    /// holds it and a machine definition of theirs by that name failed, or, short of both, when
+    /// the table of `other` (one the launch does not resolve from) holds a failure by that name,
+    /// its failed row over its machine definition, and neither a healthy row there nor a team
+    /// takes it: the launch names the wrong doorway, and that failure is what the user has to fix.
+    /// A healthy row there shadows its machine definition, so the caller's own wrong-doorway hint
+    /// answers instead.
+    fn block_failed_row(
+        &self,
+        name: &str,
+        scopes: &[ProfileScope],
+        other: Option<ProfileScope>,
+    ) -> Result<()> {
+        for table in scopes.iter().map(|scope| self.profiles_for(*scope)) {
+            if let Some(detail) = table.failed(name) {
+                return Err(EffectiveConfigErr::FailedDefinition(detail.to_owned()));
+            }
+            if table.0.contains_key(table.key(name)) {
+                return Ok(());
+            }
+        }
+        let wrong_doorway = other
+            .filter(|_| !self.teams.0.contains_key(name) && self.teams.role_spec(name).is_none())
+            .and_then(|other| {
+                let table = self.profiles_for(other);
+                if table.0.contains_key(table.key(name)) {
+                    return None;
+                }
+                table
+                    .failed_rows()
+                    .get(name)
+                    .or_else(|| self.machine_failure(other, name))
+            });
+        match scopes
+            .iter()
+            .find_map(|scope| self.machine_failure(*scope, name))
+            .or(wrong_doorway)
+        {
+            Some(detail) => Err(EffectiveConfigErr::FailedDefinition(detail.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// The machine failure the table of `scope` answers for `name`: none for a definition only
+    /// the other scope's tree declared, which fails in that table alone.
+    fn machine_failure(&self, scope: ProfileScope, name: &str) -> Option<&String> {
+        self.failed_definitions.get(name).filter(|_| {
+            self.failed_trees
+                .get(name)
+                .is_none_or(|tree| *tree == scope)
+        })
+    }
+
+    /// Whether a launch resolves `spec` in `scope` with no failure record: a team, a
+    /// `team.role`, or a cell of `scope`'s table (a row, a kind, a runtime variant, a
+    /// permission-mode or `-fast` cell).
+    fn resolves(&self, scope: ProfileScope, spec: &str) -> bool {
+        let own = self.profiles_for(scope);
+        let commands = CommandsConfig::default();
+        let (cell, _) = agents_spec::split_inline_role(spec, own, &commands);
+        self.teams.0.contains_key(spec)
+            || self.teams.role_spec(spec).is_some()
+            || (agents_spec::is_cell_word(cell, own, &commands) && own.failed(cell).is_none())
     }
 
     /// Overlay trusted project profile provenance onto machine catalog sources.
@@ -1593,6 +1701,14 @@ impl SmartCompactSeat<'_> {
 }
 
 impl ProfileScope {
+    /// The scope whose table a launch in this one does not resolve from.
+    fn other(self) -> Self {
+        match self {
+            Self::Agents => Self::Subagents,
+            Self::Subagents => Self::Agents,
+        }
+    }
+
     /// A recorded doorway wins over the one implied by child launch treatment.
     pub fn for_launch(recorded: Option<Self>, child: bool) -> Self {
         recorded.unwrap_or(if child { Self::Subagents } else { Self::Agents })
