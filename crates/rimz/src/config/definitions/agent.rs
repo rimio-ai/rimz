@@ -2154,24 +2154,39 @@ pub(super) fn base_subagents(
     subagent_list(path, listed, false, &validator)
 }
 
-/// Refuses the first of `names` that `subagents` records as failed to load.
+/// Refuses the first of `names` that `subagents` records as failed to load, checking an entry
+/// spelled as a kind alias no subagent name shadows as that kind, the row the runtime offers.
 fn refuse_failed(
     path: &Path,
     names: &[String],
     subagents: &SubagentCheck,
 ) -> Result<(), DefinitionErr> {
-    let Some(failed) = names.iter().find(|name| {
-        (subagents.defined.contains(*name) || subagents.failed.contains(*name))
-            && !subagents.allowed.contains(*name)
+    let known = |name: &str| {
+        subagents.defined.contains(name)
+            || subagents.failed.contains(name)
+            || subagents.allowed.contains(name)
+    };
+    let Some((entry, failed)) = names.iter().find_map(|entry| {
+        let row = Some(entry.as_str())
+            .filter(|name| known(name))
+            .or_else(|| {
+                agents::find_runtime(entry)
+                    .filter(|runtime| runtime.variant.is_none())
+                    .map(agents::Runtime::kind)
+            })
+            .unwrap_or(entry);
+        ((subagents.defined.contains(row) || subagents.failed.contains(row))
+            && !subagents.allowed.contains(row))
+        .then_some((entry, row))
     }) else {
         return Ok(());
     };
     Err(DefinitionErr::new(
         path,
-        format!("allows subagent '{failed}', which failed to load"),
+        format!("allows subagent '{entry}', which failed to load"),
     )
     .with_cause(DefinitionCause::DependsOnFailed {
-        name: failed.clone(),
+        name: failed.to_owned(),
         subagent: true,
     }))
 }
