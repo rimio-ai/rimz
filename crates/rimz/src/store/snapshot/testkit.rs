@@ -369,6 +369,20 @@ pub(super) fn sorted_value(mut agents: Vec<AgentState>) -> serde_json::Value {
     serde_json::to_value(agents).unwrap()
 }
 
+/// An open raised ask whose card line is `brief`, opened at `at`.
+pub(super) fn open_raised_ask(brief: &str, at: Timestamp) -> crate::agents::state::RaisedAsk {
+    crate::agents::state::RaisedAsk {
+        ask_id: crate::ids::AskId::new(),
+        state: crate::agents::state::RaisedAskState::Open,
+        raised_at: at,
+        basis_at: at,
+        opened_at: Some(at),
+        raised_by: None,
+        text: None,
+        brief: Some(brief.to_owned()),
+    }
+}
+
 /// A paneless child `AgentState` of `parent`, stamped `secs_ago` before the
 /// [`epoch`].
 pub(super) fn child_state(

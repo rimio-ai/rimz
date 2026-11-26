@@ -10,6 +10,11 @@ use std::borrow::Cow;
 #[cfg(test)]
 mod tests;
 
+/// Whether submitted `text` is `run`'s own prompt, RimZ blocks aside.
+pub(super) fn is_run_prompt(run: &rimz::store::run::RunRecord, text: &str) -> bool {
+    peel_rimz_blocks(&run.prompt).trim() == peel_rimz_blocks(text).trim()
+}
+
 pub(super) fn record_assistant_response(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -399,8 +404,7 @@ pub(super) fn record_conversation(
                             run_id.and_then(|id| rimz::harness::run::load(store.paths(), id).ok())
                         })
                         .as_ref()
-                    && peel_rimz_blocks(&run.prompt).trim()
-                        == peel_rimz_blocks(&section.text).trim()
+                    && is_run_prompt(run, &section.text)
                 {
                     origin = Cow::Owned(match run.prompt_origin() {
                         RunPromptOrigin::Parent => {

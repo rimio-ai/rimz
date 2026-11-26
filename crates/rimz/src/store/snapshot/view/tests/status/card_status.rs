@@ -428,6 +428,24 @@ fn promoted_child_row_without_a_source_settles_on_its_own_card() {
         reset_window: None,
     });
     assert_eq!(project(budgeted), (Some(AgentStatus::Running), None));
+
+    // An open raised ask turns the resting promoted card to waiting with its brief.
+    let mut asking = promoted(AgentStatus::Success);
+    asking.raised_ask = Some(open_raised_ask("Ship now?", ago(5)));
+    let snapshot = room(vec![asking]).with_live_panes_and_provider_capacities(
+        vec![pane("%2", "claude", "/repo/child")],
+        None,
+        &provider_capacity("claude", vec![unprojectable_spent_window(-60)]),
+    );
+    let card = row(&snapshot, "child-1").as_agent().unwrap();
+    assert_eq!(
+        (
+            card.status,
+            card.ask_detail.as_deref(),
+            card.overlay_raised_at.is_some()
+        ),
+        (AgentStatus::Waiting, Some("Ship now?"), true)
+    );
 }
 
 #[test]

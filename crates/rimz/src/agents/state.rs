@@ -1143,13 +1143,14 @@ fn project_refusal(
 /// overlay touches keeps its seed. A wait that still holds writes nothing,
 /// and a fresh native-wait or plan marker writes `waiting` before any label
 /// or overlay. `last_activity` is the row clock after the same-pane and
-/// child folds; the budget park, the turn start, the alert and the raised ask
-/// come from `source`, and the fallback when no rung decides is the source's
-/// own `rested_status` on its own clock, so a parent kept fresh by a finished
-/// child does not stall on its own silence. The stall rung runs before the
-/// display-only lift of wait and shell work. `card_agent` is the root source or a
-/// promoted launched child's own state: the model refusal, a promoted child's
-/// turn start, and the no-request rung read it, and the refusal decides before a
+/// child folds; the budget park, the turn start and the alert come from
+/// `source`, the raised ask from `card_agent`, and the fallback when no
+/// rung decides is the source's own `rested_status` on its own clock, so a
+/// parent kept fresh by a finished child does not stall on its own silence.
+/// The stall rung runs before the display-only lift of wait and shell work.
+/// `card_agent` is the root source or a promoted launched child's own state:
+/// the model refusal, a promoted child's turn start, the no-request rung, and
+/// a promoted child's raised ask read it, and the refusal decides before a
 /// waiting subagent can turn the card to `waiting`.
 #[expect(
     clippy::too_many_arguments,
@@ -1243,7 +1244,7 @@ pub(crate) fn project_display(
         *overlay_raised_at = Some(alert.raised_at);
     } else if matches!(projected, Idle | Success)
         && *phase != TurnPhase::Parked
-        && let Some(agent) = source
+        && let Some(agent) = source.or(card_agent)
         && let Some(ask) = agent.raised_ask.as_ref()
     {
         projected = Waiting;

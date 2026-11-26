@@ -118,7 +118,8 @@ pub(super) fn attach_sub_agents_indexed(
                     .as_ref()
                     .and_then(|ask| ask.detail.as_deref())
                     .and_then(crate::agents::single_line_description)
-                    .or_else(|| alert.as_ref().map(|(_, label)| label.clone()));
+                    .or_else(|| alert.as_ref().map(|(_, label)| label.clone()))
+                    .or_else(|| child.raised_ask.as_ref()?.detail());
                 delegated_waits.insert(
                     parent_key.clone(),
                     DelegatedWait {
@@ -170,6 +171,12 @@ fn delegated_wait_start(child: &AgentState, alert_at: Option<Timestamp>) -> Dele
     {
         return DelegatedWaitStart::Fixed(since);
     }
+    if let Some(at) = alert_at {
+        return DelegatedWaitStart::Fixed(at);
+    }
+    if let Some(ask) = child.raised_ask.as_ref() {
+        return DelegatedWaitStart::Fixed(ask.opened_at.unwrap_or(ask.raised_at));
+    }
     if let Some(settle) = child.context.as_ref().and_then(|ctx| ctx.settle)
         && matches!(
             settle.outcome,
@@ -179,7 +186,7 @@ fn delegated_wait_start(child: &AgentState, alert_at: Option<Timestamp>) -> Dele
     {
         return DelegatedWaitStart::Refreshed(settle.at);
     }
-    alert_at.map_or(DelegatedWaitStart::Unknown, DelegatedWaitStart::Fixed)
+    DelegatedWaitStart::Unknown
 }
 
 fn launched_child_park(
@@ -473,8 +480,16 @@ fn project_sub_agent(
             TurnPhase::Idle,
             Some(format!("silent {}", format_duration_coarse(secs as i64))),
         )
-    } else if let Some(card) = live_card {
-        card
+    } else if let Some((status, phase, label)) = live_card {
+        // An open raised ask waits on the user as the child's own card shows it.
+        if matches!(status, AgentStatus::Idle | AgentStatus::Success)
+            && phase != TurnPhase::Parked
+            && child.raised_ask.is_some()
+        {
+            (AgentStatus::Waiting, TurnPhase::Idle, label)
+        } else {
+            (status, phase, label)
+        }
     } else if child.is_launched_child() {
         // Ended launched children keep their recorded rest status and are never
         // lifted to Running or Sleeping by an attached wait.

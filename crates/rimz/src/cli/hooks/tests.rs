@@ -57,10 +57,13 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
     (dir, store)
 }
 
+/// Apply one `event` frame for an agent holding a raised ask in `state`, its prompt
+/// "headerless notice"; `run_prompt` makes the turn a supervised child's, its run's prompt.
 fn apply_raised_frame(
     event: &str,
     replay: bool,
     state: rimz::agents::state::RaisedAskState,
+    run_prompt: Option<&str>,
 ) -> (
     rimz::store::raised::RaisedRecord,
     Vec<rimz::store::event::EventEnvelope>,
@@ -95,6 +98,28 @@ fn apply_raised_frame(
         },
     )
     .unwrap();
+    let mut env = std::collections::BTreeMap::from([
+        ("RIMZ_AGENT_KIND".into(), "claude".into()),
+        ("RIMZ_AGENT_ID".into(), "session".into()),
+        ("RIMZ_AGENT_NAME".into(), "worker".into()),
+    ]);
+    if let Some(prompt) = run_prompt {
+        let mut run = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            agent.spec().kind_id(),
+            rimz::agents::PermissionMode::Auto,
+            prompt.to_owned(),
+            workspace.project_root.clone(),
+        );
+        run.subagent = true;
+        run.status = rimz::store::run::RunStatus::Running;
+        run.agent_id = Some("session".into());
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        env.insert(
+            rimz::harness::launch::ENV_RUN_ID.into(),
+            run.run_id.to_string(),
+        );
+    }
     let mut payload = serde_json::json!({"session_id": "session", "prompt": "headerless notice",
         "last_assistant_message": "Ship?"});
     if event == "StopFailure" {
@@ -112,11 +137,7 @@ fn apply_raised_frame(
         payload: payload.to_string(),
         cwd: workspace.project_root.clone(),
         hook_pid: std::process::id(),
-        env: std::collections::BTreeMap::from([
-            ("RIMZ_AGENT_KIND".into(), "claude".into()),
-            ("RIMZ_AGENT_ID".into(), "session".into()),
-            ("RIMZ_AGENT_NAME".into(), "worker".into()),
-        ]),
+        env,
     };
     let scoped = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
     if replay {
@@ -167,14 +188,37 @@ fn apply_raised_frame(
 #[test]
 fn raised_attention_replay_does_not_stamp_human_turns_but_still_opens_armed_asks() {
     use rimz::agents::state::RaisedAskState;
-    let (record, _) = apply_raised_frame("UserPromptSubmit", true, RaisedAskState::Open);
+    let (record, _) = apply_raised_frame("UserPromptSubmit", true, RaisedAskState::Open, None);
     assert!(
         record.human_turns.is_empty(),
         "a replay cannot reclassify a prompt as human"
     );
     assert!(record.is_open(&record.asks[0]));
-    let (record, _) = apply_raised_frame("Stop", true, RaisedAskState::Armed);
+    let (record, _) = apply_raised_frame("Stop", true, RaisedAskState::Armed, None);
     assert_eq!(record.asks[0].value.state, RaisedAskState::Open);
+}
+
+/// A prompt the user types into a supervised child's pane closes its raised ask as on a
+/// root, while the run's own prompt, which RimZ submits for the parent, leaves it open.
+#[test]
+fn typed_prompt_closes_a_supervised_childs_raised_ask_and_its_run_prompt_does_not() {
+    use rimz::agents::state::RaisedAskState;
+    let actual = [Some("headerless notice"), Some("the parent's task"), None].map(|run_prompt| {
+        let (record, _) =
+            apply_raised_frame("UserPromptSubmit", false, RaisedAskState::Open, run_prompt);
+        (
+            run_prompt,
+            record.asks.first().is_some_and(|ask| record.is_open(ask)),
+        )
+    });
+    assert_eq!(
+        actual,
+        [
+            (Some("headerless notice"), true),
+            (Some("the parent's task"), false),
+            (None, false),
+        ]
+    );
 }
 
 #[test]
