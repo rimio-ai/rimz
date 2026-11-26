@@ -576,7 +576,7 @@ fn a_string_stop_error_sets_a_marker_and_an_object_error_sets_none() {
 }
 
 #[test]
-fn stop_string_errors_set_capped_turn_error_markers_with_overload_demoted() {
+fn stop_string_errors_set_capped_turn_error_markers_classed_by_status_form() {
     use crate::agents::TurnErrorClass;
 
     let captured_quota = "generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 125h15m30s.";
@@ -599,7 +599,7 @@ fn stop_string_errors_set_capped_turn_error_markers_with_overload_demoted() {
         (
             "ERROR",
             "API Error: 503 Service Unavailable - overloaded",
-            TurnErrorClass::Failed,
+            TurnErrorClass::PausedOverloaded,
             "API Error: 503 Service Unavailable - overloaded",
         ),
         (
@@ -608,7 +608,74 @@ fn stop_string_errors_set_capped_turn_error_markers_with_overload_demoted() {
             TurnErrorClass::Failed,
             "invalid request: missing parameter",
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        [
+            // A 5xx code in either of agy's status forms is an overload.
+            (
+                "generating and executing: transport error (Unavailable, HTTP 503): backend gone",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "transport error (HTTP 500): oops",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "generating and executing: UNAVAILABLE (code 503): backend gone",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            // So is a listed status name where the template carries no code, in either spelling.
+            (
+                "transport error (Unavailable): backend gone",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "transport error (Internal): boom",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "transport error (DeadlineExceeded)",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "transport error (DEADLINE_EXCEEDED): slow",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            // A code decides alone, and an unlisted bare name gives no overload.
+            (
+                "transport error (Unavailable, HTTP 400): request timeout",
+                TurnErrorClass::Failed,
+            ),
+            (
+                "INVALID_ARGUMENT (code 400): connection reset",
+                TurnErrorClass::Failed,
+            ),
+            (
+                "transport error (InvalidArgument): bad request",
+                TurnErrorClass::Failed,
+            ),
+            // A `(code N)` counts only right after an upper-snake status, and only with three
+            // digits; a stray one is no code, so the stop reads as if it were absent.
+            (
+                "invalid selector: field[2] (code 503) is not a valid key",
+                TurnErrorClass::Failed,
+            ),
+            (
+                "transport error (Unavailable): backend exited (code 127)",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: Overloaded (code 127)",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "transport error (Unavailable): UNAVAILABLE (code 14)",
+                TurnErrorClass::PausedOverloaded,
+            ),
+        ]
+        .map(|(text, class)| ("ERROR", text, class, text)),
+    ) {
         let payload = with(
             &hook_payload(),
             [
