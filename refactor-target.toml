@@ -6498,6 +6498,25 @@ allowed-dependencies = [
 surface-budget = 122
 
 [[module]]
+path = "crates/rimz/src/harness/block"
+# The block types a workflow script and the MCP tools share. It reaches neither the loop scheduler
+# nor either workflow engine, and `mcp` imports it rather than the reverse, so
+# `harness::schedule`, `harness::workflow`, and `mcp` stay off this list.
+allowed-dependencies = [
+    # `pub(in crate::harness)` names the crate root.
+    "(crate)",
+    "harness::duration",
+    "harness::when",
+    "utils::time",
+]
+# The module itself and `typescript`, the one item `rimz workflow types` prints (+2).
+# The six blocks, their results, the enums their fields take, and the failure: the types the
+# script engine reads, and the MCP tools once they adopt them (+18).
+# Caller, BlockName and its spelling, Block, parse, digest, and the schema generator: the
+# entries the script engine calls (+7).
+surface-budget = 27
+
+[[module]]
 path = "crates/rimz/src/harness/check_run"
 # Neutral home of the hosted subprocess check runner the scheduler and the engine share;
 # it reaches neither `harness::schedule` nor `harness::workflow`.

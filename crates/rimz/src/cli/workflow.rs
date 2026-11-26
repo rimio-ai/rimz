@@ -426,6 +426,8 @@ enum Command {
     },
     /// Print the workflow specification's JSON Schema.
     Schema,
+    /// Print TypeScript declarations for the globals of a workflow script.
+    Types,
     #[command(hide = true)]
     Reconcile,
 }
@@ -543,6 +545,9 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
+        Command::Types => Ok(std::io::stdout()
+            .lock()
+            .write_all(rimz::harness::block::typescript().as_bytes())?),
         Command::Reconcile => reconcile::run(globals),
         Command::Validate { dir, json } => validate(dir, json, globals),
     }
