@@ -2,13 +2,13 @@
 
 use std::io::Write;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use jiff::Timestamp;
 
 use rimz::harness::resume::TeamHoldReason;
-use rimz::harness::team_stage::{self, Compaction, Delivery, FlipRequest, Flipper};
+use rimz::harness::run::TeamReportOutcome;
+use rimz::harness::team_stage::{self, CohortFlip, CohortFlipRequest, Compaction, Delivery};
 
-use super::super::agents_cmd::team_report::TeamReportOutcome;
 use super::super::{Ctx, GlobalFlags, render};
 use super::FlipArgs;
 
@@ -29,7 +29,6 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         members,
     };
     let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
-    let team_name = cohort.team();
     let caller = super::board_context::caller(&snapshot.agents)?;
     let member = caller.filter(|caller| cohort.contains(caller));
     if member.is_none()
@@ -42,55 +41,30 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             worktree.display()
         );
     }
-    let machine = rimz::config::MachineConfig::load()?;
-    let effective = rimz::config::effective::load(&machine, &ctx.workspace.project_root)?;
-    effective.block_untrusted_reference(
-        rimz::config::effective::ProfileScope::Agents,
-        Some(team_name),
-        &machine.agents.commands,
-    )?;
-    let team = effective.teams.0.get(team_name).with_context(|| {
-        effective
-            .definition_failure_for(team_name)
-            .unwrap_or_else(|| format!("team `{team_name}` is no longer configured"))
-    })?;
-    let by = match member {
-        Some(agent) => {
-            let role = agent
-                .role
-                .as_deref()
-                .context("calling team member has no role")?;
-            let pane = snapshot.live_agent_pane(&agent.kind, &agent.agent_id);
-            Flipper::Member { role, agent, pane }
-        }
-        None => Flipper::User,
-    };
-    let (by_label, flip_compact) = match &by {
-        Flipper::Member { role, agent, .. } => (
-            rimz::address::handle_with_name(&format!("@{role}"), agent.name.as_deref()),
-            team.flip_compact(role, machine.harness.flip_compact),
-        ),
-        Flipper::User => ("@user".to_owned(), None),
-    };
-    let members = cohort
-        .members
-        .iter()
-        .map(|agent| (*agent).clone())
-        .collect::<Vec<_>>();
-    let receipt = team_stage::flip(FlipRequest {
+    let CohortFlip {
+        receipt,
+        pipeline,
+        report,
+    } = team_stage::flip_cohort(CohortFlipRequest {
         workspace: &ctx.workspace,
         store: &ctx.store,
-        instance: &cohort.instance,
-        team,
+        snapshot: &snapshot,
+        cohort: &cohort,
         worktree: &worktree,
-        members: &members,
+        member,
         to: &args.stage,
         note: &args.note,
-        flip_compact,
-        by,
         mux: globals.mux,
         now: Timestamp::now(),
     })?;
+    let by_label = match member {
+        Some(agent) => rimz::address::handle_with_name(
+            &format!("@{}", agent.role.as_deref().unwrap_or_default()),
+            agent.name.as_deref(),
+        ),
+        None => "@user".to_owned(),
+    };
+    let members = &cohort.members;
     let mut out = render::out();
     match &receipt.from {
         Some(from) => write!(out, "Flipped {from} -> {}", receipt.to)?,
@@ -113,7 +87,6 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     if held_by_board && receipt.to == rimz::config::DONE_STAGE {
         writeln!(out, "  checkout released")?;
     }
-    let pipeline = team.pipeline_stages();
     if !pipeline.is_empty() {
         writeln!(
             out,
@@ -130,7 +103,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             } else {
                 "woken at its next turn boundary"
             };
-            let owner_name = rimz::address::role_holders(members.iter(), owner)
+            let owner_name = rimz::address::role_holders(members.iter().copied(), owner)
                 .first()
                 .and_then(|holder| holder.name.as_deref());
             writeln!(
@@ -163,14 +136,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     // The board already flipped; a report that cannot be queued warns rather than
     // failing a flip that has landed.
     let instance = &cohort.instance;
-    match super::super::agents_cmd::team_report::on_flip(
-        &ctx.workspace,
-        &ctx.store,
-        instance,
-        &receipt.board,
-        receipt.from.as_deref(),
-        &receipt.to,
-    ) {
+    match report {
         Ok(TeamReportOutcome::Queued {
             launcher,
             delivered,

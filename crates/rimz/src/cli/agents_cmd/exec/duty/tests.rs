@@ -123,7 +123,7 @@ fn strand_duty_completes_a_withdrawn_message_park() {
     assert_eq!(completed.last_message.as_deref(), Some("the parked answer"));
     let mut child = rimz::testkit::agent_state("claude", "session", completed.started_at);
     child.name = None;
-    let row = super::super::super::subagent_report::compose_digest_row(&child, &completed, None);
+    let row = rimz::harness::run::report::compose_digest_row(&child, &completed, None);
     assert!(row.starts_with("- @calm-fox: completed in "), "{row}");
 }
 

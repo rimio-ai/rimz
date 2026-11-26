@@ -89,8 +89,10 @@ path = "crates/rimz/src/address.rs"
 # read the cohort's typed instance (+3).
 # `selector` gives agents list one flat row, field table, and --filter match (+1).
 # TeamCohort::focus_member gives `teams focus` and the sidebar's booking rows one focus rule (+1).
-surface-budget = 59
-allowed-dependencies = ["agents", "ids", "store"]
+# TeamCohort::in_worktree and board_checkout give the team CLI and the blackboard tools one
+# board-checkout rule (+2).
+surface-budget = 61
+allowed-dependencies = ["agents", "ids", "store", "utils::path"]
 
 [[verdict]]
 kind = "item"
@@ -2679,7 +2681,9 @@ path = "crates/rimz/src/harness"
 # `ExecRequest::result_file`, `LayoutRunParams::result_file`, and `run::result_file::remove` carry and clean a subagent's result file across launch and exec (+2).
 # `run::result_file::{seen, queue_reminder}`: the lifecycle hook queues a result-file subagent's reminder, and the deadline texts name its file as it sees it (+2).
 # `spec::{validate_team_name, validate_team_roster, validate_profile_namespace}` split a machine team's own check, run as the team loads, from the set-wide namespace check in `config` (+3).
-surface-budget = 1387
+# The cohort flip, its typed error, the team report and the digest text it composes move out of
+# the CLI so the blackboard MCP tools flip as `rimz teams flip` does (+17).
+surface-budget = 1404
 
 [[verdict]]
 kind = "item"
@@ -5232,7 +5236,8 @@ upward-dependencies = ["agents"]
 # ProviderLogo and resolve_provider_logos put the logo tier order beside provider identity (+2).
 # The age, countdown and home-relative path words a wake row carries are shared with the CLI (+4).
 # `fmt::refill_in` words a refill wait for the CLI and the ended-child resume refusal (+1).
-surface-budget = 50
+# `fmt::format_compact_duration` moves with the digest text out of the CLI, whose copy delegates (+1).
+surface-budget = 51
 
 [[verdict]]
 kind = "item"
@@ -6137,7 +6142,8 @@ allowed-dependencies = [
 # fail_step_refusal lets the in-pane launch step fail its own run with a start-capped reason without waking (+1).
 # wake_workflow lets the host exec wrapper send the deferred workflow wake once the child exits (+1).
 # result_file::remove lets open_fresh clear a stale subagent result file with the one removal the terminal take uses (+1).
-surface-budget = 70
+# TeamReportOutcome and report_team_run move out of the CLI with the cohort flip, which the CLI and the blackboard tools share; team_report_on_flip reaches team_stage::flip_cohort, its one caller, inside harness only (+3).
+surface-budget = 73
 
 [[verdict]]
 kind = "item"
@@ -6317,15 +6323,24 @@ allowed-dependencies = [
     "agents",
     "disk::lock",
     "disk::paths",
+    # A digest row measures each response file it names.
+    "disk::summary",
     "harness::ancestry",
     "harness::fleet",
     "harness::run",
     "ids",
+    # A report that cannot be queued names the delivery failure.
+    "message::deliver",
     "store",
+    # Digest rows word durations, refills and commands in the shared vocabulary.
+    "theme::fmt",
 ]
 # may_claim holds the person-or-launcher read-mark rule `agents wait` applies.
 # defers_to_report reads the detached rule from `harness::fleet`, its one home.
-surface-budget = 5
+# The digest text moves out of the CLI so the team report composes in the library: ReportErr,
+# ResponseFile with its path and summary, ResumeAccount, Clock with its now, tz and local,
+# DigestRow, compose_digest, compose_digest_row, and compose_answer_row (+9).
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"

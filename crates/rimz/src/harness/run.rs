@@ -8,7 +8,11 @@ pub use peer::{
     create_peer_prompt, describes_latest_turn, fail_peer_run, fail_peer_turn, open_peer_run,
     peer_can_report, record_run_delivery,
 };
-pub use team::{open_team_run, open_team_run_for, reopen_team_run, settle_team_run};
+pub(super) use team::team_report_on_flip;
+pub use team::{
+    TeamReportOutcome, open_team_run, open_team_run_for, reopen_team_run, report_team_run,
+    settle_team_run,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

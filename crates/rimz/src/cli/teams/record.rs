@@ -40,7 +40,7 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
     let member = caller.filter(|caller| cohorts.iter().any(|cohort| cohort.contains(caller)));
     let by = if let Some(member) = member {
         let local = cohorts.iter().any(|cohort| {
-            board_context::in_worktree(cohort, &worktree)
+            cohort.in_worktree(&worktree)
                 && cohort.contains(member)
                 && selected
                     .as_ref()

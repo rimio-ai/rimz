@@ -176,15 +176,8 @@ pub(super) fn stop(
     if failed {
         std::process::exit(1);
     }
-    if let Some(checkout) = cohort
-        .members
-        .first()
-        .and_then(|agent| agent.worktree_path.as_deref())
-        && super::board_context::in_worktree(
-            &cohort,
-            &rimz::utils::path::normalize_path_lexical(std::path::Path::new(checkout)),
-        )
-        && let Some(stage) = rimz::harness::scratch::board_stage(std::path::Path::new(checkout))
+    if let Some(checkout) = cohort.board_checkout()
+        && let Some(stage) = rimz::harness::scratch::board_stage(&checkout)
         && stage.name != rimz::config::DONE_STAGE
     {
         let target = cohort.instance.to_string();

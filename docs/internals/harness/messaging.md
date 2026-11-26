@@ -103,8 +103,8 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Answer to a raised ask | `crates/rimz/src/cli/answer.rs::answer_raised`, the chosen label or text, `sender_for` on the caller | `Human` or `Agent` / `Prompt` |
 | Prompt for a cohort already running | `crates/rimz/src/launcher/reconcile.rs::reconcile_cohort_launch`, the launch prompt sent to the running leader, `sender_for` on the launcher | `Human` or `Agent` / `Prompt` |
 | Resume prompt | `crates/rimz/src/launcher/mod.rs::queue_resume_prompt`, called by `launch_resume_layout` with the resume's prompt, `sender_for` on the launcher | `Human` or `Agent` / `Prompt` |
-| Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
-| Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
+| Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `crates/rimz/src/harness/run/report.rs::compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
+| Team report | `crates/rimz/src/harness/run/team.rs::report_team_run` | `Harness { notice: TeamReport }` / `Prompt` |
 | Workflow report | `crates/rimz/src/harness/schedule/run_log/starter.rs::report`, text from `starter::text`, called by `run_log::collect_run` | `Harness { notice: WorkflowReport }` / `Prompt` |
 | Child restarted with its run open | `crates/rimz/src/cli/agents_cmd/restart.rs::notify_parent_restarted`, through `SyntheticMessage` | `Harness { notice: SubagentRestarted }` / `Prompt` |
 | Launched child silent mid-turn, never started, or stopped on a turn error nothing will retry | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |

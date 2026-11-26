@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use rimz::address::TeamCohort;
 use rimz::agents::AgentState;
 use rimz::harness::ancestry::{resolve_caller, resolve_launch_caller};
 use rimz::harness::resume::{self, TeamHold, TeamHoldReason};
@@ -30,7 +29,7 @@ pub(super) fn resolve<'a>(
             Some((_, lane)) => super::cohort::matches_worktree(cohort, lane),
             None => checkout
                 .as_deref()
-                .is_some_and(|path| in_worktree(cohort, path)),
+                .is_some_and(|path| cohort.in_worktree(path)),
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
@@ -71,11 +70,7 @@ pub(super) fn resolve<'a>(
         ),
     };
     let checkout = cohort
-        .members
-        .first()
-        .and_then(|agent| agent.worktree_path.as_deref())
-        .map(PathBuf::from)
-        .filter(|path| in_worktree(cohort, &normalize_path_lexical(path)))
+        .board_checkout()
         .context("selected cohort has no single worktree for its board")?;
     Ok((
         TeamHold {
@@ -128,13 +123,4 @@ pub(super) fn caller(agents: &[AgentState]) -> Result<Option<&AgentState>> {
     Ok(resolve_caller(agents)
         .map(|caller| resolve_launch_caller(agents, &caller))
         .transpose()?)
-}
-
-pub(super) fn in_worktree(cohort: &TeamCohort<'_>, worktree: &Path) -> bool {
-    cohort.members.iter().all(|member| {
-        member
-            .worktree_path
-            .as_deref()
-            .is_some_and(|path| normalize_path_lexical(Path::new(path)) == worktree)
-    })
 }

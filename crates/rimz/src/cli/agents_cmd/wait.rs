@@ -271,14 +271,14 @@ fn wait_deferred(
             .find(|agent| record.matches_agent(agent))
             .context("the run's agent row is gone")?;
         let response = match rimz::harness::run::publish_response(store.paths(), record)? {
-            Some(path) => Some(super::subagent_report::ResponseFile {
+            Some(path) => Some(rimz::harness::run::report::ResponseFile {
                 summary: rimz::disk::summary::FileSummary::measure(&path)
                     .with_context(|| format!("measuring {}", path.display()))?,
                 path,
             }),
             None => None,
         };
-        rows.push(super::subagent_report::compose_digest_row(
+        rows.push(rimz::harness::run::report::compose_digest_row(
             child,
             record,
             response.as_ref(),
