@@ -4093,8 +4093,9 @@ fn raw_failed_limit_parked_child_is_held_failed_beyond_horizon_and_keeps_label_i
     // Now write the limit marker: inside the horizon the helper holds the run and
     // triggers the sibling digest carrying the provider's label on the held line.
     let label = "Individual quota reached";
-    let marker_at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
+    // Stamped at each call: a marker older than its child's turn start explains no stop.
     let seed_marker = |id: &AgentSessionId| {
+        let marker_at = jiff::Timestamp::now() + std::time::Duration::from_secs(1);
         let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), marker_at);
         context.turn_error = Some(rimz::agents::AgentTurnError {
             model: None,
