@@ -1764,7 +1764,7 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
             None,
             Some(AutoCompactDefault::BuiltIn),
             Some(272_000),
-            Some(372_000),
+            Some(272_000),
         ),
         (
             Some(AutoCompactWindow::Tokens(300_000)),

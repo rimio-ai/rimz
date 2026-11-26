@@ -1315,7 +1315,7 @@ upward-dependencies = [
 # LaunchAgents::block_failed_override shares failed-override checks with the launch planner (+1).
 # resolve_seat_setting resolves after-launch profile settings in launch chain order (+1).
 # AutoCompactWindow and AutoCompactDefault carry `[harness] auto_compact`'s tri-state machine
-# setting and per-enforcer default through definitions, launch resolution, and CLI config (+2).
+# setting and its default through definitions, launch resolution, and CLI config (+2).
 # LoadContexts retains both namespace load contexts on MachineConfig for disk-free project builds (+1).
 # LaunchAgents::{definition_failure_for, project_definition_errors, all_failed_definitions, block_failed_team} and ProfilesConfig::failed carry per-row and per-team project failures across the CLI, room, doctor, harness, resume, and rebirth seams (+4 net with private failed map on ProfilesConfig).
 # MachineConfig::failed_definition_details shares the machine failure map across effective::load_with_roots and rebirth (+1).
