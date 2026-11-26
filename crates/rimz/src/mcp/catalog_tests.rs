@@ -492,6 +492,11 @@ fn capability_names_round_trip_and_become_only_arguments() {
     );
     assert!(Capability::Workflow.starts_things());
     assert_eq!(
+        names(&[Capability::Blackboard]),
+        ["blackboard_flip", "blackboard_record"]
+    );
+    assert!(!Capability::Blackboard.starts_things() && !Capability::Blackboard.launches_agents());
+    assert_eq!(
         names(&[Capability::Lsp, Capability::Notes]),
         ["lsp", "notes"]
     );
@@ -595,16 +600,38 @@ fn calls_carry_their_arguments_as_data() {
     assert_eq!(note.title, "--force");
     assert_eq!(note.body.as_deref(), Some("say \"hi\"\n$(rm -rf /)\n"));
     assert_eq!(note.meta["ticket"], "42");
+    let Call::BlackboardFlip(flip) = call(
+        "blackboard_flip",
+        json!({"stage": "--help", "note": "done; $(id)"}),
+    ) else {
+        panic!("a blackboard_flip call");
+    };
+    assert_eq!(
+        (flip.stage.as_str(), flip.note.as_str()),
+        ("--help", "done; $(id)")
+    );
+    let Call::BlackboardRecord(record) = call(
+        "blackboard_record",
+        json!({"section": "decisions", "text": "-x `y`"}),
+    ) else {
+        panic!("a blackboard_record call");
+    };
+    assert_eq!(
+        (record.section, record.text.as_str()),
+        (RecordSection::Decisions, "-x `y`")
+    );
 }
 
-/// Every tool but `lsp` and `guide` answers data and lists the object
-/// schema it fits; those two answer text and list none.
+/// Every tool but `lsp`, `blackboard_record`, and `guide` answers data and lists the object
+/// schema it fits; those three answer text and list none.
 #[test]
 fn data_tools_list_an_object_output_schema() {
     for tool in &TOOLS {
         let listed = tool.listing(&Wording::built_in());
         match tool.name {
-            "lsp" | GUIDE => assert!(listed.get("outputSchema").is_none(), "{}", tool.name),
+            "lsp" | "blackboard_record" | GUIDE => {
+                assert!(listed.get("outputSchema").is_none(), "{}", tool.name)
+            }
             _ => {
                 assert_eq!(listed["outputSchema"]["type"], "object", "{}", tool.name);
                 assert_eq!(Some(&listed["outputSchema"]), tool.output_schema().as_ref());
@@ -623,6 +650,68 @@ fn data_tools_list_an_object_output_schema() {
     assert_eq!(
         subagent["inputSchema"]["required"],
         json!(["profile", "prompt"])
+    );
+}
+
+/// The blackboard tools list the approved definitions as written.
+#[test]
+fn the_blackboard_tools_list_their_approved_definitions() {
+    let wording = Wording::built_in();
+    assert_eq!(
+        tool("blackboard_flip").listing(&wording),
+        json!({
+            "name": "blackboard_flip",
+            "description": "Hand your finished stage to the next one, or close the run with `Done`. \
+                Make it your turn's last call, after every file write has returned. A flip to a \
+                stage you own wakes nobody: carry on in this turn.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "stage": {
+                        "type": "string",
+                        "description": "The next stage by its exact name, or `Done`.",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "What is done; the reasoning stays in your stage file.",
+                    },
+                },
+                "required": ["stage", "note"],
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {"stage": {"type": "string"}, "owner": {"type": "string"}},
+                "required": ["stage"],
+            },
+        })
+    );
+    assert_eq!(
+        tool("blackboard_record").listing(&wording),
+        json!({
+            "name": "blackboard_record",
+            "description": "Append an entry to your team's board. Keep it short and point to the \
+                stage file that holds the substance.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "section": {"type": "string", "enum": ["goal", "decisions", "result"]},
+                    "text": {"type": "string", "description": "The entry."},
+                },
+                "required": ["section", "text"],
+            },
+        })
+    );
+    assert_eq!(
+        (
+            tool("blackboard_flip").commands(),
+            tool("blackboard_record").commands()
+        ),
+        (
+            vec!["rimz teams flip".to_owned()],
+            vec!["rimz teams record".to_owned()]
+        )
     );
 }
 
@@ -678,6 +767,16 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("notes", json!({"kind": "log", "title": 7})),
         ("wait", json!({"trigger": "run", "value": "x", "on": "any"})),
         ("notes", json!({"kind": "k", "title": "t", "cwd": "/src"})),
+        ("blackboard_flip", json!({"stage": "Review"})),
+        (
+            "blackboard_flip",
+            json!({"stage": "Review", "note": "n", "team": "forge"}),
+        ),
+        (
+            "blackboard_record",
+            json!({"section": "progress", "text": "t"}),
+        ),
+        ("blackboard_record", json!({"section": "Goal", "text": "t"})),
         ("agent", json!({"profile": " ", "prompt": "p"})),
         ("agent", json!({"profile": "coder", "prompt": "\n"})),
         (
@@ -976,6 +1075,9 @@ fn ambiguous_or_empty_arguments_are_refused() {
             "notes",
             json!({"kind": "k", "title": "t", "meta": {"a=b": "c"}}),
         ),
+        ("blackboard_flip", json!({"stage": " ", "note": "n"})),
+        ("blackboard_flip", json!({"stage": "Review", "note": "\n"})),
+        ("blackboard_record", json!({"section": "goal", "text": " "})),
     ] {
         assert!(
             tool(name).call(arguments.clone()).is_err(),

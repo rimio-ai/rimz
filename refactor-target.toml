@@ -2683,7 +2683,8 @@ path = "crates/rimz/src/harness"
 # `spec::{validate_team_name, validate_team_roster, validate_profile_namespace}` split a machine team's own check, run as the team loads, from the set-wide namespace check in `config` (+3).
 # The cohort flip, its typed error, the team report and the digest text it composes move out of
 # the CLI so the blackboard MCP tools flip as `rimz teams flip` does (+17).
-surface-budget = 1404
+# `team_stage::refuse_shared_board` is the one-cohort-per-board rule both flip paths read (+1).
+surface-budget = 1405
 
 [[verdict]]
 kind = "item"

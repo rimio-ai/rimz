@@ -10,6 +10,7 @@
 //! started, by an id `start` defines, and only on what `owned` traces back to
 //! the caller.
 
+mod blackboard;
 mod control;
 mod join;
 mod layout;
@@ -106,6 +107,8 @@ impl Runner for Tools {
             Call::SelfTune(args) => control::tune(self, &args),
             Call::SelfMolt(args) => control::molt(self, &args),
             Call::Notes(args) => notes::add(self, args),
+            Call::BlackboardFlip(args) => blackboard::flip(self, &args),
+            Call::BlackboardRecord(args) => blackboard::record(self, &args),
             Call::Guide(_) => Err(Failure::new("the server answers guide itself")),
         };
         answered.unwrap_or_else(Answer::Failure)

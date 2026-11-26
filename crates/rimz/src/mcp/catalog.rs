@@ -31,10 +31,11 @@ pub enum Capability {
     Message,
     Control,
     Notes,
+    Blackboard,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 10] = [
+    pub const ALL: [Capability; 11] = [
         Self::Lsp,
         Self::Wait,
         Self::Subagents,
@@ -45,6 +46,7 @@ impl Capability {
         Self::Message,
         Self::Control,
         Self::Notes,
+        Self::Blackboard,
     ];
 
     /// Whether the group's tools start things, which `tasks`, `join`, and `stop` list, await,
@@ -75,6 +77,7 @@ impl Capability {
             Self::Message => "rimz-message",
             Self::Control => "rimz-control",
             Self::Notes => "rimz-notes",
+            Self::Blackboard => "rimz-blackboard",
         }
     }
 
@@ -139,6 +142,8 @@ pub enum Call {
     SelfTune(SelfTuneArgs),
     SelfMolt(SelfMoltArgs),
     Notes(NotesArgs),
+    BlackboardFlip(BlackboardFlipArgs),
+    BlackboardRecord(BlackboardRecordArgs),
     Guide(GuideArgs),
 }
 
@@ -182,8 +187,8 @@ impl Tool {
         entry
     }
 
-    /// The schema every data answer of the tool fits; `None` for `lsp` and
-    /// `guide`, which answer text.
+    /// The schema every data answer of the tool fits; `None` for `lsp`,
+    /// `blackboard_record`, and `guide`, which answer text.
     pub fn output_schema(&self) -> Option<Value> {
         self.output.map(|output| output())
     }
@@ -246,7 +251,7 @@ impl Tool {
     }
 }
 
-pub static TOOLS: [Tool; 17] = [
+pub static TOOLS: [Tool; 19] = [
     Tool {
         name: "lsp",
         capability: Some(Capability::Lsp),
@@ -451,6 +456,30 @@ pub static TOOLS: [Tool; 17] = [
         parse: |arguments| parse::<NotesArgs>(arguments).map(Call::Notes),
     },
     Tool {
+        name: "blackboard_flip",
+        capability: Some(Capability::Blackboard),
+        purpose: Purpose::Board,
+        read_only: false,
+        command: "teams flip",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<BlackboardFlipArgs>,
+        output: Some(blackboard_flip_schema),
+        parse: |arguments| parse::<BlackboardFlipArgs>(arguments).map(Call::BlackboardFlip),
+    },
+    Tool {
+        name: "blackboard_record",
+        capability: Some(Capability::Blackboard),
+        purpose: Purpose::Board,
+        read_only: false,
+        command: "teams record",
+        declared: &[],
+        verbs: &[],
+        schema: schema::<BlackboardRecordArgs>,
+        output: None,
+        parse: |arguments| parse::<BlackboardRecordArgs>(arguments).map(Call::BlackboardRecord),
+    },
+    Tool {
         name: GUIDE,
         capability: None,
         purpose: Purpose::Guides,
@@ -476,6 +505,7 @@ pub enum Purpose {
     Started,
     Yourself,
     Notes,
+    Board,
     Guides,
 }
 
@@ -492,6 +522,7 @@ impl Purpose {
             Self::Started => "track what you started",
             Self::Yourself => "manage yourself",
             Self::Notes => "keep notes",
+            Self::Board => "write your team's board",
             Self::Guides => "load usage guides",
         }
     }
@@ -1499,6 +1530,43 @@ impl ToolArgs for NotesArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BlackboardFlipArgs {
+    /// The next stage by its exact name, or `Done`.
+    pub stage: String,
+    /// What is done; the reasoning stays in your stage file.
+    pub note: String,
+}
+
+impl ToolArgs for BlackboardFlipArgs {
+    fn refusal(&self) -> Option<String> {
+        blank_field(&[("stage", &self.stage), ("note", &self.note)])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordSection {
+    Goal,
+    Decisions,
+    Result,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlackboardRecordArgs {
+    pub section: RecordSection,
+    /// The entry.
+    pub text: String,
+}
+
+impl ToolArgs for BlackboardRecordArgs {
+    fn refusal(&self) -> Option<String> {
+        blank_field(&[("text", &self.text)])
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GuideArgs {
     /// The guide, as `<group>/<guide>`.
     pub name: String,
@@ -1668,6 +1736,14 @@ fn notes_schema() -> Value {
             "unresolved_project": { "type": ["string", "null"] },
         }),
         &["path", "dropped_meta"],
+    )
+}
+
+/// The stage a flip opened and, short of `Done`, its owner: `@role`, or `you`.
+fn blackboard_flip_schema() -> Value {
+    object(
+        serde_json::json!({ "stage": string(), "owner": string() }),
+        &["stage"],
     )
 }
 

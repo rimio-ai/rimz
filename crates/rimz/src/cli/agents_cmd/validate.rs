@@ -550,11 +550,11 @@ fn catalog_contains(
 }
 
 /// Each `rimz(x)`, `skill(x)`, and `subagent(x)` in a profile's resolved prompt sources that
-/// names an unknown target or one the profile cannot reach. A `skill(rimz-x)` for one of the ten
-/// MCP capabilities is judged as `rimz(x)`, never against `skills:`. `on_disk` gives a kind's
-/// skills on disk, or `None` when the disk is not checked, and then only the lists judge. The
-/// launch only warns for unreachable capabilities, so these checks stay out of the definition
-/// loader, whose errors refuse a launch.
+/// names an unknown target or one the profile cannot reach. A `skill(rimz-x)` for one of the
+/// eleven MCP capabilities is judged as `rimz(x)`, never against `skills:`. `on_disk` gives a
+/// kind's skills on disk, or `None` when the disk is not checked, and then only the lists judge.
+/// The launch only warns for unreachable capabilities, so these checks stay out of the
+/// definition loader, whose errors refuse a launch.
 fn capability_errors(
     loaded: &LoadedDefinitions,
     machine: &rimz::config::MachineConfig,

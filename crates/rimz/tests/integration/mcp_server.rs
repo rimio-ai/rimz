@@ -15,7 +15,7 @@ use crate::common::Env;
 
 const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 
-const ALL_TOOLS: [&str; 17] = [
+const ALL_TOOLS: [&str; 19] = [
     "lsp",
     "wait",
     "subagent",
@@ -32,6 +32,8 @@ const ALL_TOOLS: [&str; 17] = [
     "self_tune",
     "self_molt",
     "notes",
+    "blackboard_flip",
+    "blackboard_record",
     "guide",
 ];
 
@@ -53,7 +55,7 @@ fn tool_load(out: &str, tool: &str) -> String {
 }
 
 /// A spawned server, leading its own process group as a provider starts one.
-struct McpServer {
+pub(crate) struct McpServer {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
@@ -62,7 +64,7 @@ struct McpServer {
 }
 
 impl McpServer {
-    fn spawn(mut command: Command) -> Self {
+    pub(crate) fn spawn(mut command: Command) -> Self {
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
@@ -141,7 +143,7 @@ impl McpServer {
         self.reply(&json!(id))
     }
 
-    fn initialize(&mut self) -> Value {
+    pub(crate) fn initialize(&mut self) -> Value {
         let reply = self.request(
             0,
             "initialize",
@@ -171,7 +173,7 @@ impl McpServer {
     }
 
     /// A tool call's answer, read as `tool_answer` reads it.
-    fn answer(&mut self, id: i64, tool: &str, arguments: Value) -> (Value, bool) {
+    pub(crate) fn answer(&mut self, id: i64, tool: &str, arguments: Value) -> (Value, bool) {
         self.start_call(id, tool, arguments);
         tool_answer(tool, &self.reply(&json!(id)))
     }
@@ -1490,7 +1492,7 @@ fn launch_env_with_nothing_served_exits_at_once() {
     assert!(
         stderr.contains(
             "RIMZ_MCP_SERVE entry `github` is not a RimZ capability (rimz-lsp, rimz-wait, \
-             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes) with an optional `:always` or `:deferred`, named once"
+             rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard) with an optional `:always` or `:deferred`, named once"
         ),
         "{stderr}"
     );
@@ -1616,7 +1618,7 @@ fn tools_sizes_each_tool_and_json_is_the_servers_listing() {
     assert_eq!(status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(
-            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "expected one of rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{stderr}"
     );
@@ -2540,7 +2542,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("Plan"), "{out}");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
@@ -2622,7 +2624,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard"
         ),
         "{out}"
     );
@@ -2656,7 +2658,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert_eq!(tool_load(&out, "wait"), "default", "{out}");
     assert!(
         out.contains(&format!(
-            "rimz-control, rimz-notes; the mcps entry `rimz:deferred` {coded}\n"
+            "rimz-control, rimz-notes, rimz-blackboard; the mcps entry `rimz:deferred` {coded}\n"
         )),
         "{out}"
     );
@@ -2673,7 +2675,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("pmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -2747,7 +2749,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("omark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -2825,7 +2827,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+            "serves rimz-lsp, rimz-wait, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -2923,7 +2925,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -2938,7 +2940,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
         ),
         "{out}"
     );
