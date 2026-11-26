@@ -2101,6 +2101,19 @@ fn lower_capabilities(
             None => listed.push((name, mode)),
         }
     }
+    if let Some((doorway, _)) = listed
+        .iter()
+        .find(|(name, _)| [Capability::Ask.name(), SERVER_NAME].contains(name))
+        .filter(|_| bases.iter().any(|base| base == "AskUserQuestion"))
+    {
+        return Err(DefinitionErr::new(
+            path,
+            format!(
+                "lists `ask` and `{doorway}` in `capabilities:`; the rimz doorway replaces the \
+                 native one, so drop whichever this seat does not use"
+            ),
+        ));
+    }
     let wildcard = listed
         .iter()
         .find(|(name, _)| *name == SERVER_NAME)

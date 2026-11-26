@@ -1376,6 +1376,29 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         );
     }
 
+    fn disable_native_ask_args(&self, extra_args: &mut Vec<String>) {
+        const KEYS: [&str; 2] = [
+            "features.default_mode_request_user_input",
+            "tools.experimental_request_user_input.enabled",
+        ];
+        for key in KEYS {
+            crate::agents::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: key.to_owned(),
+            }
+            .remove_occurrences(extra_args);
+        }
+        let enables = crate::agents::PresetArgMatcher::Flag(vec!["--enable".to_owned()]);
+        for occurrence in enables.occurrences(extra_args).iter().rev() {
+            if occurrence.value == "default_mode_request_user_input" {
+                extra_args.drain(occurrence.argv_range.clone());
+            }
+        }
+        for key in KEYS {
+            extra_args.extend(["-c".to_owned(), format!("{key}=false")]);
+        }
+    }
+
     fn takes_mcp_servers(&self) -> bool {
         true
     }

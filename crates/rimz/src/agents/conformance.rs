@@ -1016,6 +1016,7 @@ fn agent_file_matcher_comes_with_an_agent_file() {
         reminder: "",
         tools: None,
         native_subagents: true,
+        native_ask: true,
         env: &env,
         mcp: super::capabilities::McpLaunch {
             server: None,
@@ -1062,6 +1063,7 @@ fn agent_file_kinds_write_a_limiting_mcps_list() {
                 reminder: "",
                 tools: None,
                 native_subagents: true,
+                native_ask: true,
                 env: &env,
                 mcp: super::capabilities::McpLaunch {
                     server: None,

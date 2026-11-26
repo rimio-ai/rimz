@@ -19,6 +19,9 @@ pub struct AgentFileInput<'a> {
     /// The definition's tools as canonical base names; `None` when it lists none.
     pub tools: Option<&'a [String]>,
     pub native_subagents: bool,
+    /// Whether the provider keeps its own question tool: false where the launch reaches
+    /// `rimz-ask`.
+    pub native_ask: bool,
     /// The launch env, where the launched provider resolves its home.
     pub env: &'a BTreeMap<String, String>,
     /// RimZ's MCP server when the launch hands it over, and the `mcps` list over the user's

@@ -2361,6 +2361,31 @@ fn prompt_rewrite_reaches_every_prompt_channel_and_keeps_unmodified_author_files
     )
     .unwrap();
 
+    // An on-disk `rimz-ask` skill switches native asking off only while the model can call it.
+    let ask_dir = home.join(".rimz/skills/rimz-ask");
+    std::fs::create_dir_all(&ask_dir).unwrap();
+    let native_ask_denied = |body: &str| {
+        std::fs::write(ask_dir.join("SKILL.md"), body).unwrap();
+        let plan = room.compile(&switches(true, false), &launch("claude", None, &[]));
+        let argv = &plan.process().provider_argv;
+        argv.iter()
+            .rposition(|arg| arg == "--disallowedTools")
+            .is_some_and(|flag| {
+                argv[flag + 1..]
+                    .iter()
+                    .take_while(|arg| !arg.starts_with('-'))
+                    .any(|arg| arg == "AskUserQuestion")
+            })
+    };
+    assert_eq!(
+        [
+            native_ask_denied("---\nname: rimz-ask\n---\nAsk.\n"),
+            native_ask_denied("---\nname: rimz-ask\ndisable-model-invocation: true\n---\nAsk.\n"),
+        ],
+        [true, false]
+    );
+    std::fs::remove_dir_all(&ask_dir).unwrap();
+
     // Lone-file base on a path kind: rewritten text gets an artifact; untouched text keeps the
     // author's own file path.
     let rewritten_file = room.project.path().join("rewritten.md");

@@ -1339,6 +1339,122 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
     assert_eq!(actual, expected);
 }
 
+/// A launch that reaches `rimz-ask`, its `ask` tool served or its skill callable and on disk,
+/// has the provider's own question tool switched off on every action; one that reaches neither
+/// keeps it.
+#[test]
+fn native_ask_is_withheld_where_rimz_ask_is_reached_on_every_action() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["claude", "codex"] {
+        for action in [
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+            ExecAction::Resume {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+            ExecAction::Fork {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+        ] {
+            for tool in [false, true] {
+                for (on_disk, skills, listed) in [
+                    (false, None, true),
+                    (true, None, true),
+                    (true, Some(vec!["rimz-ask"]), true),
+                    (true, Some(vec!["commit"]), false),
+                ] {
+                    let mut invocation = request(kind, action.clone());
+                    invocation.skills = skills
+                        .map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+                    let process = compile_agent_process_with_extra_env(
+                        None,
+                        Path::new("/checkout"),
+                        &invocation,
+                        Path::new("/checkout"),
+                        &BTreeMap::new(),
+                        &LaunchReminders {
+                            mcp_server: tool.then(|| ("/bin/rimz".into(), Vec::new())),
+                            rimz_skills: if on_disk {
+                                ["rimz-ask".to_owned()].into()
+                            } else {
+                                BTreeSet::new()
+                            },
+                            ..LaunchReminders::default()
+                        },
+                    )
+                    .unwrap();
+                    let argv = &process.provider_argv;
+                    let disabled = if kind == "claude" {
+                        argv.iter()
+                            .rposition(|arg| arg == "--disallowedTools")
+                            .is_some_and(|flag| {
+                                argv[flag + 1..]
+                                    .iter()
+                                    .take_while(|arg| !arg.starts_with('-'))
+                                    .any(|arg| arg == "AskUserQuestion")
+                            })
+                    } else {
+                        [
+                            "features.default_mode_request_user_input",
+                            "tools.experimental_request_user_input.enabled",
+                        ]
+                        .iter()
+                        .all(|key| {
+                            argv.windows(2)
+                                .any(|args| args[0] == "-c" && args[1] == format!("{key}=false"))
+                        })
+                    };
+                    let case = format!(
+                        "{kind} {action:?} tool={tool} on_disk={on_disk} skills={:?}",
+                        invocation.skills
+                    );
+                    actual.push((case.clone(), disabled));
+                    expected.push((case, tool || (on_disk && listed)));
+                }
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+/// A team seat other than the leader is served no `ask` tool and keeps its native one, as a
+/// child of that seat is served `ask`; the leader keeps `ask` and loses the native tool.
+#[test]
+fn only_the_team_leader_seat_reaches_rimz_ask() {
+    let reminders = LaunchReminders {
+        mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+        team: Some(team()),
+        ..LaunchReminders::default()
+    };
+    let mut actual = Vec::new();
+    for (role, subagent) in [("planner", false), ("coder", false), ("coder", true)] {
+        let mut invocation = team_request("claude");
+        invocation.identity.params.role = Some(role.to_owned());
+        invocation.subagent = subagent;
+        actual.push((
+            role,
+            subagent,
+            reminders
+                .mcp_capabilities(&invocation)
+                .contains(&crate::mcp::catalog::Capability::Ask),
+            reminders.disable_native_ask(&invocation),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            ("planner", false, true, true),
+            ("coder", false, false, false),
+            ("coder", true, true, true),
+        ]
+    );
+}
+
 #[test]
 fn a_child_is_withheld_the_skill_of_every_capability_that_launches_agents() {
     let mut invocation = request(

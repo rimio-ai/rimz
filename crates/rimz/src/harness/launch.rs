@@ -1421,6 +1421,9 @@ fn compile_agent_process_with_extra_env(
     if reminders.disable_native_subagents(request) {
         adapter.disable_native_subagent_args(action.extra_args_mut());
     }
+    if reminders.disable_native_ask(request) {
+        adapter.disable_native_ask_args(action.extra_args_mut());
+    }
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
     }

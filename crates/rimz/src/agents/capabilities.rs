@@ -838,6 +838,10 @@ pub trait LaunchCapability: CoreCapability {
     /// native restriction.
     fn disable_native_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Disable the provider's own question tool for a launch that reaches `rimz-ask`. The
+    /// default leaves argv unchanged for providers without a verified native switch.
+    fn disable_native_ask_args(&self, _extra_args: &mut Vec<String>) {}
+
     /// Add launch-scoped permissions for routine RimZ coordination, where supported.
     fn allow_routine_rimz_args(
         &self,

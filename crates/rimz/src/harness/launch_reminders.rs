@@ -135,11 +135,17 @@ impl LaunchReminders {
     /// so it keeps `rimz-agents` and `rimz-teams`.
     pub(super) fn denied_capabilities(&self, request: &ExecRequest) -> Vec<Capability> {
         let no_subagents = self.no_subagents(request);
+        // Only the leader reaches the user; another seat asks the leader.
+        let seat_beside_leader = !request.subagent
+            && self.team.as_ref().is_some_and(|reminder| {
+                request.identity.params.role.as_deref() != reminder.team.leader_role()
+            });
         Capability::ALL
             .into_iter()
             .filter(|capability| {
                 (request.cannot_delegate() && capability.launches_agents())
                     || (no_subagents && *capability == Capability::Subagents)
+                    || (seat_beside_leader && *capability == Capability::Ask)
             })
             .collect()
     }
@@ -276,6 +282,17 @@ impl LaunchReminders {
         request.subagent
             || (self.callable(request, Capability::Subagents)
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
+    }
+
+    /// The launch reaches `rimz-ask`, so the provider's own question tool goes: its `ask` tool
+    /// is served, or its skill is callable and on disk. Unlike `disable_native_subagents`, a
+    /// callable skill counts only on disk, since a launch with neither would lose asking.
+    pub(super) fn disable_native_ask(&self, request: &ExecRequest) -> bool {
+        let ask = Capability::Ask;
+        !self.denied_capabilities(request).contains(&ask)
+            && self.callable(request, ask)
+            && (self.reach(request, ask) == Reach::Tools(ask)
+                || self.rimz_skills.contains(ask.name()))
     }
 }
 

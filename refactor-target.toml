@@ -533,7 +533,9 @@ upward-dependencies = [
 # RIMZ_MCP_SERVE, and read its load back for explain, so launch_plan, launch and explain stay
 # provider-neutral (+3).
 # LaunchSpec::resume_prompt_args renders the continue a kind's resume command takes, for the exec wrapper (+1).
-surface-budget = 1406
+# AgentFileInput::native_ask tells an agent file whether the provider keeps its own question
+# tool, false where the launch reaches `rimz-ask` (+1).
+surface-budget = 1407
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

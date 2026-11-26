@@ -964,6 +964,18 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         adapter.skills_home(&skill_env).as_deref(),
         crate::agents::skills::SkillChain::from_env(&skill_env).as_ref(),
     );
+    // A user-only `rimz-ask` gives the model no way to ask, so it cannot replace the native tool.
+    let ask = crate::mcp::catalog::Capability::Ask.name();
+    if reminders.rimz_skills.contains(ask)
+        && !crate::agents::skills::is_model_callable_on_disk(
+            ask,
+            adapter,
+            &skill_env,
+            request.skills.as_deref().unwrap_or_default(),
+        )
+    {
+        reminders.rimz_skills.remove(ask);
+    }
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
     reminders.runtime_env = adapter.spec().capabilities.prompt_context
@@ -1341,6 +1353,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     reminder: &process.reminder,
                     tools: request.tools.as_deref(),
                     native_subagents: !reminders.disable_native_subagents(&request),
+                    native_ask: !reminders.disable_native_ask(&request),
                     env: &env,
                     mcp: crate::agents::capabilities::McpLaunch {
                         server,

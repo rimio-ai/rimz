@@ -807,6 +807,36 @@ fn native_subagent_denial_replaces_codex_multi_agent_overrides() {
 }
 
 #[test]
+fn native_ask_denial_replaces_codex_request_user_input_overrides() {
+    let mut args: Vec<String> = [
+        "--enable",
+        "default_mode_request_user_input",
+        "--enable=default_mode_request_user_input",
+        "--enable",
+        "other_feature",
+        "-c",
+        "features.default_mode_request_user_input=true",
+    ]
+    .map(ToOwned::to_owned)
+    .into();
+
+    CodexAdapter.disable_native_ask_args(&mut args);
+
+    assert_eq!(
+        args,
+        [
+            "--enable",
+            "other_feature",
+            "-c",
+            "features.default_mode_request_user_input=false",
+            "-c",
+            "tools.experimental_request_user_input.enabled=false",
+        ]
+        .map(ToOwned::to_owned)
+    );
+}
+
+#[test]
 fn provider_sandbox_respects_trusted_project_permission_layers() {
     use crate::config::Isolation;
     let home = tempfile::tempdir().unwrap();
