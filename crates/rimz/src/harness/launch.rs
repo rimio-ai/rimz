@@ -371,6 +371,17 @@ impl CompiledAgentProcess {
             .map(|(_, settings, _)| settings)
     }
 
+    /// The final command with `args` after the provider command. Every wrapping (the session
+    /// step, the login shell, the scoped view's `bwrap ... --`, the hibernation scope) ends with
+    /// the provider command, so `args` reach the provider as its own trailing arguments. An argv
+    /// edit made after this call lands after them: the session step's
+    /// `changed_system_prompt_args` (`cli/agents_cmd/session_step.rs::run`, Claude only) and
+    /// OpenCode's model session step, which rewrites the argv past the step's separator. Neither
+    /// kind declares a resume prompt slot (`LaunchSpec::resume_prompt`).
+    pub fn argv_with_provider_args(&self, args: &[String]) -> Vec<String> {
+        self.argv.iter().chain(args).cloned().collect()
+    }
+
     pub(super) fn rebuild_argv(&mut self) {
         let argv = self
             .session_step_argv
@@ -770,8 +781,8 @@ pub struct ExecRequest {
     pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_message: Option<MessageId>,
-    /// Whether the wrapper queues one continue to the resumed session after
-    /// spawn, unless a stage re-wake stands in for it. Set by
+    /// Whether the resumed session takes one continue, on its resume command
+    /// line or queued, unless a stage re-wake stands in for it. Set by
     /// `rimz agents restart` for an interrupted agent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continue_session: bool,

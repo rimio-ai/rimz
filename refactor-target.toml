@@ -532,7 +532,8 @@ upward-dependencies = [
 # serves from the launch env name its stale entry, stamp its own variables beside
 # RIMZ_MCP_SERVE, and read its load back for explain, so launch_plan, launch and explain stay
 # provider-neutral (+3).
-surface-budget = 1405
+# LaunchSpec::resume_prompt_args renders the continue a kind's resume command takes, for the exec wrapper (+1).
+surface-budget = 1406
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2684,7 +2685,8 @@ path = "crates/rimz/src/harness"
 # The cohort flip, its typed error, the team report and the digest text it composes move out of
 # the CLI so the blackboard MCP tools flip as `rimz teams flip` does (+17).
 # `team_stage::refuse_shared_board` is the one-cohort-per-board rule both flip paths read (+1).
-surface-budget = 1405
+# CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
+surface-budget = 1406
 
 [[verdict]]
 kind = "item"
@@ -6015,7 +6017,8 @@ allowed-dependencies = [
 # ENV_SELF_COMPACT_TOOL tells the hook-context hook its launch serves the self-compaction tool (+1).
 # ExecRequest::default_always is the one consensus-layer load rule that served_marks and both
 # McpLaunch builders read (+1).
-surface-budget = 68
+# CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
+surface-budget = 69
 
 [[verdict]]
 kind = "item"

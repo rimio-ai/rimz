@@ -199,6 +199,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             before_id: &["claude", "--resume"],
             after_id: &[],
         }),
+        resume_prompt: super::PromptStyle::None,
         fork: Some(super::SessionCommand {
             before_id: &["claude", "--resume"],
             after_id: &["--fork-session"],

@@ -257,6 +257,9 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             before_id: &["codex", "resume"],
             after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         }),
+        // `codex resume <SESSION_ID> [PROMPT]` submits the prompt as a user turn once the
+        // resumed session has attached and replayed its history.
+        resume_prompt: super::PromptStyle::PositionalAfterDoubleDash,
         fork: Some(super::SessionCommand {
             before_id: &["codex", "fork"],
             after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],

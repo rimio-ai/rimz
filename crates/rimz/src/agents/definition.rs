@@ -274,6 +274,9 @@ pub struct LaunchSpec {
     pub fixed_args: &'static [&'static str],
     pub prompt: PromptStyle,
     pub resume: Option<SessionCommand>,
+    /// How the resume command takes a prompt the provider submits once the resumed session is
+    /// attached; `None` for a resume that takes none.
+    pub resume_prompt: PromptStyle,
     pub picker: Option<&'static [&'static str]>,
     pub fork: Option<SessionCommand>,
     pub restores_session_model: bool,
@@ -296,6 +299,7 @@ impl LaunchSpec {
         fixed_args: &[],
         prompt: PromptStyle::None,
         resume: None,
+        resume_prompt: PromptStyle::None,
         picker: None,
         fork: None,
         restores_session_model: false,
@@ -686,6 +690,14 @@ impl LaunchSpec {
         self.resume.map(|command| command.render(session_id))
     }
 
+    /// The arguments that follow the resume command to hand it `prompt`, or `None` when the
+    /// kind's resume takes no prompt.
+    pub fn resume_prompt_args(self, prompt: &str) -> Option<Vec<String>> {
+        let mut args = Vec::new();
+        self.resume_prompt.render(prompt, &mut args);
+        Some(args).filter(|args| !args.is_empty())
+    }
+
     pub(super) fn launch_command(
         self,
         extra_args: &[String],
@@ -694,22 +706,8 @@ impl LaunchSpec {
         let mut argv = vec![self.program?.to_owned()];
         argv.extend(self.fixed_args.iter().map(|arg| (*arg).to_owned()));
         argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            match self.prompt {
-                PromptStyle::None => {}
-                PromptStyle::PositionalAfterDoubleDash => {
-                    argv.extend(["--".to_owned(), prompt.to_owned()]);
-                }
-                PromptStyle::Positional => argv.push(prompt.to_owned()),
-                PromptStyle::Flag(flag) => {
-                    argv.extend([flag.to_owned(), prompt.to_owned()]);
-                }
-                PromptStyle::JoinedFlag(flag) => argv.push(format!("{flag}={prompt}")),
-                PromptStyle::FlagWithSuffix { flag, suffix } => {
-                    argv.extend([flag.to_owned(), prompt.to_owned()]);
-                    argv.extend(suffix.iter().map(|arg| (*arg).to_owned()));
-                }
-            }
+        if let Some(prompt) = prompt {
+            self.prompt.render(prompt, &mut argv);
         }
         Some(argv)
     }
@@ -838,6 +836,26 @@ pub enum PromptStyle {
         flag: &'static str,
         suffix: &'static [&'static str],
     },
+}
+
+impl PromptStyle {
+    /// Append the arguments that carry a non-empty `prompt` in this style.
+    fn render(self, prompt: &str, argv: &mut Vec<String>) {
+        if prompt.is_empty() {
+            return;
+        }
+        match self {
+            Self::None => {}
+            Self::PositionalAfterDoubleDash => argv.extend(["--".to_owned(), prompt.to_owned()]),
+            Self::Positional => argv.push(prompt.to_owned()),
+            Self::Flag(flag) => argv.extend([flag.to_owned(), prompt.to_owned()]),
+            Self::JoinedFlag(flag) => argv.push(format!("{flag}={prompt}")),
+            Self::FlagWithSuffix { flag, suffix } => {
+                argv.extend([flag.to_owned(), prompt.to_owned()]);
+                argv.extend(suffix.iter().map(|arg| (*arg).to_owned()));
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

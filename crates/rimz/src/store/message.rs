@@ -770,6 +770,10 @@ pub struct MessageRecord {
     /// no prompt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub team_return: Vec<ReturningMember>,
+    /// The text went to the provider on its own command line, never into a pane
+    /// (`Store::record_argv_prompt`): left unconfirmed, it times out instead of being typed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_argv: bool,
 }
 
 /// A team member a `rimz teams resume` prompt's return brings back: the launch and the epoch it
@@ -917,6 +921,7 @@ impl MessageRecord {
             withdrawn: false,
             batch_id: None,
             team_return: Vec::new(),
+            on_argv: false,
         }
     }
 
@@ -1467,7 +1472,7 @@ fn queue_order_key(message: &MessageRecord) -> (DeliveryRank, &str) {
 /// Whether pasted text reaches the composer as a slash command: a slash-led message rides alone
 /// and is submitted with its receiver's command keys, since a queue key can complete it in the
 /// slash popup instead.
-pub(crate) fn opens_slash_command(text: &str) -> bool {
+pub fn opens_slash_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 

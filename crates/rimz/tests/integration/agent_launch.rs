@@ -9082,115 +9082,305 @@ fn resume_exec_triggers_queued_head_without_provider_registration() {
     resume_exec_cleanup_case(ResumeExecCleanupCase::QueuedHeadTrigger);
 }
 
+/// A restarted resume of a kind whose resume takes no prompt queues exactly one continue, which
+/// the queued-head deliverer the wrapper spawns then types.
 #[cfg(unix)]
 #[test]
 fn restarted_resume_wrapper_queues_exactly_one_continue() {
     use std::time::{Duration, Instant};
 
-    let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
-    let workspace = env.resolve_workspace(&env.project_root);
-    let kind = AgentKind::new_unchecked("codex");
-    let session_id = AgentSessionId::from("sess-restarted");
-    let mut observation =
-        AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);
-    observation.agent_name = Some("otter".into());
-    store
-        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
-            session_name: &workspace.session_name,
-            agent_kind: kind.clone(),
-            event_name: "SessionStart",
-            observation: &observation,
-            spawned_subagents: &[],
-        })
-        .unwrap();
-    let shim_dir = crate::common::write_long_lived_agent_shim(&env, "codex");
-    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
-        .unwrap();
-    let delivery_trace = env.home_root.join("continue-delivery.log");
-    let rimz_shim = crate::common::write_path_shim(
-        &shim_dir,
-        "continue-delivery",
-        r#"case " $* " in
-  *' message deliver --message-id '*) printf '%s\n' "$@" >> "$RIMZ_TEST_DELIVERY_TRACE" ;;
-  *) exec "$RIMZ_TEST_REAL_BIN" "$@" ;;
-esac"#,
-    );
-    let mut request = ExecRequest {
-        result_file: None,
-        isolation_default: None,
-        kind: kind.clone(),
-        action: ExecAction::Resume {
-            session_id: session_id.to_string(),
-            extra_args: Vec::new(),
-        },
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-        team_prompt: None,
-        skills: None,
-        seat_consensus_skill: false,
-        mcps: None,
-        no_skill_tool: false,
-        allowed_tools: None,
-        tools: None,
-        provider_account: ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        subagent: false,
-        continue_session: true,
-        no_continue: false,
-        follow_up_message: None,
-        reminder_section: None,
-        identity: ExecIdentity::default(),
-        rimz_capabilities: None,
-    };
-    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
-    let mut wrapper = env
-        .rimz()
-        .args(exec_args(&env, &request))
-        .args([
-            "--root",
-            env.project_root.to_str().unwrap(),
-            "--mux",
-            "zellij",
-        ])
-        .env("SHELL", "/definitely/not/a/shell")
-        .env("PATH", path_with_front(&shim_dir))
-        .env("ZELLIJ_PANE_ID", "4")
-        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
-        .env("RIMZ_BIN", rimz_shim)
-        .env("RIMZ_TEST_DELIVERY_TRACE", &delivery_trace)
-        .env("RIMZ_TEST_REAL_BIN", env.rimz_bin())
-        .spawn()
-        .unwrap();
+    let mut restart = RestartedResume::spawn("claude");
     // The wrapper spawns the queued head's deliverer after it queues the continue.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while std::fs::read_to_string(&delivery_trace)
+    while std::fs::read_to_string(&restart.delivery_trace)
         .unwrap_or_default()
         .is_empty()
     {
-        assert!(
-            wrapper.try_wait().unwrap().is_none(),
-            "the wrapper exited before it queued the continue"
-        );
+        restart.assert_running("queued the continue");
         assert!(Instant::now() < deadline, "no continue was delivered");
         std::thread::sleep(Duration::from_millis(10));
     }
-    let continues = store
-        .list_messages()
-        .unwrap()
-        .into_iter()
-        .filter(|message| message.sender == rimz::store::message::MessageSender::System)
-        .collect::<Vec<_>>();
-    let _ = wrapper.kill();
-    let _ = wrapper.wait();
+    let continues = restart.continues();
     assert_eq!(continues.len(), 1, "{continues:?}");
     assert_eq!(continues[0].text, "continue");
-    assert_eq!(continues[0].agent_id, session_id);
+    assert_eq!(continues[0].agent_id, restart.session_id);
+    assert_eq!(
+        continues[0].status,
+        rimz::store::message::MessageStatus::Queued
+    );
+    assert!(!continues[0].on_argv);
+    let argv = restart.provider_argv();
+    assert!(!argv.iter().any(|arg| arg == "continue"), "{argv:?}");
+}
+
+/// A restarted Codex resume hands its continue to Codex on the resume command line, recorded as
+/// a system message already in flight; Codex's submit of that text confirms it, and the
+/// transcript renders it from RimZ with its message id.
+#[cfg(unix)]
+#[test]
+fn restarted_codex_resume_takes_its_continue_on_the_command_line() {
+    let restart = RestartedResume::spawn("codex");
+    let argv = restart.provider_argv();
+    assert_eq!(argv[..2], ["resume", "sess-restarted"], "{argv:?}");
+    assert_eq!(argv[argv.len() - 2..], ["--", "continue"], "{argv:?}");
+    let continues = restart.continues();
+    assert_eq!(continues.len(), 1, "{continues:?}");
+    let record = &continues[0];
+    assert_eq!(
+        (record.status, record.on_argv, record.text.as_str()),
+        (rimz::store::message::MessageStatus::Sent, true, "continue")
+    );
+
+    let env = &restart.env;
+    let mut hook = env.hook_command("codex");
+    hook.env("ZELLIJ_PANE_ID", "4");
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-restarted",
+        "cwd": env.project_root,
+        "prompt": "continue",
+    })
+    .to_string();
+    let output = env
+        .spawn_payload(hook, &payload)
+        .wait_with_output()
+        .unwrap();
+    env.drain_hooks();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let delivered = env
+        .store()
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == record.message_id)
+        .map(|message| message.status);
+    assert_eq!(
+        delivered,
+        Some(rimz::store::message::MessageStatus::Delivered)
+    );
+    let entries = rimz::transcript::read_all(env.store().paths()).unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.message_id.as_ref() == Some(&record.message_id))
+        .unwrap_or_else(|| panic!("no transcript entry for the continue: {entries:#?}"));
+    assert_eq!(entry.from.as_deref(), Some("rimz"), "{entry:#?}");
+}
+
+/// A restarted Codex resume keeps its continue off the command line and queues it, as on a kind
+/// whose resume takes no prompt, when the text opens a slash command (typed with the command
+/// keys) or a model hold stands on the card (held as the ordered check holds it).
+#[cfg(unix)]
+#[test]
+fn restarted_codex_resume_queues_a_slash_led_or_held_continue() {
+    let slash = RestartedResume::spawn_with("codex", |env, _| {
+        let config = env.rimz_home().join("config.toml");
+        let mut text = std::fs::read_to_string(&config).unwrap_or_default();
+        text.push_str("\n[resume]\nauto_continue_text = '/prompts:go'\n");
+        std::fs::write(&config, text).unwrap();
+    });
+    let held = RestartedResume::spawn_with("codex", |env, observation| {
+        observation.launch.model = Some("gpt-5.5".to_owned());
+        let refusals = rimz::agents::RateLimitsCache::shared_path(&env.runtime_paths())
+            .with_file_name("model_refusals.v1.json");
+        std::fs::create_dir_all(refusals.parent().unwrap()).unwrap();
+        let refused_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(1);
+        std::fs::write(
+            &refusals,
+            serde_json::json!({"logins": {"codex@default": {"gpt-5.5": {"refused_at": refused_at}}}})
+                .to_string(),
+        )
+        .unwrap();
+    });
+    for (restart, text) in [(&slash, "/prompts:go"), (&held, "continue")] {
+        let argv = restart.provider_argv();
+        assert!(
+            argv.last().is_some_and(|arg| arg != text) && !argv.iter().any(|arg| arg == "--"),
+            "{argv:?}"
+        );
+        let continues = restart.continues();
+        assert_eq!(continues.len(), 1, "{continues:?}");
+        assert_eq!(
+            (
+                continues[0].status,
+                continues[0].on_argv,
+                continues[0].text.as_str()
+            ),
+            (rimz::store::message::MessageStatus::Queued, false, text),
+            "{continues:?}"
+        );
+        assert!(!continues[0].premises.is_empty(), "{continues:?}");
+    }
+}
+
+/// A restarted resume wrapper of one kind, its provider stand-in writing its NUL-separated argv,
+/// and its queued-head deliverer only tracing its argv.
+#[cfg(unix)]
+struct RestartedResume {
+    env: Env,
+    session_id: AgentSessionId,
+    provider_argv_log: std::path::PathBuf,
+    delivery_trace: std::path::PathBuf,
+    wrapper: std::process::Child,
+}
+
+#[cfg(unix)]
+impl RestartedResume {
+    /// Seed a registered card of `kind`, then start its wrapper as `rimz agents restart` asks
+    /// (`continue_session`), and wait for its provider to start.
+    fn spawn(kind: &str) -> Self {
+        Self::spawn_with(kind, |_, _| {})
+    }
+
+    /// [`Self::spawn`], with `setup` run on the room and the card's registration first.
+    fn spawn_with(kind: &str, setup: impl FnOnce(&Env, &mut AgentLifecycleObservation)) -> Self {
+        use std::time::{Duration, Instant};
+
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks(kind);
+        if kind == "codex" {
+            crate::common::trust_codex_hooks(&env);
+        }
+        let store = env.store();
+        let workspace = env.resolve_workspace(&env.project_root);
+        let kind = AgentKind::new_unchecked(kind);
+        let session_id = AgentSessionId::from("sess-restarted");
+        let mut observation =
+            AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);
+        observation.agent_name = Some("otter".into());
+        setup(&env, &mut observation);
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: kind.clone(),
+                event_name: "SessionStart",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        let shim_dir = env.home_root.join("agent-bin");
+        crate::common::write_path_shim(
+            &shim_dir,
+            kind.as_str(),
+            "[ \"$1\" = --version ] && exit 1\nprintf '%s\\0' \"$@\" > \"$RIMZ_TEST_PROVIDER_ARGV.tmp\"\nmv \"$RIMZ_TEST_PROVIDER_ARGV.tmp\" \"$RIMZ_TEST_PROVIDER_ARGV\"\nexec sleep 300",
+        );
+        std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+            .unwrap();
+        let delivery_trace = env.home_root.join("continue-delivery.log");
+        let provider_argv_log = env.home_root.join("provider-argv.log");
+        let rimz_shim = crate::common::write_path_shim(
+            &shim_dir,
+            "continue-delivery",
+            r#"case " $* " in
+  *' message deliver --message-id '*) printf '%s\n' "$@" >> "$RIMZ_TEST_DELIVERY_TRACE" ;;
+  *) exec "$RIMZ_TEST_REAL_BIN" "$@" ;;
+esac"#,
+        );
+        let mut request = ExecRequest {
+            result_file: None,
+            isolation_default: None,
+            kind: kind.clone(),
+            action: ExecAction::Resume {
+                session_id: session_id.to_string(),
+                extra_args: Vec::new(),
+            },
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            team_prompt: None,
+            skills: None,
+            seat_consensus_skill: false,
+            mcps: None,
+            no_skill_tool: false,
+            allowed_tools: None,
+            tools: None,
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            subagent: false,
+            continue_session: true,
+            no_continue: false,
+            follow_up_message: None,
+            reminder_section: None,
+            identity: ExecIdentity::default(),
+            rimz_capabilities: None,
+        };
+        request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+        let wrapper = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .args([
+                "--root",
+                env.project_root.to_str().unwrap(),
+                "--mux",
+                "zellij",
+            ])
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", path_with_front(&shim_dir))
+            .env("ZELLIJ_PANE_ID", "4")
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            .env("RIMZ_BIN", rimz_shim)
+            .env("RIMZ_TEST_DELIVERY_TRACE", &delivery_trace)
+            .env("RIMZ_TEST_REAL_BIN", env.rimz_bin())
+            .env("RIMZ_TEST_PROVIDER_ARGV", &provider_argv_log)
+            .spawn()
+            .unwrap();
+        let mut restart = Self {
+            env,
+            session_id,
+            provider_argv_log,
+            delivery_trace,
+            wrapper,
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !restart.provider_argv_log.exists() {
+            restart.assert_running("started its provider");
+            assert!(Instant::now() < deadline, "the provider never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        restart
+    }
+
+    #[track_caller]
+    fn assert_running(&mut self, step: &str) {
+        let exit = self.wrapper.try_wait().unwrap();
+        assert!(
+            exit.is_none(),
+            "the wrapper exited ({exit:?}) before it {step}"
+        );
+    }
+
+    /// The provider's argv after its program name.
+    fn provider_argv(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.provider_argv_log)
+            .unwrap()
+            .split_terminator('\0')
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    /// Every system message for the card, live or settled.
+    fn continues(&self) -> Vec<rimz::store::message::MessageRecord> {
+        let (live, history) = self.env.store().list_messages_and_history().unwrap();
+        live.into_iter()
+            .chain(history)
+            .filter(|message| message.sender == rimz::store::message::MessageSender::System)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestartedResume {
+    fn drop(&mut self) {
+        let _ = self.wrapper.kill();
+        let _ = self.wrapper.wait();
+    }
 }
 
 #[cfg(unix)]

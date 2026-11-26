@@ -1960,11 +1960,18 @@ impl Fixture {
     ) -> Wrapper {
         let shims = self.env.home_root.join("provider-shims");
         // The wrapper's informational `--version` probe gets a prompt failure (an unknown
-        // version) instead of a provider that sleeps through the probe's timeout.
+        // version) instead of a provider that sleeps through the probe's timeout. The provider
+        // writes its NUL-separated argv for `Self::provider_argv`.
+        let argv_log = shlex::try_quote(self.provider_argv_path(kind).to_str().unwrap())
+            .unwrap()
+            .into_owned();
         crate::common::write_path_shim(
             &shims,
             kind,
-            "[ \"$1\" = --version ] && exit 1\nexec sleep 60",
+            &format!(
+                "[ \"$1\" = --version ] && exit 1\nprintf '%s\\0' \"$@\" > {argv_log}.tmp\n\
+                 mv {argv_log}.tmp {argv_log}\nexec sleep 60"
+            ),
         );
         let stderr = self.wrapper_log_path();
         let mut request = ExecRequest {
@@ -2026,6 +2033,29 @@ impl Fixture {
                 .spawn()
                 .unwrap(),
         )
+    }
+
+    fn provider_argv_path(&self, kind: &str) -> PathBuf {
+        self.env.home_root.join(format!("{kind}-provider.argv"))
+    }
+
+    /// The resumed provider's argv after its program name, once it has started.
+    fn provider_argv(&self, kind: &str) -> Vec<String> {
+        let path = self.provider_argv_path(kind);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the provider never started: {}",
+                self.wrapper_log()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::fs::read_to_string(path)
+            .unwrap()
+            .split_terminator('\0')
+            .map(ToOwned::to_owned)
+            .collect()
     }
 
     /// Poll the event log until `done` holds.
@@ -3959,7 +3989,8 @@ fn resume_skips_a_stage_delivered_after_its_attempt_began() {
 /// continue while no stage is open, and nobody anything at `Done` or on another role's stage.
 /// `--no-continue` takes the leader's continue away, and so does a `rimz teams resume` PROMPT
 /// queued for it, so the PROMPT is its one prompt. Other mail queued for the leader, due now or
-/// later, leaves its continue queued beside it.
+/// later, leaves its continue queued beside it. A Codex leader takes its continue on its resume
+/// command line instead, in flight, and nothing is left queued.
 #[test]
 fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
     let stage = || MessageSender::Harness {
@@ -4044,6 +4075,37 @@ fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
                 (name("coder"), MessageSender::System)
             ],
         ]
+    );
+
+    let fixture = Fixture::new();
+    std::fs::write(fixture.board(), no_stage).unwrap();
+    fixture.env.install_agent_hooks("codex");
+    crate::common::trust_codex_hooks(&fixture.env);
+    let session = fixture.ended("codex", "coder");
+    let _wrapper = fixture.spawn_resume("codex", "coder", &session);
+    let argv = fixture.provider_argv("codex");
+    assert_eq!(argv[argv.len() - 2..], ["--", "continue"], "{argv:?}");
+    let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+    let records = live
+        .iter()
+        .chain(&history)
+        .map(|message| {
+            (
+                message.agent_name.clone(),
+                message.sender.clone(),
+                message.status,
+                message.on_argv,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        [(
+            name("coder"),
+            MessageSender::System,
+            MessageStatus::Sent,
+            true
+        )]
     );
 }
 

@@ -1903,6 +1903,103 @@ fn stale_sent_prompt_startup_hold_ends_at_ten_windows() {
     }
 }
 
+/// A continue handed to a resumed provider on its command line is in flight before the provider
+/// spawns: the provider's submit confirms it, and left unconfirmed it is held through the
+/// provider-start hold and then times out, never requeued to be typed.
+#[test]
+fn argv_prompt_is_in_flight_before_spawn_and_never_retyped() {
+    let mut outcomes = Vec::new();
+    for confirmed in [true, false] {
+        let q = Queue::new();
+        let record = q.record(1).with_sender(MessageSender::System);
+        let resumed_at = Timestamp::now();
+        append_receiver_lifecycle(
+            &q,
+            &record,
+            "rimz.agent-resumed",
+            LifecycleSignal::Registered,
+            resumed_at,
+        );
+        q.record_argv_prompt(&record, "session").unwrap();
+        let sent = q
+            .live()
+            .into_iter()
+            .find(|message| message.message_id == record.message_id);
+        let written = sent.as_ref().map(|sent| {
+            (
+                sent.status,
+                sent.on_argv,
+                sent.pane_id.clone(),
+                sent.attempts,
+            )
+        });
+        let window = record.body.delivery_window();
+        let outcome = if confirmed {
+            let delivered = q
+                .confirm_delivered_for_card(
+                    &record.kind,
+                    &record.agent_id,
+                    None,
+                    DeliveryAck::TurnStarted {
+                        prompt: Some(&record.text),
+                    },
+                    "session",
+                )
+                .unwrap();
+            delivered
+                .first()
+                .map(|message| (message.status, message.unconfirmed_sends, None))
+        } else {
+            let held = q
+                .reconcile_stale_messages("session", resumed_at + window * 9, 3)
+                .unwrap();
+            assert_eq!(held, ReconcileReport::default());
+            let report = q
+                .reconcile_stale_messages("session", resumed_at + window * 10, 3)
+                .unwrap();
+            assert_eq!((report.timed_out, report.requeued), (1, 0));
+            q.history().first().map(|message| {
+                (
+                    message.status,
+                    message.unconfirmed_sends,
+                    message.last_error.clone(),
+                )
+            })
+        };
+        let methods = q
+            .methods()
+            .into_iter()
+            .filter(|method| method.starts_with("message."))
+            .collect::<Vec<_>>();
+        outcomes.push((written, outcome, methods));
+    }
+    let reason =
+        "the provider took this prompt on its command line and did not confirm it; not typed";
+    assert_eq!(
+        outcomes,
+        [
+            (
+                Some((MessageStatus::Sent, true, None, 1)),
+                Some((MessageStatus::Delivered, 0, None)),
+                vec![
+                    "message.queued".to_owned(),
+                    "message.sent".to_owned(),
+                    "message.delivered".to_owned()
+                ]
+            ),
+            (
+                Some((MessageStatus::Sent, true, None, 1)),
+                Some((MessageStatus::TimedOut, 0, Some(reason.to_owned()))),
+                vec![
+                    "message.queued".to_owned(),
+                    "message.sent".to_owned(),
+                    "message.timed_out".to_owned()
+                ]
+            ),
+        ]
+    );
+}
+
 #[test]
 fn starting_receiver_retries_pre_resume_writes_and_times_out_commands() {
     for body in [MessageBody::Prompt, MessageBody::Command] {
