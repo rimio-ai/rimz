@@ -1,0 +1,10 @@
+{"result":{"code":0,"stdout":"{\"outcome\":\"ready\",\"milestones\":[{\"id\":\"m1\",\"items\":[\"i1\",\"i2\"]}]}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"pass\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"done"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"triage\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"plan"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"ready\",\"milestones\":[{\"id\":\"m1\",\"items\":[\"i1\"]}]}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"done"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"built\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"complete"}}
+{"result":{"report":"the goal is built","handle":"opus"}}

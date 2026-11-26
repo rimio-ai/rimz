@@ -32,7 +32,7 @@ pub(in crate::harness) enum Caller {
 /// The name of a block, which is also the name of its tool and of its script function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum BlockName {
+pub enum BlockName {
     Agent,
     Team,
     Shell,
@@ -42,7 +42,7 @@ pub(in crate::harness) enum BlockName {
 }
 
 impl BlockName {
-    pub(in crate::harness) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Agent => "agent",
             Self::Team => "team",
@@ -70,20 +70,7 @@ pub(in crate::harness) trait Block: DeserializeOwned + JsonSchema {
 }
 
 /// Parse a block's object for `caller`: the typed block, or the sentence that refuses it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "only tests parse a block until the script engine calls each parser"
-    )
-)]
 pub(in crate::harness) fn parse<B: Block>(object: Value, caller: Caller) -> Result<B, String> {
-    parse_for(object, caller)
-}
-
-// A schedule's refusal parses its carried block through here, so the entry above stays the
-// one item a dead-code expectation can name.
-fn parse_for<B: Block>(object: Value, caller: Caller) -> Result<B, String> {
     let Value::Object(fields) = &object else {
         return Err(format!(
             "a `{}` block is one object of named fields",
@@ -110,13 +97,6 @@ fn parse_for<B: Block>(object: Value, caller: Caller) -> Result<B, String> {
 /// Lowercase hex SHA-256 over the block's name, a newline, and the canonical JSON of the
 /// object it was called with (keys sorted at every depth), so a call's digest covers everything
 /// it passed, a prompt's text included.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "only tests digest a call until the replay matches calls by digest"
-    )
-)]
 pub(in crate::harness) fn digest(block: BlockName, object: &Value) -> String {
     let mut text = format!("{}\n", block.as_str());
     write_canonical(&mut text, object);
@@ -476,7 +456,7 @@ pub(in crate::harness) struct ScheduleResult {
 /// Why a call did not end as asked, or why a run ended without one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum Cause {
+pub enum Cause {
     // A command's nonzero exit.
     Exit,
     // An agent or a team gone with its task unfinished.
@@ -497,7 +477,7 @@ pub(in crate::harness) enum Cause {
 /// the awaited call throws.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct Failure {
+pub struct Failure {
     /// The block whose call failed; none for a run that ended without a call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block: Option<BlockName>,
@@ -521,6 +501,20 @@ pub(in crate::harness) struct Failure {
     /// An agent's handle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
+}
+
+impl Cause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exit => "exit",
+            Self::Died => "died",
+            Self::Timeout => "timeout",
+            Self::Capacity => "capacity",
+            Self::Invalid => "invalid",
+            Self::Replay => "replay",
+            Self::Stuck => "stuck",
+        }
+    }
 }
 
 impl Block for Agent {
@@ -702,9 +696,9 @@ impl Schedule {
         }
         let carried = Value::Object(carried);
         let parsed = match self.tool {
-            ScheduleTool::Agent => parse_for::<Agent>(carried, Caller::Tool).map(drop),
-            ScheduleTool::Team => parse_for::<Team>(carried, Caller::Tool).map(drop),
-            ScheduleTool::Workflow => parse_for::<Workflow>(carried, Caller::Tool).map(drop),
+            ScheduleTool::Agent => parse::<Agent>(carried, Caller::Tool).map(drop),
+            ScheduleTool::Team => parse::<Team>(carried, Caller::Tool).map(drop),
+            ScheduleTool::Workflow => parse::<Workflow>(carried, Caller::Tool).map(drop),
         };
         parsed.err().map(|reason| format!("`arguments`: {reason}"))
     }

@@ -101,9 +101,9 @@ Then start the run:
 
 `run` validates again, prints any warnings to stderr, and prints three lines: the run id (`wf_` and 32 hexadecimal digits), the run's work directory, and a `rimz workflow show` command for the run. The first node starts in the background. When the first step cannot start yet (no capacity, a closed usage window, a spent budget, an agent already in the checkout), a fourth line says what it waits for. The work directory moves when the run ends ([Stop a run and clean up](#stop-a-run-and-clean-up)), so a run that ends before `run` returns prints the directory it moved to.
 
-Without `-w` the run uses the checkout you are in. `-w <name>` runs it in that RimZ worktree, created from your configured base when it does not exist yet. A workflow holds at most one unfinished run per checkout, so a second `run` there refuses and names the run that holds it. A try ([below](#try-one-node)) is the one exception. `--prompt 'keep the public API unchanged'` adds text to the end of every agent step's prompt for this run.
+Without `-w` the run uses the checkout you are in. `-w <name>` runs it in that RimZ worktree, created from your configured base when it does not exist yet. A workflow holds at most one unfinished run per checkout, so a second `run` there refuses and names the run that holds it. A one-node run ([below](#run-one-node)) is the one exception. `--prompt 'keep the public API unchanged'` adds text to the end of every agent step's prompt for this run.
 
-## Try one node
+## Run one node
 
 A workflow is hard to debug from its start: to see what one check answers, or how one step behaves, you would have to run every node before it. `--at` starts a run at any check or step, `--input` hands that node the answer a route would have brought it, and `--once` stops the run once that node has answered:
 
@@ -112,9 +112,9 @@ rimz workflow run fix-tests --at tests --once
 rimz workflow run fix-tests --at fix --input '{"outcome":"fail","reason":"3 failures"}' --once
 ```
 
-The node runs for real: a check's script runs, and an agent step launches its agent in the checkout and does its work. A try prints its receipt and then waits until the node has answered. It ends `tried`, prints the run's history (what the node answered and the route the run would have taken from there, such as `the run would go → fix`), and exits 0, whichever route that is, `@failed` included. A condition that cannot read its data yet (`unknown`) and a step held for capacity keep the try waiting, as they would keep a run. A session step stays with you across its turns and the try ends when the session closes.
+The node runs for real: a check's script runs, and an agent step launches its agent in the checkout and does its work. A one-node run prints its receipt and then waits until the node has answered. It ends `tried`, prints the run's history (what the node answered and the route the run would have taken from there, such as `the run would go → fix`), and exits 0, whichever route that is, `@failed` included. A condition that cannot read its data yet (`unknown`) and a step held for capacity keep the one-node run waiting, as they would keep a run. A session step stays with you across its turns and the one-node run ends when the session closes.
 
-A try starts beside a live run of the same workflow and never blocks one, so you can try a node while the real run works. Press Ctrl-C to stop waiting: the try keeps running, and `rimz workflow cancel <run>` ends it. Without `--once`, `--at` and `--input` start an ordinary run from that node, which follows its routes to the end and holds the checkout like any run. A loop task cannot carry these flags: its runs always start at the start.
+A one-node run starts beside a live run of the same workflow and never blocks one, so you can run a node alone while the real run works. Press Ctrl-C to stop waiting: the one-node run keeps running, and `rimz workflow cancel <run>` ends it. Without `--once`, `--at` and `--input` start an ordinary run from that node, which follows its routes to the end and holds the checkout like any run. A loop task cannot carry these flags: its runs always start at the start.
 
 ## Watch a run
 
@@ -614,7 +614,7 @@ Each fire runs `rimz workflow run` in the checkout that met the condition. The f
 
 ## One run per project
 
-Some work is project-wide: a monthly dependency sweep, or a loop that takes the next item off a shared backlog. Set `scope = "project"` under `[workflow]` for it. Every node then runs at the project root, and the workflow holds one unfinished run for the whole project, a try aside. Starting it from a worktree still runs it at the root, and `-w` refuses. Start it from a loop task without `--each-worktree`: with that flag the task fires in every worktree, and every fire after the first fails with a strike while the project's run is unfinished.
+Some work is project-wide: a monthly dependency sweep, or a loop that takes the next item off a shared backlog. Set `scope = "project"` under `[workflow]` for it. Every node then runs at the project root, and the workflow holds one unfinished run for the whole project, a one-node run aside. Starting it from a worktree still runs it at the root, and `-w` refuses. Start it from a loop task without `--each-worktree`: with that flag the task fires in every worktree, and every fire after the first fails with a strike while the project's run is unfinished.
 
 ## Rules for writing nodes
 

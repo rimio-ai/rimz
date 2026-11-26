@@ -1,0 +1,8 @@
+{"result":{"outcome":"clean"}}
+{"failure":{"cause":"died","reason":"the reviewer closed with its task unfinished"}}
+{"result":{"outcome":"findings","list":["a test misses the empty case"]}}
+{"result":{"outcome":"fix","list":["a test misses the empty case"]}}
+{"result":{"report":"added the case","handle":"opus"}}
+{"failure":{"cause":"exit","code":1,"stdout":"1 failed\n","output":"/runs/gate.log"}}
+{"result":{"report":"fixed the test","handle":"opus"}}
+{"result":{"code":0,"stdout":"ok\n","output":"/runs/gate.log"}}

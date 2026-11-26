@@ -187,6 +187,7 @@ flate2.workspace = true
 tar.workspace = true
 foldhash.workspace = true
 rusqlite.workspace = true
+rquickjs.workspace = true
 sha2.workspace = true
 prost.workspace = true
 shlex.workspace = true

@@ -1084,6 +1084,11 @@ criteria = "safe-to-run"
 version = "0.8.11"
 criteria = "safe-to-deploy"
 
+[[exemptions.relative-path]]
+version = "2.0.3"
+criteria = "safe-to-deploy"
+notes = "Optional dependency of rquickjs-core, enabled only by its `loader` feature, which RimZ leaves off: it is in Cargo.lock but never compiled into RimZ."
+
 [[exemptions.resvg]]
 version = "0.50.0"
 criteria = "safe-to-deploy"
@@ -1102,6 +1107,18 @@ criteria = "safe-to-deploy"
 
 [[exemptions.roxmltree]]
 version = "0.21.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.rquickjs]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.rquickjs-core]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.rquickjs-sys]]
+version = "0.14.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rsqlite-vfs]]

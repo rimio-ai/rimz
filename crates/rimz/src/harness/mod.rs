@@ -60,6 +60,7 @@ pub mod tmp_floor;
 pub mod tune;
 pub mod when;
 pub mod workflow;
+pub mod workflow_script;
 pub mod worktree_entry;
 
 pub use auto_continue::{AutoContinueRequest, CardStatus, park_demotion};

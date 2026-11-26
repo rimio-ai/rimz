@@ -2720,7 +2720,10 @@ path = "crates/rimz/src/harness"
 # spec::is_cell_word is shared with config::effective's cell-word check (+2).
 # `ShellJoin::target` and `ShellJoin::last_outcome` let a join claim only for the shell's own
 # agent and answer a shell that has already exited (+2).
-surface-budget = 1421
+# `workflow_script`: the module, `replay` and `answers`, the pass and its caps and log, the call,
+# the recorded line, the outcome, the replay and its end, and `Meta`, which `rimz workflow try`
+# reads and prints (+17).
+surface-budget = 1438
 
 [[verdict]]
 kind = "item"
@@ -6514,7 +6517,22 @@ allowed-dependencies = [
 # script engine reads, and the MCP tools once they adopt them (+18).
 # Caller, BlockName and its spelling, Block, parse, digest, and the schema generator: the
 # entries the script engine calls (+7).
-surface-budget = 27
+# `Cause::as_str`, the one spelling of a cause, which `rimz workflow try` prints (+1).
+surface-budget = 28
+
+[[module]]
+path = "crates/rimz/src/harness/workflow_script"
+# The script engine replays a script over a log and starts nothing: it reads the block types and
+# nothing else of the crate, so `harness::schedule`, `harness::workflow`, and `mcp` stay off
+# this list.
+allowed-dependencies = [
+    # `pub(in crate::harness)` names the crate root.
+    "(crate)",
+    "harness::block",
+]
+# The module, `replay`, `answers`, `Pass`, `Caps`, `Log`, `Line`, `Outcome`, `Call`, `Replay`, `End`,
+# and `Meta`: what `rimz workflow try` builds, reads, and prints (+12).
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
