@@ -1328,7 +1328,9 @@ upward-dependencies = [
 # and definitions::missing_base let the cell build L afresh with no memo (+25).
 # ProfilesConfig::built_in_base hands a kind base moved onto a kind with no home or pack base
 # the built-in base of that kind (+1).
-surface-budget = 350
+# engine::resume, Resume, Selection::{resume, resume_of, resumes} let resume replay the recorded
+# engine through the same cell build, replacing the resume-side table rewrite (+5).
+surface-budget = 355
 
 [[verdict]]
 kind = "item"
@@ -12391,12 +12393,12 @@ reason = "Distinct lane outcomes pinned by the lane tests; restore config stays 
 [[verdict]]
 kind = "item"
 key = "harness::resume::restore_routed_cells"
-reason = "The residual is a table of distinct resume outcomes: posture from the replacement base, durable replay, or the layout; the --agent same-kind check; the same-row --tier pick; record versus legacy mode precedence. Pinned by the cohort and posture tests (pass 32d)."
+reason = "The residual is a table of distinct resume outcomes: posture from the replacement base, durable replay, or the layout, the first and last chosen by the resume engine entry (config::engine::resume), which owns the same-kind --agent check and the same-row --tier pick; record versus legacy mode precedence. Pinned by the cohort and posture tests (pass 32d)."
 
 [[verdict]]
 kind = "item"
 key = "harness::resume::resolve_posture_with_role"
-reason = "The residual is a table of distinct resume outcomes: stamped-family render, recorded base, kind change, record replay with tier consistency, prompt validation, mode replay. Pinned by the cohort and posture tests (pass 32d)."
+reason = "The residual is a table of distinct resume outcomes: recorded base, the record or stamp replayed on the session's kind through the resume engine entry, kind change, prompt validation, mode replay. Pinned by the cohort and posture tests (pass 32d)."
 
 [[verdict]]
 kind = "item"

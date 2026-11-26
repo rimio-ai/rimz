@@ -82,18 +82,17 @@ pub(super) fn interactive_permission_mode_from_flags(
     })
 }
 
+/// The resume flags, `--tier` read under `selection`'s tier table and availability.
 pub(super) fn resume_overrides<'a>(
     overrides: &'a LaunchOverrideArgs,
-    machine: &'a MachineConfig,
-    unavailable: &'a dyn Fn(&str, &str) -> Option<rimz::agents::TierSkipReason>,
+    selection: &rimz::config::Selection,
 ) -> Result<rimz::harness::resume::ResumeOverrides<'a>> {
     Ok(rimz::harness::resume::ResumeOverrides {
         team: None,
         permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
         preset: launch_override_preset(overrides)?,
         agent: overrides.agent.as_deref(),
-        tier: overrides.tier.map(|tier| (tier, &machine.tiers)),
-        unavailable: Some(unavailable),
+        selection: selection.clone().tier(overrides.tier),
     })
 }
 

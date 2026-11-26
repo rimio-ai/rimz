@@ -165,6 +165,7 @@ fn resume_of<'a>(session: &'a str, l: Side<'a>) -> Resume<'a> {
         session,
         l,
         x: None,
+        role: None,
         model: None,
         tier: None,
         recorded: None,
@@ -755,6 +756,41 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
             "codex/-/luna/-",
         ),
         (
+            "resume: --model naming a tier refuses with the fix",
+            world().run(|t, p| {
+                let req = Resume {
+                    model: Some("senior"),
+                    ..resume_of("codex", def("rev", "codex", None, None))
+                };
+                resume(&req, t, p)
+            }),
+            "Conflict: use `--tier senior`",
+        ),
+        (
+            "resume: --model of another provider refuses",
+            world().run(|t, p| {
+                let req = Resume {
+                    model: Some("opus"),
+                    recorded: Some(Some("sol")),
+                    ..resume_of("codex", def("rev", "codex", Some("sol"), None))
+                };
+                resume(&req, t, p)
+            }),
+            "Conflict: this session is codex, but --model opus runs on claude; resume with a codex \
+             model or launch fresh",
+        ),
+        (
+            "resume: --model of another provider runs on a model client",
+            world().run(|t, p| {
+                let req = Resume {
+                    model: Some("opus"),
+                    ..resume_of("pi", def("planner", "pi", None, None))
+                };
+                resume(&req, t, p)
+            }),
+            "pi/-/opus/-",
+        ),
+        (
             "resume: X of another kind refuses",
             world().run(|t, p| {
                 let req = Resume {
@@ -770,12 +806,57 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
             world().run(|t, p| {
                 let req = Resume {
                     x: Some(def("planner", "codex", Some("luna"), None)),
-                    recorded: Some(Some("sol")),
                     ..resume_of("codex", def("rev", "codex", Some("sol"), None))
                 };
                 resume(&req, t, p)
             }),
             "codex/-/luna/-",
+        ),
+        (
+            "resume: a recorded X replays the record's model",
+            world().run(|t, p| {
+                let req = Resume {
+                    x: Some(def("planner", "codex", Some("luna"), None)),
+                    recorded: Some(Some("sol")),
+                    ..resume_of("codex", def("rev", "codex", Some("sol"), None))
+                };
+                resume(&req, t, p)
+            }),
+            "codex/-/sol/-",
+        ),
+        (
+            "resume: a recorded X with a stamp and no record replays the stamp",
+            world().run(|t, p| {
+                let req = Resume {
+                    x: Some(def("planner", "codex", Some("luna"), None)),
+                    stamp: Some(&senior_stamp),
+                    ..resume_of("codex", def("rev", "codex", None, Some(Senior)))
+                };
+                resume(&req, t, p)
+            }),
+            "codex/-/astra/senior",
+        ),
+        (
+            "resume: X whose tier lands on another kind falls back to the session's kind",
+            world().run(|t, p| {
+                let req = Resume {
+                    x: Some(def("planner", "codex", None, Some(Principal))),
+                    ..resume_of("codex", def("rev", "codex", None, None))
+                };
+                resume(&req, t, p)
+            }),
+            "codex/-/base/-",
+        ),
+        (
+            "resume: --tier on a bare provider name takes its own row",
+            world().run(|t, p| {
+                let req = Resume {
+                    tier: Some(Junior),
+                    ..resume_of("claude", Side::bare("claude", "claude", None))
+                };
+                resume(&req, t, p)
+            }),
+            "claude/-/sonnet/junior",
         ),
         (
             "resume: X's tier walks as a fresh launch's when it lands on the session's kind",
@@ -811,6 +892,20 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
                 )
             }),
             "claude/-/base/-",
+        ),
+        (
+            "resume: a recorded X of another kind whose build fails on L's own kind stays typed",
+            world()
+                .broken("claude", DefinitionCause::Invalid)
+                .run(|t, p| {
+                    let req = Resume {
+                        x: Some(def("planner", "codex", None, Some(Principal))),
+                        recorded: Some(Some("fable")),
+                        ..resume_of("claude", def("rev", "claude", None, None))
+                    };
+                    resume(&req, t, p)
+                }),
+            "Unbuildable: claude does not build",
         ),
         (
             "resume: a failed build on the session's own kind stays typed",

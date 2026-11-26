@@ -656,6 +656,9 @@ pub enum LayoutErr {
     /// The engine module could not choose an agent cell's engine under the launch's flags.
     #[error("{0}")]
     Engine(String),
+    /// A resumed profile now runs on another kind and does not build under the session's.
+    #[error("now resolves to {now}, but this session is {was}")]
+    KindChanged { was: String, now: String },
     #[error("empty layout cell in `{0}`")]
     EmptyCell(String),
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
@@ -1580,7 +1583,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         subagent_scope: false,
         detect_dropped_model: false,
     })?;
-    resolve_chain(name, chain, None, None, None)
+    resolve_chain(name, chain, None, None)
 }
 
 /// A profile whose tools carry a `capabilities:` grant, a TOML profile over a Markdown kind
@@ -1732,7 +1735,7 @@ pub(crate) fn resolve_profile_under(
     fallback: Option<&ProfilesConfig>,
 ) -> Result<ResolvedProfile> {
     let base = resolve_agent_override(agent_override, profiles, fallback)?;
-    resolve_profile_with_override_and_replay(
+    resolve_profile_with_fallback(
         name,
         profiles,
         fallback,
@@ -1740,7 +1743,6 @@ pub(crate) fn resolve_profile_under(
             x: base.as_ref(),
             selection: no_flags(),
         },
-        None,
         None,
     )
 }
@@ -1893,15 +1895,6 @@ pub(super) fn kind_base_for<'a>(
         .or_else(|| fallback.and_then(pick))
 }
 
-/// The row a kind base's launch takes when it moves to `kind`: that kind's base.
-pub(crate) fn routed_kind_base(
-    kind: &str,
-    own: &ProfilesConfig,
-    fallback: Option<&ProfilesConfig>,
-) -> Option<Profile> {
-    kind_base_for(kind, own, None, fallback).cloned()
-}
-
 fn apply_role_under(
     resolved: &mut ResolvedProfile,
     binding: &RoleBinding,
@@ -1978,8 +1971,11 @@ struct LaunchChain<'a> {
     variant: Option<&'static crate::agents::Variant>,
     original_kind: String,
     dropped_model: Option<String>,
-    /// The model and tier stamp the engine module chose, over whatever a layer writes.
-    engine: Option<(String, Option<crate::agents::TierStamp>)>,
+    /// The model and tier stamp the engine module chose, over whatever a layer writes; no model
+    /// when a resumed launch recorded none.
+    engine: Option<(Option<String>, Option<crate::agents::TierStamp>)>,
+    /// Whether the engine replays a resumed session's recorded one.
+    resumed: bool,
 }
 
 impl LaunchChain<'_> {
@@ -2205,6 +2201,7 @@ fn engine_refusal(
             },
         },
         EngineErr::NoEligible { reason, .. } => LayoutErr::Engine(reason),
+        EngineErr::KindChanged { was, now } => LayoutErr::KindChanged { was, now },
         other => LayoutErr::Engine(other.to_string()),
     }
 }
@@ -2286,6 +2283,41 @@ fn launch_layers<'a>(req: ChainRequest<'a>) -> Result<LaunchChain<'a>> {
             )
         })?;
         (kind.to_owned(), variant, built)
+    } else if let Some(resume) = req.selection.resume_of(
+        l.side(),
+        req.base_override.map(x_side),
+        req.role.and_then(|binding| binding.model.as_deref()),
+    ) {
+        let mut build = |kind: &str, _variant, model: Option<&str>| {
+            // A row with no definition runs on its own kind alone: it no longer builds where
+            // the session ran, which reads as the profile having moved.
+            if let Some(root) = l.root.filter(|root| l.def.is_none() && !root.kind_base)
+                && req.base_override.is_none()
+                && kind != root.agent
+            {
+                return Err(crate::config::definitions::DefinitionErr {
+                    path: std::path::PathBuf::new(),
+                    message: format!("`{label}` runs on {}", root.agent),
+                    cause: crate::config::definitions::DefinitionCause::Invalid,
+                });
+            }
+            build_launched(&l, &req, kind, model)
+        };
+        let session = resume.session;
+        let (engine, built) = crate::config::engine::resume(
+            &resume,
+            req.selection.tiers(),
+            &mut crate::config::engine::Probe {
+                build: &mut build,
+                unavailable: &mut |kind, model| req.selection.unavailable(kind, model),
+            },
+        )
+        .map_err(|error| engine_refusal(error, label, session, None))?;
+        chain.resumed = true;
+        if !matches!(engine.model, crate::config::engine::Model::FromBase) {
+            chain.engine = Some((engine.model.named().map(str::to_owned), engine.tier));
+        }
+        (engine.kind, engine.variant, built)
     } else if !rechooses(&req, &l) {
         let natural = root.map_or(l.kind.as_str(), |profile| profile.agent.as_str());
         let built = build_launched(&l, &req, natural, None).map_err(|error| {
@@ -2328,7 +2360,7 @@ fn launch_layers<'a>(req: ChainRequest<'a>) -> Result<LaunchChain<'a>> {
         let (engine, built) =
             picked.map_err(|error| engine_refusal(error, label, &tried, selection.model_flag()))?;
         if let Some(model) = engine.model.named() {
-            chain.engine = Some((model.to_owned(), engine.tier.clone()));
+            chain.engine = Some((Some(model.to_owned()), engine.tier.clone()));
         }
         (engine.kind, engine.variant, built)
     };
@@ -2396,41 +2428,25 @@ fn rechooses(req: &ChainRequest<'_>, l: &LaunchedName<'_>) -> bool {
         || l.def.is_some_and(|def| def.written_tier().is_some())
 }
 
-/// Replay constraints carried from `harness::resume` when rebuilding a recorded launch under
-/// its stored kind, model, or tier stamp.
-#[derive(Default)]
-pub(super) struct ReplayOptions<'a> {
-    pub target_kind: Option<&'a str>,
-    /// `Some(model_opt)` when replaying a `LaunchRecord` without a tier stamp: forces the
-    /// recorded model (including `None`) and prevents any layer from filling a model.
-    pub recorded_model: Option<Option<&'a str>>,
-    pub stamped_tier: Option<&'a crate::agents::TierStamp>,
-}
-
 fn resolve_chain(
     name: &str,
     chain: LaunchChain<'_>,
     base_override: Option<&AgentOverride<'_>>,
     role: Option<&RoleBinding>,
-    replay: Option<ReplayOptions<'_>>,
 ) -> Result<ResolvedProfile> {
     let mut resolved = ResolvedProfile::bare(&chain.kind);
     resolved.variant = chain.variant;
-    let replay = replay.unwrap_or_default();
-    let override_model = replay.stamped_tier.is_some() || replay.recorded_model.is_some();
     for layer in &chain.layers {
-        fill_layer(&mut resolved, &layer.profile, &layer.name, override_model);
+        fill_layer(
+            &mut resolved,
+            &layer.profile,
+            &layer.name,
+            chain.engine.is_some(),
+        );
     }
     if let Some((model, stamp)) = chain.engine {
-        resolved.launch.model = Some(model);
+        resolved.launch.model = model;
         resolved.launch.tier = stamp.map(Box::new);
-    }
-    if let Some(stamp) = replay.stamped_tier {
-        resolved.launch.model = Some(stamp.model.clone());
-        resolved.launch.tier = Some(Box::new(stamp.clone()));
-    } else if let Some(recorded_model) = replay.recorded_model {
-        resolved.launch.model = recorded_model.map(str::to_owned);
-        resolved.launch.tier = None;
     }
     resolved.layers = chain.names;
     if let Some(model) = chain.dropped_model {
@@ -2443,7 +2459,7 @@ fn resolve_chain(
             &mut resolved,
             binding,
             &chain.original_kind,
-            base_override,
+            base_override.filter(|_| !chain.resumed),
         );
     }
     Ok(resolved)
@@ -2455,18 +2471,16 @@ fn resolve_profile_with_override(
     base: CellBase<'_>,
     role: Option<&RoleBinding>,
 ) -> Result<ResolvedProfile> {
-    resolve_profile_with_override_and_replay(name, profiles, None, base, role, None)
+    resolve_profile_with_fallback(name, profiles, None, base, role)
 }
 
-fn resolve_profile_with_override_and_replay(
+fn resolve_profile_with_fallback(
     name: &str,
     profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
     base: CellBase<'_>,
     role: Option<&RoleBinding>,
-    replay: Option<ReplayOptions<'_>>,
 ) -> Result<ResolvedProfile> {
-    let target_kind = replay.as_ref().and_then(|replay| replay.target_kind);
     let chain = launch_layers(ChainRequest {
         name: Some(name),
         own: profiles,
@@ -2474,12 +2488,12 @@ fn resolve_profile_with_override_and_replay(
         base_override: base.x,
         selection: base.selection,
         role,
-        target_kind,
+        target_kind: None,
         subagent_scope: fallback.is_some(),
-        detect_dropped_model: target_kind.is_none()
+        detect_dropped_model: !base.selection.resumes()
             && role.is_none_or(|binding| binding.model.is_none()),
     })?;
-    resolve_chain(name, chain, base.x, role, replay)
+    resolve_chain(name, chain, base.x, role)
 }
 
 fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
@@ -2759,9 +2773,8 @@ fn path_command_cell(raw: &str) -> Option<Cell> {
 }
 
 /// The agent cell a named profile launches as: its rendered provider argv plus
-/// the typed launch params it declares. Layout resolution builds profile cells
-/// through this, and relaunch replays a stored profile name through it to
-/// recover the same posture.
+/// the typed launch params it declares.
+#[cfg(test)]
 pub(super) fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
     profile_cell_with_base_override(name, profiles, CellBase::none(), None)
 }
@@ -2776,16 +2789,17 @@ pub(super) fn profile_cell_with_base_override(
     cell_from_profile(name, &resolved)
 }
 
+/// The cell a relaunch of `name` starts under X and `selection`, which holds it to a resumed
+/// session's recorded engine when it carries one.
 pub(super) fn profile_cell_for_replay(
     name: &str,
     profiles: &ProfilesConfig,
     fallback: Option<&ProfilesConfig>,
     base_override: Option<&AgentOverride<'_>>,
     role: Option<&RoleBinding>,
-    replay: ReplayOptions<'_>,
     selection: &Selection,
 ) -> Result<AgentCell> {
-    let resolved = resolve_profile_with_override_and_replay(
+    let resolved = resolve_profile_with_fallback(
         name,
         profiles,
         fallback,
@@ -2794,7 +2808,6 @@ pub(super) fn profile_cell_for_replay(
             selection,
         },
         role,
-        Some(replay),
     )?;
     cell_from_profile(name, &resolved)
 }

@@ -101,6 +101,83 @@ fn recorded_model_override_rebuilds_record_and_clears_tier() {
     assert!(request.identity.params.tier.is_none());
 }
 
+/// `--model` alone goes through the resume engine, as `--tier` does: a tier name or a model the
+/// session's kind cannot run refuses before any pane opens.
+#[test]
+fn recorded_model_override_refuses_a_tier_name_and_another_provider_model() {
+    for (model, expected) in [
+        ("senior", "use `--tier senior`"),
+        (
+            "astra",
+            "this session is claude, but --model astra runs on codex; resume with a claude model \
+             or launch fresh",
+        ),
+    ] {
+        let (plan, facts) = single(
+            &saved(),
+            &profiles("planner", profile("claude")),
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    preset: LaunchPreset {
+                        model: Some(model.into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert!(plan.tabs.is_empty(), "{model}");
+        assert!(
+            plan.skipped[0].reason.label().contains(expected),
+            "{:?}",
+            plan.skipped
+        );
+        assert!(facts.is_none());
+    }
+}
+
+/// `--model` on a resume rebuilds under the `--agent` the session recorded, so the effort is the
+/// one the build under that agent and model gives, not the record's.
+#[test]
+fn recorded_model_override_takes_the_effort_of_the_build_under_the_recorded_agent() {
+    for (agent, expected) in [(None, "medium"), (Some("low"), "low")] {
+        let mut profiles = project_profiles(
+            "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+             [profiles.low]\ndescription = 'Low'\nagent = 'claude'\neffort = 'low'\n",
+        );
+        let mut base = profile("claude");
+        base.kind_base = true;
+        base.effort = Some("medium".into());
+        profiles.0.insert("claude".into(), base);
+        let mut saved = saved();
+        saved.record.as_mut().unwrap().agent = agent.map(str::to_owned);
+        let (plan, _) = single(
+            &saved,
+            &profiles,
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    preset: LaunchPreset {
+                        model: Some("sonnet".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let request = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+        assert_eq!(
+            request.identity.params.effort.as_deref(),
+            Some(expected),
+            "{agent:?}"
+        );
+        let record = request.identity.params.record.unwrap();
+        assert_eq!(record.agent.as_deref(), agent);
+    }
+}
+
 #[test]
 fn recorded_effort_override_rebuilds_record_without_overriding_model() {
     let request = request(ResumeOverrides {
@@ -246,11 +323,12 @@ fn resume_tier_on_model_clients_uses_the_exact_row_on_the_engine() {
                 &profiles("planner", planner),
                 SingleResumeOptions {
                     overrides: ResumeOverrides {
-                        tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
-                        unavailable: Some(&|family, _| {
-                            assert_eq!(family, kind);
-                            None
-                        }),
+                        selection: crate::config::Selection::new(&tiers)
+                            .tier(Some(crate::config::tiers::ModelTier::Junior))
+                            .availability(move |family, _| {
+                                assert_eq!(family, kind);
+                                None
+                            }),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -276,7 +354,8 @@ fn resume_tier_on_model_clients_uses_the_exact_row_on_the_engine() {
 fn recorded_tier_override_selects_same_provider_and_records_model() {
     let tiers = crate::config::tiers::TierConfig::default();
     let request = request(ResumeOverrides {
-        tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+        selection: crate::config::Selection::new(&tiers)
+            .tier(Some(crate::config::tiers::ModelTier::Junior)),
         ..Default::default()
     });
     let tier = request.identity.params.tier.unwrap();
@@ -311,7 +390,8 @@ fn recorded_tier_override_takes_the_kind_base_effort_a_fresh_tier_launch_takes()
         &profiles,
         SingleResumeOptions {
             overrides: ResumeOverrides {
-                tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                selection: crate::config::Selection::new(&tiers)
+                    .tier(Some(crate::config::tiers::ModelTier::Junior)),
                 ..Default::default()
             },
             ..Default::default()
@@ -364,7 +444,8 @@ fn recorded_tier_override_keeps_machine_kind_base_effort_despite_kind_named_proj
         &launch.profiles,
         SingleResumeOptions {
             overrides: ResumeOverrides {
-                tier: Some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                selection: crate::config::Selection::new(&tiers)
+                    .tier(Some(crate::config::tiers::ModelTier::Junior)),
                 ..Default::default()
             },
             ..Default::default()
@@ -372,6 +453,81 @@ fn recorded_tier_override_keeps_machine_kind_base_effort_despite_kind_named_proj
     );
     let request = decode_exec_request(&single_pane_argv(&plan));
     assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
+}
+
+/// `--tier` on a resume rebuilds under the `--agent` the session recorded, so the tier changes
+/// only the model, tier and effort, and the effort is the one the build under that agent gives.
+#[test]
+fn recorded_tier_override_rebuilds_under_the_recorded_agent() {
+    let profiles = project_profiles(
+        "[profiles.planner]\ndescription = 'Planner'\nagent = 'claude'\n\
+         [profiles.low]\ndescription = 'Low'\nagent = 'claude'\neffort = 'low'\n",
+    );
+    let mut saved = saved();
+    saved.record.as_mut().unwrap().agent = Some("low".into());
+    let tiers = crate::config::tiers::TierConfig::default();
+    let (plan, _) = single(
+        &saved,
+        &profiles,
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                selection: crate::config::Selection::new(&tiers)
+                    .tier(Some(crate::config::tiers::ModelTier::Junior)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+    assert_eq!(request.identity.params.effort.as_deref(), Some("low"));
+}
+
+#[test]
+fn tier_override_on_a_bare_provider_session_takes_its_own_row_and_never_climbs() {
+    let saved = AgentState {
+        profile: None,
+        record: None,
+        ..saved()
+    };
+    let resume = |tiers: &crate::config::tiers::TierConfig, tier| {
+        single(
+            &saved,
+            &ProfilesConfig::default(),
+            SingleResumeOptions {
+                overrides: ResumeOverrides {
+                    selection: crate::config::Selection::new(tiers).tier(Some(tier)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .0
+    };
+    let plan = resume(
+        &crate::config::tiers::TierConfig::default(),
+        crate::config::tiers::ModelTier::Junior,
+    );
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(request.kind.as_str(), "claude");
+    assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+    let tier = request.identity.params.tier.unwrap();
+    assert_eq!(tier.tier, crate::config::tiers::ModelTier::Junior);
+    assert_eq!(tier.model, "sonnet");
+    let plan = resume(
+        &toml::from_str("principal = ['gpt-6-sol']").unwrap(),
+        crate::config::tiers::ModelTier::Principal,
+    );
+    assert!(plan.tabs.is_empty());
+    assert!(
+        plan.skipped[0]
+            .reason
+            .label()
+            .contains("tier principal has no entry for claude"),
+        "{:?}",
+        plan.skipped
+    );
 }
 
 #[test]
@@ -452,7 +608,8 @@ fn unavailable_tier_refuses_without_warning_or_launch_facts() {
         &profiles("planner", routed_profile(None)),
         SingleResumeOptions {
             overrides: ResumeOverrides {
-                tier: Some((crate::config::tiers::ModelTier::Principal, &tiers)),
+                selection: crate::config::Selection::new(&tiers)
+                    .tier(Some(crate::config::tiers::ModelTier::Principal)),
                 ..Default::default()
             },
             ..Default::default()
@@ -471,30 +628,21 @@ fn unavailable_tier_refuses_without_warning_or_launch_facts() {
 
 #[test]
 fn invalid_explicit_overrides_refuse_instead_of_resuming_bare() {
-    let tiers = crate::config::tiers::TierConfig::default();
-    for overrides in [
-        ResumeOverrides {
-            agent: Some("missing"),
-            ..Default::default()
-        },
-        ResumeOverrides {
-            tier: Some((crate::config::tiers::ModelTier::Senior, &tiers)),
-            ..Default::default()
-        },
-    ] {
-        let (plan, facts) = single(
-            &saved(),
-            &profiles("planner", profile("claude")),
-            SingleResumeOptions {
-                overrides,
+    let (plan, facts) = single(
+        &saved(),
+        &profiles("planner", profile("claude")),
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                agent: Some("missing"),
                 ..Default::default()
             },
-        );
-        assert!(plan.tabs.is_empty());
-        assert!(!plan.skipped[0].reason.label().is_empty());
-        assert!(plan.warnings.is_empty());
-        assert!(facts.is_none());
-    }
+            ..Default::default()
+        },
+    );
+    assert!(plan.tabs.is_empty());
+    assert!(!plan.skipped[0].reason.label().is_empty());
+    assert!(plan.warnings.is_empty());
+    assert!(facts.is_none());
 }
 
 #[test]
@@ -613,13 +761,13 @@ fn opencode_model_and_agent_resume_overrides_keep_effort_for_the_session_step() 
             );
             assert_eq!(
                 request.identity.params.effort.as_deref(),
-                Some(if explicit_effort {
-                    "low"
+                if explicit_effort {
+                    Some("low")
                 } else if agent_override {
-                    "max"
+                    Some("max")
                 } else {
-                    "high"
-                })
+                    None
+                }
             );
             assert_eq!(
                 request.identity.params.record.as_ref().unwrap().effort,
@@ -654,6 +802,56 @@ fn unsupported_explicit_effort_warns_and_resumes() {
         ["warning: `worker` effort high is unsupported on kimi; launching without it"]
     );
     assert!(facts.is_some());
+}
+
+/// A resume whose recorded `--agent` or profile no longer resolves degrades to bare with a
+/// warning, and `--model` or `--tier` applies on that bare posture rather than refusing.
+#[test]
+fn model_or_tier_override_applies_on_a_degraded_replay() {
+    let tiers = crate::config::tiers::TierConfig::default();
+    for gone in ["agent", "profile"] {
+        for tier in [false, true] {
+            let mut saved = saved();
+            if gone == "agent" {
+                saved.record.as_mut().unwrap().agent = Some("gone".into());
+            } else {
+                saved.profile = Some("gone".into());
+            }
+            let (plan, _) = single(
+                &saved,
+                &profiles("planner", profile("claude")),
+                SingleResumeOptions {
+                    overrides: ResumeOverrides {
+                        preset: LaunchPreset {
+                            model: (!tier).then(|| "haiku".into()),
+                            ..Default::default()
+                        },
+                        selection: crate::config::Selection::new(&tiers)
+                            .tier(tier.then_some(crate::config::tiers::ModelTier::Junior)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert!(plan.skipped.is_empty(), "{gone} {tier}: {:?}", plan.skipped);
+            assert!(
+                plan.warnings.iter().any(|w| w.contains("resuming bare")),
+                "{gone} {tier}: {:?}",
+                plan.warnings
+            );
+            let request = decode_exec_request(&single_pane_argv(&plan));
+            assert_eq!(
+                request.identity.params.model.as_deref(),
+                Some(if tier { "sonnet" } else { "haiku" }),
+                "{gone} {tier}"
+            );
+            assert_eq!(
+                request.identity.params.tier.map(|stamp| stamp.tier),
+                tier.then_some(crate::config::tiers::ModelTier::Junior),
+                "{gone} {tier}"
+            );
+        }
+    }
 }
 
 #[test]

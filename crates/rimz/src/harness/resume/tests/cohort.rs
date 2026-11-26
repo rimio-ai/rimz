@@ -934,8 +934,10 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
                         .map(str::to_owned),
                     ..Default::default()
                 },
-                tier: (override_model == Some("tier"))
-                    .then_some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                selection: crate::config::Selection::new(&tiers).tier(
+                    (override_model == Some("tier"))
+                        .then_some(crate::config::tiers::ModelTier::Junior),
+                ),
                 ..Default::default()
             },
         )
@@ -1068,10 +1070,25 @@ fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
                 crate::harness::spec::profile_cell(name, &profiles).unwrap(),
             ));
     }
+    let refused = restore_routed_cells(&mut layout, &seeds, &profiles, None, &overrides)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("this session is codex, but --model sonnet runs on claude"),
+        "{refused}"
+    );
+    let overrides = ResumeOverrides {
+        preset: crate::agents::LaunchPreset {
+            model: Some("custom".into()),
+            effort: Some("low".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     restore_routed_cells(&mut layout, &seeds, &profiles, None, &overrides).unwrap();
     for cell in layout.agent_cells() {
         let record = cell.launch.record.as_ref().unwrap();
-        assert_eq!(record.model.as_deref(), Some("sonnet"));
+        assert_eq!(record.model.as_deref(), Some("custom"));
         assert_eq!(record.effort.as_deref(), Some("low"));
     }
 }
@@ -1141,13 +1158,14 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
         "[profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\n\
          model = 'sonnet'\neffort = 'low'\nargs = '--strict-mcp-config'\n",
     );
-    profiles.0.insert("planner".into(), routed_profile(None));
+    let (_definitions, planner) = tiered_claude("planner", None);
+    profiles.0.extend(planner.0);
     let tiers = crate::config::tiers::TierConfig::default();
     let root = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
     for base in [None, Some("reviewer")] {
-        for tier in [None, Some((ModelTier::Principal, &tiers))] {
+        for tier in [None, Some(ModelTier::Principal)] {
             for (model, effort) in [
                 (None, None),
                 (Some("sonnet[1m]"), None),
@@ -1168,14 +1186,14 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                     crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
                 ));
                 let seeds = [CohortSeed::Resume(Box::new(agent))];
-                restore_routed_cells(
+                let restored = restore_routed_cells(
                     &mut layout,
                     &seeds,
                     &profiles,
                     None,
                     &ResumeOverrides {
                         agent: base,
-                        tier,
+                        selection: crate::config::Selection::new(&tiers).tier(tier),
                         preset: crate::agents::LaunchPreset {
                             model: model.map(str::to_owned),
                             effort: effort.map(str::to_owned),
@@ -1183,8 +1201,17 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                         },
                         ..Default::default()
                     },
-                )
-                .unwrap();
+                );
+                if tier.is_some() && model.is_some() {
+                    // Clap keeps the pair apart; the engine refuses it as well.
+                    let restored = format!("{restored:?}");
+                    assert!(
+                        restored.contains("choose one of --tier and --model"),
+                        "{restored}"
+                    );
+                    continue;
+                }
+                restored.unwrap();
                 let cell = layout.agent_cells().next().unwrap();
                 let record = cell.launch.record.as_ref().unwrap();
                 let panes = compile_layout_panes(
@@ -1400,7 +1427,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &profiles,
         None,
         &ResumeOverrides {
-            tier: Some((ModelTier::Junior, &tiers)),
+            selection: crate::config::Selection::new(&tiers).tier(Some(ModelTier::Junior)),
             ..Default::default()
         },
     )
@@ -1417,7 +1444,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &profiles,
         None,
         &ResumeOverrides {
-            tier: Some((ModelTier::Principal, &tiers)),
+            selection: crate::config::Selection::new(&tiers).tier(Some(ModelTier::Principal)),
             ..Default::default()
         },
     )
@@ -1446,7 +1473,7 @@ fn resume_tier_is_same_kind_and_never_climbs() {
         &profiles,
         None,
         &ResumeOverrides {
-            tier: Some((ModelTier::Principal, &tiers)),
+            selection: crate::config::Selection::new(&tiers).tier(Some(ModelTier::Principal)),
             ..Default::default()
         },
     )
@@ -1471,8 +1498,9 @@ fn unavailable_resume_tier_keeps_the_requested_row() {
         &profiles,
         None,
         &ResumeOverrides {
-            tier: Some((ModelTier::Junior, &tiers)),
-            unavailable: Some(&|_, _| Some(crate::agents::TierSkipReason::LoggedOut)),
+            selection: crate::config::Selection::new(&tiers)
+                .tier(Some(ModelTier::Junior))
+                .availability(|_, _| Some(crate::agents::TierSkipReason::LoggedOut)),
             ..Default::default()
         },
     )
@@ -1901,7 +1929,7 @@ fn team_restore_routes_fresh_seats_before_planning() {
 
 #[test]
 fn stamped_cohort_resume_reapplies_explicit_model_and_effort() {
-    let profiles = profiles("planner", routed_profile(Some("medium")));
+    let (_root, profiles) = tiered_claude("planner", Some("medium"));
     let agent = AgentState {
         profile: Some("planner".into()),
         tier: Some(tier_stamp("astra")),
@@ -2133,9 +2161,8 @@ fn roleless_team_resume_matches_a_stamped_cross_family_profile() {
 #[test]
 fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
     let (teams, mut profiles, commands) = team_configs();
-    profiles
-        .0
-        .insert("claude-plan".to_owned(), routed_profile(Some("medium")));
+    let (_root, planner) = tiered_claude("claude-plan", Some("medium"));
+    profiles.0.extend(planner.0);
     let stamp = tier_stamp("astra");
     let planner = AgentState {
         profile: Some("claude-plan".to_owned()),
@@ -2187,7 +2214,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
     );
     assert_eq!(request.identity.params.tier, Some(stamp));
     assert!(
-        matches!(request.action, crate::harness::launch::ExecAction::Resume { extra_args, .. } if extra_args.iter().any(|arg| arg == "--search"))
+        matches!(request.action, crate::harness::launch::ExecAction::Resume { extra_args, .. } if codex_render(&extra_args))
     );
 }
 
@@ -3381,8 +3408,6 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
         cell.args,
         [
             "--verbose",
-            "--effort",
-            "high",
             "--permission-mode",
             "plan",
             "--model",
@@ -3623,8 +3648,8 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
     profiles.0.insert("helper".into(), profile("claude"));
     for (label, profile, tier, record) in [
         (
-            "a tier-stamped seat whose family render is gone",
-            "planner",
+            "a tier-stamped seat whose profile moved to another kind",
+            "helper",
             Some(tier_stamp("astra")),
             None,
         ),
@@ -3679,7 +3704,7 @@ fn degraded_stamped_seat_refuses_its_cohort_restore() {
     let planner = AgentState {
         profile: Some("claude-plan".to_owned()),
         tier: Some(tier_stamp("opus")),
-        ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
+        ..team_agent("codex", "planner", "planner", "/repo/forge", 3)
     };
     let (team, flat) = split_team_and_flat(
         std::slice::from_ref(&planner),
