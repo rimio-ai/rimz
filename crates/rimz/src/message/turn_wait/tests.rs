@@ -219,30 +219,41 @@ fn a_raised_ask_ends_the_turn_for_join_and_report() {
 
     let at = Timestamp::from_second(1_000).unwrap();
     let now = Timestamp::from_second(2_000).unwrap();
-    let mut agent = crate::testkit::agent_state("claude", "sess-ask", at);
-    agent.status = AgentStatus::Success;
-    agent.turn_started_at = Some(at);
-    agent.turn_ended_at = Some(at);
-    agent.raised_ask = Some(RaisedAsk {
-        ask_id: crate::ids::AskId::new(),
-        state: RaisedAskState::Open,
-        raised_at: at,
-        basis_at: at,
-        opened_at: Some(at),
-        raised_by: None,
-        text: Some("Ship it?".into()),
-        brief: Some("Ship it?".into()),
-    });
-    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
-    let view = TurnWaitView {
-        snapshot: SidebarSnapshot::build_with_agents(workspace, vec![agent], now),
-        messages: vec![],
-        now,
-        card_status: CardStatus::from_demotion(ParkDemotion::default()),
-    };
-    let child = &view.snapshot.agents[0];
-    assert_eq!(view.completion(child), TurnCompletion::Completed);
-    assert_eq!(view.reason(child), None);
+    for launched in [false, true] {
+        let mut agent = crate::testkit::agent_state("claude", "sess-ask", at);
+        agent.status = AgentStatus::Success;
+        agent.turn_started_at = Some(at);
+        agent.turn_ended_at = Some(at);
+        if launched {
+            agent.parent_agent_id = Some("sess-parent".into());
+            agent.parent_agent_kind = Some(agent.kind.clone());
+            agent.launch_depth = Some(1);
+        }
+        agent.raised_ask = Some(RaisedAsk {
+            ask_id: crate::ids::AskId::new(),
+            state: RaisedAskState::Open,
+            raised_at: at,
+            basis_at: at,
+            opened_at: Some(at),
+            raised_by: None,
+            text: Some("Ship it?".into()),
+            brief: Some("Ship it?".into()),
+        });
+        let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+        let view = TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(workspace, vec![agent], now),
+            messages: vec![],
+            now,
+            card_status: CardStatus::from_demotion(ParkDemotion::default()),
+        };
+        let child = &view.snapshot.agents[0];
+        assert_eq!(
+            view.completion(child),
+            TurnCompletion::Completed,
+            "launched {launched}"
+        );
+        assert_eq!(view.reason(child), None, "launched {launched}");
+    }
 }
 
 #[test]

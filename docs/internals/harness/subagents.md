@@ -401,6 +401,7 @@ Idle close requires all of these, in a receipt answer requested after the waiter
 - the current answer was joined (`joined_at`), or its run settled (`completed_at`) before this wrapper bound, or the report message it names is present in the queue or in any retained message-history bucket (closing the stamp-before-queue window without waiting for delivery). A follow-up's reopen clears `completed_at`, so a new answer always settles after the bind
 - the child has no open turn
 - no non-terminal queued message is addressed to the child
+- the child has no open [raised ask](../../reference/cli/asks.md#raise-or-withdraw-an-ask) (`AgentState::raised_ask`, which `snapshot_cached` attaches), so its pane stays for the user's answer
 - the child's pane is not the focused pane by a fresh focus fact (`crates/rimz/src/sidebar/cache.rs::fresh_pane_focused`, within `FOCUS_HOLD_TTL` or a fresh focus anchor; missing, unreadable, or stale frames hold nothing)
 - the child has rested for at least `[agents.subagents] linger` (falling back to the `10m` default when machine config is unreadable or invalid) from `crates/rimz/src/harness/idle_stop.rs::rested_since`, taking the latest of `turn_ended_at`, the settle marker, `last_activity` in `snapshot_cached`, and the wrapper's own bind timestamp (`bound_at`). A message-driven resume whose follow-up settled without opening a turn (`Duty::Receipt { skip_linger: true, .. }`) omits only this wait until a turn opens on that wrapper, while keeping every condition above.
 

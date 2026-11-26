@@ -470,12 +470,22 @@ pub(super) fn handle_lifecycle_frame(
                 "lifecycle: failed to record transcript entry",
             );
         }
+        let typed_by_human = opened_by_human
+            || env_run_id().is_some()
+                && typed_into_supervised_turn(
+                    store,
+                    run_id.as_ref(),
+                    &recorded.observation,
+                    payload,
+                    &sections,
+                    &delivered,
+                );
         record_raised_attention(
             workspace,
             store,
             agent,
             recorded,
-            opened_by_human && !replay,
+            typed_by_human && !replay,
             assistant_message.as_deref(),
         );
         runtime_env::attach_runtime_env(
@@ -605,6 +615,31 @@ fn assistant_message_for_lifecycle(
     (needs_run_message || needs_conversation_message)
         .then(extract)
         .flatten()
+}
+
+/// Whether the user typed into a supervised turn: a human section other than the run's own
+/// prompt, which RimZ submits for the parent or the harness. A run that cannot be read
+/// proves nothing, so the turn reads as RimZ's.
+fn typed_into_supervised_turn(
+    store: &Store,
+    run_id: Option<&rimz::RunId>,
+    observation: &rimz::agents::AgentLifecycleObservation,
+    payload: &serde_json::Value,
+    sections: &[rimz::store::message::PromptSection<'_>],
+    delivered: &[rimz::store::message::MessageRecord],
+) -> bool {
+    let Some(run) = run_id.and_then(|id| rimz::harness::run::load(store.paths(), id).ok()) else {
+        return false;
+    };
+    let rimz_prompt = run.prompt_origin() != rimz::store::run::RunPromptOrigin::Human;
+    rimz::store::message::human_opened_turn(observation, payload, sections, delivered, false)
+        && sections.iter().any(|section| {
+            section.origin == rimz::transcript::SectionOrigin::Human
+                && section
+                    .record
+                    .is_none_or(rimz::store::message::MessageRecord::is_user_input)
+                && !(rimz_prompt && section.record.is_none() && is_run_prompt(&run, &section.text))
+        })
 }
 
 fn record_raised_attention(

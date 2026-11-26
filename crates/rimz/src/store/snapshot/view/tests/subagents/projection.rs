@@ -509,6 +509,15 @@ fn launched_waiting_child(id: &str) -> AgentState {
     child
 }
 
+fn launched_asking_child(id: &str) -> AgentState {
+    let mut child = child_state("root", id, AgentStatus::Success, 5);
+    child.launch_depth = Some(1);
+    child.name = Some(id.to_owned());
+    child.registered_at = Some(ago(100));
+    child.raised_ask = Some(open_raised_ask("Ship now?", ago(5)));
+    child
+}
+
 #[test]
 fn waiting_child_turns_non_actionable_parent_to_waiting_with_mark() {
     let mut sleeping = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
@@ -572,6 +581,7 @@ fn waiting_child_turns_non_actionable_parent_to_waiting_with_mark() {
     for (label, parent, resting_status) in parents {
         for (origin, child, expect_handle) in [
             ("launched", launched_waiting_child("scout"), "scout"),
+            ("raised", launched_asking_child("asker"), "asker"),
             (
                 "native",
                 child_state("root", "native-1", AgentStatus::Waiting, 5),
@@ -593,9 +603,23 @@ fn waiting_child_turns_non_actionable_parent_to_waiting_with_mark() {
             assert_eq!(mark.handle, expect_handle, "{label}/{origin}");
             assert_eq!(
                 mark.pane.is_some(),
-                origin == "launched",
+                origin != "native",
                 "{label}/{origin}: launched carries child pane, native does not"
             );
+            if origin == "raised" {
+                assert_eq!(mark.detail.as_deref(), Some("Ship now?"), "{label}");
+                let line = parent_row
+                    .as_agent()
+                    .unwrap()
+                    .sub_agents
+                    .iter()
+                    .find(|line| line.id == "asker");
+                assert_eq!(
+                    line.map(|line| line.status),
+                    Some(AgentStatus::Waiting),
+                    "{label}"
+                );
+            }
             assert_eq!(snapshot.agents[0].status, raw_status, "{label}/{origin}");
 
             // Once the last waiting child stops, the parent returns to its own ladder status

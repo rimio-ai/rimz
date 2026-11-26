@@ -490,6 +490,40 @@ fn idle_close_enforces_every_condition_and_ignores_parent_turn_state() {
         .unwrap(),
         "joined child with no open turn closes once rested past linger"
     );
+    // An open raised ask keeps the child's pane for the user's answer.
+    let resting = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "child")
+        .cloned()
+        .unwrap();
+    let ask = rimz::store::raised::prepare_raise(
+        store.paths(),
+        &resting,
+        false,
+        Some("Ship now?".into()),
+        None,
+        jiff::Timestamp::now(),
+    )
+    .unwrap();
+    rimz::store::raised::raise(store.paths(), ask).unwrap();
+    assert!(
+        !run_receipt_once_with(&context, false, bound_at, linger, || after_linger(
+            settled_at
+        ))
+        .unwrap(),
+        "open raised ask holds the child"
+    );
+    rimz::store::raised::withdraw(store.paths(), &kind, &resting.agent_id, None).unwrap();
+    assert!(
+        run_receipt_once_with(&context, false, bound_at, linger, || after_linger(
+            settled_at
+        ))
+        .unwrap(),
+        "withdrawn raised ask releases the child"
+    );
 
     // Condition 4: non-terminal message addressed to child holds close open even past linger.
     let child = store

@@ -355,6 +355,25 @@ fn raised_notifications_use_the_ask_line_and_id_and_alerts_need_you() {
         "a new raise is not a duplicate notification"
     );
     assert_eq!(notifications[0].body, "Ship now?");
+    // A launched child promoted to its own row notifies its raised ask as a root does.
+    let mut child = agent("child", AgentStatus::Success, false);
+    child.parent_agent_id = Some("parent-gone".into());
+    child.parent_agent_kind = Some(child.kind.clone());
+    child.launch_depth = Some(1);
+    child.raised_ask = Some(RaisedAsk {
+        ask_id: AskId::new(),
+        state: RaisedAskState::Open,
+        raised_at: Timestamp::now(),
+        basis_at: Timestamp::now(),
+        opened_at: None,
+        raised_by: None,
+        text: None,
+        brief: Some("Ship now?".into()),
+    });
+    let notifications =
+        evaluate_opened(&mut state, snapshot(vec![child]), &["child"], &prefs(), 150);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].body, "Ship now?");
     let mut alerted = agent("alerted", AgentStatus::Running, false);
     alerted.alert = Some(CardAlert {
         text: "Check this result".into(),
@@ -639,6 +658,39 @@ fn delegated_wait_notifies_naming_subagent_and_honors_answering_pane_focus() {
             .is_empty(),
         "focusing the waiting child's pane suppresses the notification"
     );
+
+    // A launched child resting on a raised ask notifies through its parent as a wait does.
+    let mut asker = agent("asker", AgentStatus::Success, false);
+    asker.parent_agent_id = Some(parent.agent_id.clone());
+    asker.parent_agent_kind = Some(parent.kind.clone());
+    asker.launch_depth = Some(1);
+    asker.name = Some("asker".to_owned());
+    asker.registered_at = Some(t0);
+    asker.last_activity = t1;
+    asker.raised_ask = Some(crate::agents::state::RaisedAsk {
+        ask_id: AskId::new(),
+        state: crate::agents::state::RaisedAskState::Open,
+        raised_at: t1,
+        basis_at: t1,
+        opened_at: Some(t1),
+        raised_by: None,
+        text: None,
+        brief: Some("Ship now?".into()),
+    });
+    let asker_pane = asker.pane.clone().unwrap();
+    let mut ask_episodes = UnreadEpisodes::default();
+    let mut ask_state = NotificationState::default();
+    let mut asked = frame(
+        vec![parent.clone(), asker],
+        vec![parent_pane.clone(), asker_pane],
+        Vec::new(),
+        t1,
+    );
+    let outcome = ask_episodes.reconcile(&mut asked, &marks, false);
+    assert_eq!(outcome.opened.len(), 1);
+    let notes = ask_state.evaluate(&asked, &outcome.opened, &prefs, 10_000);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].body.contains("@asker"), "{}", notes[0].body);
 
     // Refreshed Antigravity NativeWait (settle.at advances on every push): notifies once.
     let mut native_wait_child = agent("agy", AgentStatus::Running, false);

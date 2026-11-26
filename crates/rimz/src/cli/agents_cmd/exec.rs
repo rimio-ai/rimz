@@ -1447,7 +1447,9 @@ impl RunExecContext {
         else {
             return Ok(false);
         };
+        // An open raised ask waits for the user's answer in the child's pane.
         if child.holds_open_turn()
+            || child.raised_ask.is_some()
             || messages
                 .iter()
                 .any(|message| !message.status.is_terminal() && message.same_agent_card(child))
