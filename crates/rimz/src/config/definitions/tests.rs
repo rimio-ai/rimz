@@ -3784,8 +3784,9 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
             )
             .unwrap();
             let want = match (kind, default) {
-                ("claude" | "codex", Some(AutoCompactDefault::BuiltIn)) => Some(272_000),
-                ("antigravity", Some(AutoCompactDefault::BuiltIn)) => Some(372_000),
+                ("claude" | "codex" | "antigravity", Some(AutoCompactDefault::BuiltIn)) => {
+                    Some(272_000)
+                }
                 ("claude" | "codex" | "antigravity", Some(AutoCompactDefault::Tokens(n))) => {
                     Some(n)
                 }

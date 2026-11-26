@@ -111,7 +111,7 @@ These keys always take a string: a value that parses as another TOML type is wri
 | `theme.scheme`, and the shorthand `theme` | a bundled theme name or a path to an Alacritty TOML file |
 | `theme.glyphs.set` and the shorthand `theme.glyphs`; `theme.glyphs.<set>.<namespace>.<role>` | a glyph set name or glyph string |
 | `models.<kind>.<alias>` | the concrete model name a fresh launch pins for that alias |
-| `harness.auto_compact` | `off` or a token count from `100k` through `1M` (unset by default: `272k` on native-enforced kinds, `372k` on RimZ-enforced kinds); see [auto-compaction ceiling](../../guide/configuration.md#auto-compaction-ceiling) |
+| `harness.auto_compact` | `off` or a token count from `100k` through `1M` (unset by default: `272k` on native-enforced and RimZ-enforced kinds); see [auto-compaction ceiling](../../guide/configuration.md#auto-compaction-ceiling) |
 | `harness.smart_compact` | `off`, a token count (`258k`, the default), or a percentage (`70%`); fallback for [the mid-turn compaction reminder and compact-first delivery](../../guide/configuration.md#smart-compaction), overridden per role or profile |
 | `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); unset by default; see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |

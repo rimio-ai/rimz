@@ -4565,14 +4565,14 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some(AutoCompactDefault::BuiltIn),
             "md_agy",
             None,
-            Some("372000"),
+            Some("272000"),
         ),
         (Some(AutoCompactDefault::BuiltIn), "md_pi", None, None),
         (
             Some(AutoCompactDefault::BuiltIn),
             "md_claude",
             Some("antigravity"),
-            Some("372000"),
+            Some("272000"),
         ),
         (
             Some(AutoCompactDefault::BuiltIn),
@@ -4584,7 +4584,7 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some(AutoCompactDefault::BuiltIn),
             "md_pi",
             Some("antigravity"),
-            Some("372000"),
+            Some("272000"),
         ),
         (
             Some(AutoCompactDefault::BuiltIn),
@@ -4596,7 +4596,7 @@ fn auto_compact_resolves_per_enforcer_and_remaps_across_agent_switches() {
             Some(AutoCompactDefault::BuiltIn),
             "toml_claude",
             Some("antigravity"),
-            Some("372000"),
+            Some("272000"),
         ),
         (
             Some(AutoCompactDefault::BuiltIn),

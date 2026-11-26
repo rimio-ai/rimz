@@ -16,16 +16,14 @@ const DEFAULT_PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
 const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
 const TEAM_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags so a new context window continues without redoing work. This seat is a team member: on resume I reread the board, the stage files, and git, so point at them by path and section and copy nothing they hold. Keep only what this window alone knows: (1) facts, decisions, and drafts not yet filed, and the words of the user and teammates that shaped them, each tagged with the file and section it belongs in, so my first act on resume writes it there; (2) what is in flight: replies I wait on, messages I owe.";
 
-/// Default native auto-compaction window when `[harness] auto_compact` is unset.
-pub(crate) const NATIVE_AUTO_COMPACT_DEFAULT: u64 = 272_000;
-/// Default RimZ-enforced context ceiling when `[harness] auto_compact` is unset.
-pub(crate) const RIMZ_AUTO_COMPACT_DEFAULT: u64 = 372_000;
+/// Default auto-compaction level on every enforced kind when `[harness] auto_compact` is unset.
+pub(crate) const AUTO_COMPACT_DEFAULT: u64 = 272_000;
 
 /// Explicit machine-level `[harness] auto_compact` setting.
 ///
-/// Unset (`None` on [`HarnessConfig`]) resolves per enforcer: 272k for provider-native kinds and
-/// 372k for RimZ-enforced kinds. `Off` disables the machine default on both, and `Tokens` pins
-/// both to the configured count.
+/// Unset (`None` on [`HarnessConfig`]) resolves to 272k on every enforced kind, whether the
+/// provider or RimZ enforces it. `Off` disables the machine default, and `Tokens` pins it to the
+/// configured count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoCompactWindow {
     Off,
@@ -69,9 +67,9 @@ impl<'de> Deserialize<'de> for AutoCompactWindow {
 /// final kind is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoCompactDefault {
-    /// `[harness] auto_compact` is unset: 272k Native, 372k RimZ.
+    /// `[harness] auto_compact` is unset: 272k.
     BuiltIn,
-    /// `[harness] auto_compact` is explicitly pinned to a token count for both enforcers.
+    /// `[harness] auto_compact` is explicitly pinned to a token count.
     Tokens(u64),
 }
 
@@ -85,14 +83,10 @@ impl AutoCompactDefault {
     }
 
     pub fn resolve_for_kind(self, kind: &str) -> Option<u64> {
-        let definition = crate::agents::find_definition(kind)?;
-        let enforcer = crate::agents::auto_compact_enforcer(definition)?;
-        Some(match (self, enforcer) {
-            (Self::BuiltIn, crate::agents::AutoCompactEnforcer::Native) => {
-                NATIVE_AUTO_COMPACT_DEFAULT
-            }
-            (Self::BuiltIn, crate::agents::AutoCompactEnforcer::Rimz) => RIMZ_AUTO_COMPACT_DEFAULT,
-            (Self::Tokens(tokens), _) => tokens,
+        crate::agents::auto_compact_enforcer(crate::agents::find_definition(kind)?)?;
+        Some(match self {
+            Self::BuiltIn => AUTO_COMPACT_DEFAULT,
+            Self::Tokens(tokens) => tokens,
         })
     }
 }
@@ -528,8 +522,8 @@ pub struct HarnessConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_budget: Option<TurnCap>,
     /// Context ceiling for profiles whose chain and kind base set no `auto-compact`; unset
-    /// resolves to 272k on provider-native kinds and 372k on RimZ-enforced kinds, a count covers
-    /// both, and `off` disables the machine default.
+    /// resolves to 272k on every enforced kind, a count pins it, and `off` disables the machine
+    /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<AutoCompactWindow>,
     /// Remind a filling turn to compact itself, or compact before a message or

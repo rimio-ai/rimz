@@ -289,9 +289,8 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 ## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
 ## turn_budget = "3"              # cap every agent turn at this dollar amount
 # Auto-compact ceiling for profiles whose chain and kind base set no
-# auto-compact: unset uses 272k for provider-native kinds (Claude, Codex) and
-# 372k for RimZ-enforced kinds (Antigravity); "off" disables the default on
-# both; an explicit token count pins both.
+# auto-compact: unset uses 272k wherever the provider or RimZ enforces it;
+# "off" disables the default; an explicit token count pins it.
 # An engine switch remaps or drops this default silently where no enforcer exists.
 ## auto_compact = "272k"
 # Remind a filling turn to compact itself; also compact before messages/waits.
