@@ -64,7 +64,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or on Claude's auto-mode safety check returning no verdict, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume, or one on a model the provider refuses on that account, becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
 | `⢿` | working | running a turn, waiting on in-flight work, or running a background shell or script; active turns animate through braille frames (`⣾`, `⣽`, ...), while a resting turn uses the waiting head below | no |
-| `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child | no |
+| `☾` | sleeping | resting on a watch, a signal, or a timer, including through a child | no |
 | `○` | idle | alive, nothing in flight | no |
 
 `?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#glance-jump-answer)). A suffix always draws in these compact Unicode shapes, even when the column runs a configured [glyph set](../guide/theme.md#glyphs). A tab RimZ named after its agents goes back to the shell's name once they all exit; a tab you named yourself keeps its name.
@@ -79,7 +79,7 @@ A running agent can show a head in place of `⢿`. Whichever head it shows, it c
 |-------|------|---------|
 | `⠁` | thinking | the turn has not edited a file yet; a research turn that never edits stays here to the end |
 | `▇` | compacting | condensing its context window |
-| `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a command, check, PID, team, or peer agent, or a background shell or script; a waiting child replaces this head with `?`, and a launched child's provider park replaces it with `⏸︎`, or `!` once it can no longer resume |
+| `⢄` | waiting on handed-off work | delegated to running children; their entries are listed under the card; also a turn that ended waiting on a shell, team, or peer agent, or a background shell or script; a waiting child replaces this head with `?`, and a launched child's provider park replaces it with `⏸︎`, or `!` once it can no longer resume |
 
 Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations). On a card, each head takes the card's emphasis like the status glyph it replaces.
 
@@ -151,7 +151,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⧖` | waits the agent has armed |
 | `◷` | a timer wait |
 | `⌁` | a signal wait, or an awaited agent whose run ended and is reporting or that has no card |
-| working spinner, in violet | a live watch (command, check, PID, file), a background shell, or a background script |
+| working spinner, in violet | a running shell, a background shell, or a background script |
 | `▸ +3 done` / `▸ +3 more` | the last line of an open subagents and waits section, holding its finished subagents, launched agents and teams, and booked launches; each activation lists five more, newest finish first |
 | `✓ done (N)` | dimmed, on the section's title once nothing is in flight, at the right end or left of the subagents' cost: how many finished entries the section holds |
 | `▷` (Nerd Font: `󰃰`) | a booked launch that will start: the `▷ booked (N)` half, its mark in the violet of `⧉` and `⧖`, and each unfired entry, muted |
@@ -472,16 +472,15 @@ The count includes queued and claimed messages whose schedule has arrived, whose
 A card with waits uses the same entry layout:
 
 ```
-▌  ⧖ waits (5)                                       ▐
+▌  ⧖ waits (4)                                       ▐
 ▌    ◷ timer · in 12m                           ◔ 18m▐
-▌    ⣾ pid · 16776                              ◔  3m▐
-▌    ⣾ command · cargo                          ◔  4m▐
+▌    ⣾ shell · cargo                            ◔  4m▐
 ▌      cargo xtask gate --name foo_test              ▐
 ▌    ⌁ signal · pr.merged                       ●  1h▐
 ▌    ◷ stop · after 3m idle, in 1m              ◔  2m▐
 ```
 
-`⧉ subagents (N)` counts the children of the agent's current turn still in flight (without a verdict), both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md). A child belongs to the current turn when it was active since your latest prompt to the agent, or is a launched child still running. The turn ends when you send the agent a new prompt or run `/clear` or `/compact`; messages from other agents and RimZ's own deliveries leave it running, and so does a prompt sent while the agent's finished turn still has background work running. A child that finishes, and every child of an earlier turn, leaves the count for the done pile behind the section's `▸ +N done` line. The known cost of every child on the card, of any turn, running or finished, sits on the right wherever the line draws, so a line holding only waits, launches, or bookings still prices the finished children. It leaves the line only when a booked launch's [fix segment](#booked-launches) needs its room. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md), the agents it waits on that have no entry under `⧉` or `▶` (a peer another agent launched, a child of an earlier turn), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, the [workflow runs](../reference/cli/workflow.md) it started that have not yet reported their end, and, for Claude and Antigravity, the shell commands they left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`. A card whose agent [launched agents or teams](#launched-agents-and-teams) adds `▶ launched (N)` after the waits, and a card with [booked launches](#booked-launches) adds `▷ booked (N)` last, `▷ N` below 46 columns.
+`⧉ subagents (N)` counts the children of the agent's current turn still in flight (without a verdict), both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md). A child belongs to the current turn when it was active since your latest prompt to the agent, or is a launched child still running. The turn ends when you send the agent a new prompt or run `/clear` or `/compact`; messages from other agents and RimZ's own deliveries leave it running, and so does a prompt sent while the agent's finished turn still has background work running. A child that finishes, and every child of an earlier turn, leaves the count for the done pile behind the section's `▸ +N done` line. The known cost of every child on the card, of any turn, running or finished, sits on the right wherever the line draws, so a line holding only waits, launches, or bookings still prices the finished children. It leaves the line only when a booked launch's [fix segment](#booked-launches) needs its room. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot waits (the agent's [shells](../reference/cli/shell.md) and [watches](../reference/cli/watch.md), one-shot signals, and timers), the agents it waits on that have no entry under `⧉` or `▶` (a peer another agent launched, a child of an earlier turn), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, the [workflow runs](../reference/cli/workflow.md) it started that have not yet reported their end, and, for Claude and Antigravity, the shell commands they left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`. A card whose agent [launched agents or teams](#launched-agents-and-teams) adds `▶ launched (N)` after the waits, and a card with [booked launches](#booked-launches) adds `▷ booked (N)` last, `▷ N` below 46 columns.
 
 Selecting a card opens the section. Clicking the line opens or closes it and focuses the card's own live pane, even when one of its child panes is focused. The open or closed choice outranks selection and `card_density` until the agent's current turn ends, while the client view is retained, and follows the client view between tabs; then the section returns to its default, open when selected, held, or under `expanded` density. A card with no children, waits, launched agents or teams, or booked launches has no section, whatever was chosen. Every count on the line is of work in flight, and the line reads the same open or closed. With nothing in flight, a card draws no line unless its section is open, it is selected or held, or `expanded` density opens it; the line is then the done title: the kinds of work the done pile holds, in the line's order and with no counts, then the dimmed `✓ done (N)` pile size and, when one is known, the same subagents' cost the line carries, pinned right. At 46 columns and wider, where they fit, the kinds read `⧉ subagents · ▶ launched · ▷ booked`; otherwise they read `⧉ ▶ ▷`. Where even those do not fit they drop, then the cost drops, and `✓ done (N)` clips last. A selected, held, or `expanded` card whose section a click closed keeps the done title, so a click reopens it. In `compact` density, select the card first.
 
@@ -502,19 +501,17 @@ Each entry starts with its live state or wait icon, then who or what it names an
 | awaited agent | its live state glyph, animating as a subagent's does, or `▇` while it condenses its context, unless it is waiting, failed, or paused; `⌁` once its run ended and its report is on the way, or when it has no card | `coder#feat-x · store refactor`: the agent's profile, its named lane, and its card's activity text; `reviewer · completed, reporting` once its run ended; the profile alone without activity text, and `agent` alone when it has no card | time since its run started | never |
 | team | `⌁` | `team forge#feat-x · ◉ Review`: the team's lane clips before its name, and the stage never clips; `stage unknown` when its board is unavailable, and the `team` tag alone when the wait names no team instance | time since armed | never |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
-| PID | working spinner | `pid · 16776` | time since armed | never |
-| command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
-| check | working spinner | `check · test` (program name) | time since armed | full command, with the program path trimmed |
-| file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
+| shell | working spinner | `shell ·` its label, else program name (`shell · cargo`) | time since armed | full command, with the program path trimmed |
 | background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since the transcript step that backgrounded the command (Antigravity), else since RimZ first saw it | command when known, with the program path trimmed |
 | background script | working spinner | `shell ·` the script description, else `script`; listed once it has run 30 s, and not while the agent's open ask came from that script | time since RimZ first saw it | never |
 | signal | `⌁` | `signal · pr.merged` (selector) | time since armed | never |
+| watch | `⌁` | `when · pr=merged` (expression) | time since armed | never |
 | idle stop | `◷` | `stop · after 3m idle, in 1m`: the requested rest, then the time left or `due` while the agent rests and its clock runs | time since requested | never |
 
 Entries list in a fixed order:
 
 1. Subagents in flight: the current turn's children without a verdict, including paused, stalled, and background-work (`⋯ bg`) children, in the order they started. They are never paged. A child whose turn ended cleanly with background work still running stays in flight with `✓`, `⋯ bg`, and its runtime frozen at that turn end; ending its session finishes it at that finish instant, while reaping it rests it at idle in flight.
-2. Waits: the agents the card waits on, in wait order, then timers by due time, then watches, then background shells, then background scripts, then signals. A wait leaves the list when it fires or its job ends.
+2. Waits: the agents the card waits on, in wait order, then timers by due time, then shells, then background shells, then background scripts, then signals and watches. A wait leaves the list when it fires or its job ends.
 
 3. Launched agents and teams still running, as [launched agents and teams](#launched-agents-and-teams) lists them.
 4. Booked launches in flight, as [booked launches](#booked-launches) lists them.
@@ -563,7 +560,7 @@ Paged in beside a running child, on its column grid (from [the paged inert frame
 ▌             Haiku                                  ▐
 ```
 
-A subagent's `▤` glyph heats from green to red on the worse of window percent and window tokens when the child reports its window size, using the same bands as a card's context line. Without a reported window size, it heats on tokens alone. A running subagent's clock keeps its own quiet-age ramp over the configured stall window. A finished subagent's clock stays muted, and so does a wait's, since a wait is pending by design. A wait has no clock when its arm time is unknown. A subagent without metadata shows a single line; command and check waits show their command on a second line. Subagents never get a card of their own while their parent's card is visible. Which fields each provider reports for a child is in [sidebar internals](../internals/sidebar/sidebar.md#sub-agent-lists).
+A subagent's `▤` glyph heats from green to red on the worse of window percent and window tokens when the child reports its window size, using the same bands as a card's context line. Without a reported window size, it heats on tokens alone. A running subagent's clock keeps its own quiet-age ramp over the configured stall window. A finished subagent's clock stays muted, and so does a wait's, since a wait is pending by design. A wait has no clock when its arm time is unknown. A subagent without metadata shows a single line; a shell shows its command on a second line. Subagents never get a card of their own while their parent's card is visible. Which fields each provider reports for a child is in [sidebar internals](../internals/sidebar/sidebar.md#sub-agent-lists).
 
 ### Booked launches
 
@@ -688,18 +685,17 @@ A sleeping card names its first sleeping wait in the description:
 | wait | description |
 |------|-------------|
 | timer | `wakes in 12m`, then `wakes now` |
-| PID | `wakes after pid 16776` |
-| command or check | `wakes after <command>` |
+| shell | `wakes after <command>` |
 | background script, with no working wait | `wakes after <description>`, else `wakes after script` |
-| file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
 | signal | `wakes on pr.merged` |
+| watch | `wakes when pr=merged` |
 | subagent | `wakes when @calm-fox reports` |
 | team | `wakes when forge#feat-x reaches Done` |
 | workflow | `wakes when workflow review ends`, for a run the agent started without `--detach`, until its report is sent |
 
 A subagent wait on a child listed under `⧉` draws no separate entry and does not count in `⧖`, since the child's own entry stands for it. Any other agent the card waits on, a peer launched with `rimz agents` or a child of an earlier turn, counts in `⧖` and draws an entry with that agent's live state, profile, named lane and activity text; a click on it focuses that agent's live pane, and an agent with no card in the sidebar draws the entry with the static `⌁` lead and the word `agent`. A team wait counts in `⧖` and draws a static `team forge#feat-x · ◉ Review` entry with its elapsed age, or `stage unknown` when its board is unavailable, unless the card launched that team, which then lists only under [launched agents and teams](#launched-agents-and-teams).
 
-`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell or script instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting (including a current waiting subagent), failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+`☾` replaces only an idle or done status, for watches, signals, and timers, including a child's sleeping wait. A shell, an unfinished team, a working child, or a listed background shell or script instead keeps the card working. After the turn ends, that card shows the `⢄` waiting head and still counts as working in the cockpit. A working-through-wait card names its first working wait. Waiting (including a current waiting subagent), failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
 Hibernation does not change a card's state, glyph, ranking, or unread result. A frozen agent keeps the same working or sleeping wait classification, or its idle or done state when nothing is pending. `rimz agents show` carries the hibernation details.
 

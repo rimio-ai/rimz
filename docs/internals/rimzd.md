@@ -117,7 +117,7 @@ The broker stops accepting, rejects queued requests after taking the child's loc
 
 The Claude wrapper inherits cwd, environment and stdio and starts Claude in the wrapper's foreground process group, so terminal input and `Ctrl-C` reach the child. The wrapper ignores `SIGINT`; each `SIGHUP` and `SIGTERM` delivery is relayed to the child's pid, followed by an unbounded wait and the child's exit code (1 for signal death). A build move uses the same descendant-aware stop helper as content slots, without the thaw: `SIGHUP` to Claude and its remembered descendants, up to ten seconds of grace, then `SIGKILL` to survivors and their descendants before exec and fresh spawn. The grace allows Claude to shut down cleanly. One probe with Claude Code 2.1.312 on a logged-in Max account backs that for the host: on a build move the connected host, hosting no session, exited within about 2.2 s of `rimz reload` returning, with no `SIGKILL`, and the fresh host connected. A move while the host holds a session was not probed; a pane close with one hosted session left no process behind. An open phone session drops on reload.
 
-Pre-change panes never follow. After upgrading, close the whole `rimzd` tab and run `rimz sidebar repair` once to recreate them. A process deliberately launched from another build stays on it until the next record change; neither build following nor reload changes agent wrappers, loop runs, or `rimz wait`.
+Pre-change panes never follow. After upgrading, close the whole `rimzd` tab and run `rimz sidebar repair` once to recreate them. A process deliberately launched from another build stays on it until the next record change; neither build following nor reload changes agent wrappers, loop runs, or `rimz shell` watchers.
 
 ## Reconciliation
 

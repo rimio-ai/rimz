@@ -25,7 +25,7 @@ Guides teach the stable, dogfooded surface. An early or still-shifting surface (
 | `insight.md` | What every token and dollar figure means, how each is calculated, and the scopes and windows. |
 | `configuration.md` | Every config key and its default (the `loop.toml` keys included), choosing and binding model tiers, the `~/.rimz` layout, and rebirth resume. |
 | `theme.md` | Every `[theme]` key table, only because `docs/reference/` has no theming page: create one and the slot table, the display keys, and the glyph roles move there, leaving the guide the workflow. |
-| `loops.md` | Scheduled work, plus `rimz wait` for agents and the four hands-off reflexes (auto-continue, auto-redeem, idle compaction, smart compaction). |
+| `loops.md` | Scheduled work, plus `rimz shell` and `rimz watch` for agents and the four hands-off reflexes (auto-continue, auto-redeem, idle compaction, smart compaction). |
 | `workflows.md` | Workflow runs, except the `context.json` field table, which lives in `docs/reference/cli/workflow.md`. |
 | `troubleshooting.md` | The symptom-to-fix mapping and nothing else. An entry states the cause in a sentence or two, names the command, and links the guide that owns the model. |
 | `security.md` | The threat model and nothing else. |
@@ -39,7 +39,7 @@ The left column is the word to use. A synonym for one of these is a bug, and a t
 | --- | --- |
 | account | A provider login. |
 | model tier | A capability level with an ordered list of models in machine config. |
-| park | An agent or run held rather than progressing: a crossed cap, a provider rate limit, spend limit, or overload, or a wake that never arrived. The sidebar's `⏸` covers the limit cases only. A message parks when it is held for the recipient's next turn boundary, the opposite of `--steer`. Sleeping is a separate state: an agent resting on a timer, signal, condition, or file watch, including through a child. |
+| park | An agent or run held rather than progressing: a crossed cap, a provider rate limit, spend limit, or overload, or a wake that never arrived. The sidebar's `⏸` covers the limit cases only. A message parks when it is held for the recipient's next turn boundary, the opposite of `--steer`. Sleeping is a separate state: an agent resting on a watch or a signal, including through a child. |
 | reporting hooks | What `rimz hooks install` writes into an agent's own config. |
 | the run | What `rimz agents -p` or a scheduled task starts. |
 | channel, worktree | The two ways the fleet groups. Never "lane". |

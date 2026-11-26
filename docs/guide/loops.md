@@ -131,7 +131,7 @@ emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 task
   smoke
 ```
 
-A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits fires the subscribed tasks itself, so no daemon or running agent is needed. `emit` needs a room that has been started once for the project, but the room does not have to be open: a fire opens it before its command runs. The built-in `ci`, `pr`, and `trunk` signals are different, since the sidebar produces them: they arrive only while the room is open. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields `--match` filters on and the trigger line prints as `key: value`.
+A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits fires the subscribed tasks itself, so no daemon or running agent is needed. `emit` needs a room that has been started once for the project, but the room does not have to be open: a fire opens it before its command runs. The built-in `ci`, `pr`, and `trunk` signals are different, since the sidebar produces them: they arrive only while the room is open. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `shell`, `watch`, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields `--match` filters on and the trigger line prints as `key: value`.
 
 A task subscribes to your own names as it does to RimZ's. The `smoke` task that `emit` fired above was added with:
 
@@ -170,7 +170,7 @@ To see what a condition reads now without adding a task, run `rimz loop explain`
 rimz loop explain 'ci=passed && pr=open'
 ```
 
-It prints each term's reading and the overall result, and exits `0` when the condition is true. Run from a linked worktree, it reads that worktree's board and pull request, as a wait you arm there does.
+It prints each term's reading and the overall result, and exits `0` when the condition is true. Run from a linked worktree, it reads that worktree's board and pull request, as a watch you arm there does.
 
 ### One task for every worktree
 
@@ -270,7 +270,7 @@ cron = "0 9 * * mon"
 
 A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `dir`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
 
-A task that fires once (`--at`, `--in`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the waits agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
+A task that fires once (`--at`, `--in`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the shells and watches agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
 
 `--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat (`--every`, `--cron`, or `--signal` with `--repeat`) and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so it runs only when both of these hold:
 
@@ -287,21 +287,19 @@ A shell task's fire runs its command as one [workflow run](./workflows.md#start-
 
 ## Wake a running agent
 
-The previous sections schedule work from your shell. An agent needs its own alarm. An `until nc -z localhost 3000; do sleep 1; done` loop in its shell tool holds its turn open while it waits for a deploy, and the follow-up otherwise falls to you. `rimz wait` lets the agent arm an alarm, end its turn, and get the result back in the same conversation:
+The previous sections schedule work from your shell. An agent needs its own alarm. An `until nc -z localhost 3000; do sleep 1; done` loop in its shell tool holds its turn open while it waits for a deploy, and the follow-up otherwise falls to you. `rimz shell` runs that loop, or any command, outside the agent's turn, and `rimz watch` waits on a state RimZ already reads (CI, a pull request, a team stage, a usage window). Either lets the agent end its turn and get the result back in the same conversation:
 
 ```sh
-rimz wait --in 30m
-rimz wait --at 14:30
-rimz wait --when pr=merged
-rimz wait --pid 16776
-rimz wait --check 'nc -z localhost 3000'
-rimz wait --file build.log --grep 'READY'
-rimz wait --run 'gh run watch --exit-status'
+rimz shell -- 'until nc -z localhost 3000; do sleep 1; done'
+rimz shell -- 'gh run watch --exit-status'
+rimz shell -- 'tail -n0 -F build.log | grep -m1 -F READY'
+rimz watch pr=merged
+rimz watch 'window.5h.left>=50'
 ```
 
-An agent runs these from its own shell, and the wait wakes that agent alone. RimZ refuses a wait from a shell that is not an agent's. A watched command runs in a detached process, and the wake message gives its exit status, the elapsed time, and the path of a file holding its full output. While the agent sleeps, RimZ can send short keepalive pings so the provider's prompt cache is still warm at the wake. [Configuration](./configuration.md#idle-compaction) owns those settings.
+An agent runs these from its own shell, and each wakes that agent alone. RimZ refuses one from a shell that is not an agent's. A shell's command runs in a detached process, and the wake message gives its exit status, the elapsed time, and the path of a file holding its full output. A watch runs no process: the room's scheduler reads the expression on each tick. While the agent sleeps, RimZ can send short keepalive pings so the provider's prompt cache is still warm at the wake. [Configuration](./configuration.md#idle-compaction) owns those settings.
 
-A wait lasts until it fires, is canceled, or its agent ends. `rimz agents restart` and `rimz agents molt` keep it. `rimz wait list` shows an agent's own waits, and `rimz loop list` folds every agent's waits under WAKE-UPS. A `pr` or `ci` wait needs the room's sidebar to read the forge: with the room closed it reads `readings paused (room closed)`, and in a checkout whose `origin` is on no forge RimZ reads (GitHub through `gh`, Gitea through `tea`) the wait refuses to arm, or, when that turns out only after arming, says `no supported forge for this checkout` and counts under NEEDS YOU. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
+A shell or watch lasts until it fires, is canceled, or its agent ends. `rimz agents restart` and `rimz agents molt` keep it. `rimz shell list` and `rimz watch list` show an agent's own, and `rimz loop list` folds every agent's under WAKE-UPS. A `pr` or `ci` watch needs the room's sidebar to read the forge: with the room closed it reads `readings paused (room closed)`, and in a checkout whose `origin` is on no forge RimZ reads (GitHub through `gh`, Gitea through `tea`) the watch refuses to arm, or, when that turns out only after arming, says `no supported forge for this checkout` and counts under NEEDS YOU. The [shell](../reference/cli/shell.md) and [watch](../reference/cli/watch.md) references own every flag and the exact message each delivers.
 
 To wake a teammate on a clock instead, make the task's command a [message](./messaging.md):
 
@@ -382,7 +380,7 @@ Every agent CLI compacts on its own when the context hits its ceiling, wherever 
 Smart compaction watches each agent's context against a token line and acts at two moments:
 
 - **During a turn, RimZ reminds the agent to compact itself.** Once per compaction or `/clear`, it adds a note to the agent's turn (on its next tool result, or on Antigravity as a system message before its next model call), and once more if the context climbs 10% past the line: if this turn finishes the agent's work, just finish and rest; otherwise, pause, write down what is left to do, and run `rimz agents compact @me` (or the [`self_compact`](../reference/cli/mcp.md) tool, where the agent's launch serves RimZ's `rimz-control` tools). The agent picks the moment, and [`rimz agents compact`](../reference/cli/agents.md#compact) compacts it when the turn ends, ahead of any prompts waiting in its queue, and then sends `continue` if nothing else is waiting. When a compaction is already queued for the agent, such as a team hand-off's, the agent's request joins it instead of queuing a second, so one compaction runs and the `continue` follows it. An agent that ignores the reminder, as a Claude model under Antigravity does, is left to its `auto-compact` ceiling (enforced natively by the provider, or by RimZ on Antigravity and Pi). Interrupting the agent, `/clear`, or a prompt you type cancels the continue, and so does anything that sets the agent working again after the compaction: a waiting message, a teammate's message, or an automatic compaction in the middle of a turn, which also cancels the queued compaction.
-- **Before a message reaches a resting agent above the line, RimZ compacts first.** A `rimz message` or a scheduled wait then lands in the fresh context.
+- **Before a message reaches a resting agent above the line, RimZ compacts first.** A `rimz message` or a shell's or watch's wake then lands in the fresh context.
 
 The line is `harness.smart_compact`, default `258k` tokens. Set a token count like `200k`, a percentage like `70%`, or `off`. A profile or team role can set its own `smart-compact`, and [`rimz agents tune @coder smart-compact 70%`](../reference/cli/agents.md#tune) overrides it for one session. While the account's usage window is spent and no paid extra usage carries it, RimZ sends no reminder. The `auto-compact` ceiling (provider-native or RimZ-enforced) stays as the backstop. [Configuration](./configuration.md#smart-compaction) lists the adapters that skip it, and [messaging](./messaging.md#compact-before-the-message-lands) gives the delivery rules.
 
@@ -418,8 +416,8 @@ Leave the room open, detached on your workstation or on a server you reach with 
 - [Workflows](./workflows.md): the run every fire starts, and the graph to write when one command is not enough.
 - [Budgets](./budget.md): the dollar caps that bound hands-off work.
 - [Notifications](./notifications.md): push routes and handlers that act on what a loop cannot handle alone.
-- [Messaging](./messaging.md): the delivery path waits use, `--schedule` for one-off reminders, and smart compaction in full.
-- [Loop CLI](../reference/cli/loop.md), [Wait CLI](../reference/cli/wait.md), and [Events CLI](../reference/cli/events.md): every flag, the watcher, and the signal grammar.
+- [Messaging](./messaging.md): the delivery path shells and watches use, `--schedule` for one-off reminders, and smart compaction in full.
+- [Loop CLI](../reference/cli/loop.md), [Shell CLI](../reference/cli/shell.md), [Watch CLI](../reference/cli/watch.md), and [Events CLI](../reference/cli/events.md): every flag, the watcher, and the signal grammar.
 - [Configuration](./configuration.md): the `[resume]` and `[harness]` keys.
 - [Security and trust](./security.md): bypass flags and project trust.
 - [Loop internals](../internals/harness/loops.md): the clock, the state files, and the run log, for reading the code.

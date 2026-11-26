@@ -1202,7 +1202,7 @@ path = "crates/rimz/src/child_process.rs"
 # The temp-environment rule moves here from mux: both save-variable names, the
 # decision type, and its function serve mux, launch compile, and the sandbox (+4).
 # The `Command` applier serves the browser opener and the synchronous loop run, and
-# the unrestored reaping entry serves the wait watcher alone (+2).
+# the unrestored reaping entry serves the shell watcher alone (+2).
 # Same-PID wrapper re-exec adopts its existing provider by pid (+1).
 # The wrapper and worker creation share the native cleanup-signal mask (+3).
 # LSP and SSH supervisors share the bounded stderr tail and its two methods (+3).
@@ -1819,7 +1819,7 @@ allowed-dependencies = [
 # RuntimePaths::palette_last_launch_path owns the palette's last-launch record (+1).
 # notes_dir roots the home-wide note store, and write_bytes_new_mode publishes a note without taking a taken name (+2).
 # lock::probe opens a lock file for write without locking it, for the workflow start probe (+1).
-# StatePaths::wait_watch_log gives every wait watcher one room log for its own stderr (+1).
+# StatePaths::wait_watch_log gives every shell watcher one room log for its own stderr (+1).
 # StatePaths::{finished_workflow, finished_workflow_runs} and disk::paths::recorded_rooms_under place and find finished run homes (+3).
 # WorkflowPaths::{history, relocate} name a run's saved history and map its journal's live paths onto its current home (+2).
 # RuntimePaths::bookings_path classes the sidebar's loop-bookings lane cache (+1).
@@ -12448,7 +12448,7 @@ reason = "Pass 28e: provenance guards enforce the self-wait contract (a delay, a
 [[verdict]]
 kind = "item"
 key = "harness::schedule::arm::DeliverySpec"
-reason = "Pass 28e contradicts the pass-28 dossier's deepen candidate: loop add, wait add and team arming each supply a different subset of caller-owned inputs to one arm_delivery call. This is use, not assembly; provenance constructors need all loop options as public fields or another options struct, reduce no types and reach outside the pass into cli/wait."
+reason = "Pass 28e contradicts the pass-28 dossier's deepen candidate: loop add, harness::schedule::wait::arm and team arming each supply a different subset of caller-owned inputs to one arm_delivery call. This is use, not assembly; provenance constructors need all loop options as public fields or another options struct, reduce no types and reach outside the pass into harness::schedule::wait."
 
 [[verdict]]
 kind = "item"

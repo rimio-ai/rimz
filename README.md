@@ -77,7 +77,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 - `rimz agents -p` is `claude -p` for every agent that can run headless, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows.
 - `rimz loop` runs a command on a clock (interval, cron, or once at a time), on a signal, or when a condition holds: a test suite, a script, or a `rimz agents` launch that starts an agent. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
-- `rimz wait` lets an agent arm its own timer, clock time, state condition, command, process, polled check, or file watch and end its turn instead of sleeping.
+- `rimz shell` lets an agent run a command outside its turn and wake on its exit, and `rimz watch` lets it wake once a state condition reads true, so it ends its turn instead of sleeping.
 - A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction reminds a filling turn to compact itself, after which RimZ continues it, so agents keep working while you are gone.
 - Dollar budgets cap one turn, one agent, the room, or a provider account. A turn that crosses a cap is stopped and parked.
 - Notification handlers run your own command the moment a row needs eyes: a push to your phone, or a script that answers the routine prompt for you.
@@ -255,14 +255,13 @@ rimz loop add watchdog --every 15m -- \
     sh -c 'cargo test || rimz agents codex "Fix the failing test."'
 ```
 
-**Wait without a pane.** [`rimz wait`](./docs/reference/cli/wait.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the delay elapses, the command finishes, or the file changes, RimZ delivers a message back into the same conversation naming what fired and on what.
+**Wait without a pane.** [`rimz shell`](./docs/reference/cli/shell.md) and [`rimz watch`](./docs/reference/cli/watch.md) are the alarms an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the command exits or the condition reads true, RimZ delivers a message back into the same conversation naming what fired and on what.
 
 ```sh
-rimz wait --in 30m                           # one-shot wait after a delay
-rimz wait --check 'nc -z localhost 3000'     # poll until the service answers
-rimz wait --file build.log --grep 'READY'    # a new matching line in a file
-rimz wait --pid 16776                        # an existing process exits
-rimz wait --run 'gh run watch --exit-status' # a command exits, with its output in the message
+rimz shell -- 'gh run watch --exit-status'                     # a command exits, with its output file in the message
+rimz shell -- 'until nc -z localhost 3000; do sleep 1; done'   # poll until the service answers
+rimz shell -- 'tail -n0 -F build.log | grep -m1 -F READY'      # a new matching line in a file
+rimz watch pr=merged                                           # the checkout's pull request merges
 ```
 
 **Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#fire-on-a-signal) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, agent and team lifecycle signals from what the room already watches, and workflow run signals as each run moves and ends, and anything can emit its own. Narrow a task to one branch with `--match branch=<name>`. On GitHub, `pr.behind`, `pr.conflicted`, `pr.queued`, and `pr.dequeued` also report a PR falling behind its base, gaining conflicts, or entering and leaving the merge queue. The [loop reference](./docs/reference/cli/loop.md#built-in-signals) lists when each signal fires and what it carries.
