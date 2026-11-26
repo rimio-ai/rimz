@@ -777,7 +777,7 @@ enum Subcmd {
     /// not.
     #[command(hide = true)]
     Mod(statusline::ModArgs),
-    /// RimZ's MCP server for Claude, Codex, and Antigravity launches
+    /// RimZ's MCP server for Claude, Codex, Antigravity, and OpenCode
     Mcp(mcp::McpArgs),
     /// Install or uninstall agent hooks.
     ///

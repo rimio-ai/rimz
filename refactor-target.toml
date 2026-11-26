@@ -431,7 +431,7 @@ upward-dependencies = [
 # code-mode to its effective value; LaunchSpec::rendered_fast and CodeModeSwitch::exclude_off
 # read and render the off switches (+5).
 # McpLaunch, McpServer, LaunchCapability::{takes_mcp_servers, mcp_server_args} hand RimZ's MCP
-# server and a profile's mcps list to the Claude and Codex launch argv (+4).
+# server and a profile's mcps list to each launch that takes the server (+4).
 # account::{KnownLogin, ACCOUNTS_TTL}, ProviderRecord::known_login and ProviderStatus::at_launch
 # keep the last answered login across failed checks for the report and launch routing (+4).
 # AccountStamps, merge_account_reading and ProviderRecord::merge_reading are the one merge every
@@ -524,7 +524,9 @@ upward-dependencies = [
 # AgentContext::latest_unstopped_rest bounds a request a rested turn left behind (+2).
 # tools::grants_tool and tools::tool_preset answer whether a tools list grants a tool on a kind,
 # its kind's declared preset included, for the definition loader and the subagent policy (+2).
-surface-budget = 1401
+# capabilities::LaunchEnvEdit hands finalize_launch_env the launch's env edits and its McpLaunch,
+# so OpenCode writes RimZ's server into the one inline config the other edits share (+1).
+surface-budget = 1402
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -974,6 +976,11 @@ reason = "An adapter's unapplied load mark travels on the compiled process to ex
 kind = "item"
 key = "agents::capabilities::McpServer"
 reason = "Launch planning builds the server's command, arguments, grant, and spawn env names for each adapter."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchEnvEdit"
+reason = "Launch compilation hands the adapter's final env hook its edits and the launch's MCP server in one value."
 
 [[verdict]]
 kind = "item"

@@ -162,6 +162,29 @@ fn opencode_activity_filter_and_launch_commands_build() {
     );
 }
 
+/// One OpenCode launch's final environment edit over `inherited`, serving no MCP server.
+fn finalize(
+    inherited: &BTreeMap<String, String>,
+    env: &mut BTreeMap<String, String>,
+    disable_native_subagents: bool,
+    system_prompt_file: Option<&Path>,
+    code_mode: Option<bool>,
+    release_code_mode: bool,
+) -> Vec<String> {
+    OpencodeAdapter.finalize_launch_env(
+        inherited,
+        env,
+        &mut std::collections::BTreeSet::new(),
+        &LaunchEnvEdit {
+            disable_native_subagents,
+            system_prompt_file,
+            code_mode,
+            release_code_mode,
+            mcp: None,
+        },
+    )
+}
+
 #[test]
 fn composed_system_prompt_preserves_config_with_or_without_delegation() {
     let raw = r#"{/* JSONC */"theme":"dark","plugins":"untouched",
@@ -176,7 +199,7 @@ fn composed_system_prompt_preserves_config_with_or_without_delegation() {
         };
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw)]);
         let mut env = BTreeMap::new();
-        let warnings = OpencodeAdapter.finalize_launch_env(
+        let warnings = finalize(
             &inherited,
             &mut env,
             disable_delegation,
@@ -219,7 +242,7 @@ fn composed_system_prompt_replaces_inherited_system_with_one_warning() {
             json!({"agents":{"build":{"system":system}}}).to_string(),
         )]);
         let mut env = BTreeMap::new();
-        let warnings = OpencodeAdapter.finalize_launch_env(
+        let warnings = finalize(
             &inherited,
             &mut env,
             false,
@@ -275,7 +298,7 @@ fn malformed_prompt_and_delegation_config_warns_once_and_keeps_both_edits() {
     ] {
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
-        let warnings = OpencodeAdapter.finalize_launch_env(
+        let warnings = finalize(
             &inherited,
             &mut env,
             true,
@@ -318,8 +341,7 @@ fn unmanaged_core_config_is_untouched_without_prompt_or_delegation() {
             .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
             .unwrap_or_default();
         let mut env = BTreeMap::new();
-        let warnings =
-            OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None, None, false);
+        let warnings = finalize(&inherited, &mut env, false, None, None, false);
         actual.push((env.contains_key("OPENCODE_CONFIG_CONTENT"), warnings));
     }
     assert_eq!(actual, vec![(false, Vec::<String>::new()); 3]);
@@ -335,7 +357,7 @@ fn code_mode_config(
         .map(|raw| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]))
         .unwrap_or_default();
     let mut env = BTreeMap::new();
-    let warnings = OpencodeAdapter.finalize_launch_env(
+    let warnings = finalize(
         &inherited,
         &mut env,
         false,
@@ -465,14 +487,511 @@ fn code_mode_unset_takes_out_only_the_member_an_outer_launch_wrote() {
     // A value the launch env sets itself (trusted `[[agents]] env`) is the user's too.
     let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), on.into())]);
     let mut env = inherited.clone();
-    let warnings =
-        OpencodeAdapter.finalize_launch_env(&inherited, &mut env, false, None, None, true);
+    let warnings = finalize(&inherited, &mut env, false, None, None, true);
     assert_eq!(
         (
             env.get("OPENCODE_CONFIG_CONTENT").map(String::as_str),
             warnings
         ),
         (Some(on), Vec::new())
+    );
+}
+
+/// What one OpenCode launch that takes RimZ's MCP server writes over `inherited`: the composed
+/// inline config, the RimZ plugin's per-tool loads, the variables it unsets, its warnings, and
+/// each mark it reports unapplied.
+#[derive(Debug, PartialEq)]
+struct Served {
+    config: Option<Value>,
+    loads: Option<Value>,
+    marker: Option<Value>,
+    unset: std::collections::BTreeSet<String>,
+    warnings: Vec<String>,
+    unapplied: Vec<String>,
+}
+
+/// One OpenCode launch serving `served` (`None`: RimZ's server is off) with the `mcps` list,
+/// its routine grant, and code mode, over `inherited` and the launch env `env`.
+fn serve(
+    inherited: &BTreeMap<String, String>,
+    mut env: BTreeMap<String, String>,
+    served: Option<&[crate::mcp::catalog::Capability]>,
+    mcps: Option<&[&str]>,
+    grant: bool,
+    code_mode: Option<bool>,
+) -> Served {
+    let mcps: Option<Vec<crate::config::McpName>> =
+        mcps.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+    let launch = McpLaunch {
+        server: served.map(|only| McpServer {
+            command: PathBuf::from("/room/rimz"),
+            args: crate::mcp::catalog::serve_args(only),
+            grant,
+            env_names: Default::default(),
+        }),
+        mcps: mcps.as_deref(),
+        granted: false,
+        login_env: inherited,
+        rendered_tools: None,
+        code_mode,
+    };
+    let mut unset = std::collections::BTreeSet::new();
+    let warnings = OpencodeAdapter.finalize_launch_env(
+        inherited,
+        &mut env,
+        &mut unset,
+        &LaunchEnvEdit {
+            disable_native_subagents: false,
+            system_prompt_file: None,
+            code_mode,
+            release_code_mode: false,
+            mcp: Some(&launch),
+        },
+    );
+    let (mcp_warnings, unapplied) = OpencodeAdapter
+        .mcp_server_args(
+            &launch,
+            (Path::new("/work"), Path::new("/work")),
+            &mut Vec::new(),
+            &mut None,
+        )
+        .unwrap();
+    assert_eq!(mcp_warnings, Vec::<String>::new());
+    let json = |key: &str| env.get(key).map(|raw| serde_json::from_str(raw).unwrap());
+    Served {
+        config: json("OPENCODE_CONFIG_CONTENT"),
+        loads: json("RIMZ_LAUNCH_MCP_TOOLS"),
+        marker: json("RIMZ_OPENCODE_MCP_CONFIG"),
+        unset,
+        warnings,
+        unapplied: unapplied.iter().map(ToString::to_string).collect(),
+    }
+}
+
+fn config_env(raw: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())])
+}
+
+const LSP_WAIT: &[crate::mcp::catalog::Capability] = &[
+    crate::mcp::catalog::Capability::Lsp,
+    crate::mcp::catalog::Capability::Wait,
+];
+
+fn rimz_record(codemode: Option<bool>) -> Value {
+    let mut record = json!({
+        "type": "local",
+        "command": ["/room/rimz", "mcp", "serve", "--only", "rimz-lsp", "--only", "rimz-wait"],
+    });
+    if let Some(codemode) = codemode {
+        record["codemode"] = codemode.into();
+    }
+    record
+}
+
+#[test]
+fn opencode_takes_rimz_server_through_its_inline_config() {
+    assert!(OpencodeAdapter.takes_mcp_servers());
+    assert!(!OpencodeAdapter.serves_mcp_from_launch_env());
+}
+
+/// The `rimz` record and the routine grant join the composed inline config beside every
+/// member the user set, their own servers, policies, and permission rules included.
+#[test]
+fn rimz_record_and_grant_join_the_inline_config_keeping_the_users_members() {
+    let user = json!({
+        "theme": "dark",
+        "mcp": {"servers": {"github": {"type": "local", "command": ["gh"]}}},
+        "policies": [{"action": "provider.use", "resource": "x", "effect": "deny"}],
+        "permissions": [{"action": "bash", "resource": "*", "effect": "ask"}],
+    });
+    // One rule per served tool, so no rule matches a user server's tool (`rimz_docs_x`).
+    let grant: Vec<Value> = ["lsp", "wait", "tasks", "join", "stop", "guide"]
+        .map(|tool| json!({"action": format!("rimz_{tool}"), "resource": "*", "effect": "allow"}))
+        .into();
+    let served = serve(
+        &config_env(&user.to_string()),
+        BTreeMap::new(),
+        Some(LSP_WAIT),
+        None,
+        true,
+        None,
+    );
+    let mut expected = user.clone();
+    expected["mcp"]["servers"]["rimz"] = rimz_record(None);
+    expected["permissions"]
+        .as_array_mut()
+        .unwrap()
+        .extend(grant.clone());
+    assert_eq!(served.config, Some(expected));
+    assert_eq!(served.warnings, Vec::<String>::new());
+    assert_eq!(served.loads, None);
+    assert!(served.unset.contains("RIMZ_LAUNCH_MCP_TOOLS"));
+    assert_eq!(
+        served.marker,
+        Some(json!({"server": rimz_record(None), "permissions": grant.clone()}))
+    );
+
+    // Without the grant RimZ writes no permission rule.
+    let served = serve(
+        &BTreeMap::new(),
+        BTreeMap::new(),
+        Some(LSP_WAIT),
+        None,
+        false,
+        None,
+    );
+    assert_eq!(
+        served.config,
+        Some(json!({"mcp": {"servers": {"rimz": rimz_record(None)}}}))
+    );
+
+    // A malformed inherited value warns once and the launch still serves.
+    let mut actual = Vec::new();
+    for (raw, problem, member, shape) in [
+        ("not JSON", "is not valid JSONC", "mcp", "an object"),
+        ("[]", "is not a JSON object", "mcp", "an object"),
+        (
+            r#"{"mcp":[]}"#,
+            "sets mcp to a value that is not an object",
+            "mcp",
+            "an object",
+        ),
+        (
+            r#"{"mcp":{"servers":1}}"#,
+            "sets mcp.servers to a value that is not an object",
+            "mcp.servers",
+            "an object",
+        ),
+        (
+            r#"{"permissions":{}}"#,
+            "sets permissions to a value that is not an array",
+            "permissions",
+            "an array",
+        ),
+    ] {
+        let served = serve(
+            &config_env(raw),
+            BTreeMap::new(),
+            Some(LSP_WAIT),
+            None,
+            true,
+            None,
+        );
+        actual.push((
+            served.config,
+            served.warnings
+                == [format!(
+                    "OPENCODE_CONFIG_CONTENT {problem}; this launch ignored the configured \
+                     value; set it to a JSON object whose {member} is {shape}, or unset it"
+                )],
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (
+                Some(
+                    json!({"mcp": {"servers": {"rimz": rimz_record(None)}}, "permissions": grant})
+                ),
+                true
+            );
+            5
+        ]
+    );
+}
+
+/// A launch that serves nothing and writes no list leaves the inherited value, valid or not,
+/// untouched, and drops an inherited plugin variable.
+#[test]
+fn a_launch_that_serves_nothing_leaves_the_inline_config_untouched() {
+    for raw in [None, Some("not JSON"), Some(r#"{"theme":"dark"}"#)] {
+        let mut inherited = raw.map(config_env).unwrap_or_default();
+        inherited.insert("RIMZ_LAUNCH_MCP_TOOLS".into(), r#"{"lsp":"native"}"#.into());
+        let served = serve(&inherited, BTreeMap::new(), None, None, true, None);
+        assert_eq!(served.config, None, "{raw:?}");
+        assert_eq!(served.loads, None, "{raw:?}");
+        assert!(served.unset.contains("RIMZ_LAUNCH_MCP_TOOLS"), "{raw:?}");
+        assert_eq!(served.warnings, Vec::<String>::new(), "{raw:?}");
+        let served = serve(
+            &inherited,
+            BTreeMap::new(),
+            None,
+            Some(&["*", "github"]),
+            true,
+            None,
+        );
+        assert_eq!(served.config, None, "{raw:?}");
+    }
+}
+
+/// Each cell of the mark mapping: the record's `codemode`, the plugin's per-tool loads, and the
+/// marks reported unapplied, for each code mode.
+#[test]
+fn marks_map_to_the_record_and_the_plugins_tool_loads_per_code_mode() {
+    let tools: Vec<&str> = crate::mcp::catalog::tools_for(LSP_WAIT)
+        .map(|tool| tool.name)
+        .collect();
+    let every = |load: &str, except: &[&str]| {
+        Some(Value::Object(
+            tools
+                .iter()
+                .filter(|tool| !except.contains(tool))
+                .map(|tool| ((*tool).to_owned(), Value::from(load)))
+                .collect(),
+        ))
+    };
+    let off = "code-mode off sends every RimZ tool native, and OpenCode has no tool search \
+               outside `execute`";
+    let unapplied = |entry: &str| format!("the mcps entry `{entry}` is not applied: {off}");
+    let always = &["rimz:always", "rimz-lsp", "rimz-wait"][..];
+    let lsp_always = &["rimz-lsp:always", "rimz-wait"][..];
+    let lsp_deferred = &["rimz:always", "rimz-lsp:deferred", "rimz-wait"][..];
+    let deferred = &["rimz:deferred", "rimz-lsp:deferred", "rimz-wait"][..];
+    let unmarked = &["rimz-lsp", "rimz-wait"][..];
+    // code-mode, the mcps list, then the record's `codemode`, the loads, and the unapplied marks.
+    type Cell<'a> = (
+        Option<bool>,
+        &'a [&'a str],
+        Option<bool>,
+        Option<Value>,
+        Vec<String>,
+    );
+    let cases: Vec<Cell<'_>> = vec![
+        (None, always, Some(false), None, vec![]),
+        (
+            None,
+            lsp_always,
+            None,
+            Some(json!({"lsp": "native"})),
+            vec![],
+        ),
+        (
+            None,
+            lsp_deferred,
+            Some(false),
+            Some(json!({"lsp": "code"})),
+            vec![],
+        ),
+        (None, deferred, None, None, vec![]),
+        (None, unmarked, None, None, vec![]),
+        (Some(true), always, None, every("pinned", &[]), vec![]),
+        (
+            Some(true),
+            lsp_always,
+            None,
+            Some(json!({"lsp": "pinned"})),
+            vec![],
+        ),
+        (
+            Some(true),
+            lsp_deferred,
+            None,
+            every("pinned", &["lsp"]),
+            vec![],
+        ),
+        (Some(true), deferred, None, None, vec![]),
+        (Some(true), unmarked, None, None, vec![]),
+        (Some(false), always, Some(false), None, vec![]),
+        (Some(false), lsp_always, Some(false), None, vec![]),
+        (
+            Some(false),
+            lsp_deferred,
+            Some(false),
+            None,
+            vec![unapplied("rimz-lsp:deferred")],
+        ),
+        (
+            Some(false),
+            deferred,
+            Some(false),
+            None,
+            vec![unapplied("rimz:deferred"), unapplied("rimz-lsp:deferred")],
+        ),
+        (Some(false), unmarked, Some(false), None, vec![]),
+    ];
+    for (code_mode, mcps, codemode, loads, marks) in cases {
+        let served = serve(
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            Some(LSP_WAIT),
+            Some(mcps),
+            false,
+            code_mode,
+        );
+        let config = served.config.unwrap();
+        assert_eq!(
+            config["mcp"]["servers"]["rimz"],
+            rimz_record(codemode),
+            "{code_mode:?} {mcps:?}"
+        );
+        assert_eq!(
+            config.pointer("/experimental/full_codemode"),
+            code_mode.map(Value::from).as_ref(),
+            "{code_mode:?} {mcps:?}"
+        );
+        assert_eq!(served.loads, loads, "{code_mode:?} {mcps:?}");
+        assert_eq!(
+            served.unset.contains("RIMZ_LAUNCH_MCP_TOOLS"),
+            served.loads.is_none()
+        );
+        assert_eq!(served.unapplied, marks, "{code_mode:?} {mcps:?}");
+        assert_eq!(served.warnings, Vec::<String>::new());
+    }
+
+    // A mark on one of the user's servers is never applied, and RimZ's marks wait for its server.
+    let user = "the mcps entry `github:always` is not applied: OpenCode takes a load mode only \
+                for RimZ's server and its capabilities";
+    let served = serve(
+        &BTreeMap::new(),
+        BTreeMap::new(),
+        Some(LSP_WAIT),
+        Some(&["rimz-lsp", "rimz-wait", "github:always"]),
+        false,
+        None,
+    );
+    assert_eq!(served.unapplied, [user]);
+    let served = serve(
+        &BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+        Some(&["rimz-lsp:always", "github:always"]),
+        false,
+        None,
+    );
+    assert_eq!(
+        served.unapplied,
+        [
+            "the mcps entry `rimz-lsp:always` is not applied: RimZ's MCP server is off for this \
+             launch"
+                .to_owned(),
+            user.to_owned(),
+        ]
+    );
+}
+
+/// A list without `*` keeps RimZ's server and the user's servers it names through OpenCode
+/// `policies`, ahead of the user's own, so a user statement there still decides (the last match
+/// wins);
+/// a list holding `*` writes none.
+#[test]
+fn an_mcps_list_without_a_star_writes_server_policies() {
+    let deny = json!({"action": "integration.use", "resource": "mcp:*", "effect": "deny"});
+    let allow = |name: &str| json!({"action": "integration.use", "resource": format!("mcp:{name}"), "effect": "allow"});
+    let user = json!({"action": "provider.use", "resource": "x", "effect": "deny"});
+    let user_deny =
+        json!({"action": "integration.use", "resource": "mcp:github", "effect": "deny"});
+    let inherited = config_env(&json!({"policies": [user.clone(), user_deny.clone()]}).to_string());
+    let policies = |served: Option<&[crate::mcp::catalog::Capability]>, mcps: Option<&[&str]>| {
+        serve(&inherited, BTreeMap::new(), served, mcps, false, None)
+            .config
+            .and_then(|config| config.get("policies").cloned())
+    };
+    assert_eq!(
+        policies(Some(LSP_WAIT), Some(&["rimz-lsp", "rimz-wait", "github"])),
+        Some(json!([
+            deny,
+            allow("rimz"),
+            allow("github"),
+            user,
+            user_deny
+        ]))
+    );
+    assert_eq!(
+        policies(None, Some(&["github"])),
+        Some(json!([deny, allow("github"), user, user_deny]))
+    );
+    assert_eq!(
+        policies(None, Some(&[])),
+        Some(json!([deny, user, user_deny]))
+    );
+    assert_eq!(
+        policies(Some(LSP_WAIT), Some(&["*", "github"])),
+        Some(json!([user, user_deny]))
+    );
+    assert_eq!(
+        policies(Some(LSP_WAIT), None),
+        Some(json!([user, user_deny]))
+    );
+    assert_eq!(policies(None, Some(&["*", "github"])), None);
+}
+
+/// A launch from an OpenCode agent's environment takes back the record, policies, and grant
+/// rule its outer launch wrote, keeps the user's own members, and writes its own.
+#[test]
+fn a_nested_launch_takes_back_the_mcp_members_its_outer_launch_wrote() {
+    let user = json!({
+        "theme": "dark",
+        "mcp": {"servers": {"github": {"type": "local", "command": ["gh"]}}},
+        "policies": [{"action": "provider.use", "resource": "x", "effect": "deny"}],
+        "permissions": [{"action": "bash", "resource": "*", "effect": "ask"}],
+    });
+    let outer = serve(
+        &config_env(&user.to_string()),
+        BTreeMap::new(),
+        Some(LSP_WAIT),
+        Some(&["rimz-lsp", "rimz-wait", "github"]),
+        true,
+        None,
+    );
+    let mut inherited = config_env(&outer.config.unwrap().to_string());
+    inherited.insert(
+        "RIMZ_OPENCODE_MCP_CONFIG".into(),
+        outer.marker.clone().unwrap().to_string(),
+    );
+
+    let nested = serve(&inherited, BTreeMap::new(), None, None, true, None);
+    assert_eq!(nested.config, Some(user.clone()));
+    assert_eq!(nested.marker, None);
+    assert!(nested.unset.contains("RIMZ_OPENCODE_MCP_CONFIG"));
+
+    let nested = serve(
+        &inherited,
+        BTreeMap::new(),
+        Some(LSP_WAIT),
+        None,
+        false,
+        None,
+    );
+    let mut expected = user.clone();
+    expected["mcp"]["servers"]["rimz"] = rimz_record(None);
+    assert_eq!(nested.config, Some(expected));
+    assert_eq!(nested.marker, Some(json!({"server": rimz_record(None)})));
+    assert!(!nested.unset.contains("RIMZ_OPENCODE_MCP_CONFIG"));
+
+    // Without the marker, or under a value the launch env sets itself, the members are the
+    // user's own and pass through.
+    let unmarked = config_env(&inherited["OPENCODE_CONFIG_CONTENT"]);
+    assert_eq!(
+        serve(&unmarked, BTreeMap::new(), None, None, true, None).config,
+        None
+    );
+    let nested = serve(&inherited, unmarked.clone(), None, None, true, None);
+    assert_eq!(
+        nested.config,
+        Some(serde_json::from_str(&unmarked["OPENCODE_CONFIG_CONTENT"]).unwrap())
+    );
+
+    // The outer launch's policies lead the list, so the take-back removes the first run that
+    // matches them and leaves a user statement of the same text where the user put it.
+    let deny = json!({"action": "integration.use", "resource": "mcp:*", "effect": "deny"});
+    let user =
+        json!({"policies": [{"action": "provider.use", "resource": "x", "effect": "deny"}, deny]});
+    let outer = serve(
+        &config_env(&user.to_string()),
+        BTreeMap::new(),
+        None,
+        Some(&[]),
+        false,
+        None,
+    );
+    let mut inherited = config_env(&outer.config.unwrap().to_string());
+    inherited.insert(
+        "RIMZ_OPENCODE_MCP_CONFIG".into(),
+        outer.marker.unwrap().to_string(),
+    );
+    assert_eq!(
+        serve(&inherited, BTreeMap::new(), None, None, false, None).config,
+        Some(user)
     );
 }
 
@@ -493,8 +1012,7 @@ fn native_subagent_denial_preserves_opencode_config_and_appends_plugin_selector(
             .map(|value| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), value.into())]))
             .unwrap_or_default();
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, true, None, None, false)
+        let warning = finalize(&inherited, &mut env, true, None, None, false)
             .into_iter()
             .next();
         actual.push((
@@ -525,8 +1043,7 @@ fn native_subagent_denial_warns_when_opencode_config_is_ignored() {
     ] {
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, true, None, None, false)
+        let warning = finalize(&inherited, &mut env, true, None, None, false)
             .into_iter()
             .next()
             .unwrap_or_default();
@@ -569,8 +1086,7 @@ fn managed_launch_hides_tabs_preserving_other_cli_config() {
             inherited.insert("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into());
         }
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, false, None, None, false)
+        let warning = finalize(&inherited, &mut env, false, None, None, false)
             .into_iter()
             .next();
         actual.push((
@@ -621,8 +1137,7 @@ fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
     ] {
         let inherited = BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
-        let warning = OpencodeAdapter
-            .finalize_launch_env(&inherited, &mut env, false, None, None, false)
+        let warning = finalize(&inherited, &mut env, false, None, None, false)
             .into_iter()
             .next()
             .unwrap_or_default();
@@ -1353,6 +1868,15 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(TUI_SOURCE.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
     assert!(PLUGIN_SOURCE.contains("stdio: [\"pipe\", reply ? \"pipe\" : \"ignore\", \"ignore\"]"));
     assert!(PLUGIN_SOURCE.contains(".additional_context"));
+    // The per-tool loads ride one variable the server plugin claims once, applied to RimZ's
+    // tools alone.
+    assert!(PLUGIN_SOURCE.contains("process.env.RIMZ_LAUNCH_MCP_TOOLS"));
+    assert!(PLUGIN_SOURCE.contains("delete process.env.RIMZ_LAUNCH_MCP_TOOLS"));
+    assert!(PLUGIN_SOURCE.contains("tool.options?.namespace !== \"rimz\""));
+    for load in ["\"native\"", "\"pinned\"", "\"code\""] {
+        assert!(PLUGIN_SOURCE.contains(load), "plugin source missing {load}");
+    }
+    assert!(!TUI_SOURCE.contains("RIMZ_LAUNCH_MCP_TOOLS"));
     for event in ["client_idle", "client_running"] {
         assert!(TUI_SOURCE.contains(event), "client source missing {event}");
         assert!(

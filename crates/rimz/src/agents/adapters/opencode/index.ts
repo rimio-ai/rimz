@@ -25,6 +25,7 @@ type Cleanup = () => Promise<void>;
 const activations = new WeakMap<Context, Promise<Cleanup>>();
 const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
 const LAUNCH_AUTO_APPROVE = Symbol.for("rimz.launch-auto-approve");
+const MCP_TOOL_LOADS = Symbol.for("rimz.mcp-tool-loads");
 const DEFAULT_SESSION_TITLE = /^(?:New session|Child session) - /;
 // How long a model request waits for the deadline rung of its session's last tool feed.
 const RUNG_WAIT_MS = 1500;
@@ -45,6 +46,23 @@ function claimLaunchAutoApprove(): boolean {
     delete process.env.RIMZ_LAUNCH_AUTO_APPROVE;
   }
   return claimed[LAUNCH_AUTO_APPROVE] === true;
+}
+
+type ToolLoad = "native" | "pinned" | "code";
+
+// How the launch loads each of RimZ's MCP tools whose load differs from its server record's,
+// by the tool's own name.
+function claimMcpToolLoads(): Record<string, ToolLoad> | undefined {
+  const claimed = globalThis as Record<symbol, Record<string, ToolLoad> | undefined>;
+  if (!(MCP_TOOL_LOADS in claimed)) {
+    try {
+      claimed[MCP_TOOL_LOADS] = process.env.RIMZ_LAUNCH_MCP_TOOLS ? JSON.parse(process.env.RIMZ_LAUNCH_MCP_TOOLS) : undefined;
+    } catch {
+      claimed[MCP_TOOL_LOADS] = undefined;
+    }
+    delete process.env.RIMZ_LAUNCH_MCP_TOOLS;
+  }
+  return claimed[MCP_TOOL_LOADS];
 }
 
 function executable(): string | undefined {
@@ -81,6 +99,7 @@ function setup(ctx: Context): Promise<Cleanup> | undefined {
 async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
   const reminders = claimLaunchReminders();
   const autoApprove = claimLaunchAutoApprove();
+  const toolLoads = claimMcpToolLoads();
   // Request ids stay deduplicated until this activation is disposed.
   const autoReplies = new Set<string>();
   const controller = new AbortController();
@@ -429,6 +448,20 @@ async function activate(ctx: Context, rimz: string): Promise<Cleanup> {
     rungFeeds.set(sessionID, feed.then((stdout) => {
       if (turnEnds.get(sessionID) === turn) claimRung(sessionID, stdout);
     }));
+  }));
+  // OpenCode replays every transform on each tool registry rebuild, in registration order, so
+  // this lands only after the MCP producer's: registered last, it won that order on v2.4.2.
+  if (toolLoads) registrations.push(await ctx.tool.transform((editor) => {
+    for (const tool of editor.list()) {
+      if (tool.options?.namespace !== "rimz") continue;
+      const load = toolLoads[tool.name];
+      if (!load) continue;
+      editor.update(tool.id, (draft) => {
+        // OpenCode 2.4 reads `codemode.pinned`, and earlier releases the `pinned` it deprecates.
+        const pin = load === "pinned" ? { codemode: { pinned: true }, pinned: true } : { codemode: load !== "native" };
+        draft.options = { ...draft.options, ...pin };
+      });
+    }
   }));
   void (async () => {
     try {

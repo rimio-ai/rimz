@@ -425,6 +425,157 @@ fn plugin_carries_a_claimed_deadline_rung_into_each_later_request() {
     );
 }
 
+/// The server plugin claims `RIMZ_LAUNCH_MCP_TOOLS` once and, through one tool transform,
+/// sets each listed load on RimZ's own tools only: native, pinned in the Code Mode catalog, or
+/// back behind `execute`. A launch with no loads registers no transform.
+#[test]
+#[cfg(unix)]
+fn plugin_sets_rimz_tool_loads_through_one_transform() {
+    let capability = std::process::Command::new("node")
+        .args([
+            "--experimental-strip-types",
+            "--input-type=module-typescript",
+            "--eval",
+            "const n: number = 1;",
+        ])
+        .output();
+    let Ok(capability) = capability else {
+        crate::common::skip("node not on PATH");
+        return;
+    };
+    if !capability.status.success() {
+        crate::common::skip("node cannot strip TypeScript syntax");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("index.ts");
+    let harness = dir.path().join("harness.mjs");
+    std::fs::write(
+        &plugin,
+        include_str!("../../../src/agents/adapters/opencode/index.ts"),
+    )
+    .unwrap();
+    std::fs::write(
+        &harness,
+        r#"
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+process.env.RIMZ_BIN = process.execPath;
+process.env.RIMZ_WORKSPACE_ID = "workspace";
+const { default: plugin } = await import(pathToFileURL(process.argv[2]));
+
+function context(transforms) {
+  const register = async () => ({ dispose: async () => {} });
+  return {
+    location: { directory: "/tmp" },
+    session: { get: async () => ({}), hook: register },
+    tool: {
+      hook: register,
+      transform: async (callback) => { transforms.push(callback); return { dispose: async () => {} }; },
+    },
+    model: { list: async () => ({ data: [] }) },
+    permission: { reply: async () => {} },
+    event: { subscribe: async function* ({ signal }) {
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    } },
+  };
+}
+
+function editor(tools) {
+  const updates = [];
+  return {
+    updates,
+    list: () => tools,
+    update: (id, mutate) => {
+      const tool = tools.find((tool) => tool.id === id);
+      const draft = { ...tool, options: { ...tool.options } };
+      mutate(draft);
+      updates.push([id, draft.options]);
+    },
+  };
+}
+
+const tools = [
+  { id: "rimz_lsp", name: "lsp", options: { namespace: "rimz", codemode: true } },
+  { id: "rimz_wait", name: "wait", options: { namespace: "rimz", codemode: true } },
+  { id: "rimz_notes", name: "notes", options: { namespace: "rimz", codemode: false } },
+  { id: "rimz_guide", name: "guide", options: { namespace: "rimz", codemode: true } },
+  { id: "other_lsp", name: "lsp", options: { namespace: "other", codemode: true } },
+  { id: "bash", name: "bash", options: {} },
+];
+process.env.RIMZ_LAUNCH_MCP_TOOLS = JSON.stringify({ lsp: "native", wait: "pinned", notes: "code" });
+const transforms = [];
+const ctx = context(transforms);
+const cleanup = await plugin.setup(ctx);
+await plugin.setup(ctx);
+assert.equal(process.env.RIMZ_LAUNCH_MCP_TOOLS, undefined, "the variable is claimed");
+assert.equal(transforms.length, 1, "one transform per activation");
+// The transform replays on every registry rebuild and sets the same loads each time.
+for (let replay = 0; replay < 2; replay++) {
+  const edit = editor(tools);
+  transforms[0](edit);
+  assert.deepEqual(edit.updates, [
+    ["rimz_lsp", { namespace: "rimz", codemode: false }],
+    // `codemode.pinned` is read from OpenCode 2.4, the deprecated `pinned` before it.
+    ["rimz_wait", { namespace: "rimz", codemode: { pinned: true }, pinned: true }],
+    ["rimz_notes", { namespace: "rimz", codemode: true }],
+  ]);
+}
+await cleanup();
+
+// A later activation in the same process keeps the claimed loads.
+const again = [];
+const cleanupAgain = await plugin.setup(context(again));
+assert.equal(again.length, 1);
+await cleanupAgain();
+"#,
+    )
+    .unwrap();
+    let none = dir.path().join("none.mjs");
+    std::fs::write(
+        &none,
+        r#"
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+process.env.RIMZ_BIN = process.execPath;
+process.env.RIMZ_WORKSPACE_ID = "workspace";
+delete process.env.RIMZ_LAUNCH_MCP_TOOLS;
+const { default: plugin } = await import(pathToFileURL(process.argv[2]));
+const register = async () => ({ dispose: async () => {} });
+let transforms = 0;
+const cleanup = await plugin.setup({
+  location: { directory: "/tmp" },
+  session: { get: async () => ({}), hook: register },
+  tool: { hook: register, transform: async () => { transforms++; return { dispose: async () => {} }; } },
+  model: { list: async () => ({ data: [] }) },
+  permission: { reply: async () => {} },
+  event: { subscribe: async function* ({ signal }) {
+    await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+  } },
+});
+assert.equal(transforms, 0);
+await cleanup();
+"#,
+    )
+    .unwrap();
+    for script in [&harness, &none] {
+        let output = std::process::Command::new("node")
+            .arg("--experimental-strip-types")
+            .arg(script)
+            .arg(&plugin)
+            .env_remove("RIMZ_LAUNCH_MCP_TOOLS")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} failed:\n{}\n{}",
+            script.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn client_tracks_focus_and_background_asks_without_navigation_edges() {

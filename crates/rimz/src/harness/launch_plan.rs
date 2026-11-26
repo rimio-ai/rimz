@@ -1332,7 +1332,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         granted: request.rimz_capabilities.is_some(),
                         login_env: &env,
                         rendered_tools: request.tools.as_deref(),
-                        code_mode: request.identity.params.code_mode == Some(true),
+                        code_mode: request.identity.params.code_mode,
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")

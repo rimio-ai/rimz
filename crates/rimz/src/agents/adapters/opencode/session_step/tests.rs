@@ -195,6 +195,30 @@ fn helper_environment_is_private_and_keeps_authored_config() {
         );
     }
     assert_eq!(inherited["RIMZ_LAUNCH_REMINDERS"], "reminder");
+
+    // A launch's own `rimz` record never reaches the helper, on any release, and the helper's
+    // deny is the last `mcp:` statement of the document.
+    let github = json!({"type": "local", "command": ["gh"]});
+    let served = json!({
+        "mcp": {"servers": {
+            "rimz": {"type": "local", "command": ["/room/rimz", "mcp", "serve"]},
+            "github": github,
+        }},
+        "policies": [
+            {"action": "integration.use", "resource": "mcp:*", "effect": "deny"},
+            {"action": "integration.use", "resource": "mcp:rimz", "effect": "allow"},
+        ],
+    });
+    let env = helper_env(&BTreeMap::from([(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        served.to_string(),
+    )]));
+    let content: Value = serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+    assert_eq!(content["mcp"], json!({"servers": {"github": github}}));
+    assert_eq!(
+        content["policies"].as_array().unwrap().last(),
+        Some(&json!({"action":"integration.use", "resource":"mcp:*", "effect":"deny"}))
+    );
 }
 
 #[test]

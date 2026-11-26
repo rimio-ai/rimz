@@ -1344,14 +1344,6 @@ fn compile_agent_process_with_extra_env(
         }
         _ => false,
     };
-    let env_warnings = adapter.finalize_launch_env(
-        &login_env,
-        &mut env,
-        reminders.disable_native_subagents(request),
-        reminders.system_prompt_file.as_deref(),
-        code_mode,
-        release_code_mode,
-    );
     let ask = adapter
         .spec()
         .launch
@@ -1671,17 +1663,33 @@ fn compile_agent_process_with_extra_env(
             }
         }
     }
+    let mcps = request.mcp_list();
+    let mcp = adapter
+        .takes_mcp_servers()
+        .then(|| crate::agents::capabilities::McpLaunch {
+            server: mcp_server(reminders, &skill_env, &env),
+            mcps: mcps.as_deref(),
+            granted: request.rimz_capabilities.is_some(),
+            login_env: &skill_env,
+            rendered_tools: request.tools.as_deref(),
+            code_mode,
+        });
+    let env_warnings = adapter.finalize_launch_env(
+        &skill_env,
+        &mut env,
+        &mut unset,
+        &crate::agents::capabilities::LaunchEnvEdit {
+            disable_native_subagents: reminders.disable_native_subagents(request),
+            system_prompt_file: reminders.system_prompt_file.as_deref(),
+            code_mode,
+            release_code_mode,
+            mcp: mcp.as_ref(),
+        },
+    );
     let (mut mcp_warnings, mut unapplied_marks) = (Vec::new(), Vec::new());
-    if adapter.takes_mcp_servers() {
+    if let Some(mcp) = &mcp {
         (mcp_warnings, unapplied_marks) = adapter.mcp_server_args(
-            &crate::agents::capabilities::McpLaunch {
-                server: mcp_server(reminders, &skill_env, &env),
-                mcps: request.mcp_list().as_deref(),
-                granted: request.rimz_capabilities.is_some(),
-                login_env: &skill_env,
-                rendered_tools: request.tools.as_deref(),
-                code_mode: code_mode == Some(true),
-            },
+            mcp,
             (cwd, artifact_dir),
             action.extra_args_mut(),
             &mut settings_artifact,

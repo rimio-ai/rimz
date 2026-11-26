@@ -509,7 +509,7 @@ fn codex_mcps_lists_disable_only_the_unlisted_servers_the_account_configures() {
 fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
     let room = Room::new();
     for mcps in [None, Some(&["github"][..])] {
-        let plan = room.compile(&switches(true, true), &launch("opencode", mcps, &[]));
+        let plan = room.compile(&switches(true, true), &launch("pi", mcps, &[]));
         assert!(
             !plan
                 .process()
@@ -522,13 +522,159 @@ fn other_kinds_get_no_entry_and_a_warning_for_a_list() {
         let warnings = mcp_warnings(&plan);
         let expected: &[&str] = if mcps.is_some() {
             &[
-                "opencode takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual",
+                "pi takes no per-launch MCP servers; the profile's mcps list is not applied and the agent loads its MCP servers as usual",
             ]
         } else {
             &[]
         };
         assert_eq!(warnings, expected);
     }
+}
+
+/// The composed `OPENCODE_CONFIG_CONTENT` of an OpenCode launch, as JSON.
+fn opencode_config(plan: &LaunchPlan) -> Option<serde_json::Value> {
+    plan.process()
+        .env
+        .get("OPENCODE_CONFIG_CONTENT")
+        .map(|raw| serde_json::from_str(raw).unwrap())
+}
+
+/// An OpenCode launch takes RimZ's server as Claude, Codex, and Antigravity do: a `rimz` record
+/// in its composed inline config whose command is the room's rimz link and whose `--only`
+/// names exactly the served capabilities, within the child and judge limits; a list applies
+/// without the unsupported warning, the grant follows the switch, a rewritten prompt says
+/// `mcp(x)`, and the scoped view keeps a served capability's skill beside its tools.
+#[test]
+fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits() {
+    let room = Room::new();
+    let command = |plan: &LaunchPlan| {
+        opencode_config(plan).map(|config| config["mcp"]["servers"]["rimz"]["command"].clone())
+    };
+    let peer = room.compile(&switches(true, true), &launch("opencode", None, &[]));
+    assert_eq!(
+        command(&peer),
+        Some(serde_json::json!(["/bin/rimz", "mcp", "serve"]))
+    );
+    let actions: Vec<_> = opencode_config(&peer).unwrap()["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| {
+            assert_eq!(
+                (&rule["resource"], &rule["effect"]),
+                (&"*".into(), &"allow".into())
+            );
+            rule["action"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "rimz_lsp",
+            "rimz_wait",
+            "rimz_subagent",
+            "rimz_agent",
+            "rimz_team",
+            "rimz_workflow",
+            "rimz_schedule",
+            "rimz_message",
+            "rimz_tasks",
+            "rimz_join",
+            "rimz_stop",
+            "rimz_self_stop",
+            "rimz_self_compact",
+            "rimz_self_tune",
+            "rimz_self_molt",
+            "rimz_notes",
+            "rimz_guide",
+        ]
+    );
+    let ungranted = room.compile(&switches(false, true), &launch("opencode", None, &[]));
+    assert!(
+        opencode_config(&ungranted)
+            .unwrap()
+            .get("permissions")
+            .is_none()
+    );
+
+    let mut child = launch("opencode", None, &[]);
+    child.subagent = true;
+    let mut judge = launch("opencode", None, &[]);
+    judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
+    });
+    let limited = serde_json::json!([
+        "/bin/rimz",
+        "mcp",
+        "serve",
+        "--only",
+        "rimz-lsp",
+        "--only",
+        "rimz-wait",
+        "--only",
+        "rimz-workflow",
+        "--only",
+        "rimz-message",
+        "--only",
+        "rimz-control",
+        "--only",
+        "rimz-notes"
+    ]);
+    for request in [child, judge] {
+        assert_eq!(
+            command(&room.compile(&switches(true, true), &request)),
+            Some(limited.clone())
+        );
+    }
+
+    let listed = room.compile(
+        &switches(true, true),
+        &launch("opencode", Some(&["rimz-lsp", "github"]), &[]),
+    );
+    assert_eq!(mcp_warnings(&listed), Vec::<String>::new());
+    assert_eq!(
+        command(&listed),
+        Some(serde_json::json!([
+            "/bin/rimz",
+            "mcp",
+            "serve",
+            "--only",
+            "rimz-lsp"
+        ]))
+    );
+    assert_eq!(
+        opencode_config(&listed).unwrap()["policies"],
+        serde_json::json!([
+            {"action": "integration.use", "resource": "mcp:*", "effect": "deny"},
+            {"action": "integration.use", "resource": "mcp:rimz", "effect": "allow"},
+            {"action": "integration.use", "resource": "mcp:github", "effect": "allow"},
+        ])
+    );
+
+    let off = room.compile(&switches(true, false), &launch("opencode", None, &[]));
+    assert_eq!(opencode_config(&off), None);
+    assert!(off.mcp_capabilities.is_empty());
+
+    let rewritten = room.project.path().join("rewritten.md");
+    std::fs::write(&rewritten, "Use rimz(lsp) here.\n").unwrap();
+    let mut prompted = launch("opencode", None, &[]);
+    prompted.system_prompt_file = Some(rewritten.into());
+    let plan = room.compile(&switches(true, true), &prompted);
+    assert_eq!(
+        plan.prompt.composed.as_deref(),
+        Some("Use mcp(lsp) here.\n")
+    );
+
+    let mut granted = launch("opencode", None, &[]);
+    granted.rimz_capabilities = Some(vec!["rimz-lsp".parse().unwrap()]);
+    let scoped = room.compile_at(&switches(true, true), &granted, Isolation::Scoped);
+    assert_eq!(
+        scoped.mcp_capabilities,
+        [crate::mcp::catalog::Capability::Lsp]
+    );
+    assert_eq!(scoped.hidden_skills, Vec::<&str>::new());
 }
 
 /// Antigravity takes RimZ's server from the plugin's entry, so every launch that serves sets
@@ -969,7 +1115,7 @@ fn a_kind_without_mcp_servers_takes_a_bare_star_silently() {
         (&["*", "*"], false),
         (&["*", "github"], true),
     ] {
-        let plan = room.compile(&switches(true, true), &launch("opencode", Some(mcps), &[]));
+        let plan = room.compile(&switches(true, true), &launch("pi", Some(mcps), &[]));
         assert_eq!(mcp_warnings(&plan).len(), usize::from(warns), "{mcps:?}");
     }
 }
@@ -1371,7 +1517,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
         allowlist(&claude_settings(&none_granted.process().provider_argv)),
         None
     );
-    let plan = compile("opencode", &grant, None);
+    let plan = compile("pi", &grant, None);
     assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
 }
 

@@ -169,14 +169,18 @@ impl LaunchReminders {
 
     /// The rimz skills hidden from the model because the launch registers the
     /// MCP tools of the same name: none where the launch cannot withhold a skill,
-    /// on the host of a kind with no per-launch skill switch.
+    /// on the host of a kind with no per-launch skill switch, and in the scoped view
+    /// of a kind that cannot mark a skill user-only.
     pub(super) fn hidden_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
-        let withholds = self.sandbox
-            || crate::agents::find_definition(request.kind.as_str()).is_some_and(|adapter| {
-                matches!(
-                    adapter.spec().host_skills,
-                    crate::agents::skills::HostSkills::Switch { .. }
-                )
+        let withholds =
+            crate::agents::find_definition(request.kind.as_str()).is_some_and(|adapter| {
+                (self.sandbox
+                    && adapter.manual_skill()
+                        != crate::agents::capabilities::ManualSkill::Unsupported)
+                    || matches!(
+                        adapter.spec().host_skills,
+                        crate::agents::skills::HostSkills::Switch { .. }
+                    )
             });
         if !withholds {
             return Vec::new();

@@ -1393,7 +1393,7 @@ fn assert_terminal_note(pair: portable_pty::PtyPair, command: portable_pty::Comm
     assert!(status.success(), "{status:?}");
     let output = output.join().unwrap();
     assert!(
-        output.contains("Claude, Codex, and Antigravity launches"),
+        output.contains("Claude, Codex, Antigravity, and OpenCode launches"),
         "{output}"
     );
     assert!(
@@ -2468,13 +2468,23 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         ),
         ("pmark", "pi", "[rimz-lsp]"),
         (
+            "omark",
+            "opencode",
+            "['rimz:always', 'rimz-lsp:deferred', github]",
+        ),
+        (
+            "ooff",
+            "opencode",
+            "['rimz-lsp:deferred', 'rimz-wait', 'github:always']\ncode-mode: off",
+        ),
+        (
             "cmute",
             "claude",
             "['*']\nskills: [rimz-subagents, rimz-lsp]\nsubagents: []",
         ),
     ] {
         let tools = match (kind, name) {
-            ("pi", _) => "",
+            ("pi" | "opencode", _) => "",
             (_, "cmute") => "\ntools: [Bash, Skill]",
             _ => "\ntools: [Bash]",
         };
@@ -2490,7 +2500,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     let explain_with = |profile: &str, mcps: bool| {
         let mut bins = Vec::new();
-        for kind in ["claude", "codex", "pi"] {
+        for kind in ["claude", "codex", "pi", "opencode"] {
             bins.push(crate::common::write_failing_agent_shim(&env, kind, 0));
         }
         let shell = crate::common::write_fake_login_shell(&env, "mcps-explain-sh", &[]);
@@ -2656,6 +2666,85 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(!out.contains("CAPABILITY"), "{out}");
     assert!(
         !out.contains("## lsp") && !out.contains("Server instructions"),
+        "{out}"
+    );
+
+    // OpenCode carries the server in its composed inline config: `rimz:always` makes the record
+    // native, a capability's own `:deferred` puts its tools back behind `execute` through the
+    // plugin, and the list keeps the user's servers through policies.
+    let out = explain("omark");
+    assert!(
+        out.contains(
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes\n"
+        ),
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "lsp"), "code mode", "{out}");
+    assert_eq!(tool_load(&out, "wait"), "native", "{out}");
+    assert_eq!(tool_load(&out, "guide"), "native", "{out}");
+    assert!(out.contains("only github (policies)\n"), "{out}");
+    assert!(
+        out.contains("\nInline config (OPENCODE_CONFIG_CONTENT)\n"),
+        "{out}"
+    );
+    assert!(out.contains(r#""codemode":false"#), "{out}");
+    assert!(
+        out.contains(r#"RIMZ_LAUNCH_MCP_TOOLS={"lsp":"code"}"#),
+        "{out}"
+    );
+    assert!(!out.contains("Hidden skills"), "{out}");
+    // The Served text gives each tool the load the Tools table shows.
+    let served = |tool: &str, capability: &str, load: &str| {
+        out.lines()
+            .skip_while(|line| *line != format!("## {tool}"))
+            .nth(1)
+            .is_some_and(|line| line.ends_with(&format!(" · {capability} · load {load}")))
+    };
+    assert!(served("lsp", "rimz-lsp", "code mode"), "{out}");
+    assert!(served("wait", "rimz-wait", "native"), "{out}");
+    assert!(served("guide", "-", "native"), "{out}");
+    // An inherited inline value prints none of its own members, and its policies decide which of
+    // the user's servers stay, in either spelling.
+    let inherited = serde_json::json!({
+        "mcp": {"servers": {"docs": {"type": "remote", "url": "https://docs.example", "headers": {"Authorization": "skip-secret"}}}},
+        "policies": [
+            {"action": "mcp.use", "resource": "github", "effect": "deny"},
+        ],
+    });
+    let shell = crate::common::write_fake_login_shell(&env, "mcps-explain-sh", &[]);
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "omark", "--mcps"])
+        .env("SHELL", shell)
+        .env("OPENCODE_CONFIG_CONTENT", inherited.to_string())
+        .output()
+        .unwrap();
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{out}");
+    assert!(
+        out.contains(
+            "  your servers: only none (policies)
+"
+        ),
+        "{out}"
+    );
+    assert!(
+        !out.contains("skip-secret") && !out.contains("mcp.use"),
+        "{out}"
+    );
+    let out = explain("ooff");
+    assert_eq!(
+        tool_load(&out, "lsp"),
+        "native; the mcps entry `rimz-lsp:deferred` is not applied: code-mode off sends every \
+         RimZ tool native, and OpenCode has no tool search outside `execute`",
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "wait"), "native", "{out}");
+    assert!(
+        out.contains(
+            "only github (policies); the mcps entry `github:always` is not applied: OpenCode \
+             takes a load mode only for RimZ's server and its capabilities\n"
+        ),
         "{out}"
     );
 

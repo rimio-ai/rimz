@@ -882,7 +882,10 @@ fn the_full_listing_is_the_served_text() {
         &tools,
         &groups,
         &[(Capability::Lsp, LoadMode::Always)],
-        None,
+        |tool| match tool.capability {
+            Some(Capability::Lsp) => "always",
+            _ => "default",
+        },
         &wording,
     );
     let instructions = wording.instructions(&groups);

@@ -16,7 +16,7 @@ use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
-use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, render_listing, tools_for};
+use rimz::mcp::catalog::{Capability, LoadMode, SERVER_NAME, Tool, render_listing, tools_for};
 use rimz::mcp::launch_env;
 use rimz::mcp::wording::Wording;
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
@@ -351,20 +351,29 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     }
     let process = plan.process();
     let rides_agent_file = adapter.rides_agent_file();
-    let arguments = if rides_agent_file {
+    let inline_config = (kind == "opencode").then(|| opencode_mcp_members(&process.env));
+    let arguments = if let Some(members) = &inline_config {
+        members
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect()
+    } else if rides_agent_file {
         agent_file_mcp_lines(plan)
     } else {
         mcp_arguments(&process.provider_argv)
     };
     let served = &plan.mcp_capabilities[..];
-    let launch_env: Vec<(&str, &str)> = if adapter.serves_mcp_from_launch_env() {
-        [launch_env::ENV_SERVE, launch_env::ENV_CWD]
-            .into_iter()
-            .filter_map(|key| Some((key, process.env.get(key)?.as_str())))
-            .collect()
+    let launch_env_keys: &[&str] = if adapter.serves_mcp_from_launch_env() {
+        &[launch_env::ENV_SERVE, launch_env::ENV_CWD]
+    } else if inline_config.is_some() {
+        &[OPENCODE_TOOL_LOADS]
     } else {
-        Vec::new()
+        &[]
     };
+    let launch_env: Vec<(&str, &str)> = launch_env_keys
+        .iter()
+        .filter_map(|key| Some((*key, process.env.get(*key)?.as_str())))
+        .collect();
     // A resume writes no agent file: the conversation keeps the servers it started with, except
     // a server the provider starts from its own config, which follows each launch's env.
     let resumes = rides_agent_file && !matches!(plan.request.action, ExecAction::Launch { .. });
@@ -406,6 +415,8 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     servers.push("rimz", render::cell(with_marks(rimz_line, rimz_marks)));
     let user_line = if resumes {
         kept.to_owned()
+    } else if inline_config.is_some() {
+        opencode_user_servers(&process.env)
     } else {
         user_servers(plan, &arguments, rides_agent_file)
     };
@@ -435,7 +446,11 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         for tool in &tools {
             let size = tool.tokens(&wording);
             total += size;
-            let load = load_mode(&arguments, &launch_env, tool.capability);
+            let load = if inline_config.is_some() {
+                opencode_load(&arguments, &launch_env, tool.name)
+            } else {
+                load_mode(&arguments, &launch_env, tool.capability)
+            };
             let marks = unapplied.iter().filter(|mark| {
                 tool.capability
                     .is_some_and(|capability| mark.entry.capability() == Some(capability))
@@ -452,7 +467,9 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         writeln!(w, "total: ~{total} tokens in {} tools", tools.len())?;
     }
     if !arguments.is_empty() {
-        let heading = if rides_agent_file {
+        let heading = if inline_config.is_some() {
+            "Inline config (OPENCODE_CONFIG_CONTENT)"
+        } else if rides_agent_file {
             "Agent file"
         } else {
             "Provider arguments"
@@ -495,6 +512,17 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         })
         .collect();
     let server_wide = LoadMode::from_name(load_mode(&arguments, &launch_env, None));
+    let load = |tool: &Tool| {
+        if inline_config.is_some() {
+            return opencode_load(&arguments, &launch_env, tool.name);
+        }
+        modes
+            .iter()
+            .find(|(capability, _)| Some(*capability) == tool.capability)
+            .map(|(_, mode)| *mode)
+            .or(server_wide)
+            .map_or("default", LoadMode::name)
+    };
     writeln!(w, "\nServed text")?;
     writeln!(
         w,
@@ -504,7 +532,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     write!(
         w,
         "{}",
-        render_listing(&tools, served, &modes, server_wide, &wording)
+        render_listing(&tools, served, &modes, load, &wording)
     )
 }
 
@@ -661,6 +689,109 @@ fn load_mode(
         }
     }
     load.map_or("default", LoadMode::name)
+}
+
+/// The RimZ plugin's per-tool loads on an OpenCode launch.
+const OPENCODE_TOOL_LOADS: &str = "RIMZ_LAUNCH_MCP_TOOLS";
+const OPENCODE_MCP_MEMBERS: &str = "RIMZ_OPENCODE_MCP_CONFIG";
+
+/// The MCP members an OpenCode launch writes into `OPENCODE_CONFIG_CONTENT`, as its
+/// `RIMZ_OPENCODE_MCP_CONFIG` records them: RimZ's `rimz` record, then its `policies` and
+/// `permissions` rules, each as compact JSON. An inherited inline value's own members never
+/// print, since they may carry a server's secrets.
+fn opencode_mcp_members(env: &BTreeMap<String, String>) -> Vec<(&'static str, String)> {
+    let Some(written) = env
+        .get(OPENCODE_MCP_MEMBERS)
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+    else {
+        return Vec::new();
+    };
+    [
+        ("mcp.servers.rimz", written.get("server")),
+        ("policies", written.get("policies")),
+        ("permissions", written.get("permissions")),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| Some((key, value?.to_string())))
+    .collect()
+}
+
+/// A RimZ tool's load on OpenCode: its entry in the plugin's per-tool loads, else `native`
+/// where the `rimz` record sets `codemode: false`, else `default` (behind `execute`).
+fn opencode_load(
+    members: &[(&str, &str)],
+    launch_env: &[(&str, &str)],
+    tool: &str,
+) -> &'static str {
+    let listed = launch_env
+        .iter()
+        .find(|(key, _)| *key == OPENCODE_TOOL_LOADS)
+        .and_then(|(_, raw)| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|loads| loads.get(tool)?.as_str().map(str::to_owned));
+    match listed.as_deref() {
+        Some("native") => return "native",
+        Some("pinned") => return "pinned",
+        Some("code") => return "code mode",
+        _ => {}
+    }
+    let native = members
+        .iter()
+        .find(|(key, _)| *key == "mcp.servers.rimz")
+        .and_then(|(_, raw)| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .is_some_and(|record| record["codemode"] == false);
+    if native { "native" } else { "default" }
+}
+
+/// The user's servers an OpenCode launch keeps, read from the composed `OPENCODE_CONFIG_CONTENT`
+/// policies: under an `mcp:*` deny, those a later policy allows and none after that denies again
+/// (OpenCode applies the last match), else every one configured. A policy names a server as
+/// `mcp.use` on its bare name or as `integration.use` on `mcp:<name>`, which OpenCode folds
+/// into `mcp.use`.
+fn opencode_user_servers(env: &BTreeMap<String, String>) -> String {
+    let policies: Vec<serde_json::Value> = env
+        .get("OPENCODE_CONFIG_CONTENT")
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|config| serde_json::from_value(config.get("policies")?.clone()).ok())
+        .unwrap_or_default();
+    fn server(policy: &serde_json::Value) -> Option<&str> {
+        match policy["action"].as_str()? {
+            "mcp.use" => policy["resource"].as_str(),
+            "integration.use" => policy["resource"].as_str()?.strip_prefix("mcp:"),
+            _ => None,
+        }
+    }
+    let every = "every server the account and project configure".to_owned();
+    let Some(deny) = policies
+        .iter()
+        .rposition(|policy| server(policy) == Some("*"))
+    else {
+        return every;
+    };
+    if policies[deny]["effect"] != "deny" {
+        return every;
+    }
+    let mut names: Vec<&str> = Vec::new();
+    for policy in &policies[deny + 1..] {
+        let Some(name) = server(policy) else {
+            continue;
+        };
+        let decided = policies
+            .iter()
+            .rfind(|policy| server(policy).is_some_and(|server| server == "*" || server == name));
+        if policy["effect"] == "allow"
+            && ![SERVER_NAME, "*"].contains(&name)
+            && !names.contains(&name)
+            && decided.is_some_and(|policy| policy["effect"] == "allow")
+        {
+            names.push(name);
+        }
+    }
+    let names = if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    };
+    format!("only {names} (policies)")
 }
 
 /// The MCP lines of a planned agent file's frontmatter, each split into its key and value.
