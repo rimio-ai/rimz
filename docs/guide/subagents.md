@@ -50,7 +50,7 @@ rimz agents validate          # check every definition, subagents included
 rimz subagents profiles       # what a child can be launched from
 ```
 
-The format is the one direct profiles use ([profiles](./fleet.md#profiles-shape-an-agent-for-one-job)), with two differences. A child profile's `agent:` line accepts another child profile, a kind, or a profile from `agents/` (checking `subagents/` first, and dropping `subagents`, `idle-compact`, and `keep-warm` when following a direct profile). And the kind base still lives in `agents/`: a Codex child needs `~/.rimz/agents/codex.md` exactly as a direct Codex profile does. Every key is in the [definition reference](../reference/definitions.md).
+The format is the one direct profiles use ([profiles](./fleet.md#profiles-shape-an-agent-for-one-job)), with two differences. A child profile's `agent:` line accepts another child profile, a kind, or a profile from `agents/` (checking `subagents/` first, and dropping `subagents`, `idle-compact`, and `keep-warm` when following a direct profile). And the kind base still lives in `agents/`: a Codex child takes `~/.rimz/agents/codex.md`, or the built-in base without one, exactly as a direct Codex profile does. Every key is in the [definition reference](../reference/definitions.md).
 
 Write the `description` for the parent, because it is how the parent chooses. The list RimZ gives the parent carries each profile's name and description and nothing else, since a model codename and an effort level do not tell it which child is cheaper or stronger. Say what the child does, what it will not do, and when to pick it.
 
