@@ -4886,6 +4886,61 @@ fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
     server.close();
 }
 
+/// A machine team whose layout cell resolves nowhere is refused as a schedule's team target with
+/// its file's error, books nothing, and leaves a healthy agent and team bookable.
+#[test]
+fn a_schedule_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
+    let env = schedule_room();
+    let crew = crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: coder\nstages: [Build]\nlayout: \"coder,ghost\"\n\
+         roles:\n  - {role: coder, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let book = |tool: &str, arguments: serde_json::Value| {
+        let mut call = json!({
+            "name": "nightly",
+            "trigger": "every",
+            "value": "1h",
+            "tool": tool,
+            "arguments": arguments,
+            "overlap": "replace",
+        });
+        if tool == "team" {
+            call["worktree"] = json!("nightly");
+        }
+        call
+    };
+    let (refused, is_error) = server.answer(
+        1,
+        "schedule",
+        book("team", json!({"team": "crew", "prompt": "ship it"})),
+    );
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused,
+        json!({"error": format!(
+            "{}: team `crew` layout token `ghost` is not a declared role or valid roleless cell",
+            crew.display()
+        )})
+    );
+    assert!(loop_rows(&env).is_empty());
+    for (id, tool, arguments) in [
+        (2, "agent", json!({"profile": "worker", "prompt": "check"})),
+        (4, "team", json!({"team": "forge", "prompt": "ship it"})),
+    ] {
+        let (booked, is_error) = server.answer(id, "schedule", book(tool, arguments));
+        assert!(!is_error, "{booked}");
+        let (stopped, _) = server.answer(id + 1, "stop", json!({"id": "schedule:nightly"}));
+        assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+    }
+    server.close();
+}
+
 /// What the tool stores for each target kind passes the check `rimz loop add` makes of a fire's
 /// launch, so a booking it accepts fires.
 #[test]

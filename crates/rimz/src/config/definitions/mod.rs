@@ -240,6 +240,8 @@ pub struct LoadedDefinitions {
     /// The scope whose tree alone declares each failed name it holds; a name both trees declare,
     /// a kind base, a team, or a team seat fails in both tables.
     pub failed_trees: BTreeMap<String, ProfileScope>,
+    /// The failed names that name a team file, each of which shadows a built-in team.
+    pub failed_teams: BTreeSet<String>,
     pub rows: Vec<DefinitionRow>,
     pub pack_items: Vec<PackItem>,
     pub warnings: Vec<crate::packs::Problem>,
@@ -1352,6 +1354,9 @@ fn load_resolved(
             && !loaded.subagent_profiles.0.contains_key(name)
             && !loaded.teams.0.contains_key(name)
     });
+    loaded
+        .failed_teams
+        .retain(|name| loaded.failed.contains_key(name));
     let declares = |tree: &Namespace, name: &str| {
         tree.definitions.contains_key(name) || tree.failed.contains(name)
     };

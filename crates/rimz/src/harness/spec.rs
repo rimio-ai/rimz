@@ -22,7 +22,6 @@ use crate::config::{
 use crate::harness::team_prompt::TeamPrompt;
 use crate::ids::AgentKind;
 
-const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["plan", "ask", "auto", "yolo"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1038,10 +1037,30 @@ pub(crate) fn validate_team(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<()> {
+    validate_team_name(name, profiles, commands)?;
+    validate_team_roster(name, team, profiles, commands)
+}
+
+/// The checks of a team's name alone, which the namespace check makes for every team.
+pub(crate) fn validate_team_name(
+    name: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
     validate_team_names(std::iter::once(name))?;
     if is_cell_word(name, profiles, commands) {
         return Err(LayoutErr::ReservedTeamName(name.to_owned()));
     }
+    Ok(())
+}
+
+/// Validate one team past its name: its roles, seats, and layout.
+pub(crate) fn validate_team_roster(
+    name: &str,
+    team: &Team,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
     let prepared = prepare_team(name, team, profiles, CellBase::none(), None)?;
     if team.layout.is_some() {
         compile_team(name, prepared, profiles, commands, CellBase::none())?;
@@ -1051,7 +1070,7 @@ pub(crate) fn validate_team(
 
 /// Validate profile names and cell-name collisions without resolving every
 /// profile chain or requiring team role bindings to close over the namespace.
-fn validate_profile_namespace(
+pub(crate) fn validate_profile_namespace(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
@@ -1259,9 +1278,6 @@ pub(super) fn resolve_spec_in_scope(
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands, base);
-    }
-    if raw == "peer" {
-        return parse_layout_spec_validated(BUILTIN_PEER, profiles, commands, base);
     }
     if let Some(cell) = path_command_cell(raw) {
         return Ok(LayoutSpec::single(cell));
@@ -2562,7 +2578,6 @@ pub(super) fn is_known_spec_token(
     let raw = raw.trim();
     !raw.is_empty()
         && (spec_team(raw, teams).is_some()
-            || raw == "peer"
             || is_cell_word(raw, profiles, commands)
             || (raw.contains(':')
                 && parse_layout_spec_validated(raw, profiles, commands, CellBase::none()).is_ok())
@@ -3692,9 +3707,6 @@ fn spec_candidates(
             candidates.insert(format!("{name}.{}", binding.role), SpecKind::Role);
         }
     }
-    candidates
-        .entry("peer".into())
-        .or_insert_with(|| SpecKind::Team(Some(BUILTIN_PEER.into())));
     for SpecCandidate { name, kind } in cells {
         if teams.role_spec(&name).is_some() {
             continue;

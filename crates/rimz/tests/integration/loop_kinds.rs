@@ -469,6 +469,67 @@ fn loop_add_refuses_a_machine_team_whose_seat_allows_a_failed_project_subagent()
     );
 }
 
+/// A machine team whose layout cell resolves in no machine table fails on its own name, in the
+/// trusted project that defines the cell too: `--team` refuses it with its file's error and
+/// writes nothing, also when the built-in `peer` or an executable on PATH shares its name, and a
+/// healthy agent and team still add.
+#[test]
+fn loop_add_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
+    let env = live_room();
+    kinds_fixture(&env);
+    let crew = crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: lead\nstages: [Build]\nlayout: \"lead,proj\"\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "Build.",
+    );
+    env.write_config(
+        &env.project_root,
+        "[profiles.proj]\ndescription = 'Proj'\nagent = 'codex'\n",
+    );
+    loop_ok(&env, &["trust", "grant"]);
+    let (_, error) = loop_fail(
+        &env,
+        &["loop", "add", "t", "--every", "1h", "--team", "crew"],
+    );
+    assert_eq!(
+        error,
+        format!(
+            "error: loop task `t`: --team `crew`: {}: team `crew` layout token `proj` is not a \
+             declared role or valid roleless cell\n",
+            crew.display(),
+        )
+    );
+    for name in ["peer", "sh"] {
+        let file = crate::common::write_definition(
+            &env,
+            "teams",
+            name,
+            "leader: lead\nstages: [Build]\nlayout: \"lead,ghost\"\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+            "Build.",
+        );
+        let (_, error) = loop_fail(&env, &["loop", "add", "t", "--every", "1h", "--team", name]);
+        assert_eq!(
+            error,
+            format!(
+                "error: loop task `t`: --team `{name}`: {}: team `{name}` layout token `ghost` \
+                 is not a declared role or valid roleless cell\n",
+                file.display(),
+            )
+        );
+    }
+    assert!(!loop_config_path(&env).exists(), "nothing was written");
+    loop_ok(
+        &env,
+        &["loop", "add", "a", "--every", "1h", "--agent", "worker"],
+    );
+    loop_ok(
+        &env,
+        &["loop", "add", "f", "--every", "1h", "--team", "forge"],
+    );
+}
+
 /// A launch child stand-in behind `RIMZ_BIN`: an `agents`, `teams` or `workflow` launch writes
 /// what it was started with to `seen` and exits with the code in `code`, printing `boom`;
 /// every other `rimz` helper runs the real binary. Every call's argv is appended to

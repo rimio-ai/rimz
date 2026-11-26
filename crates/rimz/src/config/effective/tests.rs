@@ -4206,6 +4206,12 @@ fn failed_project_row_and_team_never_fall_through_to_other_readings() {
         "---\nleader: lead\nstages: [Build]\nlayout: \"lead,shared\"\nroles:\n  - role: lead\n    agent: foo\n    owns: [Build]\n---\nBuild.\n",
     )
     .unwrap();
+    // A machine team that fails its own check, named like an executable on every PATH.
+    std::fs::write(
+        home.path().join("teams/sh.md"),
+        "---\nleader: lead\nstages: [Build]\nlayout: \"lead,ghost\"\nroles:\n  - role: lead\n    agent: foo\n    owns: [Build]\n---\nBuild.\n",
+    )
+    .unwrap();
 
     let project_toml = "\
         [profiles.ok]\n\
@@ -4253,6 +4259,8 @@ fn failed_project_row_and_team_never_fall_through_to_other_readings() {
         ("foo", "description"),
         ("foo.lead", "description"),
         ("mteam", "description"),
+        ("sh", "layout token `ghost`"),
+        ("sh.lead", "layout token `ghost`"),
     ] {
         let err = crate::harness::plan::resolve_launch(
             &launch,
@@ -4284,6 +4292,16 @@ fn failed_project_row_and_team_never_fall_through_to_other_readings() {
         resolved.layout.agent_cells().next().is_none(),
         "git command cell should not resolve as an agent"
     );
+    // ... and over a same-named failed machine team.
+    commands.0.insert("sh".to_owned(), "sh -c true".to_owned());
+    crate::harness::plan::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &commands,
+        Some("sh"),
+        &crate::config::Selection::default(),
+    )
+    .expect("[agents.commands] sh must still win over the failed machine team sh");
 }
 
 #[test]

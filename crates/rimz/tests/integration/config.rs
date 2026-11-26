@@ -529,6 +529,86 @@ fn agents_validate_refuses_what_launch_refuses() {
         .stdout(contains("probe"));
 }
 
+/// A machine team whose layout cell resolves in no machine table refuses `agents explain` on
+/// its own name with its file's error, with `--tier` or without, in the trusted project that
+/// defines the cell too, ahead of the built-in `peer` and an executable on PATH of its name,
+/// and the other profiles and kinds still explain.
+#[test]
+fn agents_explain_refuses_only_a_machine_team_whose_layout_cell_does_not_resolve() {
+    let env = Env::new();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "lead",
+        "description: Lead\nagent: claude\ntools: []",
+        "",
+    );
+    let crew = crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: lead\nstages: [Build]\nlayout: \"lead,proj\"\nroles:\n  - {role: lead, agent: lead, owns: [Build]}",
+        "Build.",
+    );
+    let broken: Vec<_> = ["peer", "sh"]
+        .into_iter()
+        .map(|name| {
+            let path = crate::common::write_definition(
+                &env,
+                "teams",
+                name,
+                "leader: lead\nstages: [Build]\nlayout: \"lead,ghost\"\n\
+                 roles:\n  - {role: lead, agent: lead, owns: [Build]}",
+                "Build.",
+            );
+            (name, path)
+        })
+        .collect();
+    env.write_config(
+        &env.project_root,
+        "[profiles.proj]\ndescription = 'Proj'\nagent = 'codex'\n",
+    );
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "explain-sh", &[]);
+    let path = format!(
+        "{}:{}",
+        agent_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    env.rimz()
+        .args(["trust", "grant"])
+        .env("SHELL", &shell)
+        .env("PATH", &path)
+        .assert()
+        .success();
+    let refusals = std::iter::once(("crew", crew, "proj"))
+        .chain(broken.into_iter().map(|(name, path)| (name, path, "ghost")));
+    for (name, file, cell) in refusals {
+        for tier in [&[][..], &["--tier", "senior"]] {
+            env.rimz()
+                .args(["agents", "explain", name])
+                .args(tier)
+                .env("SHELL", &shell)
+                .env("PATH", &path)
+                .assert()
+                .code(1)
+                .stderr(format!(
+                    "error: {}: team `{name}` layout token `{cell}` is not a declared role or \
+                     valid roleless cell\n",
+                    file.display()
+                ));
+        }
+    }
+    for name in ["lead", "claude"] {
+        env.rimz()
+            .args(["agents", "explain", name])
+            .env("SHELL", &shell)
+            .env("PATH", &path)
+            .assert()
+            .success();
+    }
+}
+
 #[test]
 fn agents_validate_loads_live_pack_definitions_and_warns_for_unknown_manifest_keys() {
     let env = Env::new();

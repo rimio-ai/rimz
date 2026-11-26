@@ -2672,7 +2672,8 @@ path = "crates/rimz/src/harness"
 # `spec::validate_team_structure` shares file-level team shape checks with `config::effective` (+1).
 # `ExecRequest::result_file`, `LayoutRunParams::result_file`, and `run::result_file::remove` carry and clean a subagent's result file across launch and exec (+2).
 # `run::result_file::{seen, queue_reminder}`: the lifecycle hook queues a result-file subagent's reminder, and the deadline texts name its file as it sees it (+2).
-surface-budget = 1384
+# `spec::{validate_team_name, validate_team_roster, validate_profile_namespace}` split a machine team's own check, run as the team loads, from the set-wide namespace check in `config` (+3).
+surface-budget = 1387
 
 [[verdict]]
 kind = "item"
@@ -2767,7 +2768,22 @@ reason = "The host pass and the integration suite share one three-way reminder v
 [[verdict]]
 kind = "item"
 key = "harness::spec::validate_team"
-reason = "Pack teams use the same name, preparation and layout checks before joining the namespace."
+reason = "`config::effective` checks machine and project teams against a trusted project's profiles with the same name, preparation and layout checks."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::validate_team_name"
+reason = "A pack team's name fails at its item, and the machine team loader leaves a team whose name the namespace reserves to the set-wide check."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::validate_team_roster"
+reason = "The machine team loader checks each team past its name against the final machine table, so the team fails on its own name."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::validate_profile_namespace"
+reason = "The machine load's set-wide check keeps only the namespace collisions no single definition owns."
 
 [[verdict]]
 kind = "item"

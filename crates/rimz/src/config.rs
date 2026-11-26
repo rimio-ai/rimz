@@ -440,6 +440,8 @@ pub struct ConfigNotices {
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
     /// [`definitions::LoadedDefinitions::failed_trees`].
     pub failed_trees: BTreeMap<String, effective::ProfileScope>,
+    /// [`definitions::LoadedDefinitions::failed_teams`].
+    pub failed_teams: BTreeSet<String>,
     /// Scoped setting labels silently running on the host off Linux, for doctor only.
     pub scoped_fallbacks: Vec<String>,
     pub skipped_loop_tasks: BTreeMap<String, String>,
@@ -953,10 +955,16 @@ impl MachineConfig {
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
+        // A team file that failed shadows the built-in team of its name, as a healthy one does.
+        self.agents
+            .teams
+            .0
+            .retain(|name, _| !loaded.failed_teams.contains(name));
         self.consensus_pieces = loaded.consensus_pieces;
         self.definition_contexts = loaded.contexts;
         notices.failed_definitions = loaded.failed;
         notices.failed_trees = loaded.failed_trees;
+        notices.failed_teams = loaded.failed_teams;
         notices.definition_errors.extend(loaded.errors);
         notices.definition_warnings.extend(loaded.warnings);
         if let Err(error) = validate_agents_file(&self.agents, &self.subagents, agents_home) {
@@ -1755,12 +1763,18 @@ fn check_removed_core_keys(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// The namespace checks no single definition owns. Each team's own check runs as the team
+/// loads, so a team that fails it fails on its own name.
 fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
-    crate::harness::spec::validate_config(&agents.profiles, &agents.commands, &agents.teams)
-        .map_err(|source| ConfigErr::Agents {
-            path: path.to_path_buf(),
-            source,
-        })
+    crate::harness::spec::validate_profile_namespace(
+        &agents.profiles,
+        &agents.commands,
+        &agents.teams,
+    )
+    .map_err(|source| ConfigErr::Agents {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Validate materialized definitions using the machine configuration's launch rules.
