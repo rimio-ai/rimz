@@ -3233,12 +3233,6 @@ subagents = ["+codex"]
         (
             ProfileScope::Agents,
             "profiles",
-            "r12_general",
-            "allows unknown subagent profile(s) [\"general\"]",
-        ),
-        (
-            ProfileScope::Agents,
-            "profiles",
             "r12_mini",
             "opencode-mini",
         ),
@@ -3319,6 +3313,21 @@ subagents = ["+codex"]
     }
     // Depth 16 itself (`d15`, chain length 16) loads.
     assert!(launch.profiles.0.contains_key("d15"));
+    assert_row_refused(
+        &machine,
+        &launch,
+        ProfileScope::Agents,
+        project.path(),
+        "profiles",
+        "r12_general",
+        &format!(
+            "allows unknown subagent profile(s) `general`; add it as a \
+             `[subagents.profiles.general]` row in {} or as {}, or remove it from the \
+             `subagents` list that names it",
+            project.path().join(".rimz/config.toml").display(),
+            home.path().join("subagents/general.md").display()
+        ),
+    );
 
     // Row 2: machine kind base exists without tools/capabilities (claude, codex, antigravity).
     let home2 = tempdir().unwrap();

@@ -7002,6 +7002,10 @@ fn one_chain_rule_and_handoff_examples_through_supervised_entry() {
              tools: [Bash]\n---\nWorker craft.",
         ),
         (
+            "subagents/general.md",
+            "---\ndescription: General\nagent: codex\ntools: [Read]\n---\nGeneral craft.",
+        ),
+        (
             "subagents/advisor.md",
             "---\ndescription: Advisor\nagent: antigravity\nmodel: neon\neffort: high\n\
              fast: on\nisolation: sandbox\ntools: [Read, Grep]\n---\nAdvisor craft.",

@@ -108,8 +108,8 @@ struct PromptLayer {
 /// Splits subagent validation when a definition inherits from an override (`+` list): names in
 /// `own_names` check against `own`, while inherited names check against `inherited`.
 struct SubagentValidator<'a> {
-    own: Option<(&'a SubagentCheck, bool)>,
-    inherited: Option<(&'a SubagentCheck, bool)>,
+    own: Option<&'a SubagentCheck>,
+    inherited: Option<&'a SubagentCheck>,
     own_names: Option<BTreeSet<String>>,
 }
 
@@ -261,7 +261,7 @@ impl DefinitionSource {
             return Ok(());
         };
         let validator = SubagentValidator {
-            own: Some((subagents, !inner.is_project)),
+            own: Some(subagents),
             inherited: None,
             own_names: None,
         };
@@ -470,11 +470,7 @@ impl DefinitionSourceInner {
             fm.tier = None;
         }
         let mut subagent_validator = SubagentValidator {
-            own: self
-                .context
-                .subagents
-                .as_deref()
-                .map(|check| (check, !self.is_project)),
+            own: self.context.subagents.as_deref(),
             inherited: None,
             own_names: None,
         };
@@ -492,22 +488,14 @@ impl DefinitionSourceInner {
                 let x_fm = x.frontmatter.clone().for_namespace(self.namespace);
                 if x_fm.subagents.is_some() {
                     if self.frontmatter.subagents.is_none() {
-                        subagent_validator.own = x
-                            .context
-                            .subagents
-                            .as_deref()
-                            .map(|check| (check, !x.is_project));
+                        subagent_validator.own = x.context.subagents.as_deref();
                         if x.is_project {
                             retained_context = Arc::clone(&x.context);
                         }
                     } else if let Some(own_list) = self.frontmatter.subagents.as_deref()
                         && own_list.iter().any(|entry| frontmatter::is_plus(entry))
                     {
-                        subagent_validator.inherited = x
-                            .context
-                            .subagents
-                            .as_deref()
-                            .map(|check| (check, !x.is_project));
+                        subagent_validator.inherited = x.context.subagents.as_deref();
                         subagent_validator.own_names = Some(
                             own_list
                                 .iter()
@@ -1436,12 +1424,7 @@ impl Resolver<'_> {
             cached: None,
         };
         let subagent_validator = SubagentValidator {
-            own: self
-                .scope
-                .context
-                .subagents
-                .as_deref()
-                .map(|check| (check, true)),
+            own: self.scope.context.subagents.as_deref(),
             inherited: None,
             own_names: None,
         };
@@ -1865,7 +1848,7 @@ fn subagent_list(
     validator: &SubagentValidator<'_>,
 ) -> Result<Option<Vec<String>>, DefinitionErr> {
     if listed.iter().any(|entry| frontmatter::is_plus(entry)) {
-        if let Some((subagents, _)) = validator.own {
+        if let Some(subagents) = validator.own {
             let added: Vec<String> = listed
                 .iter()
                 .map(|entry| frontmatter::added(entry).to_owned())
@@ -1878,29 +1861,25 @@ fn subagent_list(
     if kind_base {
         return names(path, "subagents", listed).map(Some);
     }
-    if let (Some(own_names), Some((inh_check, inh_implicit))) =
-        (&validator.own_names, validator.inherited)
-    {
+    if let (Some(own_names), Some(inh_check)) = (&validator.own_names, validator.inherited) {
         let (own_listed, inh_listed): (Vec<_>, Vec<_>) = listed
             .iter()
             .cloned()
             .partition(|entry| own_names.contains(entry.trim()));
         if !own_listed.is_empty() {
-            if let Some((own_check, own_implicit)) = validator.own {
-                subagent_names(path, &own_listed, own_check, own_implicit)?;
+            if let Some(own_check) = validator.own {
+                subagent_names(path, &own_listed, own_check)?;
             } else {
                 names(path, "subagents", &own_listed)?;
             }
         }
         if !inh_listed.is_empty() {
-            subagent_names(path, &inh_listed, inh_check, inh_implicit)?;
+            subagent_names(path, &inh_listed, inh_check)?;
         }
         return names(path, "subagents", listed).map(Some);
     }
     match validator.own {
-        Some((subagents, allow_implicit_general)) => {
-            subagent_names(path, listed, subagents, allow_implicit_general).map(Some)
-        }
+        Some(subagents) => subagent_names(path, listed, subagents).map(Some),
         None => names(path, "subagents", listed).map(Some),
     }
 }
@@ -1913,7 +1892,7 @@ pub(super) fn base_subagents(
     subagents: &SubagentCheck,
 ) -> Result<Option<Vec<String>>, DefinitionErr> {
     let validator = SubagentValidator {
-        own: Some((subagents, true)),
+        own: Some(subagents),
         inherited: None,
         own_names: None,
     };
@@ -1958,12 +1937,11 @@ fn refuse_failed(
 }
 
 /// A `subagents:` list's names, each a subagent in `subagents.allowed` (those that loaded, and
-/// the `[agents.commands]` names), a kind, or `general`.
+/// the `[agents.commands]` names) or a kind.
 fn subagent_names(
     path: &Path,
     listed: &[String],
     subagents: &SubagentCheck,
-    allow_implicit_general: bool,
 ) -> Result<Vec<String>, DefinitionErr> {
     let names = names(path, "subagents", listed)?;
     for name in &names {
@@ -1973,16 +1951,11 @@ fn subagent_names(
     let unknown: Vec<_> = names
         .iter()
         .filter(|name| {
-            !(allow_implicit_general && name.as_str() == "general")
-                && agents::find_definition(name).is_none()
-                && !subagents.allowed.contains(*name)
+            agents::find_definition(name).is_none() && !subagents.allowed.contains(*name)
         })
         .collect();
     if !unknown.is_empty() {
-        return Err(DefinitionErr::new(
-            path,
-            format!("allows unknown subagent profile(s) {unknown:?}"),
-        ));
+        return Err(subagents.unknown_err(path, &unknown));
     }
     Ok(names)
 }

@@ -298,6 +298,8 @@ fn fallback_contexts(input: &ProjectProfilesInput<'_>) -> LoadContexts {
             problems: BTreeMap::new(),
             packs: BTreeSet::new(),
             allowed,
+            machine_dir: input.agents_home.join("subagents"),
+            project_config: None,
         })),
     });
     LoadContexts { agents, subagents }
@@ -360,6 +362,7 @@ pub(in crate::config) fn resolve_project_profiles(
         .as_deref()
         .cloned()
         .unwrap_or_default();
+    subagent_check.project_config = Some(input.config_path.to_owned());
     for name in resolved_subagents.keys() {
         subagent_check.defined.insert(name.clone());
         subagent_check.allowed.insert(name.clone());

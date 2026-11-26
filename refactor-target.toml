@@ -1331,8 +1331,8 @@ upward-dependencies = [
 # engine::resume, Resume, Selection::{resume, resume_of, resumes} let resume replay the recorded
 # engine through the same cell build, replacing the resume-side table rewrite (+5).
 # DefinitionSource::tier_exclusions and TierExclusion let `agents validate` ask the engine
-# module for unrunnable tier entries in place of the retired DefinitionRenders (+1 net).
-surface-budget = 356
+# module for unrunnable tier entries (+1 net).
+surface-budget = 355
 
 [[verdict]]
 kind = "item"

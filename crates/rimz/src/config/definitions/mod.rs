@@ -526,17 +526,54 @@ struct SubagentCheck {
     problems: BTreeMap<String, DefinitionErr>,
     packs: BTreeSet<String>,
     allowed: BTreeSet<String>,
+    /// The machine `subagents/` directory, where a listed name can be defined.
+    machine_dir: PathBuf,
+    /// The project config whose `[subagents.profiles]` rows a project load's listings also name.
+    project_config: Option<PathBuf>,
 }
 
 impl SubagentCheck {
-    fn from_namespace(subagents: &Namespace, allowed: &BTreeSet<String>) -> Self {
+    fn from_namespace(
+        subagents: &Namespace,
+        allowed: &BTreeSet<String>,
+        agents_home: &Path,
+    ) -> Self {
         Self {
             defined: subagents.definitions.keys().cloned().collect(),
             failed: subagents.failed.clone(),
             problems: subagents.problems.clone(),
             packs: subagents.packs.clone(),
             allowed: allowed.clone(),
+            machine_dir: agents_home.join("subagents"),
+            project_config: None,
         }
+    }
+
+    /// Refuses the `unknown` names a `subagents` list in `source` gives, with where each can be
+    /// defined.
+    fn unknown_err(&self, source: &Path, unknown: &[&String]) -> DefinitionErr {
+        let (pronoun, name) = match unknown {
+            [one] => ("it", one.as_str()),
+            _ => ("each", "<name>"),
+        };
+        let file = self.machine_dir.join(format!("{name}.md"));
+        let place = match &self.project_config {
+            Some(config) => format!(
+                "a `[subagents.profiles.{name}]` row in {} or as {}",
+                config.display(),
+                file.display()
+            ),
+            None => file.display().to_string(),
+        };
+        let listed: Vec<String> = unknown.iter().map(|name| format!("`{name}`")).collect();
+        DefinitionErr::new(
+            source,
+            format!(
+                "allows unknown subagent profile(s) {}; add {pronoun} as {place}, or remove \
+                 {pronoun} from the `subagents` list that names it",
+                listed.join(", ")
+            ),
+        )
     }
 
     fn check_lookup(&self, name: &str, source: &Path) -> Result<(), DefinitionErr> {
@@ -1160,7 +1197,7 @@ fn load_resolved(
             .chain(pending.iter().map(|base| base.keys[0].clone()))
             .chain(commands.0.keys().cloned())
             .collect();
-        let subagent_check = SubagentCheck::from_namespace(&subagents, &children);
+        let subagent_check = SubagentCheck::from_namespace(&subagents, &children, agents_home);
         let mut refused = Vec::new();
         for (index, base) in pending.iter_mut().enumerate() {
             let Some(listed) = written(&bases, base) else {
@@ -1253,7 +1290,9 @@ fn load_resolved(
     let agents_ctx = Arc::new(LoadContext {
         shared,
         subagents: Some(Arc::new(SubagentCheck::from_namespace(
-            &subagents, &children,
+            &subagents,
+            &children,
+            agents_home,
         ))),
     });
     loaded.contexts = Some(LoadContexts {

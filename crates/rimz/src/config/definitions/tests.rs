@@ -903,6 +903,7 @@ fn isolation_defaults_inherit_but_roles_cannot_set_them() {
 
 fn team_fixture() -> tempfile::TempDir {
     let root = fixture();
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     definition(
         root.path(),
         "agents/worker.md",
@@ -2924,6 +2925,7 @@ fn teams_keep_inherited_and_explicit_multi_provider_models_on_their_engine() {
 #[test]
 fn chains_inherit_launch_fields_but_render_each_own_craft() {
     let root = fixture();
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     write(root.path(), "traits/asking.md", "Ask well.");
     write(root.path(), "traits/writing.md", "Write well.");
     definition(
@@ -3640,7 +3642,14 @@ fn agents_and_seats_allow_loaded_subagents_and_commands() {
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.contains_key("probe"));
-    error(root.path(), "allows unknown subagent profile(s) [\"vim\"]");
+    error(
+        root.path(),
+        &format!(
+            "allows unknown subagent profile(s) `vim`; add it as {}, or remove it from the \
+             `subagents` list that names it",
+            root.path().join("subagents/vim.md").display()
+        ),
+    );
 }
 
 #[test]
@@ -3861,6 +3870,15 @@ fn subagent_allowlists_replace_native_delegation() {
         "model: astra\ntools: [Bash]\nsubagents: [' general ', child, claude, child]",
         "",
     );
+    error(
+        root.path(),
+        &format!(
+            "allows unknown subagent profile(s) `general`; add it as {}, or remove it from the \
+             `subagents` list that names it",
+            root.path().join("subagents/general.md").display()
+        ),
+    );
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     assert_eq!(
         clean(root.path()).agent_profiles.0["probe"]
             .subagents
@@ -3884,10 +3902,17 @@ fn subagent_allowlists_replace_native_delegation() {
     definition(
         root.path(),
         "agents/probe.md",
-        "model: astra\ntools: []\nsubagents: [missing]",
+        "model: astra\ntools: []\nsubagents: [missing, absent]",
         "",
     );
-    error(root.path(), "unknown subagent profile(s)");
+    error(
+        root.path(),
+        &format!(
+            "allows unknown subagent profile(s) `missing`, `absent`; add each as {}, or remove \
+             each from the `subagents` list that names it",
+            root.path().join("subagents/<name>.md").display()
+        ),
+    );
     definition(
         root.path(),
         "subagents/child.md",
@@ -4528,6 +4553,7 @@ fn packs_conflicts_name_every_source_and_resolve_by_exclusion_or_home_claim() {
 #[test]
 fn packs_qualified_parents_inherit_shadowed_and_conflicted_definitions_without_profiles() {
     let home = fixture();
+    definition(home.path(), "subagents/general.md", "agent: pi", "");
     let one = linked_pack(home.path(), "one");
     let two = linked_pack(home.path(), "two");
     definition(
@@ -5041,7 +5067,11 @@ fn kind_bases_take_every_profile_field_and_refuse_by_name() {
         ),
         (
             "subagents: [missing]",
-            "allows unknown subagent profile(s) [\"missing\"]".to_owned(),
+            format!(
+                "allows unknown subagent profile(s) `missing`; add it as {}, or remove it from \
+                 the `subagents` list that names it",
+                root.path().join("subagents/missing.md").display()
+            ),
         ),
         (
             "subagents: [broken]",
@@ -5101,6 +5131,7 @@ fn clean_but(root: &Path, expected: &Path) -> LoadedDefinitions {
 #[test]
 fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
     let root = fixture();
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     write(root.path(), "traits/voice.md", "Voice.");
     write(
         root.path(),
@@ -5364,6 +5395,7 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
 #[test]
 fn plus_lists_add_to_the_chain_and_the_kind_base_in_place_and_in_order() {
     let root = fixture();
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     write(
         root.path(),
         "agents/claude.md",
@@ -5565,6 +5597,7 @@ fn plus_lists_match_only_inherited_entries_and_refuse_conflicts_inside_one_list(
         ["github", "linear"]
     );
     let root = fixture();
+    definition(root.path(), "subagents/general.md", "agent: pi", "");
     definition(
         root.path(),
         "agents/parent.md",
@@ -7400,6 +7433,7 @@ fn build_idempotence_ancestors_no_disk_read_equality_and_errors() {
 #[test]
 fn subagent_files_follow_agents_parents_and_drop_direct_only_fields() {
     let home = fixture();
+    definition(home.path(), "subagents/general.md", "agent: pi", "");
     let pack = linked_pack(home.path(), "crew");
     write(
         home.path(),
