@@ -1441,8 +1441,9 @@ fn queued_codex_stops_decode_each_captured_provider_home() {
     }
 }
 
-/// Each apply attempt's deadline, which also covers its child's process start under gate load.
-const APPLY_TIMEOUT_MS: &str = "3000";
+/// Each apply attempt's deadline. It also times a healthy child's process start, which gate load
+/// has stretched past 3 s, and a stopped child holds the drainer this long before its kill.
+const APPLY_TIMEOUT_MS: &str = "10000";
 
 fn drain_command(env: &Env) -> Command {
     let mut command = env.rimz();
@@ -1884,11 +1885,13 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
     let children = rimz::proc::children(drainer.id());
     assert_eq!(children.len(), 1, "{children:?}");
     let child_pid = children[0];
+    // Stopped, the held child never reaches the rendezvous's own 10 s panic: only the kill ends it.
+    signal(child_pid, nix::sys::signal::Signal::SIGSTOP);
     let mut request =
         UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()).unwrap();
-    // Below the 10 s after which the held child panics and frees the drainer without a kill.
+    // The hung frame's apply window, then the next frame's own window for its new child.
     request
-        .set_read_timeout(Some(Duration::from_secs(8)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     writeln!(
         request,
