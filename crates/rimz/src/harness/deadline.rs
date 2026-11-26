@@ -91,10 +91,15 @@ fn warning_text(record: &RunRecord, remaining: Duration, last: bool) -> String {
 const HOOK_STOP_LEAD: Duration = Duration::from_secs(10);
 
 /// How long after the deadline the host sends the stop rung itself, as an interrupt: a kind
-/// with hook context gets the lead to carry it first.
+/// whose hook context carries the stop gets the lead to carry it first.
 fn host_stop_delay(record: &RunRecord) -> Duration {
-    let hook = crate::agents::definition_by_kind(record.kind.as_str())
-        .is_ok_and(|agent| agent.spec().capabilities.hook_context.is_some());
+    let hook = crate::agents::definition_by_kind(record.kind.as_str()).is_ok_and(|agent| {
+        agent
+            .spec()
+            .capabilities
+            .hook_context
+            .is_some_and(|reply| reply.carries_stop())
+    });
     if hook {
         HOOK_STOP_LEAD.min(record.grace.unwrap_or_default() / 2)
     } else {

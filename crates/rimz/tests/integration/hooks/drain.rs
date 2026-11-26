@@ -3275,6 +3275,82 @@ fn antigravity_hook_reply_arrives_through_the_drainer() {
 }
 
 #[test]
+fn antigravity_pre_invocation_injects_a_claimed_warning_and_leaves_the_stop_to_the_host() {
+    use rimz::store::run::{RunRecord, RunStatus};
+    use std::time::Duration;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut drainer = drain_command(&env).spawn().unwrap();
+    let _lease = drainer_connection(&store, Some(&mut drainer));
+    let mut record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("antigravity"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    record.agent_id = Some("agy-child".into());
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.timeout = Some(Duration::from_secs(1800));
+    record.warn = vec![Duration::from_secs(180)];
+    record.grace = Some(Duration::from_secs(180));
+    record.deadline_at = Some(Timestamp::now() + Duration::from_secs(150));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let feed = |event: &str, conversation: &str| {
+        let mut command = env.hook_command("antigravity");
+        command
+            .env("RIMZ_RUN_ID", record.run_id.as_str())
+            .env("RIMZ_TEST_HOOK_REPLY_WAIT_MS", "30000");
+        let payload = json!({"hookEventName": event, "conversationId": conversation, "invocationNum": 2, "initialNumSteps": 5});
+        let output = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let notice_at = || {
+        rimz::harness::run::load(store.paths(), &record.run_id)
+            .unwrap()
+            .deadline_notice_at
+    };
+
+    assert_eq!(feed("PostInvocation", "agy-child"), json!({}));
+    assert_eq!(feed("PreInvocation", "native-grandchild"), json!({}));
+    assert_eq!(
+        notice_at(),
+        None,
+        "a native child never claims its parent's rung"
+    );
+    assert_eq!(
+        feed("PreInvocation", "agy-child"),
+        json!({"injectSteps": [{"systemMessage": {"systemMessage": "2m left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains."}}]})
+    );
+    assert_eq!(
+        feed("PreInvocation", "agy-child"),
+        json!({}),
+        "a rung is injected once"
+    );
+    let warned = notice_at();
+    assert!(warned.is_some());
+
+    let mut record = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    record.deadline_at = Some(Timestamp::now() - Duration::from_secs(1));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    assert_eq!(feed("PreInvocation", "agy-child"), json!({}));
+    assert_eq!(
+        notice_at(),
+        warned,
+        "the stop stays unclaimed, so the host interrupts at the deadline"
+    );
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+}
+
+#[test]
 fn antigravity_reply_is_native_neutral_when_the_drainer_is_late() {
     payload_reply_without_drainer("antigravity", "PreInvocation", json!({}));
     payload_reply_without_drainer("antigravity", "Stop", json!({"decision": ""}));

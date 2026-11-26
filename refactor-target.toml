@@ -504,7 +504,9 @@ upward-dependencies = [
 # subagent projection (+2).
 # HookOutput::opens_native_subagent lets the hook path parent a native child by its pane at its
 # first hook, a fact only the adapter can read from the payload (+1).
-surface-budget = 1386
+# HookContextReply::carries_stop tells the hook feed and the deadline host whether a kind's hook
+# context carries the stop rung, since an Antigravity injected system message does not (+1).
+surface-budget = 1387
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

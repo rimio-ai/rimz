@@ -1126,6 +1126,10 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
             }
             Err(error) => debug!(%error, "hooks feed: prompt context was late"),
         }
+        let rung = attach_deadline_context(&store, agent, &event_name, &payload);
+        if rung != rimz::agents::HookReply::Silent {
+            reply = rung;
+        }
         return emit_reply(&reply);
     }
     let rung = attach_deadline_context(&store, agent, &event_name, &payload);
@@ -1153,15 +1157,18 @@ fn attach_deadline_context(
     event: &str,
     payload: &Value,
 ) -> rimz::agents::HookReply {
-    if agent
+    let Some(shape) = agent
         .spec()
         .capabilities
         .hook_context
-        .is_none_or(|reply| reply.event() != event)
-        || payload
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.is_empty())
+        .filter(|reply| reply.event() == event)
+    else {
+        return rimz::agents::HookReply::Silent;
+    };
+    if payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
     {
         return rimz::agents::HookReply::Silent;
     }
@@ -1180,10 +1187,14 @@ fn attach_deadline_context(
         &run_id,
         jiff::Timestamp::now(),
         |record, rung| {
+            if matches!(rung, rimz::harness::deadline::Rung::Stop { .. }) && !shape.carries_stop() {
+                return false;
+            }
             let session = payload
                 .get("session_id")
                 .or_else(|| payload.get("sessionId"))
                 .or_else(|| payload.get("conversation_id"))
+                .or_else(|| payload.get("conversationId"))
                 .and_then(Value::as_str);
             if record
                 .agent_id
