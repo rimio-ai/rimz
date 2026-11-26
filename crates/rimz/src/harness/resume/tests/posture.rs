@@ -299,9 +299,9 @@ fn relaunch_renders_code_mode_from_the_current_profile() {
         let off = resolve("agent = \"pi\"\ncode-mode = false", "pi", record);
         // The exclusion joins the final argv at compile, from this replayed state.
         assert_eq!(off.launch.code_mode, Some(false));
-        let unset = resolve("agent = \"pi\"\ncode-mode = \"unset\"", "pi", record);
-        assert_eq!(unset.launch.code_mode, None);
-        assert!(!unset.launch.args.iter().any(|arg| arg.contains("codemode")));
+        let auto = resolve("agent = \"pi\"\ncode-mode = \"auto\"", "pi", record);
+        assert_eq!(auto.launch.code_mode, None);
+        assert!(!auto.launch.args.iter().any(|arg| arg.contains("codemode")));
 
         let claude = resolve("agent = \"claude\"\ncode-mode = true", "claude", record);
         assert_eq!(
@@ -356,7 +356,7 @@ fn recorded_fast_replays_over_the_current_profile() {
 
     // The record wins over the profile, like model, and leaves at most one switch: a
     // `--fast` launch stays on, a `--no-fast` launch stays forced off, and a record
-    // without `fast` (unset, or written before off was forced) renders nothing.
+    // without `fast` (auto, or written before off was forced) renders nothing.
     for (profile, recorded, want) in [
         (profile("codex"), Some(true), Some(true)),
         (off_profile.clone(), Some(true), Some(true)),
@@ -593,7 +593,7 @@ fn off_record_keeps_a_fast_switch_the_profile_writes_in_raw_args() {
     assert_eq!(count(&posture.args), 1, "{:?}", posture.args);
 
     // The profile's `fast = true` field is RimZ's switch, so an off record (a
-    // `--no-fast` launch) and an unset one (no `fast` in the record) still drop it.
+    // `--no-fast` launch) and an auto one (no `fast` in the record) still drop it.
     let field: Profile = toml::from_str("agent = \"amp\"\nfast = true").unwrap();
     for recorded in [Some(false), None] {
         let posture = resolve(field.clone(), recorded);

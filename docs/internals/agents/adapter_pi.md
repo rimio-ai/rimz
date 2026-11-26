@@ -213,7 +213,7 @@ Profile presets render through `PresetMatchers`, pinned in `crates/rimz/src/agen
 | --- | --- |
 | `model` | `--model <value>` |
 | `effort` | `--thinking <value>` |
-| `fast` | `RIMZ_LAUNCH_FAST=1`, no argv ([Fast mode](#fast-mode)); forced off removes the key like unset, silently |
+| `fast` | `RIMZ_LAUNCH_FAST=1`, no argv ([Fast mode](#fast-mode)); forced off removes the key like auto, silently |
 | `system-prompt-file` | `--system-prompt <text>`, the file's contents as one argument |
 | `auto-compact` | skipped with a warning at launch |
 

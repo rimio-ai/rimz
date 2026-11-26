@@ -2312,7 +2312,7 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
             vec![(CODE_MODE_KEY, "1"), (CODE_MODE_MARKER, &marker)],
             cleared.clone(),
         ),
-        // A nested unset launch releases an outer launch's forced off as it releases on.
+        // A nested auto launch releases an outer launch's forced off as it releases on.
         (
             "claude",
             None,
@@ -2378,7 +2378,7 @@ fn process_compiler_stamps_or_clears_the_declared_code_mode_env() {
 const CODE_MODE_CONFIG_MARKER: &str = "RIMZ_CODE_MODE_CONFIG";
 const OPENCODE_CODE_MODE_MARKER: &str = "OPENCODE_CONFIG_CONTENT:experimental.full_codemode";
 
-/// A launch of another kind, code mode on, off, or unset, keeps the config marker an outer
+/// A launch of another kind, code mode on, off, or auto, keeps the config marker an outer
 /// OpenCode launch left, so an OpenCode launch nested below it can still release the member.
 #[test]
 fn process_compiler_keeps_an_opencode_code_mode_marker_across_other_kinds() {
@@ -2443,7 +2443,7 @@ fn process_compiler_writes_opencode_full_code_mode_on_or_off_and_takes_back_an_o
                 (CODE_MODE_CONFIG_MARKER, OPENCODE_CODE_MODE_MARKER),
             ],
         ),
-        // A nested unset launch releases an outer launch's forced off as it releases on.
+        // A nested auto launch releases an outer launch's forced off as it releases on.
         (
             None,
             vec![

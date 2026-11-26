@@ -2028,7 +2028,7 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
     definition(
         root.path(),
         "agents/cleared.md",
-        "agent: swift\nfast: unset",
+        "agent: swift\nfast: auto",
         "",
     );
     for kind in ["amp", "opencode"] {
@@ -2082,9 +2082,9 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
         "{:?}",
         loaded.errors
     );
-    // A child's own `fast: false` wins over its parent's `true`, and its `unset` stops it.
+    // A child's own `fast: false` wins over its parent's `true`, and its `auto` stops it.
     assert_eq!(loaded.agent_profiles.0["steady"].fast, Some(Toggle::Off));
-    assert_eq!(loaded.agent_profiles.0["cleared"].fast, Some(Toggle::Unset));
+    assert_eq!(loaded.agent_profiles.0["cleared"].fast, Some(Toggle::Auto));
     let row_fast = |name: &str| {
         loaded
             .rows
@@ -2100,14 +2100,15 @@ fn unsupported_tuning_fields_load_for_launch_time_normalization() {
 }
 
 #[test]
-fn code_mode_reads_on_and_off_and_follows_the_parent_chain() {
+fn code_mode_reads_auto_on_and_off_and_follows_the_parent_chain() {
     let root = fixture();
     for (name, frontmatter) in [
         ("coder", "agent: pi\ncode-mode: on"),
         ("calm", "agent: pi\ncode-mode: off"),
         ("heir", "agent: coder"),
         ("steady", "agent: coder\ncode-mode: off"),
-        ("cleared", "agent: coder\ncode-mode: unset"),
+        ("cleared", "agent: coder\ncode-mode: auto"),
+        ("legacy", "agent: coder\ncode-mode: unset"),
         ("agreeable", "agent: pi\ncode-mode: yes"),
         ("odd", "agent: pi\ncode-mode: sometimes"),
     ] {
@@ -2127,7 +2128,9 @@ fn code_mode_reads_on_and_off_and_follows_the_parent_chain() {
     assert_eq!(code_mode("calm"), Some(Some(Toggle::Off)));
     assert_eq!(code_mode("heir"), Some(Some(Toggle::On)));
     assert_eq!(code_mode("steady"), Some(Some(Toggle::Off)));
-    assert_eq!(code_mode("cleared"), Some(Some(Toggle::Unset)));
+    assert_eq!(code_mode("cleared"), Some(Some(Toggle::Auto)));
+    // The legacy spelling still reads, as `auto`.
+    assert_eq!(code_mode("legacy"), code_mode("cleared"));
     assert_eq!(code_mode("agreeable"), Some(Some(Toggle::On)));
     assert_eq!(code_mode("odd"), None);
     assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
@@ -4922,13 +4925,13 @@ fn hook_trust_fix_keeps_team_members_out_of_solo_resume() {
 
 #[test]
 fn kind_bases_take_every_profile_field_and_refuse_by_name() {
-    use crate::agents::Toggle::{On, Unset};
+    use crate::agents::Toggle::{Auto, On};
 
     let root = fixture();
     write(
         root.path(),
         "agents/claude.md",
-        "---\ndescription: Base\nagent: claude\nfast: on\ncode-mode: unset\neffort: low\nauto-compact: 300k\nmodel: opus\ntools: [Bash, Skill]\n---\nBase.",
+        "---\ndescription: Base\nagent: claude\nfast: on\ncode-mode: auto\neffort: low\nauto-compact: 300k\nmodel: opus\ntools: [Bash, Skill]\n---\nBase.",
     );
     write(
         root.path(),
@@ -4951,7 +4954,7 @@ fn kind_bases_take_every_profile_field_and_refuse_by_name() {
             (
                 true,
                 Some(On),
-                Some(Unset),
+                Some(Auto),
                 Some("low"),
                 Some("300k"),
                 Some("opus"),

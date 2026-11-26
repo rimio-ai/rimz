@@ -144,16 +144,16 @@ impl std::fmt::Display for PermissionMode {
     }
 }
 
-/// A written three-state launch switch (`fast`, `code-mode`): on, forced off, or `unset`,
+/// A written three-state launch switch (`fast`, `code-mode`): on, forced off, or `auto`,
 /// which stops inheritance and leaves the provider's own default. "Not written" is `None`
-/// around it. Reads `true`/`false`, the YAML 1.1 words (`on`, `off`, `yes`, `no`), and
-/// `"unset"`; writes `true`, `false`, and `"unset"`, so absent, `true`, and `false` keep
-/// the bytes a boolean had.
+/// around it. Reads `true`/`false`, the YAML 1.1 words (`on`, `off`, `yes`, `no`), `"auto"`,
+/// and the legacy `"unset"` as `auto`; writes `true`, `false`, and `"auto"`, so absent,
+/// `true`, and `false` keep the bytes a boolean had.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toggle {
     On,
     Off,
-    Unset,
+    Auto,
 }
 
 impl Toggle {
@@ -163,7 +163,7 @@ impl Toggle {
         match self {
             Self::On => Some(true),
             Self::Off => Some(false),
-            Self::Unset => None,
+            Self::Auto => None,
         }
     }
 }
@@ -179,7 +179,7 @@ impl Serialize for Toggle {
         match self {
             Self::On => serializer.serialize_bool(true),
             Self::Off => serializer.serialize_bool(false),
-            Self::Unset => serializer.serialize_str("unset"),
+            Self::Auto => serializer.serialize_str("auto"),
         }
     }
 }
@@ -191,7 +191,7 @@ impl<'de> Deserialize<'de> for Toggle {
             type Value = Toggle;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("`on`, `off`, `true`, `false`, or `unset`")
+                f.write_str("`auto`, `on`, `off`, `true`, or `false`")
             }
 
             fn visit_bool<E: serde::de::Error>(self, on: bool) -> Result<Toggle, E> {
@@ -202,7 +202,7 @@ impl<'de> Deserialize<'de> for Toggle {
                 match raw.to_ascii_lowercase().as_str() {
                     "on" | "true" | "yes" | "y" => Ok(Toggle::On),
                     "off" | "false" | "no" | "n" => Ok(Toggle::Off),
-                    "unset" => Ok(Toggle::Unset),
+                    "auto" | "unset" => Ok(Toggle::Auto),
                     _ => Err(E::invalid_value(serde::de::Unexpected::Str(raw), &self)),
                 }
             }
@@ -497,7 +497,7 @@ impl LaunchSpec {
                 }
                 None => {}
             }
-            // Nothing renders either way, so the launch records fast as unset.
+            // Nothing renders either way, so the launch records fast as auto.
             preset.fast = None;
         }
         (preset, skipped)
@@ -903,7 +903,7 @@ impl PresetMatchers {
 ///
 /// Fast takes three states: on renders the provider's on switch or tells RimZ's extension
 /// through the launch env; off renders its off switch, so a fast mode saved inside the
-/// provider no longer applies; unset renders nothing, so the provider's own default
+/// provider no longer applies; auto renders nothing, so the provider's own default
 /// stands. An unsupported provider carries the alternative its skip warning names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FastSwitch {
@@ -937,7 +937,7 @@ impl FastSwitch {
 /// What a provider's code mode adds to a launch.
 ///
 /// Code mode takes three states: on adds the provider's code-mode tools, argv, or env;
-/// off forces it off where the provider can turn it on by itself; unset renders nothing.
+/// off forces it off where the provider can turn it on by itself; auto renders nothing.
 /// An unsupported provider warns on on and launches without it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeModeSwitch {
@@ -964,7 +964,7 @@ pub enum CodeModeSwitch {
     /// A member the adapter writes into the provider config it composes in
     /// `finalize_launch_env`: the provider's on value or its off value. An on or an off launch
     /// records `marker` in `RIMZ_CODE_MODE_CONFIG`, which launches of other kinds pass through,
-    /// so a nested unset launch of this kind can take the member back out of the config it
+    /// so a nested auto launch of this kind can take the member back out of the config it
     /// inherits.
     Config {
         marker: &'static str,

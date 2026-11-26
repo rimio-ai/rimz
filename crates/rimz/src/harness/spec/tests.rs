@@ -2073,7 +2073,7 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
     ]);
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    // A role's own fast, off and unset included, survives `--agent` onto another kind.
+    // A role's own fast, off and auto included, survives `--agent` onto another kind.
     for (target, model, mode, effort, fast, final_mode, final_effort) in [
         ("codex", None, None, None, None, None, Some("xhigh")),
         ("opencode", None, None, None, None, None, None),
@@ -2119,7 +2119,7 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
             None,
             None,
             None,
-            Some(Toggle::Unset),
+            Some(Toggle::Auto),
             None,
             Some("xhigh"),
         ),
@@ -2447,7 +2447,7 @@ fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
         "[profiles.swift]\ndescription = 'Swift'\nagent = 'codex'\nfast = 'on'\n\
          [profiles.steady]\ndescription = 'Steady'\nagent = 'swift'\nfast = 'off'\n\
          [profiles.heir]\ndescription = 'Heir'\nagent = 'swift'\n\
-         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'swift'\nfast = 'unset'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'swift'\nfast = 'auto'\n\
          [profiles.plain]\ndescription = 'Plain'\nagent = 'codex'\n\
          [profiles.quick]\ndescription = 'Quick'\nagent = 'cursor'\nfast = 'on'\n\
          [profiles.calm]\ndescription = 'Calm'\nagent = 'cursor'\nfast = 'off'\n",
@@ -2481,7 +2481,7 @@ fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
     assert_eq!(
         profile_cell("cleared", &profiles).unwrap().args,
         profile_cell("plain", &profiles).unwrap().args,
-        "a written unset renders what an unwritten fast does"
+        "a written auto renders what an unwritten fast does"
     );
     let quick = profile_cell("quick", &profiles).expect("unsupported fast renders no switch");
     assert_eq!(
@@ -2500,13 +2500,13 @@ fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
         resolve_role(&off, &profiles).unwrap().fast,
         Some(Toggle::Off)
     );
-    let unset = RoleBinding {
-        fast: Some(Toggle::Unset),
+    let auto = RoleBinding {
+        fast: Some(Toggle::Auto),
         ..role("coder", "swift")
     };
     assert_eq!(
-        resolve_role(&unset, &profiles).unwrap().fast,
-        Some(Toggle::Unset)
+        resolve_role(&auto, &profiles).unwrap().fast,
+        Some(Toggle::Auto)
     );
 }
 
@@ -2516,7 +2516,7 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
         "[profiles.coder]\ndescription = 'Coder'\nagent = 'pi'\ncode-mode = 'on'\nargs = '--raw'\n\
          [profiles.plain]\ndescription = 'Plain'\nagent = 'coder'\ncode-mode = 'off'\n\
          [profiles.heir]\ndescription = 'Heir'\nagent = 'coder'\n\
-         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'coder'\ncode-mode = 'unset'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'coder'\ncode-mode = 'auto'\n\
          [profiles.excluding]\ndescription = 'Excluding'\nagent = 'pi'\ncode-mode = 'off'\n\
          args = '--exclude-tools read,grep'\n\
          [profiles.tooled]\ndescription = 'Tooled'\nagent = 'claude'\ncode-mode = 'on'\n\
@@ -2526,7 +2526,7 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
          [profiles.cdx]\ndescription = 'Cdx'\nagent = 'codex'\ncode-mode = 'on'\nargs = '--raw'\n\
          [profiles.cdx-off]\ndescription = 'Cdx off'\nagent = 'cdx'\ncode-mode = 'off'\n\
          [profiles.cdx-heir]\ndescription = 'Cdx heir'\nagent = 'cdx'\n\
-         [profiles.cdx-unset]\ndescription = 'Cdx unset'\nagent = 'cdx'\ncode-mode = 'unset'\n\
+         [profiles.cdx-auto]\ndescription = 'Cdx auto'\nagent = 'cdx'\ncode-mode = 'auto'\n\
          [profiles.cdx-base]\ndescription = 'Cdx base'\nagent = 'codex'\ncode-mode = 'off'\n\
          [profiles.cdx-bare]\ndescription = 'Cdx bare'\nagent = 'codex'\n",
     );
@@ -2546,7 +2546,7 @@ fn profile_code_mode_follows_the_chain_and_renders_before_raw_args() {
         ("cdx", Some("features.code_mode=true")),
         ("cdx-off", Some("features.code_mode=false")),
         ("cdx-heir", Some("features.code_mode=true")),
-        ("cdx-unset", None),
+        ("cdx-auto", None),
     ] {
         let cell = profile_cell(name, &profiles).unwrap();
         let setting = codex_switch(&cell.args);
@@ -3972,7 +3972,7 @@ fn antigravity_layouts_render_catalog_effort_and_the_max_fallback() {
 
 #[test]
 fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
-    use crate::agents::Toggle::{Off, On, Unset};
+    use crate::agents::Toggle::{Auto, Off, On};
 
     let profiles = toml_defs_with_bases(
         &[
@@ -3988,10 +3988,10 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
         ],
         "[profiles.markdown]\ndescription = 'Markdown'\nagent = 'claude'\n\
          [profiles.toml]\ndescription = 'Toml'\nagent = 'claude'\n\
-         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'claude'\nfast = 'unset'\ncode-mode = 'unset'\n\
+         [profiles.cleared]\ndescription = 'Cleared'\nagent = 'claude'\nfast = 'auto'\ncode-mode = 'auto'\n\
          [profiles.heir]\ndescription = 'Heir'\nagent = 'cleared'\n\
          [profiles.eager]\ndescription = 'Eager'\nagent = 'claude'\nfast = 'on'\n\
-         [profiles.eager-heir]\ndescription = 'Eager heir'\nagent = 'eager'\nfast = 'unset'\n\
+         [profiles.eager-heir]\ndescription = 'Eager heir'\nagent = 'eager'\nfast = 'auto'\n\
          [profiles.written]\ndescription = 'Written'\nagent = 'claude'\nfast = 'off'\ncode-mode = 'off'\n\
          effort = 'high'\nauto-compact = '200k'\n",
     );
@@ -4029,8 +4029,8 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             None,
             (
                 "claude".to_owned(),
-                Some(Unset),
-                Some(Unset),
+                Some(Auto),
+                Some(Auto),
                 Some("low".to_owned()),
                 Some("300000".to_owned()),
             ),
@@ -4040,8 +4040,8 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             None,
             (
                 "claude".to_owned(),
-                Some(Unset),
-                Some(Unset),
+                Some(Auto),
+                Some(Auto),
                 Some("low".to_owned()),
                 Some("300000".to_owned()),
             ),
@@ -4051,7 +4051,7 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             None,
             (
                 "claude".to_owned(),
-                Some(Unset),
+                Some(Auto),
                 Some(On),
                 Some("low".to_owned()),
                 Some("300000".to_owned()),
@@ -4110,7 +4110,7 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
     for (fast, effort, want_fast, want_effort) in [
         (None, None, Some(true), "low"),
         (Some(Off), Some("high"), Some(false), "high"),
-        (Some(Unset), None, None, "low"),
+        (Some(Auto), None, None, "low"),
     ] {
         let binding = RoleBinding {
             fast,

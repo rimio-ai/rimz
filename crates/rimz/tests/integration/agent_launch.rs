@@ -6284,7 +6284,7 @@ fn explain_names_where_each_tuning_value_came_from() {
     );
     for (name, extra) in [
         ("plain", ""),
-        ("cleared", "\nfast: unset"),
+        ("cleared", "\nfast: auto"),
         ("slow", "\nfast: off"),
     ] {
         crate::common::write_definition(
@@ -6477,12 +6477,12 @@ fn explain_names_where_each_tuning_value_came_from() {
         assert_eq!(row(&plain, label).as_deref(), Some(value), "{plain}");
     }
     let cleared = human(&["cleared"]);
-    assert_eq!(row(&cleared, "fast").as_deref(), Some("unset"), "{cleared}");
+    assert_eq!(row(&cleared, "fast").as_deref(), Some("auto"), "{cleared}");
     let slow = human(&["slow"]);
     assert_eq!(row(&slow, "fast").as_deref(), Some("off"), "{slow}");
 
     // Listings show what the launch takes: an unwritten effort or fast lists the kind base's,
-    // and a written one, `unset` included, still wins.
+    // and a written one, `auto` included, still wins.
     let listed = |args: &[&str], rows: &str| -> Vec<(String, Option<String>, bool)> {
         let output = env
             .rimz()

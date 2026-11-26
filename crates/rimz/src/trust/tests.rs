@@ -858,17 +858,17 @@ fn hash_covers_every_documented_surface_field() {
 }
 
 #[test]
-fn unset_fast_profile_keeps_its_executable_surface_shape() {
+fn auto_fast_profile_keeps_its_executable_surface_shape() {
     // An explicit `fast = false` is a choice that changes argv on resume and
-    // under a provider default, so it hashes apart from unset (the surface
-    // list covers that); unset adds nothing, so pinned hashes hold.
+    // under a provider default, so it hashes apart from auto (the surface
+    // list covers that); an absent key adds nothing, so pinned hashes hold.
     let bare: ProjectConfig = toml::from_str("[profiles.x]\nagent = \"claude\"\n").expect("bare");
     let surface =
         serde_json::to_value(ExecutableSurface::from(&bare).profiles).expect("profile surface");
     assert!(surface[0].get("fast").is_none(), "{surface}");
     assert!(surface[0].get("code_mode").is_none(), "{surface}");
 
-    // `true` and `false` keep a boolean's bytes; `"unset"` hashes apart from absent.
+    // `true` and `false` keep a boolean's bytes; `"auto"` hashes apart from absent.
     let hash = |fields: &str| {
         let config: ProjectConfig =
             toml::from_str(&format!("[profiles.x]\nagent = \"claude\"\n{fields}"))
@@ -890,9 +890,12 @@ fn unset_fast_profile_keeps_its_executable_surface_shape() {
         let (_, word) = hash(&format!("fast = {spelled}\ncode-mode = {spelled}\n"));
         assert_eq!(boolean, word, "{written} and {spelled} are one choice");
     }
-    let (surface, unset) = hash("fast = \"unset\"\ncode-mode = \"unset\"\n");
-    assert_eq!(surface[0]["fast"], "unset", "{surface}");
-    assert_ne!(unset, hash("").1);
+    let (surface, auto) = hash("fast = \"auto\"\ncode-mode = \"auto\"\n");
+    assert_eq!(surface[0]["fast"], "auto", "{surface}");
+    assert_eq!(surface[0]["code_mode"], "auto", "{surface}");
+    assert_ne!(auto, hash("").1);
+    // The legacy `"unset"` reads as `auto` and hashes as it.
+    assert_eq!(hash("fast = \"unset\"\ncode-mode = \"unset\"\n").1, auto);
 }
 
 #[test]
