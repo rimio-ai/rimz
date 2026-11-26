@@ -918,12 +918,19 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         (cwd, artifact_dir): (&Path, &Path),
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
-    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+    ) -> std::result::Result<
+        (Vec<String>, Vec<crate::agents::capabilities::UnappliedMark>),
+        crate::agents::skills::LaunchSettingsErr,
+    > {
         let grant = launch.server.as_ref().is_some_and(|server| server.grant);
         let limits = crate::config::mcps_limit(launch.mcps);
         let entries = launch.mcps.unwrap_or_default();
-        let warnings = launch.unapplied_marks(
+        let unapplied = launch.unapplied_marks(
             "Claude takes a load mode only for RimZ's server and its capabilities",
+            launch.code_mode.then_some(
+                "Claude's code mode offers the model only REPL and Poll, so no MCP tool loads \
+                 up front",
+            ),
         );
         if grant || limits {
             *artifact = merge_settings(
@@ -984,7 +991,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             // passthrough positional.
             extra_args.extend(["--mcp-config".to_owned(), config.to_string()]);
         }
-        Ok(warnings)
+        Ok((Vec::new(), unapplied))
     }
 
     fn take_fast_settings(&self, extra_args: &mut Vec<String>) -> Option<bool> {

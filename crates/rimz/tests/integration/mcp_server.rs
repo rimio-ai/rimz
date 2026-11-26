@@ -43,9 +43,13 @@ fn tool_load(out: &str, tool: &str) -> String {
         .skip_while(|line| !line.trim_start().starts_with("CAPABILITY"))
         .take_while(|line| !line.trim_start().starts_with("total:"))
         .find(|line| line.split_whitespace().nth(1) == Some(tool))
-        .and_then(|line| line.split_whitespace().last())
+        .map(|line| {
+            line.split_whitespace()
+                .skip(3)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .unwrap_or_else(|| panic!("no {tool} row in {out}"))
-        .to_owned()
 }
 
 /// A spawned server, leading its own process group as a provider starts one.
@@ -2423,7 +2427,8 @@ fn lsp_show_on_one_target_that_fails_is_a_failure() {
 
 /// `rimz agents explain <profile> --mcps` shows what each launch hands over:
 /// RimZ's server and the load mode of each tool, the user's servers it keeps,
-/// each mark it did not apply, and the provider's own arguments.
+/// each mark it did not apply beside the load it concerns (never on stderr),
+/// and the provider's own arguments.
 #[test]
 fn explain_mcps_shows_what_each_launch_hands_over() {
     let env = Env::new();
@@ -2454,7 +2459,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         (
             "xmark",
             "codex",
-            "['rimz:deferred', 'rimz-lsp:always', github]",
+            "['rimz:deferred', 'rimz-lsp:always', github, 'absent:always']",
+        ),
+        (
+            "ccode",
+            "claude",
+            "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']\ncode-mode: on",
         ),
         ("pmark", "pi", "[rimz-lsp]"),
         (
@@ -2497,14 +2507,14 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             .env("PATH", path)
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains(" entry `"), "{stderr}");
         String::from_utf8(output.stdout).unwrap()
     };
     let explain = |profile: &str| explain_with(profile, true);
+    let claude_user = "the mcps entry `github:always` is not applied: Claude takes a load mode \
+                       only for RimZ's server and its capabilities";
 
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
@@ -2518,16 +2528,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert_eq!(tool_load(&out, "wait"), "default", "{out}");
     assert_eq!(tool_load(&out, "guide"), "default", "{out}");
     assert!(
-        out.contains("every server the account and project configure"),
+        out.contains(&format!(
+            "every server the account and project configure; {claude_user}\n"
+        )),
         "{out}"
     );
-    assert!(
-        out.contains(
-            "the mcps entry `github:always` is not applied: Claude takes a load mode only for \
-             RimZ's server and its capabilities"
-        ),
-        "{out}"
-    );
+    assert!(!out.contains("\nNot applied\n"), "{out}");
     assert!(out.contains("--mcp-config"), "{out}");
     assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
     assert!(out.contains("claude mcp list"), "{out}");
@@ -2600,18 +2606,47 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         ),
         "{out}"
     );
-    assert_eq!(tool_load(&out, "lsp"), "deferred", "{out}");
+    assert_eq!(
+        tool_load(&out, "lsp"),
+        "deferred; the mcps entry `rimz-lsp:always` is not applied: Codex takes a load mode \
+         per server, so rimz-lsp loads as the rimz server does",
+        "{out}"
+    );
     assert_eq!(tool_load(&out, "notes"), "deferred", "{out}");
-    assert!(out.contains("switched off: notion"), "{out}");
     assert!(
         out.contains(
-            "the mcps entry `rimz-lsp:always` is not applied: Codex takes a load mode per \
-             server, so rimz-lsp loads as the rimz server does"
+            "switched off: notion; the mcps entry `absent:always` is not applied: the account's \
+             Codex config defines no MCP server `absent`\n"
         ),
         "{out}"
     );
     assert!(out.contains("mcp_servers.rimz.omit_tools_from=[]"), "{out}");
     assert!(out.contains("CODEX_ROLLOUT_TRACE_ROOT"), "{out}");
+
+    // Claude's code mode offers the model only REPL and Poll, so no mark of RimZ's applies,
+    // while the argv still carries them.
+    let out = explain("ccode");
+    let coded = "is not applied: Claude's code mode offers the model only REPL and Poll, so no \
+                 MCP tool loads up front";
+    assert_eq!(
+        tool_load(&out, "lsp"),
+        format!("always; the mcps entry `rimz-lsp:always` {coded}"),
+        "{out}"
+    );
+    assert_eq!(tool_load(&out, "wait"), "default", "{out}");
+    assert!(
+        out.contains(&format!(
+            "rimz-control, rimz-notes; the mcps entry `rimz:deferred` {coded}\n"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "every server the account and project configure; {claude_user}\n"
+        )),
+        "{out}"
+    );
+    assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
 
     let out = explain("pmark");
     assert!(
@@ -2643,8 +2678,12 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
 
     std::fs::write(&config, "[agents]\nrimz-mcp-server = false\n").unwrap();
     let out = explain("cmark");
+    let off = "is not applied: RimZ's MCP server is off for this launch";
     assert!(
-        out.contains("off: [agents] rimz-mcp-server = false"),
+        out.contains(&format!(
+            "off: [agents] rimz-mcp-server = false; the mcps entry `rimz:deferred` {off}; the \
+             mcps entry `rimz-lsp:always` {off}\n"
+        )),
         "{out}"
     );
     assert!(!out.contains("CAPABILITY"), "{out}");
@@ -2683,11 +2722,9 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
             .env("PATH", path)
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains(" entry `"), "{stderr}");
         String::from_utf8(output.stdout).unwrap()
     };
     let env = Env::new();
@@ -2711,14 +2748,11 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
         "{out}"
     );
     assert!(
-        out.contains("only github, notion (inheritMcp: false)"),
+        out.contains("only github, notion (inheritMcp: false); the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities\n"),
         "{out}"
     );
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
-    assert!(
-        out.contains("\nNot applied\n  the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities\n"),
-        "{out}"
-    );
+    assert!(!out.contains("\nNot applied\n"), "{out}");
     assert!(out.contains("\n  inheritMcp: false\n"), "{out}");
     assert!(
         out.contains(r#"{"name": "github"}, {"name": "notion"}]"#),
@@ -2778,6 +2812,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "@planner", &[]);
     let kept = "kept from the conversation's start: a resume writes no agent file";
     assert_eq!(out.matches(kept).count(), 1, "{out}");
+    assert!(!out.contains("is not applied"), "{out}");
     assert!(out.contains("serves rimz-lsp as `rimz_tools`\n"), "{out}");
     assert_eq!(tool_load(&out, "lsp"), "always", "{out}");
 

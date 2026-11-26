@@ -7140,7 +7140,7 @@ fn routine_rimz_settings_union_idempotence_and_refusal() {
     for (grant_server, expected_mcp) in [(Some(true), true), (Some(false), false), (None, false)] {
         let mut args = Vec::new();
         let mut artifact = None;
-        let warnings = AntigravityAdapter
+        let (warnings, unapplied) = AntigravityAdapter
             .mcp_server_args(
                 &crate::agents::capabilities::McpLaunch {
                     server: grant_server.map(server),
@@ -7148,13 +7148,14 @@ fn routine_rimz_settings_union_idempotence_and_refusal() {
                     granted: false,
                     login_env: &empty_env,
                     rendered_tools: false,
+                    code_mode: false,
                 },
                 (root.path(), root.path()),
                 &mut args,
                 &mut artifact,
             )
             .unwrap();
-        assert!(warnings.is_empty());
+        assert!(warnings.is_empty() && unapplied.is_empty());
         if expected_mcp {
             assert_eq!(args.len(), 2, "{args:?}");
             let doc: Value = serde_json::from_str(&args[1]).unwrap();

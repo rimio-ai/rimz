@@ -516,7 +516,9 @@ upward-dependencies = [
 # one probe-free resumability rule with the snapshot fold, harness and CLI (+3).
 # AgentState::ends_turn_for_compaction tells the hook path and the deadline hold that a stop
 # ended a turn for a hard compaction (+1).
-surface-budget = 1395
+# capabilities::UnappliedMark carries each load mark a launch cannot apply from the adapter to
+# `rimz agents explain --mcps`, the one reader, outside the launch warnings (+1).
+surface-budget = 1396
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -956,6 +958,11 @@ reason = "Launch compilation delegates the MCP server entry, its grant, and the 
 kind = "item"
 key = "agents::capabilities::McpLaunch"
 reason = "Launch compilation hands the adapter the server, the profile's mcps list, and the login env in one value."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::UnappliedMark"
+reason = "An adapter's unapplied load mark travels on the compiled process to explain, which places it beside the load it concerns."
 
 [[verdict]]
 kind = "item"

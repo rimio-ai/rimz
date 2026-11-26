@@ -1328,6 +1328,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         granted: request.rimz_capabilities.is_some(),
                         login_env: &env,
                         rendered_tools: request.tools.is_some(),
+                        code_mode: request.identity.params.code_mode == Some(true),
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")
@@ -1339,10 +1340,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 .provider_argv
                 .extend([flag.clone(), file.name.clone()]);
             process.rebuild_argv();
-            for warning in &file.warnings {
-                warnings.push(LaunchPlanWarning::LaunchEnv(warning.clone()));
-            }
-            process.mcp_warnings.extend(file.warnings.iter().cloned());
+            process
+                .unapplied_marks
+                .extend(file.unapplied.iter().cloned());
             Some(file)
         }
         _ => None,

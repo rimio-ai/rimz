@@ -1023,6 +1023,7 @@ fn agent_file_matcher_comes_with_an_agent_file() {
             granted: false,
             login_env: &env,
             rendered_tools: false,
+            code_mode: false,
         },
     };
     for adapter in BUILTINS {
@@ -1066,6 +1067,7 @@ fn agent_file_kinds_write_a_limiting_mcps_list() {
                     granted: false,
                     login_env: &env,
                     rendered_tools: false,
+                    code_mode: false,
                 },
             })
             .map(|file| file.unwrap().bytes)

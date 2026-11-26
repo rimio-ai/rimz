@@ -881,11 +881,14 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
         paths: (&Path, &Path),
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
-    ) -> std::result::Result<Vec<String>, crate::agents::skills::LaunchSettingsErr> {
+    ) -> std::result::Result<
+        (Vec<String>, Vec<crate::agents::capabilities::UnappliedMark>),
+        crate::agents::skills::LaunchSettingsErr,
+    > {
         if launch.server.as_ref().is_some_and(|server| server.grant) {
             permissions::allow_mcp_server(paths, extra_args, artifact)?;
         }
-        Ok(Vec::new())
+        Ok((Vec::new(), Vec::new()))
     }
 
     fn serves_mcp_from_launch_env(&self) -> bool {

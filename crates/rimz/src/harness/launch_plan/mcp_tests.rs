@@ -459,18 +459,27 @@ fn codex_mcps_lists_disable_only_the_unlisted_servers_the_account_configures() {
     room.codex_config("config.toml", "[mcp_servers.github\n");
     let plan = room.compile(
         &switches(true, true),
-        &launch("codex", Some(&["keep"]), &[]),
+        &launch("codex", Some(&["keep", "github:always"]), &[]),
     );
     assert_eq!(
         codex_disabled(&plan.process().provider_argv),
         Vec::<String>::new()
     );
-    let warnings: Vec<_> = plan.warnings.iter().map(ToString::to_string).collect();
+    // The switch-off failure is not about a mark, so it still warns; the mark it leaves
+    // unapplied reaches only explain.
+    let warnings = mcp_warnings(&plan);
     assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.contains("mcps") && warning.contains("config.toml")),
+        matches!(&warnings[..], [warning] if warning.starts_with(
+            "the profile's mcps list switches off none of the account's Codex MCP servers: "
+        ) && warning.contains("config.toml")),
         "{warnings:?}"
+    );
+    let unapplied = unapplied(&plan);
+    assert!(
+        matches!(&unapplied[..], [mark] if mark.starts_with(
+            "the mcps entry `github:always` is not applied: "
+        ) && mark.contains("config.toml")),
+        "{unapplied:?}"
     );
 }
 
@@ -600,7 +609,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     serves_nothing(&plan);
 
     // A capability's own mark wins over the `rimz` mark, which every other served capability
-    // takes. A marked user server warns and keeps its name-only item.
+    // takes. A marked user server keeps its name-only item, its mark unapplied.
     let marked = prompted(launch(
         "antigravity",
         Some(&["rimz:deferred", "rimz-lsp:always", "github:always"]),
@@ -616,11 +625,12 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     );
     serves(&plan, marks);
     let github = "the mcps entry `github:always` is not applied: Antigravity takes a load mode only for RimZ's capabilities";
-    assert_eq!(mcp_warnings(&plan), [github]);
-    assert_eq!(plan.process().mcp_warnings, [github]);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
+    assert_eq!(unapplied(&plan), [github]);
     let plan = room.compile(&switches(true, false), &marked);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     assert_eq!(
-        mcp_warnings(&plan),
+        unapplied(&plan),
         [
             "the mcps entry `rimz:deferred` is not applied: RimZ's MCP server is off for this launch",
             "the mcps entry `rimz-lsp:always` is not applied: RimZ's MCP server is off for this launch",
@@ -636,6 +646,8 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     };
     let plan = room.compile(&switches(true, true), &resumed);
     assert_eq!(plan.agent_file, None);
+    // A resume composes no agent file, so nothing reports a mark unapplied.
+    assert_eq!(unapplied(&plan), Vec::<String>::new());
     serves(&plan, marks);
     assert_eq!(
         plan.mcp_capabilities,
@@ -667,6 +679,15 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         let plan = room.compile(&switches(true, true), &launch(kind, None, &[]));
         serves_nothing(&plan);
     }
+}
+
+/// The marks the launch cannot apply, as `rimz agents explain --mcps` reports them.
+fn unapplied(plan: &LaunchPlan) -> Vec<String> {
+    plan.process()
+        .unapplied_marks
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// The plan's MCP warnings, whichever key they name: the launch's own MCP warnings (carried as
@@ -792,10 +813,11 @@ fn claude_marks_become_always_load_and_serve_flags() {
     }
 }
 
-/// A mark a launch cannot apply warns once, names its entry, and the launch
-/// still compiles without it.
+/// A mark a launch cannot apply reaches explain once, naming its entry, never the launch
+/// warnings, and the launch still compiles without it. Claude's code mode offers the model only
+/// REPL and Poll, so no mark of RimZ's applies there.
 #[test]
-fn claude_marks_it_cannot_apply_warn_once_each() {
+fn claude_marks_it_cannot_apply_reach_explain_and_never_warn() {
     let room = Room::new();
     let plan = room.compile(
         &switches(true, true),
@@ -807,8 +829,9 @@ fn claude_marks_it_cannot_apply_warn_once_each() {
     );
     let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
     assert_eq!(entry.get("alwaysLoad"), None);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     assert_eq!(
-        mcp_warnings(&plan),
+        unapplied(&plan),
         [
             "the mcps entry `github:always` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
             "the mcps entry `linear:deferred` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
@@ -823,11 +846,29 @@ fn claude_marks_it_cannot_apply_warn_once_each() {
         ),
     );
     assert_eq!(claude_entry(&plan.process().provider_argv), None);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     assert_eq!(
-        mcp_warnings(&plan),
+        unapplied(&plan),
         [
             "the mcps entry `rimz:always` is not applied: RimZ's MCP server is off for this launch",
             "the mcps entry `rimz-lsp:deferred` is not applied: RimZ's MCP server is off for this launch",
+        ]
+    );
+
+    let mut coded = launch(
+        "claude",
+        Some(&["rimz:always", "rimz-lsp:deferred", "github:always"]),
+        &[],
+    );
+    coded.identity.params.code_mode = Some(true);
+    let plan = room.compile(&switches(true, true), &coded);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
+    assert_eq!(
+        unapplied(&plan),
+        [
+            "the mcps entry `rimz:always` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
+            "the mcps entry `rimz-lsp:deferred` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
+            "the mcps entry `github:always` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
         ]
     );
 }
@@ -859,7 +900,8 @@ fn codex_marks_set_omit_tools_from_per_server() {
     let always = toml::Value::try_from(["deferred"]).unwrap();
     let compile = |mcps: &[&str], args: &[&str]| {
         let plan = room.compile(&switches(true, true), &launch("codex", Some(mcps), args));
-        (plan.process().provider_argv.clone(), mcp_warnings(&plan))
+        assert_eq!(mcp_warnings(&plan), Vec::<String>::new(), "{mcps:?}");
+        (plan.process().provider_argv.clone(), unapplied(&plan))
     };
     let (argv, warnings) = compile(&["*", "rimz:always", "github:deferred"], &[]);
     assert_eq!(codex_omit(&argv, "rimz"), Some(always.clone()));
@@ -1313,7 +1355,7 @@ fn a_grant_serves_its_capabilities_and_mcps_keeps_the_users_servers() {
 
 /// A grant of every capability through `rimz` hands the provider `rimz`'s mark as an
 /// `mcps: [rimz:<mark>]` list does: Codex's server-level `omit_tools_from` with no warning, and
-/// Claude's server `alwaysLoad`. With the server off, the warning names `capabilities`.
+/// Claude's server `alwaysLoad`. With the server off, the unapplied mark names `capabilities`.
 #[test]
 fn a_rimz_grant_marks_the_server_as_an_mcps_rimz_entry_does() {
     let room = Room::new();
@@ -1372,8 +1414,10 @@ fn a_rimz_grant_marks_the_server_as_an_mcps_rimz_entry_does() {
             .map(|entry| entry.parse().unwrap())
             .collect(),
     );
+    let plan = room.compile(&switches(true, false), &granted);
+    assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     assert_eq!(
-        mcp_warnings(&room.compile(&switches(true, false), &granted)),
+        unapplied(&plan),
         [
             "the capabilities entry `rimz:deferred` is not applied: RimZ's MCP server is off for \
              this launch"

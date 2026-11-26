@@ -46,20 +46,42 @@ pub struct LaunchFrontend {
     pub extension_auto_approve: bool,
 }
 
+/// A load mark a launch cannot apply, and why. No launch warns of one: `rimz agents explain
+/// --mcps` shows it beside the load it concerns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnappliedMark {
+    pub entry: crate::config::McpName,
+    /// The profile key the entry came from: `capabilities` or `mcps`.
+    key: &'static str,
+    reason: String,
+}
+
+impl std::fmt::Display for UnappliedMark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the {} entry `{}` is not applied: {}",
+            self.key, self.entry, self.reason
+        )
+    }
+}
+
 /// RimZ's MCP server as a launch hands it to the provider, and the launch's
 /// `mcps` list over the user's own servers.
 pub struct McpLaunch<'a> {
     pub server: Option<McpServer>,
     /// `None` leaves the user's servers as the provider loads them.
     pub mcps: Option<&'a [crate::config::McpName]>,
-    /// The list's RimZ capabilities come from a `capabilities:` grant, so a warning about one
-    /// names that key rather than `mcps`.
+    /// The list's RimZ capabilities come from a `capabilities:` grant, so an unapplied mark on
+    /// one names that key rather than `mcps`.
     pub granted: bool,
     /// The provider login environment, where the account's config is read.
     pub login_env: &'a BTreeMap<String, String>,
     /// The launch argv's first `--tools` is the list RimZ rendered from the profile; a later
     /// one, or any without this, is the user's own.
     pub rendered_tools: bool,
+    /// The profile turns the provider's code mode on.
+    pub code_mode: bool,
 }
 
 impl McpLaunch<'_> {
@@ -78,7 +100,7 @@ impl McpLaunch<'_> {
 
     /// The profile key `entry` came from: `capabilities` for a granted capability or `rimz`
     /// (refused in `mcps` beside a grant), else `mcps`.
-    pub(super) fn key(&self, entry: &crate::config::McpName) -> &'static str {
+    fn key(&self, entry: &crate::config::McpName) -> &'static str {
         let from_grant =
             entry.capability().is_some() || entry.name() == crate::mcp::catalog::SERVER_NAME;
         if self.granted && from_grant {
@@ -88,9 +110,27 @@ impl McpLaunch<'_> {
         }
     }
 
-    /// One warning for each mark the launch cannot apply: a mark on one of the user's
-    /// servers, for `user_server_reason`, and any other mark while RimZ's server is off.
-    pub(super) fn unapplied_marks(&self, user_server_reason: &str) -> Vec<String> {
+    /// `entry`'s mark, not applied for `reason`.
+    pub(super) fn unapplied(
+        &self,
+        entry: &crate::config::McpName,
+        reason: impl Into<String>,
+    ) -> UnappliedMark {
+        UnappliedMark {
+            entry: entry.clone(),
+            key: self.key(entry),
+            reason: reason.into(),
+        }
+    }
+
+    /// Each mark the launch cannot apply: a mark on one of the user's servers, for
+    /// `user_server_reason`, any other mark while RimZ's server is off, and with
+    /// `served_reason` every other mark too.
+    pub(super) fn unapplied_marks(
+        &self,
+        user_server_reason: &str,
+        served_reason: Option<&str>,
+    ) -> Vec<UnappliedMark> {
         self.mcps
             .unwrap_or_default()
             .iter()
@@ -101,12 +141,9 @@ impl McpLaunch<'_> {
                 } else if self.server.is_none() {
                     "RimZ's MCP server is off for this launch"
                 } else {
-                    return None;
+                    served_reason?
                 };
-                Some(format!(
-                    "the {} entry `{entry}` is not applied: {reason}",
-                    self.key(entry)
-                ))
+                Some(self.unapplied(entry, reason))
             })
             .collect()
     }
@@ -819,15 +856,17 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Register RimZ's MCP server and keep only the user's servers a `mcps`
     /// list names, within what the provider can switch off per launch.
-    /// Returns warnings for a list it could not apply in full.
+    /// Returns warnings for a list it could not apply in full, and each load mark it cannot
+    /// apply, which no launch warns of.
     fn mcp_server_args(
         &self,
         _launch: &McpLaunch<'_>,
         _paths: (&Path, &Path),
         _extra_args: &mut Vec<String>,
         _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
-    ) -> std::result::Result<Vec<String>, super::skills::LaunchSettingsErr> {
-        Ok(Vec::new())
+    ) -> std::result::Result<(Vec<String>, Vec<UnappliedMark>), super::skills::LaunchSettingsErr>
+    {
+        Ok((Vec::new(), Vec::new()))
     }
 
     /// Grant native file access to a notes folder (the checkout's team or

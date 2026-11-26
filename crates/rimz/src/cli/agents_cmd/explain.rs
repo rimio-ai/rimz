@@ -331,9 +331,10 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
 
 /// What a launch hands its provider for MCP: RimZ's server and the load mode
 /// of each of its tools, the user's servers it keeps, each `mcps` mark the
-/// adapter did not apply, and the provider arguments that carry them, all read
-/// from the compiled plan; then the instructions and each tool's description
-/// and schema, as the server sends them.
+/// adapter did not apply beside the line it concerns, and the provider
+/// arguments that carry them, all read from the compiled plan; then the
+/// instructions and each tool's description and schema, as the server sends
+/// them.
 fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io::Result<()> {
     let kind = plan.request.kind.as_str();
     let adapter = rimz::agents::find_definition(kind).expect("compiled agent has an adapter");
@@ -393,13 +394,28 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             }
         )
     };
-    servers.push("rimz", render::cell(rimz_line));
+    // A capability's mark shows on its tools' rows, and any other mark of RimZ's on this line.
+    let unapplied = &process.unapplied_marks;
+    let rimz_marks = unapplied.iter().filter(|mark| {
+        mark.entry.user_server().is_none()
+            && mark
+                .entry
+                .capability()
+                .is_none_or(|capability| !served.contains(&capability))
+    });
+    servers.push("rimz", render::cell(with_marks(rimz_line, rimz_marks)));
     let user_line = if resumes {
         kept.to_owned()
     } else {
         user_servers(plan, &arguments, rides_agent_file)
     };
-    servers.push("your servers", render::cell(user_line));
+    let user_marks = unapplied
+        .iter()
+        .filter(|mark| mark.entry.user_server().is_some());
+    servers.push(
+        "your servers",
+        render::cell(with_marks(user_line, user_marks)),
+    );
     writeln!(w, "MCP servers")?;
     servers.render(w)?;
     if !plan.hidden_skills.is_empty() {
@@ -420,22 +436,20 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             let size = tool.tokens(&wording);
             total += size;
             let load = load_mode(&arguments, &launch_env, tool.capability);
+            let marks = unapplied.iter().filter(|mark| {
+                tool.capability
+                    .is_some_and(|capability| mark.entry.capability() == Some(capability))
+            });
             table.row([
                 render::cell(tool.group_name()),
                 render::cell(tool.name),
                 render::cell(format!("~{size}")),
-                render::cell(load),
+                render::cell(with_marks(load.to_owned(), marks)),
             ]);
         }
         writeln!(w, "\nTools")?;
         table.render(w)?;
         writeln!(w, "total: ~{total} tokens in {} tools", tools.len())?;
-    }
-    if !process.mcp_warnings.is_empty() {
-        writeln!(w, "\nNot applied")?;
-        for warning in &process.mcp_warnings {
-            writeln!(w, "  {warning}")?;
-        }
     }
     if !arguments.is_empty() {
         let heading = if rides_agent_file {
@@ -492,6 +506,14 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
         "{}",
         render_listing(&tools, served, &modes, server_wide, &wording)
     )
+}
+
+/// `line`, then each mark the launch does not apply that concerns it, and why.
+fn with_marks<'a>(
+    line: String,
+    marks: impl Iterator<Item = &'a rimz::agents::capabilities::UnappliedMark>,
+) -> String {
+    marks.fold(line, |line, mark| format!("{line}; {mark}"))
 }
 
 /// The user's servers a launch keeps, read from what the adapter wrote: the
