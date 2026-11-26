@@ -2217,6 +2217,58 @@ init-options = { checkOnSave = false, workspace = { symbol = { search = { kind =
 }
 
 #[test]
+fn merge_defaults_leaves_an_already_merged_file_in_place() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "timezone = \"America/Los_Angeles\"\n").expect("seed config");
+    let files = MachineConfigFiles::from_paths(&path, dir.path().join("agents-home"));
+    let paths = files.ordered().map(|file| file.path().to_path_buf());
+    let inode = |path: &Path| std::fs::metadata(path).expect("stat merged file").ino();
+    let seeded = inode(&path);
+    let editor = ConfigEditor::new(files);
+
+    let first = editor.merge_defaults().expect("first merge");
+    assert!(
+        matches!(first.files[0].action, MergeAction::Merged { kept: 1 }),
+        "{first:?}"
+    );
+    assert!(
+        first.files[1..]
+            .iter()
+            .all(|file| matches!(file.action, MergeAction::Wrote)),
+        "{first:?}"
+    );
+    assert_ne!(
+        inode(&path),
+        seeded,
+        "a merge that changes bytes replaces the file"
+    );
+    let merged = paths
+        .each_ref()
+        .map(|path| (inode(path), std::fs::read_to_string(path).unwrap()));
+
+    let second = editor.merge_defaults().expect("second merge");
+    assert!(
+        second
+            .files
+            .iter()
+            .all(|file| matches!(file.action, MergeAction::Merged { .. })),
+        "{second:?}"
+    );
+    for (path, (merged_inode, merged_text)) in paths.iter().zip(&merged) {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), *merged_text);
+        assert_eq!(
+            inode(path),
+            *merged_inode,
+            "{} was replaced by a merge that changed no byte",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn merge_defaults_removes_unknown_machine_keys() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");
