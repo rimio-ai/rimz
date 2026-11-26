@@ -21,6 +21,13 @@ struct SeatLoader<'a> {
     subagents: &'a Namespace,
 }
 
+struct SeatTeam<'a> {
+    name: &'a str,
+    team: &'a Team,
+    traits: &'a [String],
+    reflects: bool,
+}
+
 pub(super) fn load(
     scope: LoadScope<'_>,
     [agents, subagents]: [&Namespace; 2],
@@ -93,10 +100,16 @@ pub(super) fn load(
                 ));
             }
             let (team, reflects) = roster?;
+            let seat_team = SeatTeam {
+                name: &name,
+                team: &team,
+                traits: fm.traits.as_deref().unwrap_or(&[]),
+                reflects,
+            };
             let mut profiles = Vec::new();
             let mut errors = Vec::new();
             for (role, binding) in fm.roles.iter().zip(&team.roles) {
-                match seats.load(&path, &name, role, &fm, reflects, loaded) {
+                match seats.load(&path, role, &seat_team, loaded) {
                     Ok(profile) => profiles.push((binding, profile)),
                     Err(error) => errors.push(error),
                 }
@@ -434,12 +447,11 @@ impl SeatLoader<'_> {
     fn load(
         &self,
         path: &Path,
-        name: &str,
         role: &RoleFrontmatter,
-        team: &TeamFrontmatter,
-        reflects: bool,
+        seat_team: &SeatTeam<'_>,
         loaded: &LoadedDefinitions,
     ) -> Result<Profile, DefinitionErr> {
+        let name = seat_team.name;
         let definition = self.agents.lookup(&role.agent, path)?
             .filter(|_| loaded.agent_profiles.0.contains_key(&role.agent))
             .ok_or_else(|| {
@@ -493,7 +505,7 @@ impl SeatLoader<'_> {
             .iter()
             .flatten()
             .chain(role.traits.iter().flatten())
-            .chain(team.traits.iter().flatten())
+            .chain(seat_team.traits)
         {
             if !traits.contains(name) {
                 traits.push(name.clone());
@@ -502,10 +514,7 @@ impl SeatLoader<'_> {
         fm.traits = Some(traits);
         let handle = role.role.as_deref().unwrap_or(&role.agent);
         let seat_info = agent::SeatInfo {
-            edits: agent::SeatEdits {
-                leader: team.leader.as_deref() == Some(handle),
-                reflects,
-            },
+            edits: agent::SeatEdits::for_seat(seat_team.team, handle, seat_team.reflects),
             team: name.to_owned(),
             role: handle.to_owned(),
             agent: role.agent.clone(),
