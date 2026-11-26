@@ -3041,7 +3041,6 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         let mut drainer = drain_command(&env)
             .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
-            .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
             .stderr(std::fs::File::create(&log).unwrap())
             .spawn()
             .unwrap();
@@ -3073,7 +3072,11 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
                 .iter()
                 .any(|event| event.ingress.is_some())
         );
-        drop(_lease);
+        // A stop, not an idle exit, ends the drainer: a short idle window could close the
+        // listener on the lease still in its backlog, and an elected drainer without the
+        // timing variable would then serve the frame.
+        let mut stop = drainer_connection(&store, Some(&mut drainer));
+        writeln!(stop, "{}", json!({"through": 0, "stop": true})).unwrap();
         assert!(drainer.wait().unwrap().success());
         let records = timing_records(&std::fs::read(log).unwrap());
         let ids: std::collections::HashSet<_> = env
