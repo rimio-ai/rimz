@@ -13,9 +13,9 @@ A team is staged when it declares `stages` or any role `owns` a stage (`config::
 | `harness/team_notes.rs` | `register`: the dated run directory, its `run.json`, and the checkout link, before a launch or resume |
 | `harness/scratch.rs` | Read side: link resolution (`run_dir`, `run_team`), board paths, the memory scan, `board_stage`, `board_section`, `board_run`, and `holding_team` |
 | `harness/board.rs` | Write side: `LockedBoard` (canonical worktree, board lock, owner check, read), stamping, section insertion, `Stage:` rewriting, atomic publication, and `record` |
-| `harness/team_stage.rs` | `flip`, the two re-wake producers (`rewake_resumed`, the registration branch of `react_lifecycle`), the leader's stand-in (`ResumeWake`), owner delivery, flip compaction, and `stage_flips` |
-| `harness/run/team.rs` | The team run: `create_team_run`, `reopen_team_run`, `settle_team_run` |
-| `cli/agents_cmd/team_report.rs` | `on_flip` and `settle_ended_teams`: composing, queueing, and settling the `TEAM_REPORT` |
+| `harness/team_stage.rs` | `flip`, `flip_cohort` (the team lookup, trust check, and team report around `flip`), the two re-wake producers (`rewake_resumed`, the registration branch of `react_lifecycle`), the leader's stand-in (`ResumeWake`), owner delivery, flip compaction, and `stage_flips` |
+| `harness/run/team.rs` | The team run: `create_team_run`, `reopen_team_run`, `settle_team_run`, and the `TEAM_REPORT` a flip owes (`team_report_on_flip`, `report_team_run`) |
+| `cli/agents_cmd/team_report.rs` | `settle_ended_teams`: the `TEAM_REPORT` of a cohort that died before `Done` |
 | `cli/teams/board_context.rs` | Worktree and caller resolution shared by `flip` and `record` |
 | `cli/teams/list.rs`, `cli/teams/show.rs`, `cli/teams/wait.rs` | The board's CLI readers |
 | `launcher/team_join.rs` | The team join `rimz teams wait` renders: the board poll and its settle rule |
@@ -148,7 +148,7 @@ The caller is a member (`Flipper::Member`) when it belongs to the selected cohor
 5. **Open the stage.** The flip appends the `team.stage` signal and fires its subscriptions, then delivers a `STAGE` message to the owner at the `done` boundary ([loops.md § Team signals](./loops.md#team-signals)). `Done` stops the shared language servers of the locked checkout instead (`lsp::registry::stop_checkout`), and a self-owned stage or an owner with no live seat sends nothing. A failed signal append or owner dispatch returns `PartialFlip`, which names what completed and prints the flip command to re-run. A failed subscription fire or language-server stop only logs.
 6. **Compact the flipper.** On a member's hand-off to a stage another role owns, the flipper's pane gets its compaction command when its context has reached the threshold. The threshold is the role's `flip-compact`, else `[harness] flip_compact`, else 120k tokens for a role that owns `Plan` and 180k otherwise (`config::Team::flip_compact`). `off` at either level disables it, and a user flip never compacts. The queued command ranks ahead of queued prompts and carries the threshold as its `over_hand_off_limit` premise, so it is withdrawn only when the row at typing is under the threshold or its cache is cold ([Message premises](./messaging.md#message-premises)). Each attempt over the threshold appends an `Assist::FlipCompact` record, whether it sent, queued, or was refused. It is best-effort enrichment and never fails the flip. A flip to `Done` never compacts, because no member works after it. [Idle compaction](./messaging.md#idle-compaction) is separate and reads no board.
 
-After `flip` returns, the CLI settles the team report ([Team reports](#team-reports)). A report failure prints a `report` line and leaves the landed flip standing.
+After `flip` returns, `flip_cohort` settles the team report ([Team reports](#team-reports)). A report failure leaves the landed flip standing, and the CLI prints it as a `report` line.
 
 ## Resume re-wake
 
@@ -191,7 +191,7 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 
 | Event | Run | Message |
 |---|---|---|
-| A flip into `Done` from any other stage (`on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
+| A flip into `Done` from any other stage (`team_report_on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
 | `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/launcher/stop.rs::stop_run`) | None |
@@ -205,7 +205,7 @@ Cohort death is settled by `settle_ended_teams`, called from the sidebar's diges
 
 ### Detached teams
 
-A team launched with `--detach` carries `report_to: nobody` on its team run. Settlement still selects it: `on_flip` and the death backstop publish the leader's response and mark the run completed or failed exactly as for an attached run, but queue no message, store no `report_message_id`, and return `TeamReportOutcome::Detached`, so the flip receipt says the team was launched detached. `reopen_team_run` copies the policy from the newest run, so the stretch after a flip out of `Done` stays detached.
+A team launched with `--detach` carries `report_to: nobody` on its team run. Settlement still selects it: `team_report_on_flip` and the death backstop publish the leader's response and mark the run completed or failed exactly as for an attached run, but queue no message, store no `report_message_id`, and return `TeamReportOutcome::Detached`, so the flip receipt says the team was launched detached. `reopen_team_run` copies the policy from the newest run, so the stretch after a flip out of `Done` stays detached.
 
 ### Launcher debt and the team wait
 

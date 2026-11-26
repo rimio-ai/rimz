@@ -1265,6 +1265,24 @@ impl TeamCohort<'_> {
             .iter()
             .any(|member| member.kind == agent.kind && member.agent_id == agent.agent_id)
     }
+
+    /// Whether every member works in `worktree`, a lexically normalized path.
+    pub fn in_worktree(&self, worktree: &std::path::Path) -> bool {
+        self.members.iter().all(|member| {
+            member.worktree_path.as_deref().is_some_and(|path| {
+                crate::utils::path::normalize_path_lexical(std::path::Path::new(path)) == worktree
+            })
+        })
+    }
+
+    /// The checkout the cohort's board lives in: the one worktree all its members work in.
+    pub fn board_checkout(&self) -> Option<std::path::PathBuf> {
+        self.members
+            .first()
+            .and_then(|agent| agent.worktree_path.as_deref())
+            .map(std::path::PathBuf::from)
+            .filter(|path| self.in_worktree(&crate::utils::path::normalize_path_lexical(path)))
+    }
 }
 
 /// Group conversation rows by shared launch id and agent-process/pane

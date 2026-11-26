@@ -318,6 +318,22 @@ pub fn compact_count(value: u64) -> String {
     }
 }
 
+/// Descending non-zero units from days to seconds, no separators: `4m12s`, `1h3m`, `0s`.
+pub fn format_compact_duration(mut seconds: u64) -> String {
+    let mut rendered = String::new();
+    for (unit_seconds, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {
+        let amount = seconds / unit_seconds;
+        if amount > 0 {
+            rendered.push_str(&format!("{amount}{suffix}"));
+            seconds %= unit_seconds;
+        }
+    }
+    if seconds > 0 || rendered.is_empty() {
+        rendered.push_str(&format!("{seconds}s"));
+    }
+    rendered
+}
+
 /// The wait until `at` and its local clock: `3h05m (at 21:00 +01:00)`. Minutes
 /// round up and drop from 24 hours on; a later local day adds ` tomorrow` or
 /// its date.
@@ -343,6 +359,31 @@ pub fn refill_in(at: Timestamp, now: Timestamp, tz: &jiff::tz::TimeZone) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refill_in_rounds_up_to_the_minute_and_names_a_later_day() {
+        let tz = jiff::tz::TimeZone::fixed(jiff::tz::offset(1));
+        let now: Timestamp = "2026-11-11T16:55:00Z".parse().unwrap();
+        let refills = [
+            "2026-11-11T17:42:30Z",
+            "2026-11-11T20:00:00Z",
+            "2026-11-11T17:55:00Z",
+            "2026-11-12T03:00:00Z",
+            "2026-11-13T00:00:00Z",
+            "2026-11-14T09:00:00Z",
+        ];
+        assert_eq!(
+            refills.map(|at| refill_in(at.parse().unwrap(), now, &tz)),
+            [
+                "48m (at 18:42 +01:00)",
+                "3h05m (at 21:00 +01:00)",
+                "1h00m (at 18:55 +01:00)",
+                "10h05m (at 04:00 +01:00 tomorrow)",
+                "31h (at 01:00 +01:00 on 2026-11-13)",
+                "64h (at 10:00 +01:00 on 2026-11-14)",
+            ]
+        );
+    }
 
     #[test]
     fn dollar_estimates_round_to_two_significant_figures() {

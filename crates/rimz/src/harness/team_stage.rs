@@ -23,12 +23,14 @@ use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
     MessageStatus, Premise,
 };
-use crate::store::snapshot::find_agent;
+use crate::store::snapshot::{SidebarSnapshot, find_agent};
 use crate::store::writer::AgentLifecycleReceipt;
 use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
 use super::board::{BoardErr, LockedBoard, rewrite_board, stamp};
+use super::run::report::ReportErr;
+use super::run::{TeamReportOutcome, team_report_on_flip};
 use super::schedule::signal::{fire_signal, lifecycle_signal, team_lifecycle_signals};
 use super::schedule::{arm, catalog::TaskCatalog, pending::pending_waits_by_session, team};
 use super::scratch::{parse_board_run, parse_board_stage};
@@ -236,6 +238,115 @@ impl FlipErr {
             source: Box::new(self),
         }
     }
+}
+
+/// One flip of a live or held cohort's board: by `member`, the caller when it is one of the
+/// cohort's members, or else by the user.
+pub struct CohortFlipRequest<'a> {
+    pub workspace: &'a ResolvedWorkspace,
+    pub store: &'a Store,
+    /// The rows the caller was resolved from, which name each member's live pane.
+    pub snapshot: &'a SidebarSnapshot,
+    pub cohort: &'a crate::address::TeamCohort<'a>,
+    /// The checkout the cohort's board lives in.
+    pub worktree: &'a Path,
+    pub member: Option<&'a AgentState>,
+    pub to: &'a str,
+    pub note: &'a str,
+    pub mux: Option<MuxName>,
+    pub now: Timestamp,
+}
+
+/// A cohort flip that landed: its receipt, the team's pipeline stages, and what it did for the
+/// team's launcher. The board already flipped, so a report that failed is the caller's warning,
+/// never a failed flip.
+pub struct CohortFlip {
+    pub receipt: FlipReceipt,
+    pub pipeline: Vec<String>,
+    pub report: Result<TeamReportOutcome, ReportErr>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CohortFlipErr {
+    #[error(transparent)]
+    Machine(#[from] crate::config::ConfigErr),
+    /// The room's config failed to load, or refuses the team while the project is untrusted.
+    #[error(transparent)]
+    Config(#[from] crate::config::effective::EffectiveConfigErr),
+    #[error("{0}")]
+    TeamUnconfigured(String),
+    #[error("calling team member has no role")]
+    NoRole,
+    #[error(transparent)]
+    Flip(#[from] FlipErr),
+}
+
+/// Flip the cohort's board under the team as the room's config now defines it, refused while
+/// the project is untrusted, with the flipping member's hand-off compaction, then settle the
+/// team report the flip owes the team's launcher.
+pub fn flip_cohort(request: CohortFlipRequest<'_>) -> Result<CohortFlip, CohortFlipErr> {
+    let cohort = request.cohort;
+    let team_name = cohort.team();
+    let machine = MachineConfig::load()?;
+    let effective = crate::config::effective::load(&machine, &request.workspace.project_root)?;
+    effective.block_untrusted_reference(
+        crate::config::effective::ProfileScope::Agents,
+        Some(team_name),
+        &machine.agents.commands,
+    )?;
+    let team = effective.teams.0.get(team_name).ok_or_else(|| {
+        CohortFlipErr::TeamUnconfigured(
+            effective
+                .definition_failure_for(team_name)
+                .unwrap_or_else(|| format!("team `{team_name}` is no longer configured")),
+        )
+    })?;
+    let by = match request.member {
+        Some(agent) => {
+            let role = agent.role.as_deref().ok_or(CohortFlipErr::NoRole)?;
+            let pane = request
+                .snapshot
+                .live_agent_pane(&agent.kind, &agent.agent_id);
+            Flipper::Member { role, agent, pane }
+        }
+        None => Flipper::User,
+    };
+    let flip_compact = match &by {
+        Flipper::Member { role, .. } => team.flip_compact(role, machine.harness.flip_compact),
+        Flipper::User => None,
+    };
+    let members = cohort
+        .members
+        .iter()
+        .map(|agent| (*agent).clone())
+        .collect::<Vec<_>>();
+    let receipt = flip(FlipRequest {
+        workspace: request.workspace,
+        store: request.store,
+        instance: &cohort.instance,
+        team,
+        worktree: request.worktree,
+        members: &members,
+        to: request.to,
+        note: request.note,
+        flip_compact,
+        by,
+        mux: request.mux,
+        now: request.now,
+    })?;
+    let report = team_report_on_flip(
+        request.workspace,
+        request.store,
+        &cohort.instance,
+        &receipt.board,
+        receipt.from.as_deref(),
+        &receipt.to,
+    );
+    Ok(CohortFlip {
+        receipt,
+        pipeline: team.pipeline_stages(),
+        report,
+    })
 }
 
 pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {

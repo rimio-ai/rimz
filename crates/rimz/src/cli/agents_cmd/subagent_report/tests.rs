@@ -4,9 +4,11 @@ use jiff::Timestamp;
 
 use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
+use rimz::harness::run::report::{compose_answer_row, compose_digest_row};
 use rimz::harness::run::response_path;
 use rimz::ids::{AgentKind, WorkspaceId};
 use rimz::store::message::MessageStatus;
+use rimz::store::run::RunStatus;
 use rimz::store::writer::AgentLifecycleIntent;
 use rimz::workspace::RootClass;
 
