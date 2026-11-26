@@ -47,6 +47,52 @@ fn spawn_arguments_name_only_the_current_hook_frame() {
     }
 }
 
+/// Admission resolves a step's agent as its launch does: a `tier:` definition written on Codex,
+/// whose tier lists only a Claude model, starts on Claude, and a plain Codex definition on Codex.
+#[test]
+fn launch_groups_start_a_tiered_definition_on_the_kind_its_tier_picks() {
+    if std::env::var_os("RIMZ_TEST_WORKFLOW_TIER_GROUPS").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::workflow::engine::tests::launch_groups_start_a_tiered_definition_on_the_kind_its_tier_picks", "--nocapture"])
+            .env("RIMZ_TEST_WORKFLOW_TIER_GROUPS", "1")
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let agents = crate::disk::paths::rimz_home().join("agents");
+    fs::create_dir_all(&agents).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("tiered", "agent: codex\ntier: principal\ntools: [Read]\n"),
+        ("plain", "agent: codex\ntools: [Read]\n"),
+    ] {
+        fs::write(
+            agents.join(format!("{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBody."),
+        )
+        .unwrap();
+    }
+    let (_home, _state, record, _spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\ntimeout='365d'\nrun='true'\non.ok='@done'\n",
+    );
+    let kinds = ["tiered", "plain"].map(|agent| {
+        launch_groups(&record, agent, None)
+            .unwrap()
+            .iter()
+            .map(|group| group.kind.to_string())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(kinds, [vec!["claude".to_owned()], vec!["codex".to_owned()]]);
+}
+
 #[test]
 fn accounting_uses_closed_waits_and_evaluation_origin() {
     use crate::harness::assist_log;
