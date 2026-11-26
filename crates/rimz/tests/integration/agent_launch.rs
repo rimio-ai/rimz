@@ -6645,6 +6645,73 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
     }
 }
 
+/// Claude's `default` preset keeps every built-in tool on the built-in kind base, whose code
+/// mode is on: alone it renders as written, beside other names as `preset:default`, and in
+/// both it carries the Skill tool.
+#[test]
+fn explain_claude_default_tools_keep_the_preset() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(env.agents_home().join("agents")).unwrap();
+    let mut actual = Vec::new();
+    for (name, tools) in [("alone", "[default]"), ("mixed", "[Default, Agent]")] {
+        // Written by hand: `write_definition` would add a home kind base over the built-in one.
+        std::fs::write(
+            env.agents_home().join(format!("agents/{name}.md")),
+            format!("---\ndescription: probe\nagent: claude\ntools: {tools}\n---\n"),
+        )
+        .unwrap();
+        let output = env
+            .rimz()
+            .args(["agents", "explain", name, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let argv: Vec<&str> = report["provider_argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        let tools: Vec<&str> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--tools")
+            .map(|pair| pair[1])
+            .collect();
+        actual.push((
+            name,
+            report["code_mode"].clone(),
+            tools.join(" "),
+            report["skills"]["callable"].clone(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                "alone",
+                serde_json::json!(true),
+                "default".to_owned(),
+                serde_json::Value::Null
+            ),
+            (
+                "mixed",
+                serde_json::json!(true),
+                "preset:default,Agent".to_owned(),
+                serde_json::Value::Null
+            ),
+        ]
+    );
+}
+
 #[test]
 fn explain_skill_callability_follows_the_applied_tools_list() {
     let env = Env::new();

@@ -812,6 +812,8 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "tools: [Bash]\nmcps: [github]\n",
             "Use rimz(wait) and rimz(chat).",
         ),
+        // Claude's preset holds the Skill tool.
+        ("preset", "agents", "tools: [default]\n", "Use rimz(chat)."),
         (
             "unlisted",
             "agents",

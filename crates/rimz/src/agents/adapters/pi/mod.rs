@@ -371,6 +371,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &[],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Optional(render_definition_tools),
+        tool_preset: None,
         prompt_appends: false,
     };
 

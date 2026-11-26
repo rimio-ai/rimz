@@ -173,8 +173,8 @@ pub use state::{
 use tools::ToolErr;
 pub(crate) use tools::keeps_model;
 pub(crate) use tools::{
-    ToolNotice, canonical_tool_name, definition_defaults, pinned_definition_defaults,
-    render_launch_tool_args, render_tool_args, system_prompt_appends, tools_required,
+    ToolNotice, canonical_tool_name, definition_defaults, grants_tool, pinned_definition_defaults,
+    render_launch_tool_args, render_tool_args, system_prompt_appends, tool_preset, tools_required,
     tools_ride_prompt,
 };
 pub use tools::{

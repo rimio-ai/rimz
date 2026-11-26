@@ -240,9 +240,25 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     )
 }
 
-/// Whether a supplied tools list applies to this kind and excludes `Skill`.
+/// The entry of a tools list's `bases` that is `kind`'s preset, as written; `None` on a kind
+/// that declares none, which reads every entry as a tool name.
+pub(crate) fn tool_preset<'a>(kind: &str, bases: &'a [String]) -> Option<&'a str> {
+    let preset = definitions(kind).tool_preset?;
+    bases
+        .iter()
+        .map(String::as_str)
+        .find(|base| base.eq_ignore_ascii_case(preset))
+}
+
+/// Whether a tools list's `bases` grant `tool` on `kind`: they name it, or hold the kind's
+/// preset, which RimZ reads as granting every tool.
+pub(crate) fn grants_tool(kind: &str, bases: &[String], tool: &str) -> bool {
+    bases.iter().any(|base| base == tool) || tool_preset(kind, bases).is_some()
+}
+
+/// Whether a supplied tools list applies to this kind and grants no `Skill`.
 pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
-    tools.is_some_and(|tools| !tools.has("Skill"))
+    tools.is_some_and(|tools| !grants_tool(kind, tools.bases(), "Skill"))
         && matches!(
             definitions(kind).tools,
             DefinitionTools::Required(_)

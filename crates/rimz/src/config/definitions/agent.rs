@@ -209,7 +209,7 @@ impl CraftState<'_> {
     }
 }
 
-fn lists_agent_tool(fm: &AgentFrontmatter) -> bool {
+fn lists_agent_tool(fm: &AgentFrontmatter, kind: &str) -> bool {
     fm.tools
         .as_deref()
         .and_then(|tools| {
@@ -219,7 +219,7 @@ fn lists_agent_tool(fm: &AgentFrontmatter) -> bool {
                 .collect();
             ToolSet::parse(&bare).ok()
         })
-        .is_some_and(|tools| tools.has("Agent"))
+        .is_some_and(|tools| agents::grants_tool(kind, tools.bases(), "Agent"))
 }
 
 /// Whether a model inherited from `from_kind` survives a switch to `to_kind`.
@@ -300,7 +300,7 @@ impl DefinitionSource {
         let inner = &self.inner;
         let mut fm = inner.frontmatter.clone();
         if let Some(base) = inner.context.shared.bases.get(&row.agent) {
-            fm.inherit_base(base, inner.namespace, lists_agent_tool(&fm));
+            fm.inherit_base(base, inner.namespace, lists_agent_tool(&fm, &row.agent));
         }
         let Some(listed) = fm.subagents.as_deref() else {
             return Ok(());
@@ -612,10 +612,7 @@ impl DefinitionSourceInner {
                     fm.tier.clone_from(&x.frontmatter.tier);
                 }
             } else {
-                let mut x_fm = x.frontmatter.clone().for_namespace(self.namespace);
-                if lists_agent_tool(&fm) {
-                    x_fm.subagents = None;
-                }
+                let x_fm = x.frontmatter.clone().for_namespace(self.namespace);
                 if x_fm.subagents.is_some() {
                     if self.frontmatter.subagents.is_none() {
                         subagent_validator.own = x
@@ -661,6 +658,16 @@ impl DefinitionSourceInner {
                 .clone()
                 .or_else(|| x.system_prompt_file.clone()),
             None => self.system_prompt_file.clone(),
+        };
+        // A leaf that lists the Agent tool on the kind a build runs on keeps only its own
+        // `subagents`, so each build drops the override's list once it knows its kind.
+        let keeps_own_subagents = |fm: &mut AgentFrontmatter, kind: &str| {
+            let yields =
+                x_def.is_some() && !x_in_chain && lists_agent_tool(&self.frontmatter, kind);
+            if yields {
+                fm.subagents.clone_from(&self.frontmatter.subagents);
+            }
+            yields
         };
         let mut merged_args = self.args.clone();
         if let Some(x) = x_def.filter(|_| !x_in_chain) {
@@ -712,7 +719,7 @@ impl DefinitionSourceInner {
                 )
             };
 
-        let (mut built, pre_base_fm) = if target_kind.is_none()
+        let (mut built, mut pre_base_fm) = if target_kind.is_none()
             && model.is_none()
             && let Some(tier_str) = fm.tier.as_deref()
         {
@@ -729,6 +736,7 @@ impl DefinitionSourceInner {
                 |kind, candidate_model| {
                     let mut candidate_fm = fm.clone();
                     candidate_fm.model = candidate_model.map(str::to_owned);
+                    keeps_own_subagents(&mut candidate_fm, kind);
                     let variant = effective_variant.filter(|_| kind == effective_kind);
                     finish_profile(
                         &self.context,
@@ -808,6 +816,7 @@ impl DefinitionSourceInner {
                 }
                 (kind, effective_variant)
             };
+            keeps_own_subagents(&mut fm, kind);
             let pre_base_fm = fm.clone();
             let built = finish_profile(
                 &self.context,
@@ -828,6 +837,9 @@ impl DefinitionSourceInner {
             )?;
             (built, pre_base_fm)
         };
+        if keeps_own_subagents(&mut pre_base_fm, &built.agent) {
+            retained_context = Arc::clone(&self.context);
+        }
         if attach_definition {
             built.definition = Some(self.built_source(
                 x_def,
@@ -1767,7 +1779,7 @@ fn finish_profile(
     if !profile.kind_base
         && let Some(base) = shared.bases.get(kind)
     {
-        fm.inherit_base(base, namespace, lists_agent_tool(&fm));
+        fm.inherit_base(base, namespace, lists_agent_tool(&fm, kind));
     }
     fm.settle_plus(kind)
         .map_err(|message| DefinitionErr::new(path, message))?;
@@ -1893,11 +1905,17 @@ fn finish_profile(
                 "sets `subagents:`, which only a direct profile takes; a child cannot launch again",
             ));
         }
-        if tools.as_ref().is_some_and(|tools| tools.has("Agent")) {
-            return Err(DefinitionErr::new(
-                path,
-                "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, so drop whichever this seat does not use",
-            ));
+        if let Some(tools) = tools
+            .as_ref()
+            .filter(|tools| agents::grants_tool(kind, tools.bases(), "Agent"))
+        {
+            let message = match agents::tool_preset(kind, tools.bases()) {
+                Some(preset) => format!(
+                    "sets `subagents:` and lists the `{preset}` tool preset, which holds the Agent tool; the rimz doorway replaces the native one, so drop `subagents:`, or list the tools by name without Agent"
+                ),
+                _ => "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, so drop whichever this seat does not use".to_owned(),
+            };
+            return Err(DefinitionErr::new(path, message));
         }
         profile.subagents = subagent_list(path, listed, profile.kind_base, subagent_validator)?;
     }

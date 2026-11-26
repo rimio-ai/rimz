@@ -522,7 +522,9 @@ upward-dependencies = [
 # tells the sidebar's no-request rung which kinds record a request's start (+1).
 # AgentState::no_request_alert shares the no-request rule with a nested child's line, and
 # AgentContext::latest_unstopped_rest bounds a request a rested turn left behind (+2).
-surface-budget = 1399
+# tools::grants_tool and tools::tool_preset answer whether a tools list grants a tool on a kind,
+# its kind's declared preset included, for the definition loader and the subagent policy (+2).
+surface-budget = 1401
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
