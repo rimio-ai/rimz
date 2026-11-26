@@ -186,6 +186,123 @@ mod pack_failures {
         healthy(&launch(&dir));
     }
 
+    /// A home team whose own check fails (a cell that resolves nowhere, a role placed twice, a
+    /// cell on a failed definition or on a seat of a team that fails here) fails on its name and
+    /// seats at its file, while a team whose layout names a later team's seat, and every profile,
+    /// still load.
+    #[test]
+    fn home_team_failing_its_own_check_fails_on_its_name_only() {
+        let dir = fixture();
+        let teams = dir.path().join("home/teams");
+        std::fs::create_dir_all(&teams).unwrap();
+        let gone = dir.path().join("home/agents/gone.md");
+        std::fs::write(&gone, "---\ndescription: Gone\nagent: missing\n---\n").unwrap();
+        for (name, layout) in [
+            ("alpha", "lead,zed.lead"),
+            ("beta", "lead,crew.lead"),
+            ("crew", "lead,ghost"),
+            ("lean", "lead,gone"),
+            ("nod", "lead,lost"),
+            ("tidy", "lead,term"),
+            ("twin", "lead,lead"),
+            ("zed", "lead"),
+        ] {
+            std::fs::write(
+                teams.join(format!("{name}.md")),
+                format!(
+                    "---\nleader: lead\nstages: [Build]\nlayout: \"{layout}\"\n\
+                     roles:\n  - {{role: lead, agent: good, owns: [Build]}}\n---\nBuild.\n"
+                ),
+            )
+            .unwrap();
+        }
+        // A team that failed as it loaded stands in for no cell, named like a cell word or not.
+        for name in ["lost", "term"] {
+            std::fs::write(
+                teams.join(format!("{name}.md")),
+                "---\nleader: lead\nstages: [Build]\n\
+                 roles:\n  - {role: lead, agent: missing, owns: [Build]}\n---\nBuild.\n",
+            )
+            .unwrap();
+        }
+        let launch = launch(&dir);
+        healthy(&launch);
+        let at = |team: &str| teams.join(format!("{team}.md")).display().to_string();
+        let crew = format!(
+            "{}: team `crew` layout token `ghost` is not a declared role or valid roleless cell",
+            at("crew")
+        );
+        for (team, detail) in [
+            ("crew", crew.clone()),
+            (
+                "beta",
+                format!(
+                    "{}: team 'beta' layout names failed definition 'crew.lead'\ncaused by: {crew}",
+                    at("beta")
+                ),
+            ),
+            (
+                "nod",
+                format!(
+                    "{}: team `nod` layout token `lost` is not a declared role or valid \
+                     roleless cell",
+                    at("nod")
+                ),
+            ),
+            (
+                "twin",
+                format!(
+                    "{}: team `twin` layout places role `lead` more than once",
+                    at("twin")
+                ),
+            ),
+            (
+                "lean",
+                format!(
+                    "{}: team 'lean' layout names failed definition 'gone'\ncaused by: {}",
+                    at("lean"),
+                    launch.definition_failure_for("gone").unwrap()
+                ),
+            ),
+        ] {
+            let seat = format!("{team}.lead");
+            assert!(!launch.teams.0.contains_key(team), "{team}");
+            assert!(!launch.profiles.0.contains_key(&seat), "{seat}");
+            for name in [team, seat.as_str()] {
+                assert_eq!(launch.definition_failure_for(name), Some(detail.clone()));
+            }
+        }
+        for team in ["alpha", "tidy", "zed"] {
+            assert!(launch.teams.0.contains_key(team), "{team}");
+            assert_eq!(launch.definition_failure_for(team), None);
+        }
+    }
+
+    /// A home team named like a home subagent is the set-wide reserved-name failure, whatever its
+    /// own check says.
+    #[test]
+    fn home_team_named_like_a_subagent_still_refuses_the_launch_set() {
+        let dir = fixture();
+        for (path, text) in [
+            (
+                "home/subagents/crew.md",
+                "---\ndescription: Crew\nagent: pi\n---\nCrew.",
+            ),
+            (
+                "home/teams/crew.md",
+                "---\nleader: lead\nstages: [Build]\nlayout: \"lead,ghost\"\n\
+                 roles:\n  - {role: lead, agent: good, owns: [Build]}\n---\nBuild.\n",
+            ),
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let failure = launch(&dir).block_set_failure().unwrap_err().to_string();
+        assert!(failure.contains("`crew`"), "{failure}");
+        assert!(!failure.contains("ghost"), "{failure}");
+    }
+
     #[test]
     fn home_tree_error_still_refuses_the_launch_set() {
         let dir = fixture();

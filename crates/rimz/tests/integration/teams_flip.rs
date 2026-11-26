@@ -158,6 +158,46 @@ fn board_commands_and_stage_payload_use_the_run_directory() {
     assert!(!fixture.env.project_root.join("blackboard.md").exists());
 }
 
+/// A board whose team's layout cell resolves nowhere refuses the flip with the team file's own
+/// error and leaves the board unwritten.
+#[test]
+fn flip_refuses_a_team_whose_layout_cell_does_not_resolve() {
+    let fixture = Fixture::new();
+    let forge = crate::common::write_definition(
+        &fixture.env,
+        "teams",
+        "forge",
+        &format!("{CONFIG}layout: \"coder,reviewer,ghost\"\n"),
+        "Complete the work.",
+    );
+    fixture.running("coder", None);
+    let run = fixture.env.store().paths().root.join("team-notes/manual");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+    std::fs::write(run.join("blackboard.md"), BOARD).unwrap();
+    let link = fixture.env.project_root.join(".rimz/team");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    if link.is_symlink() {
+        std::fs::remove_file(&link).unwrap();
+    }
+    std::os::unix::fs::symlink(&run, &link).unwrap();
+    let output = fixture.flip("Review", None, Some("handoff"));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "error: {}: team `forge` layout token `ghost` is not a declared role or valid \
+             roleless cell\n",
+            forge.display()
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(run.join("blackboard.md")).unwrap(),
+        BOARD
+    );
+    assert!(fixture.signals().is_empty());
+}
+
 #[test]
 fn done_stops_the_checkout_language_server_not_the_archive() {
     use std::io::{BufRead, BufReader};

@@ -162,6 +162,13 @@ pub fn load_with_roots(
 ) -> Result<LaunchAgents> {
     let machine_config = machine;
     let failed_definitions = machine.failed_definition_details();
+    // A machine team file that failed owns its name ahead of every reading but a command.
+    let machine_failed_teams: BTreeMap<String, String> = machine
+        .notices
+        .failed_teams
+        .iter()
+        .filter_map(|name| Some((name.clone(), failed_definitions.get(name)?.clone())))
+        .collect();
     let failed_trees = machine.notices.failed_trees.clone();
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
@@ -213,7 +220,7 @@ pub fn load_with_roots(
             teams: machine.teams.clone(),
             failed_definitions,
             failed_trees,
-            failed_teams: BTreeMap::new(),
+            failed_teams: machine_failed_teams,
             project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
@@ -234,7 +241,7 @@ pub fn load_with_roots(
             teams: machine.teams.clone(),
             failed_definitions,
             failed_trees,
-            failed_teams: BTreeMap::new(),
+            failed_teams: machine_failed_teams,
             project_definition_errors: Vec::new(),
             set_failure,
             repo_sources: AgentSpecSources::default(),
@@ -426,7 +433,7 @@ pub fn load_with_roots(
     subagent_profiles.set_failed_rows(resolved.failed_subagents);
 
     let mut teams = machine.teams.clone();
-    let mut failed_teams = BTreeMap::new();
+    let mut failed_teams = machine_failed_teams;
     // A machine team with a cell, role or layout, that rests on a row failed in this project
     // fails on its own name here, as a project team does below. The machine load accepted the
     // team, so any other error keeps it.
@@ -566,8 +573,8 @@ pub fn project_tasks_from_value(
 
 impl LaunchAgents {
     /// Formatted failure detail for a team that failed in this project (a project team, or a
-    /// machine team with a seat or layout cell that failed here), a row that failed in this
-    /// project, or a machine definition.
+    /// machine team with a seat or layout cell that failed here) or whose machine file failed, a
+    /// row that failed in this project, or a machine definition.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
         self.failed_teams
             .get(name)
@@ -600,8 +607,8 @@ impl LaunchAgents {
         }
     }
 
-    /// Refuse a bare team or `team.role` spec naming a team that failed in this project ahead of
-    /// any profile.
+    /// Refuse a bare team or `team.role` spec naming a team that failed in this project, or whose
+    /// machine file failed, ahead of any profile, the built-in team, or an executable on PATH.
     pub(crate) fn block_failed_team(&self, spec: &str) -> Result<()> {
         let spec = spec.trim();
         if let Some(detail) = self.failed_teams.get(spec).or_else(|| {

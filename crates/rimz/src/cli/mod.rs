@@ -589,7 +589,7 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
             "`{selector}` is a launch command, not a running agent"
         )));
     }
-    if selector == "peer" || config.agents.teams.0.contains_key(selector) {
+    if config.agents.teams.0.contains_key(selector) {
         return Ok(Some(format!(
             "`{selector}` is a launch team, not a running agent"
         )));

@@ -10796,6 +10796,46 @@ fn resume_with_empty_store_refuses_before_mux_probe() {
         ));
 }
 
+/// A machine team whose layout cell resolves nowhere refuses both team launch doorways with its
+/// own file's error, not the agents home's, also when the built-in `peer` or an executable on
+/// PATH shares its name.
+#[cfg(unix)]
+#[test]
+fn team_launch_doorways_refuse_a_machine_team_whose_layout_cell_does_not_resolve() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    for name in ["crew", "peer", "sh"] {
+        let file = crate::common::write_definition(
+            &env,
+            "teams",
+            name,
+            "leader: coder\nstages: [Build]\nlayout: \"coder,ghost\"\nroles:\n  - {role: coder, agent: worker, owns: [Build]}",
+            "Complete the work.",
+        );
+        for args in [vec!["teams", "launch", name], vec!["teams", name]] {
+            let output = env.rimz().args(&args).output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {stderr}");
+            assert_eq!(
+                stderr,
+                format!(
+                    "error: {}: team `{name}` layout token `ghost` is not a declared role or \
+                     valid roleless cell\n",
+                    file.display()
+                ),
+                "{args:?}"
+            );
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn team_resume_doorways_refuse_in_the_teams_scene_before_mux_probe() {

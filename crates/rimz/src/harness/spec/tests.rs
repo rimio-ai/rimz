@@ -215,6 +215,8 @@ fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
     let commands = commands([("build", "printf ready")]);
     let teams = TeamsConfig(BTreeMap::from([
         ("forge".into(), team(vec![role("coder", "assistant")])),
+        // The built-in `peer` reaches the candidates from the machine team table, which holds it.
+        ("peer".into(), team_with_layout(Vec::new(), "claude,codex")),
         (
             "review".into(),
             Team {
@@ -1311,6 +1313,14 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
             "claude"
         ))))
     );
+    // The built-in `peer` resolves from the machine team table, which holds it.
+    teams.0.insert(
+        "peer".to_owned(),
+        crate::config::Team {
+            layout: Some("claude,codex".to_owned()),
+            ..Default::default()
+        },
+    );
     assert_eq!(
         resolve_spec(Some("peer"), &profiles, &no_commands(), &teams)
             .expect("peer")
@@ -1366,7 +1376,10 @@ fn unknown_spec_error_groups_and_wraps_valid_choices() {
         Some("missing"),
         &no_profiles(),
         &no_commands(),
-        &TeamsConfig::default(),
+        &TeamsConfig(BTreeMap::from([(
+            "peer".into(),
+            team_with_layout(Vec::new(), "claude,codex"),
+        )])),
     )
     .expect_err("missing team");
     let rendered = error.to_string();
@@ -1507,10 +1520,11 @@ fn unknown_spec_suggests_only_the_nearest_tier() {
         ("forge.coder", profile("codex")),
         ("claude", profile("claude")),
     ]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "forge".into(),
-        team(vec![role("coder", "codex")]),
-    )]));
+    let teams = TeamsConfig(BTreeMap::from([
+        ("forge".into(), team(vec![role("coder", "codex")])),
+        // The built-in `peer` reaches the candidates from the machine team table, which holds it.
+        ("peer".into(), team_with_layout(Vec::new(), "claude,codex")),
+    ]));
     let error = resolve_spec(Some("per"), &profiles, &no_commands(), &teams).unwrap_err();
     assert_eq!(
         error.to_string(),

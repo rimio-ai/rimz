@@ -106,15 +106,7 @@ pub(super) fn load(
                 return Ok(());
             }
             if item.pack.is_some() {
-                let mut namespace = loaded.agent_profiles.clone();
-                namespace.0.extend(loaded.subagent_profiles.0.clone());
-                namespace.0.extend(
-                    profiles
-                        .iter()
-                        .map(|(binding, profile)| (binding.profile.clone(), profile.clone())),
-                );
-                crate::harness::spec::validate_team(&name, &team, &namespace, commands)
-                    .map_err(|error| item.error(error))?;
+                check_team_name(&name, loaded, commands).map_err(|error| item.error(error))?;
             }
             let origin = super::DefinitionOrigin::new(item.pack.as_ref(), None);
             for (binding, profile) in profiles {
@@ -142,7 +134,119 @@ pub(super) fn load(
             );
         }
         if !loaded.teams.0.contains_key(&name) {
+            // A name either table reserves stays its cell's, so the failed team never owns it.
+            if check_team_name(&name, loaded, commands).is_ok() {
+                loaded.failed_teams.insert(name.clone());
+            }
             for failed in std::iter::once(&name).chain(&role_names) {
+                loaded
+                    .failed
+                    .entry(failed.clone())
+                    .or_default()
+                    .insert(path.clone());
+            }
+        }
+    }
+    check_teams(sources, agents, commands, loaded);
+}
+
+/// The name checks the set-wide namespace checks make of a team, against the agents and the
+/// subagents table. A seat's `<team>.<role>` key never matches a team name, which holds no `.`.
+fn check_team_name(
+    name: &str,
+    loaded: &LoadedDefinitions,
+    commands: &super::CommandsConfig,
+) -> Result<(), crate::harness::spec::LayoutErr> {
+    for profiles in [&loaded.agent_profiles, &loaded.subagent_profiles] {
+        crate::harness::spec::validate_team_name(name, profiles, commands)?;
+    }
+    Ok(())
+}
+
+/// Check each loaded team past its name against the final agents table, which holds every
+/// team's seats, so a layout cell may name any team's seat. A team that fails fails on its own
+/// name and seats at its file, as one that does not load, and the check repeats until a pass
+/// fails no team, so a cell on a seat of a team that failed fails its team too. A team whose
+/// name either table reserves ([`check_team_name`]) is left to the set-wide namespace checks.
+fn check_teams(
+    sources: &catalog::Catalog,
+    agents: &Namespace,
+    commands: &super::CommandsConfig,
+    loaded: &mut LoadedDefinitions,
+) {
+    loop {
+        let mut table = loaded.agent_profiles.clone();
+        // Each failed profile name, an `agents/` definition or a `<team>.<role>` seat, stands in
+        // as its own detail, so the error a cell on it raises names it. A kind's word stays the
+        // kind, and a failed team's name is no profile, so a cell reads the same beside it.
+        table.set_failed_rows(
+            loaded
+                .failed
+                .keys()
+                .filter(|name| {
+                    !loaded.agent_profiles.0.contains_key(*name)
+                        && crate::agents::find_runtime(name).is_none()
+                        && (agents.definitions.contains_key(*name)
+                            || agents.failed.contains(*name)
+                            || name.contains('.'))
+                })
+                .map(|name| (name.clone(), name.clone()))
+                .collect(),
+        );
+        let failures: Vec<_> = loaded
+            .teams
+            .0
+            .iter()
+            .filter(|(name, _)| check_team_name(name, loaded, commands).is_ok())
+            .filter_map(|(name, team)| {
+                let error =
+                    crate::harness::spec::validate_team_roster(name, team, &table, commands)
+                        .err()?;
+                Some((name.clone(), error))
+            })
+            .collect();
+        if failures.is_empty() {
+            return;
+        }
+        for (name, error) in failures {
+            let (Some(team), Some(path)) = (
+                loaded.teams.0.remove(&name),
+                loaded.sources.teams.remove(&name),
+            ) else {
+                continue;
+            };
+            let error = match error {
+                crate::harness::spec::LayoutErr::FailedProfile(failed) => DefinitionErr::new(
+                    &path,
+                    format!("team '{name}' layout names failed definition '{failed}'"),
+                )
+                .with_cause(DefinitionCause::DependsOnFailed {
+                    name: failed,
+                    subagent: false,
+                }),
+                error => DefinitionErr::new(&path, error.to_string()),
+            };
+            loaded.errors.push(
+                match sources
+                    .items
+                    .iter()
+                    .find(|item| item.pack.is_some() && item.path == path)
+                {
+                    Some(item) => item.error(error.message),
+                    None => error,
+                },
+            );
+            loaded.rows.retain(|row| {
+                if row.team.as_deref() != Some(&name) {
+                    return true;
+                }
+                loaded.agent_profiles.0.remove(&row.name);
+                loaded.sources.agent_profiles.remove(&row.name);
+                false
+            });
+            loaded.failed_teams.insert(name.clone());
+            let seats = team.roles.iter().map(|binding| &binding.profile);
+            for failed in std::iter::once(&name).chain(seats) {
                 loaded
                     .failed
                     .entry(failed.clone())
