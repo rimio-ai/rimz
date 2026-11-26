@@ -539,6 +539,7 @@ The latest capture of each bench. Run one group with a name filter, such as `car
 | `hotpath::spending_live_scale_warm_discovery_inclusive` 6k files / 102k entries | 140.2 ms | 99.59 MB alloc/op | 2026-07-18 |
 | `hotpath::spending_live_scale_additional_workspace_scope` 6k files / 102k entries, all in scope | 49.72 ms | 33.94 MB alloc/op | 2026-10-29 |
 | `hotpath::spending_live_scale_additional_workspace_partial_scope` 6k files / 102k entries, one-third in scope | 14.09 ms | 15.47 MB alloc/op | 2026-10-29 |
+| `hotpath::workflow_replay` 1,000 / 10,000 log lines | 2.651 / 24.70 ms | 10.28 / 98.58 MB alloc/op | 2026-11-27 |
 
 The 2026-10-29 scope rows quote the second head run of a base/head/head/base check (three samples per bench), on Linux x86-64 with Rust 1.97.1 under ambient build load. Both benches use `bench_local_refs`; the medians exclude fixture teardown, including the 6,000-file tempdir removal and walker cache/memo cleanup. Base is trunk `ea7bdc3c44f`; head adds `fix(spending): count native sessions instead of project folders`, including the contested-session memo that limits repeat baseline dedup to sessions holding shared rows.
 
@@ -547,6 +548,10 @@ All-in-scope medians in base/head/head/base order were 50.83 / 43.27 / 49.72 / 6
 The 2026-10-14 capture ran at a load average near 45, where two back-to-back runs of the same build read 6.4 ms and 12.2 ms for one arm, so this table quotes no median from it. The `kimi`, `grok`, and `droid` changed-session refresh benches have no recorded capture.
 
 At fixed room size and across both room sizes, local publication allocates about 3.68 KB per subscriber: groups, rows, and history do not multiply with subscribers. Local configuration, worktree roots, and pane metadata stay owned per pane, and a real exclusion still pays for a detached group vector and the changed collections, as `exclude_agent` shows.
+
+The `workflow_replay` row times one replay pass of a workflow script that runs one `shell` call per step, over its recorded log. It quotes the second head run of a base/head/head/base check at load averages between 15 and 19. Base is the engine with QuickJS allocating through C `malloc`. Head takes the engine's heap from its capped allocator over the Rust allocator (`crates/rimz/src/harness/workflow_script/heap.rs::Capped`). Medians in base/head/head/base order were 2.772 / 2.761 / 2.651 / 2.608 ms at 1,000 lines and 24.05 / 25.30 / 24.70 / 24.09 ms at 10,000. The time includes the bench's counting global allocator (Divan's `AllocProfiler`), which on head sees every QuickJS allocation, and the allocation column counts the engine's heap with the Rust heap (base, which saw the Rust heap alone, read 1.666 / 16.59 MB). The shipped path matches: a release `rimz workflow try` of the same script at 10,000 steps over a 10,000-line answers file, in 20 rounds of base, head, head, base under an isolated home, took a median of 72.2 ms on base and 73.4 ms on head at load averages near 11. A run replays once after each step, so a run that grows to 10,000 lines pays 10,001 passes: `cargo xtask perf --bench hotpath -- workflow_replay_growth --ignored` runs every one and printed a replay sum of 154.3 s (2.73 min with the log copy each pass takes) on head, in one run with no base run beside it, at load averages between 10 and 18.
+
+The engine adds 1,750,784 bytes (1.9%) to the stripped x86_64-unknown-linux-gnu release binary built by `cargo build -p rimz --bin rimz --locked --release`: 94,301,408 bytes at trunk `753b9f8c7d`, 96,052,192 bytes with it.
 
 ##### Concurrent hidden attachment fanout
 

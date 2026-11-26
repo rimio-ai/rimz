@@ -5,6 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use divan::Bencher;
+use rimz::harness::workflow_script;
 use tempfile::TempDir;
 #[cfg(rimz_jemalloc)]
 use tikv_jemallocator::Jemalloc as InnerAllocator;
@@ -21,6 +22,8 @@ const CARRYOVER_PROMPT_BYTES: usize = 2_500;
 const SPENDING_FILES: usize = 4;
 const SPENDING_ENTRIES_PER_FILE: usize = 5_000;
 const SPENDING_NOW_SECS: u64 = 1_780_394_400;
+/// Log lines of the longest workflow-script run the replay benches time.
+const WORKFLOW_STEPS: usize = 10_000;
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -2740,4 +2743,87 @@ fn render_fixed(bencher: Bencher) {
             rimz::sidebar_pane::render::render_fixed(io::sink(), &fixture.snapshot, 54, 200)
                 .expect("render");
         });
+}
+
+/// The text and the recorded log of a script that runs `steps` commands in turn, each answered
+/// with exit 0: the shape of a long workflow-script run, one log line per step.
+fn workflow_run_fixture(steps: usize) -> (String, Vec<workflow_script::Line>) {
+    let text = format!(
+        "export const meta = {{ name: 'steps', description: 'One command per step' }}\n\
+         for (let i = 0; i < {steps}; i++) await shell({{ command: `make step-${{i}}` }})\n"
+    );
+    let answers = vec![
+        workflow_script::Outcome::Result(serde_json::json!({
+            "code": 0, "stdout": "ok\n", "output": "/tmp/step.log",
+        }));
+        steps
+    ];
+    let log = workflow_script::Log::Answers(answers.clone());
+    let replay = workflow_script::replay(&workflow_pass(&text, &log)).expect("loads");
+    assert_eq!(
+        replay.end,
+        workflow_script::End::Returned(serde_json::Value::Null)
+    );
+    let lines = replay
+        .calls
+        .into_iter()
+        .zip(answers)
+        .map(|(call, outcome)| workflow_script::Line {
+            number: call.number,
+            block: call.block,
+            digest: call.digest,
+            outcome,
+        })
+        .collect();
+    (text, lines)
+}
+
+fn workflow_pass<'a>(text: &'a str, log: &'a workflow_script::Log) -> workflow_script::Pass<'a> {
+    workflow_script::Pass {
+        name: "workflow.js",
+        text,
+        args: None,
+        log,
+        caps: workflow_script::Caps::PASS,
+        dir: None,
+    }
+}
+
+/// One pass over a run's recorded log, as every step of a workflow-script run pays it.
+#[divan::bench(args = [1_000, WORKFLOW_STEPS], sample_count = 10, sample_size = 1)]
+fn workflow_replay(bencher: Bencher, steps: usize) {
+    let (text, lines) = workflow_run_fixture(steps);
+    let log = workflow_script::Log::Recorded(lines);
+    let pass = workflow_pass(&text, &log);
+    bencher.bench_local(|| workflow_script::replay(&pass).expect("loads"));
+}
+
+/// Every pass of a run that grows to `WORKFLOW_STEPS` lines, one after each step and one before
+/// the first. It prints the sum of the replays alone, without the log copy each pass takes.
+#[divan::bench(sample_count = 1, sample_size = 1, ignore)]
+fn workflow_replay_growth(bencher: Bencher) {
+    use std::io::Write as _;
+
+    let (text, lines) = workflow_run_fixture(WORKFLOW_STEPS);
+    bencher.bench_local(|| {
+        let mut replays = std::time::Duration::ZERO;
+        for len in 0..=WORKFLOW_STEPS {
+            let log = workflow_script::Log::Recorded(lines[..len].to_vec());
+            let pass = workflow_pass(&text, &log);
+            let started = std::time::Instant::now();
+            divan::black_box(workflow_script::replay(&pass).expect("loads"));
+            replays += started.elapsed();
+        }
+        let row = serde_json::json!({
+            "passes": WORKFLOW_STEPS + 1,
+            "replays_ms": replays.as_millis(),
+        });
+        // Divan can leave its tree label unterminated before the closure runs.
+        writeln!(
+            io::stdout().lock(),
+            "\n{}",
+            serde_json::json!({ "workflow_replay_growth": row })
+        )
+        .unwrap();
+    });
 }
