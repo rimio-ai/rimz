@@ -14,9 +14,9 @@ use anyhow::{Context, Result};
 use rimz::child_process::StderrTail;
 use rimz::remote::forward::{ForwardState, PortAction, PortSync, cancel_spec, open_spec};
 use rimz::remote::link::{
-    LinkAck, LinkEvent, LinkMonitor, LinkProbe, PortsScope, SessionLinkAction, SessionLinkState,
-    blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
-    probe_timeout_from_env,
+    HostLine, LinkEvent, LinkMonitor, LinkProbe, PortsScope, SessionLinkAction, SessionLinkState,
+    blackout_after_from_env, control_check_spec, parse_host_line, probe_interval_from_env,
+    probe_stream_spec, probe_timeout_from_env,
 };
 use rimz::remote::reachability::{
     AttemptPacer, DIAL_TIMEOUT, DialPlan, FooterPhase, dial_interval_from_env, is_tun_interface,
@@ -1894,7 +1894,7 @@ enum ProbeStreamExit {
 struct ProbeChild {
     child: Child,
     stdin: ChildStdin,
-    acknowledgements: mpsc::Receiver<LinkAck>,
+    host_lines: mpsc::Receiver<HostLine>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -1916,24 +1916,21 @@ impl ProbeChild {
             let _ = child.wait();
             return Err(std::io::Error::other("probe stream missing stdin"));
         };
-        let (ack_tx, ack_rx) = mpsc::channel();
+        let (line_tx, line_rx) = mpsc::channel();
         let reader = std::thread::spawn(move || {
             for line in BufReader::new(stdout)
                 .lines()
                 .map_while(std::result::Result::ok)
             {
-                let Ok(ack) = serde_json::from_str::<LinkAck>(&line) else {
-                    continue;
-                };
-                if ack.version_ok() {
-                    let _ = ack_tx.send(ack);
+                if let Some(line) = parse_host_line(&line) {
+                    let _ = line_tx.send(line);
                 }
             }
         });
         Ok(Self {
             child,
             stdin,
-            acknowledgements: ack_rx,
+            host_lines: line_rx,
             reader: Some(reader),
         })
     }
@@ -1947,7 +1944,14 @@ impl ProbeChild {
         port_sync: &Mutex<ForwardPublisher>,
     ) -> ProbeAckDrain {
         let mut drain = ProbeAckDrain::default();
-        for ack in self.acknowledgements.try_iter() {
+        for line in self.host_lines.try_iter() {
+            let ack = match line {
+                HostLine::Ack(ack) => ack,
+                HostLine::Open(open) => {
+                    open_relayed_url(&open.open, target);
+                    continue;
+                }
+            };
             let outcome = monitor.record_ack(ack.seq, rimz::utils::time::unix_now_ms());
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
@@ -2000,6 +2004,7 @@ fn run_probe_stream(
         }
     };
     monitor.begin_stream();
+    let opens_urls = crate::cli::can_open_pages();
     let mut next_tick = Instant::now();
     let mut acked = false;
     let reason = loop {
@@ -2028,6 +2033,7 @@ fn run_probe_stream(
         if drain.reported_rtt_changed {
             let mut probe = monitor.stats_refresh_probe(rimz::utils::time::unix_now_ms());
             attach_forward_record(&mut probe, port_sync);
+            attach_open_capability(&mut probe, opens_urls, interval);
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }
@@ -2039,6 +2045,7 @@ fn run_probe_stream(
         if Instant::now() >= next_tick {
             let mut probe = monitor.next_probe(rimz::utils::time::unix_now_ms());
             attach_forward_record(&mut probe, port_sync);
+            attach_open_capability(&mut probe, opens_urls, interval);
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }
@@ -2224,6 +2231,71 @@ fn record_port_forward(
             assist,
         });
     }
+}
+
+/// Open a URL the host relayed, through the local opener, and record the
+/// attempt. The host is an external input here: only an http(s) URL opens.
+fn open_relayed_url(url: &str, target: &RemoteTarget) {
+    let assist = relayed_open_assist(target.host_display(), url, |url| {
+        crate::cli::launch_browser(url).opened().map(drop)
+    });
+    let Some(assist) = assist else {
+        return;
+    };
+    rimz::harness::assist_log::append(&rimz::harness::assist_log::AssistRecord {
+        at: jiff::Timestamp::now(),
+        assist,
+    });
+}
+
+fn relayed_open_assist(
+    host: &str,
+    url: &str,
+    launch: impl FnOnce(&str) -> std::result::Result<(), String>,
+) -> Option<rimz::harness::assist_log::Assist> {
+    let web = match rimz::remote::browser::web_url(url) {
+        Ok(web) => web,
+        Err(refusal) => {
+            tracing::warn!(%refusal, "refused a relayed URL");
+            return None;
+        }
+    };
+    let error = launch(web.url).err();
+    if let Some(error) = &error {
+        tracing::warn!(%error, "relayed URL did not open");
+    }
+    Some(rimz::harness::assist_log::Assist::LinkOpen {
+        host: host.to_owned(),
+        scheme: web.scheme,
+        url_host: web.host,
+        error,
+    })
+}
+
+/// Say whether this laptop opens relayed URLs, how long its terminal has been
+/// idle (the tty's access time being its last input), and how often it probes,
+/// so the host can tell a quiet link from a live one.
+fn attach_open_capability(probe: &mut LinkProbe, opens_urls: bool, interval: Duration) {
+    probe.opens_urls = opens_urls;
+    probe.idle_ms = opens_urls.then(terminal_idle_ms).flatten();
+    probe.interval_ms = opens_urls
+        .then(|| u64::try_from(interval.as_millis()).ok())
+        .flatten();
+}
+
+fn terminal_idle_ms() -> Option<u64> {
+    use std::os::fd::AsFd as _;
+
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return None;
+    }
+    let tty = std::fs::File::from(stdin.as_fd().try_clone_to_owned().ok()?);
+    let input_at = tty.metadata().ok()?.accessed().ok()?;
+    let idle = std::time::SystemTime::now()
+        .duration_since(input_at)
+        .unwrap_or_default();
+    Some(u64::try_from(idle.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn mark_port_open_failed(

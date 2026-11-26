@@ -100,31 +100,59 @@ enum BrowserLaunch {
     SshWithoutDisplay,
 }
 
-fn launch_browser(url: &str) -> BrowserLaunch {
-    let ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
-    if ssh
-        && (cfg!(target_os = "macos")
-            || (std::env::var_os("DISPLAY").is_none()
-                && std::env::var_os("WAYLAND_DISPLAY").is_none()))
-    {
-        return BrowserLaunch::SshWithoutDisplay;
+impl BrowserLaunch {
+    /// The opener that took the URL, or why none did.
+    fn opened(self) -> std::result::Result<&'static str, String> {
+        match self {
+            Self::Launched(opener) => Ok(opener),
+            Self::NotInstalled(opener) => Err(format!("{opener} is not installed")),
+            Self::Failed { opener, error } => Err(format!("{opener} failed to start: {error}")),
+            Self::SshWithoutDisplay => Err("this is an SSH session with no display".to_owned()),
+        }
     }
-    let opener = if cfg!(target_os = "macos") {
+}
+
+/// Whether this process runs in an SSH session that cannot show a page here.
+fn ssh_without_display() -> bool {
+    let ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    ssh && (cfg!(target_os = "macos")
+        || (std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none()))
+}
+
+fn platform_opener() -> &'static str {
+    if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
-    };
+    }
+}
+
+/// Whether this process can open a page itself: it can show one, and its
+/// platform opener is installed.
+pub(crate) fn can_open_pages() -> bool {
+    !ssh_without_display() && which::which(platform_opener()).is_ok()
+}
+
+/// Start the platform opener on `url`, reaped once it exits, since a long-lived
+/// caller such as `rimz remote connect` starts one per relayed URL.
+fn launch_browser(url: &str) -> BrowserLaunch {
+    if ssh_without_display() {
+        return BrowserLaunch::SshWithoutDisplay;
+    }
+    let opener = platform_opener();
     if which::which(opener).is_err() {
         return BrowserLaunch::NotInstalled(opener);
     }
-    let mut command = std::process::Command::new(opener);
-    command
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    rimz::child_process::restore_user_temp_env(&mut command);
-    match command.spawn() {
+    let spawned = rimz::child_process::spawn_detached_reaped(
+        opener,
+        |command| {
+            command.arg(url);
+            rimz::remote::browser::restore_user_browser_env(command);
+            Ok(())
+        },
+        "browser-opener",
+    );
+    match spawned {
         Ok(_) => BrowserLaunch::Launched(opener),
         Err(error) => BrowserLaunch::Failed { opener, error },
     }

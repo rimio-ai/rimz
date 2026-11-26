@@ -22,7 +22,8 @@ const AMBIENT_SESSION_PREFIXES: [&str; 3] = ["RIMZ_", "ZELLIJ", "TMUX"];
 /// branch keeps its own unit coverage in `cli::loop_timer`.
 /// Claude traffic switches likewise belong to the fixture: inheriting them
 /// disables remote control regardless of the test's configured settings.
-const AMBIENT_SESSION_KEYS: [&str; 3] = [
+const AMBIENT_SESSION_KEYS: [&str; 4] = [
+    "BROWSER",
     "INVOCATION_ID",
     "DISABLE_GROWTHBOOK",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",

@@ -10,6 +10,7 @@
 //! reconnects; the cli owns process I/O.
 
 pub mod aliases;
+pub mod browser;
 pub mod forward;
 pub mod link;
 pub mod paste;

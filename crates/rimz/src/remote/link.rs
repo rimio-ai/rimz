@@ -20,7 +20,7 @@ const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
 const LINK_STATS_FILE: &str = "link-stats.json";
 /// Expire room link sidecars after hard drops or killed publishers.
 pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
-const LINK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const LINK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const LINK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LINK_BLACKOUT_AFTER: Duration = Duration::from_secs(8);
 const LINK_WINDOW: usize = 30;
@@ -50,6 +50,17 @@ pub struct LinkProbe {
     pub stats: LinkStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forwards: Option<super::forward::ForwardRecord>,
+    /// The laptop opens relayed URLs ([`LinkOpen`]); a host sends none to a laptop
+    /// that never says so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opens_urls: bool,
+    /// How long ago the laptop's terminal last took input, absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_ms: Option<u64>,
+    /// The laptop's probe interval, sent beside `opens_urls`; absent means the default.
+    /// The host stops relaying to a link quiet for three of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
 }
 
 impl LinkProbe {
@@ -60,6 +71,9 @@ impl LinkProbe {
             sent_at_ms,
             stats,
             forwards: None,
+            opens_urls: false,
+            idle_ms: None,
+            interval_ms: None,
         }
     }
 
@@ -110,6 +124,39 @@ impl LinkAck {
     pub fn version_ok(&self) -> bool {
         self.v == LINK_SCHEMA_VERSION
     }
+}
+
+/// A remote-to-local line, apart from any ack, asking the laptop to open one URL.
+/// It answers no probe and is sent once, so it never reopens.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkOpen {
+    pub v: String,
+    pub open: String,
+}
+
+impl LinkOpen {
+    pub fn new(url: &str) -> Self {
+        Self {
+            v: LINK_SCHEMA_VERSION.to_owned(),
+            open: url.to_owned(),
+        }
+    }
+}
+
+/// One line the host writes to the probe stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostLine {
+    Ack(LinkAck),
+    Open(LinkOpen),
+}
+
+/// Read one host line of this schema version; anything else is skipped.
+pub fn parse_host_line(line: &str) -> Option<HostLine> {
+    if let Ok(ack) = serde_json::from_str::<LinkAck>(line) {
+        return ack.version_ok().then_some(HostLine::Ack(ack));
+    }
+    let open = serde_json::from_str::<LinkOpen>(line).ok()?;
+    (open.v == LINK_SCHEMA_VERSION).then_some(HostLine::Open(open))
 }
 
 /// The sidecar ingested on the remote host and read by sidebar enrichment.
@@ -1137,6 +1184,24 @@ mod tests {
         assert_eq!(old.seq, probe.seq);
         assert_eq!(old.sent_at_ms, probe.sent_at_ms);
         assert_eq!(old.stats, probe.stats);
+
+        let mut capable = probe.clone();
+        capable.opens_urls = true;
+        capable.idle_ms = Some(1_500);
+        capable.interval_ms = Some(2_000);
+        let capable_text = serde_json::to_string(&capable).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LinkProbe>(&capable_text).unwrap(),
+            capable
+        );
+        let old: OldLinkProbe = serde_json::from_str(&capable_text).unwrap();
+        assert_eq!(old.seq, probe.seq, "an old host reads a capable probe");
+        assert!(
+            !text.contains("opens_urls")
+                && !text.contains("idle_ms")
+                && !text.contains("interval_ms"),
+            "an incapable probe stays the old shape: {text}"
+        );
 
         let file = LinkStatsFile::new(2_000, "client-port server-port".to_owned(), probe.stats);
         let parsed: LinkStatsFile = serde_json::from_str(&serde_json::to_string(&file).unwrap())

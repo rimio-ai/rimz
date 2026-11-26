@@ -532,6 +532,10 @@ pub struct SessionOptions {
     pub project_root: PathBuf,
     /// Adapter-owned enrichment environment carried through the room session seam.
     pub extra_env: std::collections::BTreeMap<String, String>,
+    /// Keys of `extra_env` a live session keeps once it holds them: a later start
+    /// or attach from another shell leaves their birth value in place. Zellij
+    /// stamps the environment only at server birth, so only tmux reads this.
+    pub birth_env_keys: &'static [&'static str],
     pub cwd: PathBuf,
     pub config: crate::config::MultiplexerConfig,
     /// The birth's terminal `(cols, rows)`, detected locally

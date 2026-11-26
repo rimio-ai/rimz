@@ -702,20 +702,36 @@ impl MuxBackend for TmuxBackend {
         if opts.truecolor {
             env.insert("COLORTERM".to_owned(), "truecolor".to_owned());
         }
-        match self.new_session_command(opts, &env).run() {
+        let born = match self.new_session_command(opts, &env).run() {
             // Only a session this call created proves anything about the
             // server's cwd: a live room's pane may have been `cd`-ed since.
-            Ok(_) => self.verify_birth_cwd(&opts.session_name, &opts.cwd)?,
+            Ok(_) => {
+                self.verify_birth_cwd(&opts.session_name, &opts.cwd)?;
+                true
+            }
             Err(MuxErr::Command { stderr, .. })
-                if stderr.to_ascii_lowercase().contains("duplicate session") => {}
+                if stderr.to_ascii_lowercase().contains("duplicate session") =>
+            {
+                false
+            }
             Err(err) => return Err(err),
-        }
+        };
         run_session_command(self.global_mux_context_removal_command())?;
         // The duplicate path never saw `-e`, so the birth env is re-asserted
         // idempotently: future panes of a pre-stamp room inherit it; existing
         // panes keep the env they were born with and their participants fall
         // back to the static ladder.
         for (key, value) in &env {
+            if !born
+                && opts.birth_env_keys.contains(&key.as_str())
+                && self
+                    .cmd()
+                    .args(["show-environment", "-t", &opts.session_name, key])
+                    .run()
+                    .is_ok()
+            {
+                continue;
+            }
             self.cmd()
                 .args(["set-environment", "-t", &opts.session_name, key, value])
                 .run()?;

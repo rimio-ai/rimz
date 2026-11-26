@@ -29,6 +29,7 @@ pub(super) struct AssistRollup {
     #[serde(skip_serializing_if = "is_zero")]
     pub(super) workflow_ends: usize,
     pub(super) port_forwards: usize,
+    pub(super) link_opens: usize,
     pub(super) empty_dir_grants: usize,
     pub(super) untrusted_cwd_fallbacks: usize,
     pub(super) molts: usize,
@@ -98,6 +99,14 @@ pub(super) enum AssistEvent {
         remote: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         local: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    LinkOpen {
+        at: Timestamp,
+        host: String,
+        scheme: String,
+        url_host: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -484,6 +493,7 @@ impl AssistStats {
                 AssistEvent::EmptyDirGrant { .. } => rollup.empty_dir_grants += 1,
                 AssistEvent::UntrustedCwdFallback { .. } => rollup.untrusted_cwd_fallbacks += 1,
                 AssistEvent::PortForward { .. } => rollup.port_forwards += 1,
+                AssistEvent::LinkOpen { .. } => rollup.link_opens += 1,
                 AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
                 AssistEvent::WorkflowStep { .. } => rollup.workflow_steps += 1,
                 AssistEvent::WorkflowRoute { .. } => rollup.workflow_routes += 1,
@@ -605,7 +615,8 @@ impl AssistEvent {
             Self::Redeem { windows_reset, .. } => *windows_reset,
             Self::Gc { error, .. }
             | Self::TmpEvict { error, .. }
-            | Self::PortForward { error, .. } => error.is_none(),
+            | Self::PortForward { error, .. }
+            | Self::LinkOpen { error, .. } => error.is_none(),
             Self::Molt { .. }
             | Self::SpendRebuild { .. }
             | Self::IdleStopWithdrawn { .. }
@@ -635,6 +646,7 @@ impl AssistEvent {
         match self {
             Self::SpendRebuild { .. } => "spend_rebuilds",
             Self::PortForward { .. } => "port_forwards",
+            Self::LinkOpen { .. } => "link_opens",
             Self::EmptyDirGrant { .. } => "empty_dir_grants",
             Self::UntrustedCwdFallback { .. } => "untrusted_cwd_fallbacks",
             Self::WorkflowStart { .. } => "workflow_starts",
@@ -723,6 +735,18 @@ impl AssistEvent {
                 host,
                 remote,
                 local,
+                error,
+            },
+            Assist::LinkOpen {
+                host,
+                scheme,
+                url_host,
+                error,
+            } => Self::LinkOpen {
+                at: record.at,
+                host,
+                scheme,
+                url_host,
                 error,
             },
             Assist::WorkflowStart {
@@ -1237,6 +1261,7 @@ impl AssistEvent {
     fn at(&self) -> Timestamp {
         match self {
             Self::PortForward { at, .. }
+            | Self::LinkOpen { at, .. }
             | Self::SpendRebuild { at, .. }
             | Self::EmptyDirGrant { at, .. }
             | Self::UntrustedCwdFallback { at, .. }
@@ -1399,6 +1424,7 @@ enum RepeatSubject<'a> {
     Loop(&'a str, &'a Path),
     Workflow(&'a rimz::ids::WorkflowRunId),
     Forward(&'a str, u16),
+    Link(&'a str),
     Account(&'a AgentKind, &'a rimz::ids::LoginKey),
     Alias(&'a AgentKind, &'a rimz::ids::LoginKey, &'a str),
     Redeem(&'a str, Option<&'a rimz::ids::LoginName>),
@@ -1436,6 +1462,7 @@ enum RepeatKey<'a> {
     Park(&'a str, rimz::store::workflow::ParkReason),
     End(rimz::store::workflow::RunState),
     Forward(Option<u16>),
+    Link(&'a str, &'a str),
     Redeem(RedeemReason, Option<&'a str>),
     Alias(&'a str, &'a str),
     Grant(&'a Path, Option<&'a str>),
@@ -1473,6 +1500,7 @@ impl AssistEvent {
             | Self::WorkflowPark { run, .. }
             | Self::WorkflowEnd { run, .. } => RepeatSubject::Workflow(run),
             Self::PortForward { host, remote, .. } => RepeatSubject::Forward(host, *remote),
+            Self::LinkOpen { host, .. } => RepeatSubject::Link(host),
             Self::EmptyDirGrant { kind, login, .. }
             | Self::UntrustedCwdFallback { kind, login, .. } => RepeatSubject::Account(kind, login),
             Self::ModelAlias {
@@ -1555,6 +1583,9 @@ impl AssistEvent {
             Self::WorkflowPark { node, reason, .. } => RepeatKey::Park(node, *reason),
             Self::WorkflowEnd { state, .. } => RepeatKey::End(*state),
             Self::PortForward { local, .. } => RepeatKey::Forward(*local),
+            Self::LinkOpen {
+                scheme, url_host, ..
+            } => RepeatKey::Link(scheme, url_host),
             Self::Redeem {
                 reason, outcome, ..
             } => RepeatKey::Redeem(*reason, outcome.as_deref()),
@@ -1788,6 +1819,7 @@ pub(super) fn category_entries(
         rollup.port_forwards,
         None,
     );
+    row("Laptop links:", "link_opens", rollup.link_opens, None);
     let recovered = (rollup.recovered_secs > 0).then(|| {
         format!(
             "after {} parked",
@@ -1906,6 +1938,19 @@ fn row_benefit_line(
                 "{time} {host}:{remote} forwarded{}",
                 local.map_or_else(String::new, |local| format!(" to localhost:{local}"))
             ),
+        },
+        AssistEvent::LinkOpen {
+            host,
+            scheme,
+            url_host,
+            error,
+            ..
+        } => match error {
+            Some(error) => format!(
+                "{time} {host} link held: {scheme}://{url_host}, {}",
+                first_line(error)
+            ),
+            None => format!("{time} {host} link opened on the laptop: {scheme}://{url_host}"),
         },
         AssistEvent::WorkflowStart { workflow, task, .. } => format!(
             "{time} workflow {workflow} started{}",
@@ -2446,7 +2491,9 @@ fn forensic_row_line(event: &AssistEvent, zone: &jiff::tz::TimeZone, benefit: &s
             };
             format!("{at} {benefit} · {files} files · pending {days}{kept}")
         }
-        AssistEvent::PortForward { .. } => format!("{at} {benefit}"),
+        AssistEvent::PortForward { .. } | AssistEvent::LinkOpen { .. } => {
+            format!("{at} {benefit}")
+        }
         AssistEvent::WorkflowStart { run, .. }
         | AssistEvent::WorkflowStep { run, .. }
         | AssistEvent::WorkflowRoute { run, .. }

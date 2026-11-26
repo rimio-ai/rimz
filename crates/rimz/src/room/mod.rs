@@ -288,6 +288,7 @@ impl RoomContext {
         ] {
             extra_env.insert(key.to_owned(), String::new());
         }
+        extra_env.extend(browser_env(&state, &rimz_bin));
         Ok(Self {
             workspace,
             backend: crate::mux::backend_for(mux),
@@ -529,6 +530,7 @@ impl RoomContext {
             workspace_id: self.workspace.workspace_id.clone(),
             project_root: self.workspace.project_root.clone(),
             extra_env: self.extra_env.clone(),
+            birth_env_keys: &[crate::remote::browser::USER_BROWSER_ENV],
             cwd: cwd.to_path_buf(),
             config: self.mux_config.clone(),
             detected_size: self.detected_size,
@@ -672,6 +674,38 @@ fn unresponsive_error(session_name: &str, ownership: SessionOwnership) -> anyhow
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Write the room's `BROWSER` helper and return the env that points every pane at
+/// it, the user's own value saved beside it. Empty when the helper cannot be
+/// written or named as one plain path: the room then leaves `BROWSER` alone.
+fn browser_env(state: &StatePaths, rimz_bin: &Path) -> BTreeMap<String, String> {
+    use crate::remote::browser;
+
+    let helper = &state.browser_helper;
+    let target = if state.room_bin.is_file() {
+        state.room_bin.as_path()
+    } else {
+        rimz_bin
+    };
+    let (Some(script), Some(value)) = (
+        browser::helper_script(target),
+        browser::browser_value(helper),
+    ) else {
+        return Default::default();
+    };
+    if std::fs::read_to_string(helper).ok().as_deref() != Some(script.as_str())
+        && let Err(error) =
+            crate::disk::atomic::write_executable_bytes_atomically(helper, script.as_bytes())
+    {
+        tracing::warn!(%error, helper = %helper.display(), "room browser helper unavailable");
+        return Default::default();
+    }
+    browser::room_env(
+        &value,
+        std::env::var(browser::BROWSER_ENV).ok().as_deref(),
+        std::env::var(browser::USER_BROWSER_ENV).ok().as_deref(),
+    )
 }
 
 fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {

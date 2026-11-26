@@ -115,6 +115,7 @@ pub(super) fn session_opts(
         workspace_id,
         project_root: project_root.to_path_buf(),
         extra_env: Default::default(),
+        birth_env_keys: &[],
         cwd: cwd.to_path_buf(),
         config: rimz::config::MultiplexerConfig::default(),
         detected_size,

@@ -235,6 +235,9 @@ pub struct StatePaths {
     pub(crate) publish_lock: PathBuf,
     pub workspace_record: PathBuf,
     pub room_bin: PathBuf,
+    /// The room's `BROWSER` helper, beside `room_bin` so a reset that clears the
+    /// runtime classes leaves every pane's `BROWSER` naming a file.
+    pub browser_helper: PathBuf,
     pub(crate) boot_marker: PathBuf,
     pub live_roster: PathBuf,
     pub pending_recovery: PathBuf,
@@ -566,6 +569,7 @@ impl StatePaths {
             publish_lock: Class::Locks.path_under(&root).join("publish.lock"),
             workspace_record: root.join("workspace.json"),
             room_bin: root.join("rimz"),
+            browser_helper: root.join("rimz-browser"),
             boot_marker: records_dir.join("boot.json"),
             live_roster: records_dir.join("live-roster.json"),
             pending_recovery: records_dir.join("pending-recovery.json"),

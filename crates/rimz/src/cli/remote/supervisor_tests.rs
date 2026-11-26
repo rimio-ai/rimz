@@ -65,6 +65,49 @@ fn report_opens_record_assists_but_master_reopens_and_closes_do_not() {
 }
 
 #[test]
+fn relayed_opens_record_scheme_and_host_and_refuse_what_is_not_http() {
+    use rimz::harness::assist_log::Assist;
+
+    let mut opened = Vec::new();
+    let assist = relayed_open_assist("dev-box", "https://github.com/a/b?token=t", |url| {
+        opened.push(url.to_owned());
+        Ok(())
+    });
+    assert_eq!(opened, ["https://github.com/a/b?token=t"]);
+    assert_eq!(
+        assist,
+        Some(Assist::LinkOpen {
+            host: "dev-box".into(),
+            scheme: "https".into(),
+            url_host: "github.com".into(),
+            error: None,
+        })
+    );
+
+    let failed = relayed_open_assist("dev-box", "http://localhost:3000/", |_| {
+        Err("xdg-open failed to start: denied".into())
+    });
+    assert_eq!(
+        failed,
+        Some(Assist::LinkOpen {
+            host: "dev-box".into(),
+            scheme: "http".into(),
+            url_host: "localhost".into(),
+            error: Some("xdg-open failed to start: denied".into()),
+        })
+    );
+
+    for refused in ["file:///etc/passwd", "vscode://x", "https://a.test/\nb"] {
+        let mut launched = false;
+        let assist = relayed_open_assist("dev-box", refused, |_| {
+            launched = true;
+            Ok(())
+        });
+        assert!(!launched && assist.is_none(), "{refused}");
+    }
+}
+
+#[test]
 fn stderr_drain_keeps_a_bounded_tail_and_the_final_ssh_line() {
     let mut child = std::process::Command::new("sh")
         .args(["-c", "i=0; while [ \"$i\" -lt 12000 ]; do printf 'discarded\\n' >&2; i=$((i + 1)); done; printf 'Killed by signal 2.\\n' >&2"])
