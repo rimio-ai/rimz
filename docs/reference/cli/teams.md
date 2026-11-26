@@ -156,7 +156,7 @@ A cohort uses the sidebar's shared unit verdict. Attention from any member takes
 | `blocked` | Any member is `waiting` or `failed`. |
 | `paused` | Any member is `paused`. |
 | `working` | The stage owner is `running`, or any member is `running` without a usable owner. In-flight waits and listed background shells and scripts count as running. |
-| `sleeping` | The stage owner is `sleeping`, or any member is `sleeping` without a usable owner and none is running. Sleeping means resting on a timer, signal, condition, or file watch, including through a child. |
+| `sleeping` | The stage owner is `sleeping`, or any member is `sleeping` without a usable owner and none is running. Sleeping means resting on a timer, signal, or condition, including through a child. |
 | `idle` | The stage owner is `idle` or `success` before `Done`, or an ownerless team's members are all `idle` or `success` without a board at `Done`. |
 | `done` | The board is at `Done`. |
 

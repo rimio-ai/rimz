@@ -191,7 +191,7 @@ rimz reload [--repair]
 - reaps sidebar processes whose pane is gone, and sweeps leftover processes and runtime files from stopped sessions;
 - restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped; a failed restart appears in the report's closing block.
 
-It never starts a stopped session, closes or replaces a pane, moves or resizes an existing sidebar or any pane of another window or tab, or touches an agent wrapper, loop run, or `rimz wait`. If the new build fails to start, the sidebar and following rimzd processes keep running on their old build. A content slot restarts its configured command, even when that command is not RimZ.
+It never starts a stopped session, closes or replaces a pane, moves or resizes an existing sidebar or any pane of another window or tab, or touches an agent wrapper, loop run, or `rimz shell` watcher. If the new build fails to start, the sidebar and following rimzd processes keep running on their old build. A content slot restarts its configured command, even when that command is not RimZ.
 
 The rimzd processes follow a verified build change in the room record, normally within about one second; an unchanged build restarts nothing. Panes launched before this support do not follow: after upgrading, close the `rimzd` tab and run `rimz sidebar repair` once to recreate them.
 
@@ -351,7 +351,7 @@ The sweep runs eight areas, in the order the report prints them. Before them, th
 | `messages` | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. | Same current-room maintenance. |
 | `event log` | Cuts a corrupt tail off the event log. | Same current-room maintenance. |
 | `agent cache` | Prunes prior-agent carryover older than 14 days. | Same current-room maintenance. |
-| `loop schedules` | Reaps this room's dead or invalid instance rows, prunes its orphan schedule overlays, and removes unclaimed [wait outputs](./wait.md) older than 7 days. Machine `loop.toml` is untouched. | Reaps machine delivery tasks and every root's instance rows; sweeps all rooms' wait outputs. Overlay cleanup still uses the current root's known scopes. |
+| `loop schedules` | Reaps this room's dead or invalid instance rows, prunes its orphan schedule overlays, and removes unclaimed [shell outputs](./shell.md#the-output-file) older than 7 days. Machine `loop.toml` is untouched. | Reaps machine delivery tasks and every root's instance rows; sweeps all rooms' shell outputs. Overlay cleanup still uses the current root's known scopes. |
 
 With either scope, a current room written by an older RimZ refuses the command with a layout error; run `rimz start` or `rimz reset` there to replace it with a fresh room.
 

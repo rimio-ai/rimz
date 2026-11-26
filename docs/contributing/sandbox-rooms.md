@@ -102,11 +102,11 @@ a() { target/debug/xtask sandbox in "$ROOT" --as '@coder#probe' -- "$BIN" "--$MU
 
 ## Act as an agent
 
-A command that acts for its calling agent, such as arming a wait or launching a subagent, refuses from plain `sandbox in`:
+A command that acts for its calling agent, such as starting a shell or launching a subagent, refuses from plain `sandbox in`:
 
 ```console
-$ rz wait --check true
-error: arming a wait is only available to an agent RimZ can identify; run this command from an agent pane
+$ rz shell -- true
+error: arming a shell is only available to an agent RimZ can identify; run this command from an agent pane
 ```
 
 `--as <@handle>` copies that agent's session keys into the command's environment and sets `RIMZ_AGENT_PID` to the stub, so hooks it feeds are attributed to the agent. Use a qualified handle (`@coder#probe`) when the short form is ambiguous. A feed under `--as` with a session id the agent does not own moves the agent onto that session, so time or probe a feed from a plain `sandbox in` shell instead. `--as-ancestor <@handle>` is meant to run the command as a child of the stub with no agent keys, to exercise caller detection by process ancestry. It refuses with `agent pid <pid> has no serving seat`, because the stub creates its seat in its own temporary directory and `sandbox in` looks for it under `<root>/tmp`.
@@ -114,7 +114,7 @@ error: arming a wait is only available to an agent RimZ can identify; run this c
 The stub never starts a provider session, so the agent stays provisional until you feed one:
 
 ```console
-$ a wait --check true
+$ a shell -- true
 error: the calling agent has not registered a real session yet
 ```
 
@@ -123,13 +123,13 @@ Feed a session with [`scripts/live-check/feed-claude-turn.sh`](../../scripts/liv
 ```console
 $ scripts/live-check/feed-claude-turn.sh "$ROOT" '@coder#probe'
 session b9d9a012-6a4f-42ea-96a6-fc76ed0c5e7b
-$ a wait --check true
-armed wait-exact-square: check: true → @coder#probe
-@coder#probe · 1 wait
-  wait-exact-square  starting  true
+$ a shell -- true
+armed shell-sure-flare: shell: true → @coder#probe
+@coder#probe (@smart-beacon) · 1 shell
+  shell-sure-flare  starting  true
 ```
 
-That `wait` is a real one, and a pending wait turns the card sleeping: run `a wait cancel <name>` before a check that reads the card's shape. The script's header lists its other steps: `start` alone registers a session without a turn, `window` gives the meter a window size without a reading, and `compact=N` feeds a finished compaction that leaves `N` tokens. Set `SESSION` to feed more steps into the same session later. A SessionStart alone leaves the card in its fresh state, with no subagents or waits line. Feed a whole turn before you check either.
+That shell is a real one: its outcome comes back to the agent as a message, and a pending shell or watch shows on the card. Run `a shell cancel <name>` or `a watch cancel <name>` before a check that reads the card's shape. The script's header lists its other steps: `start` alone registers a session without a turn, `window` gives the meter a window size without a reading, and `compact=N` feeds a finished compaction that leaves `N` tokens. Set `SESSION` to feed more steps into the same session later. A SessionStart alone leaves the card in its fresh state, with no subagents or waits line. Feed a whole turn before you check either.
 
 Other agent states take a hand-fed hook through `a hooks feed --source claude`:
 

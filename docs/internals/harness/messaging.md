@@ -888,7 +888,7 @@ An ended receiver is terminal instead. The sweep archives open records for the c
 
 Durations accept `s`, `m`, `h`, and `d`, and zero is rejected. Wall-clock `HH:MM` resolves to its next occurrence in the configured `timezone` (today if still ahead, else tomorrow), falling back to the system zone.
 
-`rimz message --schedule` and `rimz wait` feel alike and work differently. A schedule is a floor on a record that already exists: the text is written now and held until its time. A wait is a loop task that holds no message until its trigger fires, then dispatches one as an automated `Harness { notice: Wait }` send with fan-out disabled and no caller attribution. That is why a wait can wait on a signal or a command, and why its text appears in the queue only when it lands ([loops.md § Waits](./loops.md#waits)).
+`rimz message --schedule` and `rimz watch` feel alike and work differently. A schedule is a floor on a record that already exists: the text is written now and held until its time. A wait is a loop task that holds no message until its trigger fires, then dispatches one as an automated `Harness { notice: Wait }` send with fan-out disabled and no caller attribution. That is why a wait can wait on a condition or a command, and why its text appears in the queue only when it lands ([loops.md § Waits](./loops.md#waits)).
 
 ## Sender notices
 

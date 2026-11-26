@@ -30,13 +30,13 @@ rimz events list --signal deploy.finished --json
 
 ```console
 $ rimz events list -n 6
-WHEN  SIGNAL                SOURCE     SUBJECT
-0s    deploy.finished ×3    cli        over 4s
-4s    build.done            cli        -
-4s    deploy.failed         cli        -
-5s    deploy.finished       cli        -
-53s   wait.wait-civil-yard  watch      -
-1m    team.idle ×2          lifecycle  forge#probe · over 5s
+WHEN  SIGNAL                    SOURCE  SUBJECT
+0s    deploy.finished ×3        cli     over 4s
+5s    build.done                cli     -
+5s    deploy.failed             cli     -
+7s    deploy.finished           cli     -
+13s   shell.shell-major-canyon  watch   -
+5m    team.stage                team    forge#probe · Build -> Review
 ```
 
 The subject is the text that follows the signal name in a delivered notification, or `-` when empty. Text output folds adjacent signals with the same name, source, and subject into one row, and appends `×N` after the name. Payload fields outside the subject never split a row, so custom signals with an empty subject fold even when their payloads differ. When the folded members span at least one second, the row adds ` · over <span>` after the subject, or `over <span>` alone when the subject is empty. `WHEN` is the age of the newest member. Lifecycle records and the `agent.*` signals derived from them are not listed.
@@ -134,10 +134,10 @@ Every signal name, by who produces it. The families in the second column are [re
 | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `team` | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort |
 | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` | `team` | A team stage flip, and the [re-wake](./teams.md#the-owners-notice) of the stage owner when it is resumed |
 | `workflow.moved`, `workflow.waiting`, `workflow.failed`, `workflow.ended` ([payload](./workflow.md#run-signals)) | `workflow` | `lifecycle` | A committed write of a [workflow](./workflow.md) run that moves it, makes it need you, or ends it, and the room's workflow pass ending a run an older RimZ left |
-| `wait.<task-name>` | `wait` | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome |
+| `shell.<task-name>` | `shell` | `watch` | The watcher of a [`rimz shell`](./shell.md), at a check-in and its final outcome. A watcher an older RimZ started sends `wait.<task-name>` instead, which RimZ still accepts. |
 | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | `agent` | none | Derived from a lifecycle record. No signal line: the lifecycle line is its trace. |
 
-A `wait.<task-name>` delivery that RimZ sends because the watcher itself died also fires subscribers without a signal line. A watched command's exit code travels only in the delivered message, never in the payload. What each built-in signal's payload carries, and when it fires, is in [the loop reference](./loop.md#built-in-signals) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+A `shell.<task-name>` delivery that RimZ sends because the watcher itself died, and a [`rimz watch`](./watch.md) check-in (`watch.<task-name>`), go only to their own row: neither writes a signal line or fires a subscriber. A shell's exit code travels only in the delivered message, never in the payload. What each built-in signal's payload carries, and when it fires, is in [the loop reference](./loop.md#built-in-signals) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
 
 ## Emit a signal
 
@@ -185,7 +185,7 @@ If firing fails after the append, `emit` exits 1 with `firing signal tasks`, and
 
 ### Reserved families
 
-Eight families belong to RimZ: `agent`, `team`, `ci`, `pr`, `trunk`, `worktree`, `wait`, and `workflow`. `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
+Ten families belong to RimZ: `agent`, `shell`, `watch`, `wait`, `team`, `ci`, `pr`, `trunk`, `worktree`, and `workflow`. `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
 
 ```console
 $ rimz events emit ci.passed

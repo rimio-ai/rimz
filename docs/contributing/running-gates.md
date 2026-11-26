@@ -21,7 +21,7 @@ How the gates and the test runner behave in practice: what each command shows an
 - A passing `cargo xtask test` prints its summary line, any `FLAKY` lines, and the self-skip report. `--no-capture` passes inherited stdio straight to nextest without capturing or showing a spinner (`requests_no_capture` in `xtask/src/gates.rs`), which runs the tests one at a time and prints each test's own output and one `PASS [   0.287s]` line per test. Redirect it to keep the stream: `cargo xtask test --no-capture <filter> >/tmp/run.log 2>&1`.
 - A failing captured run, the gate's test step included, saves its complete output to a uniquely named `.output` file under the temporary directory (`$TMPDIR`, with the usual fallback). The excerpt and any skip reports end with `full test output: <path> (<N> lines, <K> KB)` above `NEXT:`. A passing run writes no file, including one refused only by `--deny-skips`. `--no-capture` saves nothing, and neither does a run that the xtask budget ends.
 - Long phases show an animated status line on a terminal. For agents and redirected output they print a newline heartbeat after 15 seconds and every 30 seconds after that. `RIMZ_NO_PROGRESS=1` silences both.
-- The `rimz` CLI spinner has no heartbeat: it draws only when stderr is a terminal outside an agent. An agent therefore runs a long `rimz` command under `rimz wait --run`. `xtask/src/spinner.rs` is a separate copy of `crates/rimz/src/cli/spinner.rs`, so that xtask stays independent of the runtime crate.
+- The `rimz` CLI spinner has no heartbeat: it draws only when stderr is a terminal outside an agent. An agent therefore runs a long `rimz` command under `rimz shell`. `xtask/src/spinner.rs` is a separate copy of `crates/rimz/src/cli/spinner.rs`, so that xtask stays independent of the runtime crate.
 - An agent tool sandbox can deny Unix socket binds. `PermissionDenied` from `UnixListener::bind` in `agents::spending::service` tests is one known symptom. When a failure occurs only under that sandbox, rerun the affected tests unsandboxed (`cargo xtask test 'agents::spending::service'`). xtask still supplies its disposable roots.
 
 ### Self-skips
@@ -59,8 +59,8 @@ A test that returns early because the host lacks a capability records the skip t
 - `--name` takes the nextest test name without the binary: an integration test is `lsp::some_test`, never `integration::lsp::some_test`. A leaf name or a full `module::path` name both work, and the match is exact and segment-anchored.
 - Repeat `--name` to batch several tests through one nextest run. Do not launch parallel Cargo processes. xtask runs the matched tests and prints the selection (before the run under `--no-capture`, after it otherwise). It fails after the run if any requested name was unmatched, and before it if none matched.
 - `--list` prints each binary's id (`rimz::integration`) followed by its exact names. The binary's path comes from `cargo xtask test --list <fragment> --message-format json`, or from the `binary:` line of a `cargo xtask stress` `summary.txt`.
-- Every `cargo xtask test` run (`--list`, `--name`, a filter) builds the test binaries first. Run a cold one under `rimz wait --run`, never as a foreground call: a cold build on a loaded host outlasts the 10-minute tool cap.
-- The first `cargo xtask` build in a fresh worktree outlasts the 10-minute tool cap too, whatever the subcommand (`test`, `check`, `lint`). Give that command a 30-minute timeout, or run it under `rimz wait --run`.
+- Every `cargo xtask test` run (`--list`, `--name`, a filter) builds the test binaries first. Run a cold one under `rimz shell`, never as a foreground call: a cold build on a loaded host outlasts the 10-minute tool cap.
+- The first `cargo xtask` build in a fresh worktree outlasts the 10-minute tool cap too, whatever the subcommand (`test`, `check`, `lint`). Give that command a 30-minute timeout, or run it under `rimz shell`.
 - During a read-only sweep, run `rimz lsp hover` on the test function. The module path it prints, minus the crate name (`rimz::` or `integration::`), plus `::<fn>`, is the exact name.
 - A file mounted with `#[path = "..."] mod name;` runs under the mounting module's path plus `::name`, never under its file name. A sibling `#[path = "foo_tests.rs"] mod tests;` runs as `loop_cmd::list::tests`. The integration file `loop_list.rs` runs as `loop_schedule::list_tests`, so `test(loop_list::)` matches nothing.
 
@@ -125,7 +125,7 @@ A new `pub` or `pub(crate)` item, module, or cross-module import can fail the ra
 
 - `cargo xtask atlas diff --base "$(git merge-base HEAD origin/main)" --path <boundary>` lists each added surface item, up to 20 rows unless you pass `--top <N>`. Take the names for a `(+N)` line from it.
 - A `conform --ratchet` failure with the budget one lower proves the sum. It does not prove the names.
-- `atlas diff` has run for over 20 minutes on a shared host, so run it under `rimz wait --run`. When it cannot finish, count each boundary's new `pub` and `pub(crate)` items and `pub use` leaves by hand, and prove the sum the same way.
+- `atlas diff` has run for over 20 minutes on a shared host, so run it under `rimz shell`. When it cannot finish, count each boundary's new `pub` and `pub(crate)` items and `pub use` leaves by hand, and prove the sum the same way.
 
 ### Keep the comment lines true
 

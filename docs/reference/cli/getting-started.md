@@ -248,7 +248,7 @@ rimz doctor [--audit] [--json] [--no-log-text] [--output <PATH>] [--clear]
 
 | Flag | Effect |
 | --- | --- |
-| `--audit` | Widen every section to all its rows: observed agent sessions, loop tasks, language servers, and retained message failures. Also measure disk use for `STORAGE` and `TEMP UNITS`, walking the RimZ home, with per-folder room entry counts and warnings on unswept growth. For a bug report: `rimz doctor --audit --no-log-text --output doctor.txt`. The audit can take minutes; an agent runs it under [`rimz wait --run`](./wait.md). |
+| `--audit` | Widen every section to all its rows: observed agent sessions, loop tasks, language servers, and retained message failures. Also measure disk use for `STORAGE` and `TEMP UNITS`, walking the RimZ home, with per-folder room entry counts and warnings on unswept growth. For a bug report: `rimz doctor --audit --no-log-text --output doctor.txt`. The audit can take minutes; an agent runs it under [`rimz shell`](./shell.md). |
 | `--json` | Print the report as one `rimz.doctor.v1` JSON document, including top-level `audit: false` or `true`. |
 | `--no-log-text` | Omit multiplexer log record text from summaries, samples, and excerpts in either output format; retain severity, timestamps, counts, Zellij module targets, and RimZ-authored diagnoses. |
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |

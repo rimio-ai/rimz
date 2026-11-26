@@ -291,7 +291,7 @@ Your own sends carry no header: the agent reads them as your words, as if you ha
 - `MESSAGE_UNDELIVERED`, sent once to an agent sender when its message ends without delivery.
 - `MESSAGE_QUEUED`, sent once to an agent sender when its message stays queued past five minutes with a receiver not working, or twenty minutes with a receiver busy in a turn.
 - `DEADLINE`, the warnings and the stop request a subagent receives as its work deadline nears.
-- `WAIT`, a [`rimz wait`](./loops.md) delivery coming due.
+- `WAIT`, a [`rimz shell` or `rimz watch`](./loops.md#wake-a-running-agent) delivery coming due.
 - `CACHE_KEEPALIVE`, a facts-only ping that keeps a sleeping agent's prompt cache warm.
 - `SIGNAL`, a signal-triggered loop firing.
 - `STAGE`, a [team](./teams.md) stage opening.
