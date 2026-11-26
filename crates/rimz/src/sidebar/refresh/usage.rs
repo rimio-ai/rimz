@@ -374,21 +374,47 @@ pub fn complete_realtime_account_usage(
     )
 }
 
-/// Refresh one provider's account usage for `rimz accounts`, forcing a read
-/// when requested or otherwise following its durable cadence.
-/// Cache publication remains nonce-guarded by the normal claim path.
-pub fn refresh_provider_usage(
+/// Refresh the account usage of `logins` for `rimz accounts`, forcing each read
+/// when requested or otherwise following its durable cadence. Cache
+/// publication remains nonce-guarded by the normal claim path.
+pub fn refresh_logins_usage(
     runtime: &RuntimePaths,
-    login: &ProviderLogin,
-    logins: &RoomLoginSet,
+    logins: &[ProviderLogin],
+    set: &RoomLoginSet,
     force: bool,
-) -> bool {
+) {
     if crate::agents::credits::oauth_usage_offline() {
-        return false;
+        return;
     }
-    refresh_provider_usage_with(runtime, login, force, |runtime, login| {
-        merge_account_usage_if_due(runtime, login, logins)
-    })
+    refresh_logins_usage_with(runtime, logins, |login| {
+        refresh_provider_usage_with(runtime, login, force, |runtime, login| {
+            merge_account_usage_if_due(runtime, login, set)
+        })
+    });
+}
+
+fn refresh_logins_usage_with(
+    runtime: &RuntimePaths,
+    logins: &[ProviderLogin],
+    refresh: impl Fn(&ProviderLogin) -> bool,
+) {
+    let started = Instant::now();
+    for login in logins {
+        let read_started = Instant::now();
+        let landed = refresh(login);
+        let elapsed_ms = duration_ms(read_started.elapsed());
+        trace::record(runtime, || TraceEvent::UsageRead {
+            kind: login.kind().as_str(),
+            login: login.name().as_str(),
+            elapsed_ms,
+            landed,
+        });
+    }
+    let total_ms = duration_ms(started.elapsed());
+    trace::record(runtime, || TraceEvent::UsagePass {
+        login_count: logins.len(),
+        total_ms,
+    });
 }
 
 fn refresh_provider_usage_with(

@@ -29,7 +29,7 @@ use rimz::ids::{AgentKind, LoginKey, LoginName};
 use rimz::room::{AccountStanding, AgentStateCounts, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
 use rimz::sidebar::refresh::{
-    query_provider_accounts, read_provider_accounts, refresh_provider_usage,
+    query_provider_accounts, read_provider_accounts, refresh_logins_usage,
 };
 use rimz::store::snapshot::{DailyBudgetView, ProviderPlan, SidebarProviderPanel};
 
@@ -117,17 +117,17 @@ pub(super) fn list(args: ListArgs, target: Option<&str>, globals: &GlobalFlags) 
         accounts = query_provider_accounts(&runtime, &stale, &probe_logins, true);
     }
     spinner.set("Refreshing provider usage");
-    for login in &logins {
-        let Some(record) = accounts.logins.get(&login.key()) else {
-            continue;
-        };
-        if filter.is_some_and(|filter| filter != login.kind().as_str())
-            || ProviderStatus::from_record(Some(record)) != ProviderStatus::LoggedIn
-        {
-            continue;
-        }
-        refresh_provider_usage(&runtime, login, &probe_logins, args.refresh);
-    }
+    let logged_in: Vec<_> = logins
+        .iter()
+        .filter(|login| filter.is_none_or(|filter| filter == login.kind().as_str()))
+        .filter(|login| {
+            accounts.logins.get(&login.key()).is_some_and(|record| {
+                ProviderStatus::from_record(Some(record)) == ProviderStatus::LoggedIn
+            })
+        })
+        .cloned()
+        .collect();
+    refresh_logins_usage(&runtime, &logged_in, &probe_logins, args.refresh);
     drop(spinner);
     // A usage read above may have merged a newer plan into the records.
     let accounts = with_republished_records(accounts, read_provider_accounts(&runtime));
