@@ -740,60 +740,6 @@ fn agent_override_errors_reach_the_launch_failure_ladder() {
 }
 
 #[test]
-fn profile_agent_overrides_are_not_consumed_by_model_or_tier_routing() {
-    let root = tempdir().unwrap();
-    std::fs::create_dir(root.path().join("agents")).unwrap();
-    for (name, body) in [
-        ("claude", ""),
-        ("worker", "agent: claude\ntier: junior\ntools: [Bash]\n"),
-        ("quick", "agent: claude\nmodel: haiku\ntools: [Bash]\n"),
-    ] {
-        std::fs::write(
-            root.path().join(format!("agents/{name}.md")),
-            format!("---\ndescription: Worker\n{body}---\nCraft."),
-        )
-        .unwrap();
-    }
-    let mut machine = MachineConfig::default();
-    let definitions = crate::config::definitions::load(
-        root.path(),
-        crate::config::definitions::SkillCheck::Skip,
-        &machine.agents.commands,
-        &root.path().join("config.toml"),
-        &machine.tiers,
-        None,
-    );
-    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
-    machine.agents.profiles = definitions.agent_profiles;
-    machine.agents.profiles.0.insert(
-        "fast".into(),
-        toml::from_str("agent = 'claude'\nmodel = 'haiku'").unwrap(),
-    );
-    let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
-    for base in ["fast", "quick"] {
-        for (tier, model) in [
-            (None, None),
-            (Some(crate::config::tiers::ModelTier::Junior), None),
-            (None, Some("sonnet")),
-        ] {
-            let resolved = launch_under(
-                &launch,
-                &machine.tiers,
-                ProfileScope::Agents,
-                "worker",
-                tier,
-                model,
-                Some(base),
-                |_, _| None,
-            )
-            .unwrap();
-            let cell = resolved.layout.agent_cells().next().unwrap();
-            assert_eq!(cell.kind.as_str(), "claude");
-        }
-    }
-}
-
-#[test]
 fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -827,9 +773,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         root.path().join("skills/one/SKILL.md").display()
     );
     for (name, runtime) in [
-        ("principal", "tier: principal"),
         ("exact", "agent: claude\nmodel: claude-future"),
-        ("concrete", "model: opus"),
         ("other", "tier: principal"),
         ("codex-worker", "agent: codex\ntier: junior"),
     ] {
@@ -890,22 +834,6 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     for fragment in ["skilled", "opus", "claude", user_only.as_str()] {
         assert!(error.to_string().contains(fragment), "{error}");
     }
-    let selected = first_cell(
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "exact",
-            None,
-            Some("astra"),
-            None,
-            |_, _| Some(crate::agents::TierSkipReason::LoggedOut),
-        )
-        .unwrap(),
-    );
-    assert_eq!(selected.kind.as_str(), "codex");
-    assert_eq!(selected.launch.model.as_deref(), Some("astra"));
-    assert!(selected.launch.tier.is_none());
     for family in ["codex", "codex-worker"] {
         let error = launch_under(
             &launch,
@@ -922,20 +850,6 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             assert!(error.to_string().contains(fragment), "{error}");
         }
     }
-    let cell = first_cell(
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "codex-worker",
-            Some(super::super::tiers::ModelTier::Senior),
-            None,
-            None,
-            |_, _| None,
-        )
-        .unwrap(),
-    );
-    assert_eq!(cell.launch.model.as_deref(), Some("astra"));
     let selected = first_cell(
         launch_under(
             &launch,
@@ -968,23 +882,6 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         launch.profiles.0["other"].model,
         machine.agents.profiles.0["other"].model
     );
-    for name in ["principal", "exact", "concrete", "claude"] {
-        let cell = first_cell(
-            launch_under(
-                &launch,
-                &machine.tiers,
-                ProfileScope::Agents,
-                name,
-                Some(super::super::tiers::ModelTier::Intern),
-                None,
-                Some("codex"),
-                |_, _| None,
-            )
-            .unwrap(),
-        );
-        assert_eq!(cell.kind.as_str(), "codex");
-        assert_eq!(cell.launch.model.as_deref(), Some("luna"));
-    }
     let cell = first_cell(
         launch_under(
             &launch,
@@ -1046,7 +943,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
                 None,
                 None,
                 None,
-                unavailable.clone(),
+                unavailable,
             )
             .unwrap(),
         );
@@ -1058,82 +955,6 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             wire["tier"]["skipped"][0]["reason"],
             serde_json::to_value(reason).unwrap()["reason"]
         );
-        let cell = first_cell(
-            launch_under(
-                &launch,
-                &machine.tiers,
-                ProfileScope::Agents,
-                "concrete",
-                None,
-                None,
-                None,
-                unavailable,
-            )
-            .unwrap(),
-        );
-        assert_eq!(cell.kind.as_str(), "claude");
-        assert_eq!(cell.launch.model.as_deref(), Some("opus"));
-        assert!(cell.launch.tier.is_none());
-    }
-    let concrete = load_with_roots(&machine, project.path(), root.path()).unwrap();
-    let cell = first_cell(
-        launch_under(
-            &concrete,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "concrete",
-            None,
-            None,
-            Some("codex"),
-            |_, _| None,
-        )
-        .unwrap(),
-    );
-    assert_eq!(cell.kind.as_str(), "codex");
-    assert!(cell.launch.tier.is_none());
-    for routing in [
-        super::super::tiers::Routing::Fallback,
-        super::super::tiers::Routing::Off,
-    ] {
-        let mut table = machine.tiers.clone();
-        table.routing = routing;
-        let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
-        launch.profiles.0.insert(
-            "project".into(),
-            toml::from_str("agent = 'claude'\nmodel = 'opus'").unwrap(),
-        );
-        let unavailable = |_: &str, _: &str| Some(crate::agents::TierSkipReason::LoggedOut);
-        let resolved = first_cell(
-            launch_under(
-                &launch,
-                &table,
-                ProfileScope::Agents,
-                "worker",
-                None,
-                None,
-                None,
-                unavailable,
-            )
-            .unwrap(),
-        );
-        let wire = serde_json::to_value(&resolved.launch).unwrap();
-        assert_eq!(wire["tier"]["model"], "opus");
-        assert!(wire["tier"].get("skipped").is_none());
-        let project = first_cell(
-            launch_under(
-                &launch,
-                &table,
-                ProfileScope::Agents,
-                "project",
-                None,
-                None,
-                None,
-                unavailable,
-            )
-            .unwrap(),
-        );
-        assert_eq!(project.launch.model.as_deref(), Some("opus"));
-        assert!(project.launch.tier.is_none());
     }
 }
 
@@ -1219,120 +1040,6 @@ fn mini_tier_and_model_overrides_keep_the_selected_interface() {
             ),
         ]
     );
-    let bare = first_cell(
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "opencode-mini",
-            Some(crate::config::tiers::ModelTier::Junior),
-            None,
-            None,
-            |_, _| None,
-        )
-        .unwrap(),
-    );
-    assert_eq!(
-        (
-            bare.kind.as_str(),
-            bare.launch.tier.as_ref().map(|stamp| stamp.tier)
-        ),
-        ("opencode", Some(crate::config::tiers::ModelTier::Junior)),
-        "--tier on a bare provider name walks as on a definition"
-    );
-}
-
-#[test]
-fn tier_launches_keep_the_requested_model_client_engine() {
-    let root = tempdir().unwrap();
-    std::fs::create_dir(root.path().join("agents")).unwrap();
-    for kind in ["claude", "codex", "pi", "opencode"] {
-        std::fs::write(
-            root.path().join(format!("agents/{kind}.md")),
-            "---\ndescription: Base.\n---\nBase.",
-        )
-        .unwrap();
-    }
-    for (name, kind) in [("worker", "opencode"), ("native", "claude")] {
-        std::fs::write(
-            root.path().join(format!("agents/{name}.md")),
-            format!(
-                "---\ndescription: Worker.\nagent: {kind}\ntier: junior\ntools: [Bash]\n---\nCraft."
-            ),
-        )
-        .unwrap();
-    }
-    let mut machine = MachineConfig::default();
-    let loaded = crate::config::definitions::load(
-        root.path(),
-        crate::config::definitions::SkillCheck::Skip,
-        &machine.agents.commands,
-        &root.path().join("config.toml"),
-        &machine.tiers,
-        None,
-    );
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    machine.agents.profiles = loaded.agent_profiles;
-    machine.agents.profiles.0.insert(
-        "alternate".into(),
-        toml::from_str("agent = 'opencode'").unwrap(),
-    );
-    let launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
-    let actual: Vec<_> = [
-        ("worker", None),
-        ("worker", Some("opencode")),
-        ("worker", Some("alternate")),
-        ("native", Some("opencode")),
-    ]
-    .map(|(target, family)| {
-        let resolved = launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            target,
-            Some(crate::config::tiers::ModelTier::Junior),
-            None,
-            family,
-            |kind, _| (kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut),
-        )
-        .unwrap();
-        let cell = resolved.layout.agent_cells().next().unwrap();
-        (cell.kind.to_string(), cell.launch.model.clone())
-    })
-    .into();
-    assert_eq!(
-        actual,
-        [(); 4].map(|_| ("opencode".into(), Some("sol".into())))
-    );
-}
-
-#[test]
-fn explicit_cross_provider_models_route_only_on_multi_provider_engines() {
-    let machine = MachineConfig::default();
-    let project = tempdir().unwrap();
-    let config = tempdir().unwrap();
-    let mut launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
-    launch.profiles.0.insert(
-        "planner".into(),
-        toml::from_str("agent = 'claude'\nmodel = 'sonnet'").unwrap(),
-    );
-    for (kind, accepted) in [("pi", true), ("codex", false)] {
-        let result = launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "planner",
-            None,
-            Some("sonnet"),
-            Some(kind),
-            |_, _| None,
-        )
-        .map(|_| ());
-        assert_eq!(result.is_ok(), accepted, "{kind}: {result:?}");
-        if let Err(error) = result {
-            assert!(error.to_string().contains("choose the same family"));
-        }
-    }
 }
 
 #[test]
@@ -1425,24 +1132,6 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
         outcomes,
         std::array::from_fn(|_| ("pi".to_owned(), Some("sonnet".to_owned()), true, true, true))
     );
-    let worker = first_cell(
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "worker",
-            None,
-            Some("sonnet"),
-            Some("claude"),
-            |_, _| None,
-        )
-        .unwrap(),
-    );
-    assert_eq!(
-        (worker.kind.as_str(), worker.launch.model.as_deref()),
-        ("claude", Some("sonnet")),
-        "--agent still selects another family's complete render"
-    );
 }
 
 #[test]
@@ -1503,59 +1192,6 @@ fn opencode_model_overrides_finalize_without_provider_model_args() {
         );
         assert!(cell.args.is_empty(), "{:?}", cell.args);
     }
-}
-
-#[test]
-fn pi_model_routing_does_not_require_the_models_native_family_render() {
-    let config = tempdir().unwrap();
-    let project = tempdir().unwrap();
-    std::fs::create_dir(config.path().join("agents")).unwrap();
-    std::fs::write(
-        config.path().join("agents/pi.md"),
-        "---\ndescription: Pi base\n---\nBase.",
-    )
-    .unwrap();
-    std::fs::write(
-        config.path().join("agents/worker.md"),
-        "---\ndescription: Worker\nagent: pi\ntools: ['Agent(unknown)']\n---\n",
-    )
-    .unwrap();
-    let mut machine = MachineConfig::default();
-    let definitions = crate::config::definitions::load(
-        config.path(),
-        crate::config::definitions::SkillCheck::Skip,
-        &CommandsConfig::default(),
-        &config.path().join("config.toml"),
-        &machine.tiers,
-        machine.harness.auto_compact_default(),
-    );
-    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
-    machine.agents.profiles = definitions.agent_profiles;
-    let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
-    assert!(
-        launch.profiles.0["worker"]
-            .definition
-            .as_ref()
-            .unwrap()
-            .build(None, "claude", None)
-            .is_err()
-    );
-    let results = [None, Some("pi")].map(|family| {
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "worker",
-            None,
-            Some("sonnet"),
-            family,
-            |_, _| None,
-        )
-        .map(first_cell)
-        .map(|cell| cell.kind.to_string())
-        .map_err(|error| error.to_string())
-    });
-    assert_eq!(results, [Ok("pi".to_owned()), Ok("pi".to_owned())]);
 }
 
 #[test]
@@ -3955,26 +3591,7 @@ roles = [{ role = "lead", profile = "r7_effort", model = "sonnet" }]
         Some(272_000)
     );
 
-    // `--tier` on project profile AND on project team with TOML role `model`.
-    let solo_resolved = first_cell(
-        launch_under(
-            &launch,
-            &machine.tiers,
-            ProfileScope::Agents,
-            "r7_effort",
-            Some(super::super::tiers::ModelTier::Senior),
-            None,
-            Some("codex"),
-            |_, _| None,
-        )
-        .expect("--tier on project profile succeeds"),
-    );
-    assert_eq!(solo_resolved.kind.as_str(), "codex");
-    assert_eq!(solo_resolved.launch.model.as_deref(), Some("astra"));
-    assert_eq!(
-        solo_resolved.launch.tier.as_ref().map(|t| t.tier),
-        Some(super::super::tiers::ModelTier::Senior)
-    );
+    // `--tier` on a project team with TOML role `model`.
 
     let team_resolved = launch_under(
         &launch,

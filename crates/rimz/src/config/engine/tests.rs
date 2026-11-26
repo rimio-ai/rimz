@@ -188,7 +188,7 @@ fn stamp(tier: ModelTier, model: &str) -> TierStamp {
 /// principal fable; claude owns the rest, and opencode runs every provider's models.
 #[test]
 fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
-    use ModelTier::{Junior, Principal, Senior};
+    use ModelTier::{Intern, Junior, Principal, Senior};
     let world = World::default;
     let senior_stamp = stamp(Senior, "astra");
     let rows: Vec<(&str, String, &str)> = vec![
@@ -639,6 +639,159 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
             "opencode/opencode-mini/base/-",
         ),
         (
+            "launch: X's model replaces L's tier",
+            world().run(|t, p| {
+                let req = launch_of(
+                    def("worker", "claude", None, Some(Junior)),
+                    Some(def("quick", "claude", Some("haiku"), None)),
+                );
+                launch(&req, t, p)
+            }),
+            "claude/-/haiku/-",
+        ),
+        (
+            "launch: --tier over X's model walks under X's family",
+            world().run(|t, p| {
+                let req = Launch {
+                    tier: Some(Junior),
+                    ..launch_of(
+                        def("worker", "codex", None, Some(Senior)),
+                        Some(def("quick", "claude", Some("haiku"), None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "claude/-/sonnet/junior",
+        ),
+        (
+            "launch: --tier with X sets aside L's own tier",
+            world().run(|t, p| {
+                let req = Launch {
+                    tier: Some(Intern),
+                    ..launch_of(
+                        def("principal", "claude", None, Some(Principal)),
+                        Some(Side::bare("codex", "codex", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "codex/-/luna/intern",
+        ),
+        (
+            "launch: --tier on a model-client file takes the first entry on its row",
+            world().unavailable("opencode", "haiku").run(|t, p| {
+                let req = Launch {
+                    tier: Some(Junior),
+                    ..launch_of(def("worker", "opencode", None, Some(Junior)), None)
+                };
+                launch(&req, t, p)
+            }),
+            "opencode/-/sol/junior",
+        ),
+        (
+            "launch: --tier under a plain model-client X takes the first entry on its row",
+            world().unavailable("claude", "sonnet").run(|t, p| {
+                let req = Launch {
+                    tier: Some(Junior),
+                    ..launch_of(
+                        def("native", "claude", None, Some(Junior)),
+                        Some(Side::bare("opencode", "opencode", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "opencode/-/sol/junior",
+        ),
+        (
+            "launch: --tier on a bare variant name keeps its variant",
+            world().run(|t, p| {
+                let req = Launch {
+                    tier: Some(Junior),
+                    ..launch_of(Side::bare("opencode-mini", "opencode", mini()), None)
+                };
+                launch(&req, t, p)
+            }),
+            "opencode/opencode-mini/sol/junior",
+        ),
+        (
+            "launch: --model of another provider runs on a model-client X",
+            world().run(|t, p| {
+                let req = Launch {
+                    model: Some("sonnet"),
+                    ..launch_of(
+                        def("planner", "claude", Some("sonnet"), None),
+                        Some(Side::bare("pi", "pi", None)),
+                    )
+                };
+                launch(&req, t, p)
+            }),
+            "pi/-/sonnet/-",
+        ),
+        (
+            "launch: --model on a model-client file keeps its kind",
+            world()
+                .broken("claude", DefinitionCause::Invalid)
+                .run(|t, p| {
+                    let req = Launch {
+                        model: Some("sonnet"),
+                        ..launch_of(def("worker", "pi", None, None), None)
+                    };
+                    launch(&req, t, p)
+                }),
+            "pi/-/sonnet/-",
+        ),
+        (
+            "launch: --model passes over no availability",
+            world().unavailable("codex", "astra").run(|t, p| {
+                let req = Launch {
+                    model: Some("astra"),
+                    ..launch_of(def("exact", "claude", Some("claude-future"), None), None)
+                };
+                launch(&req, t, p)
+            }),
+            "codex/-/astra/-",
+        ),
+        (
+            "launch: an untiered launch passes over no availability",
+            world().unavailable("claude", "opus").run(|t, p| {
+                launch(
+                    &launch_of(def("concrete", "claude", Some("opus"), None), None),
+                    t,
+                    p,
+                )
+            }),
+            "claude/-/opus/-",
+        ),
+        (
+            "launch: L's tier takes its first entry when every entry is unavailable",
+            world()
+                .unavailable("claude", "opus")
+                .unavailable("codex", "astra")
+                .unavailable("claude", "fable")
+                .run(|t, p| {
+                    launch(
+                        &launch_of(def("worker", "claude", None, Some(Senior)), None),
+                        t,
+                        p,
+                    )
+                }),
+            "claude/-/opus/senior",
+        ),
+        (
+            "launch: with routing off L's tier asks no availability",
+            world()
+                .tiers("routing = \"off\"")
+                .unavailable("claude", "opus")
+                .run(|t, p| {
+                    launch(
+                        &launch_of(def("worker", "claude", None, Some(Senior)), None),
+                        t,
+                        p,
+                    )
+                }),
+            "claude/-/opus/senior",
+        ),
+        (
             "launch: X whose build fails is typed",
             world()
                 .broken("codex", DefinitionCause::Invalid)
@@ -742,6 +895,17 @@ fn each_entry_chooses_kind_model_tier_and_variant_by_one_rule() {
                 resume(&req, t, p)
             }),
             "opencode/opencode-mini/opus/senior",
+        ),
+        (
+            "resume: --tier on a model client walks its row as a fresh launch does",
+            world().unavailable("pi", "haiku").run(|t, p| {
+                let req = Resume {
+                    tier: Some(Junior),
+                    ..resume_of("pi", def("planner", "pi", None, None))
+                };
+                resume(&req, t, p)
+            }),
+            "pi/-/sol/junior",
         ),
         (
             "resume: --model runs as given on the session's kind",
