@@ -82,7 +82,7 @@ target/debug/xtask sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancest
 
 `sandbox in` runs one command with the room's `HOME`, `RIMZ_HOME`, and XDG roots. It starts in the room card's Worktree. Pass `--cwd "$ROOT/home/room"` to run in the room's project, which you also need once a check removes the worktree. The command's `PATH` starts with the stub directory, `$ROOT/home/bin`, then the directory of the room's `rimz`. A relative program path that contains `/` resolves from your checkout. A path inside `env` or `sh -c` resolves in that command instead, so pass the RimZ binary there by absolute path.
 
-The environment drops your Zellij and tmux session keys and every ambient `RIMZ_*` variable, so a switch set in your shell never reaches the room. Write room settings into the room's home instead ([Set up the room](#set-up-the-room-for-a-check)).
+The environment drops your Zellij and tmux session keys and every ambient `RIMZ_*` variable, so a switch set in your shell never reaches the room. Write room settings into the room's home instead ([Set up the room](#set-up-the-room-for-a-check)). Without `--as`, `sandbox in` also omits the room's identity pin (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`), while `--as <@handle>` copies the agent's session keys including that pin. To check what a pane-side helper does from a directory outside the worktree without `--as`, pass `env RIMZ_WORKSPACE_ID="$SESSION" RIMZ_PROJECT_ROOT="$ROOT/home/room"` inside the sandboxed command (with `SESSION` from `room.json` below).
 
 A command that exits nonzero makes `sandbox in` exit 1 and print `sandboxed command ... exited with ...`. To check an exit code, record it inside the sandbox: `-- sh -c '<command>; echo $? > <file>'`.
 
