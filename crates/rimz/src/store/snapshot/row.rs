@@ -658,8 +658,14 @@ pub struct AgentCard {
     /// sort reads them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bookings: Vec<SidebarBooking>,
+    /// The agents and teams this card launched directly, in launch order: no subagent, and
+    /// no booked fire's launch. Beside `bookings` and as inert: no status, attention, count
+    /// or sort reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launched: Vec<SidebarLaunched>,
     /// The agents this card's `Subagent` waits await that have no entry among its current
-    /// children (a peer with its own card, a child from an earlier turn), in wait order.
+    /// children or its launched entries (a peer with its own card, a child from an earlier
+    /// turn), in wait order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub awaited: Vec<SidebarAwaitedAgent>,
 }
@@ -762,6 +768,7 @@ impl Default for AgentCard {
             overlay_raised_at: None,
             delegated_wait: None,
             bookings: Vec::new(),
+            launched: Vec::new(),
             awaited: Vec::new(),
         }
     }
@@ -787,6 +794,50 @@ pub struct SidebarBooking {
     /// The booking's own text: its label, else its launch `--description`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+/// One launch the card's agent made directly, for the card it sits on: a solo peer, or every
+/// seat of a team. It reads no harness type, so the renderer draws it without adding a rule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarLaunched {
+    pub starts: BookingStarts,
+    /// A team's lane other than trunk's, else the peer's named lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// A solo peer's launch description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The launch ids of its rows.
+    pub launches: Vec<String>,
+    /// Its first registration.
+    pub at: Timestamp,
+    /// What the launch has alive in this fold; `None` once nothing is: the entry is
+    /// finished unless it is `starting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<BookingLive>,
+    /// The launch lane read a row of it alive, its row is still in the fold, and no card
+    /// holds it yet: the entry is in flight and reads `starting`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starting: bool,
+    /// The end of its last seat; read only when `live` is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<Timestamp>,
+    /// The pull request of the branch its tree runs on.
+    pub pr: BookingPr,
+    /// A team entry's cohort, the instance a `Team` wait on it names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<crate::ids::TeamInstanceId>,
+}
+
+impl SidebarLaunched {
+    pub fn is_finished(&self) -> bool {
+        self.live.is_none() && !self.starting
+    }
+
+    /// The pane a click on the entry focuses: its live launch's.
+    pub fn live_pane(&self) -> Option<&PaneId> {
+        self.live.as_ref().and_then(|live| live.pane.as_ref())
+    }
 }
 
 /// What a booking launches: a configured team, or an agent profile or kind.
@@ -1098,6 +1149,7 @@ impl AgentCard {
             overlay_raised_at: None,
             delegated_wait: None,
             bookings: Vec::new(),
+            launched: Vec::new(),
             awaited: Vec::new(),
         }
     }

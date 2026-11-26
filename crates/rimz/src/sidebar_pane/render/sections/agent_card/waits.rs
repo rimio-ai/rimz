@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells and then scripts shown past their threshold, which draw as shells labelled with the script description (else `script`), with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice.
+//! Type-led wait entries share the subagent layout and pin armed age right. Agents the card awaits outside its subagents list come first, one entry each named by profile and named lane, else `agent`: a live one behind its own state lead, a click target and cursor stop for its pane, and a settled run still reporting or an agent with no row behind the static signal lead. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line; a team wait names the team and lane its wait names, then its stage, which never clips. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells and then scripts shown past their threshold, which draw as shells labelled with the script description (else `script`), with signals last and a pending idle stop after them. Subagent waits draw only through the card's awaited list, so a child with its own entry is not listed twice, and a team wait on a team the card launched draws only under launched.
 
 use jiff::Timestamp;
 
@@ -9,14 +9,27 @@ use crate::agents::{
 use crate::ids::{LaneName, TeamInstanceId};
 use crate::proc::command::{command_program_basename, program_label};
 use crate::sidebar_pane::render::labels::hour_age_glyph;
-use crate::store::snapshot::{CardScript, SidebarAwaitedAgent};
+use crate::store::snapshot::{CardScript, SidebarAwaitedAgent, SidebarLaunched};
 
 use super::*;
 
-pub(super) fn visible_waits(waits: &[PendingWait]) -> impl Iterator<Item = &PendingWait> {
-    waits
-        .iter()
-        .filter(|wait| !matches!(wait.trigger, PendingWaitTrigger::Subagent { .. }))
+/// The waits drawn as wait entries: no `Subagent` wait, which draws through the card's
+/// awaited list, and no `Team` wait on a team the card launched, which lists under
+/// launched.
+pub(super) fn visible_waits<'a>(
+    waits: &'a [PendingWait],
+    launched: &'a [SidebarLaunched],
+) -> impl Iterator<Item = &'a PendingWait> {
+    waits.iter().filter(|wait| match wait.trigger {
+        PendingWaitTrigger::Subagent { .. } => false,
+        PendingWaitTrigger::Team { .. } => !launched.iter().any(|entry| {
+            entry
+                .team
+                .as_ref()
+                .is_some_and(|team| wait.name.parse::<TeamInstanceId>().ok().as_ref() == Some(team))
+        }),
+        _ => true,
+    })
 }
 
 /// An awaited agent whose run is working or compacting: its entry animates, as a child's does.
@@ -99,11 +112,12 @@ pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
 pub(super) fn wait_entry_lines<'a>(
     ctx: &RowCtx<'_>,
     waits: &[PendingWait],
+    launched: &[SidebarLaunched],
     shells: &[BackgroundShell],
     scripts: impl Iterator<Item = &'a CardScript>,
     idle_stop: Option<&PendingIdleStop>,
 ) -> Vec<Line<'static>> {
-    let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits).partition(|wait| {
+    let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits, launched).partition(|wait| {
         matches!(
             wait.trigger,
             PendingWaitTrigger::Signal { .. } | PendingWaitTrigger::Condition { .. }

@@ -183,8 +183,8 @@ pub(super) fn refresh_bookings_for(
 }
 
 /// How long a consumed entry whose launch runs in no worktree stays after its end: a
-/// data-plane lifetime, not a display setting.
-const CONSUMED_TREELESS_SECS: u64 = 15 * 60;
+/// data-plane lifetime, not a display setting. A launched peer's entry keeps the same one.
+pub(super) const CONSUMED_TREELESS_SECS: u64 = 15 * 60;
 
 /// The room one pass reads.
 struct Lane<'a> {
@@ -292,7 +292,7 @@ impl Lane<'_> {
 
 /// The room's Audit rows, which keep an ended row with its `loop_fire` and end stamp; `None`,
 /// logged, when the store cannot be opened or its rows cannot be read.
-fn audit_rows(store: Option<&Store>) -> Option<Vec<AgentState>> {
+pub(super) fn audit_rows(store: Option<&Store>) -> Option<Vec<AgentState>> {
     let Some(store) = store else {
         tracing::debug!("sidebar bookings pass skipped: the room's store cannot be opened");
         return None;
@@ -634,10 +634,8 @@ pub(super) fn consumed(
     (kept, gone)
 }
 
-/// A consumed entry's lifetime: while something it launched is alive, or, with no end
-/// recorded, for `window_secs` after its fire (its launch is starting); after that, one with
-/// a known worktree until its pull request merges or `checkout` (the launch's checkout) is
-/// gone, and one without, or whose tree is not known, for `window_secs` after its end.
+/// A consumed entry's lifetime: its fire's launch's [`Lifetime`], with `checkout` (the
+/// launch's checkout) read only for an entry with a worktree.
 fn in_lifetime(
     facts: &BookingFacts,
     checkout: Option<&Path>,
@@ -648,18 +646,48 @@ fn in_lifetime(
     let Some(fire) = &facts.fire else {
         return false;
     };
-    let within = |stamp: Timestamp| {
-        now.duration_since(stamp).as_secs() <= i64::try_from(window_secs).unwrap_or(i64::MAX)
-    };
-    if alive || (fire.ended_at.is_none() && within(fire.at)) {
-        return true;
+    Lifetime {
+        at: fire.at,
+        ended_at: fire.ended_at,
+        alive,
+        checkout: checkout.filter(|_| facts.worktree),
+        pr: fire.pr,
     }
-    if facts.worktree
-        && let Some(checkout) = checkout
-    {
-        return !matches!(fire.pr, BookingPr::Merged { .. }) && checkout.is_dir();
+    .holds(now, window_secs)
+}
+
+/// What a launch's lifetime reads: a booked fire's or a launched peer's.
+pub(super) struct Lifetime<'a> {
+    /// When the launch began: a fire's time, a peer's registration.
+    pub at: Timestamp,
+    /// The newest end its records hold.
+    pub ended_at: Option<Timestamp>,
+    /// Something it launched is alive.
+    pub alive: bool,
+    /// The checkout of a launch known to run in a worktree; `None` for one that runs in
+    /// none or whose tree is not known.
+    pub checkout: Option<&'a Path>,
+    /// The pull request of its own branch.
+    pub pr: BookingPr,
+}
+
+impl Lifetime<'_> {
+    /// While something it launched is alive, or, with no end recorded, for `window_secs`
+    /// after it began (it is starting); after that, one with a known checkout until its
+    /// pull request merges or the checkout is gone, and one without for `window_secs`
+    /// after its end.
+    pub(super) fn holds(&self, now: Timestamp, window_secs: u64) -> bool {
+        let within = |stamp: Timestamp| {
+            now.duration_since(stamp).as_secs() <= i64::try_from(window_secs).unwrap_or(i64::MAX)
+        };
+        if self.alive || (self.ended_at.is_none() && within(self.at)) {
+            return true;
+        }
+        if let Some(checkout) = self.checkout {
+            return !matches!(self.pr, BookingPr::Merged { .. }) && checkout.is_dir();
+        }
+        self.ended_at.is_some_and(within)
     }
-    fire.ended_at.is_some_and(within)
 }
 
 /// Whether anything the fire launched is alive, by `harness::schedule::launches::alive`'s rule
@@ -668,7 +696,7 @@ fn in_lifetime(
 /// agent is not over by `agents::state::agent_end`. The one process read is the open mark's
 /// launch child.
 fn fire_alive(mark: &FireMark, records: &RoomRecords, rows: &[&AgentState]) -> bool {
-    rows.iter().any(|agent| !agent_over(records, agent))
+    rows.iter().any(|agent| !agent_over(records.rows, agent))
         || records
             .runs
             .iter()
@@ -810,7 +838,7 @@ fn ended_at(mark: &FireMark, records: &RoomRecords, rows: &[&AgentState]) -> Opt
         .filter(|run| run.loop_fire.as_ref() == Some(&mark.fire))
         .collect();
     let runs_ended = stamped.iter().filter_map(|run| run.completed_at);
-    let rows_ended = (!rows.is_empty() && rows.iter().all(|agent| agent_over(records, agent)))
+    let rows_ended = (!rows.is_empty() && rows.iter().all(|agent| agent_over(records.rows, agent)))
         .then(|| {
             rows.iter()
                 .filter_map(|agent| agent.ended_at)
@@ -826,10 +854,10 @@ fn ended_at(mark: &FireMark, records: &RoomRecords, rows: &[&AgentState]) -> Opt
     runs_ended.chain(rows_ended).chain(unlaunched).max()
 }
 
-/// Whether `agent`'s launch is over among the room's Audit rows: ended, or a provisional launch
-/// that failed; a row no launch answers to is over once its session is.
-fn agent_over(records: &RoomRecords, agent: &AgentState) -> bool {
-    match agent_end(records.rows, &agent.kind, &agent.agent_id) {
+/// Whether `agent`'s launch is over among the room's Audit `rows`: ended, or a provisional
+/// launch that failed; a row no launch answers to is over once its session is.
+pub(super) fn agent_over(rows: &[AgentState], agent: &AgentState) -> bool {
+    match agent_end(rows, &agent.kind, &agent.agent_id) {
         AgentEnd::Ended => true,
         AgentEnd::Live => false,
         AgentEnd::Unknown => agent.session_over(),

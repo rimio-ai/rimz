@@ -95,9 +95,9 @@ pub(super) fn row_selection_reach(
 }
 
 /// What a card opens: reach marks its own live or held selection.
-/// Delegation entries open only on a card with a child, a wait, or a booking. There
-/// they follow a header pin taken in the parent's current user turn, else open for a
-/// live or held selection or under `expanded` density. `pages` counts the pages of
+/// Delegation entries open only on a card with a child, a wait, a launched entry, or a
+/// booking. There they follow a header pin taken in the parent's current user turn, else
+/// open for a live or held selection or under `expanded` density. `pages` counts the pages of
 /// finished entries the open section shows, taken in the parent's current user turn;
 /// it is 0 while the section is closed or has no finished entry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

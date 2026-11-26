@@ -1778,7 +1778,9 @@ allowed-dependencies = [
 # The daemon stderr logs share one capped open for the spawn sites and one own-stderr
 # check for the daemons, both called from the binary crate (`capped_log`, `open`,
 # `watch_own_stderr`) (+3).
-surface-budget = 350
+# RuntimePaths::launched_path names the launched lane's cache for its refresh lane, its enrich
+# join and the pull request lane's demand, as bookings_path does for bookings (+1).
+surface-budget = 351
 
 [[verdict]]
 kind = "item"
@@ -4864,7 +4866,8 @@ path = "crates/rimz/src/store"
 # event::{SoftCompactClaim, SOFT_COMPACT_CLAIMED_METHOD} and EventEnvelope::agent_soft_compact_claimed
 # carry a claimed reminder rung from the hook-context hook's ingress frame to the fold (+3).
 # store::message::ReturningMember is the launch and epoch a `rimz teams resume` prompt lists per member, read by the stage re-wake (+1).
-surface-budget = 703
+# SidebarLaunched carries a card's launched agents and teams from the launched lane to the renderer (+1).
+surface-budget = 704
 
 [[verdict]]
 kind = "item"

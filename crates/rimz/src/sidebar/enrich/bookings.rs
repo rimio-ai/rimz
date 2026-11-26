@@ -91,7 +91,7 @@ pub(super) fn row_of(snapshot: &SidebarSnapshot, at: RowAt) -> &SidebarRow {
     &snapshot.worktree_groups[at.0].rows[at.1]
 }
 
-fn agent_row(rows: &HashMap<(&str, &str), RowAt>, agent: &AgentState) -> Option<RowAt> {
+pub(super) fn agent_row(rows: &HashMap<(&str, &str), RowAt>, agent: &AgentState) -> Option<RowAt> {
     rows.get(&(agent.kind.as_str(), agent.agent_id.as_str()))
         .copied()
 }
@@ -109,7 +109,7 @@ fn owner(
 }
 
 /// The row of a chain link's launch while it lives: not ended, and with a row here.
-fn living_row(
+pub(super) fn living_row(
     snapshot: &SidebarSnapshot,
     rows: &HashMap<(&str, &str), RowAt>,
     link: &crate::agents::LaunchedBy,
@@ -319,7 +319,13 @@ fn fired(
     members: &[&AgentState],
     depended_on: bool,
 ) -> BookingFire {
-    let live = live(snapshot, rows, facts, members);
+    let live = live(
+        snapshot,
+        rows,
+        facts.leader.as_deref(),
+        &facts.starts,
+        members,
+    );
     let starting = starting(snapshot, fire, live.is_some());
     let done = fire.team_done == Some(true)
         || live
@@ -422,12 +428,14 @@ fn order(built: Vec<(SidebarBooking, Option<usize>)>) -> Vec<SidebarBooking> {
         .collect()
 }
 
-/// What a fire has alive: the lead's status (a team's most urgent member), the focus
-/// pane, a team's board stage, and an agent's card activity text. `None` once nothing is.
-fn live(
+/// What a launch of `starts` has alive among `members`, its lead first: the lead's status
+/// (a team's most urgent member), the focus pane (a team's by its `leader_role`), a team's
+/// board stage, and an agent's card activity text. `None` once nothing is.
+pub(super) fn live(
     snapshot: &SidebarSnapshot,
     rows: &HashMap<(&str, &str), RowAt>,
-    facts: &BookingFacts,
+    leader_role: Option<&str>,
+    starts: &BookingStarts,
     members: &[&AgentState],
 ) -> Option<BookingLive> {
     let leader = *members.first()?;
@@ -476,7 +484,7 @@ fn live(
                     instance,
                     members: members.to_vec(),
                 });
-            cohort.focus_member(facts.leader.as_deref(), &scores, snapshot.now)
+            cohort.focus_member(leader_role, &scores, snapshot.now)
         }
         None => leader,
     };
@@ -495,7 +503,7 @@ fn live(
         status,
         phase: leader_card.phase,
         stage,
-        description: matches!(facts.starts, BookingStarts::Profile(_))
+        description: matches!(starts, BookingStarts::Profile(_))
             .then(|| leader_card.activity_description())
             .flatten()
             .and_then(crate::agents::single_line_description),
