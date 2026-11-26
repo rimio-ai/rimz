@@ -3397,7 +3397,12 @@ fn restore_resume_cell(
         let profile_row = profile.and_then(|name| profiles.0.get(name));
         let definition = profile_row
             .and_then(|profile| profile.definition_renders.as_ref())
-            .ok_or_else(|| error("--tier on resume requires a Markdown agent definition".into()))?;
+            .ok_or_else(|| {
+                error(
+                    "--tier on resume requires a Markdown definition or a trusted project profile"
+                        .into(),
+                )
+            })?;
         let mut skipped = Vec::new();
         let mut first = None;
         let model = tiers
