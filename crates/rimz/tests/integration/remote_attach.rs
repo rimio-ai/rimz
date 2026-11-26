@@ -29,6 +29,8 @@ use crate::common::ssh_trace::{
 };
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
+#[path = "remote_browser.rs"]
+mod browser;
 #[path = "remote_keyboard.rs"]
 mod keyboard;
 #[path = "remote_paste.rs"]

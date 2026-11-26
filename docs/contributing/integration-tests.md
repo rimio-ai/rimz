@@ -26,6 +26,7 @@ Every builder that runs `rimz` or creates a mux server scrubs the ambient sessio
 | --- | --- |
 | Removes the `RIMZ_*` identity pin (`RIMZ_PROJECT_ROOT`, `RIMZ_WORKSPACE_ID`, `RIMZ_CHANNEL`, `RIMZ_WORKTREE_PATH`) | The child resolves the fixture's room |
 | Removes the `ZELLIJ*` and `TMUX*` detection variables | The child detects no ambient multiplexer |
+| Removes `BROWSER`, and with the `RIMZ_*` prefix `RIMZ_USER_BROWSER` | A child born from a room pane would otherwise run the host's `BROWSER` or that room's browser helper |
 | Removes systemd's `INVOCATION_ID` | Loop ticks are not routed through `systemd-run --user` at a fixture runtime directory with no bus |
 | Removes the provider home and config keys, such as `CODEX_HOME` and `CLAUDE_CONFIG_DIR` | Adapters resolve these ahead of the fixture `HOME`, and an agent on a named account passes them to every child |
 | Sets `RIMZ_CODEX_BIN` to a path that does not exist | Every fixture room reads codex as not installed, as CI does: no broker pane, and no host `codex app-server` or `codex login status` |

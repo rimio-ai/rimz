@@ -675,6 +675,7 @@ fn session_options() -> crate::mux::SessionOptions {
         workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
         project_root: PathBuf::from("/project"),
         extra_env: Default::default(),
+        birth_env_keys: &[],
         cwd: PathBuf::from("/project"),
         config: Default::default(),
         detected_size: None,

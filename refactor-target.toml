@@ -4258,7 +4258,8 @@ path = "crates/rimz/src/remote"
 # The paste module: Input and its bytes, paste_payload, InputScanner's feed/expire/hold_deadline/in_paste, and the parse_drop/encode_drop/drop_paste codec (+12).
 # The upload module: the stale and failed-hold windows, UploadFile, UploadHeader and its new/version_ok/total, UploadReply and its ready/done/failed, UploadState, UploadLane and its running/failed/live_at, and lane_path (+18).
 # ReconnectPolicy::control_check_timeout carries the ControlMaster -O check timeout from RIMZ_REMOTE_CONTROL_CHECK_MS (+1).
-surface-budget = 244
+# The browser relay: the browser module's URL rule, helper path, user-browser argv and env restore, socket naming, relay order, OSC 52 bytes and helper wire, plus LinkOpen, HostLine, parse_host_line and the probe's opens_urls/idle_ms (+19).
+surface-budget = 263
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"

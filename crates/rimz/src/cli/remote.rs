@@ -20,6 +20,7 @@ mod clipboard;
 mod keyboard;
 mod link_stats;
 mod list;
+mod open_url;
 mod outage_ui;
 mod ports;
 mod relay;
@@ -117,6 +118,12 @@ enum RemoteSubcmd {
     /// Hidden remote paste receiver. The upload client calls this.
     #[command(hide = true)]
     Upload(link_stats::RoomArgs),
+    /// Hidden browser helper. A room pane's `BROWSER` calls this with one URL.
+    #[command(name = "open-url", hide = true)]
+    OpenUrl {
+        /// URL to open on the attached laptop, locally, or by clipboard.
+        url: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -283,6 +290,7 @@ impl RemoteArgs {
             RemoteSubcmd::Ports { .. } => "remote ports",
             RemoteSubcmd::LinkStats { .. } => "remote link-stats",
             RemoteSubcmd::Upload(_) => "remote upload",
+            RemoteSubcmd::OpenUrl { .. } => "remote open-url",
         }
     }
 }
@@ -365,6 +373,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             LinkStatsSubcmd::Ingest(args) => link_stats::ingest(args),
         },
         RemoteSubcmd::Upload(args) => upload_receiver::run(args),
+        RemoteSubcmd::OpenUrl { url } => open_url::run(&url),
     }
 }
 

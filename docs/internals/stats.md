@@ -219,6 +219,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 | auto-redeem | a window reset, since a stamp write that fails afterwards does not undo it |
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
 | port forward | it has no error: the local supervisor opened the forward |
+| link open | it has no error: the laptop's platform opener started on the relayed URL |
 | empty-dir grant | always: the provider-file write succeeded, independently of later launch preflights |
 | untrusted cwd fallback | the child launched in its private directory (preparation and refused launches do not count) |
 | spend rebuild | always: the helper writes a record only after at least one replacement append |
@@ -227,6 +228,8 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 `crates/rimz/src/cli/stats/assists.rs::category_entries` takes a `CategoryMode`: Dashboard omits held-attempt detail, counts Auto-compact requests as `compacts + held["compacts"]`, and hides zero-count categories. Timeline keeps effective counts and held detail. Both modes group counts by thousands and describe Auto-continue's duration as `(after 5.1h parked)`, not time saved. These are text projections, not changes to the rollup or timeline predicate.
 
 `port_forward` events count under `port_forwards`, with failed opens under `held.port_forwards`. They are written on the laptop, so only that RimZ home's stats include them. A listener returning after a close counts as a new forward. Reopening an existing forward after a master replacement does not ([forward lifecycle](./remote.md#port-auto-forwarding)).
+
+`link_open` events count under `link_opens` and `Laptop links:`, with failed opens under `held.link_opens`. Like port forwards they are written on the laptop, and repeats group by remote host. The record names the host and the URL's scheme and host, never its path or query ([the browser relay](./remote.md#the-browser-relay)).
 
 `empty_dir_grant` events count under `empty_dir_grants` and the `Empty-dir trust:` category. The benefit names the provider, account, trusted folder, and profile when present, and the forensic line adds the provider file. Failed writes and a concurrent writer's completed grant produce no assist.
 

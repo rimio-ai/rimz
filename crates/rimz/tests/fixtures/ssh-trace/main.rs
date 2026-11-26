@@ -63,6 +63,8 @@
 //! `$RIMZ_TEST_SSH_TUNNEL_LISTEN` binds the direct tunnel's forwarded port.
 //! `$RIMZ_TEST_SSH_TUNNEL_HTTP_LOG` also binds it and logs HTTP requests,
 //! serving stub HTTP and WebSocket responses.
+//! `$RIMZ_TEST_PROBE_OPEN_URLS` lists space-separated URLs the probe stream
+//! sends as open lines, once, after the first probe that says it opens URLs.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -776,6 +778,8 @@ fn ack_probe_stream() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok());
     let room_scoped = env::var("RIMZ_TEST_PROBE_PORTS_SCOPE").as_deref() == Ok("room");
+    // Open lines go out once, after the first probe that says the laptop opens URLs.
+    let mut open_urls = env::var("RIMZ_TEST_PROBE_OPEN_URLS").unwrap_or_default();
     loop {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
@@ -822,6 +826,16 @@ fn ack_probe_stream() {
             }
             None => {
                 writeln!(stdout, r#"{{"v":"rimz.link.v1","seq":{seq}}}"#).expect("write ack");
+            }
+        }
+        if value.get("opens_urls").and_then(|opens| opens.as_bool()) == Some(true) {
+            for url in std::mem::take(&mut open_urls).split_whitespace() {
+                writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::json!({"v": "rimz.link.v1", "open": url})
+                )
+                .expect("write open line");
             }
         }
         stdout.flush().expect("flush ack");

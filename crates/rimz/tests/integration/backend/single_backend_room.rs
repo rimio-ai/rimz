@@ -945,6 +945,158 @@ fn a_room_started_from_an_agent_gives_panes_the_user_tmpdir() {
     }
 }
 
+/// Every pane of a room carries the room's browser helper as `BROWSER` and the
+/// user's own value in the save variable; a room born from inside another
+/// room carries that room's saved value forward instead of saving its helper,
+/// and a later start from a shell without `BROWSER` keeps the value of birth.
+#[test]
+fn a_room_gives_panes_the_browser_helper_and_saves_the_users_browser() {
+    let user = [("BROWSER", "/usr/bin/firefox")];
+    let nested = [
+        ("BROWSER", "/run/outer/rimz-browser"),
+        ("RIMZ_USER_BROWSER", "/opt/w3m"),
+    ];
+    for (extra, saved) in [(&user[..], "/usr/bin/firefox"), (&nested[..], "/opt/w3m")] {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let script = |marker: &Path| {
+            format!(
+                "printf '%s|%s' \"${{BROWSER-unset}}\" \"${{RIMZ_USER_BROWSER-unset}}\" > '{}'; sleep 60",
+                marker.display()
+            )
+        };
+        let check = |mux: &str, env: &Env, seen: String| {
+            let helper = env.state_path_for(&env.project_root).browser_helper;
+            assert_eq!(seen, format!("{}|{saved}", helper.display()), "{mux}");
+            let script = std::fs::read_to_string(&helper).expect("read browser helper");
+            assert!(script.contains("remote open-url"), "{mux}: {script}");
+        };
+        if let Some(room) = TmuxRoom::start_with(extra) {
+            let marker = scratch.path().join("tmux-pane");
+            let output = tmux_output(
+                &room.env.runtime_root,
+                &[
+                    "new-window",
+                    "-d",
+                    "-t",
+                    &room.session_name,
+                    &script(&marker),
+                ],
+            );
+            assert!(output.status.success(), "tmux new-window failed");
+            check("tmux", &room.env, wait_for_marker(&marker));
+            room.open(&[]);
+            let marker = scratch.path().join("tmux-pane-again");
+            let output = tmux_output(
+                &room.env.runtime_root,
+                &[
+                    "new-window",
+                    "-d",
+                    "-t",
+                    &room.session_name,
+                    &script(&marker),
+                ],
+            );
+            assert!(output.status.success(), "tmux new-window failed");
+            check("tmux again", &room.env, wait_for_marker(&marker));
+        }
+        if let Some(room) = ZellijRoom::start_with(extra) {
+            let marker = scratch.path().join("zellij-pane");
+            let status = room
+                .zellij()
+                .args(["--session", &room.session_name, "run", "--"])
+                .args(["sh", "-c", &script(&marker)])
+                .bounded_status()
+                .expect("zellij run");
+            assert!(status.success(), "zellij run failed");
+            check("zellij", &room.env, wait_for_marker(&marker));
+        }
+    }
+}
+
+/// A reset rebuilds the room with its browser helper still in place, so a pane
+/// born after it runs `$BROWSER` and reaches the user's own browser.
+#[test]
+fn a_reset_room_keeps_the_browser_helper_its_panes_run() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let log = scratch.path().join("opened.log");
+    let browser = crate::common::write_path_shim(
+        scratch.path(),
+        "user-browser",
+        &format!("printf '%s\\n' \"$1\" >> '{}'", log.display()),
+    );
+    let browser = browser.display().to_string();
+    let extra = [("BROWSER", browser.as_str())];
+    let script = |marker: &Path| {
+        format!(
+            "env -u SSH_CONNECTION -u SSH_TTY \"$BROWSER\" https://a.test/reset; \
+             printf '%s|done' \"$?\" > '{}'; sleep 60",
+            marker.display()
+        )
+    };
+    if let Some(room) = TmuxRoom::start_with(&extra) {
+        let reset = room
+            .rimz()
+            .args(["--mux", "tmux", "reset", "--yes"])
+            .envs(extra)
+            .bounded_output()
+            .expect("run tmux reset");
+        assert!(
+            reset.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reset.stderr)
+        );
+        let marker = scratch.path().join("tmux-pane");
+        let output = tmux_output(
+            &room.env.runtime_root,
+            &[
+                "new-window",
+                "-d",
+                "-t",
+                &room.session_name,
+                &script(&marker),
+            ],
+        );
+        assert!(output.status.success(), "tmux new-window failed");
+        assert_eq!(wait_for_marker(&marker), "0|done", "tmux");
+        assert_eq!(
+            std::fs::read_to_string(&log).expect("tmux opened log"),
+            "https://a.test/reset\n"
+        );
+    }
+    if let Some(room) = ZellijRoom::start_with(&extra) {
+        // The teardown and the birth each get their own bound, as `ZellijRoom::start_with`
+        // gives a birth: one `reset --yes` runs both inside one, which a loaded host outruns.
+        for args in [["reset", "--yes", "--no-start"].as_slice(), &["start"]] {
+            let output = room
+                .rimz()
+                .args(["--mux", "zellij"])
+                .args(args)
+                .envs(extra)
+                .bounded_output()
+                .unwrap_or_else(|error| panic!("run zellij {args:?}: {error}"));
+            assert!(
+                output.status.success(),
+                "zellij {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let marker = scratch.path().join("zellij-pane");
+        let status = room
+            .zellij()
+            .args(["--session", &room.session_name, "run", "--"])
+            .args(["sh", "-c", &script(&marker)])
+            .bounded_status()
+            .expect("zellij run");
+        assert!(status.success(), "zellij run failed");
+        assert_eq!(wait_for_marker(&marker), "0|done", "zellij");
+        assert!(
+            std::fs::read_to_string(&log)
+                .expect("zellij opened log")
+                .ends_with("https://a.test/reset\n"),
+        );
+    }
+}
+
 #[test]
 fn a_nested_room_gives_panes_only_its_own_mux_context() {
     let scratch = tempfile::tempdir().expect("scratch");
@@ -1107,6 +1259,7 @@ fn a_room_repairs_outer_mux_context_on_an_existing_tmux_server() {
             session_name: room.session_name.clone(),
             workspace_id: workspace.workspace_id,
             project_root: room.env.project_root.clone(),
+            birth_env_keys: &[],
             extra_env: command
                 .get_envs()
                 .filter_map(|(key, value)| {

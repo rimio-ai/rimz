@@ -195,6 +195,7 @@ The header categories, in the order they print:
 | `Model aliases:` | `model_aliases` | |
 | `Tier fallback:` | `tier_fallbacks` | |
 | `Port forwards:` | `port_forwards` | |
+| `Laptop links:` | `link_opens` | |
 | `Auto-continue:` | `resumes` | `after 5.1h parked` |
 | `Auto-compact:` | `compacts` | |
 | `Compact reminder:` | `soft_compacts` | |
@@ -242,6 +243,7 @@ Counts are of assists that took effect, in the order they print. The five `workf
 | --- | --- |
 | `workflow_starts`, `workflow_steps`, `workflow_routes`, `workflow_parks`, `workflow_ends` | Workflow runs a loop task started, step attempts launched, routes including closed merged waits, parks, and runs that reached `done`, `failed`, or `canceled`. |
 | `port_forwards` | Automatic forwards opened. |
+| `link_opens` | URLs a remote room relayed that the laptop opened. |
 | `empty_dir_grants` | Automatic empty-root folder-trust writes. |
 | `untrusted_cwd_fallbacks` | Explicit undecided-cwd children started privately. |
 | `molts` | Fresh sessions a molt started. |
@@ -279,6 +281,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 | `spend_rebuild` | Spend rebuild | `days`, `files`, `rebuilt`, `kept` |
 | `empty_dir_grant` | Empty-dir trust | `kind`, `login`, `key`, `path`, `profile?` |
 | `port_forward` | Port forwards | `host`, `remote`, `local?`, `error?` |
+| `link_open` | Laptop links | `host`, `scheme`, `url_host`, `error?` |
 | `workflow_start` | Workflow | `run`, `workflow`, `task`, `checkout`, `prompt` |
 | `workflow_step` | Workflow | `run`, `workflow`, `step`, `visit`, `seq`, `handle`, `run_id` |
 | `workflow_route` | Workflow | `run`, `workflow`, `node`, `outcome`, `to`, `count?` |
@@ -310,6 +313,8 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 ### Category notes
 
 `Port forwards: N` counts successful report-driven opens by `rimz remote connect`. A server returning after stopping counts again; reopening an existing forward after link recovery does not. `local` is present only on success and `error` only on failure. Failed attempts count under `held.port_forwards` and appear with `--all`; persistent local-port exhaustion contributes one held attempt. These records live on the laptop, so read its stats, not the host's.
+
+`Laptop links: N` counts http(s) URLs a remote room's `BROWSER` helper relayed that the laptop's `rimz remote connect` opened in its browser ([links open on your laptop](../../guide/remote.md#links-open-on-your-laptop)). The record names the remote `host` and the URL's `scheme` and `url_host`, never its path or query. A failed open carries `error` (`xdg-open is not installed`, for example), counts under `held.link_opens`, and appears with `--all`. A relayed URL the laptop refuses, one that is not http(s), opens nothing and records nothing. These records live on the laptop too.
 
 `Empty-dir trust: N` counts automatic folder-trust grants on the empty root. `login` is the account as `kind@name`, `key` the trusted folder, and `path` the changed provider file. The line names the provider, account, folder, and profile, then the provider file. A successful write counts even if a later launch preflight refuses; failures and grants completed by another writer produce no record.
 

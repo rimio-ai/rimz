@@ -3204,6 +3204,14 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             "at":ts(3550),"assist":"port_forward","host":"dev-box","remote":9000,
             "error":"forwarding disabled"
         }),
+        serde_json::json!({
+            "at":ts(3520),"assist":"link_open","host":"dev-box","scheme":"https",
+            "url_host":"github.com"
+        }),
+        serde_json::json!({
+            "at":ts(3530),"assist":"link_open","host":"dev-box","scheme":"https",
+            "url_host":"example.test","error":"xdg-open is not installed"
+        }),
     ]
     .into_iter()
     .map(serde_json::from_value::<AssistRecord>)
@@ -3261,6 +3269,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             workflow_parks: 0,
             workflow_ends: 0,
             port_forwards: 1,
+            link_opens: 1,
             stall_notices: 0,
             stall_nudges: 1,
             resident_launches: 0,
@@ -3295,6 +3304,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 ("resumes", 1),
                 ("sweeps", 1),
                 ("port_forwards", 1),
+                ("link_opens", 1),
                 ("soft_compacts", 1),
                 ("stall_nudges", 1)
             ]
@@ -3303,11 +3313,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     );
     assert_eq!(
         stats.events.len(),
-        15,
+        17,
         "every assist outcome stays forensic"
     );
-    assert_eq!(stats.timeline(0, false).0.len(), 10);
-    assert_eq!(stats.timeline(0, true).0.len(), 15);
+    assert_eq!(stats.timeline(0, false).0.len(), 11);
+    assert_eq!(stats.timeline(0, true).0.len(), 17);
     assert_eq!(
         serde_json::to_value(&stats.rollup).unwrap()["soft_compacts"],
         2
@@ -3331,6 +3341,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line == "Port forwards: 1 (1 held)")
     );
+    assert!(
+        categories
+            .iter()
+            .any(|line| line == "Laptop links: 1 (1 held)"),
+        "{categories:?}"
+    );
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -3347,6 +3363,15 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             .iter()
             .any(|line| line.contains("dev-box:9000 forward held: forwarding disabled"))
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("dev-box link opened on the laptop: https://github.com")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|line| {
+        line.contains("dev-box link held: https://example.test, xdg-open is not installed")
+    }));
     assert!(
         lines
             .iter()
@@ -3412,6 +3437,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(json["rollup"]["resumes"], 1);
     assert_eq!(json["rollup"]["sweeps"], 1);
     assert_eq!(json["rollup"]["port_forwards"], 1);
+    assert_eq!(json["rollup"]["link_opens"], 1);
     assert_eq!(json["events"][0]["assist"], "auto_gc");
     let envelope = json::assists_value(&stats, 1, false, &shanghai(1_728_921_600));
     assert_eq!(keys(&envelope), ["as_of", "events", "older", "rollup"]);

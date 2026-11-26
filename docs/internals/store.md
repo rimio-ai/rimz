@@ -75,7 +75,7 @@ Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it co
 
 ## What is on disk
 
-Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. Each path is built under its class directory, never straight off a room root, and `cargo xtask invariants` rejects a `self.root.join(` there outside tests. State survives reboot, and runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. The figures below come from `disk/retention.rs`. A new class, or a change to what reset, teardown, or GC removes, updates the table below, [Reset](#reset), [What survives what](#what-survives-what), and reset's numbered steps in [maintenance.md](../reference/cli/maintenance.md#reset-a-wedged-room).
+Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. Each path is built under its class directory, never straight off a room root, and `cargo xtask invariants` rejects a `self.root.join(` there outside tests. State survives reboot, and runtime does not. The root `workspace.json`, `rimz` executable, and `rimz-browser` helper are room identity, outside the classes. The figures below come from `disk/retention.rs`. A new class, or a change to what reset, teardown, or GC removes, updates the table below, [Reset](#reset), [What survives what](#what-survives-what), and reset's numbered steps in [maintenance.md](../reference/cli/maintenance.md#reset-a-wedged-room).
 
 | Class directory | Tier | Reclamation rule |
 | --- | --- | --- |
@@ -166,6 +166,7 @@ locks/*.lock                                  room, workspace, publish, subagent
 locks/pane-write/                             per-pane write locks
 workspace.json                                room record, layout: 2
 rimz                                          stable room executable
+rimz-browser                                  the panes' `BROWSER` helper, which execs `rimz`
 ```
 
 This page owns the log, the caches derived from it, hook ingress, and the workspace record. The other files have their own homes:
@@ -227,6 +228,7 @@ sock/host.<digest>.sock                       attach socket of the room host tha
 sock/host.<digest>.wake.sock                  room event socket, bound by each sidebar host
 sock/hook-drainer.sock                        request and reply socket of the elected hook drainer
 sock/codex-app-server.sock                    the per-session Codex broker socket
+sock/link-open-<pid>.sock                     browser relay socket, bound by a laptop link's ingest
 snapshots/{latest,rollup}.json                 view-model checkpoint and fold base
 snapshots/publish.stamp                       checkpoint publish pacing
 live/heartbeat/sidebar.*.json                 renderer liveness

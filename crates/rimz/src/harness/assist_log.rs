@@ -56,6 +56,15 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A URL a remote room's `BROWSER` helper relayed, as the laptop opened it.
+    /// Names the URL's scheme and host only: its path and query can carry secrets.
+    LinkOpen {
+        host: String,
+        scheme: String,
+        url_host: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     WorkflowStart {
         run: crate::ids::WorkflowRunId,
         workflow: String,
@@ -649,6 +658,21 @@ mod tests {
         let decoded = serde_json::from_value::<AssistRecord>(forwarded.clone());
         assert!(decoded.is_ok(), "port forwarding is an assist: {decoded:?}");
         assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), forwarded);
+        for opened in [
+            serde_json::json!({
+                "at": "2026-06-02T12:00:00Z", "assist": "link_open",
+                "host": "dev-box", "scheme": "https", "url_host": "github.com"
+            }),
+            serde_json::json!({
+                "at": "2026-06-02T12:00:00Z", "assist": "link_open",
+                "host": "dev-box", "scheme": "https", "url_host": "github.com",
+                "error": "xdg-open is not installed"
+            }),
+        ] {
+            let decoded = serde_json::from_value::<AssistRecord>(opened.clone());
+            assert!(decoded.is_ok(), "a relayed open is an assist: {decoded:?}");
+            assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), opened);
+        }
         let molted = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "molt",
             "kind": "claude", "agent_id": "session-1", "label": "@fox",
