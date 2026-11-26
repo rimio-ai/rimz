@@ -1239,6 +1239,7 @@ fn project_row_replay_passes_when_valid_and_degrades_like_failed_markdown_when_b
                 runtime: &runtime,
                 profiles: &restore.profiles,
                 subagent_profiles: &restore.subagent_profiles,
+                selection: &crate::config::Selection::default(),
                 max: 10,
                 logins: &logins,
                 catalog: &catalog,

@@ -21,7 +21,6 @@ use super::LaunchOverrides;
 
 #[derive(Debug)]
 pub struct FinalizedLaunch {
-    pub profiles: crate::config::ProfilesConfig,
     pub resolved: ResolvedLaunch,
     pub preset: LaunchPreset,
     pub warnings: Vec<LaunchFinalizeWarning>,
@@ -47,16 +46,17 @@ pub fn resolve_finalized_layout(
     enforce_name_cardinality: bool,
     room: Option<(&crate::RuntimePaths, &crate::StatePaths)>,
 ) -> Result<FinalizedLaunch> {
-    let availability = room
-        .filter(|_| overrides.login.is_none())
-        .map(|(runtime, state)| {
-            crate::harness::plan::LaunchAvailability::read(
-                runtime,
-                state,
-                machine_config,
-                jiff::Timestamp::now(),
-            )
-        });
+    let mut selection = selection_of(machine_config, overrides);
+    if let Some((runtime, state)) = room.filter(|_| overrides.login.is_none()) {
+        let availability = crate::harness::plan::LaunchAvailability::read(
+            runtime,
+            state,
+            machine_config,
+            jiff::Timestamp::now(),
+        );
+        selection =
+            selection.availability(move |kind, model| availability.unavailable(kind, model));
+    }
     resolve_routed(
         snapshot,
         machine_config,
@@ -69,12 +69,19 @@ pub fn resolve_finalized_layout(
         max_turns,
         lane,
         enforce_name_cardinality,
-        |kind, model| {
-            availability
-                .as_ref()
-                .and_then(|usage| usage.unavailable(kind, model))
-        },
+        &selection,
     )
+}
+
+/// The launch's `--agent`, `--model` and `--tier` over the machine's tier table.
+fn selection_of(
+    machine_config: &MachineConfig,
+    overrides: &LaunchOverrides,
+) -> crate::config::Selection {
+    crate::config::Selection::new(&machine_config.tiers)
+        .agent(overrides.agent.as_deref())
+        .model(overrides.preset.model.as_deref())
+        .tier(overrides.tier)
 }
 
 /// Every agent kind a launch of `spec` can run on, each once, in layout order: the kinds its
@@ -100,6 +107,12 @@ pub fn routable_kinds(
 ) -> Result<Vec<String>> {
     let mut kinds = Vec::<String>::new();
     loop {
+        let seen = kinds.clone();
+        let selection = selection_of(machine_config, overrides).availability(move |kind, _| {
+            seen.iter()
+                .any(|seen| seen == kind)
+                .then_some(crate::agents::TierSkipReason::LoggedOut)
+        });
         let finalized = resolve_routed(
             snapshot,
             machine_config,
@@ -112,12 +125,7 @@ pub fn routable_kinds(
             max_turns,
             lane,
             enforce_name_cardinality,
-            |kind, _| {
-                kinds
-                    .iter()
-                    .any(|seen| seen == kind)
-                    .then_some(crate::agents::TierSkipReason::LoggedOut)
-            },
+            &selection,
         )?;
         let found = kinds.len();
         for kind in finalized.resolved.layout.agent_kinds() {
@@ -147,7 +155,7 @@ fn resolve_routed(
     max_turns: Option<u32>,
     lane: Option<&LaneName>,
     enforce_name_cardinality: bool,
-    mut unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
+    selection: &crate::config::Selection,
 ) -> Result<FinalizedLaunch> {
     // A bare role in a team's lane names that team's role, not a global profile.
     let mut qualified_spec = None;
@@ -169,28 +177,18 @@ fn resolve_routed(
         }
     }
     let spec = qualified_spec.as_deref().or(spec);
-    let mut effective = effective.clone();
-    effective.route(
-        &machine_config.tiers,
-        scope,
-        spec,
-        overrides.tier,
-        overrides.preset.model.as_deref(),
-        overrides.agent.as_deref(),
-        &mut unavailable,
-    )?;
     let mut resolved = crate::harness::plan::resolve_launch(
-        &effective,
+        effective,
         scope,
         &machine_config.agents.commands,
         spec,
-        overrides.agent.as_deref(),
+        selection,
     )?;
     let preset = validate_resolved_launch_inputs(
         spec,
         prompt,
         overrides,
-        &effective,
+        effective,
         scope,
         &machine_config.agents.commands,
         &resolved.layout,
@@ -200,7 +198,7 @@ fn resolve_routed(
         &mut resolved.layout,
         LaunchFinalizeOptions {
             smart_compact: Some(crate::harness::plan::LaunchCompactPolicy::new(
-                &effective,
+                effective,
                 &machine_config.harness,
                 scope,
                 resolved.team_name.as_deref(),
@@ -232,10 +230,6 @@ fn resolve_routed(
         }
     }
     Ok(FinalizedLaunch {
-        profiles: match scope {
-            ProfileScope::Agents => effective.profiles,
-            ProfileScope::Subagents => effective.subagent_profiles,
-        },
         resolved,
         preset,
         warnings,

@@ -2290,7 +2290,7 @@ fn finalized_smart_compact_warnings(
         scope,
         &machine.agents.commands,
         Some(spec),
-        None,
+        &crate::config::Selection::default(),
     )
     .unwrap();
     if let Some(window) = native_window {
@@ -2409,7 +2409,7 @@ fn finalized_smart_compact_warns_only_for_explicit_skipping_seats() {
             scope,
             &machine.agents.commands,
             Some(spec),
-            None,
+            &crate::config::Selection::default(),
         )
         .unwrap();
         let actual: Vec<String> = finalize_launch_layout(
@@ -2563,9 +2563,14 @@ fn failed_definitions_refuse_only_the_requested_launch() {
         ("crew.worker", ProfileScope::Agents, "crew"),
         ("good,broken", ProfileScope::Agents, "broken"),
     ] {
-        let error =
-            super::resolve_launch(&launch, scope, &machine.agents.commands, Some(name), None)
-                .unwrap_err();
+        let error = super::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            Some(name),
+            &crate::config::Selection::default(),
+        )
+        .unwrap_err();
         assert_eq!(
             error.to_string(),
             machine.definition_failure_for(failed_name).unwrap()
@@ -2576,7 +2581,7 @@ fn failed_definitions_refuse_only_the_requested_launch() {
         ProfileScope::Agents,
         &machine.agents.commands,
         None,
-        Some("broken"),
+        &crate::config::Selection::default().agent(Some("broken")),
     )
     .unwrap_err();
     assert_eq!(
@@ -2653,7 +2658,7 @@ fn failed_kind_base_refuses_bare_mini_runtime() {
             scope,
             &machine.agents.commands,
             Some("opencode-mini"),
-            None,
+            &crate::config::Selection::default(),
         )
         .err()
         .map(|error| error.to_string())
@@ -2693,7 +2698,7 @@ fn failed_kind_bases_refuse_bare_cells_and_overrides() {
                     scope,
                     &machine.agents.commands,
                     spec,
-                    agent_override,
+                    &crate::config::Selection::default().agent(agent_override),
                 )
                 .err()
                 .map(|error| error.to_string()),
@@ -2706,7 +2711,7 @@ fn failed_kind_bases_refuse_bare_cells_and_overrides() {
             ProfileScope::Agents,
             &machine.agents.commands,
             Some("good"),
-            Some("amp"),
+            &crate::config::Selection::default().agent(Some("amp")),
         )
         .err()
         .map(|error| error.to_string()),
@@ -2718,7 +2723,7 @@ fn failed_kind_bases_refuse_bare_cells_and_overrides() {
             ProfileScope::Agents,
             &machine.agents.commands,
             Some("legacy"),
-            None,
+            &crate::config::Selection::default(),
         )
         .unwrap_err()
         .to_string(),
@@ -2798,7 +2803,7 @@ roles = [{role = 'worker', profile = 'good-codex'}]
             scope,
             &machine.agents.commands,
             spec,
-            agent_override,
+            &crate::config::Selection::default().agent(agent_override),
         )
         .unwrap_err()
         .to_string();
@@ -2813,7 +2818,14 @@ roles = [{role = 'worker', profile = 'good-codex'}]
         (ProfileScope::Agents, "good-crew"),
         (ProfileScope::Subagents, "good-crew.worker"),
     ] {
-        super::resolve_launch(&launch, scope, &machine.agents.commands, Some(spec), None).unwrap();
+        super::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            Some(spec),
+            &crate::config::Selection::default(),
+        )
+        .unwrap();
     }
     let other_failure = resolve_launch(
         &launch,
@@ -2844,10 +2856,15 @@ roles = [{role = 'worker', profile = 'good-codex'}]
         (ProfileScope::Agents, "claude"),
         (ProfileScope::Subagents, "claude"),
     ] {
-        let err =
-            super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
-                .unwrap_err()
-                .to_string();
+        let err = super::resolve_launch(
+            &shadowed,
+            scope,
+            &machine.agents.commands,
+            Some(spec),
+            &crate::config::Selection::default(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             err.contains("[profiles.claude]") || err.contains("[subagents.profiles.claude]"),
             "{err}"
@@ -2859,10 +2876,15 @@ roles = [{role = 'worker', profile = 'good-codex'}]
         (ProfileScope::Agents, "crew.worker"),
         (ProfileScope::Subagents, "child"),
     ] {
-        let err =
-            super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
-                .unwrap_err()
-                .to_string();
+        let err = super::resolve_launch(
+            &shadowed,
+            scope,
+            &machine.agents.commands,
+            Some(spec),
+            &crate::config::Selection::default(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains(&claude_failure), "{scope:?} {spec}: {err}");
     }
 }
@@ -2914,7 +2936,7 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
                     scope,
                     &Default::default(),
                     Some(spec),
-                    agent_override,
+                    &crate::config::Selection::default().agent(agent_override),
                 )
                 .err()
                 .map(|err| err.to_string()),
@@ -2927,7 +2949,7 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
             ProfileScope::Subagents,
             &Default::default(),
             Some("other.lead"),
-            Some("child-override"),
+            &crate::config::Selection::default().agent(Some("child-override")),
         )
         .err()
         .map(|err| err.to_string()),
@@ -2998,7 +3020,7 @@ fn resolve_launch(
         crate::config::effective::ProfileScope::Agents,
         commands,
         spec,
-        agent_override,
+        &crate::config::Selection::default().agent(agent_override),
     )
 }
 
@@ -3025,7 +3047,7 @@ fn profile_scope_selects_the_doorway_namespace_and_kind_shadowing() {
         crate::config::effective::ProfileScope::Agents,
         &machine.agents.commands,
         Some("shared"),
-        None,
+        &crate::config::Selection::default(),
     )
     .expect("agent profile");
     assert_eq!(
@@ -3048,7 +3070,7 @@ fn profile_scope_selects_the_doorway_namespace_and_kind_shadowing() {
         crate::config::effective::ProfileScope::Subagents,
         &machine.agents.commands,
         Some("shared"),
-        None,
+        &crate::config::Selection::default(),
     )
     .expect("subagent profile");
     assert_eq!(
@@ -3067,7 +3089,7 @@ fn profile_scope_selects_the_doorway_namespace_and_kind_shadowing() {
         crate::config::effective::ProfileScope::Subagents,
         &machine.agents.commands,
         Some("claude"),
-        None,
+        &crate::config::Selection::default(),
     )
     .expect("subagent kind shadow");
     assert_eq!(
@@ -3101,7 +3123,7 @@ fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
         crate::config::effective::ProfileScope::Subagents,
         &machine.agents.commands,
         Some("main-only"),
-        None,
+        &crate::config::Selection::default(),
     )
     .expect_err("agent profile must not launch as subagent");
     assert!(matches!(
@@ -3123,7 +3145,7 @@ fn profile_scope_reports_profiles_configured_for_the_other_doorway() {
         crate::config::effective::ProfileScope::Agents,
         &machine.agents.commands,
         Some("child-only"),
-        None,
+        &crate::config::Selection::default(),
     )
     .expect_err("subagent profile must not launch as agent");
     assert!(matches!(
@@ -3292,7 +3314,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
             crate::config::effective::ProfileScope::Subagents,
             &machine.agents.commands,
             Some(spec),
-            None,
+            &crate::config::Selection::default(),
         )
         .expect("team role resolves through the subagents doorway");
         let cell = resolved.layout.agent_cells().next().expect("agent cell");
@@ -6221,7 +6243,6 @@ fn definition_timeout_survives_agent_tier_and_model_overrides() {
 
 #[test]
 fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
-    use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
     use crate::store::writer::LaunchLogin;
 
     let root = tempfile::tempdir().unwrap();
@@ -6236,31 +6257,28 @@ fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
         .unwrap(),
         ..Default::default()
     };
-    let mut profile = configured_profile("claude", None, Some("sonnet"), None, None, None);
-    profile.model_tier = Some(TierProvenance {
-        tier: ModelTier::Junior,
-        fell_back: false,
-    });
-    profile.definition_renders = Some(DefinitionRenders {
-        preference: TierPreference {
-            model: Some("sonnet".into()),
-            family: Some("claude".into()),
-        },
-        renders: [
-            (
-                "claude".into(),
-                configured_profile("claude", None, Some("sonnet"), None, None, None),
-            ),
-            (
-                "codex".into(),
-                configured_profile("codex", None, Some("sol"), None, None, None),
-            ),
-        ]
-        .into(),
-        exclusions: Default::default(),
-        effort: None,
-    });
-    machine.agents.profiles.0.insert("sonnet".into(), profile);
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("sonnet", "agent: claude\ntier: junior\ntools: [Read]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Probe\n{fields}---\nCraft."),
+        )
+        .unwrap();
+    }
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        None,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_accounts_path(),
         &crate::agents::account::AccountsCache {
@@ -6318,6 +6336,15 @@ fn supervised_account_pin_keeps_the_provider_while_unpinned_falls_back() {
                 request.login
             );
             assert_eq!(cell.launch.model.as_deref(), Some(expected_model));
+            assert_eq!(
+                cell.launch
+                    .tier
+                    .as_ref()
+                    .map(|stamp| (stamp.tier, stamp.model.as_str())),
+                Some((crate::config::tiers::ModelTier::Junior, expected_model)),
+                "{:?}, loop {loop_task:?}",
+                request.login
+            );
         }
     }
 }

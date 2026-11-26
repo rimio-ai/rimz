@@ -884,7 +884,9 @@ fn plan_settlement(
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
     let (teams, profiles, subagent_profiles, failed_definitions, warning) =
-        effective_teams_and_profiles(machine, project_root, &availability);
+        effective_teams_and_profiles(machine, project_root);
+    let selection = crate::config::Selection::new(&machine.tiers)
+        .availability(move |kind, model| availability.unavailable(kind, model));
     let mut planned = plan_recovery(
         projection,
         paths,
@@ -893,6 +895,7 @@ fn plan_settlement(
         project_root,
         machine,
         &(teams, profiles, subagent_profiles),
+        &selection,
         &failed_definitions,
         logins,
         agent_shell,
@@ -938,7 +941,6 @@ fn trace_unplanned(candidates: &[AgentState], planned: &RecoveryPlan, recovery_o
 fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
-    availability: &crate::harness::plan::LaunchAvailability,
 ) -> (
     TeamsConfig,
     ProfilesConfig,
@@ -946,22 +948,8 @@ fn effective_teams_and_profiles(
     BTreeMap<String, String>,
     Option<String>,
 ) {
-    let launch = crate::config::effective::load(machine, project_root)
-        .map_err(|error| error.to_string())
-        .and_then(|mut launch| {
-            launch
-                .route(
-                    &machine.tiers,
-                    crate::config::effective::ProfileScope::Agents,
-                    None,
-                    None,
-                    None,
-                    None,
-                    |kind, model| availability.unavailable(kind, model),
-                )
-                .map_err(|error| error.to_string())?;
-            Ok(launch)
-        });
+    let launch =
+        crate::config::effective::load(machine, project_root).map_err(|error| error.to_string());
     match launch {
         Ok(launch) => {
             let failed_definitions = launch.all_failed_definitions();
@@ -1001,6 +989,7 @@ fn plan_recovery(
     project_root: &Path,
     machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig, ProfilesConfig),
+    selection: &crate::config::Selection,
     failed_definitions: &BTreeMap<String, String>,
     logins: Option<&crate::agents::RoomAccounts>,
     agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
@@ -1023,6 +1012,7 @@ fn plan_recovery(
         teams,
         profiles,
         &machine.agents.commands,
+        selection,
         Some(project_root),
         &paths.workspace_id,
         Path::is_dir,
@@ -1172,7 +1162,7 @@ fn plan_recovery(
             ProfileScope::for_launch(agent.profile_scope, agent.is_launched_child())
                 .resolve_launch(agent.profile.as_deref(), profiles, subagent_profiles);
         let fallback = (scope == ProfileScope::Subagents).then_some(profiles);
-        let posture = crate::harness::resume::resolve_posture(
+        let posture = crate::harness::resume::resolve_posture_under(
             crate::harness::resume::PostureRequest {
                 record: agent.record.as_deref(),
                 profile: agent.profile.as_deref(),
@@ -1182,6 +1172,7 @@ fn plan_recovery(
             },
             own_profiles,
             fallback,
+            selection,
         );
         let isolation = crate::config::Isolation::resolve(
             crate::harness::plan::effective_resume_isolation(
@@ -1219,6 +1210,7 @@ fn plan_recovery(
             runtime,
             profiles,
             subagent_profiles,
+            selection,
             max: machine.resume.max.saturating_sub(team_panes),
             logins,
             catalog: &catalog,

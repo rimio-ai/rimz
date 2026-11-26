@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
 use crate::config::engine::{self, Engine, keeps_inherited_model};
@@ -85,7 +85,6 @@ impl PartialEq for DefinitionSource {
             && a.natural_variant == b.natural_variant
             && a.preference == b.preference
             && a.runtime_kind == b.runtime_kind
-            && a.built_under == b.built_under
             && a.seat == b.seat
             && a.is_project == b.is_project
             && a.context == b.context
@@ -93,44 +92,6 @@ impl PartialEq for DefinitionSource {
 }
 
 impl Eq for DefinitionSource {}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum MemoBase {
-    Runtime(String, Option<&'static str>),
-    Definition(String, PathBuf),
-}
-
-impl MemoBase {
-    fn from_build_base(base: BuildBase<'_>) -> Option<Self> {
-        match base {
-            BuildBase::Runtime(rt) => Some(Self::Runtime(
-                rt.kind().to_owned(),
-                rt.variant.map(|v| v.name),
-            )),
-            BuildBase::Profile(profile) => profile
-                .definition
-                .as_ref()
-                .map(|def| Self::Definition(def.inner.name.clone(), def.inner.path.clone())),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct MemoKey {
-    base: Option<MemoBase>,
-    target_kind: Option<String>,
-    model: Option<String>,
-}
-
-impl MemoKey {
-    fn new(base: Option<BuildBase<'_>>, target_kind: Option<&str>, model: Option<&str>) -> Self {
-        Self {
-            base: base.and_then(MemoBase::from_build_base),
-            target_kind: target_kind.map(str::to_owned),
-            model: model.map(str::to_owned),
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KindArgs {
@@ -176,11 +137,9 @@ struct DefinitionSourceInner {
     natural_variant: Option<&'static agents::Variant>,
     preference: TierPreference,
     runtime_kind: Option<String>,
-    built_under: Option<MemoBase>,
     seat: Option<SeatInfo>,
     is_project: bool,
     context: Arc<LoadContext>,
-    memo: Mutex<BTreeMap<MemoKey, Result<Profile, DefinitionErr>>>,
 }
 
 enum CraftState<'a> {
@@ -307,7 +266,7 @@ impl DefinitionSource {
     }
 
     /// This definition with its on-demand builds checking against `context`, the agents context
-    /// of the trusted project it launches in, and a memo of its own.
+    /// of the trusted project it launches in.
     pub(super) fn in_project(&self, context: &Arc<LoadContext>) -> Self {
         let inner = &self.inner;
         Self {
@@ -326,11 +285,9 @@ impl DefinitionSource {
                 natural_variant: inner.natural_variant,
                 preference: inner.preference.clone(),
                 runtime_kind: inner.runtime_kind.clone(),
-                built_under: inner.built_under.clone(),
                 seat: inner.seat.clone(),
                 is_project: inner.is_project,
                 context: Arc::clone(context),
-                memo: Mutex::default(),
             }),
         }
     }
@@ -346,112 +303,21 @@ impl DefinitionSource {
         })
     }
 
-    /// Whether this row was already built under `base`.
-    pub(crate) fn is_built_under(&self, base: BuildBase<'_>) -> bool {
-        self.inner.built_under.is_some()
-            && self.inner.built_under == MemoBase::from_build_base(base)
+    /// The tier table this definition's walks read.
+    pub(crate) fn tiers(&self) -> &crate::config::tiers::TierConfig {
+        &self.inner.context.shared.tiers
     }
 
+    /// Builds this definition again under X (`base`), a kind and a model. Nothing is cached:
+    /// each call builds.
     pub(crate) fn build(
         &self,
-        current: &Profile,
         base: Option<BuildBase<'_>>,
         target_kind: Option<&str>,
         model: Option<&str>,
     ) -> Result<Profile, DefinitionErr> {
-        if model.is_none()
-            && target_kind.is_none_or(|kind| kind == current.agent)
-            && base.is_some_and(|base| self.is_built_under(base))
-        {
-            return Ok(current.clone());
-        }
-        let skip_memo = matches!(
-            base,
-            Some(BuildBase::Profile(profile))
-                if profile
-                    .definition
-                    .as_ref()
-                    .is_some_and(|def| def.inner.is_project)
-        );
-        if skip_memo {
-            return self.inner.build_with_craft(
-                base,
-                target_kind,
-                model,
-                &mut CraftState::Rendered,
-                true,
-            );
-        }
-        let key = MemoKey::new(base, target_kind, model);
-        {
-            let memo = self
-                .inner
-                .memo
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cached) = memo.get(&key) {
-                return cached.clone();
-            }
-        }
-        let result =
-            self.inner
-                .build_with_craft(base, target_kind, model, &mut CraftState::Rendered, true);
-        let mut memo = self
-            .inner
-            .memo
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        memo.entry(key).or_insert_with(|| result.clone());
-        result
-    }
-}
-
-pub(in crate::config) struct TierCandidates {
-    pub(in crate::config) engine: bool,
-    pub(in crate::config) renders: BTreeMap<String, Profile>,
-    pub(in crate::config) exclusions: BTreeMap<String, DefinitionErr>,
-}
-
-/// Build the per-kind candidate rows and exclusions for one tier under `preference`: a single
-/// engine build for providers that run other providers' models, or one build per distinct kind
-/// named in the tier table.
-pub(in crate::config) fn build_tier_candidates(
-    tiers: &crate::config::tiers::TierConfig,
-    tier: ModelTier,
-    preference: &TierPreference,
-    mut build: impl FnMut(&str, Option<&str>) -> Result<Profile, DefinitionErr>,
-) -> TierCandidates {
-    let engine = preference
-        .family
-        .as_deref()
-        .filter(|kind| agents::runs_other_providers_models(kind));
-    let candidates: Vec<(&str, Option<&str>)> = if let Some(engine) = engine {
-        vec![(engine, None)]
-    } else {
-        tiers
-            .entries(tier)
-            .filter_map(|(_, kind, model)| kind.map(|kind| (kind, Some(model))))
-            .collect()
-    };
-    let mut renders = BTreeMap::new();
-    let mut exclusions = BTreeMap::new();
-    for (kind, candidate_model) in candidates {
-        if renders.contains_key(kind) || exclusions.contains_key(kind) {
-            continue;
-        }
-        match build(kind, candidate_model) {
-            Ok(rendered) => {
-                renders.insert(kind.to_owned(), rendered);
-            }
-            Err(error) => {
-                exclusions.insert(kind.to_owned(), error);
-            }
-        }
-    }
-    TierCandidates {
-        engine: engine.is_some(),
-        renders,
-        exclusions,
+        self.inner
+            .build_with_craft(base, target_kind, model, &mut CraftState::Rendered, true)
     }
 }
 
@@ -475,7 +341,6 @@ impl DefinitionSourceInner {
     fn built_source(
         &self,
         x_def: Option<&Self>,
-        built_under: Option<MemoBase>,
         frontmatter: AgentFrontmatter,
         crafts: Vec<PromptLayer>,
         system_prompt_file: Option<PromptSource>,
@@ -511,11 +376,9 @@ impl DefinitionSourceInner {
                 natural_variant: built.variant,
                 preference,
                 runtime_kind,
-                built_under: built_under.or_else(|| self.built_under.clone()),
                 seat: self.seat.clone(),
                 is_project: self.is_project || x_def.is_some_and(|x| x.is_project),
                 context,
-                memo: Mutex::default(),
             }),
         }
     }
@@ -528,7 +391,6 @@ impl DefinitionSourceInner {
         craft: &mut CraftState<'_>,
         attach_definition: bool,
     ) -> Result<Profile, DefinitionErr> {
-        let mut built_under = base.and_then(MemoBase::from_build_base);
         let (has_base, x_def, base_kind, base_variant, base_writes_engine) = match base {
             Some(BuildBase::Runtime(rt)) => (true, None, Some(rt.kind()), rt.variant, false),
             Some(BuildBase::Profile(profile)) => match &profile.definition {
@@ -540,10 +402,7 @@ impl DefinitionSourceInner {
                     other.inner.natural_variant,
                     other.writes_engine(),
                 ),
-                _ => {
-                    built_under = None;
-                    (false, None, None, None, false)
-                }
+                _ => (false, None, None, None, false),
             },
             None => (false, None, None, None, false),
         };
@@ -804,7 +663,6 @@ impl DefinitionSourceInner {
         if attach_definition {
             built.definition = Some(self.built_source(
                 x_def,
-                built_under,
                 pre_base_fm,
                 crafts,
                 system_prompt_file,
@@ -1488,11 +1346,9 @@ impl Resolver<'_> {
             natural_variant: profile.variant,
             preference: preference.clone(),
             runtime_kind: runtime_kind.clone(),
-            built_under: None,
             seat: self.seat.clone(),
             is_project: self.is_project,
             context: Arc::clone(self.scope.context),
-            memo: Mutex::default(),
         };
         let mut renders = BTreeMap::new();
         let mut exclusions = BTreeMap::new();

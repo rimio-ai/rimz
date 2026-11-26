@@ -19,7 +19,6 @@ mod traits;
 #[cfg(test)]
 pub(crate) use super::engine::keeps_inherited_model;
 pub use agent::DefinitionSource;
-pub(super) use agent::{TierCandidates, build_tier_candidates};
 pub(in crate::config) use project::{ProjectProfilesInput, resolve_project_profiles};
 pub use traits::ConsensusPieces;
 
@@ -280,6 +279,36 @@ pub enum DefinitionCause {
 /// one, since it refuses a kind base file and every other kind falls back to its built-in base.
 pub(super) fn no_kind_base(kind: &str) -> String {
     format!("{kind} takes no system prompt, so it has no kind base for a definition to run on")
+}
+
+/// The refusal of a launch that runs on the kind base of `kind` as the tables hold it, when that
+/// base `failed` (a conflict over the kind whole, else the file to fix caused by its load
+/// failure, both typed as depending on that failed base) or the kind has none.
+pub(crate) fn missing_base(kind: &str, failed: Option<&DefinitionErr>) -> DefinitionErr {
+    if let Some(error) = failed {
+        return DefinitionErr {
+            path: error.path.clone(),
+            message: if error.is_conflict_over(kind) {
+                error.message.clone()
+            } else {
+                format!(
+                    "{}\ncaused by: {}: {}",
+                    failed_kind_base(&error.path),
+                    error.path.display(),
+                    error.message
+                )
+            },
+            cause: DefinitionCause::DependsOnFailed {
+                name: kind.to_owned(),
+                subagent: false,
+            },
+        };
+    }
+    let home = crate::disk::paths::rimz_home();
+    DefinitionErr::new(
+        &home.join("agents").join(format!("{kind}.md")),
+        no_kind_base(kind),
+    )
 }
 
 /// The refusal for a kind base whose prompt body is empty, raw or rendered.
@@ -1191,6 +1220,23 @@ fn load_resolved(
         (&mut loaded.agent_profiles, false),
         (&mut loaded.subagent_profiles, true),
     ] {
+        profiles.set_failed_bases(failed_bases.clone());
+        // Only the kind base rows inserted above move onto another kind's base; a table with
+        // none keeps no built-in rows, so it compares equal to an empty table.
+        if profiles.0.is_empty() {
+            continue;
+        }
+        profiles.set_built_in_bases(
+            built_in
+                .iter()
+                .map(|(kind, rows)| {
+                    (
+                        kind.clone(),
+                        if subagent { &rows.1 } else { &rows.0 }.clone(),
+                    )
+                })
+                .collect(),
+        );
         let renders: BTreeMap<_, _> = families
             .iter()
             .copied()

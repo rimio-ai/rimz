@@ -732,14 +732,7 @@ fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
     std::fs::create_dir_all(fixture.project.join(".rimz")).unwrap();
     std::fs::write(fixture.project.join(".rimz/config.toml"), "[tiers]\n").unwrap();
     let machine = team_machine();
-    let availability = crate::harness::plan::LaunchAvailability::read(
-        &fixture.runtime,
-        &fixture.paths,
-        &machine,
-        Timestamp::UNIX_EPOCH,
-    );
-    let (teams, profiles, _, _, _) =
-        effective_teams_and_profiles(&machine, &fixture.project, &availability);
+    let (teams, profiles, _, _, _) = effective_teams_and_profiles(&machine, &fixture.project);
     assert!(
         teams.0.is_empty(),
         "an unrouted fresh seat must not be planned"

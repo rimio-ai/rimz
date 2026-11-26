@@ -1089,7 +1089,7 @@ fn step_layout(
         crate::config::effective::ProfileScope::Agents,
         &machine.agents.commands,
         Some(agent),
-        None,
+        &crate::config::Selection::new(&machine.tiers),
     )?;
     // A team has no one turn end or rest to judge, so it runs only in a session that judges
     // neither: one with no rest check, whose attempt lasts until the leader's session ends.

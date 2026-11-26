@@ -465,17 +465,22 @@ pub enum LaunchPlacement {
 /// `Self::failed`; a failed kind base keeps its row for the definitions that replace its list. A
 /// reader that looks a launch name up in the rows asks `failed` first, or resolves through
 /// `crates/rimz/src/harness/spec.rs`, so a failed name never resolves to a kind base, a variant, a
-/// command, or a namesake in another table.
+/// command, or a namesake in another table. A machine kind base that failed to load is absent
+/// from the rows and present in `Self::failed_base`, so a launch moved onto its kind names why.
+/// The built-in kind base of a kind with no home or pack base adds no row; a launch moved onto
+/// that kind runs on `Self::built_in_base`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct ProfilesConfig(
     pub BTreeMap<String, Profile>,
     #[serde(skip)] BTreeMap<String, String>,
+    #[serde(skip)] BTreeMap<String, super::definitions::DefinitionErr>,
+    #[serde(skip)] BTreeMap<String, Profile>,
 );
 
 impl From<BTreeMap<String, Profile>> for ProfilesConfig {
     fn from(profiles: BTreeMap<String, Profile>) -> Self {
-        Self(profiles, BTreeMap::new())
+        Self(profiles, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
     }
 }
 
@@ -512,6 +517,28 @@ impl ProfilesConfig {
 
     pub(in crate::config) fn failed_rows(&self) -> &BTreeMap<String, String> {
         &self.1
+    }
+
+    /// The load failure of the machine kind base of `kind`, when it failed.
+    pub(crate) fn failed_base(&self, kind: &str) -> Option<&super::definitions::DefinitionErr> {
+        self.2.get(kind)
+    }
+
+    pub(in crate::config) fn set_failed_bases(
+        &mut self,
+        failed: BTreeMap<String, super::definitions::DefinitionErr>,
+    ) {
+        self.2 = failed;
+    }
+
+    /// The built-in kind base of `kind` as a row of this table, where no home or pack base
+    /// stands for that kind.
+    pub(crate) fn built_in_base(&self, kind: &str) -> Option<&Profile> {
+        self.3.get(kind)
+    }
+
+    pub(in crate::config) fn set_built_in_bases(&mut self, bases: BTreeMap<String, Profile>) {
+        self.3 = bases;
     }
 
     /// The nearest profile maximum, else `fallback`; explicit `off` stops inheritance.
@@ -768,7 +795,7 @@ impl Profile {
         model: Option<&str>,
     ) -> Option<std::result::Result<Self, super::definitions::DefinitionErr>> {
         let source = self.definition.as_ref()?;
-        Some(source.build(self, base, target_kind, model))
+        Some(source.build(base, target_kind, model))
     }
 }
 
