@@ -1833,7 +1833,11 @@ fn antigravity_signals(store: &rimz::Store, agent_id: &str) -> Vec<LifecycleSign
         .collect()
 }
 
-fn queue_antigravity_continue(store: &rimz::Store, agent_id: &str) {
+fn queue_antigravity_continue(
+    store: &rimz::Store,
+    agent_id: &str,
+    past_stop: bool,
+) -> rimz::ids::MessageId {
     use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender, SoftCompactStep};
     let mut message = MessageRecord::new(
         store.paths().workspace_id.clone(),
@@ -1843,7 +1847,9 @@ fn queue_antigravity_continue(store: &rimz::Store, agent_id: &str) {
     )
     .with_sender(MessageSender::System);
     message.soft_compact = Some(SoftCompactStep::Continue);
+    message.past_stop = past_stop;
     store.queue_message(&message, "main").unwrap();
+    message.message_id
 }
 
 fn antigravity_continue_owed(store: &rimz::Store, agent_id: &str) -> bool {
@@ -2635,7 +2641,7 @@ fn an_antigravity_rest_report_interrupts_only_a_turn_its_hooks_hold_open() {
 fn an_antigravity_rest_after_a_turn_end_changes_nothing_and_leaves_an_owed_continue_owed() {
     let (_dir, store) = hooks_test_store();
     start_antigravity_turn(&store, "finished");
-    queue_antigravity_continue(&store, "finished");
+    queue_antigravity_continue(&store, "finished", false);
     stop_antigravity_turn(&store, "finished", true);
     assert!(antigravity_continue_owed(&store, "finished"));
     let (payload, observation) =
@@ -2770,7 +2776,7 @@ fn an_antigravity_escape_after_a_self_compaction_cancels_its_continue_for_good()
     let (_dir, store) = hooks_test_store();
     let adapter = rimz::agents::definition_by_kind("antigravity").unwrap();
     start_antigravity_turn(&store, "compacted");
-    queue_antigravity_continue(&store, "compacted");
+    queue_antigravity_continue(&store, "compacted", false);
     assert!(antigravity_continue_owed(&store, "compacted"));
 
     feed_antigravity_statusline(
@@ -2835,6 +2841,75 @@ fn an_antigravity_rest_report_opens_the_interrupt_hold_of_a_supervised_child() {
         (held.status, held.interrupted_at),
         (rimz::store::run::RunStatus::Running, Some(frames[0].ts))
     );
+}
+
+/// A rest report while RimZ ends the turn for a compaction records a clean turn end: the continue
+/// stays owed and the run parks on it. Once the debt closes, the same report is a stop again: a
+/// supervised child's run opens the interrupt hold and an ordinary run cancels.
+#[test]
+fn a_rest_report_under_an_open_hard_compaction_debt_is_a_clean_turn_end() {
+    use rimz::store::run::{ParkCause, RunStatus};
+
+    for subagent in [true, false] {
+        let (_dir, store) = hooks_test_store();
+        let mut run = rimz::store::run::RunRecord::new(
+            store.paths().workspace_id.clone(),
+            rimz::ids::AgentKind::new_unchecked("antigravity"),
+            rimz::agents::PermissionMode::Auto,
+            "task".into(),
+            "/tmp/hooks-test".into(),
+        );
+        run.subagent = subagent;
+        run.status = RunStatus::Running;
+        run.agent_id = Some("child".into());
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        let env =
+            std::collections::BTreeMap::from([("RIMZ_RUN_ID".to_owned(), run.run_id.to_string())]);
+        let idle = || serde_json::json!({"agent_state": "idle"});
+        start_antigravity_turn(&store, "child");
+        let continue_id = queue_antigravity_continue(&store, "child", true);
+        assert!(antigravity_row(&store, "child").ends_turn_for_compaction(jiff::Timestamp::now()));
+
+        feed_antigravity_statusline_in(&store, "child", idle(), &env);
+        assert!(
+            matches!(
+                antigravity_signals(&store, "child").last(),
+                Some(LifecycleSignal::TurnEnded { errored: false, .. })
+            ),
+            "{:?}",
+            antigravity_signals(&store, "child")
+        );
+        assert!(
+            antigravity_continue_owed(&store, "child"),
+            "subagent {subagent}"
+        );
+        let parked = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        assert_eq!(
+            (parked.status, parked.parked_on, parked.interrupted_at),
+            (RunStatus::Running, Some(ParkCause::SoftCompact), None),
+            "subagent {subagent}"
+        );
+
+        store
+            .cancel_message(&continue_id, "main", "test closes the debt")
+            .unwrap();
+        start_antigravity_turn(&store, "child");
+        assert!(!antigravity_row(&store, "child").ends_turn_for_compaction(jiff::Timestamp::now()));
+        let frames = feed_antigravity_statusline_in(&store, "child", idle(), &env);
+        assert!(matches!(
+            antigravity_signals(&store, "child").last(),
+            Some(LifecycleSignal::TurnInterrupted { .. })
+        ));
+        let stopped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        if subagent {
+            assert_eq!(
+                (stopped.status, stopped.interrupted_at),
+                (RunStatus::Running, Some(frames[0].ts))
+            );
+        } else {
+            assert_eq!(stopped.status, RunStatus::Canceled);
+        }
+    }
 }
 
 #[test]
@@ -3814,7 +3889,7 @@ fn an_antigravity_rest_report_keeps_an_owed_continue_owed_when_finishing_a_parke
     let run = create_antigravity_child_run(&store, "parked-owed");
 
     start_antigravity_turn(&store, "parked-owed");
-    queue_antigravity_continue(&store, "parked-owed");
+    queue_antigravity_continue(&store, "parked-owed", false);
     park_antigravity_with_shell(&store, "parked-owed", "task-1", "sleep 60");
     let before = antigravity_row(&store, "parked-owed");
     assert!(antigravity_continue_owed(&store, "parked-owed"));

@@ -325,7 +325,7 @@ fn builtin_compact_command_instruction_and_steer_checked_facts_are_pinned() {
         })
         .collect();
     let expected = vec![
-        ("claude", Some((CompactInstruction::Trailing, false))),
+        ("claude", Some((CompactInstruction::Trailing, true))),
         ("codex", Some((CompactInstruction::Unsupported, false))),
         ("amp", None),
         ("copilot", Some((CompactInstruction::Unsupported, false))),

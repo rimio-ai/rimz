@@ -53,6 +53,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
                 store,
                 &message_id,
                 Some(&request.pane_id),
+                rimz::message::deliver::DeliveryPolicy::Boundary,
                 DeliveryFailureDisposition::Retry,
                 &reason,
             )

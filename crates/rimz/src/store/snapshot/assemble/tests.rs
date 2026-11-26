@@ -566,8 +566,8 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_resumable_reopen_contract_is_version_120() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 120);
+fn snapshot_past_stop_continue_contract_is_version_121() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 121);
 }
 
 #[test]
@@ -582,6 +582,21 @@ fn pre_120_resumable_reopen_snapshot_is_not_a_fresh_view() {
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
         "views that offered to reopen a child whose session cannot resume must refold"
+    );
+}
+
+#[test]
+fn pre_121_past_stop_less_continue_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(120);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose owed continues dropped whether they survive a stop must refold"
     );
 }
 

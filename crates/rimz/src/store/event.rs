@@ -470,6 +470,8 @@ pub struct MessageEventPayload {
     pub compacted_context_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soft_compact: Option<SoftCompactStep>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub past_stop: bool,
 }
 
 impl MessageEventPayload {
@@ -496,6 +498,7 @@ impl MessageEventPayload {
             delivered_at: message.delivered_at,
             compacted_context_tokens: message.compacted_context_tokens,
             soft_compact: message.soft_compact,
+            past_stop: message.past_stop,
         }
     }
 
@@ -530,6 +533,7 @@ impl MessageEventPayload {
             delivered_at: None,
             compacted_context_tokens: None,
             soft_compact: None,
+            past_stop: false,
         }
     }
 }

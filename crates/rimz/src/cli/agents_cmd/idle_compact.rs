@@ -112,10 +112,11 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             sender: MessageSender::System,
             automated: true,
             continue_text: None,
+            hard: false,
         },
     );
     let delivery_error = match &outcome {
-        Ok(CompactOutcome::Sent) => None,
+        Ok(CompactOutcome::Sent { .. }) => None,
         Ok(CompactOutcome::Queued { .. }) => Some("compaction delivery gate closed".to_owned()),
         Err(err) => Some(err.to_string()),
     };
@@ -127,7 +128,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         Some(window.fire_after.as_secs()),
         occupied_tokens,
         &message_id,
-        matches!(outcome, Ok(CompactOutcome::Sent)),
+        matches!(outcome, Ok(CompactOutcome::Sent { .. })),
         delivery_error,
     );
     outcome.context("sending idle-compaction command")?;

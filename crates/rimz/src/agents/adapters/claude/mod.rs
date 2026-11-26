@@ -226,7 +226,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,
-            steer_checked: false,
+            steer_checked: true,
         }),
         presets: super::PresetMatchers {
             code_mode: super::CodeModeSwitch::Supported {

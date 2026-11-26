@@ -633,7 +633,7 @@ fn self_compact_schema_admits_every_receipt_status() {
 
     let schema = tool("self_compact").output_schema().unwrap();
     let statuses: Vec<Value> = [
-        ReceiptOutcome::Sent,
+        ReceiptOutcome::Sent { continues: false },
         ReceiptOutcome::Queued { continues: true },
         ReceiptOutcome::Joined { continues: true },
     ]
@@ -642,6 +642,7 @@ fn self_compact_schema_admits_every_receipt_status() {
         serde_json::to_value(CompactReceipt {
             message_id: crate::ids::MessageId::new(),
             outcome,
+            soft_because: None,
         })
         .unwrap()["status"]
             .clone()

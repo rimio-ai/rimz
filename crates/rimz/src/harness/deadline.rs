@@ -156,7 +156,8 @@ pub fn interrupt_expired(record: &RunRecord, now: Timestamp) -> bool {
 }
 
 /// The settle instant of an Interrupted marker on `record`'s child card that
-/// would open a hold, for the room host to pass to its helper.
+/// would open a hold, for the room host to pass to its helper. A stop RimZ made to
+/// compact the child (`AgentState::ends_turn_for_compaction`) opens none.
 pub(super) fn interrupt_evidence(record: &RunRecord, agents: &[AgentState]) -> Option<Timestamp> {
     let child = find_agent(agents, record.kind.as_str(), record.agent_id.as_ref()?)?;
     let context = child.context.as_ref();
@@ -166,7 +167,7 @@ pub(super) fn interrupt_evidence(record: &RunRecord, agents: &[AgentState]) -> O
         return None;
     }
     let at = context?.settle?.at;
-    opens_interrupt_hold(record, at).then_some(at)
+    (!child.ends_turn_for_compaction(at) && opens_interrupt_hold(record, at)).then_some(at)
 }
 
 #[cfg(test)]
@@ -345,6 +346,20 @@ mod tests {
             interrupt_evidence(&run, &[active]),
             None,
             "work came after it"
+        );
+        let mut compacting = child.clone();
+        compacting.soft_compact = Some(crate::agents::state::SoftCompactMark {
+            continue_owed: Some(crate::agents::state::OwedContinue {
+                message_id: crate::ids::MessageId::new(),
+                queued_at: marker - Duration::from_secs(10),
+                past_stop: true,
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            interrupt_evidence(&run, &[compacting]),
+            None,
+            "a stop RimZ sent for a compaction holds no run"
         );
         let mut other = child;
         other.agent_id = "other".into();

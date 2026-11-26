@@ -16426,6 +16426,7 @@ fn idle_compaction_after_registration_at_rest_waits_then_delivers_once() {
             automated: true,
             idle: true,
             continue_text: None,
+            hard: false,
         },
     );
     assert!(
@@ -16494,6 +16495,7 @@ fn idle_compaction_is_canceled_when_a_resumed_parked_turn_ends() {
             automated: true,
             idle: true,
             continue_text: None,
+            hard: false,
         },
     );
     assert!(matches!(
@@ -16671,6 +16673,7 @@ fn idle_compaction_first_attempt_keeps_its_cancellation_reason() {
             automated: true,
             idle: true,
             continue_text: None,
+            hard: false,
         },
     );
     let reason = match outcome {

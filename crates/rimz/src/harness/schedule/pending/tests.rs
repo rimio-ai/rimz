@@ -177,6 +177,7 @@ fn child_wait_chain_follows_an_owed_compaction_continue() {
                     continue_owed: owed.then(|| crate::agents::state::OwedContinue {
                         message_id: crate::ids::MessageId::new(),
                         queued_at,
+                        past_stop: false,
                     }),
                     ..SoftCompactMark::default()
                 });

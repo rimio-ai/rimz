@@ -1166,6 +1166,7 @@ fn compact_flipper(
                 sender: MessageSender::System,
                 automated: true,
                 continue_text: None,
+                hard: false,
             },
         )
         .map_err(FlipCompactErr::from)
@@ -1195,12 +1196,12 @@ fn compact_flipper(
                     CompactErr::Store(_) | CompactErr::Deliver(_) | CompactErr::Settled { .. },
                 )) => Some(message_id.to_string()),
             },
-            delivered: matches!(outcome, Ok(CompactOutcome::Sent)),
+            delivered: matches!(outcome, Ok(CompactOutcome::Sent { .. })),
             error: outcome.as_ref().err().map(ToString::to_string),
         },
     });
     match outcome {
-        Ok(CompactOutcome::Sent) => Compaction::Sent {
+        Ok(CompactOutcome::Sent { .. }) => Compaction::Sent {
             message_id,
             occupied_tokens,
             threshold,

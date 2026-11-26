@@ -1330,6 +1330,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     original.queued_notice_at = Some(now);
     original.compacted_context_tokens = Some(120_000);
     original.batch_id = Some(message_id(1));
+    original.past_stop = true;
 
     assert!(original.is_deliverable(now));
 
@@ -1375,6 +1376,10 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.pane_id, None);
     assert_eq!(requeued.batch_id, None);
     assert_eq!(requeued.compacted_context_tokens, None);
+    assert!(
+        !requeued.past_stop,
+        "a requeued continue owes nothing past a stop"
+    );
 }
 
 #[test]
@@ -3357,6 +3362,7 @@ fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_continue() {
         continue_owed: Some(crate::agents::state::OwedContinue {
             message_id: soft.message_id.clone(),
             queued_at: at,
+            past_stop: false,
         }),
         ..SoftCompactMark::default()
     });
@@ -3488,6 +3494,20 @@ fn next_prompt_command_batches_immediate_continue_tail_and_respects_fifo_and_kin
     };
 
     let (agy, command, tail) = pair("antigravity");
+    assert_eq!(
+        steer_batch_indices(&[command.clone(), tail.clone()], &command.message_id, now),
+        Some(vec![0, 1]),
+        "a steered NextPrompt command folds its continue tail onto its line"
+    );
+    let past_stop = MessageRecord {
+        past_stop: true,
+        ..tail.clone()
+    };
+    assert_eq!(
+        steer_batch_indices(&[command.clone(), past_stop], &command.message_id, now),
+        Some(vec![0]),
+        "a continue owed past the stop is typed after the compaction, never on its line"
+    );
     assert_eq!(
         delivery_batch_indices(
             &[command.clone(), tail.clone()],

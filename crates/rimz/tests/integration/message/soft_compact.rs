@@ -368,17 +368,59 @@ impl Fixture {
 
     /// `rimz agents compact @<kind> <extra>`, the agent's own self-compaction.
     fn compact(&self, extra: &[&str]) -> String {
-        let handle = format!("@{}", self.request.kind.as_str());
         let output = run_success(
-            traced_rimz(&self.env, "soft-trace.log")
-                .env("RIMZ_TEST_PANE_LIST", &self.panes)
+            self.person_compact(extra)
                 .env("RIMZ_AGENT_KIND", self.request.kind.as_str())
-                .env("RIMZ_AGENT_ID", self.request.agent_id.as_str())
-                .args(["agents", "compact", handle.as_str()])
-                .args(extra),
+                .env("RIMZ_AGENT_ID", self.request.agent_id.as_str()),
             "self compaction",
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// `rimz agents compact @<kind> <extra>` as a person runs it, outside any agent.
+    fn person_compact(&self, extra: &[&str]) -> std::process::Command {
+        let handle = format!("@{}", self.request.kind.as_str());
+        let mut command = traced_rimz(&self.env, "soft-trace.log");
+        command
+            .env("RIMZ_TEST_PANE_LIST", &self.panes)
+            .args(["agents", "compact", handle.as_str()])
+            .args(extra);
+        command
+    }
+
+    /// The handle receipts name the agent by.
+    fn named(&self) -> String {
+        rimz::address::handle_with_name(
+            &format!("@{}", self.request.kind.as_str()),
+            self.records()[0].agent_name.as_deref(),
+        )
+    }
+
+    /// Rests the row as a finished compaction does and types the continue it owes.
+    /// `auto` is the trigger the compaction's end reports.
+    fn compact_and_continue(&self, continuation: &MessageRecord, auto: Option<bool>) {
+        self.lifecycle(LifecycleSignal::Compacting);
+        self.lifecycle(LifecycleSignal::CompactionEnded {
+            auto,
+            failed: false,
+            echo: false,
+        });
+        self.context(20_000);
+        self.deliver(&continuation.message_id);
+        let trace = self.trace();
+        let command_at = trace.iter().rposition(|line| is_compact_command(line));
+        let pastes: Vec<_> = trace
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| is_paste(line, "keep going"))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(pastes.len(), 1, "{trace:?}");
+        assert!(command_at < Some(pastes[0]), "{trace:?}");
+        assert_eq!(
+            self.status_of(&continuation.message_id),
+            MessageStatus::Sent
+        );
     }
 
     /// The queued compaction command and the continue behind it, in queue order.
@@ -437,6 +479,337 @@ impl Fixture {
                 .map(|event| event.params_value())
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+/// A person's hard request to a busy agent of a steering kind types the command alone now and
+/// presses send-now; its continue stays queued past the stop and is typed once the compaction rests
+/// the row, which a steered command does with no turn end, its compaction closing on the manual
+/// trigger.
+#[test]
+fn a_hard_request_steers_the_command_into_a_busy_agent_and_continues_it_after() {
+    for kind in ["claude", "antigravity"] {
+        let fixture = Fixture::new(kind);
+        let output = fixture.person_compact(&["--hard"]).output().unwrap();
+        assert!(output.status.success(), "{kind}: {output:?}");
+        let (command, continuation) = fixture.command_and_continue();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim_end(),
+            format!(
+                "compacting {} now ({}), then continues it if nothing else is waiting",
+                fixture.named(),
+                command.message_id
+            )
+        );
+        assert_eq!(
+            (command.status, continuation.status, continuation.past_stop),
+            (MessageStatus::Sent, MessageStatus::Queued, true),
+            "{kind}"
+        );
+        assert!(
+            fixture
+                .agent()
+                .ends_turn_for_compaction(jiff::Timestamp::now()),
+            "{kind}"
+        );
+        let trace = fixture.trace();
+        let typed = trace
+            .iter()
+            .position(|line| is_compact_command(line))
+            .unwrap_or_else(|| panic!("{kind}: no command typed: {trace:?}"));
+        assert_eq!(keys_after(&trace, typed), send_now_keys(kind), "{kind}");
+        assert!(!trace.iter().any(|line| is_paste(line, "keep going")));
+        fixture.compact_and_continue(&continuation, Some(false));
+    }
+}
+
+/// A person's hard request to a busy Codex presses its interrupt keys and types nothing until its
+/// stop arrives, which records as a clean turn end; then it types the command and submits it with
+/// the command keys, and the continue stays owed.
+#[test]
+fn a_hard_request_stops_a_busy_agent_then_types_the_command_and_owes_its_continue() {
+    let fixture = Fixture::new("codex");
+    trust_codex_preflight_hooks(&fixture.env);
+    let started = Instant::now();
+    let child = fixture
+        .person_compact(&["--hard"])
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    while !fixture.trace().iter().any(|line| is_escape_key(line)) {
+        assert!(started.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        !fixture.trace().iter().any(|line| is_compact_command(line)),
+        "nothing is typed before the stop"
+    );
+    let stop = json!({
+        "hook_event_name": "Interrupt",
+        "session_id": fixture.request.agent_id.as_str(),
+        "cwd": fixture.env.project_root,
+    });
+    let hook = fixture.env.run_hook("codex", &stop.to_string());
+    assert!(hook.status.success(), "{hook:?}");
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("interrupt not confirmed"),
+        "{output:?}"
+    );
+    let trace = fixture.trace();
+    let escape = trace.iter().position(|line| is_escape_key(line)).unwrap();
+    let typed = trace.iter().position(|line| is_compact_command(line));
+    assert!(typed > Some(escape), "{trace:?}");
+    assert_eq!(keys_after(&trace, typed.unwrap()), ["13"], "{trace:?}");
+    let (command, continuation) = fixture.command_and_continue();
+    assert_eq!(
+        (command.status, continuation.status, continuation.past_stop),
+        (MessageStatus::Sent, MessageStatus::Queued, true)
+    );
+    let row = fixture.agent();
+    assert!(
+        row.ends_turn_for_compaction(jiff::Timestamp::now()) && !row.holds_open_turn(),
+        "RimZ's stop is a clean turn end that keeps the debt: {row:?}"
+    );
+    fixture.compact_and_continue(&continuation, None);
+}
+
+/// A stop the interrupt window does not see still types the command; the continue typed after
+/// it starts a turn that closes the debt, and a later stop is a person's again.
+#[test]
+fn a_hard_request_types_the_command_unseen_stop_and_its_debt_closes_with_the_continue() {
+    let fixture = Fixture::new("codex");
+    trust_codex_preflight_hooks(&fixture.env);
+    let output = fixture
+        .person_compact(&["--hard"])
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "200")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let trace = fixture.trace();
+    let escape = trace.iter().position(|line| is_escape_key(line));
+    let typed = trace.iter().position(|line| is_compact_command(line));
+    assert!(escape.is_some() && typed > escape, "{trace:?}");
+    assert_eq!(keys_after(&trace, typed.unwrap()), ["13"], "{trace:?}");
+    let (_, continuation) = fixture.command_and_continue();
+    assert!(
+        fixture
+            .agent()
+            .ends_turn_for_compaction(jiff::Timestamp::now())
+    );
+
+    fixture.end_turn();
+    fixture.compact_and_continue(&continuation, None);
+    fixture.lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+    assert!(
+        !fixture
+            .agent()
+            .ends_turn_for_compaction(jiff::Timestamp::now())
+    );
+    let stop = json!({
+        "hook_event_name": "Interrupt",
+        "session_id": fixture.request.agent_id.as_str(),
+        "cwd": fixture.env.project_root,
+    });
+    assert!(
+        fixture
+            .env
+            .run_hook("codex", &stop.to_string())
+            .status
+            .success()
+    );
+    let stopped = fixture
+        .env
+        .store()
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload) => {
+                Some(payload.observation.signal)
+            }
+            _ => None,
+        });
+    assert!(
+        matches!(stopped, Some(LifecycleSignal::TurnInterrupted { .. })),
+        "{stopped:?}"
+    );
+}
+
+/// A hard request compacts at the turn end, naming why, where it cannot end the turn now: the
+/// agent's own request, an agent waiting on an answer, no continue text. It queues what the soft
+/// request queues. A resting agent gets the ordinary compaction and receipt.
+#[test]
+fn a_hard_request_falls_back_to_the_turn_end_and_names_why() {
+    let queued = |fixture: &Fixture, receipt: &str, continues: bool, why: &str| {
+        let lines: Vec<_> = receipt.lines().collect();
+        let named = fixture.named();
+        assert!(
+            lines[0].starts_with(&format!("queued compaction for {named} (msg_"))
+                && lines[0].ends_with(if continues {
+                    "delivers at its next turn boundary, then continues it if nothing else is waiting"
+                } else {
+                    "delivers at its next turn boundary, with no continue after"
+                }),
+            "{receipt}"
+        );
+        assert_eq!(
+            lines[1..],
+            [format!("--hard did not end {named}'s turn: {why}")],
+            "{receipt}"
+        );
+        let records = fixture.records();
+        assert_eq!(records.len(), 1 + usize::from(continues), "{records:?}");
+        assert!(
+            records
+                .iter()
+                .all(|record| record.status == MessageStatus::Queued && !record.past_stop),
+            "{records:?}"
+        );
+        assert!(
+            !fixture
+                .trace()
+                .iter()
+                .any(|line| is_escape_key(line) || is_compact_command(line))
+        );
+    };
+    let own = Fixture::new("claude");
+    let receipt = own.compact(&["--hard"]);
+    queued(
+        &own,
+        &receipt,
+        true,
+        "an agent's own compaction waits for its turn to end",
+    );
+    let resting_own = Fixture::new("claude");
+    resting_own.end_turn();
+    let receipt = resting_own.compact(&["--hard"]);
+    let records = resting_own.records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        receipt.trim_end(),
+        format!(
+            "compacting {} ({})",
+            resting_own.named(),
+            records[0].message_id
+        ),
+        "a resting agent's own request names no reason"
+    );
+
+    let waiting = Fixture::new("claude");
+    waiting.lifecycle(LifecycleSignal::AwaitingInput {
+        extra_questions: 0,
+        kind: AskKind::Permission,
+        ask_id: None,
+        detail: None,
+        native_key: None,
+    });
+    let output = waiting.person_compact(&["--hard"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    queued(
+        &waiting,
+        &String::from_utf8_lossy(&output.stdout),
+        false,
+        "it is waiting on an answer",
+    );
+
+    let blank = Fixture::new("claude");
+    run_success(
+        blank
+            .env
+            .rimz()
+            .args(["config", "set", "resume.auto_continue_text", "  "]),
+        "blank continue text",
+    );
+    let output = blank.person_compact(&["--hard"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    queued(
+        &blank,
+        &String::from_utf8_lossy(&output.stdout),
+        false,
+        "resume.auto_continue_text is empty, and ending a turn for a compaction owes a continue",
+    );
+
+    let resting = Fixture::new("claude");
+    resting.end_turn();
+    let output = resting.person_compact(&["--hard"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let records = resting.records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format!("compacting {} ({})", resting.named(), records[0].message_id)
+    );
+    assert_eq!(records[0].status, MessageStatus::Sent);
+}
+
+/// A hard request that finds a compaction queued joins it, owes its continue past the stop (a
+/// soft continue already queued is replaced), and makes its hard attempt on that command.
+#[test]
+fn a_hard_request_joins_a_queued_compaction_and_types_it_now() {
+    for own_continue in [false, true] {
+        let fixture = Fixture::new("claude");
+        if own_continue {
+            fixture.compact(&[]);
+        } else {
+            run_success(&mut fixture.person_compact(&[]), "soft compaction");
+        }
+        let queued = fixture.records();
+        let command = queued
+            .iter()
+            .find(|record| record.body == MessageBody::Command)
+            .unwrap()
+            .clone();
+        let output = fixture.person_compact(&["--hard"]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim_end(),
+            format!(
+                "compacting {} now ({}), then continues it if nothing else is waiting",
+                fixture.named(),
+                command.message_id
+            )
+        );
+        let records = fixture.records();
+        let commands: Vec<_> = records
+            .iter()
+            .filter(|record| record.body == MessageBody::Command)
+            .collect();
+        assert_eq!(commands.len(), 1, "{records:?}");
+        assert_eq!(
+            (&commands[0].message_id, commands[0].status),
+            (&command.message_id, MessageStatus::Sent)
+        );
+        let mut continues: Vec<_> = records
+            .iter()
+            .filter(|record| record.soft_compact == Some(SoftCompactStep::Continue))
+            .collect();
+        continues.sort_by_key(|record| &record.message_id);
+        let continues: Vec<_> = continues
+            .iter()
+            .map(|record| (record.status, record.past_stop))
+            .collect();
+        let mut expected = vec![(MessageStatus::Queued, true)];
+        if own_continue {
+            expected.insert(0, (MessageStatus::Canceled, false));
+        }
+        assert_eq!(continues, expected, "{records:?}");
+        assert!(
+            fixture
+                .agent()
+                .ends_turn_for_compaction(jiff::Timestamp::now())
+        );
+        let trace = fixture.trace();
+        let typed = trace
+            .iter()
+            .position(|line| is_compact_command(line))
+            .unwrap();
+        assert_eq!(keys_after(&trace, typed), send_now_keys("claude"));
     }
 }
 

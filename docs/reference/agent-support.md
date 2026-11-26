@@ -453,7 +453,7 @@ OpenCode's project instructions and RimZ's launch reminder still follow the repl
 
 ### Message keys
 
-Every message RimZ delivers presses keys from the receiving agent's declaration: [`rimz message --steer`](./cli/message.md#when-a-message-lands) presses send-now after the text, a boundary send presses queue, a typed command such as `/compact` presses command, and [`rimz message --interrupt`](./cli/message.md#when-a-message-lands) presses interrupt, waits up to 5 seconds for the agent's row to show the stop, then types the text and presses send-now. An agent at rest gets no interrupt keys.
+Every message RimZ delivers presses keys from the receiving agent's declaration: [`rimz message --steer`](./cli/message.md#when-a-message-lands) presses send-now after the text, a boundary send presses queue, a typed command such as `/compact` presses command (send-now when [`rimz agents compact --hard`](./cli/agents.md#compact) steers it into a running turn), and [`rimz message --interrupt`](./cli/message.md#when-a-message-lands) presses interrupt, waits up to 5 seconds for the agent's row to show the stop, then types the text and presses send-now. An agent at rest gets no interrupt keys.
 
 | Agent | Send now | Queue | Interrupt | Command |
 | --- | --- | --- | --- | --- |

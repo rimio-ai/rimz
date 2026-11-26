@@ -228,3 +228,49 @@ fn acknowledgement_confirms_a_tagged_wrap_up() {
     );
     assert_eq!(q.count("message.delivered"), 1);
 }
+
+/// A compaction command that times out unconfirmed withdraws, in the same commit, the continue owed
+/// past the stop it was typed to make; one owed at the turn end stays for delivery's premise.
+#[test]
+fn a_timed_out_command_withdraws_the_continue_owed_past_its_stop() {
+    let outcomes = [false, true].map(|past_stop| {
+        let q = Queue::new();
+        let command = q.record(1).with_body(MessageBody::Command);
+        q.queue_message(&command, "session").unwrap();
+        let tail = q.queue_with(2, |tail| {
+            tail.soft_compact = Some(SoftCompactStep::Continue);
+            tail.follows_command = Some(command.message_id.clone());
+            tail.past_stop = past_stop;
+        });
+        let sent = q.record_sent_message(&command, "session").unwrap().unwrap();
+        let deadline = sent.last_sent_at.unwrap() + sent.body.delivery_window();
+        let report = q.reconcile_stale_messages("session", deadline, 3).unwrap();
+        let status = |id: &MessageId| {
+            q.live()
+                .into_iter()
+                .chain(q.history())
+                .find(|message| message.message_id == *id)
+                .map(|message| message.status)
+        };
+        (
+            report.timed_out,
+            status(&command.message_id),
+            status(&tail.message_id),
+        )
+    });
+    assert_eq!(
+        outcomes,
+        [
+            (
+                1,
+                Some(MessageStatus::TimedOut),
+                Some(MessageStatus::Queued)
+            ),
+            (
+                1,
+                Some(MessageStatus::TimedOut),
+                Some(MessageStatus::Canceled)
+            ),
+        ]
+    );
+}

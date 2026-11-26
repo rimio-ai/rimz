@@ -5,7 +5,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use rimz::address::{addressable_agents, named_handle};
-use rimz::message::compact::{ReceiptOutcome, compact_agent as compact};
+use rimz::message::compact::{CompactAsk, ReceiptOutcome, SoftBecause, compact_agent as compact};
 
 use crate::cli::{GlobalFlags, ctx::Ctx, render, send};
 
@@ -13,6 +13,7 @@ pub(super) fn compact_agent(
     reference: String,
     instruction: Option<String>,
     no_continue: bool,
+    hard: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
@@ -38,12 +39,22 @@ pub(super) fn compact_agent(
         agent,
         &handle,
         instruction.as_deref(),
-        self_request && !no_continue,
+        CompactAsk {
+            own: self_request,
+            no_continue,
+            hard,
+        },
         send::sender_for(caller.as_ref(), ctx.channel(), false),
     )?;
     let message_id = receipt.message_id;
     match receipt.outcome {
-        ReceiptOutcome::Sent => writeln!(render::out(), "compacting {handle} ({message_id})")?,
+        ReceiptOutcome::Sent { continues: false } => {
+            writeln!(render::out(), "compacting {handle} ({message_id})")?;
+        }
+        ReceiptOutcome::Sent { continues: true } => writeln!(
+            render::out(),
+            "compacting {handle} now ({message_id}), then continues it if nothing else is waiting"
+        )?,
         ReceiptOutcome::Queued { continues } => writeln!(
             render::out(),
             "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary, {}",
@@ -63,6 +74,18 @@ pub(super) fn compact_agent(
                 "with no continue after"
             },
         )?,
+    }
+    if let Some(because) = receipt.soft_because {
+        writeln!(
+            render::out(),
+            "--hard did not end {handle}'s turn: {}",
+            match because {
+                SoftBecause::OwnRequest => "an agent's own compaction waits for its turn to end",
+                SoftBecause::AwaitingAnswer => "it is waiting on an answer",
+                SoftBecause::NoContinueText =>
+                    "resume.auto_continue_text is empty, and ending a turn for a compaction owes a continue",
+            }
+        )?;
     }
     Ok(())
 }

@@ -297,6 +297,7 @@ fn queue_notice(
         &ctx.store,
         message,
         None,
+        crate::message::deliver::DeliveryPolicy::Boundary,
         crate::store::writer::DeliveryFailureDisposition::Retry,
         "workflow notice delivery deferred",
     )?;
@@ -572,6 +573,7 @@ impl workflow::AttemptHost for Host<'_> {
                 &ctx.store,
                 &push.message,
                 None,
+                crate::message::deliver::DeliveryPolicy::Boundary,
                 crate::store::writer::DeliveryFailureDisposition::Retry,
                 "workflow push-back delivery deferred",
             )?;

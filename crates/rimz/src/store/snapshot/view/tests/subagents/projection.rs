@@ -172,6 +172,7 @@ fn subagent_projection_marks_compaction_and_an_owed_compaction_continue() {
             continue_owed: owed.then(|| crate::agents::state::OwedContinue {
                 message_id: crate::ids::MessageId::new(),
                 queued_at: ago(5),
+                past_stop: false,
             }),
             ..SoftCompactMark::default()
         });

@@ -514,7 +514,9 @@ upward-dependencies = [
 # built-in kind base in config::definitions and harness::plan (+2).
 # registry::session_resumable, AgentState::resumable and LaunchCapability::resumes_session share
 # one probe-free resumability rule with the snapshot fold, harness and CLI (+3).
-surface-budget = 1394
+# AgentState::ends_turn_for_compaction tells the hook path and the deadline hold that a stop
+# ended a turn for a hard compaction (+1).
+surface-budget = 1395
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -3667,7 +3669,9 @@ upward-dependencies = [
 # InterruptConfirmation::warning and interrupt_withheld_detail give the CLI receipts and the MCP
 # message tool one wording for an unconfirmed or withheld interrupt (+2).
 # `soft_compact::send_ceiling_compact` exposes the enforced ceiling steer to the CLI helper (+1).
-surface-budget = 93
+# compact::CompactAsk and compact::SoftBecause carry a hard request in from the CLI and MCP
+# callers and its fallback reason out to the receipt (+2).
+surface-budget = 95
 
 [[verdict]]
 kind = "item"

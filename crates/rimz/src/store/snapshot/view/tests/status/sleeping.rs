@@ -229,6 +229,7 @@ fn launched_child_owed_a_compaction_continue_holds_parent_turn() {
             continue_owed: owed.then(|| crate::agents::state::OwedContinue {
                 message_id: crate::ids::MessageId::new(),
                 queued_at: ago(5),
+                past_stop: false,
             }),
             ..SoftCompactMark::default()
         });

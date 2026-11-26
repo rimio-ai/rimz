@@ -406,6 +406,129 @@ fn held_live_sends_replay_as_themselves_while_the_receiver_is_running() {
     }
 }
 
+/// A hard compaction a person's typing holds types nothing, so it leaves what the same request
+/// without `--hard` leaves: the command waits for the turn boundary with no live replay, no
+/// continue is owed past a stop, and the receipt is the soft one.
+#[test]
+fn a_held_hard_compaction_types_nothing_and_leaves_what_the_soft_request_leaves() {
+    let fixture = Fixture::new(true);
+    fixture.long_hold();
+    run_success(
+        fixture
+            .command()
+            .args(["config", "set", "resume.auto_continue_text", "keep going"]),
+        "continue text",
+    );
+    let output = run_success(
+        fixture
+            .command()
+            .args(["agents", "compact", "--hard", "@claude"]),
+        "held hard compaction",
+    );
+    assert_eq!(fixture.writes(), 0);
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        receipt.starts_with("queued compaction for @claude (")
+            && receipt
+                .trim_end()
+                .ends_with("delivers at its next turn boundary, with no continue after"),
+        "{receipt}"
+    );
+    let (live, history) = fixture.env.store().list_messages_and_history().unwrap();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(
+        (live[0].body, live[0].status),
+        (MessageBody::Command, MessageStatus::Queued)
+    );
+    let hold = &serde_json::to_value(&live[0]).unwrap()["typing_hold"];
+    assert!(
+        hold["until"].is_string() && hold["replay"].is_null(),
+        "{hold}"
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|record| record.past_stop)
+            .map(|record| record.status)
+            .collect::<Vec<_>>(),
+        [MessageStatus::Canceled]
+    );
+    let row = fixture.env.store().snapshot().unwrap().agents[0].clone();
+    assert!(!row.ends_turn_for_compaction(jiff::Timestamp::now()));
+    assert!(
+        row.soft_compact
+            .and_then(|mark| mark.continue_owed)
+            .is_none()
+    );
+    run_success(fixture.command().args(["message", "sweep"]), "sweep");
+    assert_eq!(fixture.writes(), 0);
+}
+
+/// A hard request that joins a queued self-compaction and whose attempt a typing hold refuses
+/// leaves the continue the agent's own request owed, as the join without `--hard` does.
+#[test]
+fn a_held_hard_join_keeps_the_continue_owed_before_it() {
+    let fixture = Fixture::new(true);
+    fixture.long_hold();
+    run_success(
+        fixture
+            .command()
+            .args(["config", "set", "resume.auto_continue_text", "keep going"]),
+        "continue text",
+    );
+    run_success(
+        fixture
+            .command()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "typing-session")
+            .args(["agents", "compact", "@claude"]),
+        "own compaction",
+    );
+    let command = fixture
+        .env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.body == MessageBody::Command)
+        .unwrap();
+    let output = run_success(
+        fixture
+            .command()
+            .args(["agents", "compact", "--hard", "@claude"]),
+        "held hard join",
+    );
+    assert_eq!(fixture.writes(), 0);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format!(
+            "compaction {} is already queued for {}; delivers at its next turn boundary, \
+             then continues it if nothing else is waiting",
+            command.message_id,
+            rimz::address::handle_with_name("@claude", command.agent_name.as_deref())
+        )
+    );
+    let live = fixture.env.store().list_messages().unwrap();
+    let continues: Vec<_> = live
+        .iter()
+        .filter(|record| record.follows_command.as_ref() == Some(&command.message_id))
+        .map(|record| (record.status, record.past_stop, record.text.as_str()))
+        .collect();
+    assert_eq!(
+        continues,
+        [(MessageStatus::Queued, false, "keep going")],
+        "{live:?}"
+    );
+    let row = fixture.env.store().snapshot().unwrap().agents[0].clone();
+    assert!(!row.ends_turn_for_compaction(jiff::Timestamp::now()));
+    assert!(
+        row.soft_compact
+            .and_then(|mark| mark.continue_owed)
+            .is_some_and(|owed| !owed.past_stop),
+        "the self-request's continue is still owed"
+    );
+}
+
 #[test]
 fn pushing_a_held_boundary_message_replays_it_in_the_requested_live_mode() {
     for (verb, force) in [("steer", true), ("interrupt", false)] {
