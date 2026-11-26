@@ -13,7 +13,15 @@ use super::Ctx;
 pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
     let ctx = Ctx::for_workspace(request.workspace_id, None)
         .context("resolving stall notice workspace")?;
-    let (agents, now) = super::read_heartbeat_agents(&ctx).context("reading agent history")?;
+    let (mut agents, now) = super::read_heartbeat_agents(&ctx).context("reading agent history")?;
+    // A child paused on an overload keeps its run open on a raw `Failed` row, which the rest
+    // certificates skip: attach its marker as the park notice helper does.
+    rimz::store::agent_context::attach_child_display_context(
+        ctx.runtime(),
+        agents
+            .iter_mut()
+            .filter(|agent| agent.status == rimz::agents::AgentStatus::Failed),
+    );
     let paths = ctx.store.paths();
     let run =
         rimz::harness::run::load(paths, &request.run_id).context("loading silent child run")?;
