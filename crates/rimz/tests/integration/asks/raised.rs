@@ -424,6 +424,72 @@ fn self_raise_is_armed_until_stop_and_a_later_human_turn_closes_it() {
 }
 
 #[test]
+fn a_launched_subagent_cannot_raise_on_itself_and_others_still_raise_on_it() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventEnvelope;
+    let env = room();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("child-session".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("helper".into());
+    observation.launch.parent_agent_id = Some("raised-session".into());
+    observation.launch.launch_depth = Some(1);
+    observation.launch.lane = env.store().snapshot_cached().unwrap().agents[0]
+        .lane
+        .clone();
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    for args in [
+        vec!["asks", "raise", "Ship?"],
+        vec!["asks", "raise", "@me", "Ship?"],
+    ] {
+        let output = env
+            .rimz()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "child-session")
+            .env("RIMZ_AGENT_NAME", "helper")
+            .args(args)
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.lines().find_map(|line| line.strip_prefix("error: ")),
+            Some(
+                "a subagent cannot ask the user: make the question your result and end your turn, and the agent that launched you answers it"
+            ),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("registered agent"), "{stderr}");
+    }
+    assert_eq!(listed_asks(&env), json!([]));
+    assert!(
+        !env.read_events()
+            .iter()
+            .any(|event| event.method == "ask.raised"),
+        "a refused raise writes nothing"
+    );
+    let output = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "raised-session")
+        .env("RIMZ_AGENT_NAME", "worker")
+        .args(["asks", "raise", "@helper", "Review?"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(listed_asks(&env)[0]["context"], "Review?");
+}
+
+#[test]
 fn raise_requires_a_target_in_a_user_shell_and_text_for_an_active_outside_target() {
     let env = room();
     for verb in ["raise", "withdraw"] {
