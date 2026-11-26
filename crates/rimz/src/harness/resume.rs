@@ -2691,7 +2691,10 @@ fn plan_resume_candidates_detailed(
             plan.skip(&candidate, label, reason);
             continue;
         }
-        if !supports_candidate_resume(&candidate) {
+        if !crate::agents::registry::session_resumable(
+            candidate.identity.kind.as_str(),
+            &candidate.identity.session_id,
+        ) {
             plan.skip(&candidate, label, ResumeSkipReason::NoResumeSupport);
             continue;
         }
@@ -3142,7 +3145,7 @@ fn plan_cohort_members(
     for (index, cell) in cells.iter().enumerate() {
         let matched = matches[index];
         let seed = match matched {
-            Some(agent) if supports_agent_resume(agent) && session_backed(agent) => {
+            Some(agent) if agent.resumable() && session_backed(agent) => {
                 CohortSeed::Resume(Box::new(AgentState {
                     login: relaunch_logins[index].clone().flatten(),
                     ..agent.clone()
@@ -4053,29 +4056,6 @@ impl<'a> CohortAssignments<'a> {
     }
 }
 
-fn supports_agent_resume(agent: &AgentState) -> bool {
-    // A provisional `launch_...` id only names RimZ's pre-adoption placeholder.
-    if agent.agent_id.is_provisional() {
-        return false;
-    }
-    let Some(cwd) = agent_worktree(agent) else {
-        return false;
-    };
-    find_definition(&agent.kind)
-        .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some())
-}
-
-fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
-    if candidate.identity.session_id.is_provisional() {
-        return false;
-    }
-    find_definition(&candidate.identity.kind).is_some_and(|adapter| {
-        adapter
-            .resume_command(&candidate.identity.session_id, &candidate.cwd)
-            .is_some()
-    })
-}
-
 /// A session that cannot be reopened because its account is outside the
 /// history pool of the one the room now launches its kind on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4373,7 +4353,7 @@ pub fn closed_cohort_specs(
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
-        .filter(|agent| supports_agent_resume(agent))
+        .filter(|agent| agent.resumable())
         .collect::<Vec<_>>();
     members.sort_by(|left, right| {
         newest_cmp(

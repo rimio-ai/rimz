@@ -1535,7 +1535,7 @@ fn long_wait_clocks_and_child_runtimes_stay_muted() {
         "child-1",
         "claude",
         AgentStatus::Running,
-        None,
+        Some("/repo/main"),
         None,
         Some("Explore"),
     );

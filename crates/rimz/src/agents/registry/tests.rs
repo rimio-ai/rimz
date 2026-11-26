@@ -889,3 +889,36 @@ fn resume_provider_stop_avoids_real_multithreaded_proc_children_reads() {
         drop(release);
     });
 }
+
+#[test]
+fn resumes_session_agrees_with_resume_command_on_every_builtin() {
+    let cwd = std::path::Path::new("/repo/wt");
+    let disagreeing: Vec<_> = BUILTINS
+        .iter()
+        .flat_map(|adapter| {
+            ["4b0c-session", "-dash-led"].map(|id| {
+                (
+                    adapter.spec().kind,
+                    id,
+                    adapter.resumes_session(id),
+                    adapter.resume_command(id, cwd).is_some(),
+                )
+            })
+        })
+        .filter(|(_, _, probe_free, built)| probe_free != built)
+        .collect();
+    assert_eq!(disagreeing, []);
+}
+
+#[test]
+fn session_resumable_refuses_a_provisional_id_an_unknown_kind_and_an_id_the_adapter_refuses() {
+    let actual = [
+        ("claude", "4b0c-session"),
+        ("claude", "launch_4b0c"),
+        ("no-such-provider", "4b0c-session"),
+        ("antigravity", "-dash-led"),
+        ("antigravity", "4b0c-session"),
+    ]
+    .map(|(kind, id)| session_resumable(kind, &crate::ids::AgentSessionId::from(id)));
+    assert_eq!(actual, [true, false, false, false, true]);
+}

@@ -157,6 +157,13 @@ pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
 }
 
+/// Whether a recorded `(kind, session_id)` session can resume: the id is a real session id
+/// rather than a provisional launch placeholder, and the kind's adapter resumes that id.
+pub fn session_resumable(kind: &str, session_id: &crate::ids::AgentSessionId) -> bool {
+    !session_id.is_provisional()
+        && find_definition(kind).is_some_and(|definition| definition.resumes_session(session_id))
+}
+
 /// The message keys `kind` declares; an unknown kind takes the defaults.
 pub fn message_keys(kind: &crate::ids::AgentKind) -> super::MessageKeys {
     spec_by_kind(kind.as_str()).map_or(super::MessageKeys::NOT_YET_IMPLEMENTED, |spec| {

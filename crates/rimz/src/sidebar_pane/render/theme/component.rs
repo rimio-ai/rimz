@@ -127,7 +127,8 @@ pub(crate) enum Component {
     SubagentHeader,
     /// The fold line under a card's delegation entries that opens its prior-round children.
     PriorSubagentsFold,
-    /// A paneless subagent entry that cannot be reopened (provider-native or without resume).
+    /// A paneless subagent entry that cannot be reopened (provider-native, or a launched child
+    /// whose recorded session cannot resume).
     SubagentInert,
     /// A paneless reopenable subagent entry while `rimz agents resume` is in flight.
     SubagentReopening,

@@ -277,9 +277,7 @@ fn provider_child_is_current(
 }
 
 fn child_reopenable(child: &AgentState) -> bool {
-    child.is_launched_child()
-        && crate::agents::find_definition(child.kind.as_str())
-            .is_some_and(|adapter| adapter.supports_resume())
+    child.is_launched_child() && child.resumable()
 }
 
 #[cfg(test)]

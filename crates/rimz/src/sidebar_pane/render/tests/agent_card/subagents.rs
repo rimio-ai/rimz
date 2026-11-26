@@ -182,7 +182,14 @@ fn fast_children_mut(
 fn fast_child_snapshot(status: AgentStatus, stalled: bool) -> SidebarSnapshot {
     let mut parent = agent("parent", "claude", AgentStatus::Idle, None, None, None);
     parent.prompt = Some("Delegate the work".to_owned());
-    let mut child = agent("child", "claude", status, None, None, Some("worker"));
+    let mut child = agent(
+        "child",
+        "claude",
+        status,
+        Some("/repo/main"),
+        None,
+        Some("worker"),
+    );
     child.parent_agent_id = Some("parent".into());
     child.launch_depth = Some(1);
     child.model = Some("Haiku".to_owned());
@@ -400,7 +407,14 @@ fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() 
             let mut parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
             parent.compaction_count = 9;
             parent.context = Some(claude_context(fixed_now()));
-            let mut child = agent("child", "claude", status, None, None, Some("Explore"));
+            let mut child = agent(
+                "child",
+                "claude",
+                status,
+                Some("/repo/main"),
+                None,
+                Some("Explore"),
+            );
             child.parent_agent_id = Some("parent".into());
             child.launch_depth = Some(1);
             child.compaction_count = count;
@@ -499,7 +513,14 @@ fn child_compaction_count_drops_whole_at_the_clock_boundary_without_moving_colum
 fn child_type_uses_its_own_provider_tone_and_keeps_the_model_muted() {
     for (kind, launched, name) in [("codex", true, "implementer"), ("claude", false, "Explore")] {
         let parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
-        let mut child = agent("child", kind, AgentStatus::Running, None, None, Some(name));
+        let mut child = agent(
+            "child",
+            kind,
+            AgentStatus::Running,
+            Some("/repo/main"),
+            None,
+            Some(name),
+        );
         child.parent_agent_id = Some("parent".into());
         child.parent_agent_kind = Some(parent.kind.clone());
         let model = if launched { "GPT 5.5" } else { "Haiku" };
@@ -726,7 +747,7 @@ fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
         "child",
         "claude",
         AgentStatus::Running,
-        None,
+        Some("/repo/main"),
         None,
         Some("Explore"),
     );
@@ -1989,7 +2010,7 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
             id,
             "claude",
             AgentStatus::Running,
-            None,
+            Some("/repo/main"),
             None,
             Some("Explore"),
         );

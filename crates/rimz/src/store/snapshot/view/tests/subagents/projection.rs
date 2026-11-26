@@ -1665,7 +1665,7 @@ fn prior_launched_children_stay_listed_with_recorded_rest_status_and_reopenable_
     parent.user_turn_started_at = Some(ago(10));
 
     let make_launched = |kind: &str, id: &str, status: AgentStatus| {
-        let mut child = agent(kind, id, status, 120);
+        let mut child = agent(kind, id, status, 120).worktree("/repo/wt");
         child.parent_agent_id = Some(parent.agent_id.clone());
         child.parent_agent_kind = Some(parent.kind.clone());
         child.launch_depth = Some(1);
@@ -1728,6 +1728,49 @@ fn prior_launched_children_stay_listed_with_recorded_rest_status_and_reopenable_
     let native_done = by_id("native-done").expect("provider-native finished prior child kept");
     assert!(native_done.prior_turn);
     assert!(!native_done.reopenable);
+}
+
+#[test]
+fn launched_child_is_reopenable_only_when_its_recorded_session_can_resume() {
+    let parent = agent("claude", "root", AgentStatus::Idle, 200);
+    let launched = |kind: &str, id: &str, worktree: Option<&str>| {
+        let mut child = agent(kind, id, AgentStatus::Success, 120);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child.ended_at = Some(ago(50));
+        child.worktree_path = worktree.map(str::to_owned);
+        child
+    };
+    let agents = [
+        parent.clone(),
+        launched("claude", "real", Some("/repo/wt")),
+        launched("antigravity", "launch_provisional", Some("/repo/wt")),
+        launched("claude", "no-worktree", None),
+        launched("claude", "empty-worktree", Some("")),
+        launched("antigravity", "-dash-led", Some("/repo/wt")),
+        launched("no-such-provider", "unknown-kind", Some("/repo/wt")),
+    ];
+
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &agents, epoch());
+    let mut reopenable: Vec<_> = rows[0]
+        .sub_agents()
+        .iter()
+        .map(|entry| (entry.id.to_string(), entry.reopenable))
+        .collect();
+    reopenable.sort_unstable();
+    assert_eq!(
+        reopenable,
+        [
+            ("-dash-led".to_owned(), false),
+            ("empty-worktree".to_owned(), false),
+            ("launch_provisional".to_owned(), false),
+            ("no-worktree".to_owned(), false),
+            ("real".to_owned(), true),
+            ("unknown-kind".to_owned(), false),
+        ]
+    );
 }
 
 #[test]

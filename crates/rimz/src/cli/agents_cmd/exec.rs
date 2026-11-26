@@ -859,8 +859,9 @@ fn settle_after_exit(
     ) && launch_identity
         .is_some_and(|identity| !picker_session_bound(invocation, identity).unwrap_or(false));
     if !unbound_pick && should_print_exit_hint(request, abrupt) {
-        let resumable = std::env::current_dir()
-            .is_ok_and(|cwd| exited_session_resumable(ended_session.as_ref(), &cwd));
+        // An unreadable cwd means the directory went away under the agent: hint a relaunch.
+        let resumable =
+            std::env::current_dir().is_ok() && exited_session_resumable(ended_session.as_ref());
         let hint = exit_hint(
             request,
             &status,
@@ -1128,11 +1129,12 @@ fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
 }
 
 /// Whether the pane's ended session can resume outside the subagent lifecycle:
-/// a parentless provider session id whose adapter compiles a resume command for
-/// this directory. The hint then teaches resume; anything else relaunches fresh.
-fn exited_session_resumable(ended: Option<&EndedSession>, cwd: &Path) -> bool {
+/// a parentless session that can resume ([`rimz::agents::registry::session_resumable`]).
+/// The hint then teaches resume; anything else relaunches fresh.
+fn exited_session_resumable(ended: Option<&EndedSession>) -> bool {
     ended.is_some_and(|ended| {
-        !ended.is_child_session && agent_session_resumable(&ended.kind, &ended.agent_id, cwd)
+        !ended.is_child_session
+            && rimz::agents::registry::session_resumable(ended.kind.as_str(), &ended.agent_id)
     })
 }
 

@@ -1403,8 +1403,9 @@ pub struct SidebarSubAgent {
     #[serde(default)]
     pub prior_turn: bool,
     /// Whether this entry can be reopened through `rimz agents resume`: true
-    /// for a launched child whose provider kind answers a resume command, false
-    /// for provider-native entries and non-resumable kinds.
+    /// for a launched child whose recorded session can resume
+    /// ([`crate::agents::AgentState::resumable`]), false for provider-native
+    /// entries and every other launched child.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reopenable: bool,
     /// The subagent's type (`Explore`, `review`, …). A launched child's type is
