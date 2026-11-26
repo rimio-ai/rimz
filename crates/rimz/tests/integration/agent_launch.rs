@@ -5916,6 +5916,142 @@ fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
 
 #[cfg(unix)]
 #[test]
+fn overload_held_child_on_a_failed_row_tells_its_parent_it_stopped() {
+    use rimz::harness::stall_notice::StallNoticeRequest;
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("qwen");
+    let child_id = AgentSessionId::from("child-session");
+    let stopped_at = jiff::Timestamp::now() - std::time::Duration::from_secs(3_600);
+    for (kind, id, name, launch) in [
+        (&parent_kind, &parent_id, "planner", LaunchParams::default()),
+        (
+            &child_kind,
+            &child_id,
+            "still-silver",
+            LaunchParams {
+                parent_agent_id: Some(parent_id.clone()),
+                parent_agent_kind: Some(parent_kind.clone()),
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let mut event = EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: id.clone(),
+                launch_id: None,
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch,
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        );
+        event.timestamp = stopped_at;
+        store.append_event(&event).expect("seed live agent");
+    }
+    // The overload stop leaves the child's row raw `Failed` while its run stays open.
+    for (hook, signal) in [
+        (
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+        (
+            "StopFailure",
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ),
+    ] {
+        let mut event = EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            child_kind.as_str(),
+            hook,
+            &AgentLifecycleObservation::new(Some(child_id.clone()), signal),
+        );
+        event.timestamp = stopped_at;
+        store.append_event(&event).expect("stop the child's turn");
+    }
+    let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), stopped_at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        model: None,
+        ended_turn: false,
+        class: rimz::agents::TurnErrorClass::PausedOverloaded,
+        at: stopped_at,
+        label: Some("API Error: Overloaded".to_owned()),
+        refill_at: None,
+    });
+    rimz::store::agent_context::write_record(
+        &env.runtime_paths(),
+        &rimz::agents::context::record::AgentContextRecord::new(
+            child_kind.as_str(),
+            child_id.as_str(),
+            context,
+        ),
+    )
+    .expect("seed the overload marker");
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind,
+        rimz::agents::PermissionMode::Auto,
+        "gate the release".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some(child_id);
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    env.rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "stall-notice",
+            &StallNoticeRequest {
+                workspace_id: workspace.workspace_id.clone(),
+                run_id: run.run_id.clone(),
+                stalled_after_secs: 1_800,
+                continuation: rimz::harness::park_notice::Continuation::Off,
+            },
+        ))
+        .assert()
+        .success();
+    let queued: Vec<_> = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .filter(|message| {
+            serde_json::to_value(&message.sender).unwrap()["notice"] == "subagent_stalled"
+        })
+        .collect();
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!(queued[0].agent_id, parent_id);
+    assert_eq!(
+        queued[0].text,
+        "@still-silver stopped on a turn error 1h ago: \"API Error: Overloaded\"; its pane is open. Its run stays open. RimZ will not continue it: look with `rimz pane capture @still-silver`, continue it with `rimz message @still-silver \"continue\"`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere."
+    );
+    let stamped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert!(stamped.stall_noticed_at.is_some());
+}
+
+#[cfg(unix)]
+#[test]
 fn registered_child_that_never_starts_tells_its_parent_once_and_records_the_queued_assist() {
     never_started_child_notice(true);
 }
