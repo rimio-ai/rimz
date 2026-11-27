@@ -1,0 +1,7 @@
+{"result":{"code":0,"stdout":"{\"outcome\":\"closed\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"sent\"}\n","output":"/runs/step.log"}}
+{"result":{"readings":{"ci":"passed","pr":"open","pr.mergeable":"mergeable","pr.queue":"none"}}}
+{"result":{"readings":{"ci":"passed","pr":"merged","pr.mergeable":"mergeable","pr.queue":"none"}}}
+{"result":{"readings":{"ci":null,"pr":"merged","pr.mergeable":null,"pr.queue":null}}}
+{"result":{"code":0,"stdout":"","output":"/runs/clean.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"none\"}\n","output":"/runs/step.log"}}

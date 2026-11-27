@@ -35,16 +35,26 @@ fn walk(name: &str, args: Option<&str>, answers: &str) -> (Vec<String>, String) 
     (calls, end)
 }
 
-/// The condition land's `FORGE` watches.
-const FORGE: &str = "pr=merged,closed || (pr=open && pr.queue!=queued && (pr.queue=dequeued || pr.mergeable=conflicting || ci=failed || (ci=passed && pr.queue=none)))";
+/// The condition land's `FORGE` watches: any of its cases, in order.
+const FORGE: &str = "(pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || (pr=open && pr.queue!=queued && pr.mergeable=conflicting) || (pr=open && pr.queue!=queued && ci=failed) || (pr=open && ci=passed && pr.queue=none)";
+
+/// The condition land's hold watches: the PR no longer reads unqueued, its case false or a case
+/// before it true.
+const BROKEN: &str = "!((pr=open && ci=passed && pr.queue=none) && !((pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || (pr=open && pr.queue!=queued && pr.mergeable=conflicting) || (pr=open && pr.queue!=queued && ci=failed)))";
+
+/// A walk of land with its two long conditions named.
+fn land(answers: &str) -> (Vec<String>, String) {
+    let (calls, end) = walk("land", None, answers);
+    let calls = calls
+        .into_iter()
+        .map(|call| call.replace(BROKEN, "BROKEN").replace(FORGE, "FORGE"))
+        .collect();
+    (calls, end)
+}
 
 #[test]
 fn land_repairs_a_red_gate_and_lands() {
-    let (calls, end) = walk("land", None, "red-gate");
-    let calls: Vec<String> = calls
-        .into_iter()
-        .map(|call| call.replace(FORGE, "FORGE"))
-        .collect();
+    let (calls, end) = land("red-gate");
     assert_eq!(
         calls,
         [
@@ -56,6 +66,48 @@ fn land_repairs_a_red_gate_and_lands() {
             "6 watch FORGE",
             "7 shell cargo clean",
             "8 shell uv run --script checks/notes.py sift",
+        ]
+    );
+    assert_eq!(end, r#"returns {"pr":"merged"}"#);
+}
+
+/// A green PR that stays unqueued through the hold counts once the forge reads it again.
+#[test]
+fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
+    let (calls, end) = land("held");
+    assert_eq!(
+        calls,
+        [
+            "1 shell uv run --script checks/team.py close",
+            "2 shell uv run --script checks/send.py",
+            "3 watch FORGE",
+            "4 watch BROKEN",
+            "5 watch FORGE",
+            "6 agent fixer",
+            "7 shell uv run --script checks/send.py resend",
+            "8 watch FORGE",
+            "9 shell cargo clean",
+            "10 shell uv run --script checks/notes.py sift",
+        ]
+    );
+    assert_eq!(end, r#"returns {"pr":"merged"}"#);
+}
+
+/// A PR merged mid-hold can still read green and unqueued, so the hold breaks on the earlier
+/// case and no fixer goes to the merged PR.
+#[test]
+fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
+    let (calls, end) = land("merged-mid-hold");
+    assert_eq!(
+        calls,
+        [
+            "1 shell uv run --script checks/team.py close",
+            "2 shell uv run --script checks/send.py",
+            "3 watch FORGE",
+            "4 watch BROKEN",
+            "5 watch FORGE",
+            "6 shell cargo clean",
+            "7 shell uv run --script checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -207,7 +259,7 @@ fn a_script_that_cannot_load_exits_nonzero_with_its_line() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.ends_with(
-            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, and `args`\n"
+            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`\n"
         ),
         "{stderr}"
     );
@@ -229,6 +281,47 @@ fn types_prints_the_declarations_of_a_scripts_globals() {
             "// The globals of a RimZ workflow script, printed by `rimz workflow types`.\n"
         ) && stdout.contains("declare function shell(block: Shell): Promise<ShellResult>;\n"),
         "{stdout}"
+    );
+}
+
+/// The clock is a call the answers file answers, and the call answers run out at gets a template
+/// of its answer: its result's fields, a watch's keys unread, and the failure form.
+#[test]
+fn try_answers_now_and_offers_a_template_for_the_call_it_waits_on() {
+    let env = Env::new();
+    let script = env.project_root.join("script.js");
+    fs::write(
+        &script,
+        "export const meta = { name: 'wait', description: 'Waits on a PR' }\n\
+         const since = await now()\n\
+         return [since, await watch({ when: 'pr=merged || ci=failed', timeout: '1h' })]\n",
+    )
+    .unwrap();
+    let answers = env.project_root.join("answers.jsonl");
+    fs::write(&answers, "{\"result\":1764268800000}\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["workflow", "try"])
+        .arg(&script)
+        .arg("--answers")
+        .arg(&answers)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout,
+        "wait: Waits on a PR\n\
+         1 now\n  answer 1764268800000\n\
+         2 watch pr=merged || ci=failed\n  no answer\n\
+         waits on call 2, the first with no answer; answer it with a line like one of these:\n\
+         \x20 {\"result\":{\"readings\":{\"ci\":null,\"pr\":null}}}\n\
+         \x20 {\"failure\":{\"cause\":\"...\"}}\n"
     );
 }
 
