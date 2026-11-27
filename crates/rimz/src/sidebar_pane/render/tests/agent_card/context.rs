@@ -1807,10 +1807,11 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
     }
 }
 
-/// A closing card takes the closing tone on its text, and each meter placeholder keeps the
-/// foreground that names its image.
+/// A closing card draws its context meter as the bare track across the whole bar, with no
+/// image, fill, or compaction wall, on a pixel terminal and a cell one alike. Its glyph and
+/// percentage stay, and the meter takes the closing tone with the card's text.
 #[test]
-fn a_closing_card_leaves_its_meter_placeholders_naming_their_image() {
+fn a_closing_card_draws_its_meter_as_an_empty_track() {
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -1825,6 +1826,7 @@ fn a_closing_card_leaves_its_meter_placeholders_naming_their_image() {
     codex.usage.cache_read_input_tokens = Some(120_000);
     codex.usage.fresh_input_tokens = Some(9_200);
     let snapshot = snapshot_with(vec![codex]);
+    let group = &snapshot.worktree_groups[0];
     let pane = snapshot
         .rows()
         .next()
@@ -1837,31 +1839,45 @@ fn a_closing_card_leaves_its_meter_placeholders_naming_their_image() {
     let theme = truecolor_sidebar_theme();
     let rolls = CostRolls::default();
     let mut ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &rolls);
+    let placeholder = |line: &Line<'_>| {
+        line.spans
+            .iter()
+            .any(|span| span.content.contains('\u{10eeee}'))
+    };
     let mut pixels = MeterPixels::new(0x120000);
     pixels.begin_frame();
-    let calm =
-        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(&mut pixels)).lines;
-    pixels.observe_visible(&calm);
-    let image = pixels
-        .visible_rasters()
-        .map(|(image_id, _)| image_id)
-        .next()
-        .expect("one visible meter raster");
-    ctx.closing = &closing;
-    pixels.begin_frame();
-    let marked =
-        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(&mut pixels)).lines;
-    let spans = || marked.iter().flat_map(|line| &line.spans);
-    let placeholder = |span: &&Span<'_>| span.content.contains('\u{10eeee}');
-    assert!(spans().any(|span| placeholder(&span)));
-    let image_color = crate::sidebar_pane::pixel::image_id_color(image);
-    assert!(
-        spans()
-            .filter(placeholder)
-            .all(|span| span.style.fg == Some(image_color))
+    let calm = worktree_group_block(&ctx, group, false, Some(&mut pixels)).lines;
+    assert!(calm.iter().any(placeholder), "{calm:?}");
+    assert_eq!(
+        line_texts(&worktree_group_block(&ctx, group, false, None).lines)[3],
+        "▌  ▣ ━━━━━━━━━━━━━━╺━───────────────┤ 52.8%▐"
     );
+    ctx.closing = &closing;
     let tone = theme.component(Component::CardClosing);
-    assert!(spans().any(|span| span.content.contains("add tests") && span.style.fg == Some(tone)));
+    for pixel_terminal in [true, false] {
+        pixels.begin_frame();
+        let marked =
+            worktree_group_block(&ctx, group, false, pixel_terminal.then_some(&mut pixels)).lines;
+        assert!(!marked.iter().any(placeholder), "{marked:?}");
+        assert_eq!(
+            line_texts(&marked)[3],
+            format!("▌  ▣ {} 52.8%▐", "─".repeat(32))
+        );
+        let meter = &marked[3].spans;
+        assert!(
+            meter[1..meter.len() - 1]
+                .iter()
+                .filter(|span| !span.content.trim().is_empty())
+                .all(|span| span.style.fg == Some(tone)),
+            "{meter:?}"
+        );
+        assert!(
+            marked
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content.contains("add tests") && span.style.fg == Some(tone))
+        );
+    }
 }
 
 #[test]

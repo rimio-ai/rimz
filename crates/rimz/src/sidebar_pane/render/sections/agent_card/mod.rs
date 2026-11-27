@@ -289,6 +289,10 @@ pub(super) fn row_lines(
     let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
         .then(|| ctx.theme.unread_wash())
         .flatten();
+    let closing_card = row
+        .pane
+        .as_ref()
+        .is_some_and(|pane| ctx.closing.contains_key(&pane.pane_id));
     let mut inner = Vec::new();
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
@@ -368,7 +372,9 @@ pub(super) fn row_lines(
                     }
                 }
                 CardSlot::Gauge => {
-                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
+                    inner.push(
+                        gauge_line(ctx, row, closing_card, meter_pixels.as_deref_mut()).into(),
+                    );
                 }
                 CardSlot::Tokens => {
                     if !agent.compacted_unmeasured {
@@ -477,13 +483,9 @@ pub(super) fn row_lines(
             }
         }
     }
-    // A card whose close began repaints its own lines in the closing tone, a launched
-    // child's close only that child's entry, and a reopening child only its own entry,
-    // so none of these marks moves any line or changes any height.
-    let closing_card = row
-        .pane
-        .as_ref()
-        .is_some_and(|pane| ctx.closing.contains_key(&pane.pane_id));
+    // A card whose close began repaints its own lines in the closing tone over its emptied
+    // context meter, a launched child's close only that child's entry, and a reopening child
+    // only its own entry, so none of these marks moves any line or changes any height.
     let tone = ctx.theme.component(Component::CardClosing);
     let reopening_style = ctx
         .theme
@@ -500,13 +502,11 @@ pub(super) fn row_lines(
                 Some(HitTarget::ReopenSubAgent(id)) if ctx.reopening.contains_key(id)
             );
             if closing_card || closing_entry {
-                // A kitty placeholder's foreground is the id of its image, not a color.
                 for span in &mut card.line.spans {
-                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
-                        span.style.fg = Some(tone);
-                    }
+                    span.style.fg = Some(tone);
                 }
             } else if reopening_entry {
+                // A kitty placeholder's foreground is the id of its image, not a color.
                 for span in &mut card.line.spans {
                     if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
                         span.style.fg = reopening_style.fg;
