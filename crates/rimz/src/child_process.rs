@@ -572,8 +572,17 @@ where
     #[cfg(test)]
     {
         let _ = (runtime, args, label);
+        if FAIL_DETACHED_RIMZ.get() {
+            return Err(io::Error::other("a test failed this spawn"));
+        }
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by a test whose suppressed `spawn_detached_rimz` calls must fail on this thread.
+    pub(crate) static FAIL_DETACHED_RIMZ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Spawn a detached program in its own process group. Unit tests suppress the

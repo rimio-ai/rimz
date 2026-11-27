@@ -1133,4 +1133,58 @@ mod tests {
             assert!(!message.contains(wrong), "{message}");
         }
     }
+
+    /// A join's poll reads the history again only once the log's length or modification time
+    /// moved since a read that found no outcome.
+    #[test]
+    fn a_join_rereads_the_history_only_once_the_log_changes() {
+        if super::super::test_homes::reexec_with_private_homes(
+            "harness::schedule::wait::tests::a_join_rereads_the_history_only_once_the_log_changes",
+        ) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let target = TaskTarget {
+            kind: AgentKind::new_unchecked("claude"),
+            session: "session".into(),
+            handle: "@coder".to_owned(),
+        };
+        let mut canceled = super::super::run_log::LoopRunRecord::new(
+            "shell-b",
+            super::super::run_log::LoopRunResult::Canceled,
+            super::super::run_log::LoopRunMode::Manual,
+            0,
+        );
+        canceled.wakes = Some(target.clone());
+        let mut join = ShellJoin {
+            paths: StatePaths::for_project_root(root.path()).unwrap(),
+            root: root.path().to_owned(),
+            name: "shell-a".to_owned(),
+            armed_at: canceled.at,
+            target,
+            unchanged: None,
+        };
+        super::super::run_log::record_stopped(root.path(), &canceled, Some(TaskKind::WakeUp));
+        assert!(join.ended().is_none(), "another shell's outcome");
+        // The same bytes but for the name, so the log keeps its length and modification time.
+        let log = crate::disk::paths::logs_dir().join("loop-runs.log.jsonl");
+        let modified = std::fs::metadata(&log).unwrap().modified().unwrap();
+        let text = std::fs::read_to_string(&log).unwrap();
+        std::fs::write(&log, text.replace("shell-b", "shell-a")).unwrap();
+        let touch = |at| {
+            std::fs::File::options()
+                .write(true)
+                .open(&log)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        };
+        touch(modified);
+        assert!(join.ended().is_none(), "an unchanged log is read again");
+        touch(modified + Duration::from_secs(1));
+        assert_eq!(
+            join.ended().map(|record| record.task),
+            Some("shell-a".to_owned())
+        );
+    }
 }
