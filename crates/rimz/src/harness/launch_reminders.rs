@@ -242,7 +242,9 @@ impl LaunchReminders {
 
     /// The launch can use `capability`, through its MCP tools or its skill. Under a RimZ grant
     /// the skill counts only when it is on disk, as a `skills` list is checked on disk. A
-    /// capability the launch leaves to the provider's own tool it cannot use.
+    /// capability the launch leaves to the provider's own tool it cannot use. `rimz agents
+    /// validate` judges the same reach offline in
+    /// `crates/rimz/src/cli/agents_cmd/validate.rs::shut_out`; change both together.
     fn callable(&self, request: &ExecRequest, capability: Capability) -> bool {
         if request.yields_to_native(capability) {
             return false;

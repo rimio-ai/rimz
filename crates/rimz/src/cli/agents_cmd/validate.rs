@@ -494,7 +494,9 @@ fn own_rows(
 /// a `capabilities:` grant reaches a capability of RimZ's MCP server only when the
 /// grant names it, on either side, and a `rimz-*` skill alone as its skills say. A
 /// capability its definition leaves to the provider's own tool
-/// (`Profile::native_wins`) it reaches neither way.
+/// (`Profile::native_wins`) it reaches neither way. A launch judges the same reach
+/// in `crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::callable`;
+/// change both together.
 fn shut_out(
     machine: &rimz::config::MachineConfig,
     kind: &str,
