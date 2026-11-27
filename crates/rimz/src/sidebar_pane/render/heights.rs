@@ -10,6 +10,12 @@ use crate::store::snapshot::SidebarWorktreeGroup;
 use super::sections::{CardExpansion, RowCtx};
 use super::theme::Theme;
 
+/// Each card's painted height, kept across composes while one `HeightEpoch` holds.
+///
+/// A compose keeps the epoch only when it is passed the theme `UiState::theme` cached. Any
+/// other `&Theme` gets a fresh `Rc`, so `prepare` opens a cold epoch and clears every height,
+/// and the `cfg(test)` cached-height check in `worktree_group_lines_windowed` never runs. A
+/// test that means to reach the cache asserts `hits`.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct CardHeights {
     epoch: Option<HeightEpoch>,
