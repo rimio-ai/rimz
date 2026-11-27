@@ -428,7 +428,7 @@ fn render_surface_diff(
         writeln!(out, "    no field changes")
     } else {
         for entry in entries {
-            let path = format_diff_path(&entry.path);
+            let path = rimz::packs::one_line(&format_diff_path(&entry.path));
             match entry.kind {
                 SurfaceDiffKind::Added => {
                     writeln!(
@@ -563,15 +563,20 @@ fn block_tokens(spans: &[Span]) -> Vec<BlockToken> {
                 if !word.is_empty() {
                     tokens.push(BlockToken::Word(std::mem::take(&mut word)));
                 }
-            } else if let Some(last) = word.last_mut()
-                && last.emphasized == span.emphasized
-            {
-                last.text.push(ch);
             } else {
-                word.push(Span {
-                    text: ch.to_string(),
-                    emphasized: span.emphasized,
-                });
+                // Diff values are repository text, so no character but a line break reaches
+                // the terminal raw.
+                let shown = rimz::packs::one_line(ch.encode_utf8(&mut [0; 4]));
+                if let Some(last) = word.last_mut()
+                    && last.emphasized == span.emphasized
+                {
+                    last.text.push_str(&shown);
+                } else {
+                    word.push(Span {
+                        text: shown,
+                        emphasized: span.emphasized,
+                    });
+                }
             }
         }
     }
@@ -795,6 +800,43 @@ mod tests {
         assert!(rendered.contains("    - env.OLD\n      - {\"enabled\":false}\n"));
         assert!(rendered.contains("    ~ hooks[0].args\n      - [\"old\",1]\n"));
         assert!(rendered.contains("      + [\"new\",2]\n"));
+    }
+
+    #[test]
+    fn value_blocks_escape_repository_controls_and_keep_line_breaks() {
+        let entries = [
+            SurfaceDiffEntry {
+                kind: SurfaceDiffKind::Changed,
+                path: vec![
+                    "lsp_servers".to_owned(),
+                    "[0]".to_owned(),
+                    "name".to_owned(),
+                ],
+                granted: Some(serde_json::json!("rust")),
+                current: Some(serde_json::json!("\u{1b}]0;pwned\u{7}x")),
+            },
+            SurfaceDiffEntry {
+                kind: SurfaceDiffKind::Added,
+                path: vec!["env".to_owned(), "K\u{1b}[2J".to_owned()],
+                granted: None,
+                current: Some(serde_json::json!("first\u{9b}line\nsecond line")),
+            },
+        ];
+        assert_eq!(
+            render_stripped(&entries, 100),
+            concat!(
+                "  surface diff:\n",
+                "    ~ lsp_servers[0].name\n",
+                "      - rust\n",
+                r"      + \u{1b}]0;pwned\u{7}x",
+                "\n",
+                r"    + env.K\u{1b}[2J",
+                "\n",
+                r"      + first\u{9b}line",
+                "\n",
+                "        second line\n",
+            )
+        );
     }
 
     #[test]
