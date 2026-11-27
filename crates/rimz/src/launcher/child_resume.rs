@@ -179,11 +179,14 @@ fn limit_refusal(
     ))
 }
 
-/// The refill ahead on the child's own login for a limit failure settled at `failed_at`: a spent
-/// window reads until its reset; quota available in a usage read newer than the failure, or an
-/// identity switch on the login since it, reads none; otherwise the refill the failure recorded
-/// counts while it is ahead, since a provider stop that names its refill leaves no spent window
-/// behind. Any provider's recorded refill counts.
+/// The refill ahead on the child's own login for a limit failure settled at `failed_at`: a refill
+/// the child's limit reading names counts until it, the later of it and a stated refill the
+/// failure recorded; otherwise an identity switch on the login since the failure reads none, and
+/// so does quota available in a usage read newer than the failure, unless the recorded refill is
+/// the one the provider's stop stated (`LimitFailure::refill_stated`: such a provider can read
+/// below 100% while its quota is spent); otherwise the recorded refill counts while it is ahead,
+/// since a stop that names its refill leaves no spent window behind. Any provider's recorded
+/// refill counts.
 fn same_login_refill(
     runtime: &crate::RuntimePaths,
     child: &AgentState,
@@ -194,13 +197,14 @@ fn same_login_refill(
     use crate::harness::park_notice::LimitReading;
 
     let since = failed_at.unwrap_or(now);
+    let recorded = failure.refill_at.filter(|at| *at > now);
     match crate::harness::park_notice::limit_reading(runtime, child, now, since) {
-        LimitReading::Refill(refill) => Some(refill),
-        LimitReading::Refilled => None,
-        LimitReading::Unknown if identity_switched_since(runtime, &child.login_key(), since) => {
-            None
+        LimitReading::Refill(refill) => {
+            Some(refill).max(recorded.filter(|_| failure.refill_stated))
         }
-        LimitReading::Unknown => failure.refill_at.filter(|at| *at > now),
+        LimitReading::Refilled if !failure.refill_stated => None,
+        _ if identity_switched_since(runtime, &child.login_key(), since) => None,
+        _ => recorded,
     }
 }
 

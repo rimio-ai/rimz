@@ -535,7 +535,12 @@ upward-dependencies = [
 # LaunchSpec::resume_prompt_args renders the continue a kind's resume command takes, for the exec wrapper (+1).
 # AgentFileInput::native_ask tells an agent file whether the provider keeps its own question
 # tool, false where the launch reaches `rimz-ask` (+1).
-surface-budget = 1407
+# AgentState::limit_refill is the one answer to when a stop's limit refills (its stated refill
+# or its spent windows, the later), read by auto-continue, the child limit hold and the
+# workflow host (+1).
+# AgentState::stated_refill_lifted is the one rule for when a passed stated refill reads lifted,
+# read by auto-continue's recovery and the child limit reading (+1).
+surface-budget = 1409
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

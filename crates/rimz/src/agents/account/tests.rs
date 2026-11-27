@@ -115,6 +115,84 @@ fn a_stop_naming_its_refill_or_a_window_begun_after_it_confirms_no_refusal() {
 }
 
 #[test]
+fn a_limit_refills_at_the_later_of_the_stops_stated_refill_and_its_spent_windows() {
+    let mut agent =
+        crate::agents::AgentState::stub("antigravity", "agy", crate::agents::AgentStatus::Running);
+    let at = agent.last_activity + SignedDuration::from_secs(1);
+    let now = at + SignedDuration::from_secs(60);
+    let secs = |secs: i64| now + SignedDuration::from_secs(secs);
+    let window = |used, resets_at| {
+        ProviderCapacity::from_windows(vec![RateLimitWindow {
+            duration_mins: Some(300),
+            used_percentage: Some(used),
+            resets_at: Some(resets_at),
+            ..Default::default()
+        }])
+    };
+    let cases = [
+        ("stated ahead, no reading", Some(secs(3_600)), None),
+        (
+            "stated ahead, a 99% read",
+            Some(secs(3_600)),
+            Some(window(99, secs(9_000))),
+        ),
+        (
+            "stated before the spent window",
+            Some(secs(3_600)),
+            Some(window(100, secs(7_200))),
+        ),
+        (
+            "stated after the spent window",
+            Some(secs(7_200)),
+            Some(window(100, secs(3_600))),
+        ),
+        (
+            "stated passed, a window spent",
+            Some(secs(-10)),
+            Some(window(100, secs(3_600))),
+        ),
+        (
+            "stated passed, no window spent",
+            Some(secs(-10)),
+            Some(window(99, secs(9_000))),
+        ),
+        (
+            "none stated, a window spent",
+            None,
+            Some(window(100, secs(3_600))),
+        ),
+        ("none stated, no reading", None, None),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(case, refill_at, capacity)| {
+            let mut context = crate::agents::AgentContext::new("antigravity", at);
+            context.turn_error = Some(crate::agents::AgentTurnError {
+                class: crate::agents::TurnErrorClass::PausedRateLimit,
+                at,
+                refill_at,
+                ..Default::default()
+            });
+            agent.context = Some(context);
+            (case, agent.limit_refill(capacity.as_ref(), None, now))
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("stated ahead, no reading", Some(secs(3_600))),
+            ("stated ahead, a 99% read", Some(secs(3_600))),
+            ("stated before the spent window", Some(secs(7_200))),
+            ("stated after the spent window", Some(secs(7_200))),
+            ("stated passed, a window spent", Some(secs(3_600))),
+            ("stated passed, no window spent", None),
+            ("none stated, a window spent", Some(secs(3_600))),
+            ("none stated, no reading", None),
+        ]
+    );
+}
+
+#[test]
 fn usage_keys_round_trip_legacy_and_scoped_text_and_reject_ambiguous_shapes() {
     for text in [
         "claude@work",

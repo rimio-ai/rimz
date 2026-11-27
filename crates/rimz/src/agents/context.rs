@@ -1736,7 +1736,10 @@ pub struct AgentTurnError {
     /// span the provider's own stop report states, on the same clock. Absent when the stop
     /// names no refill that parses, or the sum overflows; only Antigravity's stop decode
     /// fills it. A marker that names a refill never confirms a model refusal
-    /// (`ProviderCapacity::confirms_refusal`).
+    /// (`ProviderCapacity::confirms_refusal`). While the marker is displayed, its refill joins
+    /// the spent windows' resets in [`super::AgentState::limit_refill`], the refill
+    /// auto-continue arms at, a launched child's limit hold reads, and a workflow's limited
+    /// agent reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refill_at: Option<Timestamp>,
 }

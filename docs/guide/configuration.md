@@ -196,7 +196,7 @@ A running room never asks about parked agents, whether you use Zellij or tmux. U
 
 **A park while the room is live.** `auto_continue` is off by default. Turned on, it picks a parked turn back up by typing `auto_continue_text` down the same path as `message --steer`:
 
-- A rate-limit or spend-limit park fires when the account's budget window resets, or five minutes after that for a Claude agent (below).
+- A rate-limit or spend-limit park fires when the limit refills, the later of the account's budget window reset and the refill time the provider's stop names, or five minutes after that for a Claude agent (below).
 - An overload or transient API-error park (a stalled stream, a timeout, a dropped connection) fires on the retry ramp. `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then one every five minutes.
 - Every park type stops after `auto_continue_max_retries` (default 12, about an hour on the default ramp) and stays parked for you.
 
