@@ -315,6 +315,77 @@ fn polled_watch_probe_runs_to_exit_without_checkin() {
     assert!(!output.timed_out);
 }
 
+/// A watch with a timeout still sends its one check-in, then is killed whole once the timeout
+/// passes, its background children included, and reads timed out.
+#[test]
+fn a_watch_past_its_timeout_is_killed_whole_after_its_check_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut notices = 0;
+    let output = run_command(
+        dir.path(),
+        "sleep 300 & printf '%s' \"$!\" > descendant.pid; wait",
+        WatchDeadline::WatchKillAfter {
+            check_in: Some(Duration::from_millis(100)),
+            timeout: Duration::from_millis(500),
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |elapsed_ms, _| {
+            notices += 1;
+            assert!(elapsed_ms < 500, "the check-in came after the timeout");
+        },
+        &mut None,
+    )
+    .unwrap();
+    assert_eq!(notices, 1);
+    assert!(output.timed_out && !output.passed);
+    let descendant = std::fs::read_to_string(dir.path().join("descendant.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        wait_for_process_exit(descendant, Duration::from_secs(2)),
+        "descendant {descendant} outlived the timeout"
+    );
+}
+
+/// A shell that exits at once while its background child holds the output pipe is still
+/// bounded by its timeout: the group is killed at the deadline and the watch reads timed out.
+#[test]
+fn a_watch_whose_background_child_holds_its_pipe_is_killed_at_its_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let output = run_command(
+        dir.path(),
+        "sleep 30 & printf '%s' \"$!\" > descendant.pid",
+        WatchDeadline::WatchKillAfter {
+            check_in: None,
+            timeout: Duration::from_millis(500),
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("no check-in was asked for"),
+        &mut None,
+    )
+    .unwrap();
+    assert!(output.timed_out && !output.passed, "{:?}", output.code);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    let descendant = std::fs::read_to_string(dir.path().join("descendant.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        wait_for_process_exit(descendant, Duration::from_secs(2)),
+        "descendant {descendant} outlived the timeout"
+    );
+}
+
 #[test]
 fn watch_exit_during_checkin_delivery_is_not_lost() {
     let dir = tempfile::tempdir().unwrap();

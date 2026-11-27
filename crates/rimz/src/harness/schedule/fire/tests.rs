@@ -958,6 +958,90 @@ fn stage_watch(
     (runtime, tasks)
 }
 
+/// A watch past its `expires` that reads unmet plans one expiry and latches, so the ticks after
+/// it plan none and no check-in follows; one that reads true at that tick fires as met, and one not
+/// yet past it plans nothing.
+#[test]
+fn a_watch_past_its_timeout_expires_once_unless_it_reads_true() {
+    let now = zdt(2026, 6, 24, 8, 30, 0);
+    let armed_at = seconds_before(now.timestamp(), 30 * 60);
+    let watch = |expires: Timestamp| {
+        loaded_from(
+            TaskEntry {
+                root: PathBuf::from("/repo"),
+                when: Some(vec!["pr=merged".to_owned()]),
+                expires: Some(expires),
+                wait: Some(crate::config::TaskTarget {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    session: "session".into(),
+                    handle: "@coder".to_owned(),
+                }),
+                wait_meta: Some(crate::config::WaitMeta {
+                    armed_at,
+                    delay: None,
+                    reader: None,
+                    joined_until: None,
+                }),
+                ..TaskEntry::default()
+            },
+            TaskSource::Instance,
+        )
+    };
+    let reads = |truth: bool| {
+        one(Verdict {
+            truth: Some(truth),
+            readings: BTreeMap::new(),
+            unread: BTreeMap::new(),
+        })
+    };
+    let tick = |task: &LoadedTask, states: &BTreeMap<String, WhenState>, truth: bool| {
+        plan(
+            &one(task.clone()),
+            &one(armed_at),
+            &BTreeMap::new(),
+            &now,
+            states,
+            &reads(truth),
+            &BTreeSet::new(),
+        )
+    };
+    for (case, expires, truth, expected) in [
+        (
+            "due",
+            now.timestamp(),
+            false,
+            vec![(NAME.to_owned(), Action::Expire)],
+        ),
+        (
+            "met",
+            now.timestamp(),
+            true,
+            vec![(NAME.to_owned(), Action::Fire)],
+        ),
+        ("early", seconds_before(now.timestamp(), -1), false, vec![]),
+    ] {
+        let task = watch(expires);
+        let (actions, _, states) = tick(&task, &BTreeMap::new(), truth);
+        assert_eq!(actions, expected, "{case}");
+        if case != "due" {
+            continue;
+        }
+        let (again, _, kept) = tick(&task, &states, false);
+        assert_eq!(again, vec![], "an expired watch expires once");
+        let (third, _, _) = tick(&task, &kept, false);
+        assert_eq!(third, vec![], "the latch outlives a tick that reads unmet");
+        let (due, _) = check_ins(
+            &one(task),
+            &reads(false),
+            &BTreeMap::new(),
+            &states,
+            &BTreeMap::new(),
+            now.timestamp(),
+        );
+        assert_eq!(due, vec![], "an expired watch sends no check-in");
+    }
+}
+
 #[test]
 fn a_watch_checks_in_once_at_its_due_time() {
     let now = zdt(2026, 6, 24, 8, 30, 0);

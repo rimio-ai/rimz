@@ -55,11 +55,13 @@ pub enum DeliveryTrigger {
         lifetime: SubscriptionLifetime,
         check_in: Option<Duration>,
     },
-    /// `on` is the row's delivery polarity, the shell's `--on`.
+    /// `on` is the row's delivery polarity, the shell's `--on`; `input` is written to the
+    /// command's `context.json` before its watcher starts.
     Watch {
         spec: WatchSpec,
         on: CheckOn,
         timeout: Option<Duration>,
+        input: Option<serde_json::Map<String, serde_json::Value>>,
     },
     Signal {
         selector: SignalSelector,
@@ -90,6 +92,8 @@ pub struct DeliverySpec {
     pub prompt: DeliveryPrompt,
     pub provenance: DeliveryProvenance,
     pub deadline: Option<Timestamp>,
+    /// When a self wait ends unmet (the row's `expires`).
+    pub expires: Option<Timestamp>,
     pub max_strikes: Option<u32>,
 }
 
@@ -116,8 +120,12 @@ pub enum ArmFailure {
 
 pub fn arm_delivery(
     workspace: &ResolvedWorkspace,
-    spec: DeliverySpec,
+    mut spec: DeliverySpec,
 ) -> Result<ArmOutcome, ArmFailure> {
+    let input = match &mut spec.trigger {
+        DeliveryTrigger::Watch { input, .. } => input.take(),
+        DeliveryTrigger::Condition { .. } | DeliveryTrigger::Signal { .. } => None,
+    };
     let (name, task) = build_entry(workspace, spec, Timestamp::now())?;
     let entry = task.entry();
     let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
@@ -170,6 +178,7 @@ pub fn arm_delivery(
                 .write(true)
                 .truncate(true)
                 .open(path)?;
+            super::signal::publish_wait_context(&paths, &name, entry, input.as_ref())?;
             // The output file holds only what the watch writes; the watcher's
             // own diagnostics go to the room's shared watcher log.
             let log = crate::disk::capped_log::open(&paths, &paths.wait_watch_log())?;
@@ -706,6 +715,7 @@ fn build_entry(
         dir: (workspace.worktree_root != workspace.project_root)
             .then(|| workspace.worktree_root.clone()),
         deadline: spec.deadline,
+        expires: spec.expires,
         max_strikes: spec.max_strikes,
         ..TaskEntry::default()
     };
@@ -735,7 +745,9 @@ fn build_entry(
             entry.repeat = matches!(lifetime, SubscriptionLifetime::Standing);
             entry.timeout = check_in.map(duration_label);
         }
-        DeliveryTrigger::Watch { spec, on, timeout } => {
+        DeliveryTrigger::Watch {
+            spec, on, timeout, ..
+        } => {
             entry.watch = Some(spec);
             entry.on = Some(on);
             entry.timeout = timeout.map(duration_label);

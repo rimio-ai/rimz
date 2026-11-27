@@ -514,6 +514,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             watch: None,
             repeat: true,
             deadline: Some(jiff::Timestamp::UNIX_EPOCH),
+            expires: None,
             fire_at: Some(jiff::Timestamp::UNIX_EPOCH),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: Some("work".parse().expect("login name")),

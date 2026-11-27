@@ -7,10 +7,10 @@ use super::Tools;
 use super::room::Room;
 use super::start::{Start, TaskKind};
 use crate::config::CheckOn;
+use crate::harness::block::{On, Shell, Watch};
 use crate::harness::schedule::arm::task_label;
 use crate::harness::schedule::wait::{self, WaitRequest, WaitRoom, WaitTrigger};
 use crate::launcher::context::resolve_caller;
-use crate::mcp::catalog::{ShellArgs, ShellOn, WatchArgs};
 use crate::mcp::{Answer, Failure};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -19,18 +19,20 @@ const SHELL_REPORT: &str = "a message to you when the command exits; join waits 
 /// How a watch's wake reaches the agent that armed it.
 const WATCH_REPORT: &str = "a message to you when the condition reads true";
 
-pub(super) fn shell(tools: &Tools, args: &ShellArgs) -> Result<Answer, Failure> {
+pub(super) fn shell(tools: &Tools, args: &Shell) -> Result<Answer, Failure> {
     let request = WaitRequest {
         label: label(args.label.as_deref())?,
         trigger: WaitTrigger::Shell {
             command: args.command.clone(),
             on: match args.on {
                 None => CheckOn::Any,
-                Some(ShellOn::Fail) => CheckOn::Fail,
-                Some(ShellOn::Success) => CheckOn::Success,
+                Some(On::Fail) => CheckOn::Fail,
+                Some(On::Success) => CheckOn::Success,
             },
+            input: args.input.clone(),
         },
-        check_in: check_in(args.check_in.as_deref())?,
+        check_in: duration("check_in", args.check_in.as_deref())?,
+        timeout: duration("timeout", args.timeout.as_deref())?,
     };
     arm(
         tools,
@@ -41,13 +43,14 @@ pub(super) fn shell(tools: &Tools, args: &ShellArgs) -> Result<Answer, Failure> 
     )
 }
 
-pub(super) fn watch(tools: &Tools, args: &WatchArgs) -> Result<Answer, Failure> {
+pub(super) fn watch(tools: &Tools, args: &Watch) -> Result<Answer, Failure> {
     let request = WaitRequest {
         label: label(args.label.as_deref())?,
         trigger: WaitTrigger::Watch {
             when: args.when.clone(),
         },
-        check_in: check_in(args.check_in.as_deref())?,
+        check_in: duration("check_in", args.check_in.as_deref())?,
+        timeout: duration("timeout", args.timeout.as_deref())?,
     };
     arm(
         tools,
@@ -93,11 +96,11 @@ fn label(raw: Option<&str>) -> Result<Option<String>, Failure> {
     .transpose()
 }
 
-/// `check_in` parsed as the command parses `--check-in`.
-fn check_in(raw: Option<&str>) -> Result<Option<Duration>, Failure> {
+/// Duration `field` parsed as the command parses `--check-in`.
+fn duration(field: &str, raw: Option<&str>) -> Result<Option<Duration>, Failure> {
     raw.map(|raw| {
         crate::utils::time::parse_compact_duration(raw)
-            .map_err(|err| Failure::new(format!("invalid check_in `{raw}`: {err}")))
+            .map_err(|err| Failure::new(format!("invalid {field} `{raw}`: {err}")))
     })
     .transpose()
 }

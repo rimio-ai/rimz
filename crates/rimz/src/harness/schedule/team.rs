@@ -175,6 +175,7 @@ fn binding_spec(
             .map_or(DeliveryPrompt::None, DeliveryPrompt::Inline),
         provenance,
         deadline: None,
+        expires: None,
         max_strikes: None,
     })
 }

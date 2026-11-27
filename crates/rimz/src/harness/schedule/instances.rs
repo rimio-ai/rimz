@@ -236,6 +236,7 @@ pub(super) fn insert_delivery(
                 && current.resolved_root() == entry.resolved_root()
                 && current.when == entry.when
                 && current.hold == entry.hold
+                && current.expires == entry.expires
                 && (entry.loop_task.is_none() || current.loop_task == entry.loop_task)
                 && (entry.when.is_none() || current.run_dir() == entry.run_dir())
         })
@@ -541,6 +542,46 @@ mod tests {
                 insert_delivery(&paths, Some(name), entry, &BTreeSet::new()).unwrap();
             assert_eq!(&actual, expected);
             assert!(duplicate);
+        }
+    }
+
+    /// A watch's timeout is part of what it waits for: two self watches on one condition
+    /// with different timeouts, in either order, are two rows, each with its own expiry,
+    /// while the same timeout still answers the first row.
+    #[test]
+    fn self_watches_on_one_condition_dedupe_only_on_the_same_timeout() {
+        let expiry: Timestamp = "2026-06-01T08:00:00Z".parse().unwrap();
+        for (first, second) in [(None, Some(expiry)), (Some(expiry), None)] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = StatePaths::for_project_root(dir.path()).unwrap();
+            record_room(&paths, dir.path());
+            let watch = |expires: Option<Timestamp>| TaskEntry {
+                root: dir.path().to_owned(),
+                when: Some(vec!["pr=merged".into()]),
+                wait: Some(crate::config::TaskTarget {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    session: "otter".into(),
+                    handle: "@otter".into(),
+                }),
+                wait_meta: Some(crate::config::WaitMeta {
+                    armed_at: Timestamp::UNIX_EPOCH,
+                    delay: None,
+                    reader: None,
+                    joined_until: None,
+                }),
+                expires,
+                ..Default::default()
+            };
+            let (a, _) = insert_delivery(&paths, None, &watch(first), &BTreeSet::new()).unwrap();
+            let (b, duplicate) =
+                insert_delivery(&paths, None, &watch(second), &BTreeSet::new()).unwrap();
+            assert!(!duplicate, "{first:?} then {second:?}");
+            let rows = load_from(&paths.root).0;
+            assert_eq!(rows[&a].expires, first);
+            assert_eq!(rows[&b].expires, second);
+            let (again, duplicate) =
+                insert_delivery(&paths, None, &watch(second), &BTreeSet::new()).unwrap();
+            assert_eq!((again, duplicate), (b, true));
         }
     }
 

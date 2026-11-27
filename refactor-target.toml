@@ -2725,7 +2725,9 @@ path = "crates/rimz/src/harness"
 # reads and prints (+17).
 # `workflow_script::{Mark, Progress}`: the `phase` changes and `log` lines of a pass, which
 # `rimz workflow try` prints among the calls (+2).
-surface-budget = 1440
+# The `shell` and `watch` blocks, their results, `On`, and the `Caller`, `Block`, and `parse`
+# they are read through, which the MCP tools take as their arguments (+9).
+surface-budget = 1449
 
 [[verdict]]
 kind = "item"
@@ -6516,7 +6518,7 @@ allowed-dependencies = [
 ]
 # The module itself and `typescript`, the one item `rimz workflow types` prints (+2).
 # The six blocks, their results, the enums their fields take, and the failure: the types the
-# script engine reads, and the MCP tools once they adopt them (+18).
+# script engine reads, and the `shell` and `watch` tools take (+18).
 # `Now`, the seventh block: the clock a script reads as a call its log answers (+1).
 # `ms` and `reads`, the duration grammar and the condition walk a script calls as pure
 # functions, kept here so the script engine reaches nothing past this module (+2).
@@ -6532,8 +6534,8 @@ path = "crates/rimz/src/mcp"
 # callers, and every tool's schema comes from the block's one generator.
 upward-dependencies = ["harness::block"]
 # The tool table, each tool's argument and answer types, the wording, and the server entry, which
-# `mcp_tools`, the CLI, and the conformance checks read (89).
-surface-budget = 89
+# `mcp_tools`, the CLI, and the conformance checks read (86).
+surface-budget = 86
 
 [[module]]
 path = "crates/rimz/src/harness/workflow_script"

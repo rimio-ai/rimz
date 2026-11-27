@@ -257,6 +257,10 @@ pub struct TaskEntry {
     pub repeat: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
+    /// When a self wait ends unmet: a shell's command is killed, and a watch wakes its agent once
+    /// naming its timeout and retires. Unlike `deadline`, which only gates a fire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires: Option<Timestamp>,
     /// The instant of an absolute one-shot, written by `rimz loop add --in` and `--at`, and by
     /// an older RimZ's self wait. A scheduled fire that records a result removes the row,
     /// whatever the result; the clock pass dispatches a fire that recorded none again, and a

@@ -27,7 +27,7 @@ pub use typescript::typescript;
 
 /// Who made a call: an agent through its MCP tool, or a workflow script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::harness) enum Caller {
+pub(crate) enum Caller {
     Tool,
     Script,
 }
@@ -61,7 +61,7 @@ impl BlockName {
 }
 
 /// One block: its object, the fields a script may not pass, and its result.
-pub(in crate::harness) trait Block: DeserializeOwned + JsonSchema {
+pub(crate) trait Block: DeserializeOwned + JsonSchema {
     const NAME: BlockName;
     /// Fields that tell RimZ when to wake a calling agent, or that belong to a script's own run;
     /// a script awaits its calls, so the parser refuses these from one.
@@ -78,7 +78,7 @@ pub(in crate::harness) trait Block: DeserializeOwned + JsonSchema {
 }
 
 /// Parse a block's object for `caller`: the typed block, or the sentence that refuses it.
-pub(in crate::harness) fn parse<B: Block>(object: Value, caller: Caller) -> Result<B, String> {
+pub(crate) fn parse<B: Block>(object: Value, caller: Caller) -> Result<B, String> {
     let Value::Object(fields) = &object else {
         return Err(format!(
             "a `{}` block is one object of named fields",
@@ -282,7 +282,7 @@ pub(in crate::harness) struct TeamResult {
 /// Which ending of a command wakes the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum On {
+pub enum On {
     Fail,
     Success,
 }
@@ -290,34 +290,32 @@ pub(in crate::harness) enum On {
 /// Runs one command; a nonzero exit fails the call with cause `exit`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "the tools and the run steps of later changes read the fields no refusal reads"
-)]
-pub(in crate::harness) struct Shell {
+pub struct Shell {
     /// The whole command as one string, run once through POSIX `sh -c` at the checkout's root
     /// with stdin closed, stdout and stderr going to the shell's output file.
     pub command: String,
     /// What you will do on waking, 1 to 60 characters.
     pub label: Option<String>,
-    /// Any JSON value, written to the `context.json` the command finds in
-    /// `RIMZ_WORKFLOW_DIR`.
-    pub input: Option<Value>,
+    /// A JSON object the command reads as `input` from the `context.json` in the directory
+    /// `RIMZ_WORKFLOW_DIR` names to it.
+    pub input: Option<Map<String, Value>>,
     /// Wake only on this outcome (default either; `fail` for a server left running).
     pub on: Option<On>,
-    /// One still-running notice after this long, whatever `on` says (never a stop).
+    /// One still-running notice after this long, whatever `on` says (never a stop); 30m when
+    /// absent, or none while cache keepalive pings you. Set one longer than the command should
+    /// take when it could hang.
     pub check_in: Option<String>,
-    /// Checkout to run in; defaults to the caller's.
+    /// Checkout to run in; defaults to the caller's (an agent's session start directory).
     pub cwd: Option<PathBuf>,
-    /// Stop the command after this long (`90m`, `2h`, `3d`) and fail the call with
-    /// `timeout`; none by default.
+    /// Kill the command and every process it started after this long (`90m`, `2h`, `3d`):
+    /// its outcome reads timed out, and a script's call fails with `timeout`. None by default.
     pub timeout: Option<String>,
 }
 
 /// What a command's call gives.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct ShellResult {
+pub(crate) struct ShellResult {
     /// The exit code, `0`.
     pub code: i32,
     /// What the command printed, up to a cap.
@@ -329,28 +327,26 @@ pub(in crate::harness) struct ShellResult {
 /// Waits until a condition reads true, already true when called included.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "the tools and the run steps of later changes read the fields no refusal reads"
-)]
-pub(in crate::harness) struct Watch {
+pub struct Watch {
     /// A condition, firing once it reads true, already true when set included.
     pub when: String,
     /// What you will do on waking, 1 to 60 characters; the wake carries only what fired.
     pub label: Option<String>,
-    /// One still-not-met notice after this long (never a stop).
+    /// One still-not-met notice after this long (never a stop); 30m when absent, or none while
+    /// cache keepalive pings you.
     pub check_in: Option<String>,
-    /// Checkout to arm in, whose branch bare forge terms read; defaults to the caller's.
+    /// Checkout to arm in, whose branch bare forge terms read; defaults to the caller's (an
+    /// agent's session start directory).
     pub cwd: Option<PathBuf>,
-    /// Stop watching after this long (`90m`, `2h`, `3d`) and fail the call with `timeout`;
-    /// none by default.
+    /// Stop watching after this long (`90m`, `2h`, `3d`): one wake names the timeout, and a
+    /// script's call fails with `timeout`. None by default.
     pub timeout: Option<String>,
 }
 
 /// What a watch's call gives.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct WatchResult {
+pub(crate) struct WatchResult {
     /// The reading of each key the condition names, at the look that read it true: `null` for a
     /// key that look had not read.
     pub readings: BTreeMap<String, Option<String>>,

@@ -100,6 +100,7 @@ fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
             prompt: DeliveryPrompt::None,
             provenance: DeliveryProvenance::SelfWait { reader: None },
             deadline: None,
+            expires: None,
             max_strikes: None,
         },
     )

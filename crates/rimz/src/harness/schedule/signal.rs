@@ -35,6 +35,38 @@ pub(super) fn wait_output_path(paths: &StatePaths, name: &str, entry: &TaskEntry
     paths.out_reader_dir(reader).join(format!("{name}.output"))
 }
 
+/// Directory of wait `name`'s `context.json`, beside its output file and named by its stem, so
+/// what collects the output collects it too.
+fn wait_context_dir(output: &Path) -> PathBuf {
+    output.with_extension("")
+}
+
+/// Publish a shell's `input` as `{ "input": … }` in its `context.json`, or clear what a wait
+/// that reused the name left there.
+pub(super) fn publish_wait_context(
+    paths: &StatePaths,
+    name: &str,
+    entry: &TaskEntry,
+    input: Option<&Map<String, Value>>,
+) -> std::io::Result<()> {
+    let dir = wait_context_dir(&wait_output_path(paths, name, entry));
+    match std::fs::remove_dir_all(&dir) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err),
+        _ => {}
+    }
+    let Some(input) = input else {
+        return Ok(());
+    };
+    crate::disk::paths::ensure_private_runtime_dir(&dir).map_err(std::io::Error::other)?;
+    crate::disk::atomic::write_temp_then_rename(
+        &dir.join(WAIT_CONTEXT_FILE),
+        &serde_json::json!({ "input": input }),
+    )
+    .map_err(std::io::Error::other)
+}
+
+const WAIT_CONTEXT_FILE: &str = "context.json";
+
 pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let start = file.metadata()?.len().saturating_sub(WAIT_TAIL_CAP as u64);
@@ -126,8 +158,25 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let Some(WatchSpec::Command(command)) = &task.entry().watch else {
         anyhow::bail!("wait {name} has no watch");
     };
-    let timeout = task_timeout(task.entry())?;
+    let check_in = task_timeout(task.entry())?;
+    let deadline = match task.entry().expires {
+        None => WatchDeadline::Watch(check_in),
+        Some(expires) => WatchDeadline::WatchKillAfter {
+            check_in,
+            timeout: std::time::Duration::try_from(expires.duration_since(jiff::Timestamp::now()))
+                .unwrap_or_default(),
+        },
+    };
     let output_path = wait_output_path(store.paths(), name, task.entry());
+    let context_dir = wait_context_dir(&output_path);
+    let env = std::collections::BTreeMap::from_iter(
+        context_dir.join(WAIT_CONTEXT_FILE).is_file().then(|| {
+            (
+                "RIMZ_WORKFLOW_DIR".to_owned(),
+                context_dir.display().to_string(),
+            )
+        }),
+    );
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
@@ -157,20 +206,27 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let outcome = run_command(
         &task.entry().run_dir(),
         command,
-        WatchDeadline::Watch(timeout),
+        deadline,
         CheckEcho::Tee { file },
-        &std::collections::BTreeMap::new(),
+        &env,
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
         &mut None,
     )?;
+    // A stop ends the watcher along with its command, so its outcome goes unsent.
+    if outcome.interrupted() {
+        return Ok(());
+    }
     let check = check_record(&outcome);
-    emit(
+    let elapsed_ms = elapsed_millis(started);
+    let verdict = if outcome.timed_out() {
+        WatchVerdict::TimedOut { elapsed_ms }
+    } else {
         WatchVerdict::Exited {
             code: check.code,
-            elapsed_ms: elapsed_millis(started),
-        },
-        check.output,
-    );
+            elapsed_ms,
+        }
+    };
+    emit(verdict, check.output);
     Ok(())
 }
 
