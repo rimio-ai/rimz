@@ -225,8 +225,13 @@ pub(in crate::cli) fn restart_resolved(
     )?;
     let mut cell = restart_cell(agent, &posture);
     if let Cell::Agent(cell) = &mut cell {
-        let profile = agent.profile.as_deref().unwrap_or(agent.kind.as_str());
-        for warning in rimz::harness::plan::LaunchFinalizeWarning::take_cell_notices(cell, profile)
+        let profile = match (agent.team.as_deref(), agent.role.as_deref()) {
+            (Some(team), Some(role)) => std::borrow::Cow::Owned(format!("{team}.{role}")),
+            _ => {
+                std::borrow::Cow::Borrowed(agent.profile.as_deref().unwrap_or(agent.kind.as_str()))
+            }
+        };
+        for warning in rimz::harness::plan::LaunchFinalizeWarning::take_cell_notices(cell, &profile)
         {
             writeln!(crate::cli::render::err(), "{warning}")?;
         }

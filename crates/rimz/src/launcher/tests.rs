@@ -1954,34 +1954,48 @@ roles = [{ role = "lead", profile = "toml_claude", model = "sol" }]
         crate::config::effective::load_with_roots(&machine, repo.path(), home.path()).unwrap();
 
     // Finding 1: TOML role writing foreign model drops both role and profile foreign models with
-    // one warning naming the role's model.
-    let f1 = resolve::resolve_finalized_layout(
-        None,
-        &machine,
-        &effective,
-        ProfileScope::Agents,
-        Some("toml_squad"),
-        None,
-        &super::LaunchOverrides {
-            agent: Some("codex".into()),
-            ..Default::default()
-        },
-        None,
-        None,
-        None,
-        false,
-        None,
-    )
-    .expect("toml_squad --agent codex");
-    let f1_cell = f1.resolved.layout.agent_cells().next().unwrap();
-    assert_eq!(f1_cell.kind.as_str(), "codex");
-    assert_eq!(f1_cell.launch.model, None, "opus must not leak onto seat");
-    let f1_warnings: Vec<String> = f1.warnings.iter().map(ToString::to_string).collect();
-    assert_eq!(f1_warnings.len(), 1, "{f1_warnings:?}");
-    assert!(
-        f1_warnings[0].contains("drops model `sonnet`"),
-        "{f1_warnings:?}"
-    );
+    // one warning naming the role's `team.role` seat and model, matching Markdown team roles.
+    for (spec, expected_warning) in [
+        (
+            "toml_squad",
+            "warning: profile `toml_squad.lead` drops model `sonnet` when switching to codex",
+        ),
+        (
+            "toml_squad.lead",
+            "warning: profile `toml_squad.lead` drops model `sonnet` when switching to codex",
+        ),
+        (
+            "crew.reviewer",
+            "warning: profile `crew.reviewer` drops model `opus` when switching to codex",
+        ),
+    ] {
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some(spec),
+            None,
+            &super::LaunchOverrides {
+                agent: Some("codex".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{spec} --agent codex: {err}"));
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "codex", "{spec}");
+        assert_eq!(
+            cell.launch.model, None,
+            "{spec}: foreign model must not leak onto seat"
+        );
+        let warnings: Vec<String> = finalized.warnings.iter().map(ToString::to_string).collect();
+        assert_eq!(warnings, vec![expected_warning], "{spec}");
+    }
     let f1_native = resolve::resolve_finalized_layout(
         None,
         &machine,
