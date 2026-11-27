@@ -638,7 +638,7 @@ A pane keeps its baseline only while a fold applies an overlay or focus intent, 
 
 `FocusStranded` repair keeps the renderer's baseline if that is a live visible work sibling, and otherwise picks the leftmost sibling. Distinct observed client views leave focus alone, because `focus-pane-id` is session-global. The repair reads the strand's sample on Zellij and the pulled `client_views` on tmux, never fused focus or intents. It is dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds), so late delivery cannot yank focus.
 
-On tmux, a direct pane-focus transition never lists sidebar chrome in `unfocused`, so focus leaving a sidebar arrives as `unfocused: []`. A window switch is different: it names the previous window's active pane as the prior pane whatever its role, so a sidebar can appear in `unfocused` there (`crates/rimz/src/sidebar/presence/tmux.rs::TmuxPresenceState::switch_window`).
+On tmux, a direct pane-focus transition never lists sidebar chrome in `unfocused`, so focus leaving a sidebar arrives as `unfocused: []`. A window switch is different: it names the previous window's active pane as the prior pane whatever its role, so a sidebar can appear in `unfocused` there (`crates/rimz/src/sidebar/presence/tmux.rs::TmuxPresenceState::switch_window`). A window switch also puts focus on the destination window's active pane, which can be that window's own sidebar, so a rule keyed on focus leaving a sidebar also handles a view arriving at another sidebar pane.
 
 `Reload` also travels as a bare control word, so it reaches a renderer whose event schema predates the current one. Pane rows carry no focus bit: focus lives only in the session register.
 
