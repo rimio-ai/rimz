@@ -865,6 +865,19 @@ fn validation_resolves_listed_skills_against_the_current_checkout() {
         references.is_empty(),
         "skill(proj) names the project skill the launch reaches: {references:?}"
     );
+    let marked = checkout.path().join(".qoder/skills/proj");
+    std::fs::create_dir_all(&marked).unwrap();
+    std::fs::write(
+        marked.join("SKILL.md"),
+        "---\nname: proj\ndescription: Project.\ndisable-model-invocation: true\n---\nProject.",
+    )
+    .unwrap();
+    assert_eq!(
+        errors(checkout.path()),
+        [("claude-worker.md".to_owned(), only("claude"))],
+        "qoder reads its own user-only copy, and a kind without a switch skips marker checks"
+    );
+    std::fs::remove_dir_all(checkout.path().join(".qoder")).unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     let missing = errors(elsewhere.path());
     assert_eq!(missing.len(), 3, "{missing:?}");

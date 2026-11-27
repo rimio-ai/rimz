@@ -461,6 +461,20 @@ fn a_host_list_refuses_a_listed_skill_its_author_marks_user_only() {
         ),
         other => panic!("a listed user-only skill refuses: {other:?}"),
     }
+    let marked = checkout.path().join(".qoder/skills/proj");
+    std::fs::create_dir_all(&marked).unwrap();
+    std::fs::write(
+        marked.join("SKILL.md"),
+        "---\nname: proj\ndescription: Project.\ndisable-model-invocation: true\n---\nProject.\n",
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            host_apply("qoder", &["proj"], checkout.path()),
+            Ok(HostSkillPlan::Unenforced)
+        ),
+        "a kind without a switch enforces no list, so its launch skips the marker check"
+    );
 }
 
 #[test]
