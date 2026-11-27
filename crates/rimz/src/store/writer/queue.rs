@@ -731,7 +731,10 @@ impl Store {
     /// Record `message` as `Sent` with no pane write, for a prompt its provider takes on its own
     /// command line: written before the provider spawns, it is in flight when the provider
     /// submits it, so that submit confirms it. Left unconfirmed, reconciliation times it out
-    /// rather than typing it (`MessageRecord::on_argv`).
+    /// rather than typing it (`MessageRecord::on_argv`). The record skips the ordered check, so a
+    /// caller first rules on each verdict the queued path would reach for the text (the model hold,
+    /// the command keys a slash-led text is typed with), queueing the message where one would hold
+    /// it or change its keys (`cli/agents_cmd/exec.rs::record_resume_continue`).
     #[must_use = "durability barrier; check the result"]
     pub fn record_argv_prompt(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         let now = Timestamp::now();
