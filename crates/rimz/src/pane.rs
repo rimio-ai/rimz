@@ -296,6 +296,7 @@ pub fn command_is_launch_chrome(command: &str) -> bool {
             | "stall-notice"
             | "stall-nudge"
             | "run-timeout"
+            | "call-timeout"
             | "orphan-subagent"
             | "subagent-digest"
             | "supervise-duty"

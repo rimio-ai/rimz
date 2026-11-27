@@ -355,6 +355,23 @@ pub fn supervised_prompt<'a>(
     }
 }
 
+/// A call's launch prompt `prompt` for leader `cell`: with no channel for the launch text, it
+/// carries the call's reminder section (its Answer), which would otherwise reach no one.
+pub(super) fn call_prompt(
+    prompt: String,
+    call: &crate::harness::call::CallSpec,
+    adapter: &crate::agents::AgentDefinition,
+    cell: &crate::harness::spec::AgentCell,
+) -> String {
+    match call.reminder() {
+        Some(section) if !launch_text_delivered(adapter, cell) => format!(
+            "{prompt}\n\n{}",
+            crate::harness::launch_reminders::section_reminder(&section)
+        ),
+        _ => prompt,
+    }
+}
+
 pub fn check_supervised_subagent_allowed(
     request: &SupervisedRunRequest,
     caller: Option<&crate::agents::AgentState>,

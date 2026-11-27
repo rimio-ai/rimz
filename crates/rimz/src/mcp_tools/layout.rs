@@ -12,12 +12,14 @@ use super::room::Room;
 use super::start::{Start, TaskKind};
 use crate::config::MachineConfig;
 use crate::config::effective::LaunchAgents;
+use crate::harness::block::{Agent, Team};
+use crate::harness::call::CallSpec;
+use crate::harness::run::SupervisedRunRequest;
 use crate::launcher::context::resolve_caller;
 use crate::launcher::{
-    CohortRequest, LaunchOutcome, LaunchOverrides, LayoutEntry, LayoutLaunch, LayoutRoom,
-    OpenedLayout,
+    BackgroundLaunchOutcome, CohortRequest, LaunchOutcome, LaunchOverrides, LayoutEntry,
+    LayoutLaunch, LayoutRoom, OpenedLayout, RunCompletion, SupervisedContext,
 };
-use crate::mcp::catalog::{AgentArgs, TeamArgs};
 use crate::mcp::{Answer, Failure};
 use crate::store::run::ReportTo;
 
@@ -33,10 +35,12 @@ struct Launch {
     cwd: Option<PathBuf>,
     fresh: bool,
     teams_scene: bool,
+    call: CallSpec,
 }
 
-/// Launch one persistent peer in a new background tab, started by the caller.
-pub(super) fn launch_agent(tools: &Tools, args: &AgentArgs) -> Result<Answer, Failure> {
+/// Launch one agent in a new background tab, started by the caller: a persistent peer, or with
+/// `stay: false` a run that closes itself once its turn ends.
+pub(super) fn launch_agent(tools: &Tools, args: &Agent) -> Result<Answer, Failure> {
     let cwd = args
         .cwd
         .as_deref()
@@ -54,6 +58,33 @@ pub(super) fn launch_agent(tools: &Tools, args: &AgentArgs) -> Result<Answer, Fa
         crate::harness::plan::validate_agent_name(name)?;
     }
     let agent = crate::harness::plan::normalized_preset_value(args.agent.as_deref());
+    let call = CallSpec {
+        stay: args.stay,
+        schema: args.schema.clone(),
+        timeout: timeout(args.timeout.as_deref())?,
+    };
+    let timed = call.timeout.is_some();
+    if !args.stay {
+        let mut request = SupervisedRunRequest::new(
+            spec.to_owned(),
+            args.prompt.clone(),
+            None,
+            crate::agents::ManagedLaunchState::PendingResolution,
+        );
+        request.background = true;
+        request.self_cleanup_on_completion = true;
+        request.force_new_tab = true;
+        request.report_to = ReportTo::Launcher;
+        request.cwd = cwd;
+        request.worktree.clone_from(&args.worktree);
+        request.fresh = args.fresh;
+        request.from_pr = from_pr;
+        request.name.clone_from(&args.name);
+        request.description.clone_from(&args.description);
+        request.agent = agent;
+        request.call = Some(call);
+        return launch_worker(&room, machine, &request);
+    }
     let (opened, warnings) = open(
         &room,
         machine,
@@ -68,6 +99,7 @@ pub(super) fn launch_agent(tools: &Tools, args: &AgentArgs) -> Result<Answer, Fa
             cwd,
             fresh: args.fresh,
             teams_scene: false,
+            call,
         },
     )?;
     let seat = opened
@@ -76,7 +108,7 @@ pub(super) fn launch_agent(tools: &Tools, args: &AgentArgs) -> Result<Answer, Fa
         .ok_or_else(|| Failure::new("the launch opened no agent"))?;
     let report = match &opened.team {
         Some((team, _)) => seat_report(&team_id(team, &opened)?),
-        None => report(TaskKind::Agent, opened.peer.is_some()).to_owned(),
+        None => report(TaskKind::Agent, opened.peer.is_some(), timed).to_owned(),
     };
     Ok(Answer::data(&Start {
         warnings,
@@ -85,7 +117,7 @@ pub(super) fn launch_agent(tools: &Tools, args: &AgentArgs) -> Result<Answer, Fa
 }
 
 /// Launch a configured team's cohort in its worktree, started by the caller.
-pub(super) fn launch_team(tools: &Tools, args: &TeamArgs) -> Result<Answer, Failure> {
+pub(super) fn launch_team(tools: &Tools, args: &Team) -> Result<Answer, Failure> {
     let from_pr = pr_target(args.from_pr.as_deref())?;
     let (room, machine, effective) = caller_room(tools, "a team")?;
     let team = args.team.trim();
@@ -104,6 +136,11 @@ pub(super) fn launch_team(tools: &Tools, args: &TeamArgs) -> Result<Answer, Fail
             cwd: None,
             fresh: false,
             teams_scene: true,
+            call: CallSpec {
+                stay: true,
+                schema: None,
+                timeout: timeout(args.timeout.as_deref())?,
+            },
         },
     )?;
     Ok(Answer::data(&Start {
@@ -111,9 +148,61 @@ pub(super) fn launch_team(tools: &Tools, args: &TeamArgs) -> Result<Answer, Fail
         ..Start::running(
             TaskKind::Team,
             &team_id(team, &opened)?,
-            report(TaskKind::Team, opened.peer.is_some()),
+            report(TaskKind::Team, opened.peer.is_some(), false),
         )
     }))
+}
+
+/// A `stay: false` agent: the background run `rimz agents <profile> -p --bg` starts, which
+/// reports to the caller and closes once its turn ends.
+fn launch_worker(
+    room: &Room,
+    machine: Arc<MachineConfig>,
+    request: &SupervisedRunRequest,
+) -> Result<Answer, Failure> {
+    let context = SupervisedContext {
+        root: Some(room.workspace.project_root.clone()),
+        worktree_fresh_command: None,
+        machine,
+        mux: None,
+        recovery: crate::room::AttendedRecovery::RequireExplicitReset,
+        completion: RunCompletion::Detached,
+    };
+    let mut notices = CollectedNotices::default();
+    let outcome = crate::launcher::launch_background(request, context, &mut notices);
+    let closed = notices.closed_cohort().map(str::to_owned);
+    let warnings = notices.into_lines();
+    let failure = match outcome {
+        Ok(BackgroundLaunchOutcome::Launched(child)) => {
+            return Ok(Answer::data(&Start {
+                warnings,
+                ..Start::running(TaskKind::Agent, &child.name, WORKER_REPORT)
+            }));
+        }
+        Ok(BackgroundLaunchOutcome::BudgetExceeded { reason }) => Failure::new(reason),
+        Ok(BackgroundLaunchOutcome::Aborted) => Failure::new(
+            "the launch was declined or found an open launch of the same name; nothing launched",
+        )
+        .with_hint("call `tasks` to see what you have running"),
+        Err(err) => with_closed_cohort_hint(
+            Failure::from(err),
+            closed.as_deref(),
+            TaskKind::Agent,
+            request.from_pr.is_some(),
+        ),
+    };
+    Err(with_warnings(failure, warnings))
+}
+
+/// How a `stay: false` agent's result reaches the caller.
+const WORKER_REPORT: &str = "an AGENT_REPORT message to you once its turn ends, then it closes";
+
+fn timeout(raw: Option<&str>) -> Result<Option<std::time::Duration>, Failure> {
+    raw.map(|raw| {
+        crate::utils::time::parse_compact_duration(raw)
+            .map_err(|err| Failure::new(format!("invalid timeout `{raw}`: {err}")))
+    })
+    .transpose()
 }
 
 /// The name under which `tasks` lists the opened lane of `team`: the team instance.
@@ -280,6 +369,7 @@ fn enter_and_launch(
         teams_scene: launch.teams_scene,
         one_seat: !launch.teams_scene,
         report_to: ReportTo::Launcher,
+        call: Some(launch.call),
         ..LayoutLaunch::default()
     };
     crate::launcher::launch_layout(&entered, layout, false, notices)
@@ -295,7 +385,8 @@ fn seat_report(team: &str) -> String {
 }
 
 /// How the launch's result reaches the caller; a launch that opened no reporting run says so.
-fn report(kind: TaskKind, reports: bool) -> &'static str {
+/// `timed`: the call has a `timeout`, whose stop of an agent reports once whatever its provider.
+fn report(kind: TaskKind, reports: bool, timed: bool) -> &'static str {
     match (kind, reports) {
         (TaskKind::Team, true) => {
             "a TEAM_REPORT message to you each time the team's board reaches Done"
@@ -305,6 +396,11 @@ fn report(kind: TaskKind, reports: bool) -> &'static str {
              way to the answer"
         }
         (_, true) => "an AGENT_REPORT message to you once none of your agents is mid-turn",
+        (_, false) if timed => {
+            "no report comes for its turns, since this agent's provider cannot report; `join` on \
+             the id is the way to its answers, and its `timeout` sends one AGENT_REPORT when it \
+             stops the agent"
+        }
         (_, false) => {
             "no report comes, since this agent's provider cannot report; `join` on the id is \
              the way to its answers"
@@ -352,14 +448,20 @@ mod tests {
 
     #[test]
     fn the_report_sentence_says_whether_a_report_comes() {
-        assert!(report(TaskKind::Agent, true).contains("AGENT_REPORT"));
-        assert!(report(TaskKind::Team, true).contains("TEAM_REPORT"));
+        assert!(report(TaskKind::Agent, true, false).contains("AGENT_REPORT"));
+        assert!(report(TaskKind::Team, true, false).contains("TEAM_REPORT"));
         for kind in [TaskKind::Agent, TaskKind::Team] {
-            let none = report(kind, false);
+            let none = report(kind, false, false);
             assert!(
                 none.contains("no report") && none.contains("`join`"),
                 "{none}"
             );
         }
+        // The timeout's stop of an agent whose provider cannot report still reports once.
+        let timed = report(TaskKind::Agent, false, true);
+        assert!(
+            timed.contains("`join`") && timed.contains("its `timeout` sends one AGENT_REPORT"),
+            "{timed}"
+        );
     }
 }

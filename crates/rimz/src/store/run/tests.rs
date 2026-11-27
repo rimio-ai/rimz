@@ -285,6 +285,15 @@ fn peer_run_codec_and_prompt_origin() {
     let old: RunRecord = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(old.follow_ups, 0);
     assert_eq!(old.prompt_origin(), RunPromptOrigin::Human);
+    let mut launched = old.clone();
+    launched.reader = Some("planner".into());
+    assert_eq!(
+        launched.prompt_origin(),
+        RunPromptOrigin::Parent,
+        "an agent's `-p` launch carries its brief"
+    );
+    launched.loop_task = Some("nightly".into());
+    assert_eq!(launched.prompt_origin(), RunPromptOrigin::Harness);
     for field in ["follow_up", "opened_by", "earlier_answers", "report_to"] {
         assert!(value.get(field).is_none());
     }
@@ -429,6 +438,26 @@ fn a_detached_run_owes_no_answer_but_keeps_it_readable() {
     let claims = record.answer_claims().collect::<Vec<_>>();
     assert_eq!(claims.len(), 1, "the answer is still there to join");
     assert!(!claims[0].owed);
+}
+
+#[test]
+fn self_cleanup_round_trips_and_defaults_when_absent() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    record.self_cleanup = true;
+
+    let mut value = serde_json::to_value(&record).unwrap();
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert!(decoded.self_cleanup);
+
+    value.as_object_mut().unwrap().remove("self_cleanup");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert!(!decoded.self_cleanup);
 }
 
 #[test]

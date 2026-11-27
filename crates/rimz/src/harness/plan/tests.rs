@@ -6594,6 +6594,65 @@ fn a_fire_stamped_print_run_of_more_than_one_agent_meets_the_ordinary_refusal() 
 }
 
 #[test]
+fn an_agent_calls_run_refuses_a_command_or_a_team_seat_in_the_tools_terms() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine
+        .agents
+        .commands
+        .0
+        .insert("logs".to_owned(), "tail -f run.log".to_owned());
+    machine.agents.profiles.0.insert(
+        "claude-agent".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    machine.agents.teams.0.insert(
+        "pair".to_owned(),
+        Team {
+            keep_warm: None,
+            roles: ["coder", "reviewer"]
+                .iter()
+                .map(|role| RoleBinding {
+                    profile: "claude-agent".to_owned(),
+                    ..role_binding(role)
+                })
+                .collect(),
+            leader: Some("coder".to_owned()),
+            layout: None,
+            scratch_files: None,
+            consensus_file: None,
+            consensus: Vec::new(),
+            append_system_prompt_files: Vec::new(),
+            stages: Vec::new(),
+        },
+    );
+    for (spec, refusal) in [
+        ("logs", "`logs` runs no agent; `agent` launches one"),
+        (
+            "pair.reviewer",
+            "`pair.reviewer` is a seat of team `pair`; with `stay: false` `agent` runs one agent \
+             outside any team, so launch it with `stay: true` or launch the team with `team`",
+        ),
+    ] {
+        let mut request = supervised_request(spec, "work");
+        request.call = Some(crate::harness::call::CallSpec {
+            stay: false,
+            schema: None,
+            timeout: None,
+        });
+        let (planned, _warnings) = SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path());
+        assert_eq!(planned.expect_err(spec).to_string(), refusal);
+    }
+}
+
+#[test]
 fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();

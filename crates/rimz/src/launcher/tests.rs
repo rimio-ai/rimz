@@ -1031,11 +1031,35 @@ fn agent_file_adapters_keep_subagent_reminder_out_of_user_prompt_only_with_promp
         )
     );
 
+    let schema = serde_json::json!({ "type": "object" });
+    let section = crate::harness::launch_reminders::answer_section(schema.as_object().unwrap());
+    let crate::harness::launch::ReminderSection::Answer(body) = &section else {
+        unreachable!("answer_section builds an Answer section");
+    };
+    let in_prompt = format!(
+        "agy\n\n{}",
+        crate::harness::launch_reminders::wrap_hook_context(&format!("### Answer\n\n{body}"))
+    );
+    let call = crate::harness::call::CallSpec {
+        stay: false,
+        schema: schema.as_object().cloned(),
+        timeout: None,
+    };
+    assert_eq!(
+        resolve::call_prompt("agy".to_owned(), &call, adapter, &cell),
+        in_prompt,
+        "a launch with no channel for its reminder carries its section in the prompt"
+    );
+
     cell.system_prompt_file = Some(crate::config::PromptSource::Text {
         origin: "antigravity.md".into(),
         text: "Base.".to_owned(),
     });
     assert_eq!(resolve::supervised_prompt(&request, adapter, &cell), "agy");
+    assert_eq!(
+        resolve::call_prompt("agy".to_owned(), &call, adapter, &cell),
+        "agy"
+    );
 }
 
 fn agent_cell(kind: &str) -> crate::harness::spec::AgentCell {
@@ -1051,6 +1075,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
     SupervisedRunRequest {
         spec: "codex".to_owned(),
         throttle_turn: None,
+        call: None,
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,

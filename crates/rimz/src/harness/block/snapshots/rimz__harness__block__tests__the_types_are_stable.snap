@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/harness/block/tests.rs
+assertion_line: 616
 expression: typescript()
 ---
 // The globals of a RimZ workflow script, printed by `rimz workflow types`.
@@ -84,7 +85,8 @@ interface CasesResult {
 
 /**
  * Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
- * `cwd`) it works in its caller's checkout.
+ * `cwd`) it works in its caller's checkout. A script's call resolves when a staying agent's
+ * session has closed, or when a `stay: false` agent's turn has ended.
  */
 declare function agent(block: Agent & { schema: object }): Promise<any>;
 declare function agent(block: Agent): Promise<AgentResult>;
@@ -94,7 +96,10 @@ interface Agent {
   profile: string;
   /** The brief: the agent's first turn. */
   prompt: string;
-  /** Inherit this profile or provider kind below the launched profile. */
+  /**
+   * Inherit this profile or provider kind below the launched profile; omit unless the user
+   * asks.
+   */
   agent?: string;
   /** Existing directory to work in. */
   cwd?: string;
@@ -104,27 +109,28 @@ interface Agent {
   fresh?: boolean;
   /** Worktree for this open pull request, by number or URL. */
   from_pr?: string;
-  /** Distinct handle when the channel already holds this profile's. */
+  /** Distinct handle when the channel already holds this profile's, the caller's own included. */
   name?: string;
   /**
    * JSON Schema the agent's answer must fit, over `type`, `required`, `properties`,
-   * `enum`, and `items` only; the call's result is that answer.
+   * `enum`, and `items` only. The agent is told to hand it in with `rimz submit`, and the
+   * answer stands in for its last message as its report and the call's result.
    */
   schema?: Record<string, unknown>;
   /**
    * `true` (the default): the agent stays in the room after its first turn until it is
-   * closed, and the call resolves when its session has closed. `false`: one task, and it
-   * closes when its turn ends.
+   * closed. `false`: one task, and it closes once its turn ends and its report is out.
    */
   stay?: boolean;
   /**
-   * Stop the agent after this long (`90m`, `2h`, `3d`) and fail the call with
-   * `timeout`; none by default.
+   * Stop the agent this long after its launch (`90m`, `2h`, `3d`), staying or not: its
+   * report, and a script's call, read timed out. None by default.
    */
   timeout?: string;
   /**
    * Kebab-case worktree name (at most two words); at most one of `worktree`, `from_pr`, and
-   * `cwd`.
+   * `cwd`. A new one branches from `agents.worktree.base` when set, else from the `HEAD` of the
+   * main checkout; a `team.role` branches as its team does.
    */
   worktree?: string;
 }
@@ -147,18 +153,19 @@ interface Team {
   team: string;
   /** The brief, delivered to the team's leader. */
   prompt: string;
-  /** Label each seat carries in the sidebar, a few words. */
+  /** Label each seat carries in the sidebar, a few words; `tasks` shows the team's goal. */
   description?: string;
   /** Open pull request, by number or URL, to create or reuse a worktree for. */
   from_pr?: string;
   /**
-   * Stop the team after this long (`90m`, `2h`, `3d`) and fail the call with
-   * `timeout`; none by default.
+   * Stop every seat this launch opened this long after it (`90m`, `2h`, `3d`): its
+   * report, and a script's call, read timed out. None by default.
    */
   timeout?: string;
   /**
    * Kebab-case worktree name (at most two words); give exactly one of `worktree` and
-   * `from_pr`.
+   * `from_pr`. A new one branches from `agents.worktree.base` when set, else from origin's
+   * default branch fetched at launch (or `HEAD` with no origin).
    */
   worktree?: string;
 }

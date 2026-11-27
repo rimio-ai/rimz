@@ -338,7 +338,7 @@ Under `agents.isolation = "scoped"`, Codex keeps the same sandbox, network, and 
 Claude, Codex, and Antigravity also receive routine-command permissions by default, independent of permission mode. Claude gets one `Bash(<prefix> *)` rule per prefix through a merged `--settings`, matching the bare command and its arguments. Antigravity gets one `command(<prefix>)` rule per prefix through its merged `--settings`, matching the prefix word by word with any trailing arguments (removing the permission prompt and letting a call that bypasses agy's terminal sandbox run outside it without asking, without excluding default calls from the sandbox). Codex gets one `prefix_rule` per prefix in the installed `$CODEX_HOME/rules/rimz.rules`:
 
 - `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
-- `rimz asks`, `rimz answer`, `rimz shell`, `rimz watch`
+- `rimz asks`, `rimz answer`, `rimz submit`, `rimz shell`, `rimz watch`
 - `rimz pane list`, `rimz pane capture`, `rimz loop show`, `rimz loop logs`
 - `rimz workflow run`, `rimz workflow list`, `rimz workflow show`, `rimz workflow wait`, `rimz workflow cancel`, `rimz workflow resume`, `rimz workflow extend`, `rimz workflow restart`, `rimz workflow submit`, `rimz workflow validate`, `rimz workflow schema`
 - `rimz packs list`, `rimz packs show`, `rimz packs diff`

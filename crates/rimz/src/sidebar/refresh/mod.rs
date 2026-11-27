@@ -459,6 +459,7 @@ pub(super) fn refresh_heavy_lanes(
     let runs = steps.step("run_timeout", || {
         let runs =
             crate::harness::run_timeout::enforce(state_paths, runtime, &base.agents, base.now);
+        crate::harness::call_timeout::enforce(state_paths, runtime, &base.agents, base.now);
         if let Some(runs) = &runs {
             crate::harness::park_notice::spawn_park_helpers(
                 runs,

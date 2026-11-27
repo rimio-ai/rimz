@@ -386,6 +386,14 @@ pub(super) fn handle_lifecycle_frame(
             {
                 warn!(%run_id, %error, "lifecycle: could not queue a result reminder");
             }
+            if run_completion.is_none()
+                && turn_ended
+                && let Some(run_id) = run_id.as_ref()
+                && let Err(error) =
+                    rimz::harness::call::queue_answer_notice(store, &workspace.session_name, run_id)
+            {
+                warn!(%run_id, %error, "lifecycle: could not queue an owed-answer notice");
+            }
         }
         let compaction_prompt = !replaced
             && matches!(

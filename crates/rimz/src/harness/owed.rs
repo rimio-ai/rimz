@@ -28,6 +28,9 @@ use super::fleet::FleetRuns;
 /// marks it sent, and the collector queues the report before that mark, so a
 /// reader that finds it sent finds the report in the later queue read.
 ///
+/// The answer term reads the agent's call record: a `stay: false` agent whose call has a
+/// schema and no answer owes it until it hands one in or its deadline stops it.
+///
 /// A continue a compaction command owes counts from the queue read alone, from
 /// its queuing until it is terminal; a smart-compaction reminder owes nothing.
 ///
@@ -86,6 +89,11 @@ pub fn owed_wake(
     if view.wake_in_flight(agent, true) {
         return Ok(Some(OwedWake::WakeInFlight));
     }
+    if let Some(launch_id) = agent.launch_id.as_ref()
+        && crate::store::call::owes_answer(store.paths(), launch_id)?
+    {
+        return Ok(Some(OwedWake::Answer));
+    }
     Ok(view.message_in_flight(agent).then_some(OwedWake::Message))
 }
 
@@ -140,6 +148,8 @@ pub enum OwedWake {
     SoftCompact,
     Message,
     Workflow,
+    /// A `stay: false` agent's answer to its call's schema.
+    Answer,
 }
 
 impl OwedWake {
@@ -152,6 +162,7 @@ impl OwedWake {
             Self::SoftCompact => "soft compaction",
             Self::Message => "message",
             Self::Workflow => "workflow run",
+            Self::Answer => "answer",
         }
     }
 
@@ -164,7 +175,7 @@ impl OwedWake {
             Self::Team => ParkCause::Team,
             Self::SoftCompact => ParkCause::SoftCompact,
             Self::Message => ParkCause::Message,
-            Self::Workflow => ParkCause::Wait,
+            Self::Workflow | Self::Answer => ParkCause::Wait,
         }
     }
 }

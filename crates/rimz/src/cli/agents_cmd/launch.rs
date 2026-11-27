@@ -143,6 +143,7 @@ pub(super) fn launch_layout(
         loop_fire: fire.map(|fire| fire.fire),
         subagent_profile: launch.subagent_profile,
         one_seat: false,
+        call: None,
     };
     let outcome =
         rimz::launcher::launch_layout(&room, layout, allow_in_place, &mut CliInteraction)?;

@@ -736,6 +736,8 @@ impl ProviderAccountState {
 pub enum ReminderSection {
     Loop(String),
     Workflow(String),
+    /// An `agent` call's `schema`, and how to hand in the answer.
+    Answer(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -223,6 +223,39 @@ fn fail_open_run(
     Ok(Some(record))
 }
 
+/// Record a timed-out turn for `peer`, a launcher's peer at rest when its call's deadline stopped
+/// it, so its launcher's digest reports the stop: a terminal record of the call's launch, carrying
+/// `failure`, whose response goes to `reader`'s `out/` directory. It starts and ends at the stop,
+/// so it sorts after every turn the peer completed and is the run a `join` or a wait reads. None
+/// for a row that is no launcher's peer.
+pub fn time_out_idle_peer(
+    paths: &StatePaths,
+    peer: &AgentState,
+    reader: Option<&str>,
+    failure: &str,
+) -> Result<Option<RunRecord>> {
+    let Some(launch_id) = peer_launch_id(peer) else {
+        return Ok(None);
+    };
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = new_peer_record(
+        paths,
+        peer,
+        reader,
+        launch_id,
+        String::new(),
+        Path::new("."),
+    );
+    record.agent_id = Some(peer.agent_id.clone());
+    record.report_to = ReportTo::Launcher;
+    let now = jiff::Timestamp::now();
+    record.started_at = now;
+    record.mark_terminal(RunStatus::TimedOut, now);
+    record.failure_tail = Some(failure.to_owned());
+    crate::store::run::write(&paths.runs_dir, &record)?;
+    Ok(Some(record))
+}
+
 /// Whether a terminal peer run's answer is `peer`'s latest turn: the peer is at
 /// rest by `completion` (as `TurnWaitView::completion` reads it, which a prompt
 /// on its way to the peer holds open), and no request has closed on its row

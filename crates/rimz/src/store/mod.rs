@@ -36,6 +36,7 @@
 
 pub mod active_time;
 pub mod agent_context;
+pub mod call;
 pub mod event;
 pub mod event_log;
 pub mod follow;
@@ -134,6 +135,8 @@ pub enum StoreErr {
     MessageStore(#[from] message::MessageStoreErr),
     #[error(transparent)]
     RunStore(#[from] run::RunStoreErr),
+    #[error(transparent)]
+    CallStore(#[from] call::CallStoreErr),
     #[error(transparent)]
     WorkflowStore(#[from] workflow::WorkflowStoreErr),
     #[error(transparent)]

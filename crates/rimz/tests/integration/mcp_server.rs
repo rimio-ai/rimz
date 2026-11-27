@@ -926,6 +926,83 @@ fn an_agent_call_opens_a_peer_of_the_caller_from_outside_the_room() {
     assert_eq!(stopped["id"], json!(id), "{stopped}");
 }
 
+/// An `agent` call with `stay: false`, a `schema`, and a `timeout` opens one task that closes
+/// once its turn ends, and records the call its answer and deadline are read from.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_for_one_task_records_its_schema_and_deadline() {
+    let room = LayoutRoom::new();
+    let mut server = room.serve("parent-launch");
+    let schema = json!({"type": "object", "required": ["verdict"]});
+    let call = json!({
+        "profile": "worker",
+        "prompt": "audit the parser",
+        "name": "tasker",
+        "worktree": "audit",
+        "stay": false,
+        "schema": schema,
+        "timeout": "30m",
+    });
+    let (refused, is_error) = server.answer(
+        1,
+        "agent",
+        json!({"profile": "worker,worker", "prompt": "p", "stay": false}),
+    );
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["error"],
+        json!("`worker,worker` is a layout of several seats; `agent` launches one"),
+        "{refused}"
+    );
+    let (answer, is_error) = server.answer(2, "agent", call);
+    assert!(!is_error, "{answer}");
+    assert_eq!(answer["status"], json!("running"), "{answer}");
+    assert_eq!(
+        answer["report"],
+        json!("an AGENT_REPORT message to you once its turn ends, then it closes"),
+        "{answer}"
+    );
+    assert_eq!(answer["id"], json!("agent:tasker"), "{answer}");
+    let agents = room.agents();
+    let worker = agents
+        .iter()
+        .find(|agent| agent.profile.as_deref() == Some("worker"))
+        .expect("the worker's launch row");
+    assert_eq!(worker.name.as_deref(), Some("tasker"));
+    let checkout = worker.worktree_path.as_deref().expect("a checkout");
+    assert!(
+        checkout.ends_with("/audit") && checkout != room.env.project_root.display().to_string(),
+        "`worktree` places it in its own checkout, as on the peer path: {checkout}"
+    );
+    let trace = std::fs::read_to_string(&room.trace).unwrap();
+    let tabs: Vec<&str> = trace
+        .lines()
+        .filter(|line| line.contains("new-tab"))
+        .collect();
+    assert!(
+        tabs.iter().any(|line| line.contains("#audit")),
+        "a background tab titled by its lane: {tabs:?}"
+    );
+    assert!(!trace.contains("run claude"), "{tabs:?}");
+    let launch_id = worker.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(!record.stay, "{record:?}");
+    assert_eq!(
+        record.schema.clone().map(Value::Object),
+        Some(schema),
+        "{record:?}"
+    );
+    assert_eq!(
+        record
+            .deadline
+            .map(|deadline| deadline.duration_since(record.created_at)),
+        Some(jiff::SignedDuration::from_mins(30)),
+    );
+    assert!(record.owes_answer());
+}
+
 /// A `team` call opens the team's cohort in the named worktree, through a real launch: the
 /// answered id is the seats' team instance, and `tasks`, `join`, and `stop` act on it. A second
 /// call onto the live cohort says its brief went to the leader, so it is not sent again.

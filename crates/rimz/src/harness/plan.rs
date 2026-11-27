@@ -1200,7 +1200,29 @@ pub fn plan_supervised_launch(
         commands,
         &effective.teams,
     )?;
+    // An `agent` call's run refuses as the call's peer launch does, in the tool's terms.
+    let cells: usize = resolved
+        .layout
+        .columns
+        .iter()
+        .map(|column| column.rows.len())
+        .sum();
     let agents = resolved.layout.agent_cells().count();
+    if request.call.is_some() {
+        if cells > 1 {
+            bail!("`{spec}` is a layout of several seats; `agent` launches one");
+        }
+        if agents == 0 {
+            bail!("`{spec}` runs no agent; `agent` launches one");
+        }
+        // A seat run alone would take the team's lane with no team run behind it.
+        if let Some(team) = &resolved.team_name {
+            bail!(
+                "`{spec}` is a seat of team `{team}`; with `stay: false` `agent` runs one agent \
+                 outside any team, so launch it with `stay: true` or launch the team with `team`"
+            );
+        }
+    }
     if agents != 1 {
         bail!("--print requires a layout with exactly one agent cell");
     }

@@ -227,6 +227,8 @@ pub struct StatePaths {
     pub fleet_budget_record: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
+    /// The call records of `store::call`, one per launch.
+    pub calls_dir: PathBuf,
     /// The terminal run-record files a listing has seen, each under its file stamp.
     pub(crate) terminal_runs_cache: PathBuf,
     pub cache_dir: PathBuf,
@@ -564,6 +566,7 @@ impl StatePaths {
             message_history_dir: audit_dir.join("messages"),
             fleet_budget_record: records_dir.join("budget.fleet.json"),
             transcript_dir,
+            calls_dir: owned_dir.join("calls"),
             runs_dir,
             workspace_lock: Class::Locks.path_under(&root).join("workspace.lock"),
             publish_lock: Class::Locks.path_under(&root).join("publish.lock"),

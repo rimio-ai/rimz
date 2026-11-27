@@ -345,6 +345,13 @@ fn an_answer_schema_uses_only_the_named_keywords() {
         schema(json!({ "type": "array", "items": { "oneOf": [] } })),
         schema(json!({ "properties": { "outcome": true } })),
         schema(json!({ "items": [] })),
+        schema(json!({ "type": "strng" })),
+        schema(json!({ "properties": { "n": { "type": [] } } })),
+        schema(json!({ "type": ["string", "null"] })),
+        schema(json!({ "enum": "pass" })),
+        schema(json!({ "properties": { "outcome": { "enum": [] } } })),
+        schema(json!({ "required": "outcome" })),
+        schema(json!({ "required": ["outcome", 1] })),
     ];
     let got: Vec<_> = cases
         .into_iter()
@@ -358,11 +365,68 @@ fn an_answer_schema_uses_only_the_named_keywords() {
         Some("`schema.items` uses `oneOf`"),
         Some("`schema.properties.outcome` is not a schema object"),
         Some("`schema.items` is not an object"),
+        Some("`schema.type` names no JSON type"),
+        Some("`schema.properties.n.type` names no JSON type"),
+        None,
+        Some("`schema.enum` is not a non-empty array of values"),
+        Some("`schema.properties.outcome.enum` is not a non-empty array of values"),
+        Some("`schema.required` is not an array of field names"),
+        Some("`schema.required` is not an array of field names"),
     ]
     .into_iter()
     .map(|refusal| refusal.map(|refusal| Some(refusal.to_owned())))
     .collect();
     assert_eq!(got, want);
+}
+
+#[test]
+fn an_answer_fits_its_schema_or_names_its_first_misfit() {
+    let schema = json!({
+        "type": "object",
+        "required": ["verdict", "notes"],
+        "properties": {
+            "verdict": { "type": "string", "enum": ["pass", "fail"] },
+            "notes": { "type": "array", "items": { "type": "string" } },
+            "score": { "type": ["integer", "null"] },
+            "rank": { "enum": [1, [2, { "of": 3 }]] },
+        },
+    });
+    let schema = schema.as_object().unwrap();
+    let misfit = |answer: Value| answer_misfit(schema, &answer);
+    assert_eq!(misfit(json!({ "verdict": "pass", "notes": [] })), None);
+    assert_eq!(
+        misfit(json!({ "verdict": "pass", "notes": ["a"], "score": null, "extra": 1 })),
+        None
+    );
+    // A number with no fractional part is an integer, and `enum` compares numbers by value.
+    for rank in [json!(1.0), json!([2.0, { "of": 3.0 }])] {
+        assert_eq!(
+            misfit(json!({ "verdict": "pass", "notes": [], "score": 2.0, "rank": rank })),
+            None,
+            "{rank}"
+        );
+    }
+    for (answer, expected) in [
+        (json!("pass"), "`answer` is not of type object"),
+        (
+            json!({ "verdict": "pass" }),
+            "`answer` lacks the required `notes`",
+        ),
+        (
+            json!({ "verdict": "maybe", "notes": [] }),
+            "`answer.verdict` is not one of the schema's `enum` values",
+        ),
+        (
+            json!({ "verdict": "fail", "notes": ["a", 2] }),
+            "`answer.notes[1]` is not of type string",
+        ),
+        (
+            json!({ "verdict": "fail", "notes": [], "score": 1.5 }),
+            "`answer.score` is not of type integer or null",
+        ),
+    ] {
+        assert_eq!(misfit(answer).as_deref(), Some(expected));
+    }
 }
 
 #[test]

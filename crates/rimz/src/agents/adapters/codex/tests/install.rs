@@ -293,6 +293,7 @@ fn install_includes_shared_routine_rules_golden() {
         prefix_rule(pattern=["rimz", "teams"], decision="allow")
         prefix_rule(pattern=["rimz", "asks"], decision="allow")
         prefix_rule(pattern=["rimz", "answer"], decision="allow")
+        prefix_rule(pattern=["rimz", "submit"], decision="allow")
         prefix_rule(pattern=["rimz", "shell"], decision="allow")
         prefix_rule(pattern=["rimz", "watch"], decision="allow")
         prefix_rule(pattern=["rimz", "pane", "list"], decision="allow")

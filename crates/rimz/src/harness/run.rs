@@ -6,12 +6,12 @@ pub mod result_file;
 mod team;
 pub use peer::{
     create_peer_prompt, describes_latest_turn, fail_peer_run, fail_peer_turn, open_peer_run,
-    peer_can_report, record_run_delivery,
+    peer_can_report, record_run_delivery, time_out_idle_peer,
 };
 pub(super) use team::team_report_on_flip;
 pub use team::{
     TeamReportOutcome, open_team_run, open_team_run_for, reopen_team_run, report_team_run,
-    settle_team_run,
+    report_team_timeout, settle_team_run,
 };
 
 use std::path::{Path, PathBuf};
@@ -218,6 +218,8 @@ pub struct SupervisedRunRequest {
     pub login: crate::store::writer::LaunchLogin,
     /// The loop throttle turn this launch holds; the launch commit reports it.
     pub throttle_turn: Option<crate::harness::throttle::Turn>,
+    /// What an `agent` call asks of the launch beyond opening it.
+    pub call: Option<crate::harness::call::CallSpec>,
 }
 
 impl SupervisedRunRequest {
@@ -274,6 +276,7 @@ impl SupervisedRunRequest {
             managed_launch,
             login: crate::store::writer::LaunchLogin::RoomDefault,
             throttle_turn: None,
+            call: None,
         }
     }
 
@@ -1514,27 +1517,64 @@ fn record_lifecycle_at(
         observation.signal.terminal_disposition() == Some(TerminalDisposition::Completed);
     let owed = if completed { owed() } else { None };
     let result_written = completed && result_file::written(paths, run_id);
+    let handed = completed
+        .then(|| handed_answer(paths, run_id, observed_at.unwrap_or_else(Timestamp::now)))
+        .flatten();
     let (record, transition, _) = write_record(paths, run_id, |record, now| {
         let observed_at = observed_at.unwrap_or(now);
-        Ok(
-            match fold_lifecycle(
-                record,
-                kind,
-                observation,
-                last_message,
-                turn_error,
-                now,
-                observed_at,
-                owed,
-                result_written,
-            ) {
-                LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
-                LifecycleFold::Updated => RecordMutation::Write(LifecycleFold::Updated),
-                LifecycleFold::NewlyTerminal => RecordMutation::Write(LifecycleFold::NewlyTerminal),
-            },
-        )
+        let fold = fold_lifecycle(
+            record,
+            kind,
+            observation,
+            last_message,
+            turn_error,
+            now,
+            observed_at,
+            owed,
+            result_written,
+        );
+        if fold != LifecycleFold::Ignored
+            && let Some(answer) = &handed
+        {
+            record.last_message = Some(answer.clone());
+        }
+        Ok(match fold {
+            LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
+            LifecycleFold::Updated => RecordMutation::Write(LifecycleFold::Updated),
+            LifecycleFold::NewlyTerminal => RecordMutation::Write(LifecycleFold::NewlyTerminal),
+        })
     })?;
     Ok(matches!(transition, LifecycleFold::NewlyTerminal).then_some(record))
+}
+
+/// Settle run `run_id` timed out with `failure`, a call's deadline having stopped its launch:
+/// the record when this call settled it, none when it was already terminal.
+pub fn time_out_run(store: &Store, run_id: &RunId, failure: &str) -> Result<Option<RunRecord>> {
+    let (record, wrote) = update_record(store.paths(), run_id, |record, now| {
+        if !record.mark_terminal(RunStatus::TimedOut, now) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.failure_tail = Some(failure.to_owned());
+        Ok(RecordMutation::Write(true))
+    })?;
+    if !wrote {
+        return Ok(None);
+    }
+    crate::store::run::wake_run(store.runtime_paths(), &record);
+    Ok(Some(record))
+}
+
+/// The answer the launch of run `run_id` (its own, a peer's, or a team leader's) handed in
+/// during the run's current answer, which ended at `ended_at`, read with no lock held: it stands
+/// in for that answer's last message.
+fn handed_answer(paths: &StatePaths, run_id: &RunId, ended_at: Timestamp) -> Option<String> {
+    let record = load(paths, run_id).ok()?;
+    super::call::handed_answer(
+        paths,
+        record.agent_launch_id()?,
+        record.answer_started_at(),
+        ended_at,
+    )
 }
 
 /// Settle provider exit and cumulative spend together for a session run: completed when the

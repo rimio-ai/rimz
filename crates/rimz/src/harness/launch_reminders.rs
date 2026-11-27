@@ -456,6 +456,18 @@ fn result_file_reminder_body(path: &Path) -> String {
     )
 }
 
+/// The Answer section of a launch given an answer `schema`.
+pub fn answer_section(schema: &serde_json::Map<String, serde_json::Value>) -> ReminderSection {
+    let schema = serde_json::to_string(schema).unwrap_or_default();
+    ReminderSection::Answer(format!(
+        "Your launcher asked for an answer that fits this JSON Schema: `{}`. Once the task is \
+         done, hand the answer in as one JSON value with `rimz submit '<answer>'`. RimZ refuses \
+         an answer that does not fit, with the reason, and stores one that fits as this task's \
+         result in place of your last message; a later `rimz submit` replaces it.",
+        escape_reminder_text(&schema)
+    ))
+}
+
 const SKILLS_REMINDER_BODY: &str = concat!(
     "### Skills\n\n",
     "When a skill's description matches the work in hand, invoke it, even when you know the ",
@@ -475,6 +487,21 @@ pub fn wrap_hook_context(body: &str) -> String {
 /// Child policy for adapters that require a user-prompt fallback.
 pub fn subagent_reminder() -> String {
     wrap(SUBAGENT_REMINDER_BODY)
+}
+
+/// `section` on its own, for a launch whose reminder has no channel to ride and so goes in the
+/// prompt.
+pub fn section_reminder(section: &ReminderSection) -> String {
+    wrap(&section_paragraph(section))
+}
+
+fn section_paragraph(section: &ReminderSection) -> String {
+    let (heading, body) = match section {
+        ReminderSection::Loop(body) => ("Loop", body),
+        ReminderSection::Workflow(body) => ("Workflow", body),
+        ReminderSection::Answer(body) => ("Answer", body),
+    };
+    format!("### {heading}\n\n{body}")
 }
 
 /// `shell` is the one the launch wrapper runs under, named when the
@@ -508,11 +535,7 @@ pub(super) fn render(
         paragraphs.push(model_line(params, request.identity.name.as_deref(), &model));
     }
     if let Some(section) = &request.reminder_section {
-        let (heading, body) = match section {
-            ReminderSection::Loop(body) => ("Loop", body),
-            ReminderSection::Workflow(body) => ("Workflow", body),
-        };
-        paragraphs.push(format!("### {heading}\n\n{body}"));
+        paragraphs.push(section_paragraph(section));
     }
     let lsp_servers = if reminders.lsp_callable(request) {
         reminders.lsp_servers.as_slice()

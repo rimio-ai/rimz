@@ -113,10 +113,11 @@ A record-less human section on a turn with a run can be that run's launch prompt
 | Run | Origin | Entry |
 | --- | --- | --- |
 | Subagent, peer, or team run | `Parent` | `Message` from the parent's or launcher's handle. An unresolved launcher gives a harness `Prompt` with `from: "rimz"`, never the user |
-| Any other run with a `loop_task` | `Harness` | `Prompt` with `from: "rimz"` |
+| Any other run with a `loop_task` or a `loop_fire` | `Harness` | `Prompt` with `from: "rimz"` |
+| Any other run with a `reader`: an agent's `-p` launch, an `agent` call with `stay: false` among them | `Parent` | `Message` from the launcher's handle, as a subagent's |
 | Any other run | `Human` | Human `Prompt` |
 
-A retry carries the same `subagent` and `loop_task` fields, so it keeps its origin without loading `retry_of`. Text that does not match the run prompt follows ordinary classification.
+A retry carries the same `subagent`, `reader`, and `loop_task` fields, so it keeps its origin without loading `retry_of`. Text that does not match the run prompt follows ordinary classification.
 
 Persistent peers and team seats carry no run id in their environment, so step 2 finds their open run from the row (`harness::run::open_peer_run`, `open_team_run`). An open run suppresses the human-input spend window, as a supervised run does. Once the run settles, later turns carry no run: even identical launch text is then human-authored and opens a spend window.
 

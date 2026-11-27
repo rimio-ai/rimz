@@ -224,6 +224,31 @@ pub(super) enum Named<'a> {
     Gone,
 }
 
+/// The newest run of team instance `name` led by a seat the caller started: what a `join` on
+/// the team answers from once its cohort no longer runs. A launch on the same lane that another
+/// agent started is never read.
+pub(super) fn ended_team_run(
+    owners: &Owners<'_>,
+    name: &str,
+) -> Option<crate::store::run::RunRecord> {
+    let instance = TeamInstanceId::from_str(name).ok()?;
+    let started: Vec<_> = owners
+        .audit
+        .iter()
+        .filter(|row| row.team_instance().as_ref() == Some(&instance) && owners.started_agent(row))
+        .map(|row| row.launch_key())
+        .collect();
+    crate::harness::run::list(owners.state)
+        .ok()?
+        .into_iter()
+        .filter(|run| {
+            run.team
+                .as_ref()
+                .is_some_and(|team| team.instance == instance && started.contains(&&team.launch_id))
+        })
+        .max_by_key(|run| run.started_at)
+}
+
 /// What the id `kind:name` names, refused when another agent started it or no record of it
 /// exists. `catalog` is the room's loop catalog, read for a schedule or a wait.
 pub(super) fn resolve<'a>(
