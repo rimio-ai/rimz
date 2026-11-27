@@ -34,7 +34,7 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 - Wrap source comments by hand to the width of the code around them, at most 100 columns: a harness rule against hard-wrapping prose covers messages and Markdown, not source comments.
 - A refactor you noticed on the way becomes a note unless it blocks you.
 - Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
-- Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request: it is written as a standalone change once the work merges.
+- Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request, except for the link retargets [docs/AGENTS.md](./docs/AGENTS.md) asks of a moved page: it is written as a standalone change once the work merges.
 - Do not read `examples/` unless the user asks: it is sample configuration for users to copy, never authority on behaviour.
 - A change to any Markdown file, an `AGENTS.md` included, follows [docs/AGENTS.md](./docs/AGENTS.md).
 
@@ -42,8 +42,9 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 
 These hold for a change anywhere in the tree, and no gate catches a skipped one.
 
-- **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule. When a change removes a call, or a check stops reading an input, the same change deletes what only that call or input served: each callee left with no production caller, with the `refactor-target.toml` lines that name it, and each trigger that re-runs the check when that input moves. A callee that only tests still call is gated to tests (`#[cfg(test)]`) instead.
+- **Rule on every writer and reader.** Before you change a predicate, filter, guard, lookup, or default, or when a field is set or cleared, list every site that writes the value and every site that reads it (`rimz lsp refs`, `rimz lsp callers`), and decide what each does under the new rule.
 - **Name what a guard protects before you drop it.** When a change removes a condition from a predicate, a premise from a record, or a check from a path, read why it is there (its rustdoc, `git log -S '<condition>'`), and say in the plan or hand-off what protects that case afterward.
+- **Delete what a removed call served.** When a change removes a call, or a check stops reading an input, the same change deletes each callee left with no production caller, with the `refactor-target.toml` lines that name it, and each trigger that re-runs the check when that input moves. A callee that only tests still call is gated to tests (`#[cfg(test)]`) instead.
 - **Prove timing at the consumer.** That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time ([Timestamps and clocks](./docs/contributing/rust-conventions.md#timestamps-and-clocks)).
 - **Sweep the sentences you made false.** After a changed rule, name, set, output, path, argv, or refusal, grep the old words, by stem rather than phrase, across `docs/`, every `AGENTS.md`, rustdoc and comments, clap help text, tests, and the `refactor-target.toml` verdicts, and fix each hit before hand-off ([Sweeps](./docs/AGENTS.md#sweeps)).
 - **Run the tests that name what you changed.** Grep `crates/rimz/src` and `crates/rimz/tests` for the field, command, or message you changed, and run each module that names it ([Tests outside the change](./docs/contributing/running-gates.md#tests-outside-the-change)).
