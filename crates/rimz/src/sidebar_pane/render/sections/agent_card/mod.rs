@@ -506,13 +506,10 @@ pub(super) fn row_lines(
                     span.style.fg = Some(tone);
                 }
             } else if reopening_entry {
-                // A kitty placeholder's foreground is the id of its image, not a color.
                 for span in &mut card.line.spans {
-                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
-                        span.style.fg = reopening_style.fg;
-                        if reopening_style.fg.is_none() {
-                            span.style = span.style.add_modifier(Modifier::DIM);
-                        }
+                    span.style.fg = reopening_style.fg;
+                    if reopening_style.fg.is_none() {
+                        span.style = span.style.add_modifier(Modifier::DIM);
                     }
                 }
             }
@@ -976,10 +973,8 @@ fn sub_agent_entry_lines(
             let inert_style = theme.styled(Component::SubagentInert, Modifier::DIM);
             for line in &mut entry_lines {
                 for span in &mut line.spans {
-                    if !span.content.contains(crate::pixel_wire::PLACEHOLDER) {
-                        span.style.fg = inert_style.fg;
-                        span.style = span.style.add_modifier(Modifier::DIM);
-                    }
+                    span.style.fg = inert_style.fg;
+                    span.style = span.style.add_modifier(Modifier::DIM);
                 }
             }
         }
