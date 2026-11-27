@@ -45,6 +45,7 @@ How to find the sentences a change made false.
 - A set that gains or loses a member is found by two existing members joined by `.*` in both orders, by the old count beside the set's noun, and, where a table documents it, by one member as a cell (``rg -n '^\| `lifted` \|'``).
 - A renumbered list moves every citation by number (`check 13`). A page that gains a new kind of content updates its one-line summary on each page that links to it.
 - A renamed identifier's stem is also grepped over test function names without `-w` (`rg -n 'fn <stem>_'`), since `rg -w` cannot match `fn agent_breakdown_folds_tail`.
+- A test whose body a change edits is grepped by name across `docs/` (`rg -n '<test_name>' docs`): a contributing page can cite it as the shape of a rule the edit breaks.
 - A changed argv is grepped with any separator between its tokens (`'attach.{1,4}--create'`): a test joins them with a tab or lists them as array elements.
 - Every `rg` names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` reads stdin and hangs.
 - A tree-wide sweep passes `--no-ignore-dot`, since the root `.ignore` skips `docs/externals/`, `examples/`, `supply-chain/`, and `CHANGELOG.md`, and `--hidden` or `.github` when workflows are in scope.
