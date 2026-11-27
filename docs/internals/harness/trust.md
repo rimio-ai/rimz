@@ -19,6 +19,8 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 
 `trust::status` re-hashes on every call, so `stale` is the auto-revoke: drift shows on the next read of the workspace, with no background sweep. `rimz trust status`, `rimz doctor`, and every launch gate call it. `trust::blocked_fix` is the fix text every trust-gated refusal prints. Its `stale` variant says the surface changed since the last grant.
 
+Before a grant, `config::effective::load_with_roots` checks only the [refused project keys](#refused-project-keys) it owns and reads the `[lsp.servers]` names, then returns before it parses the rest of the repo layer. A check that leaves a bad value for the launch load to report therefore reports nothing for it in an `untrusted` or `stale` workspace.
+
 ## The executable surface
 
 `trust::ExecutableSurface` projects the fields that can cause a process to run, and only those enter the hash. Each entry's name is hashed with it, so renaming a profile, team, task, agent entry, or server drifts the grant.
