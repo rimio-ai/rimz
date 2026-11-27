@@ -620,7 +620,10 @@ fn totals_label(totals: &EffortTotals) -> String {
         } else {
             String::new()
         };
-        parts.push(format!("{messages} messages{from_you}"));
+        parts.push(format!(
+            "{messages} {}{from_you}",
+            if messages == 1 { "message" } else { "messages" }
+        ));
     }
     parts.join(" · ")
 }
