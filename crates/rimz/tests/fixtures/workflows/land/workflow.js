@@ -44,28 +44,46 @@ const turn = (profile, name, timeout, data) =>
   agent({ profile, stay: false, timeout, prompt: brief('prompts/' + name, data) })
     .catch(failure => failure)
 
-// Fires on what keeps the PR out, or on its end: merged or closed, or, while it is open and
-// not queued, a dequeue, a conflict, a red CI, or a green PR that is neither queued nor armed.
-// A queued PR waits even when its CI is red, and a fact not read yet waits.
-const FORGE = 'pr=merged,closed || (pr=open && pr.queue!=queued && (pr.queue=dequeued' +
-  ' || pr.mergeable=conflicting || ci=failed || (ci=passed && pr.queue=none)))'
+// What keeps the PR out, or its end, in the order the forge decides it: merged or closed, or,
+// while it is open, a dequeue, then (while it is not queued) a conflict, a red CI, or a green PR
+// that is neither queued nor armed. A conflict reads before any ci reading, since GitHub starts
+// no PR CI on a conflicted head. A queued PR waits even when its CI is red.
+const CASES = [
+  ['merged', 'pr=merged'],
+  ['closed', 'pr=closed'],
+  ['dequeued', 'pr=open && pr.queue=dequeued'],
+  ['conflicted', 'pr=open && pr.queue!=queued && pr.mergeable=conflicting'],
+  ['red', 'pr=open && pr.queue!=queued && ci=failed'],
+  ['unqueued', 'pr=open && ci=passed && pr.queue=none'],
+]
+const any = cases => cases.map(([, when]) => '(' + when + ')').join(' || ')
 
-// Names what the watch read, in the order the forge decides it. A conflict reads before any ci
-// reading, since GitHub starts no PR CI on a conflicted head.
-function blocker({ readings }) {
-  if (readings.pr !== 'open') return readings.pr
-  if (readings['pr.queue'] === 'dequeued') return 'dequeued'
-  if (readings['pr.mergeable'] === 'conflicting') return 'conflicted'
-  if (readings.ci === 'failed') return 'red'
-  return 'unqueued'
-}
+// Fires once any case reads true. A fact not read yet waits.
+const FORGE = any(CASES)
 
-// Watches the forge, and gives a green PR thirty minutes to reach the queue before it counts.
+// Names what a watch read: the first case that reads true. A case with a fact not read yet is
+// passed over, as the watch that fired read past it.
+const outcome = ({ readings }) => CASES.find(([, when]) => reads(when, readings))[0]
+
+// Fires once the PR no longer reads unqueued: its case reads false, or a case before it reads
+// true, since a PR merged mid-hold can still read green and unqueued.
+const UNQUEUED = CASES.findIndex(([name]) => name === 'unqueued')
+const BROKEN = '!((' + CASES[UNQUEUED][1] + ') && !(' + any(CASES.slice(0, UNQUEUED)) + '))'
+
+// Watches the forge, and gives a green PR thirty minutes to reach the queue before it counts: a
+// watch for the hold to break, whose timeout means it held. A hold that held reads the forge
+// again whole before it counts, and one that broke watches from the top.
 async function forge() {
-  const outcome = blocker(await watch({ when: FORGE, timeout: '3d' }))
-  if (outcome !== 'unqueued') return outcome
-  await shell({ command: 'sleep 1800' })
-  return blocker(await watch({ when: FORGE, timeout: '3d' }))
+  for (;;) {
+    const named = outcome(await watch({ when: FORGE, timeout: '3d' }))
+    if (named !== 'unqueued') return named
+    try {
+      await watch({ when: BROKEN, timeout: '30m' })
+    } catch (failure) {
+      if (failure.cause !== 'timeout') throw failure
+      return outcome(await watch({ when: FORGE, timeout: '3d' }))
+    }
+  }
 }
 
 async function land() {
