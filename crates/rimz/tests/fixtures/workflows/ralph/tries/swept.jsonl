@@ -1,0 +1,17 @@
+{"result":{"code":0,"stdout":"{\"outcome\":\"ready\",\"milestones\":[{\"id\":\"m1\",\"items\":[\"i1\"]}]}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"pass\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"done"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"landed\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"some\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"clean"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"open\"}\n","output":"/runs/step.log"}}
+{"result":1764268800000}
+{"result":{"readings":{"ci":"passed","pr":"open","pr.mergeable":"mergeable","pr.queue":"none","pr.review":"changes_requested"}}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"sweep\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"done"}}
+{"result":1764279600000}
+{"result":{"readings":{"ci":null,"pr":"merged","pr.mergeable":null,"pr.queue":null,"pr.review":null}}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"advanced\"}\n","output":"/runs/step.log"}}
+{"result":{"code":0,"stdout":"{\"outcome\":\"built\"}\n","output":"/runs/step.log"}}
+{"result":{"outcome":"complete"}}
+{"result":{"report":"the goal is built","handle":"opus"}}
