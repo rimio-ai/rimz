@@ -549,7 +549,9 @@ upward-dependencies = [
 # Project skills: launch_inventory is the one launch-order inventory the scoped preflight and
 # validation share, same_dir lets the sandbox view skip a tier that is the provider root, and
 # ProjectTier::{user_first, user_only} carry the kind's precedence and the user-only refusal (+4).
-surface-budget = 1427
+# The native-tool contest (`native_tool`, `native_claim`, `contest` and their three enums) is
+# shared by definition lowering, definition warnings and launch compilation (+6).
+surface-budget = 1433
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1358,7 +1360,10 @@ upward-dependencies = [
 # list read for the server-level exposure, beside served_marks (+1).
 # ProjectKeyNotice and project_key_notices carry the project config's unread keys to room entry
 # and doctor (+2).
-surface-budget = 358
+# A row's native wins (Profile::native_wins, a kind base's kept in Profile::base_native_wins)
+# and a definition's file path feed `rimz agents validate`, `rimz doctor` and the launch
+# warning (+2).
+surface-budget = 360
 
 [[verdict]]
 kind = "item"
@@ -6056,7 +6061,8 @@ allowed-dependencies = [
 # McpLaunch builders read (+1).
 # CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
 # PreflightCheckout names the checkout whose project skills an entry-point preflight reads (+1).
-surface-budget = 70
+# Launch reminders and the plan warning read `ExecRequest::yields_to_native` (+1).
+surface-budget = 71
 
 [[verdict]]
 kind = "item"

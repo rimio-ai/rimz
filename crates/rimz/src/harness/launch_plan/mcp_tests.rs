@@ -3396,7 +3396,8 @@ fn seat_added_rimz_message_reads_trusted_project_env() {
 /// A launch on a built-in kind base, as a definition with no home or pack base or as a bare kind
 /// launch, keeps the provider's question tool and native delegation on every kind, as the
 /// official program does; one on a home kind base loses both where `rimz-ask` is served and a
-/// child is launchable.
+/// child is launchable, unless the base's tools list names the native tool, which then outranks
+/// RimZ's serve-everything default and warns once per compile.
 #[test]
 fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
     let native = |plan: &LaunchPlan, kind: &str| -> (bool, bool) {
@@ -3444,7 +3445,11 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
             }
         }
     };
-    let compile = |bases: &[(&str, &str)], spec: Option<&str>, kind: &str, subagent: bool| {
+    let compile_with = |bases: &[(&str, &str)],
+                        spec: Option<&str>,
+                        kind: &str,
+                        subagent: bool,
+                        server: bool| {
         let room = Room::new();
         let agents_home = Path::new(&room.ambient["HOME"]).join(".rimz");
         let mut files = vec![
@@ -3482,7 +3487,7 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
             .unwrap();
         }
         let mut machine: crate::config::MachineConfig =
-            toml::from_str(&switches(true, true)).unwrap();
+            toml::from_str(&switches(true, server)).unwrap();
         let loaded = crate::config::definitions::load(
             &agents_home,
             crate::config::definitions::SkillCheck::Skip,
@@ -3515,6 +3520,10 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
             }
             request.tools.clone_from(&cell.tools);
             request
+                .rimz_capabilities
+                .clone_from(&cell.rimz_capabilities);
+            request.no_skill_tool = cell.no_skill_tool;
+            request
                 .system_prompt_file
                 .clone_from(&cell.system_prompt_file);
         }
@@ -3526,7 +3535,15 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
         }
         room.compile_config(&machine, &request, Isolation::Host)
     };
+    let compile = |bases: &[(&str, &str)], spec: Option<&str>, kind: &str, subagent: bool| {
+        compile_with(bases, spec, kind, subagent, true)
+    };
     let home_bases = [
+        ("agents/claude.md", "tools: [Bash, Read, Skill]"),
+        ("agents/codex.md", "tools: [Bash, Read, Skill]"),
+        ("agents/antigravity.md", "tools: [Read]"),
+    ];
+    let naming_bases = [
         (
             "agents/claude.md",
             "tools: [Bash, Read, AskUserQuestion, Agent, Skill]",
@@ -3537,11 +3554,25 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
             "tools: [Read, AskUserQuestion, Agent]",
         ),
     ];
+    let native_wins = |plan: &LaunchPlan| {
+        plan.warnings
+            .iter()
+            .filter(|warning| matches!(warning, LaunchPlanWarning::NativeToolWins(_)))
+            .count()
+    };
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for kind in ["claude", "codex", "antigravity"] {
         let worker = format!("worker-{kind}");
         let (lead, coder) = (format!("crew-{kind}.lead"), format!("crew-{kind}.coder"));
+        // Codex's base names neither tool, so its tools list switches both off itself.
+        let named = if kind == "codex" {
+            (false, false)
+        } else {
+            (true, true)
+        };
+        let seat_named = (false, named.1);
+        let warned = |kept: (bool, bool)| usize::from(kept.0) + usize::from(kept.1);
         for (case, bases, spec, subagent, kept) in [
             ("bare", &[][..], None, false, (true, true)),
             (
@@ -3597,14 +3628,83 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
                 false,
                 (false, false),
             ),
+            (
+                "home base naming the native tools",
+                &naming_bases[..],
+                Some(worker.as_str()),
+                false,
+                named,
+            ),
+            (
+                "bare on home base naming the native tools",
+                &naming_bases[..],
+                Some(kind),
+                false,
+                named,
+            ),
+            (
+                "subagent on home base naming the native tools",
+                &naming_bases[..],
+                Some(worker.as_str()),
+                true,
+                (false, false),
+            ),
+            (
+                "seat on home base naming the native tools",
+                &naming_bases[..],
+                Some(coder.as_str()),
+                false,
+                seat_named,
+            ),
         ] {
-            actual.push((
-                kind,
-                case,
-                native(&compile(bases, spec, kind, subagent), kind),
-            ));
-            expected.push((kind, case, kept));
+            let plan = compile(bases, spec, kind, subagent);
+            let on_home = !bases.is_empty() && bases[0].1.contains("AskUserQuestion");
+            actual.push((kind, case, native(&plan, kind), native_wins(&plan)));
+            let owed = if on_home { warned(kept) } else { 0 };
+            expected.push((kind, case, kept, owed));
         }
     }
     assert_eq!(actual, expected);
+    let messages = |plan: &LaunchPlan| -> Vec<String> {
+        plan.warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                LaunchPlanWarning::NativeToolWins(message) => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // A bare launch on a kind base whose own `capabilities:` settled the contest warns in its words.
+    let granted = compile(
+        &[("agents/claude.md", "capabilities: [read, ask, rimz]")],
+        Some("claude"),
+        "claude",
+        false,
+    );
+    let [message] = messages(&granted).try_into().unwrap();
+    assert!(
+        message
+            .contains("/.rimz/agents/claude.md lists `ask` in `capabilities:` and gets `rimz-ask`"),
+        "{message}"
+    );
+    assert!(native(&granted, "claude").0);
+    // A blanket that reaches `rimz-ask` neither served nor as a skill keeps the native tool
+    // without a warning.
+    for (tools, warned) in [
+        ("tools: [Bash, Read, AskUserQuestion]", 0),
+        ("tools: [Bash, Read, AskUserQuestion, Skill]", 1),
+    ] {
+        let plan = compile_with(
+            &[("agents/claude.md", tools)],
+            Some("claude"),
+            "claude",
+            false,
+            false,
+        );
+        assert_eq!(
+            (native(&plan, "claude").0, messages(&plan).len()),
+            (true, warned),
+            "{tools}"
+        );
+    }
 }

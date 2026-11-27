@@ -21,7 +21,8 @@ pub struct AgentFileInput<'a> {
     pub native_subagents: bool,
     /// Whether the provider keeps its own question tool: false on a launched subagent or a
     /// team seat beside the leader, and elsewhere where the launch reaches `rimz-ask` outside a
-    /// built-in kind base.
+    /// built-in kind base, which a tools list naming the native tool beside a blanket grant does
+    /// not.
     pub native_ask: bool,
     /// The launch env, where the launched provider resolves its home.
     pub env: &'a BTreeMap<String, String>,

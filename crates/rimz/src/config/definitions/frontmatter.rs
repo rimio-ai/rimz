@@ -120,7 +120,7 @@ fn merge_list(list: &mut Option<Vec<String>>, below: Option<&Vec<String>>, key: 
 }
 
 /// A tool entry's base before `(`, in RimZ's spelling.
-fn tool_key(entry: &str) -> &str {
+pub(super) fn tool_key(entry: &str) -> &str {
     crate::agents::canonical_tool_name(entry.split('(').next().unwrap_or("").trim())
 }
 

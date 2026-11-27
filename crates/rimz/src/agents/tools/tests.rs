@@ -540,3 +540,85 @@ fn definition_effort_defaults_require_a_matcher() {
         ]
     );
 }
+
+/// A native question claim reaches only kinds whose questions RimZ sees, which is why the
+/// native-wins warning carries no clause about an unmarked card.
+#[test]
+fn every_kind_that_renders_the_native_question_tool_has_question_coverage() {
+    use crate::mcp::catalog::Capability;
+    let named = vec!["AskUserQuestion".to_owned()];
+    for definition in crate::agents::all_definitions() {
+        let kind = definition.spec().kind;
+        if native_claim(kind, &named, Capability::Ask).is_none() {
+            continue;
+        }
+        assert!(
+            !matches!(
+                definition.concern_coverage(crate::agents::IntegrationConcern::UserQuestion),
+                crate::agents::ConcernCoverage::Unsupported { .. }
+            ),
+            "{kind} renders AskUserQuestion but RimZ cannot see its questions: the native-wins \
+             question warning must again say this agent's questions will not mark its card"
+        );
+    }
+}
+
+/// A tools list names a capability's native tool where the kind renders it: Pi has a question
+/// tool but no `Agent`, and a kind that applies no tools list claims neither. Claude's preset
+/// claims both and ranks with neither side; a named tool outranks a blanket grant, and two named
+/// entries refuse.
+#[test]
+fn a_named_native_tool_outranks_a_blanket_grant_and_the_preset_ranks_with_neither() {
+    use crate::mcp::catalog::Capability;
+    let bases =
+        |names: &[&str]| -> Vec<String> { names.iter().map(|name| (*name).to_owned()).collect() };
+    let named = bases(&["Bash", "AskUserQuestion", "Agent"]);
+    let preset = bases(&["default"]);
+    let claims = |kind: &str| {
+        [Capability::Ask, Capability::Subagents, Capability::Lsp]
+            .map(|capability| native_claim(kind, &named, capability))
+    };
+    let (ask, agent) = (
+        Some(NativeClaim::Named("AskUserQuestion")),
+        Some(NativeClaim::Named("Agent")),
+    );
+    assert_eq!(
+        ["claude", "codex", "antigravity", "pi", "amp", "omp"].map(claims),
+        [
+            [ask, agent, None],
+            [ask, agent, None],
+            [ask, agent, None],
+            [ask, None, None],
+            [None, None, None],
+            [None, None, None],
+        ]
+    );
+    assert_eq!(
+        [
+            native_claim("claude", &bases(&["Bash"]), Capability::Ask),
+            native_claim("claude", &preset, Capability::Ask),
+            native_claim("codex", &preset, Capability::Ask),
+        ],
+        [None, Some(NativeClaim::Preset("default")), None]
+    );
+    let named = Some(NativeClaim::Named("AskUserQuestion"));
+    let preset = Some(NativeClaim::Preset("default"));
+    assert_eq!(
+        [
+            contest(named, Some(RimzClaim::Blanket)),
+            contest(named, Some(RimzClaim::Named)),
+            contest(named, None),
+            contest(preset, Some(RimzClaim::Blanket)),
+            contest(preset, Some(RimzClaim::Named)),
+            contest(None, Some(RimzClaim::Blanket)),
+        ],
+        [
+            Some(Contest::NativeWins),
+            Some(Contest::Refused),
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+}

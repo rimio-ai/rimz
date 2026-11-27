@@ -880,9 +880,10 @@ impl ExecRequest {
     }
 
     /// The RimZ capabilities the launch's grant, or else its `mcps` selection, serves, less
-    /// those `denied` it (`LaunchReminders::denied_capabilities`), and less `rimz-loop` on a
-    /// launch that cannot delegate: a booking's fire resolves no caller, so it would launch a
-    /// top-level agent past the child's refusal.
+    /// those `denied` it (`LaunchReminders::denied_capabilities`), less each it leaves to the
+    /// provider's own tool (`Self::yields_to_native`), and less `rimz-loop` on a launch that
+    /// cannot delegate: a booking's fire resolves no caller, so it would launch a top-level agent
+    /// past the child's refusal.
     pub(super) fn mcp_capabilities(
         &self,
         denied: &[crate::mcp::catalog::Capability],
@@ -896,11 +897,66 @@ impl ExecRequest {
                 .collect(),
             None => crate::config::mcp_capabilities(self.mcps.as_deref()),
         };
-        capabilities.retain(|capability| !denied.contains(capability));
+        capabilities.retain(|capability| {
+            !denied.contains(capability) && !self.yields_to_native(*capability)
+        });
         if self.cannot_delegate() {
             capabilities.retain(|capability| *capability != Capability::Loop);
         }
         capabilities
+    }
+
+    /// Whether the launch leaves `capability` to the provider's own tool, which its tools list
+    /// names while RimZ reaches the capability only through a blanket grant
+    /// (`crate::agents::contest`): the launch is neither served the capability's MCP tools nor
+    /// offered its skill, and keeps the native tool.
+    pub(super) fn yields_to_native(&self, capability: crate::mcp::catalog::Capability) -> bool {
+        let native = self
+            .tools
+            .as_deref()
+            .and_then(|bases| crate::agents::native_claim(self.kind.as_str(), bases, capability));
+        crate::agents::contest(native, self.rimz_claim(capability))
+            == Some(crate::agents::Contest::NativeWins)
+    }
+
+    /// How the request's lists reach `capability`: its grant names it or holds `rimz`, or with
+    /// no grant its `mcps` or `skills` name it, or its `mcps` holds `*` or `rimz` or is absent.
+    fn rimz_claim(
+        &self,
+        capability: crate::mcp::catalog::Capability,
+    ) -> Option<crate::agents::RimzClaim> {
+        use crate::agents::RimzClaim;
+        if let Some(grant) = &self.rimz_capabilities {
+            if grant
+                .iter()
+                .any(|entry| entry.capability() == Some(capability))
+            {
+                return Some(RimzClaim::Named);
+            }
+            return grant
+                .iter()
+                .any(crate::config::RimzEntry::is_server)
+                .then_some(RimzClaim::Blanket);
+        }
+        let mcps = self.mcps.as_deref();
+        if mcps
+            .unwrap_or_default()
+            .iter()
+            .any(|entry| entry.capability() == Some(capability))
+            || self
+                .skills
+                .iter()
+                .flatten()
+                .any(|skill| skill.as_str() == capability.name())
+        {
+            return Some(RimzClaim::Named);
+        }
+        mcps.is_none_or(|entries| {
+            entries
+                .iter()
+                .any(crate::config::McpName::serves_every_capability)
+        })
+        .then_some(RimzClaim::Blanket)
     }
 
     /// Each capability the grant, or else the `mcps` selection, serves, with its load mark: its

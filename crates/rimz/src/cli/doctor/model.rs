@@ -149,6 +149,15 @@ pub(super) struct Home {
 #[derive(Debug, Serialize)]
 pub(super) struct MachineConfigHealth {
     pub(super) broken_files: Vec<MachineConfigProblem>,
+    /// Each loaded definition or kind base whose named native tool outranks a blanket RimZ
+    /// grant, with each warning it carries.
+    pub(super) definition_warnings: Vec<DefinitionWarning>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DefinitionWarning {
+    pub(super) path: String,
+    pub(super) message: String,
 }
 
 #[derive(Debug, Serialize)]

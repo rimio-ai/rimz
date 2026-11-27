@@ -46,6 +46,11 @@ impl McpName {
         Capability::from_name(&self.name)
     }
 
+    /// `*` or `rimz`, either of which serves every RimZ capability.
+    pub fn serves_every_capability(&self) -> bool {
+        self.is_all() || self.name == crate::mcp::catalog::SERVER_NAME
+    }
+
     /// The user's own server the entry names: not `*`, `rimz`, or a capability.
     pub fn user_server(&self) -> Option<&str> {
         let rimz = self.is_all()
@@ -67,10 +72,7 @@ pub fn mcp_capabilities(mcps: Option<&[McpName]>) -> Vec<Capability> {
     let Some(entries) = mcps else {
         return Capability::ALL.to_vec();
     };
-    if entries
-        .iter()
-        .any(|entry| entry.is_all() || entry.name == crate::mcp::catalog::SERVER_NAME)
-    {
+    if entries.iter().any(McpName::serves_every_capability) {
         return Capability::ALL.to_vec();
     }
     Capability::ALL

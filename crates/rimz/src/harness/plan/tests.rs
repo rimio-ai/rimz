@@ -2230,6 +2230,7 @@ fn configured_profile(
         kind_defaults: false,
         kind_base: false,
         built_in_base: false,
+        base_native_wins: Vec::new(),
         tools: None,
         auto_compact_default: None,
         model_tier: None,

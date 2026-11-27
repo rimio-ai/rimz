@@ -995,6 +995,13 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
             "tools: [Bash, Skill]\n",
             "Use rimz(nope).",
         ),
+        // Named native tools beside RimZ's default outrank it, so neither capability is reached.
+        (
+            "yields",
+            "agents",
+            "tools: [Read, Skill, AskUserQuestion, Agent]\n",
+            "Use rimz(ask) and rimz(subagents).",
+        ),
         (
             "shut",
             "agents",
@@ -1051,6 +1058,12 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
              a RimZ capability nor a skill on disk for claude",
             "agents/unlisted.md: profile unlisted: rimz(chat) names `rimz-chat`, which \
              this profile cannot reach: its skills leave out rimz-chat",
+            "agents/yields.md: profile yields: rimz(ask) names `rimz-ask`, which this profile \
+             cannot reach: its tools list names the provider's own tool beside a blanket RimZ \
+             grant",
+            "agents/yields.md: profile yields: rimz(subagents) names `rimz-subagents`, which \
+             this profile cannot reach: its tools list names the provider's own tool beside a \
+             blanket RimZ grant",
             "subagents/child.md: profile child: rimz(agents) names `rimz-agents`, which this \
              profile cannot reach: a subagent cannot launch agents",
             "subagents/child.md: profile child: rimz(subagents) names `rimz-subagents`, which \
@@ -1389,5 +1402,58 @@ fn notes_name_each_kind_whose_definitions_run_on_the_built_in_base() {
             "note: codex definitions run on the built-in kind base; write {} to replace it",
             root.path().join("agents/codex.md").display()
         )]
+    );
+}
+
+/// A definition or kind base whose named native tool outranks a blanket RimZ grant warns once at
+/// its own file with the load's attribution, and a `rimz(ask)` in its prompt reads as
+/// unreachable; one whose chain lists no tools does not warn.
+#[test]
+fn a_named_native_tool_beside_a_blanket_grant_warns_at_its_definition() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", "capabilities: [read, ask, rimz]\n"),
+        ("asks", "agent: claude\ntools: [Bash, AskUserQuestion]\n"),
+        ("plain", "agent: claude\ntools: [Bash]\n"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Test\n{fields}---\nBase. Ask with rimz(ask)."),
+        )
+        .unwrap();
+    }
+    let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let machine = rimz::config::MachineConfig::default();
+    let warnings = native_tool_warnings(&loaded, &machine);
+    let mut warned: Vec<_> = warnings
+        .iter()
+        .map(|warning| (warning.path.clone(), warning.message.clone()))
+        .collect();
+    warned.sort();
+    let [(asks, asks_message), (codex, codex_message)] = warned.as_slice() else {
+        panic!("{warned:?}");
+    };
+    assert!(asks.ends_with("agents/asks.md"), "{asks:?}");
+    assert!(asks_message.contains(
+        "lists `AskUserQuestion` in `tools:` and gets `rimz-ask` from RimZ's default (no \
+         `mcps`); using the native question tool"
+    ));
+    assert!(codex.ends_with("agents/codex.md"), "{codex:?}");
+    assert!(
+        codex_message.contains("codex.md lists `ask` in `capabilities:`"),
+        "{codex_message}"
+    );
+    let mut unreachable: Vec<_> = capability_errors(&loaded, &machine, |_, _| None)
+        .into_iter()
+        .filter(|error| error.message.contains("rimz(ask)"))
+        .map(|error| error.path)
+        .collect();
+    unreachable.sort();
+    assert_eq!(
+        unreachable,
+        ["asks", "codex"].map(|name| root.path().join(format!("agents/{name}.md")))
     );
 }

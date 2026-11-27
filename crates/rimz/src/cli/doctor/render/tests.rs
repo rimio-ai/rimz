@@ -1,10 +1,11 @@
 use super::*;
 use crate::cli::doctor::model::{
-    AccountRow, DaemonTab, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
-    LoopTimer, MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries,
-    MuxLogIssue, OpenCounts, OutdatedIntegration, PresenceCommandFailure, PresencePluginRow,
-    PresencePluginStatus, PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageFolderView,
-    StorageRoomView, StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
+    AccountRow, DaemonTab, DefinitionWarning, HookRow, Host, IncidentAgent, LastIncident,
+    LegacySession, LoopTaskRow, LoopTimer, MachineConfigProblem, MachineConfigProblemKind,
+    MessageProblemRow, MuxBinaries, MuxLogIssue, OpenCounts, OutdatedIntegration,
+    PresenceCommandFailure, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
+    PresencePlugins, RemoteAgent, StorageFolderView, StorageRoomView, StorageRootView, TmuxCaps,
+    ZellijCaps, ZellijKittyGraphics,
 };
 use rimz::daemon_view::{DaemonShape, DaemonShapeFault};
 use rimz::ids::MuxName;
@@ -618,6 +619,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
                 .to_owned(),
             kind: MachineConfigProblemKind::Parse,
         }],
+        definition_warnings: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -649,6 +651,7 @@ fn machine_config_definition_problem_names_launch_precondition() {
             error: "empty layout cell in `claude,,codex`".to_owned(),
             kind: MachineConfigProblemKind::Definition,
         }],
+        definition_warnings: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -683,6 +686,7 @@ fn machine_config_definition_path_stays_on_one_line() {
             error: "refused".to_owned(),
             kind: MachineConfigProblemKind::Definition,
         }],
+        definition_warnings: Vec::new(),
     };
     let mut raw = Vec::new();
     let mut tally = Tally::default();
@@ -865,6 +869,7 @@ fn report_fixture() -> DoctorReport {
         },
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
+            definition_warnings: Vec::new(),
         },
         packs: Probe::Ready(rimz::packs::CheckoutReport::default()),
         sandbox: super::super::model::Sandbox {
@@ -1363,6 +1368,7 @@ fn packs_section_counts_modified_and_unreadable_checkouts_but_not_clean_ones() {
         .map(|case| {
             let mut config = MachineConfigHealth {
                 broken_files: Vec::new(),
+                definition_warnings: Vec::new(),
             };
             let packs = if matches!(*case, "record" | "duplicate-record") {
                 if *case == "duplicate-record" {
@@ -4172,4 +4178,54 @@ fn trust_section_renders_each_unread_project_key_with_its_own_fix() {
             .contains("! TRUST: 2 findings: nonsense, profilez\n      fix: remove or rename it\n"),
         "{closing}"
     );
+}
+
+/// A definition whose named native tool outranks a blanket RimZ grant shows as a warning row
+/// naming its file, with the fix the warning carries, once however many definitions inherit the
+/// entry; the summary names a file once however many warnings it has.
+#[test]
+fn machine_config_names_a_definition_whose_native_tool_wins() {
+    let config = MachineConfigHealth {
+        broken_files: Vec::new(),
+        definition_warnings: vec![
+            DefinitionWarning {
+                path: "/home/eddie/.rimz/agents/coder.md".to_owned(),
+                message: "/home/eddie/.rimz/agents/coder.md lists `ask` in `capabilities:` and \
+                          gets `rimz-ask` from `rimz` in `capabilities:`; using the native \
+                          question tool"
+                    .to_owned(),
+            },
+            DefinitionWarning {
+                path: "/home/eddie/.rimz/agents/coder.md".to_owned(),
+                message: "/home/eddie/.rimz/agents/coder.md lists `Agent` in `tools:` and gets \
+                          `rimz-subagents` from RimZ's default (no `mcps`); using native \
+                          delegation"
+                    .to_owned(),
+            },
+            DefinitionWarning {
+                path: "/home/eddie/.rimz/agents/reviewer.md".to_owned(),
+                message: "/home/eddie/.rimz/agents/coder.md lists `ask` in `capabilities:` and \
+                          gets `rimz-ask` from `rimz` in `capabilities:`; using the native \
+                          question tool"
+                    .to_owned(),
+            },
+        ],
+    };
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_machine_config(w, &config, &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(out.contains("all present files parse"), "{out}");
+    assert!(
+        out.contains("lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz`"),
+        "{out}"
+    );
+    assert_eq!(out.matches("lists `ask`").count(), 1, "{out}");
+    assert!(out.contains("2 warnings"), "{out}");
+    let summary = out
+        .lines()
+        .find(|line| line.contains("MACHINE CONFIG: 2 findings: "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(summary.matches("coder.md").count(), 1, "{out}");
 }

@@ -1642,6 +1642,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         kind_defaults: false,
         kind_base: false,
         built_in_base: false,
+        base_native_wins: Vec::new(),
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -3546,7 +3547,7 @@ subagents = ["+codex"]
         project4.path(),
         "profiles",
         "r9",
-        "Agent tool",
+        "lists `Agent` in `tools:`",
     );
     assert_row_refused(
         &m4,
