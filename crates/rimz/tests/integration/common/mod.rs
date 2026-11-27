@@ -354,7 +354,7 @@ pub(crate) fn write_claude_conversation(env: &Env, root: &std::path::Path, sessi
 /// Writes `<namespace>/<name>.md` under the agents home. For an agent or subagent on a kind
 /// whose launch replaces the system prompt from a file, it first writes that kind's home base
 /// (`write_kind_base`) unless one exists, and that base replaces the built-in kind base: a test
-/// of what the built-in base supplies (its `code-mode`, its `capabilities`) writes its
+/// of what the built-in base supplies (its `code-mode`, its prompt body) writes its
 /// definition by hand.
 pub fn write_definition(
     env: &Env,

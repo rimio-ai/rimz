@@ -19,8 +19,9 @@ pub struct AgentFileInput<'a> {
     /// The definition's tools as canonical base names; `None` when it lists none.
     pub tools: Option<&'a [String]>,
     pub native_subagents: bool,
-    /// Whether the provider keeps its own question tool: false where the launch reaches
-    /// `rimz-ask`.
+    /// Whether the provider keeps its own question tool: false on a launched subagent or a
+    /// team seat beside the leader, and elsewhere where the launch reaches `rimz-ask` outside a
+    /// built-in kind base.
     pub native_ask: bool,
     /// The launch env, where the launched provider resolves its home.
     pub env: &'a BTreeMap<String, String>,

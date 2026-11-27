@@ -134,14 +134,16 @@ impl LaunchReminders {
     }
 
     /// The capabilities the launch is denied whatever its lists say: every capability that
-    /// launches agents where `ExecRequest::cannot_delegate` holds, and `rimz-subagents` on a
-    /// launch with no subagent surface. A profile's `subagents = []` limits its children only,
-    /// so it keeps `rimz-agents` and `rimz-teams`.
+    /// launches agents where `ExecRequest::cannot_delegate` holds, `rimz-subagents` on a launch
+    /// with no subagent surface, and `rimz-ask` on a launched subagent (its question goes in its
+    /// result) or a team seat beside the leader (only the leader reaches the user). A profile's
+    /// `subagents = []` limits its children only, so it keeps `rimz-agents` and `rimz-teams`.
     pub(super) fn denied_capabilities(&self, request: &ExecRequest) -> Vec<Capability> {
         let no_subagents = self.no_subagents(request);
-        // Only the leader reaches the user; another seat asks the leader.
-        let seat_beside_leader = !request.subagent
-            && self.team.as_ref().is_some_and(|reminder| {
+        // Only the leader reaches the user; a subagent puts its question in its result and
+        // another team seat asks the leader.
+        let cannot_ask = request.subagent
+            || self.team.as_ref().is_some_and(|reminder| {
                 request.identity.params.role.as_deref() != reminder.team.leader_role()
             });
         Capability::ALL
@@ -149,7 +151,7 @@ impl LaunchReminders {
             .filter(|capability| {
                 (request.cannot_delegate() && capability.launches_agents())
                     || (no_subagents && *capability == Capability::Subagents)
-                    || (seat_beside_leader && *capability == Capability::Ask)
+                    || (cannot_ask && *capability == Capability::Ask)
             })
             .collect()
     }
@@ -289,9 +291,9 @@ impl LaunchReminders {
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
 
-    /// The provider's own question tool goes: on a team seat beside the leader, on every base,
-    /// since only the leader reaches the user; elsewhere where the launch reaches `rimz-ask`,
-    /// its `ask` tool served or its skill callable and on disk. Unlike
+    /// The provider's own question tool goes: on a launched subagent or a team seat beside the
+    /// leader, on every base, since neither reaches the user; elsewhere where the launch reaches
+    /// `rimz-ask`, its `ask` tool served or its skill callable and on disk. Unlike
     /// `disable_native_subagents`, a callable skill counts only on disk, since a launch with
     /// neither would lose asking. Any other launch on a built-in kind base keeps its own.
     pub(super) fn disable_native_ask(&self, request: &ExecRequest) -> bool {
@@ -337,7 +339,7 @@ pub(super) struct PromptRewrite {
     pub unreachable: BTreeSet<String>,
 }
 
-/// Rewrite each `rimz(x)` and each `skill(rimz-x)` for one of the eleven MCP
+/// Rewrite each `rimz(x)` and each `skill(rimz-x)` for one of the twelve MCP
 /// capabilities in `text` to this launch's short form (`mcp(<tool>)` or
 /// `skill(<name>)`). Unreachable references stay written as the author wrote
 /// them and are recorded in `unreachable` as their short capability name `x`.

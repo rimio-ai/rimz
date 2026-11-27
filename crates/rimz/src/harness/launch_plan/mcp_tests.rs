@@ -578,6 +578,7 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
             "rimz_workflow",
             "rimz_schedule",
             "rimz_message",
+            "rimz_ask",
             "rimz_tasks",
             "rimz_join",
             "rimz_stop",
@@ -607,7 +608,7 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
         seq: 1,
         role: crate::agents::WorkflowAttemptRole::Judge,
     });
-    let limited = serde_json::json!([
+    let child_limited = serde_json::json!([
         "/bin/rimz",
         "mcp",
         "serve",
@@ -626,12 +627,35 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
         "--only",
         "rimz-blackboard"
     ]);
-    for request in [child, judge] {
-        assert_eq!(
-            command(&room.compile(&switches(true, true), &request)),
-            Some(limited.clone())
-        );
-    }
+    let judge_limited = serde_json::json!([
+        "/bin/rimz",
+        "mcp",
+        "serve",
+        "--only",
+        "rimz-lsp",
+        "--only",
+        "rimz-wait",
+        "--only",
+        "rimz-workflow",
+        "--only",
+        "rimz-message",
+        "--only",
+        "rimz-ask",
+        "--only",
+        "rimz-control",
+        "--only",
+        "rimz-notes",
+        "--only",
+        "rimz-blackboard"
+    ]);
+    assert_eq!(
+        command(&room.compile(&switches(true, true), &child)),
+        Some(child_limited)
+    );
+    assert_eq!(
+        command(&room.compile(&switches(true, true), &judge)),
+        Some(judge_limited)
+    );
 
     let listed = room.compile(
         &switches(true, true),
@@ -897,7 +921,7 @@ fn pi_serves_through_the_launch_env_with_its_exposures() {
         room.ambient.insert(key.into(), "caller".into());
     }
     let cwd = room.project.path().display().to_string();
-    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-control,rimz-notes,rimz-blackboard";
+    let all = "rimz-lsp,rimz-wait,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes,rimz-blackboard";
     let compile = |mcps: Option<&[&str]>, code_mode: Option<bool>, tools: bool| {
         let mut request = launch("pi", mcps, &[]);
         request.identity.params.code_mode = code_mode;
@@ -1363,8 +1387,8 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
     };
     let deferred = "rimz-lsp:deferred,rimz-wait:deferred,rimz-subagents:deferred,\
                     rimz-agents:deferred,rimz-teams:deferred,rimz-workflow:deferred,\
-                    rimz-loop:deferred,rimz-message:deferred,rimz-control:deferred,\
-                    rimz-notes:deferred";
+                    rimz-loop:deferred,rimz-message:deferred,rimz-ask:deferred,\
+                    rimz-control:deferred,rimz-notes:deferred";
     assert_eq!(
         served(&seat("antigravity", Some(&["rimz:deferred"]))),
         Some(format!("{deferred},rimz-blackboard:always"))
@@ -1833,22 +1857,33 @@ fn a_child_and_a_judge_are_served_no_capability_that_launches() {
             seq: 1,
             role: crate::agents::WorkflowAttemptRole::Judge,
         });
-        for request in [child, judge] {
-            assert_eq!(
-                served(&request),
-                [
-                    Capability::Lsp,
-                    Capability::Wait,
-                    Capability::Workflow,
-                    Capability::Message,
-                    Capability::Ask,
-                    Capability::Control,
-                    Capability::Notes,
-                    Capability::Blackboard
-                ],
-                "{kind}"
-            );
-        }
+        assert_eq!(
+            served(&child),
+            [
+                Capability::Lsp,
+                Capability::Wait,
+                Capability::Workflow,
+                Capability::Message,
+                Capability::Control,
+                Capability::Notes,
+                Capability::Blackboard
+            ],
+            "{kind}"
+        );
+        assert_eq!(
+            served(&judge),
+            [
+                Capability::Lsp,
+                Capability::Wait,
+                Capability::Workflow,
+                Capability::Message,
+                Capability::Ask,
+                Capability::Control,
+                Capability::Notes,
+                Capability::Blackboard
+            ],
+            "{kind}"
+        );
     }
 }
 
@@ -1968,6 +2003,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     .unwrap();
     // `subagents = []` limits a launch's children only, so it keeps the agent and team tools;
     // a child and a judge lose every capability that launches agents, and `rimz-loop` too.
+    // A child also loses `rimz-ask`, since its question goes in its result for its launcher.
     let served = |withheld: &[Capability]| -> Vec<Capability> {
         Capability::ALL
             .into_iter()
@@ -1979,6 +2015,13 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         Capability::Agents,
         Capability::Teams,
         Capability::Loop,
+    ];
+    let child_denied = [
+        Capability::Subagents,
+        Capability::Agents,
+        Capability::Teams,
+        Capability::Loop,
+        Capability::Ask,
     ];
     let mute = |kind: &str, profile: &str| {
         let mut request = launch(kind, None, &[]);
@@ -1999,7 +2042,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
             mute("claude", "mute"),
             served(&[Capability::Subagents]),
         ),
-        ("child", child, served(&launchers)),
+        ("child", child, served(&child_denied)),
         ("judge", judge, served(&launchers)),
     ] {
         let only: Vec<_> = served
@@ -3392,7 +3435,7 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
             }
         }
     };
-    let compile = |bases: &[(&str, &str)], spec: Option<&str>, kind: &str| {
+    let compile = |bases: &[(&str, &str)], spec: Option<&str>, kind: &str, subagent: bool| {
         let room = Room::new();
         let agents_home = Path::new(&room.ambient["HOME"]).join(".rimz");
         let mut files = vec![
@@ -3444,6 +3487,7 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
         machine.subagents.profiles = loaded.subagent_profiles.clone();
         machine.agents.teams = loaded.teams.clone();
         let mut request = launch(kind, None, &[]);
+        request.subagent = subagent;
         if let Some(spec) = spec {
             let layout = crate::harness::spec::resolve_spec_with_agent_override(
                 Some(spec),
@@ -3489,24 +3533,36 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
     for kind in ["claude", "codex", "antigravity"] {
         let worker = format!("worker-{kind}");
         let (lead, coder) = (format!("crew-{kind}.lead"), format!("crew-{kind}.coder"));
-        for (case, bases, spec, kept) in [
-            ("bare", &[][..], None, (true, true)),
+        for (case, bases, spec, subagent, kept) in [
+            ("bare", &[][..], None, false, (true, true)),
             (
                 "built-in base",
                 &[][..],
                 Some(worker.as_str()),
+                false,
                 (true, true),
             ),
             (
                 "home base",
                 &home_bases[..],
                 Some(worker.as_str()),
+                false,
                 (false, false),
             ),
             (
                 "bare on home base",
                 &home_bases[..],
                 Some(kind),
+                false,
+                (false, false),
+            ),
+            // A launched subagent puts its question in its result and cannot delegate, so it
+            // loses both native tools on every base.
+            (
+                "subagent on built-in base",
+                &[][..],
+                Some(worker.as_str()),
+                true,
                 (false, false),
             ),
             // Only the leader reaches the user, so a seat beside it loses its own question
@@ -3515,22 +3571,29 @@ fn only_launches_on_a_built_in_kind_base_keep_native_ask_and_delegation() {
                 "leader on built-in base",
                 &[][..],
                 Some(lead.as_str()),
+                false,
                 (true, true),
             ),
             (
                 "seat on built-in base",
                 &[][..],
                 Some(coder.as_str()),
+                false,
                 (false, true),
             ),
             (
                 "seat on home base",
                 &home_bases[..],
                 Some(coder.as_str()),
+                false,
                 (false, false),
             ),
         ] {
-            actual.push((kind, case, native(&compile(bases, spec, kind), kind)));
+            actual.push((
+                kind,
+                case,
+                native(&compile(bases, spec, kind, subagent), kind),
+            ));
             expected.push((kind, case, kept));
         }
     }
