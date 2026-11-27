@@ -854,36 +854,8 @@ fn condition_replacement_resets_fired_and_hold_state() {
 #[test]
 fn a_watch_past_its_check_in_sends_none_before_a_tick_reads_it_unmet() {
     let root = tempfile::tempdir().unwrap();
-    let runtime =
-        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
-    std::fs::write(
-        root.path().join(".rimz/team/blackboard.md"),
-        "Stage: Done\n",
-    )
-    .unwrap();
     let now = zdt(2026, 6, 24, 8, 30, 0);
-    let tasks = one(loaded_from(
-        TaskEntry {
-            root: root.path().to_owned(),
-            when: Some(vec!["team.stage=Done".to_owned()]),
-            timeout: Some("30m".to_owned()),
-            wait: Some(crate::config::TaskTarget {
-                kind: crate::ids::AgentKind::new_unchecked("claude"),
-                session: "session".into(),
-                handle: "@coder".to_owned(),
-            }),
-            wait_meta: Some(crate::config::WaitMeta {
-                armed_at: seconds_before(now.timestamp(), 40 * 60),
-                delay: None,
-                reader: None,
-                joined_until: None,
-            }),
-            ..TaskEntry::default()
-        },
-        TaskSource::Instance,
-    ));
+    let (runtime, tasks) = stage_watch(root.path(), "Done", &now);
     let tick = || {
         fire_tasks(
             &runtime,
@@ -909,6 +881,81 @@ fn a_watch_past_its_check_in_sends_none_before_a_tick_reads_it_unmet() {
             BTreeMap::new()
         )
     );
+}
+
+/// A due check-in whose fire fails to start is not recorded as sent, so the next tick sends it.
+#[test]
+fn a_check_in_whose_fire_fails_to_start_goes_on_the_next_tick() {
+    if super::super::test_homes::reexec_with_private_homes(
+        "harness::schedule::fire::tests::a_check_in_whose_fire_fails_to_start_goes_on_the_next_tick",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let now = zdt(2026, 6, 24, 8, 30, 0);
+    let (runtime, tasks) = stage_watch(root.path(), "Review", &now);
+    let tick = |fail: bool| {
+        crate::child_process::FAIL_DETACHED_RIMZ.set(fail);
+        let fired = fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        );
+        // Keyed by the row's task id, which the failed start's history record bound.
+        let sent: BTreeMap<String, Timestamp> =
+            crate::disk::atomic::read_json_cache(&check_in_path(&runtime));
+        (fired, sent.into_values().collect::<Vec<_>>())
+    };
+    let armed_at = tasks[NAME].entry().wait_meta.as_ref().unwrap().armed_at;
+    assert_eq!(
+        [tick(false), tick(true), tick(false)],
+        [
+            (Vec::new(), Vec::new()),
+            (Vec::new(), Vec::new()),
+            (vec![NAME.to_owned()], vec![armed_at]),
+        ]
+    );
+}
+
+/// A watch for `team.stage=<stage>`, armed 40 minutes before `now` with a 30-minute check-in,
+/// in the room at `root` whose blackboard reads `blackboard`.
+fn stage_watch(
+    root: &Path,
+    blackboard: &str,
+    now: &ZonedDateTime,
+) -> (RuntimePaths, BTreeMap<String, LoadedTask>) {
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(root), root).unwrap();
+    runtime.ensure_dirs().unwrap();
+    std::fs::create_dir_all(root.join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.join(".rimz/team/blackboard.md"),
+        format!("Stage: {blackboard}\n"),
+    )
+    .unwrap();
+    let tasks = one(loaded_from(
+        TaskEntry {
+            root: root.to_owned(),
+            when: Some(vec!["team.stage=Done".to_owned()]),
+            timeout: Some("30m".to_owned()),
+            wait: Some(crate::config::TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: "session".into(),
+                handle: "@coder".to_owned(),
+            }),
+            wait_meta: Some(crate::config::WaitMeta {
+                armed_at: seconds_before(now.timestamp(), 40 * 60),
+                delay: None,
+                reader: None,
+                joined_until: None,
+            }),
+            ..TaskEntry::default()
+        },
+        TaskSource::Instance,
+    ));
+    (runtime, tasks)
 }
 
 #[test]
