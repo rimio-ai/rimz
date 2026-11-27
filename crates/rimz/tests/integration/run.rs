@@ -5541,6 +5541,10 @@ fn wait_for_message_count(
     }
 }
 
+/// Write `record` whole, stamped completed now, and wake the run's waiter. The write is
+/// unconditional: a child whose `--timeout` deadline passed first has already written
+/// `TimedOut`, which this overwrites, so a child launched with `--timeout` gets one its setup
+/// cannot reach.
 #[cfg(unix)]
 fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
     record.updated_at = Timestamp::now();
