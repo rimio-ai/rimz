@@ -102,6 +102,7 @@ pub(super) struct FreshLaunch {
     pub(super) soft_name: bool,
     pub(super) throttle_turn: Option<crate::harness::throttle::Turn>,
     pub(super) fallback_assist: Option<crate::harness::assist_log::Assist>,
+    pub(super) call: Option<crate::harness::call::CallSpec>,
 }
 
 pub struct OpenedRun {
@@ -231,6 +232,27 @@ fn execute_fresh(
     open_fresh(fresh, leader, interaction, room.backend())
 }
 
+/// The seats of a launch's call record, its leader (`identities[leader]`) first.
+fn call_seats(
+    identities: &[crate::store::writer::AgentLaunchIdentity],
+    leader: usize,
+) -> Vec<crate::store::call::Seat> {
+    let seat = |identity: &crate::store::writer::AgentLaunchIdentity| crate::store::call::Seat {
+        kind: identity.kind.clone(),
+        launch_id: identity.launch_id().clone(),
+    };
+    let leader = identities.get(leader);
+    leader
+        .into_iter()
+        .chain(
+            identities
+                .iter()
+                .filter(|identity| Some(*identity) != leader),
+        )
+        .map(seat)
+        .collect()
+}
+
 fn open_fresh(
     mut fresh: FreshLaunch,
     leader: Option<LeaderRun>,
@@ -242,6 +264,15 @@ fn open_fresh(
     let store = &fresh.context.store;
     let cwd = &fresh.launch.cwd;
     let leader_index = fresh.leader_index.unwrap_or(0);
+    if let (Some(call), Some(index)) = (&fresh.call, fresh.prompt_index)
+        && let Some(cell) = fresh.layout.agent_cells().nth(index)
+        && let Some(adapter) = crate::agents::find_definition(&cell.kind)
+    {
+        fresh.prompt = fresh
+            .prompt
+            .take()
+            .map(|prompt| super::resolve::call_prompt(prompt, call, adapter, cell));
+    }
     let (mut record, writes_result_file) = leader
         .as_ref()
         .map(|leader| {
@@ -278,6 +309,7 @@ fn open_fresh(
             );
             record.lifecycle = leader.lifecycle;
             record.keep = leader.keep;
+            record.self_cleanup = leader.cleanup;
             record.report_to = leader.report_to;
             record.subagent = leader.subagent;
             record.budget.clone_from(&cell.launch.budget);
@@ -375,6 +407,16 @@ fn open_fresh(
             description: fresh.description.clone(),
         },
     )?;
+    if let Some(call) = &fresh.call
+        && let Err(error) = call.publish(
+            store.paths(),
+            call_seats(batch.identities(), leader_index),
+            jiff::Timestamp::now(),
+        )
+    {
+        let _ = store.fail_agent_launch_batch(&batch);
+        return Err(anyhow::Error::from(error).context("recording the call"));
+    }
     if let Some(turn) = &fresh.throttle_turn {
         turn.report_launch(
             &workspace.workspace_id,
@@ -420,6 +462,11 @@ fn open_fresh(
         }
     };
     let in_place = fresh.placement == Placement::SamePane && leader.is_none();
+    let reminder_section = fresh
+        .call
+        .as_ref()
+        .and_then(crate::harness::call::CallSpec::reminder)
+        .or_else(|| fresh.reminder_section.clone());
     let mut panes = compile_layout_panes(
         &fresh.layout,
         LayoutPaneParams {
@@ -431,7 +478,7 @@ fn open_fresh(
             resume_seeds: None,
             launch_identities: batch.identities(),
             agents: &title_parents,
-            reminder_section: fresh.reminder_section.as_ref(),
+            reminder_section: reminder_section.as_ref(),
             leader_run: leader
                 .as_ref()
                 .zip(record.as_ref())
@@ -467,7 +514,9 @@ fn open_fresh(
     }
     let channel = fresh.lane.pin_name();
     let channel = channel.as_ref().map(LaneName::as_str);
-    let title = if let Some(leader) = &leader {
+    // A `stay: false` call's run is the `agent` tool's launch, so its tab is titled as a peer's.
+    let call_run = fresh.call.as_ref().is_some_and(|call| !call.stay);
+    let title = if let Some(leader) = leader.as_ref().filter(|_| !call_run) {
         leader.loop_task.as_ref().map_or_else(
             || {
                 placement::run_tab_title(

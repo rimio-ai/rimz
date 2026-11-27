@@ -59,6 +59,7 @@ impl Fixture {
             _dir: dir,
             fresh: FreshLaunch {
                 loop_fire: None,
+                call: None,
                 context: LaunchContext {
                     workspace,
                     store,
@@ -177,6 +178,10 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
         panic!("launch did not open")
     };
     let run = opened.run.unwrap();
+    assert!(
+        run.record.self_cleanup,
+        "a self-cleaning leader's run says so"
+    );
     let tabs = backend.tabs.lock().unwrap();
     let panes: Vec<_> = tabs[0]
         .panes

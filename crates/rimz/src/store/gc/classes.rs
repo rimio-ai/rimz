@@ -497,6 +497,30 @@ fn collect_owned(
             )?;
         }
     }
+    // A call record goes past the grace once no seat of its launch is live and its deadline,
+    // if any, has passed: a live seat still hands in its answer or is still owed its stop, and
+    // a seat resumed under its launch id before the deadline is still to be stopped.
+    let now = jiff::Timestamp::now();
+    for call in crate::store::call::list(paths)? {
+        let path = crate::store::call::call_path(paths, &call.launch_id);
+        let live = |seat: &crate::store::call::Seat| {
+            agents.iter().any(|agent| {
+                agent.kind == seat.kind
+                    && agent.launch_key() == &seat.launch_id
+                    && agent.ended_at.is_none()
+            })
+        };
+        if !call.seats.iter().any(live)
+            && call.deadline.is_none_or(|deadline| deadline <= now)
+            && super::collect::is_older_than(&path, retention::OWNED_GRACE)?
+        {
+            sweep.remove_file_if_exists(
+                &path,
+                |report| report.sidecar_files_removed += 1,
+                report,
+            )?;
+        }
+    }
     // A finished home goes once its record, or the home when it has none, is past the grace,
     // whatever version wrote it; the move into the finished directory keeps the record's mtime.
     for home in paths.finished_workflow_runs()? {

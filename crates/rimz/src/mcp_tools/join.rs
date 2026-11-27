@@ -37,6 +37,9 @@ const QUEUED: &str = "a message waits for you: read it, then join again";
 const ALSO_SENT: &str = "this outcome also came to you as a message";
 /// A shell canceled before its command exited.
 const CANCELED: &str = "it was canceled before its command exited";
+/// The detail of a team its call's `timeout` stopped.
+const TEAM_TIMED_OUT: &str =
+    "timed_out: its timeout stopped the team before its board reached Done";
 /// How often a shell join reads the shell's row, and its history once the row is gone.
 const SHELL_POLL: Duration = Duration::from_millis(100);
 /// How long past its deadline a join waits for history when dropping its claim finds a fire
@@ -124,6 +127,13 @@ pub(super) fn join(
     };
     let joined = match named {
         Named::Gone if kind == TaskKind::Shell => ended_shell(&owners, &root, id, name)?,
+        Named::Gone
+            if kind == TaskKind::Team
+                && owned::ended_team_run(&owners, name)
+                    .is_some_and(|run| run.status == RunStatus::TimedOut) =>
+        {
+            Joined::done(id, None, Some(TEAM_TIMED_OUT.to_owned()))
+        }
         Named::Gone => Joined {
             hint: Some(GONE.to_owned()),
             ..Joined::new(id, "ended")
@@ -187,8 +197,17 @@ pub(super) fn join(
                     let result = (status == RunStatus::Completed)
                         .then(|| crate::harness::scratch::board_section(&worktree, "Result"))
                         .flatten();
-                    let detail = (status != RunStatus::Completed)
-                        .then(|| "the cohort ended before its board reached Done".to_owned());
+                    // A cohort its call's timeout stopped dissolves short of Done after the
+                    // timeout settled its team run.
+                    let timed_out = || {
+                        owned::ended_team_run(&owners, name)
+                            .is_some_and(|run| run.status == RunStatus::TimedOut)
+                    };
+                    let detail = match status {
+                        RunStatus::Completed => None,
+                        _ if timed_out() => Some(TEAM_TIMED_OUT.to_owned()),
+                        _ => Some("the cohort ended before its board reached Done".to_owned()),
+                    };
                     Joined::done(id, result, detail)
                 }
                 team_join::Joined::Interrupted(why) => Joined::stopped(id, Some(why)),
@@ -399,9 +418,21 @@ fn schedule_disabled(root: &Path, name: &str) -> anyhow::Result<bool> {
     ))
 }
 
+/// Whether `run` is the self-cleaning run `row`'s own launch opened (a `stay: false` call's,
+/// say), which no later turn of that launch supersedes, so its record is the answer while the
+/// pane closes. A kept run's agent works on, and its later turns supersede the run.
+fn own_run(run: &crate::store::run::RunRecord, row: &AgentState) -> bool {
+    run.self_cleanup
+        && run.peer.is_none()
+        && run.team.is_none()
+        && run.launch_id.is_some()
+        && run.launch_id == row.launch_id
+}
+
 /// Join a subagent or agent: its supervised run when the run still goes, the agent has ended,
-/// or the run is the subagent's or the peer's latest turn, else its live turn, as
-/// `rimz agents wait` picks; a settled run is claimed so the digest does not deliver it again.
+/// or the run is the subagent's or the peer's latest turn or the launch's own, else its live
+/// turn, as `rimz agents wait` picks; a settled run is claimed so the digest does not deliver it
+/// again.
 fn join_agent(
     room: &Room,
     snapshot: &SidebarSnapshot,
@@ -434,6 +465,7 @@ fn join_agent(
             if !run.status.is_terminal()
                 || live.is_none()
                 || (run.subagent && row.is_launched_child())
+                || own_run(&run, row)
                 || latest_turn(&run)? =>
         {
             WaitTarget::Run {

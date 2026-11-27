@@ -91,6 +91,8 @@ pub struct LayoutLaunch {
     pub subagent_profile: bool,
     /// `agent`'s launch: refuse a spec whose resolved layout is other than one agent seat.
     pub one_seat: bool,
+    /// What an `agent` or `team` call asks of the launch beyond opening it.
+    pub call: Option<crate::harness::call::CallSpec>,
 }
 
 impl LayoutLaunch {
@@ -1326,6 +1328,7 @@ fn settle_layout(
         soft_name: false,
         throttle_turn: None,
         fallback_assist: None,
+        call: args.launch.call.clone(),
     })))
 }
 

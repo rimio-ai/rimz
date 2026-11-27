@@ -20,6 +20,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "teams",
             "asks",
             "answer",
+            "submit",
             "message",
             "transcript",
             "notes",

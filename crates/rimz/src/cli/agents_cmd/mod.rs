@@ -5,6 +5,7 @@ mod auto_continue;
 mod auto_redeem;
 mod budget_park;
 mod cache_keepalive;
+mod call_timeout;
 mod ceiling_compact;
 mod check;
 mod compact;
@@ -68,6 +69,7 @@ use rimz::agents::{AgentState, LifecycleRefreshRequest};
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::auto_redeem::AutoRedeemRequest;
 use rimz::harness::budget::BudgetParkRequest;
+use rimz::harness::call_timeout::CallTimeoutRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::orphan_sweep::OrphanSubagentRequest;
 #[cfg(test)]
@@ -92,6 +94,7 @@ use attribution::attribution;
 use auto_continue::run_auto_continue;
 use auto_redeem::run_auto_redeem;
 use budget_park::run_budget_park;
+use call_timeout::call_timeout;
 use check::{CheckArgs, run_check};
 use exec::run_exec;
 use fork::{ForkArgs, run_fork};
@@ -1022,6 +1025,9 @@ enum AgentsSubcmd {
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
     RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
+    /// Hidden helper that stops a launch past its call's `timeout`.
+    #[command(hide = true)]
+    CallTimeout(HelperRequestArgs<CallTimeoutRequest>),
     /// Hidden helper that records and repairs a subagent whose parent ended.
     #[command(hide = true)]
     OrphanSubagent(HelperRequestArgs<OrphanSubagentRequest>),
@@ -1171,6 +1177,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::StallNotice(args)) => return stall_notice::run(args.request),
         Some(AgentsSubcmd::StallNudge(args)) => return stall_nudge::run(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
+        Some(AgentsSubcmd::CallTimeout(args)) => return call_timeout(args.request, globals),
         Some(AgentsSubcmd::OrphanSubagent(args)) => {
             return repair_orphan(args.request, globals);
         }

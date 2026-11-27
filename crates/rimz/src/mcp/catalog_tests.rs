@@ -557,6 +557,42 @@ fn calls_carry_their_arguments_as_data() {
             Some("2h")
         )
     );
+    let Call::Agent(agent) = call(
+        "agent",
+        json!({
+            "profile": "judge",
+            "prompt": "Review.",
+            "stay": false,
+            "schema": {"type": "object", "required": ["verdict"]},
+            "timeout": "30m",
+        }),
+    ) else {
+        panic!("an agent call with stay, schema, and timeout");
+    };
+    assert!(!agent.stay);
+    assert_eq!(
+        (agent.schema, agent.timeout.as_deref()),
+        (
+            Some(
+                json!({"type": "object", "required": ["verdict"]})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ),
+            Some("30m")
+        )
+    );
+    let Call::Agent(agent) = call("agent", json!({"profile": "coder", "prompt": "Go."})) else {
+        panic!("an agent call");
+    };
+    assert!(agent.stay && agent.schema.is_none() && agent.timeout.is_none());
+    let Call::Team(team) = call(
+        "team",
+        json!({"team": "forge", "prompt": "Build.", "worktree": "fix", "timeout": "3d"}),
+    ) else {
+        panic!("a team call with a timeout");
+    };
+    assert_eq!(team.timeout.as_deref(), Some("3d"));
     let Call::Stop(stop) = call("stop", json!({"id": "--all"})) else {
         panic!("a stop call");
     };
@@ -826,6 +862,42 @@ fn arguments_outside_the_schema_shape_are_refused() {
         (
             "agent",
             json!({"profile": "coder", "prompt": "p", "model": "opus"}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "schema": {"minimum": 1}}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "schema": "object"}),
+        ),
+        (
+            "agent",
+            json!({"profile": "coder", "prompt": "p", "timeout": "soon"}),
+        ),
+        (
+            "team",
+            json!({"team": "forge", "prompt": "p", "worktree": "a", "timeout": "0x"}),
+        ),
+        (
+            "schedule",
+            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
+                   "arguments": {"profile": "w", "prompt": "go", "stay": false}}),
+        ),
+        (
+            "schedule",
+            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
+                   "arguments": {"profile": "w", "prompt": "go", "schema": {"type": "string"}}}),
+        ),
+        (
+            "schedule",
+            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
+                   "arguments": {"profile": "w", "prompt": "go", "timeout": "1h"}}),
+        ),
+        (
+            "schedule",
+            json!({"name": "n", "trigger": "in", "value": "5m", "worktree": "fix", "tool": "team",
+                   "arguments": {"team": "forge", "prompt": "go", "timeout": "1h"}}),
         ),
         ("team", json!({"team": " ", "prompt": "p", "worktree": "a"})),
         (

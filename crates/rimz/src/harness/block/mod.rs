@@ -191,26 +191,25 @@ fn drop_field_null(field: &mut Value) {
 }
 
 /// Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
-/// `cwd`) it works in its caller's checkout.
+/// `cwd`) it works in its caller's checkout. A script's call resolves when a staying agent's
+/// session has closed, or when a `stay: false` agent's turn has ended.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "the tools and the run steps of later changes read the fields no refusal reads"
-)]
-pub(in crate::harness) struct Agent {
+pub struct Agent {
     /// Agent profile (from `rimz agents profiles`) or bare model; one seat, never a team.
     pub profile: String,
     /// The brief: the agent's first turn.
     pub prompt: String,
     /// Label for `tasks` and the sidebar, 3 to 5 words.
     pub description: Option<String>,
-    /// Distinct handle when the channel already holds this profile's.
+    /// Distinct handle when the channel already holds this profile's, the caller's own included.
     pub name: Option<String>,
-    /// Inherit this profile or provider kind below the launched profile.
+    /// Inherit this profile or provider kind below the launched profile; omit unless the user
+    /// asks.
     pub agent: Option<String>,
     /// Kebab-case worktree name (at most two words); at most one of `worktree`, `from_pr`, and
-    /// `cwd`.
+    /// `cwd`. A new one branches from `agents.worktree.base` when set, else from the `HEAD` of the
+    /// main checkout; a `team.role` branches as its team does.
     pub worktree: Option<String>,
     /// `worktree` only: start a new session in a closed worktree (otherwise refused).
     #[serde(default)]
@@ -220,15 +219,15 @@ pub(in crate::harness) struct Agent {
     /// Existing directory to work in.
     pub cwd: Option<PathBuf>,
     /// `true` (the default): the agent stays in the room after its first turn until it is
-    /// closed, and the call resolves when its session has closed. `false`: one task, and it
-    /// closes when its turn ends.
+    /// closed. `false`: one task, and it closes once its turn ends and its report is out.
     #[serde(default = "stays")]
     pub stay: bool,
     /// JSON Schema the agent's answer must fit, over `type`, `required`, `properties`,
-    /// `enum`, and `items` only; the call's result is that answer.
+    /// `enum`, and `items` only. The agent is told to hand it in with `rimz submit`, and the
+    /// answer stands in for its last message as its report and the call's result.
     pub schema: Option<Map<String, Value>>,
-    /// Stop the agent after this long (`90m`, `2h`, `3d`) and fail the call with
-    /// `timeout`; none by default.
+    /// Stop the agent this long after its launch (`90m`, `2h`, `3d`), staying or not: its
+    /// report, and a script's call, read timed out. None by default.
     pub timeout: Option<String>,
 }
 
@@ -239,7 +238,7 @@ fn stays() -> bool {
 /// What an agent's call gives without a `schema`; with one, the answer it handed in.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct AgentResult {
+pub(crate) struct AgentResult {
     /// The agent's last message.
     pub report: String,
     /// The agent's handle.
@@ -250,31 +249,28 @@ pub(in crate::harness) struct AgentResult {
 /// time the team's board is done.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "the tools and the run steps of later changes read the fields no refusal reads"
-)]
-pub(in crate::harness) struct Team {
+pub struct Team {
     /// Configured team to launch (from `rimz teams list`).
     pub team: String,
     /// The brief, delivered to the team's leader.
     pub prompt: String,
     /// Kebab-case worktree name (at most two words); give exactly one of `worktree` and
-    /// `from_pr`.
+    /// `from_pr`. A new one branches from `agents.worktree.base` when set, else from origin's
+    /// default branch fetched at launch (or `HEAD` with no origin).
     pub worktree: Option<String>,
     /// Open pull request, by number or URL, to create or reuse a worktree for.
     pub from_pr: Option<String>,
-    /// Label each seat carries in the sidebar, a few words.
+    /// Label each seat carries in the sidebar, a few words; `tasks` shows the team's goal.
     pub description: Option<String>,
-    /// Stop the team after this long (`90m`, `2h`, `3d`) and fail the call with
-    /// `timeout`; none by default.
+    /// Stop every seat this launch opened this long after it (`90m`, `2h`, `3d`): its
+    /// report, and a script's call, read timed out. None by default.
     pub timeout: Option<String>,
 }
 
 /// What a team's call gives.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct TeamResult {
+pub(crate) struct TeamResult {
     /// The leader's last message.
     pub report: String,
 }
@@ -813,6 +809,118 @@ fn at_refusal(field: &str, clock: &str) -> Option<String> {
     })
 }
 
+/// Why `answer` does not fit `schema`, a schema `schema_refusal` passed: the path of the first
+/// misfit (`answer` for the whole, then `.field` and `[index]`) and its reason.
+pub(crate) fn answer_misfit(schema: &Map<String, Value>, answer: &Value) -> Option<String> {
+    misfit_at("answer", schema, answer)
+}
+
+fn misfit_at(at: &str, schema: &Map<String, Value>, value: &Value) -> Option<String> {
+    if let Some(expected) = schema.get("type") {
+        let types: Vec<&str> = match expected {
+            Value::Array(types) => types.iter().filter_map(Value::as_str).collect(),
+            other => other.as_str().into_iter().collect(),
+        };
+        if !types.iter().any(|kind| is_type(kind, value)) {
+            return Some(format!("`{at}` is not of type {}", types.join(" or ")));
+        }
+    }
+    if let Some(Value::Array(allowed)) = schema.get("enum")
+        && !allowed.iter().any(|allowed| same_value(allowed, value))
+    {
+        return Some(format!("`{at}` is not one of the schema's `enum` values"));
+    }
+    if let Value::Object(fields) = value {
+        if let Some(Value::Array(required)) = schema.get("required")
+            && let Some(missing) = required
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|name| !fields.contains_key(*name))
+        {
+            return Some(format!("`{at}` lacks the required `{missing}`"));
+        }
+        if let Some(Value::Object(properties)) = schema.get("properties")
+            && let Some(misfit) = properties.iter().find_map(|(name, property)| {
+                let (Value::Object(property), Some(field)) = (property, fields.get(name)) else {
+                    return None;
+                };
+                misfit_at(&format!("{at}.{name}"), property, field)
+            })
+        {
+            return Some(misfit);
+        }
+    }
+    if let (Value::Array(items), Some(Value::Object(item))) = (value, schema.get("items")) {
+        return items
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| misfit_at(&format!("{at}[{index}]"), item, value));
+    }
+    None
+}
+
+/// Whether a schema's `type` is a JSON type name or a non-empty array of them, so some answer
+/// can fit it.
+fn names_json_types(kind: &Value) -> bool {
+    let named = |kind: &Value| {
+        kind.as_str().is_some_and(|kind| {
+            [
+                "object", "array", "string", "number", "integer", "boolean", "null",
+            ]
+            .contains(&kind)
+        })
+    };
+    match kind {
+        Value::Array(kinds) => !kinds.is_empty() && kinds.iter().all(named),
+        kind => named(kind),
+    }
+}
+
+/// Whether `left` and `right` are the same JSON value, numbers compared by value (`1` and
+/// `1.0` alike), as JSON Schema compares an `enum` member.
+fn same_value(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            left == right
+                || left
+                    .as_f64()
+                    .is_some_and(|left| Some(left) == right.as_f64())
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| same_value(left, right))
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|(key, left)| right.get(key).is_some_and(|right| same_value(left, right)))
+        }
+        _ => left == right,
+    }
+}
+
+fn is_type(kind: &str, value: &Value) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        // A number with no fractional part is an integer, `1.0` included.
+        "integer" => {
+            value.is_i64()
+                || value.is_u64()
+                || value.as_f64().is_some_and(|number| number.fract() == 0.0)
+        }
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
 /// The keywords an agent's answer schema may use.
 const SCHEMA_KEYWORDS: [&str; 5] = ["type", "required", "properties", "enum", "items"];
 
@@ -834,6 +942,13 @@ fn schema_refusal(at: &str, schema: &Map<String, Value>) -> Option<String> {
                 })
             }
             ("items" | "properties", _) => Some(format!("`{at}.{keyword}` is not an object")),
+            ("enum", Value::Array(values)) if !values.is_empty() => None,
+            ("enum", _) => Some(format!("`{at}.enum` is not a non-empty array of values")),
+            ("required", Value::Array(names)) if names.iter().all(Value::is_string) => None,
+            ("required", _) => Some(format!("`{at}.required` is not an array of field names")),
+            ("type", kind) if !names_json_types(kind) => Some(format!(
+                "`{at}.type` names no JSON type: one of `object`, `array`, `string`, `number`, `integer`, `boolean`, and `null`, or an array of them"
+            )),
             _ => None,
         }
     })

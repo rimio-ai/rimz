@@ -713,6 +713,77 @@ fn owned_units_and_terminal_runs_expire_together() {
     assert!(!orphan.exists() && !terminal.exists() && running.exists());
 }
 
+/// A call record outlives the grace while a seat of its launch is live or its deadline is still
+/// to stop it, the host down at the deadline included; it goes once neither holds.
+#[test]
+fn a_call_record_goes_only_with_no_live_seat_and_no_deadline_to_come() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    let now = jiff::Timestamp::now();
+    let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+    let past = jiff::Timestamp::try_from(old).unwrap();
+    let to_come = now + Duration::from_secs(86_400);
+    let mut live = crate::testkit::agent_state("claude", "live-seat", now);
+    live.launch_id = Some("call-live".into());
+    let mut revived = crate::testkit::agent_state("claude", "revived", now);
+    revived.launch_id = Some("call-revived-later".into());
+    revived.prior_launch_ids = vec!["call-revived".into()];
+    // Each record: its launch, its deadline, whether that deadline was claimed, whether its
+    // file is past the grace, and whether it goes.
+    let cases = [
+        ("call-live", None, false, true, false),
+        // A launch that ended before its deadline leaves it unclaimed, with nothing to stop.
+        ("call-unclaimed", Some(past), false, true, true),
+        ("call-to-come", Some(to_come), false, true, false),
+        ("call-claimed", Some(past), true, true, true),
+        ("call-ended", None, false, true, true),
+        ("call-revived", None, false, true, true),
+        ("call-fresh", None, false, false, false),
+    ];
+    for (launch, deadline, claimed, aged, _) in cases {
+        let record = crate::store::call::CallRecord {
+            launch_id: launch.into(),
+            seats: vec![crate::store::call::Seat {
+                kind: live.kind.clone(),
+                launch_id: launch.into(),
+            }],
+            stay: true,
+            schema: None,
+            created_at: past,
+            deadline,
+            answer: None,
+            asked: None,
+            timed_out_at: claimed.then_some(past),
+        };
+        crate::store::call::create(&paths, &record).unwrap();
+        if aged {
+            let path = crate::store::call::call_path(&paths, &launch.into());
+            fs::File::open(path).unwrap().set_modified(old).unwrap();
+        }
+    }
+    collect_owned(
+        &paths,
+        &vec![live, revived].into(),
+        &mut Sweep::new(false),
+        &mut GcReport::default(),
+    )
+    .unwrap();
+    let gone: Vec<_> = cases
+        .iter()
+        .map(|(launch, ..)| {
+            let path = crate::store::call::call_path(&paths, &(*launch).into());
+            (*launch, !path.exists())
+        })
+        .collect();
+    let expected: Vec<_> = cases.iter().map(|case| (case.0, case.4)).collect();
+    assert_eq!(gone, expected);
+}
+
 #[test]
 fn owned_grace_uses_ended_at_but_a_live_owner_always_wins() {
     let now = SystemTime::now();

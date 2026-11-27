@@ -100,6 +100,16 @@ pub fn settle_team_run(
         Some(_) => RunStatus::Failed,
         None => RunStatus::Completed,
     };
+    settle_team_run_as(paths, run_id, report, status, failure)
+}
+
+fn settle_team_run_as(
+    paths: &StatePaths,
+    run_id: &crate::ids::RunId,
+    report: Option<&MessageId>,
+    status: RunStatus,
+    failure: Option<&str>,
+) -> Result<Option<RunRecord>> {
     let (record, settled) = super::update_record(paths, run_id, |record, now| {
         if !record.mark_terminal(status, now) {
             return Ok(RecordMutation::Keep(false));
@@ -221,6 +231,44 @@ pub fn report_team_run(
     stage: Option<&str>,
 ) -> std::result::Result<TeamReportOutcome, ReportErr> {
     let failure = (stage != Some(DONE_STAGE)).then_some(COHORT_ENDED);
+    let outcome = match failure {
+        None => "reached Done".to_owned(),
+        Some(_) => format!("ended before Done at stage {}", stage.unwrap_or("no board")),
+    };
+    let status = match failure {
+        Some(_) => RunStatus::Failed,
+        None => RunStatus::Completed,
+    };
+    report_settled(workspace, store, record, board, (status, failure), &outcome)
+}
+
+/// Report the cohort's open team run to its launcher as timed out, `failure` naming the
+/// timeout, when its call's deadline stopped the launch.
+pub fn report_team_timeout(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    record: &RunRecord,
+    board: &Path,
+    failure: &str,
+) -> std::result::Result<TeamReportOutcome, ReportErr> {
+    report_settled(
+        workspace,
+        store,
+        record,
+        board,
+        (RunStatus::TimedOut, Some(failure)),
+        &format!("timed out: {failure}"),
+    )
+}
+
+fn report_settled(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    record: &RunRecord,
+    board: &Path,
+    (status, failure): (RunStatus, Option<&str>),
+    outcome: &str,
+) -> std::result::Result<TeamReportOutcome, ReportErr> {
     // Constructed with a team marker by `open_team_run_for`'s filter.
     let Some(team) = record.team.as_ref() else {
         return Ok(TeamReportOutcome::NotOwed);
@@ -228,7 +276,7 @@ pub fn report_team_run(
     if record.report_to == ReportTo::Nobody {
         // Detached: the run follows the board and leaves the answer on disk for a join.
         super::publish_response(store.paths(), record)?;
-        settle_team_run(store.paths(), &record.run_id, None, failure)?;
+        settle_team_run_as(store.paths(), &record.run_id, None, status, failure)?;
         return Ok(TeamReportOutcome::Detached);
     }
     let instance = &team.instance;
@@ -241,7 +289,7 @@ pub fn report_team_run(
         .filter(|launcher| launcher.ended_at.is_none());
     let (Some(leader), Some(launcher)) = (leader, launcher) else {
         // Nobody to tell: settle the run so the next Done does not report it.
-        settle_team_run(store.paths(), &record.run_id, None, failure)?;
+        settle_team_run_as(store.paths(), &record.run_id, None, status, failure)?;
         return Ok(TeamReportOutcome::NotOwed);
     };
 
@@ -257,18 +305,10 @@ pub fn report_team_run(
         None => None,
     };
     let settled = RunRecord {
-        status: if failure.is_some() {
-            RunStatus::Failed
-        } else {
-            RunStatus::Completed
-        },
+        status,
         failure_tail: failure.map(Into::into),
         completed_at: Some(jiff::Timestamp::now()),
         ..record.clone()
-    };
-    let outcome = match failure {
-        None => "reached Done".to_owned(),
-        Some(_) => format!("ended before Done at stage {}", stage.unwrap_or("no board")),
     };
     let text = format!(
         "Team {instance} {outcome}; its leader reports:\n{}\nMemory: {}",
@@ -290,7 +330,15 @@ pub fn report_team_run(
     // Queue before settling: a crash in between re-reports at the next Done
     // rather than losing this one.
     store.queue_message(&message, &workspace.session_name)?;
-    if settle_team_run(store.paths(), &record.run_id, Some(&message_id), failure)?.is_none() {
+    if settle_team_run_as(
+        store.paths(),
+        &record.run_id,
+        Some(&message_id),
+        status,
+        failure,
+    )?
+    .is_none()
+    {
         store.cancel_message(
             &message_id,
             &workspace.session_name,

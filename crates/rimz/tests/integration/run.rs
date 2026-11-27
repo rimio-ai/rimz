@@ -32,6 +32,9 @@ mod launch_characterization;
 #[path = "run/command_cells.rs"]
 mod command_cells;
 
+#[path = "run/calls.rs"]
+mod calls;
+
 #[path = "run/late_wait.rs"]
 mod late_wait;
 

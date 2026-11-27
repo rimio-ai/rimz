@@ -48,6 +48,8 @@ pub enum GcErr {
     #[error(transparent)]
     Run(#[from] crate::store::run::RunStoreErr),
     #[error(transparent)]
+    Call(#[from] crate::store::call::CallStoreErr),
+    #[error(transparent)]
     Workflow(#[from] crate::store::workflow::WorkflowStoreErr),
     #[error("reading dir {path}: {source}")]
     ReadDir {

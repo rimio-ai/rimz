@@ -44,6 +44,7 @@ pub(super) fn prepare_run_layout(
     supervised.subagent = leader.subagent;
     supervised.force_new_tab = true;
     supervised.report_to = leader.report_to;
+    supervised.call.clone_from(&request.launch.call);
     let context = SupervisedContext {
         root: Some(request.context.workspace.project_root.clone()),
         worktree_fresh_command: None,
@@ -838,6 +839,7 @@ fn prepare(
             soft_name: false,
             throttle_turn: request.throttle_turn.clone(),
             fallback_assist,
+            call: request.call.clone(),
         })),
         leader_run: Some(leader),
     })))

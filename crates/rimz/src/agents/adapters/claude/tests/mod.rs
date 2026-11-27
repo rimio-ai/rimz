@@ -207,6 +207,7 @@ fn routine_rimz_settings_union_and_idempotence() {
             "teams",
             "asks",
             "answer",
+            "submit",
             "shell",
             "watch",
             "pane list",

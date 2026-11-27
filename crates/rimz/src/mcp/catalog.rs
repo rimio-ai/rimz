@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::wording::Wording;
-use crate::harness::block::{self, Block, Caller, Shell, Watch, schema};
+use crate::harness::block::{self, Agent, Block, Caller, Shell, Team, Watch, schema};
 
 /// The name a provider registers RimZ's server under; Claude spells a tool
 /// `mcp__rimz__<tool>`.
@@ -143,8 +143,8 @@ pub enum Call {
     Shell(Shell),
     Watch(Watch),
     Subagent(SubagentArgs),
-    Agent(AgentArgs),
-    Team(TeamArgs),
+    Agent(Agent),
+    Team(Team),
     Workflow(WorkflowArgs),
     Schedule(Box<ScheduleArgs>),
     Message(MessageArgs),
@@ -323,9 +323,9 @@ pub static TOOLS: [Tool; 21] = [
         command: "agents",
         declared: &[],
         verbs: &[],
-        schema: schema::<AgentArgs>,
+        schema: block_schema::<Agent>,
         output: Some(start_schema),
-        parse: |arguments| parse::<AgentArgs>(arguments).map(Call::Agent),
+        parse: |arguments| block_call(arguments, Call::Agent),
     },
     Tool {
         name: "team",
@@ -335,9 +335,9 @@ pub static TOOLS: [Tool; 21] = [
         command: "teams launch",
         declared: &[],
         verbs: &[],
-        schema: schema::<TeamArgs>,
+        schema: block_schema::<Team>,
         output: Some(start_schema),
-        parse: |arguments| parse::<TeamArgs>(arguments).map(Call::Team),
+        parse: |arguments| block_call(arguments, Call::Team),
     },
     Tool {
         name: "workflow",
@@ -878,93 +878,10 @@ impl ToolArgs for SubagentArgs {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentArgs {
-    /// Agent profile (from `rimz agents profiles`) or bare model; one seat, never a team.
-    pub profile: String,
-    /// The brief: the agent's first turn.
-    pub prompt: String,
-    /// Label for `tasks` and the sidebar, 3 to 5 words.
-    pub description: Option<String>,
-    /// Distinct handle when the channel already holds this profile's (including yours).
-    pub name: Option<String>,
-    /// Inherit this profile or provider kind below the launched profile; omit unless the user
-    /// asks.
-    pub agent: Option<String>,
-    /// Kebab-case worktree name (at most two words); at most one of `worktree`, `from_pr`, and
-    /// `cwd`. A new one branches from `agents.worktree.base` when set, else from the `HEAD` of the
-    /// main checkout; a `team.role` branches as its team does.
-    pub worktree: Option<String>,
-    /// `worktree` only: start a new session in a closed worktree (otherwise refused).
-    #[serde(default)]
-    pub fresh: bool,
-    /// Worktree for this open pull request, by number or URL.
-    pub from_pr: Option<String>,
-    /// Existing directory to work in.
-    pub cwd: Option<PathBuf>,
-}
-
-impl ToolArgs for AgentArgs {
-    fn refusal(&self) -> Option<String> {
-        if let Some(blank) = blank_field(&[("profile", &self.profile), ("prompt", &self.prompt)]) {
-            return Some(blank);
-        }
-        let places = [
-            self.worktree.is_some(),
-            self.from_pr.is_some(),
-            self.cwd.is_some(),
-        ];
-        if places.into_iter().filter(|given| *given).count() > 1 {
-            return Some("give at most one of `worktree`, `from_pr`, and `cwd`".to_owned());
-        }
-        if self.fresh && self.worktree.is_none() {
-            return Some("`fresh` needs `worktree`".to_owned());
-        }
-        blank_place(self.worktree.as_deref(), self.from_pr.as_deref())
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct TeamArgs {
-    /// Configured team to launch (from `rimz teams list`).
-    pub team: String,
-    /// The brief, delivered to the team's leader.
-    pub prompt: String,
-    /// Kebab-case worktree name (at most two words); give exactly one of `worktree` and `from_pr`.
-    /// A new one branches from `agents.worktree.base` when set, else from origin's default branch
-    /// fetched at launch (or `HEAD` with no origin).
-    pub worktree: Option<String>,
-    /// Open pull request, by number or URL, to create or reuse a worktree for.
-    pub from_pr: Option<String>,
-    /// Label each seat carries in the sidebar, a few words; `tasks` shows the team's goal.
-    pub description: Option<String>,
-}
-
-impl ToolArgs for TeamArgs {
-    fn refusal(&self) -> Option<String> {
-        if let Some(blank) = blank_field(&[("team", &self.team), ("prompt", &self.prompt)]) {
-            return Some(blank);
-        }
-        if self.worktree.is_some() == self.from_pr.is_some() {
-            return Some("give exactly one of `worktree` and `from_pr`".to_owned());
-        }
-        blank_place(self.worktree.as_deref(), self.from_pr.as_deref())
-    }
-}
-
 fn blank_field(fields: &[(&str, &String)]) -> Option<String> {
     fields
         .iter()
         .find(|(_, value)| value.trim().is_empty())
-        .map(|(field, _)| format!("`{field}` is blank"))
-}
-
-fn blank_place(worktree: Option<&str>, from_pr: Option<&str>) -> Option<String> {
-    [("worktree", worktree), ("from_pr", from_pr)]
-        .into_iter()
-        .find(|(_, value)| value.is_some_and(|value| value.trim().is_empty()))
         .map(|(field, _)| format!("`{field}` is blank"))
 }
 
@@ -1042,8 +959,8 @@ pub enum ScheduleOverlap {
 /// What a fire launches, parsed through the named tool's own argument parser and `refusal`.
 #[derive(Debug)]
 pub enum ScheduleTarget {
-    Agent(AgentArgs),
-    Team(TeamArgs),
+    Agent(Agent),
+    Team(Team),
     Workflow(WorkflowArgs),
 }
 
@@ -1130,19 +1047,24 @@ fn nul_refusal(field: &str, value: Option<&str>) -> Option<String> {
 }
 
 fn parse_carried<T: ToolArgs>(arguments: Value) -> Result<T, serde_json::Error> {
-    parse::<T>(arguments).map_err(|err| {
-        let mut reason = err.to_string();
-        if let Some((head, tail)) = reason.split_once("expected one of ") {
-            let tail = tail.replace(", `worktree`", "").replace("`worktree`, ", "");
-            reason = format!("{head}expected one of {tail}");
-        }
-        let formatted = if reason.contains("`worktree`") {
-            format!("`arguments` (with top-level `worktree`): {reason}")
-        } else {
-            format!("`arguments`: {reason}")
-        };
-        serde::de::Error::custom(formatted)
-    })
+    parse::<T>(arguments).map_err(|err| carried_error(err.to_string()))
+}
+
+fn parse_carried_block<B: Block>(arguments: Value) -> Result<B, serde_json::Error> {
+    block::parse::<B>(arguments, Caller::Tool).map_err(carried_error)
+}
+
+fn carried_error(mut reason: String) -> serde_json::Error {
+    if let Some((head, tail)) = reason.split_once("expected one of ") {
+        let tail = tail.replace(", `worktree`", "").replace("`worktree`, ", "");
+        reason = format!("{head}expected one of {tail}");
+    }
+    let formatted = if reason.contains("`worktree`") {
+        format!("`arguments` (with top-level `worktree`): {reason}")
+    } else {
+        format!("`arguments`: {reason}")
+    };
+    serde::de::Error::custom(formatted)
 }
 
 fn parse_schedule(raw: Value) -> Result<Call, serde_json::Error> {
@@ -1161,8 +1083,8 @@ fn parse_schedule(raw: Value) -> Result<Call, serde_json::Error> {
     }
     let forwarded = Value::Object(forwarded);
     let target = match input.tool {
-        ScheduleTool::Agent => ScheduleTarget::Agent(parse_carried::<AgentArgs>(forwarded)?),
-        ScheduleTool::Team => ScheduleTarget::Team(parse_carried::<TeamArgs>(forwarded)?),
+        ScheduleTool::Agent => ScheduleTarget::Agent(parse_carried_block::<Agent>(forwarded)?),
+        ScheduleTool::Team => ScheduleTarget::Team(parse_carried_block::<Team>(forwarded)?),
         ScheduleTool::Workflow => {
             ScheduleTarget::Workflow(parse_carried::<WorkflowArgs>(forwarded)?)
         }
@@ -1240,47 +1162,62 @@ fn schedule_input_refusal(input: &ScheduleInput) -> Option<String> {
     None
 }
 
+/// A booked field a fire's `rimz agents` or `rimz teams` launch cannot carry, which a fire would
+/// otherwise drop.
+fn uncarried_refusal(given: &[(&str, bool)]) -> Option<String> {
+    let (field, _) = given.iter().find(|(_, given)| *given)?;
+    Some(format!(
+        "`arguments.{field}`: a fire's launch cannot carry it, so a booking does not take it"
+    ))
+}
+
 /// Refusals particular to a fire beyond what the carried tool's own `ToolArgs::refusal` holds:
 /// each is one `rimz loop add`'s check or a fire's child launch would refuse.
 fn schedule_target_refusal(args: &ScheduleArgs) -> Option<String> {
     match &args.target {
         ScheduleTarget::Agent(agent) => {
             let profile = agent.profile.trim();
-            nul_refusal("arguments.profile", Some(&agent.profile))
-                .or_else(|| flag_refusal("arguments.profile", profile))
-                .or_else(|| {
-                    profile.starts_with(['@', '#']).then(|| {
-                        "`arguments.profile` is a profile, not an address or scope".to_owned()
-                    })
-                })
-                .or_else(|| {
-                    // `launch` is the verb a launch spec may follow, so a spec named that is a
-                    // verb too.
-                    let launches = profile != "launch"
-                        && crate::pane::command_is_launch_chrome(&format!(
-                            "rimz agents {profile} prompt"
-                        ));
-                    (!launches).then(|| {
-                        format!(
-                            "`arguments.profile` `{profile}` is a `rimz agents` verb, which a \
+            uncarried_refusal(&[
+                ("stay", !agent.stay),
+                ("schema", agent.schema.is_some()),
+                ("timeout", agent.timeout.is_some()),
+            ])
+            .or_else(|| nul_refusal("arguments.profile", Some(&agent.profile)))
+            .or_else(|| flag_refusal("arguments.profile", profile))
+            .or_else(|| {
+                profile
+                    .starts_with(['@', '#'])
+                    .then(|| "`arguments.profile` is a profile, not an address or scope".to_owned())
+            })
+            .or_else(|| {
+                // `launch` is the verb a launch spec may follow, so a spec named that is a
+                // verb too.
+                let launches = profile != "launch"
+                    && crate::pane::command_is_launch_chrome(&format!(
+                        "rimz agents {profile} prompt"
+                    ));
+                (!launches).then(|| {
+                    format!(
+                        "`arguments.profile` `{profile}` is a `rimz agents` verb, which a \
                              fire's launch reads in place of a profile"
-                        )
-                    })
+                    )
                 })
-                .or_else(|| text_flag_refusal("arguments.prompt", &agent.prompt))
-                .or_else(|| nul_refusal("arguments.prompt", Some(&agent.prompt)))
-                .or_else(|| nul_refusal("arguments.description", agent.description.as_deref()))
-                .or_else(|| nul_refusal("arguments.name", agent.name.as_deref()))
-                .or_else(|| nul_refusal("arguments.agent", agent.agent.as_deref()))
-                .or_else(|| nul_refusal("arguments.from_pr", agent.from_pr.as_deref()))
-                .or_else(|| {
-                    let cwd = agent.cwd.as_deref().map(|path| path.to_string_lossy());
-                    nul_refusal("arguments.cwd", cwd.as_deref())
-                })
+            })
+            .or_else(|| text_flag_refusal("arguments.prompt", &agent.prompt))
+            .or_else(|| nul_refusal("arguments.prompt", Some(&agent.prompt)))
+            .or_else(|| nul_refusal("arguments.description", agent.description.as_deref()))
+            .or_else(|| nul_refusal("arguments.name", agent.name.as_deref()))
+            .or_else(|| nul_refusal("arguments.agent", agent.agent.as_deref()))
+            .or_else(|| nul_refusal("arguments.from_pr", agent.from_pr.as_deref()))
+            .or_else(|| {
+                let cwd = agent.cwd.as_deref().map(|path| path.to_string_lossy());
+                nul_refusal("arguments.cwd", cwd.as_deref())
+            })
         }
         ScheduleTarget::Team(team) => {
             let team_name = team.team.trim();
-            nul_refusal("arguments.team", Some(&team.team))
+            uncarried_refusal(&[("timeout", team.timeout.is_some())])
+                .or_else(|| nul_refusal("arguments.team", Some(&team.team)))
                 .or_else(|| flag_refusal("arguments.team", team_name))
                 .or_else(|| {
                     team_name.contains('#').then(|| {

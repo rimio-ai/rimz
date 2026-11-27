@@ -54,6 +54,7 @@ mod spinner;
 mod stats;
 mod statusline;
 mod subagents;
+mod submit;
 mod supervised;
 mod tab;
 mod teams;
@@ -318,6 +319,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Teams(args)) => teams::run(*args, &globals),
         Some(Subcmd::Asks(args)) => asks::run(args, &globals),
         Some(Subcmd::Answer(args)) => answer::run(args, &globals),
+        Some(Subcmd::Submit(args)) => submit::run(args, &globals),
         Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
         Some(Subcmd::Workflow(args)) => workflow::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
@@ -767,6 +769,8 @@ enum Subcmd {
     Asks(asks::AsksArgs),
     /// Answer one current prompt in its agent pane.
     Answer(answer::AnswerArgs),
+    /// Hand in the answer your launch's `schema` asked for.
+    Submit(submit::SubmitArgs),
     /// Run commands on a schedule, a signal, or a condition.
     ///
     /// A clock or condition task fires from its room's sidebar host, or from the loop timer when
