@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 #[test]
 fn team_roles_accept_bare_mini_runtime() {
     let profiles = ProfilesConfig::default();
-    let teams =
-        toml::from_str("[forge]\nroles = [{role = 'coder', profile = 'opencode-mini'}]").unwrap();
+    let teams = toml::from_str(
+        "[forge]\nleader = 'coder'\nroles = [{role = 'coder', profile = 'opencode-mini'}]",
+    )
+    .unwrap();
     let actual = resolve_spec_with_agent_override(
         Some("forge"),
         &profiles,
@@ -216,10 +218,14 @@ fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
     let teams = TeamsConfig(BTreeMap::from([
         ("forge".into(), team(vec![role("coder", "assistant")])),
         // The built-in `peer` reaches the candidates from the machine team table, which holds it.
-        ("peer".into(), team_with_layout(Vec::new(), "claude,codex")),
+        (
+            "peer".into(),
+            crate::config::MachineConfig::default().agents.teams.0["peer"].clone(),
+        ),
         (
             "review".into(),
             Team {
+                leader: Some("claude".into()),
                 layout: Some("claude,build".into()),
                 ..Default::default()
             },
@@ -327,6 +333,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
                 "mill",
                 &team,
                 &ProfilesConfig::default(),
+                &no_commands(),
                 CellBase::none(),
                 None,
             );
@@ -347,6 +354,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
             "mill",
             &team,
             &ProfilesConfig::default(),
+            &no_commands(),
             CellBase::none(),
             None,
         );
@@ -360,6 +368,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
                 "mill",
                 &team,
                 &ProfilesConfig::default(),
+                &no_commands(),
                 CellBase::none(),
                 None
             )
@@ -974,8 +983,8 @@ fn role(role: &str, profile: &str) -> RoleBinding {
 fn team(roles: Vec<RoleBinding>) -> Team {
     Team {
         keep_warm: None,
+        leader: roles.first().map(|binding| binding.role.clone()),
         roles,
-        leader: None,
         layout: None,
         scratch_files: None,
         consensus_file: None,
@@ -986,10 +995,15 @@ fn team(roles: Vec<RoleBinding>) -> Team {
 }
 
 fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
+    let first_cell = layout.split([',', '+', '/']).next();
     Team {
         keep_warm: None,
+        leader: roles
+            .first()
+            .map(|binding| binding.role.as_str())
+            .or(first_cell)
+            .map(str::to_owned),
         roles,
-        leader: None,
         layout: Some(layout.to_owned()),
         scratch_files: None,
         consensus_file: None,
@@ -1015,7 +1029,15 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
         prompt: None,
     });
     let validate = |team: &Team| {
-        prepare_team("forge", team, &no_profiles(), CellBase::none(), None).map(|_| ())
+        prepare_team(
+            "forge",
+            team,
+            &no_profiles(),
+            &no_commands(),
+            CellBase::none(),
+            None,
+        )
+        .map(|_| ())
     };
     assert_eq!(validate(&declared), Ok(()));
     let repeated = declared.roles[1].signals[0].clone();
@@ -1316,10 +1338,7 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
     // The built-in `peer` resolves from the machine team table, which holds it.
     teams.0.insert(
         "peer".to_owned(),
-        crate::config::Team {
-            layout: Some("claude,codex".to_owned()),
-            ..Default::default()
-        },
+        crate::config::MachineConfig::default().agents.teams.0["peer"].clone(),
     );
     assert_eq!(
         resolve_spec(Some("peer"), &profiles, &no_commands(), &teams)
@@ -2182,6 +2201,7 @@ fn role_values_survive_defaults_in_both_rebase_orders() {
             "forge",
             &configured,
             &profiles,
+            &no_commands(),
             CellBase::under(base.as_ref()),
             None,
         )
@@ -3419,6 +3439,7 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
             "forge",
             candidate,
             &empty_profiles,
+            &no_commands(),
             CellBase::under(base_override.as_ref()),
             None,
         )?;
@@ -3786,6 +3807,8 @@ fn team_leader_validation_accepts_one_target() {
         stages: Vec::new(),
     };
     validate(layout_only("claude", "claude,codex")).expect("unique layout leader");
+    // A cell counts by its profile, else its kind, so `claude-fast` is a `claude` cell.
+    validate(layout_only("claude", "claude-fast,codex")).expect("variant cell leads");
     assert!(matches!(
         validate(layout_only("pi", "claude,codex")),
         Err(LayoutErr::UnknownLeaderRole { leader, .. }) if leader == "pi"
@@ -3796,6 +3819,71 @@ fn team_leader_validation_accepts_one_target() {
             token: "claude".to_owned(),
         })
     );
+
+    let mut leaderless = team(vec![role("planner", "planner"), role("coder", "coder")]);
+    leaderless.leader = None;
+    let roleless = |layout: &str| Team {
+        leader: None,
+        ..layout_only("claude", layout)
+    };
+    let offered = |cells: &str| {
+        format!(
+            "team `forge` must declare a `leader`; add `leader = \"<profile>\"` naming the \
+             profile or kind that only one of its layout cells carries: {cells}"
+        )
+    };
+    assert_eq!(
+        [
+            leaderless,
+            roleless("claude,codex"),
+            roleless("claude,claude-fast,codex"),
+            roleless("claude,claude"),
+        ]
+        .map(|team| validate(team).map_err(|error| error.to_string())),
+        [
+            Err(
+                "team `forge` must declare a `leader`; add `leader = \"<role>\"` naming one of \
+                 its roles: planner, coder"
+                    .to_owned()
+            ),
+            Err(offered("claude, codex")),
+            Err(offered("codex")),
+            Err(
+                "team `forge` must declare a `leader`; no cell of its layout claude,claude has \
+                 a profile or kind of its own, so give one cell a profile no other cell carries \
+                 and add `leader = \"<profile>\"` naming it"
+                    .to_owned()
+            ),
+        ]
+    );
+}
+
+/// `peer`'s leader is the cell written `claude`, whichever kind `--agent` or `--tier` routes
+/// each cell to.
+#[test]
+fn the_built_in_peer_team_is_led_by_its_claude_cell_under_any_selection() {
+    let machine = crate::config::MachineConfig::default();
+    let selection = || Selection::new(&machine.tiers);
+    let principal = Some(crate::config::tiers::ModelTier::Principal);
+    for (label, selection) in [
+        ("bare", selection()),
+        ("--agent codex", selection().agent(Some("codex"))),
+        ("--agent claude", selection().agent(Some("claude"))),
+        ("--tier principal", selection().tier(principal)),
+    ] {
+        let layout = resolve_spec_in_scope(
+            Some("peer"),
+            &no_profiles(),
+            &no_profiles(),
+            None,
+            &no_commands(),
+            &machine.agents.teams,
+            &selection,
+        );
+        assert!(layout.is_ok(), "{label}: {layout:?}");
+        let layout = layout.unwrap();
+        assert_eq!(prompt_leader(&layout), Ok(0), "{label}");
+    }
 }
 
 #[test]
@@ -3806,35 +3894,37 @@ fn prompt_leader_selects_or_rejects_targets() {
         vec![role("planner", "planner"), role("coder", "coder")],
         "coder,planner",
     );
-    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), configured.clone())]));
-    let layout = resolve_spec(Some("forge"), &profiles, &commands, &teams).expect("reordered team");
-    assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(1));
-
+    let leader = |configured: &Team| {
+        let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), configured.clone())]));
+        let layout =
+            resolve_spec(Some("forge"), &profiles, &commands, &teams).expect("reordered team");
+        prompt_leader(&layout)
+    };
+    assert_eq!(leader(&configured), Ok(1));
     configured.leader = Some("coder".to_owned());
-    assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(0));
+    assert_eq!(leader(&configured), Ok(0));
 
     let command_first =
         parse_layout_spec("vim,codex+term", &profiles, &commands).expect("one agent");
-    assert_eq!(prompt_leader(&command_first, None), Ok(0));
+    assert_eq!(prompt_leader(&command_first), Ok(0));
     let unique =
         parse_layout_spec("claude,codex", &no_profiles(), &no_commands()).expect("unique first");
-    assert_eq!(prompt_leader(&unique, None), Ok(0));
+    assert_eq!(prompt_leader(&unique), Ok(0));
     let inline = parse_layout_spec("claude:lead,claude", &no_profiles(), &no_commands())
         .expect("inline leader");
-    assert_eq!(prompt_leader(&inline, None), Ok(0));
+    assert_eq!(prompt_leader(&inline), Ok(0));
 
     let ambiguous =
         parse_layout_spec("claude,claude", &no_profiles(), &no_commands()).expect("duplicate");
     assert_eq!(
-        prompt_leader(&ambiguous, None),
+        prompt_leader(&ambiguous),
         Err(LayoutErr::AmbiguousPromptLeader {
             token: "claude".to_owned(),
         })
     );
     assert_eq!(
         prompt_leader(
-            &parse_layout_spec("term", &no_profiles(), &no_commands()).expect("terminal"),
-            None
+            &parse_layout_spec("term", &no_profiles(), &no_commands()).expect("terminal")
         ),
         Err(LayoutErr::NoPromptTarget)
     );
@@ -4168,16 +4258,23 @@ fn kind_base_tuning_fills_below_written_values_and_follows_the_final_kind() {
             ..role("coder", "toml")
         };
         let configured = team(vec![binding.clone()]);
-        let seat = prepare_team("forge", &configured, &profiles, CellBase::none(), None)
-            .map(|team| {
-                let resolved = &team.roles[0].resolved;
-                (
-                    resolved.fast.and_then(crate::agents::Toggle::enabled),
-                    resolved.code_mode.and_then(crate::agents::Toggle::enabled),
-                    resolved.launch.effort.clone(),
-                )
-            })
-            .map_err(|error| error.to_string());
+        let seat = prepare_team(
+            "forge",
+            &configured,
+            &profiles,
+            &no_commands(),
+            CellBase::none(),
+            None,
+        )
+        .map(|team| {
+            let resolved = &team.roles[0].resolved;
+            (
+                resolved.fast.and_then(crate::agents::Toggle::enabled),
+                resolved.code_mode.and_then(crate::agents::Toggle::enabled),
+                resolved.launch.effort.clone(),
+            )
+        })
+        .map_err(|error| error.to_string());
         let replayed =
             profile_cell_with_base_override("toml", &profiles, CellBase::none(), Some(&binding))
                 .map(|cell| (cell.launch.fast, cell.launch.code_mode, cell.launch.effort))
@@ -4449,6 +4546,7 @@ fn team_seat_and_toml_profiles_follow_one_chain_and_agree_between_fresh_and_repl
         "toml_t",
         &toml_team,
         &profiles,
+        &no_commands(),
         CellBase::under(base_astra.as_ref()),
         None,
     )

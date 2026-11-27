@@ -1464,6 +1464,22 @@ fn only_the_team_leader_seat_reaches_rimz_ask() {
             ("coder", true, false, true),
         ]
     );
+    // A roleless team's `leader` names a layout cell, which no role matches, so every seat of
+    // the built-in `peer` keeps `ask`.
+    let peer = LaunchReminders {
+        mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+        team: Some(crate::harness::launch_reminders::TeamReminder::new(
+            crate::config::MachineConfig::default().agents.teams.0["peer"].clone(),
+        )),
+        ..LaunchReminders::default()
+    };
+    let mut seat = team_request("claude");
+    seat.identity.params.team = Some("peer".to_owned());
+    seat.identity.params.role = None;
+    assert!(
+        peer.mcp_capabilities(&seat)
+            .contains(&crate::mcp::catalog::Capability::Ask)
+    );
     // A standalone subagent on a built-in base loses both `rimz-ask` and native ask too.
     let built_in = LaunchReminders {
         mcp_server: Some(("/bin/rimz".into(), Vec::new())),

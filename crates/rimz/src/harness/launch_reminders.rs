@@ -141,10 +141,12 @@ impl LaunchReminders {
     pub(super) fn denied_capabilities(&self, request: &ExecRequest) -> Vec<Capability> {
         let no_subagents = self.no_subagents(request);
         // Only the leader reaches the user; a subagent puts its question in its result and
-        // another team seat asks the leader.
+        // another team seat asks the leader. A roleless team's `leader` names a layout cell,
+        // which no role matches, so its seats keep asking.
         let cannot_ask = request.subagent
             || self.team.as_ref().is_some_and(|reminder| {
-                request.identity.params.role.as_deref() != reminder.team.leader_role()
+                !reminder.team.roles.is_empty()
+                    && request.identity.params.role != reminder.team.leader
             });
         Capability::ALL
             .into_iter()

@@ -1204,6 +1204,8 @@ fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
         [profiles.coder]
         description = "Coder"
         agent = "codex"
+        [agents.teams.forge]
+        leader = "coder"
         [[agents.teams.forge.roles]]
         role = "coder"
         profile = "coder"
@@ -1563,6 +1565,8 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
         [profiles.coder]
         description = "Coder"
         agent = "claude"
+        [agents.teams.forge]
+        leader = "coder"
         [[agents.teams.forge.roles]]
         role = "coder"
         profile = "coder"

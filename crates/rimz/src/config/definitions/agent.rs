@@ -888,11 +888,11 @@ struct SeatSkillEdits {
 
 impl SeatEdits {
     /// Builds seat edits for `handle` on `team`, taking the leader from
-    /// [`crate::config::Team::leader_role`] so seat edits share one leader definition with the
+    /// [`crate::config::Team::leader`] so seat edits share one leader definition with the
     /// served-capability and launch switch-off rules.
     pub(super) fn for_seat(team: &crate::config::Team, handle: &str, reflects: bool) -> Self {
         Self {
-            leader: team.leader_role() == Some(handle),
+            leader: team.leader.as_deref() == Some(handle),
             reflects,
         }
     }

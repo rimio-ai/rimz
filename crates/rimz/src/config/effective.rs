@@ -447,6 +447,8 @@ pub fn load_with_roots(
         failed_teams.insert(team_name.clone(), detail);
         false
     });
+    let mut project_definition_errors: Vec<String> =
+        resolved.errors.iter().map(ToString::to_string).collect();
     for (team_name, team) in repo.teams.0 {
         match agents_spec::validate_team(
             &team_name,
@@ -467,6 +469,14 @@ pub fn load_with_roots(
                 teams.0.remove(&team_name);
                 failed_teams.insert(team_name, error.to_string());
             }
+            // A team without a leader fails alone, and room entry warns about it as it does
+            // about a project row that did not load.
+            Err(error @ LayoutErr::MissingLeader { .. }) => {
+                let detail = format!("{}: {error}", config_path.display());
+                teams.0.remove(&team_name);
+                project_definition_errors.push(detail.clone());
+                failed_teams.insert(team_name, detail);
+            }
             Err(source) => {
                 return Err(EffectiveConfigErr::Agents {
                     path: config_path.clone(),
@@ -476,7 +486,6 @@ pub fn load_with_roots(
         }
     }
 
-    let project_definition_errors = resolved.errors.iter().map(ToString::to_string).collect();
     Ok(LaunchAgents {
         env_reminder: repo.env_reminder.unwrap_or(machine.env_reminder),
         runtime_env: machine.runtime_env,

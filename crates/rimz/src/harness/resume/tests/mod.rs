@@ -545,6 +545,7 @@ fn team_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
     let teams = toml::from_str(
         r#"
         [forge]
+        leader = "planner"
         layout = "planner,coder"
         roles = [
             { role = "planner", profile = "claude-plan" },

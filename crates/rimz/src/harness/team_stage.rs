@@ -706,7 +706,7 @@ pub enum ResumeWake {
     /// A Stage notice was queued for the member, which owns the board's open stage.
     Stage(Box<FlipReceipt>),
     /// No stage is open and the member holds its team's leader seat
-    /// (`super::spec::leads_team`): the wrapper queues it the resume continue.
+    /// (`leads_resumed_team`): the wrapper queues it the resume continue.
     Leader,
     /// Nothing is owed to the member: another role owns the open stage, the board is at
     /// `Done`, a notice or prompt already covers it, its return's `rimz teams resume` prompt
@@ -722,7 +722,7 @@ pub enum ResumeWake {
 /// or a `rimz teams resume` prompt names the member among those its return brings back
 /// ([`MessageRecord::team_return`]) and is pending or was delivered at or after `since`.
 /// The notice is withdrawn once the member is prompted or the stage visit ends. While no stage
-/// is open, the member in the seat that leads the team (`super::spec::leads_team`, the seat a
+/// is open, the member in the seat that leads the team (`leads_resumed_team`, the seat a
 /// launch prompt goes to) is answered [`ResumeWake::Leader`]. The wrapper calls it on every
 /// resume, after the resume stamp has revived the card; a team that no longer loads is logged
 /// and wakes nobody.
@@ -788,16 +788,56 @@ pub fn rewake_resumed(
     Ok(match rewake {
         Rewake::Woken(receipt) => ResumeWake::Stage(Box::new(receipt)),
         Rewake::Closed
-            if super::spec::leads_team(
-                &team,
-                member.role.as_deref(),
-                Some(member.profile.as_deref().unwrap_or(member.kind.as_str())),
-            ) =>
+            if leads_resumed_team(&team, || written_leader_index(workspace, name), member) =>
         {
             ResumeWake::Leader
         }
         Rewake::Closed | Rewake::Skipped => ResumeWake::Nobody,
     })
+}
+
+/// Whether resumed `member` holds `team`'s leader seat. A team with roles is led by the role its
+/// `leader` names. A roleless team's member records the kind `--agent` or `--tier` routed its cell
+/// to, not the cell as written, so it leads when its launch ordinal (its agent-cell index) is
+/// `written_leader`, the leader cell's index in the layout as written. A member with no ordinal
+/// leads nobody, nor does any member while that layout does not resolve.
+fn leads_resumed_team(
+    team: &Team,
+    written_leader: impl FnOnce() -> Option<usize>,
+    member: &AgentState,
+) -> bool {
+    if !team.roles.is_empty() {
+        return member.role.is_some() && member.role == team.leader;
+    }
+    member.launch_ordinal.is_some_and(|ordinal| {
+        written_leader().is_some_and(|index| usize::try_from(ordinal) == Ok(index))
+    })
+}
+
+/// The agent-cell index of team `name`'s leader in its layout as written, resolved with no
+/// `--agent` or flags; `None`, logged, when the team no longer resolves.
+fn written_leader_index(workspace: &ResolvedWorkspace, name: &str) -> Option<usize> {
+    let resolve = || -> Result<usize, MemberTeamErr> {
+        let machine = MachineConfig::load()?;
+        let effective = crate::config::effective::load(&machine, &workspace.project_root)?;
+        if !effective.teams.0.contains_key(name) {
+            return Err(MemberTeamErr::Effective(
+                crate::config::effective::EffectiveConfigErr::FailedDefinition(format!(
+                    "team `{name}` is no longer configured"
+                )),
+            ));
+        }
+        let layout = super::spec::resolve_team(
+            name,
+            &effective.teams,
+            &effective.profiles,
+            &machine.agents.commands,
+        )?;
+        Ok(super::spec::prompt_leader(&layout)?)
+    };
+    resolve()
+        .inspect_err(|err| warn!(error = %err, "resume: failed to resolve the team's leader seat"))
+        .ok()
 }
 
 /// The live members of `member`'s team cohort on its channel.
@@ -1016,6 +1056,8 @@ pub(super) enum MemberTeamErr {
     Machine(#[from] crate::config::ConfigErr),
     #[error(transparent)]
     Effective(#[from] crate::config::effective::EffectiveConfigErr),
+    #[error(transparent)]
+    Layout(#[from] super::spec::LayoutErr),
 }
 
 pub(super) fn load_member_team(

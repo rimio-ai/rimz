@@ -730,9 +730,10 @@ fn stage_handoff_reminder_stays_inside_the_single_team_wrapper() {
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
     request.identity.params.team = Some("forge".to_owned());
     request.identity.params.role = Some("coder".to_owned());
-    let team: Team =
-        toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'\nowns = ['Implement']")
-            .expect("team");
+    let team: Team = toml::from_str(
+        "leader = 'coder'\n[[roles]]\nrole = 'coder'\nprofile = 'claude'\nowns = ['Implement']",
+    )
+    .expect("team");
     let reminders = LaunchReminders {
         team: Some(team_reminder(team)),
         worktree: Some(crate::worktree::LinkedWorktree {
@@ -770,7 +771,8 @@ fn environment_follows_identity_and_precedes_policy() {
     let mut reminders = LaunchReminders {
         env: true,
         team: Some(team_reminder(
-            toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
+            toml::from_str("leader = 'coder'\n[[roles]]\nrole = 'coder'\nprofile = 'claude'")
+                .expect("team"),
         )),
         subagent_catalog: Some(SubagentCatalog::Disabled),
         files: files("/tmp", false),

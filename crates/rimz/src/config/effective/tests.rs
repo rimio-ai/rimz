@@ -140,7 +140,7 @@ fn flags_and_role_models_choose_every_agent_cell_of_a_team() {
         project.path(),
         "",
         "[profiles.lead]\ndescription = 'Lead'\nagent = 'claude'\n\
-         [agents.teams.crew]\nlayout = 'lead,claude'\n\
+         [agents.teams.crew]\nleader = 'lead'\nlayout = 'lead,claude'\n\
          roles = [{ role = 'lead', profile = 'lead', model = 'astra' }]\n",
     );
     let cells = |tier, model| {
@@ -253,7 +253,7 @@ fn a_role_that_cannot_run_on_the_kind_its_model_picks_fails_only_its_team() {
         "",
         "[profiles.writer]\ndescription = 'Writer'\nagent = 'claude'\n\
          [profiles.healthy]\ndescription = 'Healthy'\nagent = 'claude'\n\
-         [agents.teams.squad]\nlayout = 'coder'\n\
+         [agents.teams.squad]\nleader = 'coder'\nlayout = 'coder'\n\
          roles = [{ role = 'coder', profile = 'writer', model = 'astra' }]\n",
     );
     let resolve = |spec: &str| {
@@ -277,6 +277,90 @@ fn a_role_that_cannot_run_on_the_kind_its_model_picks_fails_only_its_team() {
             error.contains("cannot run on codex") && error.contains("requires a tools list"),
             "{spec}: {error}"
         );
+    }
+}
+
+#[test]
+fn a_project_team_without_a_leader_fails_alone_and_warns() {
+    let home = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let (machine, launch) = load_trusted_project(
+        home.path(),
+        project.path(),
+        "",
+        "[profiles.writer]\ndescription = 'Writer'\nagent = 'claude'\n\
+         [agents.teams.crew]\n\
+         roles = [{ role = 'planner', profile = 'writer' }, { role = 'coder', profile = 'writer' }]\n\
+         [agents.teams.pair]\nlayout = 'claude,writer'\n\
+         [agents.teams.twin]\nlayout = 'claude,claude-fast'\n\
+         [agents.teams.led]\nleader = 'planner'\nroles = [{ role = 'planner', profile = 'writer' }]\n",
+    );
+    let resolve = |spec: &str| {
+        launch_under(
+            &launch,
+            &machine.tiers,
+            ProfileScope::Agents,
+            spec,
+            None,
+            None,
+            None,
+            |_, _| None,
+        )
+        .map(drop)
+        .map_err(|err| err.to_string())
+    };
+    assert_eq!([resolve("led"), resolve("writer")], [Ok(()), Ok(())]);
+    let crew = "team `crew` must declare a `leader`; add `leader = \"<role>\"` naming one of its \
+                roles: planner, coder";
+    let pair = "team `pair` must declare a `leader`; add `leader = \"<profile>\"` naming the \
+                profile or kind that only one of its layout cells carries: claude, writer";
+    let twin = "team `twin` must declare a `leader`; no cell of its layout claude,claude-fast \
+                has a profile or kind of its own, so give one cell a profile no other cell carries \
+                and add `leader = \"<profile>\"` naming it";
+    for (spec, message) in [
+        ("crew", crew),
+        ("crew.coder", crew),
+        ("pair", pair),
+        ("twin", twin),
+    ] {
+        let error = resolve(spec).unwrap_err();
+        assert!(error.contains(message), "{spec}: {error}");
+    }
+    assert_eq!(
+        ["crew", "pair", "twin", "led"].map(|team| launch.teams.0.contains_key(team)),
+        [false, false, false, true]
+    );
+    assert!(launch.block_failed_team("crew.planner").is_err());
+    let config = project.path().join(".rimz/config.toml");
+    assert_eq!(
+        launch.project_definition_errors(),
+        [crew, pair, twin].map(|message| format!("{}: {message}", config.display()))
+    );
+
+    // Each value the message offers, once written, loads and launches.
+    for leader in ["claude", "writer"] {
+        let project = tempdir().unwrap();
+        let (machine, launch) = load_trusted_project(
+            home.path(),
+            project.path(),
+            "",
+            &format!(
+                "[profiles.writer]\ndescription = 'Writer'\nagent = 'claude'\n\
+                 [agents.teams.pair]\nleader = '{leader}'\nlayout = 'claude,writer'\n"
+            ),
+        );
+        let launched = launch_under(
+            &launch,
+            &machine.tiers,
+            ProfileScope::Agents,
+            "pair",
+            None,
+            None,
+            None,
+            |_, _| None,
+        );
+        assert!(launched.is_ok(), "{leader}: {:?}", launched.err());
+        assert_eq!(launch.project_definition_errors(), [] as [String; 0]);
     }
 }
 
@@ -459,7 +543,7 @@ fn a_team_role_launch_applies_its_agent_to_that_role_alone() {
         "[profiles.coder]\ndescription = 'Coder'\nagent = 'claude'\n\
          [profiles.reviewer]\ndescription = 'Reviewer'\nagent = 'claude'\n\
          system-prompt-file = 'prompt.md'\n\
-         [agents.teams.crew]\nroles = [\
+         [agents.teams.crew]\nleader = 'coder'\nroles = [\
          { role = 'coder', profile = 'coder' }, { role = 'reviewer', profile = 'reviewer' }]\n",
     );
     let resolve = |spec: &str| {
@@ -1070,7 +1154,8 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
     machine.agents.teams =
-        toml::from_str("[crew]\nroles = [{role = 'code', profile = 'worker'}]").unwrap();
+        toml::from_str("[crew]\nleader = 'code'\nroles = [{role = 'code', profile = 'worker'}]")
+            .unwrap();
     let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
     launch.subagent_profiles = launch.profiles.clone();
     assert!(
@@ -1142,7 +1227,8 @@ fn opencode_model_overrides_finalize_without_provider_model_args() {
         toml::from_str("[worker]\nagent = 'opencode'\nmodel = 'opencode-go/deepseek-v4.1-flash'")
             .unwrap();
     machine.agents.teams =
-        toml::from_str("[crew]\nroles = [{role = 'code', profile = 'worker'}]").unwrap();
+        toml::from_str("[crew]\nleader = 'code'\nroles = [{role = 'code', profile = 'worker'}]")
+            .unwrap();
     let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
     launch.subagent_profiles = launch.profiles.clone();
     for (scope, target) in [
@@ -1274,7 +1360,7 @@ fn team_cli_models_route_each_markdown_role() {
     );
     assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
     machine.agents.profiles = definitions.agent_profiles;
-    machine.agents.teams = toml::from_str("[forge]\nroles = [{role = 'writer', profile = 'writer'}, {role = 'coder', profile = 'coder'}]").unwrap();
+    machine.agents.teams = toml::from_str("[forge]\nleader = 'writer'\nroles = [{role = 'writer', profile = 'writer'}, {role = 'coder', profile = 'coder'}]").unwrap();
     for (tier, model, spent) in [
         (None, Some("opus"), true),
         (Some(super::super::tiers::ModelTier::Senior), None, false),
@@ -2499,6 +2585,7 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     write_project_config(
         &project,
         "[profiles.planner]\ndescription = \"Planner\"\nagent = \"claude\"\n\n\
+         [agents.teams.review]\nleader = \"planner\"\n\n\
          [[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
@@ -2562,7 +2649,7 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
                 &project,
                 &format!(
                     "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-                     [agents.teams.crew]\n{layer}\nlayout = 'lead'\n\
+                     [agents.teams.crew]\n{layer}\nleader = 'lead'\nlayout = 'lead'\n\
                      roles = [{{role = 'lead', profile = 'worker', owns = ['Plan']}}]\n"
                 ),
             );
@@ -2622,7 +2709,7 @@ fn repo_teams_compose_consensus_pieces_from_the_machine_trait_claims() {
     let crew = |extra: &str| {
         format!(
             "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-             [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+             [agents.teams.crew]\nleader = 'lead'\nconsensus-file = 'consensus.md'\n\
              append-system-prompt-files = ['pipeline.md']\n{extra}\n\
              roles = [{{role = 'lead', profile = 'worker', owns = ['Plan', 'Reflect']}}]\n"
         )
@@ -3533,6 +3620,7 @@ description = "Subagent inheriting direct row."
 agent = "parent"
 
 [agents.teams.proj_team]
+leader = "lead"
 roles = [{ role = "lead", profile = "r7_effort", model = "sonnet" }]
 "#,
     );
@@ -3689,6 +3777,7 @@ skills = ["review"]
 mcps = ["rimz-lsp"]
 
 [agents.teams.t_toml]
+leader = "lead"
 roles = [{ role = "lead", profile = "toml_same" }]
 "#,
     );
@@ -3756,9 +3845,11 @@ agent = "claude"
 agent = "claude"
 
 [agents.teams.good_team]
+leader = "lead"
 roles = [{ role = "lead", profile = "good" }]
 
 [agents.teams.bad_team]
+leader = "lead"
 roles = [{ role = "lead", profile = "bad" }]
 "#,
     );
@@ -3997,6 +4088,7 @@ fn team_role_args_drop_on_provider_switch_for_model_and_tier_on_fresh_and_replay
         agent = \"claude\"\n\
         \n\
         [agents.teams.crew]\n\
+        leader = \"lead\"\n\
         roles = [{ role = \"lead\", profile = \"ok\", args = \"--role-claude-flag\" }]\n";
     let (machine, base_launch) =
         load_trusted_project(home.path(), project.path(), machine_toml, project_toml);
@@ -4266,6 +4358,7 @@ fn failed_project_row_and_team_never_fall_through_to_other_readings() {
         agent = \"claude\"\n\
         \n\
         [agents.teams.foo]\n\
+        leader = \"lead\"\n\
         layout = \"lead\"\n\
         [[agents.teams.foo.roles]]\n\
         role = \"lead\"\n\
@@ -4344,6 +4437,7 @@ fn failed_project_row_in_team_layout_variant_fails_only_that_team() {
         agent = \"claude\"\n\
         \n\
         [agents.teams.tc]\n\
+        leader = \"lead\"\n\
         layout = \"lead,work-fast\"\n\
         [[agents.teams.tc.roles]]\n\
         role = \"lead\"\n\
@@ -4397,6 +4491,7 @@ fn tier_refuses_failed_project_row_team_and_markdown_ahead_of_eligibility() {
         agent = \"claude\"\n\
         \n\
         [agents.teams.broken_team]\n\
+        leader = \"lead\"\n\
         layout = \"lead\"\n\
         [[agents.teams.broken_team.roles]]\n\
         role = \"lead\"\n\

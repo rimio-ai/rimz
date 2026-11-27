@@ -1909,17 +1909,22 @@ impl Fixture {
         channel: &str,
         checkout: &Path,
     ) -> AgentSessionId {
-        self.ended_seat(kind, role, Some(role), None, channel, checkout)
+        self.ended_seat(kind, role, Some(role), None, None, channel, checkout)
     }
 
     /// [`Self::ended_at_checkout`] for the seat `name` of `role` (none in a roleless team),
-    /// launched from `profile` when one is given.
+    /// launched from `profile` when one is given, at the layout agent-cell index `launch_ordinal`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one launch identity field a seat test sets"
+    )]
     fn ended_seat(
         &self,
         kind: &str,
         name: &str,
         role: Option<&str>,
         profile: Option<&str>,
+        launch_ordinal: Option<u32>,
         channel: &str,
         checkout: &Path,
     ) -> AgentSessionId {
@@ -1932,6 +1937,7 @@ impl Fixture {
                 team: Some("forge".to_owned()),
                 role: role.map(ToOwned::to_owned),
                 profile: profile.map(ToOwned::to_owned),
+                launch_ordinal,
                 lane: Some(crate::common::wait::stamped_lane(
                     &self.env, checkout, channel,
                 )),
@@ -4161,12 +4167,12 @@ fn a_resumed_member_is_owed_its_stage_the_leaders_continue_or_nothing() {
 }
 
 /// A team with no roles is led by the cell its `leader` names, the seat a `rimz teams resume`
-/// PROMPT is addressed to: resumed while no stage is open, that seat takes the continue and the
-/// other member nothing.
+/// PROMPT is addressed to: resumed while no stage is open, the member whose launch ordinal is that
+/// cell's place in the layout takes the continue and the other member nothing.
 #[test]
 fn a_roleless_teams_named_leader_takes_the_resume_continue() {
     let mut woken = Vec::new();
-    for (name, profile) in [("lead", "mate"), ("other", "hand")] {
+    for (name, profile, ordinal) in [("lead", "mate", 1), ("other", "hand", 0)] {
         let fixture = Fixture::new();
         // A team definition file always lists roles; only project config declares a roleless one,
         // whose profiles run on a kind base with a tools list.
@@ -4204,6 +4210,7 @@ fn a_roleless_teams_named_leader_takes_the_resume_continue() {
             name,
             None,
             Some(profile),
+            Some(ordinal),
             "feature-team",
             &fixture.env.project_root,
         );

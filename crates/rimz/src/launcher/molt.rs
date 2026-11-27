@@ -772,7 +772,7 @@ mod tests {
                  effort = 'medium'\n\
                  auto-compact = '200k'\n\
                  {extra_args}\
-                 [agents.teams.forge]\n\
+                 [agents.teams.forge]\nleader = 'coder'\n\
                  roles = [{{ role = 'coder', profile = 'worker', system-prompt-file = '{}' }}]\n",
                 role_prompt.display()
             )

@@ -6294,9 +6294,11 @@ fn a_capabilities_seat_loses_ask_off_the_lead_and_gains_rimz_message_and_rimz_re
 }
 
 #[test]
-fn seat_edits_take_the_leader_from_team_leader_role() {
-    let implicit: crate::config::Team = toml::from_str(
+fn seat_edits_take_the_leader_from_the_declared_leader() {
+    let first: crate::config::Team = toml::from_str(
         r#"
+leader = "first"
+
 [[roles]]
 role = "first"
 profile = "claude"
@@ -6307,31 +6309,20 @@ profile = "claude"
 "#,
     )
     .expect("valid team");
-    let mut explicit_first = implicit.clone();
-    explicit_first.leader = Some("first".to_owned());
-    let mut explicit_second = implicit.clone();
-    explicit_second.leader = Some("second".to_owned());
+    let mut second = first.clone();
+    second.leader = Some("second".to_owned());
 
-    // Without a declared `leader`, `Team::leader_role` falls back to the first role.
-    assert_eq!(
-        agent::SeatEdits::for_seat(&implicit, "first", false),
-        agent::SeatEdits::for_seat(&explicit_first, "first", false),
-    );
-    assert_eq!(
-        agent::SeatEdits::for_seat(&implicit, "second", false),
-        agent::SeatEdits::for_seat(&explicit_first, "second", false),
-    );
     assert_ne!(
-        agent::SeatEdits::for_seat(&implicit, "first", false),
-        agent::SeatEdits::for_seat(&implicit, "second", false),
+        agent::SeatEdits::for_seat(&first, "first", false),
+        agent::SeatEdits::for_seat(&first, "second", false),
     );
     assert_eq!(
-        agent::SeatEdits::for_seat(&explicit_second, "second", false),
-        agent::SeatEdits::for_seat(&explicit_first, "first", false),
+        agent::SeatEdits::for_seat(&second, "second", false),
+        agent::SeatEdits::for_seat(&first, "first", false),
     );
     assert_eq!(
-        agent::SeatEdits::for_seat(&explicit_second, "first", false),
-        agent::SeatEdits::for_seat(&explicit_first, "second", false),
+        agent::SeatEdits::for_seat(&second, "first", false),
+        agent::SeatEdits::for_seat(&first, "second", false),
     );
 }
 

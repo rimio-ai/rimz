@@ -808,7 +808,7 @@ fn project_team_consensus_composes_the_kind_base() {
     env.write_config(
         &env.project_root,
         "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         [agents.teams.crew]\nleader = 'lead'\nconsensus-file = 'consensus.md'\n\
          consensus = ['reflect', 'house']\nappend-system-prompt-files = ['pipeline.md']\n\
          roles = [{role = 'lead', profile = 'worker', owns = ['Plan', 'Reflect']}]\n",
     );
@@ -853,7 +853,7 @@ fn project_team_consensus_refuses_reflect_without_its_stage() {
     env.write_config(
         &env.project_root,
         "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-         [agents.teams.crew]\nconsensus = ['reflect']\n\
+         [agents.teams.crew]\nleader = 'lead'\nconsensus = ['reflect']\n\
          roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
     );
     env.rimz().args(["trust", "grant"]).assert().success();
@@ -877,7 +877,7 @@ fn project_team_consensus_reports_a_failed_kind_base() {
     env.write_config(
         &env.project_root,
         "[profiles.worker]\ndescription = 'Worker'\nagent = 'claude'\n\
-         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         [agents.teams.crew]\nleader = 'lead'\nconsensus-file = 'consensus.md'\n\
          roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
     );
     env.rimz().args(["trust", "grant"]).assert().success();

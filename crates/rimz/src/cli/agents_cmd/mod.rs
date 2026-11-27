@@ -531,8 +531,8 @@ pub(crate) struct AgentLaunchArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     pub(crate) spec: Option<String>,
-    /// Prompt delivered to the layout's leader agent (a team's `leader` role,
-    /// defaulting to its first role; otherwise the first agent cell).
+    /// Prompt delivered to the layout's leader agent (a team's declared `leader`;
+    /// otherwise the first agent cell).
     /// On resume, queued as a user message after reopening.
     #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = parse_agent_prompt)]
     pub(crate) prompt: Option<String>,

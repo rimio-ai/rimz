@@ -704,7 +704,8 @@ fn role_tools_render_once_for_every_profile_cell_path() {
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let profiles = loaded.agent_profiles;
     let teams: crate::config::TeamsConfig =
-        toml::from_str("[crew]\nroles = [{role = 'lead', profile = 'worker'}]").unwrap();
+        toml::from_str("[crew]\nleader = 'lead'\nroles = [{role = 'lead', profile = 'worker'}]")
+            .unwrap();
     for spec in [
         "worker",
         "claude",
@@ -1938,6 +1939,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         system_prompt_file: Some(PathBuf::from("system.md").into()),
         append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         team_prompt: None,
+        leads_team: false,
         skills: Some(vec!["merge".parse().unwrap()]),
         seat_consensus_skill: true,
         mcps: Some(vec!["rimz-lsp".parse().unwrap()]),
@@ -1967,6 +1969,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         system_prompt_file,
         append_system_prompt_files,
         team_prompt,
+        leads_team: _,
         skills,
         seat_consensus_skill,
         mcps,
@@ -2071,6 +2074,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: None,
         seat_consensus_skill: false,
         mcps: None,
@@ -2173,6 +2177,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: None,
         seat_consensus_skill: false,
         mcps: None,
@@ -2374,7 +2379,7 @@ fn finalized_smart_compact_warns_only_for_explicit_skipping_seats() {
             .unwrap();
     machine.subagents.profiles = sub_machine.subagents.profiles;
     machine.agents.teams = toml::from_str(
-        "[forge]\nroles = [{role = 'reviewer', profile = 'coder', smart-compact = '70%', flip-compact = 'off'}]",
+        "[forge]\nleader = 'reviewer'\nroles = [{role = 'reviewer', profile = 'coder', smart-compact = '70%', flip-compact = 'off'}]",
     )
     .unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -2771,8 +2776,10 @@ agent = 'codex'
 description = 'Child'
 agent = 'claude'
 [agents.teams.crew]
+leader = 'worker'
 roles = [{role = 'worker', profile = 'myprof'}]
 [agents.teams.good-crew]
+leader = 'worker'
 roles = [{role = 'worker', profile = 'good-codex'}]
 ";
     std::fs::write(root.path().join(".rimz/config.toml"), config).unwrap();
@@ -2910,9 +2917,9 @@ fn declared_team_layers_report_failed_kind_bases_at_each_launch_doorway() {
          [profiles.inherited]\ndescription = 'Inherited'\nagent = 'worker'\n\
          [profiles.bare]\ndescription = 'Bare'\nagent = 'codex'\n\
          [subagents.profiles.child-override]\ndescription = 'Child'\nagent = 'claude'\n\
-         [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+         [agents.teams.crew]\nleader = 'lead'\nconsensus-file = 'consensus.md'\n\
          roles = [{role = 'lead', profile = 'inherited', owns = ['Plan']}]\n\
-         [agents.teams.other]\nconsensus-file = 'consensus.md'\n\
+         [agents.teams.other]\nleader = 'lead'\nconsensus-file = 'consensus.md'\n\
          roles = [{role = 'lead', profile = 'bare', owns = ['Plan']}]\n",
     )
     .unwrap();
@@ -3188,9 +3195,10 @@ fn subagent_profile_flag_takes_exactly_one_subagent_profile() {
         .profiles
         .0
         .insert("codex".to_owned(), kind_base);
-    machine.agents.teams =
-        toml::from_str("[forge]\nroles = [{ role = 'reviewer', profile = 'main-only' }]\n")
-            .expect("team table");
+    machine.agents.teams = toml::from_str(
+        "[forge]\nleader = 'reviewer'\nroles = [{ role = 'reviewer', profile = 'main-only' }]\n",
+    )
+    .expect("team table");
     machine
         .agents
         .commands
@@ -3288,7 +3296,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
                 append_system_prompt_files: Vec::new(),
                 args: None,
             }],
-            leader: None,
+            leader: Some("reviewer".to_owned()),
             layout: None,
             scratch_files: None,
             consensus_file: None,
@@ -4354,6 +4362,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
+            leads_team: false,
             skills: None,
             seat_consensus_skill: false,
             mcps: None,
@@ -4461,6 +4470,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: None,
         seat_consensus_skill: false,
         mcps: None,
@@ -4983,6 +4993,7 @@ fn launch_request_names_and_metadata() {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: None,
         seat_consensus_skill: false,
         mcps: None,
@@ -5667,6 +5678,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: Some(vec!["merge".parse().unwrap()]),
         seat_consensus_skill: false,
         mcps: None,
@@ -5789,6 +5801,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: Some(Vec::new()),
         seat_consensus_skill: false,
         mcps: None,
@@ -6403,7 +6416,7 @@ fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
                 profile: "claude-agent".to_owned(),
                 ..role_binding("reviewer")
             }],
-            leader: None,
+            leader: Some("reviewer".to_owned()),
             layout: None,
             scratch_files: None,
             consensus_file: None,
@@ -6536,7 +6549,7 @@ fn a_fire_stamped_print_run_of_more_than_one_agent_meets_the_ordinary_refusal() 
                 ..role_binding(role)
             })
             .collect(),
-        leader: None,
+        leader: roles.first().map(|role| (*role).to_owned()),
         layout: None,
         scratch_files: None,
         consensus_file: None,

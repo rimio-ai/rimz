@@ -118,6 +118,9 @@ pub struct AgentCell {
     /// The team layer composed after the role's own prompt; set only on a role
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
+    /// Whether this cell holds its team's `leader` seat, set by team compilation on exactly one
+    /// cell of a team's layout and read by [`prompt_leader`].
+    pub(crate) leads_team: bool,
     pub skills: Option<Vec<crate::config::SkillName>>,
     pub seat_consensus_skill: bool,
     pub mcps: Option<Vec<crate::config::McpName>>,
@@ -157,6 +160,7 @@ impl Cell {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
+            leads_team: false,
             skills: None,
             seat_consensus_skill: false,
             mcps: None,
@@ -693,6 +697,8 @@ pub enum LayoutErr {
         leader: String,
         valid_roles: String,
     },
+    #[error("team `{team}` must declare a `leader`; {fix}")]
+    MissingLeader { team: String, fix: String },
     #[error(
         "the launch prompt leader `{token}` is ambiguous because this layout has several `{token}` cells; give the first cell an inline role (`{token}:lead,{token}`), use a unique profile plus `leader` on a named team, or launch without a prompt and `rimz message` the right agent"
     )]
@@ -1061,7 +1067,7 @@ pub(crate) fn validate_team_roster(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<()> {
-    let prepared = prepare_team(name, team, profiles, CellBase::none(), None)?;
+    let prepared = prepare_team(name, team, profiles, commands, CellBase::none(), None)?;
     if team.layout.is_some() {
         compile_team(name, prepared, profiles, commands, CellBase::none())?;
     }
@@ -1336,7 +1342,7 @@ fn resolve_team_with_base_override(
         .0
         .get(name)
         .expect("team resolution called with a known team name");
-    let mut prepared = prepare_team(name, team, profiles, base, None)?;
+    let mut prepared = prepare_team(name, team, profiles, commands, base, None)?;
     resolve_team_prompts(name, &mut prepared)?;
     validate_flip_compact(
         name,
@@ -1348,26 +1354,18 @@ fn resolve_team_with_base_override(
     Ok(compile_team(name, prepared, profiles, commands, base)?.layout)
 }
 
-/// Resolve the one agent cell that receives a trailing launch prompt.
-pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> {
+/// Resolve the one agent cell that receives a trailing launch prompt: a team's leader seat, the
+/// cell team compilation marks `leads_team`, else the first agent cell when no other carries its
+/// token.
+pub fn prompt_leader(layout: &LayoutSpec) -> Result<usize> {
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
     match agent_cells.as_slice() {
         [] => return Err(LayoutErr::NoPromptTarget),
         [_] => return Ok(0),
         _ => {}
     }
-
-    if let Some(team) = team
-        && (team.leader.is_some() || !team.roles.is_empty())
-    {
-        // Team validation proves a configured leader, and every declared role, is placed
-        // exactly once.
-        return Ok(agent_cells
-            .iter()
-            .position(|cell| {
-                leads_team(team, cell.launch.role.as_deref(), prompt_leader_token(cell))
-            })
-            .expect("validated team leader is placed in the resolved layout"));
+    if let Some(leader) = agent_cells.iter().position(|cell| cell.leads_team) {
+        return Ok(leader);
     }
 
     let first = agent_cells[0];
@@ -1387,19 +1385,79 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
     Ok(0)
 }
 
-/// Whether the seat of `role` launched as `token` (its profile, else its kind) leads `team`, the
-/// seat [`prompt_leader`] gives a team's launch prompt: a team with roles is led by its
-/// [`Team::leader_role`], and a roleless one by the cell its `leader` names. A roleless team
-/// with no `leader` has no seat that leads it by name.
-pub(super) fn leads_team(team: &Team, role: Option<&str>, token: Option<&str>) -> bool {
-    if team.roles.is_empty() {
-        return team.leader.is_some() && team.leader.as_deref() == token;
-    }
-    role.is_some() && role == team.leader_role()
-}
-
 fn prompt_leader_token(cell: &AgentCell) -> Option<&str> {
     Some(cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()))
+}
+
+/// A layout word's token as written: the profile of the cell it builds, else its kind, read with
+/// no `--agent`, `--tier`, `--model` or tier fallback, so that a roleless team's `leader` names
+/// the cell the layout writes, whatever a launch routes it to. A command cell has none.
+fn written_token(
+    word: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<Option<String>> {
+    Ok(
+        match parse_cell(word, profiles, commands, CellBase::none())? {
+            Cell::Agent(cell) => prompt_leader_token(&cell).map(str::to_owned),
+            Cell::Command { .. } => None,
+        },
+    )
+}
+
+/// Mark the one cell of `layout` that holds team `team_name`'s leader seat
+/// ([`AgentCell::leads_team`]): the cell of the role `leader` names, or in a roleless team the
+/// cell whose [`written_token`] is `leader`.
+fn mark_team_leader(
+    team_name: &str,
+    team: &Team,
+    leader: &str,
+    layout: &mut LayoutSpec,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
+    let seats = if team.roles.is_empty() {
+        // `validate_team_header` refuses a team with neither roles nor a layout.
+        parse_layout_structure(team.layout.as_deref().unwrap_or_default())?
+            .cells()
+            .map(|word| Ok(written_token(word, profiles, commands)?.as_deref() == Some(leader)))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        layout
+            .columns
+            .iter()
+            .flat_map(|column| &column.rows)
+            .map(|cell| {
+                matches!(cell, Cell::Agent(cell) if cell.launch.role.as_deref() == Some(leader))
+            })
+            .collect()
+    };
+    match seats.iter().filter(|seat| **seat).count() {
+        1 => {}
+        0 => {
+            return Err(LayoutErr::UnknownLeaderRole {
+                team: team_name.to_owned(),
+                leader: leader.to_owned(),
+                valid_roles: valid_team_roles(team),
+            });
+        }
+        _ => {
+            return Err(LayoutErr::AmbiguousPromptLeader {
+                token: leader.to_owned(),
+            });
+        }
+    }
+    for (cell, seat) in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+        .zip(seats)
+    {
+        if let Cell::Agent(cell) = cell {
+            cell.leads_team = seat;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_team_role(
@@ -1414,7 +1472,7 @@ fn resolve_team_role(
         .0
         .get(team_name)
         .expect("team role resolution called with a known team name");
-    let mut prepared = prepare_team(team_name, team, profiles, base, Some(role_name))?;
+    let mut prepared = prepare_team(team_name, team, profiles, commands, base, Some(role_name))?;
     resolve_team_prompts(team_name, &mut prepared)?;
     validate_flip_compact(
         team_name,
@@ -1491,7 +1549,7 @@ fn compile_team(
         cell.team_prompt = role.team_prompt;
         role_cells.insert(role.role, cell);
     }
-    let layout = if let Some(raw) = prepared.team.layout.as_deref() {
+    let mut layout = if let Some(raw) = prepared.team.layout.as_deref() {
         compile_team_layout(team_name, raw, &role_cells, profiles, commands, base)?
     } else {
         LayoutSpec {
@@ -1511,28 +1569,15 @@ fn compile_team(
                 .collect(),
         }
     };
-    if let Some(leader) = prepared.team.leader.as_deref()
-        && prepared.team.roles.is_empty()
-    {
-        match layout
-            .agent_cells()
-            .filter(|cell| prompt_leader_token(cell) == Some(leader))
-            .count()
-        {
-            1 => {}
-            0 => {
-                return Err(LayoutErr::UnknownLeaderRole {
-                    team: team_name.to_owned(),
-                    leader: leader.to_owned(),
-                    valid_roles: valid_team_roles(prepared.team),
-                });
-            }
-            _ => {
-                return Err(LayoutErr::AmbiguousPromptLeader {
-                    token: leader.to_owned(),
-                });
-            }
-        }
+    if let Some(leader) = prepared.team.leader.as_deref() {
+        mark_team_leader(
+            team_name,
+            prepared.team,
+            leader,
+            &mut layout,
+            profiles,
+            commands,
+        )?;
     }
     Ok(CompiledTeam {
         layout,
@@ -2867,6 +2912,7 @@ fn agent_cell_from(
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
+        leads_team: false,
         skills: resolved.skills.clone(),
         seat_consensus_skill: resolved.seat_consensus_skill,
         mcps: resolved.mcps.clone(),
@@ -3459,10 +3505,14 @@ fn prepare_team<'a>(
     name: &str,
     team: &'a Team,
     profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
     base: CellBase<'_>,
     launched_role: Option<&str>,
 ) -> Result<PreparedTeam<'a>> {
     validate_team_header(name, team)?;
+    if team.leader.is_none() {
+        return Err(missing_leader(name, team, profiles, commands));
+    }
     let unlaunched = base.selection.without_flags();
     let mut roles = Vec::with_capacity(team.roles.len());
     for binding in &team.roles {
@@ -3754,6 +3804,53 @@ fn wrap_choices<'a>(label: &str, names: impl IntoIterator<Item = &'a str>) -> St
         width += name.width();
     }
     wrapped
+}
+
+/// The refusal of a team that declares no `leader`, naming what its `leader` may name: one of its
+/// roles, or for a roleless team a [`written_token`] that only one of its cells carries.
+fn missing_leader(
+    name: &str,
+    team: &Team,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> LayoutErr {
+    let fix = match team.layout.as_deref() {
+        Some(layout) if team.roles.is_empty() => {
+            let tokens = parse_layout_structure(layout)
+                .map(|structure| {
+                    structure
+                        .cells()
+                        .filter_map(|word| written_token(word, profiles, commands).ok().flatten())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let unique = tokens
+                .iter()
+                .filter(|token| tokens.iter().filter(|other| other == token).count() == 1)
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if unique.is_empty() {
+                format!(
+                    "no cell of its layout {layout} has a profile or kind of its own, so give one \
+                     cell a profile no other cell carries and add `leader = \"<profile>\"` naming it"
+                )
+            } else {
+                format!(
+                    "add `leader = \"<profile>\"` naming the profile or kind that only one of its \
+                     layout cells carries: {}",
+                    unique.join(", ")
+                )
+            }
+        }
+        _ => format!(
+            "add `leader = \"<role>\"` naming one of its roles: {}",
+            valid_team_roles(team)
+        ),
+    };
+    LayoutErr::MissingLeader {
+        team: name.to_owned(),
+        fix,
+    }
 }
 
 pub(super) fn valid_team_roles(team: &Team) -> String {

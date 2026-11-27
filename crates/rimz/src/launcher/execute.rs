@@ -450,7 +450,7 @@ fn open_fresh(
         let _ = store.fail_agent_launch_batch(&batch);
         fail_peer();
     })?;
-    panes.focused_pane = team_leader_pane(&fresh.layout, fresh.team.as_ref().map(|(_, team)| team));
+    panes.focused_pane = team_leader_pane(&fresh.layout);
     let waiter = if let (Some(leader), Some(record)) = (&leader, &mut record) {
         let identity = &batch.identities()[leader_index];
         record.agent_name = Some(identity.name.clone());

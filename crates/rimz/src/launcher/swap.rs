@@ -761,6 +761,7 @@ pub fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
+        leads_team: false,
         skills: posture.launch.skills.clone(),
         seat_consensus_skill: posture.launch.seat_consensus_skill,
         mcps: posture.launch.mcps.clone(),

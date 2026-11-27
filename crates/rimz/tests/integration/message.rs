@@ -15307,7 +15307,7 @@ fn message_stores_the_recipients_smart_compact_line() {
              [profiles.off]\ndescription = 'Off'\nagent = 'worker'\nsmart-compact = 'off'\n\
              [subagents.profiles.sub-base]\ndescription = 'Sub base'\nagent = 'claude'\nsmart-compact = '50k'\n\
              [subagents.profiles.sub-worker]\ndescription = 'Sub worker'\nagent = 'sub-base'\n\
-             [agents.teams.forge]\nroles = [{role = 'lead', profile = 'worker', \
+             [agents.teams.forge]\nleader = 'lead'\nroles = [{role = 'lead', profile = 'worker', \
              smart-compact = '80%'}]",
         );
         run_success(env.rimz().args(["trust", "grant"]), "trust seat policy");

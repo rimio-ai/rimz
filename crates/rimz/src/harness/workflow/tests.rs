@@ -691,6 +691,7 @@ fn validation_accepts_step_layouts() {
             definitions.teams.0.insert(
                 "forge".into(),
                 crate::config::Team {
+                    leader: Some("claude".into()),
                     layout: Some("claude".into()),
                     ..Default::default()
                 },

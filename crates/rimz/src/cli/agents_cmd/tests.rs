@@ -1929,6 +1929,7 @@ mod launch_options {
         machine.agents.teams.0.insert(
             "forge".to_owned(),
             rimz::config::Team {
+                leader: Some("planner".to_owned()),
                 roles: vec![rimz::config::RoleBinding {
                     role: "planner".to_owned(),
                     profile: "planner".to_owned(),

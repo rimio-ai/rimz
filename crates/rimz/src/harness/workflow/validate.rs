@@ -418,7 +418,7 @@ pub(super) fn validate_spec(
             None
         };
         let do_background = layout.as_ref().and_then(|layout| {
-            let leader = crate::harness::spec::prompt_leader(layout, None).ok()?;
+            let leader = crate::harness::spec::prompt_leader(layout).ok()?;
             let cell = layout.agent_cells().nth(leader)?;
             let adapter = crate::agents::find_definition(&cell.kind)?;
             Some(
@@ -1102,7 +1102,7 @@ fn step_layout(
     if resolved.layout.agent_cells().next().is_none() {
         anyhow::bail!("step layout needs a prompt leader; add an agent cell");
     }
-    crate::harness::spec::prompt_leader(&resolved.layout, None)
+    crate::harness::spec::prompt_leader(&resolved.layout)
         .map_err(|error| anyhow::anyhow!("{error}; choose an unambiguous prompt leader"))?;
     Ok(resolved.layout)
 }

@@ -3028,7 +3028,7 @@ fn team_machine() -> MachineConfig {
                     args: None,
                 },
             ],
-            leader: None,
+            leader: Some("planner".to_owned()),
             layout: Some("planner,coder".to_owned()),
             scratch_files: None,
             consensus_file: None,
