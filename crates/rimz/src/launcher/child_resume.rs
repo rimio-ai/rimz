@@ -390,15 +390,13 @@ fn prepare_child_resume(
         .clone();
     let mut request = resume_request(child, &run, &posture, action.clone(), login.clone(), None);
     request.identity.params.isolation = capped.isolation;
-    if !isolation.is_scoped() {
-        crate::harness::launch::preflight_agent_process(
-            &workspace.project_root,
-            &request,
-            &cwd,
-            Some(store.runtime_paths()),
-            crate::harness::launch::PreflightCheckout::Cwd,
-        )?;
-    }
+    crate::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        &request,
+        &cwd,
+        (!isolation.is_scoped()).then_some(store.runtime_paths()),
+        crate::harness::launch::PreflightCheckout::Cwd,
+    )?;
     let launch_id = child
         .launch_id
         .clone()

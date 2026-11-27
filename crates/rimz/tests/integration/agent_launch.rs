@@ -12938,6 +12938,93 @@ fn scoped_skill_errors_refuse_before_launch_without_writes() {
     assert!(!env.runtime_paths().prompt_dir().exists());
 }
 
+/// A scoped agent whose profile now lists a skill no root holds (deleted since its launch) is
+/// refused by the restart's preflight, before its pane is replaced or any record changes.
+#[cfg(unix)]
+#[test]
+fn a_scoped_restart_refuses_a_listed_skill_gone_since_launch_before_the_respawn() {
+    if let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        crate::common::skip(&format!("bubblewrap unusable: {err}"));
+        return;
+    }
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'scoped'\n",
+    )
+    .unwrap();
+    crate::common::trust_claude_project(&env, &env.project_root);
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\ntools: [Read, Skill]",
+        "Claude base.",
+    );
+    std::fs::write(
+        env.rimz_home().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: claude\nisolation: scoped\ntools: [Read, Skill]\nskills: [gone]\n---\n",
+    )
+    .unwrap();
+    register_paned_planner(
+        &env,
+        LaunchParams {
+            profile: Some("worker".to_owned()),
+            ..LaunchParams::default()
+        },
+        None,
+    );
+    let shim = write_env_dump_shim(&env, "claude");
+    let shell = write_fake_login_shell(&env, "swap-shell", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let panes = r#"[{"id": 1, "is_plugin": false, "tab_id": 1, "title": "claude", "pane_command": "claude"}]"#;
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    let before = env.store().read_events().unwrap();
+    let output = env
+        .rimz()
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "restart",
+            "@planner",
+            "--no-continue",
+        ])
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("error: profile 'worker': unknown skill \"gone\"; searched ["),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("]; install the skill or remove it from the profile"),
+        "{stderr}"
+    );
+    let mux_log = std::fs::read_to_string(env.home_root.join("mux.log")).unwrap_or_default();
+    assert!(!mux_log.contains("new-pane"), "{mux_log}");
+    let after = env.store().read_events().unwrap();
+    assert_eq!(after.len(), before.len(), "{after:#?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn profile_isolation_is_preflighted_before_launch() {
