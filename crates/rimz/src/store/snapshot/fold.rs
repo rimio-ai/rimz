@@ -405,8 +405,9 @@ pub(crate) fn agent_rollup_with_carryover(
 
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
-/// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 85;
+/// mismatched cache reads as absent and cold-rebuilds. A reducer that folds
+/// one log to different row values bumps [`super::SNAPSHOT_VERSION`] too.
+const ROLLUP_CACHE_VERSION: u32 = 86;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -556,9 +557,11 @@ fn fold_delta(
     };
 
     // Hydrate continuing rows at rebirth, plus observed keys, linked predecessors,
-    // and command or soft-compaction receivers. Stamps persist in raw_agents, not
-    // the shared carryover. A carried reservation an earlier catch-up retired
-    // into its session never returns.
+    // command or soft-compaction receivers, and the rows of an announced launch at
+    // the announcement's epoch or later, the only rows that can consume it: an
+    // older row would hand the warm fold a handle owner the cold fold never picks.
+    // Stamps persist in raw_agents, not the shared carryover. A carried
+    // reservation an earlier catch-up retired into its session never returns.
     let (before_rebirth, after_rebirth) = events.split_at(rebirth.unwrap_or(0));
     for delta in std::iter::once(before_rebirth)
         .filter(|delta| !delta.is_empty())
@@ -603,6 +606,20 @@ fn fold_delta(
                 EventKind::AgentAttach(payload) => payload.launch_id.as_ref(),
                 _ => None,
             };
+            if let EventKind::AgentLaunch(payload) = &event.kind {
+                let launch = payload.launch_id.as_ref().unwrap_or(&payload.agent_id);
+                let epoch = payload.launch.epoch.unwrap_or(0);
+                for carried in carryover.agents.iter().filter(|carried| {
+                    carried.kind == key.0
+                        && carried.launch_key() == launch
+                        && carried.epoch >= epoch
+                        && !seed.identity.launch_consumed(&carried.agent_id)
+                }) {
+                    seed.agents
+                        .entry((carried.kind.clone(), carried.agent_id.clone()))
+                        .or_insert_with(|| Arc::clone(carried));
+                }
+            }
             if let Some(launch) = launch {
                 for carried in carryover.provisionals().iter().filter(|carried| {
                     carried.kind == key.0

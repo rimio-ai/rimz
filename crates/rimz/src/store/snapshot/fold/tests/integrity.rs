@@ -571,6 +571,203 @@ fn a_carryover_boundary_inside_a_swap_keeps_the_holder() {
     }
 }
 
+/// A wake-up's events: the wrapper's re-announce of the launch at `epoch`,
+/// its attach of `session` on `pane`, and its resume trace, which carries the
+/// launch but no pane.
+fn wake_up(workspace: &WorkspaceId, session: &str, epoch: u32, pane: &str) -> [EventEnvelope; 3] {
+    let mut resumed = lifecycle_at(
+        workspace,
+        "codex",
+        "rimz.agent-resumed",
+        session,
+        lifecycle::LifecycleSignal::Registered,
+    );
+    let mut params = resumed.params_value();
+    params["launch_id"] = serde_json::json!("launch_a");
+    if epoch > 0 {
+        params["epoch"] = serde_json::json!(epoch);
+    }
+    resumed.params = serde_json::value::to_raw_value(&params).unwrap();
+    let attach = EventEnvelope::agent_attached(
+        workspace.clone(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentAttachPayload {
+            epoch: (epoch > 0).then_some(epoch),
+            login: None,
+            record: None,
+            tier: None,
+            mode: None,
+            effective_isolation: None,
+            agent_id: session.into(),
+            isolation: None,
+            launch_id: Some("launch_a".into()),
+            pane_id: PaneId::parse(pane).unwrap(),
+            pane_pid: None,
+            runtime_owner: RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                session,
+                9,
+                Some("start-9".into()),
+            ),
+        },
+    );
+    [
+        swap_launch(AgentLaunchState::Bound, "launch_a", epoch, Some(pane)),
+        attach,
+        resumed,
+    ]
+}
+
+/// A launch woken after its sessions ended re-announces its reservation. With
+/// a rotation at any point of that history and a catch-up after every event,
+/// a warm fold, a held cursor, and a cold fold agree on rows and identity, and
+/// the launch gains no row: for one session, and for a swapped launch in
+/// either order of its two session keys.
+#[test]
+fn a_launch_woken_across_a_rotation_at_any_point_gains_no_row() {
+    let registered = || lifecycle::LifecycleSignal::Registered;
+    let ended = || lifecycle::LifecycleSignal::Ended;
+    let placeholder = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    for (replaced, woken, late_end) in [
+        (None, "s1", false),
+        (Some("s1"), "s2", false),
+        (Some("s3"), "s2", false),
+        (Some("s1"), "s2", true),
+    ] {
+        let ws = &placeholder;
+        let mut history = vec![swap_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            0,
+            Some("tmux:%1"),
+        )];
+        let (epoch, pane) = match replaced {
+            None => {
+                history.extend([
+                    swap_hook(ws, woken, 0, registered(), "SessionStart", "tmux:%1"),
+                    swap_hook(ws, woken, 0, ended(), "SessionEnd", "tmux:%1"),
+                ]);
+                (0, "tmux:%1")
+            }
+            Some(replaced) => {
+                history.extend([
+                    swap_hook(ws, replaced, 0, registered(), "SessionStart", "tmux:%1"),
+                    swap_launch(AgentLaunchState::Starting, "launch_b", 1, None),
+                    swap_launch(AgentLaunchState::Bound, "launch_b", 1, Some("tmux:%2")),
+                    swap_hook(ws, woken, 1, registered(), "SessionStart", "tmux:%2"),
+                ]);
+                let mut ends = [
+                    swap_hook(ws, replaced, 0, ended(), "SessionEnd", "tmux:%1"),
+                    swap_hook(ws, woken, 1, ended(), "SessionEnd", "tmux:%2"),
+                ];
+                if late_end {
+                    ends.reverse();
+                }
+                history.extend(ends);
+                // Another agent's hook, so a catch-up after a rotation here is
+                // warm when the re-announce folds.
+                history.push(lifecycle_at(
+                    ws,
+                    "claude",
+                    "SessionStart",
+                    "other",
+                    registered(),
+                ));
+                (1, "tmux:%2")
+            }
+        };
+        let reannounce = history.len();
+        history.extend(wake_up(ws, woken, epoch, pane));
+        let mut sessions: Vec<_> = replaced.into_iter().chain([woken]).collect();
+        sessions.sort_unstable();
+        for boundary in 1..history.len() {
+            let case = format!("replaced {replaced:?}, late end {late_end}, boundary {boundary}");
+            let dir = tempfile::tempdir().unwrap();
+            let workspace = WorkspaceId::from_project_root(dir.path());
+            let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
+            paths.ensure_dirs().unwrap();
+            let mut events = history.clone();
+            for (index, event) in events.iter_mut().enumerate() {
+                event.workspace_id = workspace.clone();
+                event.timestamp = recent(100 - index as u64);
+            }
+            let mut cursor = RollupCursor::new();
+            for (index, event) in events.iter().enumerate() {
+                if index == boundary {
+                    stage_carryover_for_rotation(&paths, 1).unwrap();
+                    assert!(rotate(&paths).rotation.is_rotated());
+                }
+                event_log::append(&paths.events_log, event).unwrap();
+                let case = format!("{case}, event {index}");
+                let (warm_cache, warm, _) = catch_up_rollup(&paths).unwrap();
+                let (cursor_cache, cursor_rows, _) = cursor.fold_shared(&paths).unwrap();
+                // The first event has no `rollup.json` yet.
+                let rollup = paths.rollup_cache().unwrap();
+                if rollup.exists() {
+                    fs::remove_file(rollup).unwrap();
+                }
+                let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
+                assert_eq!(
+                    sorted_value(warm.clone()),
+                    sorted_value(cold.clone()),
+                    "{case}"
+                );
+                assert_eq!(
+                    sorted_value(cursor_rows.to_vec()),
+                    sorted_value(cold),
+                    "{case}"
+                );
+                // A replaced session's late end, caught up alone after a rotation,
+                // re-adds the handle from that session in the warm fold, while a
+                // cold fold that loads the holder beside it keeps the holder:
+                // `CardIdentityAllocator::from_map_and_state` drops a handle whose
+                // owner is outside the map. The holder's next hook takes it back.
+                let identity = |cache: &RollupCache| {
+                    let mut identity = serde_json::to_value(&cache.agent_identity).unwrap();
+                    if late_end && index + 1 < events.len() {
+                        identity.as_object_mut().unwrap().remove("names");
+                    }
+                    identity
+                };
+                assert_eq!(identity(&warm_cache), identity(&cold_cache), "{case}");
+                assert_eq!(identity(&cursor_cache), identity(&cold_cache), "{case}");
+                assert!(
+                    index < reannounce
+                        || !warm.iter().any(|agent| {
+                            agent.launch_key() == "launch_a" && agent.agent_id.is_provisional()
+                        }),
+                    "{case}: the re-announce added a row: {warm:#?}"
+                );
+                write_rollup_cache(&paths, &warm_cache).unwrap();
+            }
+            let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+            let launch_rows: Vec<_> = agents
+                .iter()
+                .filter(|agent| agent.launch_key() == "launch_a")
+                .collect();
+            assert_eq!(
+                launch_rows
+                    .iter()
+                    .map(|agent| agent.agent_id.as_str())
+                    .collect::<Vec<_>>(),
+                sessions,
+                "{case}: {launch_rows:#?}"
+            );
+            let holder = launch_rows
+                .iter()
+                .find(|agent| agent.agent_id == woken)
+                .unwrap();
+            assert!(holder.ended_at.is_none(), "{case}");
+            assert_eq!(
+                holder.pane.as_ref().map(|pane| pane.pane_id.as_str()),
+                Some(pane),
+                "{case}"
+            );
+        }
+    }
+}
+
 /// A bound reservation carried over a rotation, taken by its session in one
 /// catch-up, stays taken in every later one: through a direct-key event, a
 /// rebirth, and its session's stamped end, a warm fold equals a cold one.

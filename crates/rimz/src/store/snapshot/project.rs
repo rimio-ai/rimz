@@ -828,19 +828,25 @@ impl ReducerState {
         if self.identity.launch_consumed(&payload.agent_id) {
             return;
         }
-        // A swap's reservation keeps its agent's handle: it is the owner's
-        // launch at a later epoch. Any other launch under an owned handle is
+        // A launch a row of it already holds at this epoch or later is a
+        // re-announce, whichever of its rows owns the handle. A swap's
+        // reservation, at an epoch above every row of its launch, keeps its
+        // agent's handle. A launch under a handle another launch owns is
         // consumed.
         let launch = payload.launch_id.as_ref().unwrap_or(&payload.agent_id);
         let epoch = payload.launch.epoch.unwrap_or(0);
         if payload.agent_id.is_provisional()
-            && let Some(owner) = self.identity.owner_for_name(&payload.agent_name)
-            && owner.0 == *kind
-            && owner != key
-            && self
-                .map
-                .get(&owner)
-                .is_some_and(|row| row.launch_key() != launch || row.epoch >= epoch)
+            && (self.map.iter().any(|(row_key, row)| {
+                row_key.0 == *kind
+                    && *row_key != key
+                    && row.launch_key() == launch
+                    && row.epoch >= epoch
+            }) || self
+                .identity
+                .owner_for_name(&payload.agent_name)
+                .filter(|owner| owner.0 == *kind && *owner != key)
+                .and_then(|owner| self.map.get(&owner))
+                .is_some_and(|row| row.launch_key() != launch))
         {
             self.identity.consume_launch_key(&key);
             return;
