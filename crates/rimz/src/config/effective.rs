@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::project_file::{ProjectAgents, ProjectFile};
 use crate::config::{
     AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, DefinitionOrigin, MachineConfig,
     Profile, ProfileSource, ProfilesConfig, Tasks, TeamsConfig,
@@ -1256,20 +1257,22 @@ fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {
 }
 
 fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {
-    for profiles in [
-        value.get("profiles"),
-        value
-            .get("subagents")
-            .and_then(|subagents| subagents.get("profiles")),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(toml::Value::as_table)
-    {
-        for (name, profile) in profiles {
-            reject_project_tier_key(profile, name)?;
-        }
+    if let Some(key) = project_lsp_policy_key(value) {
+        return Err(serde::de::Error::custom(
+            EffectiveConfigErr::ProjectLspPolicy(key.to_owned()),
+        ));
     }
+    let file: ProjectFile = value.clone().try_into()?;
+    let subagent_profiles = file.subagents.and_then(|subagents| subagents.profiles);
+    for (name, profile) in [&file.profiles, &subagent_profiles]
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+        .flatten()
+    {
+        reject_project_tier_key(profile, name)?;
+    }
+    // A role's `tier` is a key `RoleBinding` does not declare, so it is read from the file.
     if let Some(teams) = value
         .get("agents")
         .and_then(|agents| agents.get("teams"))
@@ -1286,43 +1289,16 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
             }
         }
     }
-    let env_reminder = value
-        .get("agents")
-        .and_then(toml::Value::as_table)
-        .and_then(|agents| agents.get("env-reminder"))
-        .cloned()
-        .map(toml::Value::try_into)
-        .transpose()?;
-    if let Some(key) = project_lsp_policy_key(value) {
-        return Err(serde::de::Error::custom(
-            EffectiveConfigErr::ProjectLspPolicy(key.to_owned()),
-        ));
-    }
-    let lsp_servers = value
-        .get("lsp")
-        .and_then(|lsp| lsp.get("servers"))
-        .cloned()
-        .map(toml::Value::try_into)
-        .transpose()?
-        .unwrap_or_default();
-    let (profiles, profile_unknown_keys) = parse_repo_profiles(value.get("profiles"))?;
-    let (subagent_profiles, subagent_unknown_keys) = parse_repo_profiles(
-        value
-            .get("subagents")
-            .and_then(toml::Value::as_table)
-            .and_then(|subagents| subagents.get("profiles")),
-    )?;
-    let teams = value
-        .get("agents")
-        .and_then(toml::Value::as_table)
-        .and_then(|agents| agents.get("teams"))
-        .cloned()
-        .map(toml::Value::try_into)
-        .transpose()?
-        .unwrap_or_default();
+    let (teams, env_reminder) = match file.agents {
+        ProjectAgents::Table(agents) => (agents.teams, agents.env_reminder),
+        ProjectAgents::Absent | ProjectAgents::Entries => (TeamsConfig::default(), None),
+    };
+    let (profiles, profile_unknown_keys) = parse_repo_profiles(file.profiles.as_ref())?;
+    let (subagent_profiles, subagent_unknown_keys) =
+        parse_repo_profiles(subagent_profiles.as_ref())?;
     let config = RepoConfig {
         env_reminder,
-        lsp_servers,
+        lsp_servers: file.lsp.map(|lsp| lsp.servers).unwrap_or_default(),
         profiles,
         subagent_profiles,
         profile_unknown_keys,

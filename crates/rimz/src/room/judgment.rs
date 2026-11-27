@@ -95,8 +95,11 @@ fn judge_with_config_root(
                 .strip_prefix(&project_prefix)
                 .unwrap_or(&text)
                 .to_owned();
-            warn(project_config, message);
+            warn(project_config.clone(), message);
         }
+    }
+    for notice in crate::config::project_key_notices(&workspace.project_root) {
+        warn(project_config.clone(), notice.to_string());
     }
     for error in &errors {
         match error {
@@ -131,20 +134,6 @@ fn judge_with_config_root(
         warn(
             crate::packs::one_line(&warning.path.display().to_string()),
             warning.to_string(),
-        );
-    }
-    if crate::trust::project_throttle(&workspace.project_root).unwrap_or(false) {
-        warn(
-            "throttle".into(),
-            "[throttle] is machine-only; the project table is ignored; set it in ~/.rimz/config.toml"
-                .into(),
-        );
-    }
-    if crate::trust::project_keys(&workspace.project_root).unwrap_or(false) {
-        warn(
-            "keys".into(),
-            "[keys] is machine-only; the project table is ignored; set it in ~/.rimz/config.toml"
-                .into(),
         );
     }
     if let Ok(Some(packs)) = crate::trust::project_packs(&workspace.project_root)

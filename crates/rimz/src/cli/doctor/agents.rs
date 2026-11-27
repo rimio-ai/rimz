@@ -1129,6 +1129,7 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
                 state: report.state,
                 granted_at: report.granted_at.map(|at| at.to_string()),
                 definition_errors,
+                unread_keys: rimz::config::project_key_notices(&ws.project_root),
             })
         }
         Err(err) => Probe::Unavailable {
