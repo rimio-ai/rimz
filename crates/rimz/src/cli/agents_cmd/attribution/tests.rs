@@ -335,6 +335,34 @@ fn markdown_single_team_keeps_the_group_name_in_the_summary_only() {
 }
 
 #[test]
+fn totals_label_singularizes_one_message() {
+    let mut single_teammate = report();
+    single_teammate.totals.messages = MessageCounts {
+        from_user: 0,
+        from_teammates: 1,
+        to_teammates: 0,
+    };
+    let mut output = Vec::new();
+    render_markdown(&mut output, &single_teammate).expect("render markdown");
+    let markdown = String::from_utf8(output).expect("utf8");
+    assert!(
+        markdown.contains(" · 1 message</summary>"),
+        "expected singular message count in summary, got:\n{markdown}"
+    );
+
+    let mut single_user = report();
+    single_user.totals.messages = MessageCounts {
+        from_user: 1,
+        from_teammates: 0,
+        to_teammates: 0,
+    };
+    assert_eq!(
+        totals_label(&single_user.totals),
+        "2 agents · 2h10m active · $3.20 · 1 message (1 from you)"
+    );
+}
+
+#[test]
 fn markdown_preserves_identity_punctuation_and_escapes_plain_labels() {
     let mut report = report();
     report.groups[0].members[0].role = Some(r"plan*ner_[x]\tail".to_owned());
