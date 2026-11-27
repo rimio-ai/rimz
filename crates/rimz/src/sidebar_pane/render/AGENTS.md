@@ -2,11 +2,11 @@
 
 Local contract for `crates/rimz/src/sidebar_pane/render/`. Extends [sidebar_pane/AGENTS.md](../AGENTS.md).
 
-- Draw what the snapshot resolved (`SidebarProviderPanel::budget`, `SidebarRow::call_split`), and never re-read windows, credits, or the usage blob. The one read of `web` here is `web::pixel_ttyd_pids`.
+- Draw what the snapshot resolved (`SidebarProviderPanel::budget`, `SidebarRow::call_split`), and never re-read windows, credits, or the usage blob.
 - A new mark, line, or chip gets its own `Component` variant even when an existing one already resolves to the tone it wants: borrowing another role's token lets that role's retune recolor the new element.
 - Measure the painted width of text the renderer did not format itself (a product name, a theme override, an account label) with `text_width` in [`render/layout.rs`](./layout.rs), never `chars().count()`: wide or zero-width characters misplace every cell and click target after them.
-- A line reads its width tier from `RowCtx::tier`, measured on `content_width` (pane width minus 2), and never recomputes `Tier::for_width` from the pane width, so every line in a frame degrades at the same column.
-- A render change updates the frames in [docs/interface/sidebar.md](../../../../../docs/interface/sidebar.md) drawn from the moved `.snap` files and every hand-drawn frame there that shows the changed line, [the whole frame](../../../../../docs/interface/sidebar.md#the-whole-frame) included, found by the line's glyph (`rg -n '⧉' docs/interface/sidebar.md`), the [docs/guide/sidebar.md](../../../../../docs/guide/sidebar.md) sentence that lists the changed line's elements in on-screen order, and, for what a click or key does, that input's row in the interface page's input table.
+- A line reads its width tier from `RowCtx::tier`, measured on `content_width`, and never recomputes `Tier::for_width` from the pane width, so every line in a frame degrades at the same column.
+- A render change updates the frames in [docs/interface/sidebar.md](../../../../../docs/interface/sidebar.md) drawn from the moved `.snap` files and each hand-drawn frame there that shows the changed line, found by grepping the page for the line's glyph, the [docs/guide/sidebar.md](../../../../../docs/guide/sidebar.md) sentence that lists the changed line's elements in on-screen order, and, for what a click or key does, that input's row in the interface page's input table.
 
 ## Tests
 
