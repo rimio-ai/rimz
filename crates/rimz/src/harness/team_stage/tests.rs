@@ -588,3 +588,39 @@ fn stage_notices_carry_the_channel_rule_for_a_non_leader_owner() {
         "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops.\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
     );
 }
+
+/// A roleless team's resumed member records the kind `--agent` or `--tier` routed its cell to,
+/// so its seat is matched by its order in the layout as written, and one seat at most leads.
+#[test]
+fn only_the_seat_written_as_leader_takes_the_resume_continue() {
+    let teams = crate::config::MachineConfig::default().agents.teams;
+    let seat = |kind: &str, ordinal: Option<u32>, role: Option<&str>| {
+        let mut agent = crate::testkit::agent_state(
+            kind,
+            &format!("{kind}-{ordinal:?}"),
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        agent.launch_ordinal = ordinal;
+        agent.role = role.map(str::to_owned);
+        agent
+    };
+    // `--agent claude` and `--tier principal` route both cells to claude, `--agent codex` to codex.
+    for kind in ["claude", "codex"] {
+        let leads = [Some(0), Some(1), None].map(|ordinal| {
+            leads_resumed_team(&teams.0["peer"], || Some(0), &seat(kind, ordinal, None))
+        });
+        assert_eq!(leads, [true, false, false], "{kind}");
+    }
+    let crew: Team = toml::from_str(
+        "leader = 'coder'\nroles = [{ role = 'planner', profile = 'claude' }, { role = 'coder', profile = 'claude' }]",
+    )
+    .unwrap();
+    let leads = [("coder", 1), ("planner", 0)].map(|(role, ordinal)| {
+        leads_resumed_team(
+            &crew,
+            || unreachable!("a role seat matches by role"),
+            &seat("claude", Some(ordinal), Some(role)),
+        )
+    });
+    assert_eq!(leads, [true, false]);
+}

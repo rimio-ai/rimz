@@ -6278,7 +6278,7 @@ fn explain_names_where_each_tuning_value_came_from() {
     env.write_config(
         &env.project_root,
         "[profiles.hand]\ndescription = 'Hand'\nagent = 'claude'\n\
-         [agents.teams.crew]\nroles = [\
+         [agents.teams.crew]\nleader = 'lead'\nroles = [\
          {role = 'lead', profile = 'hand', fast = 'off', auto-compact = '400k'}, \
          {role = 'mate', profile = 'hand'}]\n",
     );

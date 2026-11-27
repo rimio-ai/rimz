@@ -740,7 +740,10 @@ fn restart_posture_keeps_a_team_role_childs_agent_profile() {
         .insert("claude-agent".to_owned(), profile);
     machine.agents.teams.0.insert(
         "forge".to_owned(),
-        toml::from_str("roles = [{ role = 'reviewer', profile = 'claude-agent' }]").unwrap(),
+        toml::from_str(
+            "leader = 'reviewer'\nroles = [{ role = 'reviewer', profile = 'claude-agent' }]",
+        )
+        .unwrap(),
     );
     let launch = crate::config::effective::load(&machine, &workspace.project_root).unwrap();
     let resolved = crate::harness::plan::resolve_launch(
@@ -1021,8 +1024,10 @@ fn restart_posture_keeps_the_team_prompt_layer() {
     machine.agents.profiles.0.insert("worker".into(), profile);
     machine.agents.teams.0.insert(
         "forge".into(),
-        toml::from_str("roles = [{ role = 'reviewer', profile = 'worker', owns = ['Review'] }]")
-            .unwrap(),
+        toml::from_str(
+            "leader = 'reviewer'\nroles = [{ role = 'reviewer', profile = 'worker', owns = ['Review'] }]",
+        )
+        .unwrap(),
     );
     let mut agent = crate::testkit::agent_state("claude", "seat", jiff::Timestamp::UNIX_EPOCH);
     agent.profile = Some("worker".into());
@@ -1060,7 +1065,7 @@ fn restart_posture_refuses_undeliverable_team_prompt_layers() {
     let mut actual = Vec::new();
     for owns in ["['Review']", "[]"] {
         let team = toml::from_str(&format!(
-            "consensus-file = 'consensus.md'\n\
+            "consensus-file = 'consensus.md'\nleader = 'reviewer'\n\
              roles = [{{ role = 'reviewer', profile = 'worker', owns = {owns} }}]"
         ))
         .unwrap();

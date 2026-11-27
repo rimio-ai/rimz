@@ -437,7 +437,8 @@ fn a_session_leader_on_a_team_of_tiered_seats_is_resident() {
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     machine.agents.profiles = loaded.agent_profiles;
     machine.agents.teams =
-        toml::from_str("[forge]\nroles = [{role = 'lead', profile = 'tiered'}]").unwrap();
+        toml::from_str("[forge]\nleader = 'lead'\nroles = [{role = 'lead', profile = 'tiered'}]")
+            .unwrap();
     let machine = Arc::new(machine);
     let mut leader = fixture.leader();
     leader.lifecycle = crate::store::run::RunLifecycle::Session;

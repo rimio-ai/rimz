@@ -56,8 +56,6 @@ pub(super) struct TeamLaunchContext {
     role: String,
     channel: Option<String>,
     leader: String,
-    /// The team declares its leader; a fallback leader gets no channel rule.
-    declared_leader: bool,
     seats: Vec<Seat>,
     /// The declared pipeline without the implicit terminal stage `Done`.
     pipeline: Vec<String>,
@@ -85,10 +83,7 @@ pub(super) fn team_launch_context(
     let team = &reminder.team;
     let team_name = params.team.as_ref()?;
     let role = params.role.as_ref()?;
-    let leader = team
-        .leader_role()
-        .map(str::to_owned)
-        .unwrap_or_else(|| role.clone());
+    let leader = team.leader.clone()?;
     let scratch_patterns = scratch::memory_patterns(team);
     let scratch = scratch::scan(cwd, &scratch_patterns);
     let board = if team.staged() {
@@ -110,7 +105,6 @@ pub(super) fn team_launch_context(
             .and_then(crate::ids::Lane::pin_name)
             .map(Into::into),
         leader,
-        declared_leader: team.leader.is_some(),
         seats: team
             .roles
             .iter()
@@ -163,7 +157,7 @@ pub(super) fn reminder(context: &TeamLaunchContext) -> String {
         };
         text.push_str(&format!("\n\n{label}: {}.", seats.join(", ")));
     }
-    if context.declared_leader && !context.is_leader() {
+    if !context.is_leader() {
         text.push_str("\n\n");
         text.push_str(&channel_paragraph(context));
     }
@@ -379,7 +373,6 @@ mod tests {
             role: "coder".to_owned(),
             channel: Some("feature".to_owned()),
             leader: "planner".to_owned(),
-            declared_leader: true,
             seats: vec![
                 seat("planner", &[]),
                 seat("coder", &[]),
@@ -518,6 +511,7 @@ mod tests {
             }
             let team = Team {
                 roles: vec![role("planner"), role("coder")],
+                leader: Some("planner".to_owned()),
                 stages: vec!["Plan".to_owned()],
                 scratch_files: Some(vec!["/blackboard.md".to_owned(), "[abc.md".to_owned()]),
                 ..Team::default()
@@ -543,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_configured_leader_then_falls_back_to_first_role() {
+    fn the_declared_leader_leads_and_every_other_seat_gets_the_channel_rule() {
         let mut team = Team {
             roles: vec![role("planner"), role("coder")],
             leader: Some("coder".to_owned()),
@@ -565,21 +559,36 @@ mod tests {
             reminder(&context)
         );
         assert_eq!(files_block(&context), None);
-        team.leader = None;
+        team.leader = Some("planner".to_owned());
         team.roles[0].owns = vec!["Plan".to_owned()];
         let context = team_launch_context(
             &params(),
             None,
             &launch(),
-            &team_reminder(team),
+            &team_reminder(team.clone()),
             Path::new("/tmp/worktree"),
         )
         .unwrap();
         assert_eq!(context.leader, "planner");
-        assert!(!reminder(&context).contains("user"));
+        assert!(
+            reminder(&context).ends_with(&channel_paragraph(&context)),
+            "{}",
+            reminder(&context)
+        );
         assert_eq!(
             files_block(&context).unwrap(),
             "```\n$ ls .rimz/team/*.md\n(no such files)\n```"
+        );
+        team.leader = None;
+        assert_eq!(
+            team_launch_context(
+                &params(),
+                None,
+                &launch(),
+                &team_reminder(team),
+                Path::new("/tmp/worktree"),
+            ),
+            None
         );
     }
 
@@ -597,7 +606,11 @@ mod tests {
                     &params,
                     None,
                     &launch(),
-                    &team_reminder(Team::default()),
+                    &team_reminder(Team {
+                        leader: Some("planner".to_owned()),
+                        roles: vec![role("planner")],
+                        ..Team::default()
+                    }),
                     Path::new("/tmp")
                 )
                 .is_none()

@@ -56,6 +56,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         system_prompt_file: Some(system_prompt.clone()),
         append_system_prompt_files: appended.to_vec(),
         team_prompt: Some(team_prompt.clone()),
+        leads_team: false,
         skills: Some(skills.to_vec()),
         seat_consensus_skill: false,
         mcps: None,

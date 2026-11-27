@@ -505,17 +505,29 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
 fn team_tab_focuses_the_leader_pane_past_command_cells() {
     let team = toml::from_str::<crate::config::Team>(
         r#"leader = "planner"
+layout = "coder+term,planner"
 roles = [{role = "coder", profile = "codex"}, {role = "planner", profile = "claude"}]"#,
     )
     .unwrap();
-    let layout = crate::harness::spec::parse_layout_spec(
+    let teams = crate::config::TeamsConfig(std::collections::BTreeMap::from([(
+        "forge".to_owned(),
+        team,
+    )]));
+    let layout = crate::harness::spec::resolve_team(
+        "forge",
+        &teams,
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(team_leader_pane(&layout), 2);
+    let inline = crate::harness::spec::parse_layout_spec(
         "codex:coder+term,claude:planner",
         &Default::default(),
         &Default::default(),
     )
     .unwrap();
-    assert_eq!(team_leader_pane(&layout, Some(&team)), 2);
-    assert_eq!(team_leader_pane(&layout, None), 0);
+    assert_eq!(team_leader_pane(&inline), 0);
 }
 
 #[test]
@@ -1936,9 +1948,11 @@ agent = "toml_codex"
 model = "astra"
 
 [agents.teams.toml_squad]
+leader = "lead"
 roles = [{ role = "lead", profile = "toml_claude", model = "sonnet" }]
 
 [agents.teams.toml_squad_native]
+leader = "lead"
 roles = [{ role = "lead", profile = "toml_claude", model = "sol" }]
 "#,
     )
@@ -2463,6 +2477,7 @@ agent = "codex"
 model = "astra"
 
 [agents.teams.toml_team]
+leader = "lead"
 roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
 "#,
     )

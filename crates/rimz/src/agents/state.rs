@@ -1633,8 +1633,9 @@ pub struct AgentState {
     /// key; inline layouts use this generated id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_group: Option<String>,
-    /// Stable order inside the launch cohort: team role-list index or inline
-    /// agent-cell index. Roleless team cells leave it unset and tail the block.
+    /// Stable order inside the launch cohort: the layout's agent-cell index for
+    /// every team cell, a roleless one included, and every inline cell. A row
+    /// from an older launch can hold its role-list index, or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
     /// The lane's name while `lane` is set and is not trunk's own, else an

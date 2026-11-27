@@ -1306,7 +1306,6 @@ upward-dependencies = [
 # SmartCompactSeat, its explicit/resolve methods and ProfilesConfig::setting share seat lines (+4).
 # load_seat_tables shares effective-or-machine fallback with dispatch and harness policy (+1).
 # ProfilesConfig::keep_warm and Team::keep_warm_with_default share horizon fallback with validation (+2).
-# Team::leader_role shares the declared-or-first-role fallback with launch reminders and nudges (+1).
 # KeepWarmSeat and declared_horizon share the declared hold rule with launch compilation (+2).
 # MuxStatusBar carries the backend-neutral status mode to room setup (+1).
 # MuxConfig lets the settings class table exhaustively account for backend selection (+1).

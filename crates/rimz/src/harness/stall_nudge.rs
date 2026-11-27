@@ -127,7 +127,7 @@ fn nudge_stalled_teams_with(
             workspace_id: runtime.workspace_id.clone(),
             checkout: checkout.into(),
             team: team.clone(),
-            leader_role: team_config.leader_role().map(str::to_owned),
+            leader_role: team_config.leader.clone(),
             stage: pipeline.stage.clone(),
             visit_started_at,
             stalled_since,

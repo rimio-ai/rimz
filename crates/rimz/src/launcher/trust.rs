@@ -457,7 +457,7 @@ fn node_problems(
     let leader = if layout_recipe {
         None
     } else {
-        Some(crate::harness::spec::prompt_leader(&layout, None)?)
+        Some(crate::harness::spec::prompt_leader(&layout)?)
     };
     let leader_cwd = match &launch.worktree {
         Some(own) => own.as_deref(),

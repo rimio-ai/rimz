@@ -16,7 +16,8 @@ fn role_mode_reports_show_kind_defaults_and_mappings_even_with_invalid_peers() {
             }))
             .unwrap();
             let mut team: Team =
-                toml::from_str("roles = [{role = 'lead', profile = 'worker'}]").unwrap();
+                toml::from_str("leader = 'lead'\nroles = [{role = 'lead', profile = 'worker'}]")
+                    .unwrap();
             if broken {
                 let mut ghost = team.roles[0].clone();
                 ghost.role = "ghost".into();
@@ -36,13 +37,14 @@ fn role_mode_reports_show_kind_defaults_and_mappings_even_with_invalid_peers() {
                 Some(expected),
                 "{kind} {broken}"
             );
+            assert_eq!(report.valid, !broken, "{kind} {broken}: {:?}", report.error);
         }
     }
 }
 
 #[test]
 fn keep_warm_reports_use_resolved_role_over_team_fields() {
-    let team: Team = toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}, {role = 'helper', profile = 'claude', keep-warm = {max = 'off'}}, {role = 'cold', profile = 'claude', keep-warm = 'off'}]").unwrap();
+    let team: Team = toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nleader = 'lead'\nroles = [{role = 'lead', profile = 'claude'}, {role = 'helper', profile = 'claude', keep-warm = {max = 'off'}}, {role = 'cold', profile = 'claude', keep-warm = 'off'}]").unwrap();
     let report = definition_report(
         "mill",
         &team,
@@ -63,7 +65,8 @@ fn keep_warm_reports_use_resolved_role_over_team_fields() {
     assert!(roles[2].get("keep_warm").is_none());
 
     let layout_team: Team =
-        toml::from_str("keep-warm = '2h'\nlayout = 'claude,codex'\nroles = []").unwrap();
+        toml::from_str("keep-warm = '2h'\nleader = 'claude'\nlayout = 'claude,codex'\nroles = []")
+            .unwrap();
     let report = definition_report(
         "peer",
         &layout_team,
@@ -80,6 +83,39 @@ fn keep_warm_reports_use_resolved_role_over_team_fields() {
             role["keep_warm"],
             serde_json::json!({"max": "2h", "while": null}),
             "layout cell must report the team default"
+        );
+    }
+}
+
+#[test]
+fn a_team_report_names_only_the_declared_leader() {
+    let report = |team: &str| {
+        let team: Team = toml::from_str(team).unwrap();
+        let report = definition_report(
+            "pair",
+            &team,
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            None,
+            Vec::new(),
+        );
+        (report.leader, report.valid, report.error)
+    };
+    assert_eq!(
+        report("leader = 'codex'\nlayout = 'claude,codex'"),
+        (Some("codex".to_owned()), true, None)
+    );
+    for leaderless in [
+        "layout = 'claude,codex'",
+        "roles = [{ role = 'planner', profile = 'claude' }]",
+    ] {
+        let (leader, valid, error) = report(leaderless);
+        assert_eq!((leader, valid), (None, false), "{leaderless}");
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|error| error.contains("must declare a `leader`")),
+            "{leaderless}: {error:?}"
         );
     }
 }

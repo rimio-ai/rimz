@@ -396,7 +396,7 @@ fn definition_report(
     );
     let (layout, validation) = match resolved {
         Ok(layout) => {
-            let validation = rimz::harness::spec::prompt_leader(&layout, Some(team)).map(|_| ());
+            let validation = rimz::harness::spec::prompt_leader(&layout).map(|_| ());
             (Some(layout), validation)
         }
         Err(error) => (None, Err(error)),
@@ -427,16 +427,6 @@ fn definition_report(
             })
             .collect();
     }
-    let leader = team
-        .leader
-        .clone()
-        .or_else(|| team.roles.first().map(|binding| binding.role.clone()))
-        .or_else(|| {
-            layout
-                .as_ref()
-                .and_then(|layout| layout.agent_cells().next())
-                .map(cell_label)
-        });
     TeamReport {
         name: name.to_owned(),
         defined: true,
@@ -448,7 +438,7 @@ fn definition_report(
                 .collect::<Vec<_>>()
                 .join(",")
         })),
-        leader,
+        leader: team.leader.clone(),
         roles,
         consensus: team.staged().then(|| {
             team.consensus_file

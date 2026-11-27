@@ -429,6 +429,7 @@ impl ResumeLaunchPosture {
             system_prompt_file: self.system_prompt_file,
             append_system_prompt_files: self.append_system_prompt_files,
             team_prompt: self.team_prompt,
+            leads_team: false,
             skills: self.skills,
             seat_consensus_skill: self.seat_consensus_skill,
             mcps: self.mcps,

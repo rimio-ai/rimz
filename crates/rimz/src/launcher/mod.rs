@@ -235,7 +235,9 @@ pub enum Notice<'a> {
         team: Option<&'a str>,
         lane: &'a crate::ids::Lane,
         identities: &'a [AgentLaunchIdentity],
-        leader: Option<&'a str>,
+        /// The agent-cell index of the team's leader seat, whose handle the receipt's `Reach:`
+        /// line names.
+        leader_index: Option<usize>,
     },
 }
 
@@ -677,7 +679,7 @@ pub fn prepare_layout(
         .prompt
         .as_deref()
         .filter(|prompt| !prompt.trim().is_empty());
-    let leader = crate::harness::spec::prompt_leader(&layout, team);
+    let leader = crate::harness::spec::prompt_leader(&layout);
     let receipt_leader_index = if prompt.is_some() {
         Some(leader?)
     } else {
@@ -2008,14 +2010,13 @@ fn launch_resume_layout(
             leader_run: None,
         },
     )?;
-    panes.focused_pane = team_leader_pane(&layout, team);
-    let leader = team.and_then(|team| team.leader.as_deref());
+    panes.focused_pane = team_leader_pane(&layout);
     let receipt = Notice::ResumeReceipt {
         plan: &plan,
         team: team_name.as_deref(),
         lane: &lane,
         identities: launch_batch.identities(),
-        leader,
+        leader_index: team.and(crate::harness::spec::prompt_leader(&layout).ok()),
     };
     if let Some(prompt) = args
         .launch
@@ -2031,7 +2032,7 @@ fn launch_resume_layout(
             &plan.seeds,
             launch_batch.identities(),
             prompt,
-            crate::harness::spec::prompt_leader(&layout, team)?,
+            crate::harness::spec::prompt_leader(&layout)?,
             context::sender_for(caller.as_ref(), channel.as_deref(), false),
             team.is_some(),
         )?;
@@ -2089,22 +2090,15 @@ fn launch_resume_layout(
 }
 
 /// A team tab opens focused on its leader's pane; any other layout keeps the
-/// leading pane. The leader is an agent-cell index, so command cells before it
-/// still count toward its pane position.
-fn team_leader_pane(layout: &LayoutSpec, team: Option<&crate::config::Team>) -> usize {
-    let Some(leader) =
-        team.and_then(|team| crate::harness::spec::prompt_leader(layout, Some(team)).ok())
-    else {
-        return 0;
-    };
+/// leading pane. Command cells before the leader still count toward its pane
+/// position.
+fn team_leader_pane(layout: &LayoutSpec) -> usize {
     layout
         .columns
         .iter()
         .flat_map(|column| column.rows.iter())
-        .enumerate()
-        .filter(|(_, cell)| matches!(cell, Cell::Agent(_)))
-        .nth(leader)
-        .map_or(0, |(position, _)| position)
+        .position(|cell| matches!(cell, Cell::Agent(cell) if cell.leads_team))
+        .unwrap_or(0)
 }
 
 fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {

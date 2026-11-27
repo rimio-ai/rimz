@@ -250,7 +250,7 @@ fn prepare(
             bail!("a run-bearing layout cannot launch a team; use an agent layout instead");
         }
         let mut layout = finalized.resolved.layout;
-        let leader_index = crate::harness::spec::prompt_leader(&layout, None)?;
+        let leader_index = crate::harness::spec::prompt_leader(&layout)?;
         for (index, cell) in layout
             .columns
             .iter_mut()

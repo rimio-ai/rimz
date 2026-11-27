@@ -67,8 +67,15 @@ impl Interaction for CliInteraction {
                 team,
                 lane,
                 identities,
-                leader,
-            } => write_resume_receipt(&mut render::out(), plan, team, lane, identities, leader)?,
+                leader_index,
+            } => write_resume_receipt(
+                &mut render::out(),
+                plan,
+                team,
+                lane,
+                identities,
+                leader_index,
+            )?,
             line => {
                 if let Some(line) = line.line() {
                     writeln!(render::err(), "{line}")?;
@@ -379,11 +386,14 @@ fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
     identity.launch.role.as_deref().unwrap_or(&identity.name)
 }
 
+/// The handle of the agent in seed `index` of a resumed cohort: a resumed member's own, or the
+/// fresh identity started in that seat.
 fn resume_hint_handle<'a>(
     plan: &'a rimz::harness::plan::CohortResumePlan,
     fresh_identities: &'a [AgentLaunchIdentity],
+    index: usize,
 ) -> Option<&'a str> {
-    match plan.seeds.first()? {
+    match plan.seeds.get(index)? {
         rimz::harness::plan::CohortSeed::Resume(agent) => agent
             .role
             .as_deref()
@@ -391,7 +401,13 @@ fn resume_hint_handle<'a>(
             .or(agent.profile.as_deref())
             .or(Some(agent.kind.as_str())),
         rimz::harness::plan::CohortSeed::Fresh => {
-            fresh_identities.first().map(launch_identity_handle)
+            let fresh_before = plan.seeds[..index]
+                .iter()
+                .filter(|seed| matches!(seed, rimz::harness::plan::CohortSeed::Fresh))
+                .count();
+            fresh_identities
+                .get(fresh_before)
+                .map(launch_identity_handle)
         }
     }
 }
@@ -441,7 +457,7 @@ fn write_resume_receipt(
     team: Option<&str>,
     lane: &rimz::ids::Lane,
     fresh_identities: &[AgentLaunchIdentity],
-    leader: Option<&str>,
+    leader_index: Option<usize>,
 ) -> Result<()> {
     report_cohort_resume(w, plan)?;
     writeln!(w)?;
@@ -451,8 +467,8 @@ fn write_resume_receipt(
         w,
         instance.as_ref(),
         Some(lane.routing_name().as_str()),
-        resume_hint_handle(plan, fresh_identities),
-        leader,
+        resume_hint_handle(plan, fresh_identities, 0),
+        leader_index.and_then(|index| resume_hint_handle(plan, fresh_identities, index)),
     )
 }
 

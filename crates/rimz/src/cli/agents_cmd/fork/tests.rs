@@ -112,7 +112,7 @@ fn fork_posture_refuses_profiles_and_recorded_overrides_on_a_failed_kind() {
     std::fs::create_dir(dir.path().join(".rimz")).unwrap();
     std::fs::write(
         dir.path().join(".rimz/config.toml"),
-        "[profiles.broken]\nagent = \"codex\"\n\n[agents.teams.projcrew]\nlayout = \"lead\"\n[[agents.teams.projcrew.roles]]\nrole = \"lead\"\nprofile = \"broken\"\n",
+        "[profiles.broken]\nagent = \"codex\"\n\n[agents.teams.projcrew]\nleader = \"lead\"\nlayout = \"lead\"\n[[agents.teams.projcrew.roles]]\nrole = \"lead\"\nprofile = \"broken\"\n",
     )
     .unwrap();
     rimz::trust::grant(dir.path()).unwrap();
@@ -151,11 +151,18 @@ fn fork_posture_refuses_profiles_and_recorded_overrides_on_a_failed_kind() {
         machine.definition_failure_for("crew")
     );
     let proj_team_seat = seed("codex", Some("projcrew.lead"), None);
+    let failure = effective.definition_failure_for("projcrew");
+    assert!(
+        failure
+            .as_deref()
+            .is_some_and(|detail| detail.contains("broken")),
+        "{failure:?}"
+    );
     assert_eq!(
         super::fork_posture(&proj_team_seat, &effective)
             .err()
             .map(|error| error.to_string()),
-        effective.definition_failure_for("projcrew")
+        failure
     );
 }
 

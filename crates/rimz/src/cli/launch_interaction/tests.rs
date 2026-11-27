@@ -354,7 +354,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
         &Default::default(),
     )
     .unwrap();
-    let leader_index = rimz::harness::spec::prompt_leader(&layout, None).ok();
+    let leader_index = rimz::harness::spec::prompt_leader(&layout).ok();
     assert!(leader_index.is_none());
     let identities = [
         launch_identity("claude", "first-peer"),
@@ -508,7 +508,7 @@ fn assert_receipt_handle_round_trip_beside_launched_child(ended_at: Option<jiff:
 }
 
 #[test]
-fn team_launch_receipt_marks_the_implicit_leader() {
+fn team_launch_receipt_marks_the_declared_leader() {
     let mut identities = [
         launch_identity("codex", "coder"),
         launch_identity("claude", "planner"),
@@ -516,16 +516,13 @@ fn team_launch_receipt_marks_the_implicit_leader() {
     identities[0].launch.role = Some("coder".to_owned());
     identities[1].launch.role = Some("planner".to_owned());
     let team = toml::from_str::<rimz::config::Team>(
-        r#"roles = [{role = "planner", profile = "claude"}, {role = "coder", profile = "codex"}]"#,
+        r#"leader = "planner"
+layout = "coder,planner"
+roles = [{role = "planner", profile = "claude"}, {role = "coder", profile = "codex"}]"#,
     )
     .unwrap();
-    let layout = rimz::harness::spec::parse_layout_spec(
-        "codex:coder,claude:planner",
-        &Default::default(),
-        &Default::default(),
-    )
-    .unwrap();
-    let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
+    let layout = resolve_forge(&team);
+    let leader_index = rimz::harness::spec::prompt_leader(&layout).unwrap();
     assert_eq!(leader_index, 1);
     let mut output = anstream::StripStream::new(Vec::new());
 
@@ -561,17 +558,12 @@ fn team_launch_receipt_marks_the_implicit_leader() {
 
 #[test]
 fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
-    let layout = rimz::harness::spec::parse_layout_spec(
-        "codex,claude",
-        &Default::default(),
-        &Default::default(),
-    )
-    .unwrap();
     let team = rimz::config::Team {
         leader: Some("claude".to_owned()),
+        layout: Some("codex,claude".to_owned()),
         ..Default::default()
     };
-    let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
+    let leader_index = rimz::harness::spec::prompt_leader(&resolve_forge(&team)).unwrap();
     assert_eq!(leader_index, 1);
     let mut identities = [
         launch_identity("codex", "worker"),
@@ -662,12 +654,12 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
         String::from_utf8(announcement).unwrap(),
         "resuming forge in #feat-x (newest of 2; others: run rimz agents resume from the project root)\n"
     );
-    assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
+    assert_eq!(resume_hint_handle(&plan, &[], 0), Some("planner"));
     let lane = |value| serde_json::from_value::<rimz::ids::Lane>(value).unwrap();
     let feat =
         lane(serde_json::json!({"home": "worktree", "path": "/repo/.rimz/worktrees/feat-x"}));
     let mut output = Vec::new();
-    write_resume_receipt(&mut output, &plan, Some("forge"), &feat, &[], None).unwrap();
+    write_resume_receipt(&mut output, &plan, Some("forge"), &feat, &[], Some(0)).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
     assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
@@ -677,15 +669,60 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
     let trunk = lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout"}));
     let design =
         lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout", "name": "design"}));
-    for lane in [trunk, design, feat] {
+    for lane in [trunk, design, feat.clone()] {
         let mut output = Vec::new();
-        write_resume_receipt(&mut output, &plan, Some("forge"), &lane, &[], None).unwrap();
+        write_resume_receipt(&mut output, &plan, Some("forge"), &lane, &[], Some(0)).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains(&format!(
             "Check: rimz teams show forge#{}",
             lane.routing_name()
         )));
     }
+
+    // A roleless team's receipt reaches its leader seat by that seat's own handle, resumed or
+    // fresh, never by a kind selector another agent in the lane could answer to.
+    let mut codex = test_agent("sess-codex");
+    codex.kind = AgentKind::new_unchecked("codex");
+    codex.name = Some("swift-otter".to_owned());
+    let mut claude = test_agent("sess-claude");
+    claude.kind = AgentKind::new_unchecked("claude");
+    claude.name = Some("stable-haven".to_owned());
+    let peer = |seeds| rimz::harness::plan::CohortResumePlan {
+        spec: "peer".to_owned(),
+        seeds,
+        ..plan.clone()
+    };
+    let resumed = peer(vec![
+        rimz::harness::plan::CohortSeed::Resume(Box::new(codex.clone())),
+        rimz::harness::plan::CohortSeed::Resume(Box::new(claude)),
+    ]);
+    let refilled = peer(vec![
+        rimz::harness::plan::CohortSeed::Resume(Box::new(codex)),
+        rimz::harness::plan::CohortSeed::Fresh,
+    ]);
+    let fresh = [launch_identity("claude", "quiet-fern")];
+    for (plan, fresh, handle) in [
+        (&resumed, &[][..], "stable-haven"),
+        (&refilled, &fresh[..], "quiet-fern"),
+    ] {
+        let mut output = Vec::new();
+        write_resume_receipt(&mut output, plan, Some("peer"), &feat, fresh, Some(1)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!("Reach: rimz message @{handle}#feat-x '<text>'")),
+            "{output}"
+        );
+    }
+}
+
+/// `team`'s layout as the launcher resolves it, with its leader seat marked.
+fn resolve_forge(team: &rimz::config::Team) -> rimz::harness::spec::LayoutSpec {
+    let teams = rimz::config::TeamsConfig(std::collections::BTreeMap::from([(
+        "forge".to_owned(),
+        team.clone(),
+    )]));
+    rimz::harness::spec::resolve_team("forge", &teams, &Default::default(), &Default::default())
+        .unwrap()
 }
 
 fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {
