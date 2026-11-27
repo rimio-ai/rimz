@@ -138,9 +138,14 @@ pub(super) fn gauge_age_width(ctx: &RowCtx<'_>, row: &SidebarRow) -> usize {
 /// Finished cards follow the same ramp. The clock reads the agent's own cache
 /// clock ([`SidebarRow::idle_since`]), not child-folded activity: a parent
 /// waiting on children makes no model call, so its cache keeps cooling.
+///
+/// A `closing` card's bar is the bare track across the whole bar, never the
+/// pixel image, a fill, or the wall, while its glyph, value, and age stay; the
+/// card's closing repaint gives it the closing tone.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
+    closing: bool,
     meter_pixels: Option<&mut MeterPixels>,
 ) -> Line<'static> {
     let theme = ctx.theme;
@@ -208,6 +213,12 @@ pub(super) fn gauge_line(
         theme.style(glyph_color, Modifier::empty()),
         &value,
         |bar_width| {
+            if closing {
+                return vec![Span::styled(
+                    theme.glyph(GlyphRole::MeterBarTrack).repeat(bar_width),
+                    theme.faint(),
+                )];
+            }
             if (!compacted_empty || wall.is_some())
                 && let Some(pixels) = meter_pixels
                 && let Some(spans) = pixel_gauge_spans(
