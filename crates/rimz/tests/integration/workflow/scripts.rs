@@ -331,7 +331,7 @@ fn a_script_that_cannot_load_exits_nonzero_with_its_line() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.ends_with(
-            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`\n"
+            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, `phase`, `log`, and `args`\n"
         ),
         "{stderr}"
     );
@@ -394,6 +394,58 @@ fn try_answers_now_and_offers_a_template_for_the_call_it_waits_on() {
          waits on call 2, the first with no answer; answer it with a line like one of these:\n\
          \x20 {\"result\":{\"readings\":{\"ci\":null,\"pr\":null}}}\n\
          \x20 {\"failure\":{\"cause\":\"...\"}}\n"
+    );
+}
+
+/// A phase change and a log line print where the script made them, among its calls.
+#[test]
+fn try_prints_phase_changes_and_log_lines_among_the_calls() {
+    let env = Env::new();
+    let script = env.project_root.join("script.js");
+    fs::write(
+        &script,
+        "export const meta = { name: 'gate', description: 'Gates a change' }\n\
+         phase('Gate')\n\
+         const gate = await shell({ command: 'cargo xtask gate' })\n\
+         phase('Gate')\n\
+         phase('Fix')\n\
+         log(`the gate exited ${gate.code}`)\n\
+         await shell({ command: 'cargo xtask fix' })\n\
+         phase('Report')\n\
+         return gate.code\n",
+    )
+    .unwrap();
+    let answers = env.project_root.join("answers.jsonl");
+    fs::write(
+        &answers,
+        "{\"result\":{\"code\":3}}\n{\"result\":{\"code\":0}}\n",
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["workflow", "try"])
+        .arg(&script)
+        .arg("--answers")
+        .arg(&answers)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout,
+        "gate: Gates a change\n\
+         phase Gate\n\
+         1 shell cargo xtask gate\n  answer {\"code\":3}\n\
+         phase Fix\n\
+         log the gate exited 3\n\
+         2 shell cargo xtask fix\n  answer {\"code\":0}\n\
+         phase Report\n\
+         returns 3\n"
     );
 }
 

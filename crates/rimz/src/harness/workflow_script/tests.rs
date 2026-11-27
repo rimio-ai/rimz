@@ -142,7 +142,7 @@ fn a_dynamic_import_finds_no_module_loader() {
 fn an_import_statement_is_refused_with_its_line() {
     assert_eq!(
         refused(&script("const a = 1\nimport { b } from './b.js'\nreturn b")),
-        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`"
+        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, `phase`, `log`, and `args`"
     );
 }
 
@@ -193,6 +193,7 @@ fn now_is_a_call_the_log_answers_and_takes_no_object() {
                 block: BlockName::Now,
                 object: json!({}),
                 digest: digest(BlockName::Now, &json!({})),
+                phase: None,
             }],
             returned(json!([1_764_268_800_000_u64, [refused, refused]]))
         )
@@ -247,6 +248,120 @@ fn reads_decides_a_condition_on_the_watchs_three_valued_walk_and_makes_no_call()
                 true,
                 "`reads`: clause 1, position 4: empty term; use key=value",
                 "`reads`: the readings are not an object of strings and nulls: invalid type: integer `1`, expected a string",
+            ]))
+        )
+    );
+}
+
+#[test]
+fn phase_and_log_make_no_call_and_each_call_carries_its_phase() {
+    let replay = answered(
+        "const said = log('starting')\n\
+         phase('Gate')\n\
+         const gate = await shell({ command: 'gate' })\n\
+         phase('Gate')\n\
+         phase('Fix')\n\
+         log(`the gate exited ${gate.code}`)\n\
+         await shell({ command: 'fix' })\n\
+         return [said, phase('Done')]",
+        vec![result(json!({"code": 3})), result(json!({"code": 0}))],
+    );
+    let call = |number, command: &str, phase: &str| {
+        (
+            number,
+            digest(BlockName::Shell, &json!({ "command": command })),
+            Some(phase.to_owned()),
+        )
+    };
+    let mark = |after, replayed, progress| Mark {
+        after,
+        replayed,
+        progress,
+    };
+    let phase = |title: &str| Progress::Phase(title.to_owned());
+    let log = |line: &str| Progress::Log(line.to_owned());
+    assert_eq!(
+        (
+            replay
+                .calls
+                .into_iter()
+                .map(|call| (call.number, call.digest, call.phase))
+                .collect::<Vec<_>>(),
+            replay.marks,
+            replay.end
+        ),
+        (
+            vec![call(1, "gate", "Gate"), call(2, "fix", "Fix")],
+            vec![
+                mark(0, true, log("starting")),
+                mark(0, true, phase("Gate")),
+                mark(1, true, phase("Fix")),
+                mark(1, true, log("the gate exited 3")),
+                mark(2, false, phase("Done")),
+            ],
+            returned(json!([null, null]))
+        )
+    );
+}
+
+#[test]
+fn a_renamed_phase_keeps_the_logs_answers() {
+    let body = "phase('Gate')\nawait shell({ command: 'a' })\nphase('Fix')\nreturn await shell({ command: 'b' })";
+    let text = script(&body.replace("'Fix'", "'Repair'"));
+    let log = Log::Recorded(recorded(body, vec![result(json!(1)), result(json!(2))]));
+    let replay = replay(&pass(&text, &log)).unwrap();
+    assert_eq!((replay.used, replay.end), (2, returned(json!(2))));
+}
+
+/// Lines arrive in the order calls settle, so a mark is told new by the lines handed back before
+/// it, not by the calls made before it.
+#[test]
+fn a_mark_is_replayed_until_the_pass_hands_back_its_logs_last_line() {
+    let body = "const a = shell({ command: 'a' })\n\
+                await shell({ command: 'b' })\n\
+                log('b settled')\n\
+                await a\n\
+                log('a settled')";
+    let marks = |lines: Vec<Line>| {
+        let text = script(body);
+        let log = Log::Recorded(lines);
+        replay(&pass(&text, &log)).unwrap().marks
+    };
+    let settled = |line: &str, replayed| Mark {
+        after: 2,
+        replayed,
+        progress: Progress::Log(line.to_owned()),
+    };
+    assert_eq!(
+        [
+            marks(vec![line(2, "b", result(json!(2)))]),
+            marks(vec![
+                line(2, "b", result(json!(2))),
+                line(1, "a", result(json!(1)))
+            ]),
+        ],
+        [
+            vec![settled("b settled", false)],
+            vec![settled("b settled", true), settled("a settled", false)],
+        ]
+    );
+}
+
+#[test]
+fn phase_and_log_take_text() {
+    let replay = answered(
+        "const thrown = mark => { try { mark() } catch (error) { return error.message } }\n\
+         return [thrown(() => phase()), thrown(() => phase(3)), thrown(() => log({ line: 'a' }))]",
+        Vec::new(),
+    );
+    assert_eq!(
+        (replay.marks, replay.end),
+        (
+            Vec::new(),
+            returned(json!([
+                "`phase` takes its title as text",
+                "`phase` takes its title as text",
+                "`log` takes its line as text",
             ]))
         )
     );
@@ -1149,6 +1264,19 @@ fn a_memory_cap_hit_ends_the_pass_invalid_whatever_the_script_caught_and_did_aft
             memory_capped(),
             memory_capped()
         ]
+    );
+}
+
+/// A pass keeps its marks outside the engine's heap, so their text counts against the cap.
+#[test]
+fn the_memory_cap_counts_the_marks_a_pass_keeps() {
+    let mark = "const line = 'x'.repeat(4096)\nwhile (true) log(line)";
+    assert_eq!(
+        [
+            capped(mark),
+            capped(&format!("try {{ {mark} }} catch {{}}\nreturn 'went on'")),
+        ],
+        [memory_capped(), memory_capped()]
     );
 }
 
