@@ -142,7 +142,7 @@ fn a_dynamic_import_finds_no_module_loader() {
 fn an_import_statement_is_refused_with_its_line() {
     assert_eq!(
         refused(&script("const a = 1\nimport { b } from './b.js'\nreturn b")),
-        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, and `args`"
+        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`"
     );
 }
 
@@ -157,7 +157,7 @@ fn a_second_export_is_refused_with_its_line() {
 #[test]
 fn the_clock_throws() {
     let no_clock =
-        "a workflow script has no clock: take the time from `args`, or from a `shell` command";
+        "a workflow script has no clock: `await now()` gives the time, which the run's log keeps";
     assert_eq!(
         ran(
             "const tries = [() => Date.now(), () => new Date(), () => Date(), () => Date(0), \
@@ -165,6 +165,90 @@ fn the_clock_throws() {
              return tries.map(clock => { try { clock(); return 'ran' } catch (error) { return error.message } })"
         ),
         returned(json!([no_clock, no_clock, no_clock, no_clock, no_clock]))
+    );
+}
+
+#[test]
+fn now_is_a_call_the_log_answers_and_takes_no_object() {
+    let replay = answered(
+        "const at = await now()\n\
+         const tried = []\n\
+         for (const call of [() => now({}), () => now(5)]) {\n\
+           try { await call() } catch (failure) { tried.push([failure.block, failure.cause, failure.step, failure.reason]) }\n\
+         }\n\
+         return [at, tried]",
+        vec![result(json!(1_764_268_800_000_u64))],
+    );
+    let refused = json!([
+        "now",
+        "invalid",
+        null,
+        "a `now` call takes no object: call `now()`"
+    ]);
+    assert_eq!(
+        (replay.calls, replay.end),
+        (
+            vec![Call {
+                number: 1,
+                block: BlockName::Now,
+                object: json!({}),
+                digest: digest(BlockName::Now, &json!({})),
+            }],
+            returned(json!([1_764_268_800_000_u64, [refused, refused]]))
+        )
+    );
+}
+
+#[test]
+fn ms_reads_the_duration_grammar_of_a_timeout_and_makes_no_call() {
+    let replay = answered(
+        "const thrown = text => { try { return ms(text) } catch (error) { return error.message } }\n\
+         return [ms('90s'), ms('30m'), ms('2h'), ms('3d'), ms('0s'), thrown('366d'), thrown('')]",
+        Vec::new(),
+    );
+    assert_eq!(
+        (replay.calls, replay.end),
+        (
+            Vec::new(),
+            returned(json!([
+                90_000,
+                1_800_000,
+                7_200_000,
+                259_200_000,
+                0,
+                "`ms`: duration `366d` is longer than the 365d maximum",
+                "`ms`: duration is empty",
+            ]))
+        )
+    );
+}
+
+#[test]
+fn reads_decides_a_condition_on_the_watchs_three_valued_walk_and_makes_no_call() {
+    let replay = answered(
+        "const read = { ci: 'passed', pr: null }\n\
+         const thrown = (when, readings) => { try { return reads(when, readings) } catch (error) { return error.message } }\n\
+         return [reads('ci=passed', read), reads('pr=open || ci=passed', read),\n\
+           reads('pr=open && ci=failed', read), reads('!pr=open', read), reads('pr=open', {}),\n\
+           reads('pr=merged,closed || (pr=open && ci=failed)', { pr: 'closed' }),\n\
+           thrown('pr=', read), thrown('pr=open', { pr: 1 })]",
+        Vec::new(),
+    );
+    assert_eq!(
+        (replay.calls, replay.end),
+        (
+            Vec::new(),
+            returned(json!([
+                true,
+                true,
+                false,
+                null,
+                null,
+                true,
+                "`reads`: clause 1, position 4: empty term; use key=value",
+                "`reads`: the readings are not an object of strings and nulls: invalid type: integer `1`, expected a string",
+            ]))
+        )
     );
 }
 

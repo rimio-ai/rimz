@@ -6515,16 +6515,20 @@ allowed-dependencies = [
 # The module itself and `typescript`, the one item `rimz workflow types` prints (+2).
 # The six blocks, their results, the enums their fields take, and the failure: the types the
 # script engine reads, and the MCP tools once they adopt them (+18).
+# `Now`, the seventh block: the clock a script reads as a call its log answers (+1).
+# `ms` and `reads`, the duration grammar and the condition walk a script calls as pure
+# functions, kept here so the script engine reaches nothing past this module (+2).
+# `template`, the answer `rimz workflow try` offers for a call it has none for (+1).
 # Caller, BlockName and its spelling, Block, parse, digest, and the schema generator: the
 # entries the script engine calls (+7).
 # `Cause::as_str`, the one spelling of a cause, which `rimz workflow try` prints (+1).
-surface-budget = 28
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/harness/workflow_script"
 # The script engine replays a script over a log and starts nothing: it reads the block types and
-# nothing else of the crate, so `harness::schedule`, `harness::workflow`, and `mcp` stay off
-# this list.
+# grammars and nothing else of the crate, so `harness::schedule`, `harness::workflow`, and `mcp`
+# stay off this list.
 allowed-dependencies = [
     # `pub(in crate::harness)` names the crate root.
     "(crate)",

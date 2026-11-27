@@ -4,8 +4,9 @@
 //! `harness::block` named a pending promise with the next number, and hands the log's answers
 //! back one at a time in the order they arrived. Everything a script learns about the world comes
 //! from those answers, so a second replay of the same inputs makes the same calls with the same
-//! numbers: the context has no clock, no time zone, no randomness, no timers, no weak
-//! references, no module loader, and no host access but the blocks, `file`, and `args`.
+//! numbers: the context has no clock but the `now` block, no time zone, no randomness, no timers,
+//! no weak references, no module loader, and no host access but the blocks, `file`, and `args`.
+//! Its `ms` and `reads` are pure, so they make no call.
 
 use std::path::Path;
 use std::time::Duration;

@@ -20,8 +20,8 @@ use super::heap::{Capped, Heap};
 use super::load::Loaded;
 use super::{Call, Caps, End, Log, Outcome, Pass, Replay, pass_failure};
 use crate::harness::block::{
-    Agent, Block, BlockName, Caller, Cause, Failure, Schedule, Shell, Team, Watch, Workflow,
-    digest, parse,
+    Agent, Block, BlockName, Caller, Cause, Failure, Now, Schedule, Shell, Team, Watch, Workflow,
+    digest, ms, parse, reads,
 };
 
 const PRELUDE: &str = include_str!("prelude.js");
@@ -456,7 +456,7 @@ impl Engine<'_> {
         };
         if statement("import") {
             format!(
-                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, and `args`"
+                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`"
             )
         } else if statement("export") {
             format!("line {line}: a workflow script exports only `meta`, in its first statement")
@@ -474,7 +474,7 @@ fn options(name: &str) -> EvalOptions {
     options
 }
 
-/// The script's globals: the prelude's, the six blocks, `file`, and `args`.
+/// The script's globals: the prelude's, the seven blocks, `file`, `ms`, `reads`, and `args`.
 fn install<'js>(
     ctx: &Ctx<'js>,
     state: &Rc<RefCell<State>>,
@@ -488,6 +488,7 @@ fn install<'js>(
     block::<Watch>(ctx, state)?;
     block::<Workflow>(ctx, state)?;
     block::<Schedule>(ctx, state)?;
+    block::<Now>(ctx, state)?;
     let globals = ctx.globals();
     let dir = pass.dir.map(Path::to_path_buf);
     let file = Function::new(ctx.clone(), move |ctx: Ctx<'js>, path: String| {
@@ -500,6 +501,20 @@ fn install<'js>(
         read.map_err(|reason| Exception::throw_message(&ctx, &reason))
     })?;
     globals.set("file", file)?;
+    globals.set(
+        "ms",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, duration: String| {
+            ms(&duration)
+                .map_err(|reason| Exception::throw_message(&ctx, &format!("`ms`: {reason}")))
+        })?,
+    )?;
+    globals.set(
+        "reads",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, when: String, readings: JsValue<'js>| truth(&ctx, &when, readings),
+        )?,
+    )?;
     let args = match pass.args {
         Some(args) => ctx.json_parse(args.to_string())?,
         None => JsValue::new_undefined(ctx.clone()),
@@ -525,7 +540,12 @@ fn call<'js, B: Block>(
 ) -> rquickjs::Result<Promise<'js>> {
     let (promise, resolve, reject) = ctx.promise()?;
     let object = match object {
+        Some(_) if B::BARE => Err(format!(
+            "a `{name}` call takes no object: call `{name}()`",
+            name = B::NAME.as_str()
+        )),
         Some(object) => json_of(ctx, object),
+        None if B::BARE => Ok(Value::Object(serde_json::Map::new())),
         None => Ok(Value::Null),
     };
     let refusal = match &object {
@@ -580,6 +600,26 @@ fn call<'js, B: Block>(
         digest,
     });
     Ok(promise)
+}
+
+/// A script's `reads`: the truth of `when` over `readings`, `null` for unknown.
+fn truth<'js>(
+    ctx: &Ctx<'js>,
+    when: &str,
+    readings: JsValue<'js>,
+) -> rquickjs::Result<JsValue<'js>> {
+    let refused = |reason: String| Exception::throw_message(ctx, &format!("`reads`: {reason}"));
+    let readings = json_of(ctx, readings)
+        .and_then(|readings| {
+            serde_json::from_value(readings).map_err(|error| {
+                format!("the readings are not an object of strings and nulls: {error}")
+            })
+        })
+        .map_err(refused)?;
+    Ok(match reads(when, &readings).map_err(refused)? {
+        Some(truth) => JsValue::new_bool(ctx.clone(), truth),
+        None => JsValue::new_null(ctx.clone()),
+    })
 }
 
 /// A failure as the `Error` a script catches, with every field of it its own.

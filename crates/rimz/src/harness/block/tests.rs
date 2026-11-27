@@ -23,6 +23,7 @@ fn by_name(name: BlockName, object: Value, caller: Caller) -> Option<String> {
         BlockName::Watch => refusal::<Watch>(object, caller),
         BlockName::Workflow => refusal::<Workflow>(object, caller),
         BlockName::Schedule => refusal::<Schedule>(object, caller),
+        BlockName::Now => refusal::<Now>(object, caller),
     }
 }
 
@@ -56,6 +57,7 @@ fn minimal() -> Vec<(BlockName, Value, &'static [&'static str])> {
                     "tool": "agent", "arguments": { "profile": "triager", "prompt": "Rule." } }),
             &["name", "trigger", "value", "tool", "arguments"],
         ),
+        (BlockName::Now, json!({}), &[]),
     ]
 }
 
@@ -502,11 +504,11 @@ fn the_digest_hashes_the_block_name_and_the_object_with_sorted_keys() {
 fn the_types_print_every_field_a_script_may_pass() {
     fn missing<B: Block>(text: &str) -> Vec<String> {
         let schema = schema::<B>();
-        let properties = schema["properties"]
-            .as_object()
-            .expect("every block's schema lists properties");
-        properties
-            .keys()
+        schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|properties| properties.keys())
             .filter(|field| !B::SCRIPT_REFUSED.contains(&field.as_str()))
             .filter(|field| {
                 !text.contains(&format!("  {field}:")) && !text.contains(&format!("  {field}?:"))
@@ -521,6 +523,7 @@ fn the_types_print_every_field_a_script_may_pass() {
     missed.extend(missing::<Watch>(&text));
     missed.extend(missing::<Workflow>(&text));
     missed.extend(missing::<Schedule>(&text));
+    missed.extend(missing::<Now>(&text));
     let declared = [
         BlockName::Agent,
         BlockName::Team,
@@ -528,6 +531,7 @@ fn the_types_print_every_field_a_script_may_pass() {
         BlockName::Watch,
         BlockName::Workflow,
         BlockName::Schedule,
+        BlockName::Now,
     ]
     .iter()
     .filter(|name| !text.contains(&format!("declare function {}(", name.as_str())))
@@ -564,6 +568,45 @@ fn the_types_hide_the_fields_a_script_may_not_pass() {
 #[test]
 fn the_types_are_stable() {
     insta::assert_snapshot!(typescript());
+}
+
+#[test]
+fn an_answer_template_follows_the_result_its_call_gives() {
+    let answer = json!({ "type": "object", "required": ["outcome"],
+                         "properties": { "outcome": { "enum": ["none", "rule"] },
+                                         "notes": { "type": "array" } } });
+    assert_eq!(
+        [
+            template(BlockName::Shell, &json!({ "command": "true" })),
+            template(
+                BlockName::Agent,
+                &json!({ "profile": "judge", "prompt": "Rule." })
+            ),
+            template(
+                BlockName::Agent,
+                &json!({ "profile": "judge", "prompt": "Rule.", "schema": answer })
+            ),
+            template(
+                BlockName::Team,
+                &json!({ "team": "feature", "prompt": "Build." })
+            ),
+            template(
+                BlockName::Watch,
+                &json!({ "when": "pr=merged || ci[main]=failed" })
+            ),
+            template(BlockName::Schedule, &json!({ "name": "triage" })),
+            template(BlockName::Now, &json!({})),
+        ],
+        [
+            json!({ "code": 0, "stdout": "", "output": "" }),
+            json!({ "report": "", "handle": "" }),
+            json!({ "outcome": "none", "notes": [] }),
+            json!({ "report": "" }),
+            json!({ "readings": { "ci[main]": null, "pr": null } }),
+            json!({ "id": "" }),
+            json!(0),
+        ]
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
-//! The six blocks a workflow script calls: one Rust type, one schema, and one parser per
+//! The seven blocks a workflow script calls: one Rust type, one schema, and one parser per
 //! block, each block's result, and the one failure a call that did not end as asked gives in
-//! place of a result.
+//! place of a result. Beside them, the two field grammars a script also reads by hand: a
+//! duration (`ms`) and a condition's truth over readings (`reads`).
 //!
 //! The parser knows its caller: a script awaits its calls, so the fields that tell RimZ when to
 //! wake a calling agent are refused there. A field grammar this module cannot reach without
@@ -18,8 +19,10 @@ use sha2::{Digest as _, Sha256};
 use crate::harness::when::WhenExpr;
 use crate::utils::time::CalendarAt;
 
+mod template;
 mod typescript;
 
+pub use template::template;
 pub use typescript::typescript;
 
 /// Who made a call: an agent through its MCP tool, or a workflow script.
@@ -29,7 +32,8 @@ pub(in crate::harness) enum Caller {
     Script,
 }
 
-/// The name of a block, which is also the name of its tool and of its script function.
+/// The name of a block, which is also the name of its script function and, for every block but
+/// `now`, of its tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BlockName {
@@ -39,6 +43,7 @@ pub enum BlockName {
     Watch,
     Workflow,
     Schedule,
+    Now,
 }
 
 impl BlockName {
@@ -50,6 +55,7 @@ impl BlockName {
             Self::Watch => "watch",
             Self::Workflow => "workflow",
             Self::Schedule => "schedule",
+            Self::Now => "now",
         }
     }
 }
@@ -62,6 +68,8 @@ pub(in crate::harness) trait Block: DeserializeOwned + JsonSchema {
     const SCRIPT_REFUSED: &'static [&'static str] = &[];
     /// Values of a field the block's `refusal` always refuses from a script, as (field, value).
     const SCRIPT_REFUSED_VALUES: &'static [(&'static str, &'static str)] = &[];
+    /// A block with no fields: a script calls it bare, as `now()`, and its call's object is `{}`.
+    const BARE: bool = false;
     /// What an awaited call gives.
     type Result: JsonSchema;
 
@@ -134,7 +142,7 @@ fn write_canonical(out: &mut String, value: &Value) {
 }
 
 /// The draft-07 schema of `T`, inlined, with an optional field's `null` dropped: a caller
-/// omits a field rather than passing `null`.
+/// omits a field rather than passing `null`. A value that holds `null` (a map's) keeps it.
 pub(in crate::harness) fn schema<T: JsonSchema>() -> Value {
     let mut schema = schemars::generate::SchemaSettings::draft07()
         .with(|settings| {
@@ -154,20 +162,29 @@ pub(in crate::harness) fn schema<T: JsonSchema>() -> Value {
 fn drop_null(value: &mut Value) {
     match value {
         Value::Object(map) => {
-            if let Some(Value::Array(types)) = map.get_mut("type") {
-                types.retain(|kind| kind != "null");
-                if let [only] = types.as_slice() {
-                    let only = only.clone();
-                    map.insert("type".to_owned(), only);
-                }
-            }
-            if let Some(Value::Array(values)) = map.get_mut("enum") {
-                values.retain(|value| !value.is_null());
+            if let Some(Value::Object(fields)) = map.get_mut("properties") {
+                fields.values_mut().for_each(drop_field_null);
             }
             map.values_mut().for_each(drop_null);
         }
         Value::Array(items) => items.iter_mut().for_each(drop_null),
         _ => {}
+    }
+}
+
+fn drop_field_null(field: &mut Value) {
+    let Value::Object(map) = field else {
+        return;
+    };
+    if let Some(Value::Array(types)) = map.get_mut("type") {
+        types.retain(|kind| kind != "null");
+        if let [only] = types.as_slice() {
+            let only = only.clone();
+            map.insert("type".to_owned(), only);
+        }
+    }
+    if let Some(Value::Array(values)) = map.get_mut("enum") {
+        values.retain(|value| !value.is_null());
     }
 }
 
@@ -332,8 +349,9 @@ pub(in crate::harness) struct Watch {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(in crate::harness) struct WatchResult {
-    /// The reading of each key the condition names, at the look that read it true.
-    pub readings: BTreeMap<String, String>,
+    /// The reading of each key the condition names, at the look that read it true: `null` for a
+    /// key that look had not read.
+    pub readings: BTreeMap<String, Option<String>>,
 }
 
 /// What a workflow's `value` is.
@@ -453,6 +471,12 @@ pub(in crate::harness) struct ScheduleResult {
     pub id: String,
 }
 
+/// The current time, as Unix epoch milliseconds: RimZ reads it and the run's log keeps it as the
+/// call's result, so a replay and a resume read the time the first pass read.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(in crate::harness) struct Now {}
+
 /// Why a call did not end as asked, or why a run ended without one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -473,8 +497,9 @@ pub enum Cause {
     Stuck,
 }
 
-/// A call that did not end as asked, given in place of its result: in a script, the `Error`
-/// the awaited call throws.
+/// A call that did not end as asked, given in place of its result. In a script every block's
+/// failure, a refused object's included, arrives one way: the awaited call throws an `Error`
+/// whose own fields are these, so a script tells one failure from another by `cause`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Failure {
@@ -686,6 +711,16 @@ impl Block for Schedule {
     }
 }
 
+impl Block for Now {
+    const NAME: BlockName = BlockName::Now;
+    const BARE: bool = true;
+    type Result = u64;
+
+    fn refusal(&self, _caller: Caller) -> Option<String> {
+        None
+    }
+}
+
 impl Schedule {
     /// Why `arguments` does not parse as the booked block's own object. A fire starts the block
     /// afresh, outside any script, so it parses as a tool's call.
@@ -729,6 +764,23 @@ fn nul_refusal(field: &str, value: Option<&str>) -> Option<String> {
     value
         .is_some_and(|value| value.contains('\0'))
         .then(|| format!("`{field}` holds a NUL character, which a fire's launch cannot pass"))
+}
+
+/// A duration in the grammar `timeout` and `for` take, in milliseconds: what a script's `ms`
+/// gives.
+pub(in crate::harness) fn ms(raw: &str) -> Result<u64, String> {
+    let duration = crate::harness::duration::duration(raw).map_err(|error| error.to_string())?;
+    u64::try_from(duration.as_millis()).map_err(|error| error.to_string())
+}
+
+/// The truth of condition `when` over `readings` on the one walk a `watch` fires on, three-valued:
+/// none for unknown, and a key absent or `None` is not read. What a script's `reads` gives.
+pub(in crate::harness) fn reads(
+    when: &str,
+    readings: &BTreeMap<String, Option<String>>,
+) -> Result<Option<bool>, String> {
+    let condition = WhenExpr::parse(&[when.to_owned()]).map_err(|error| error.to_string())?;
+    Ok(condition.truth(readings))
 }
 
 fn duration_refusal(field: &str, raw: Option<&str>) -> Option<String> {
