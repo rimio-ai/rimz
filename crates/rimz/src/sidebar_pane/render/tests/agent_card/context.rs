@@ -1093,7 +1093,7 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
     let rendered = snapshot_to_screen(&snapshot_with(vec![droid.clone()]), 58, 17);
 
     assert!(
-        rendered.contains("DeepSeek · Pro V4 · high · 200k"),
+        rendered.contains("DeepSeek V4 Pro · high · 200k"),
         "the resolved identity and configured capacity render together:\n{rendered}"
     );
     assert!(
@@ -1184,7 +1184,7 @@ fn unresolved_droid_selector_is_friendly_without_claiming_capacity_or_cost() {
 
     let rendered = snapshot_to_screen(&snapshot_with(vec![droid]), 52, 17);
 
-    assert!(rendered.contains("DeepSeek · Pro V4"), "{rendered}");
+    assert!(rendered.contains("DeepSeek V4 Pro"), "{rendered}");
     let identity = rendered
         .lines()
         .find(|line| line.contains("droid"))
@@ -1469,7 +1469,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         )
     };
     let first = render(qwen.clone());
-    assert!(first.contains("DeepSeek · Pro V4 · 1M"), "{first}");
+    assert!(first.contains("DeepSeek V4 Pro · 1M"), "{first}");
     assert!(first.contains("3.9%"), "{first}");
     assert!(first.contains("▤ 38k · ◌ 38k ↘ 71 ↗ 85"), "{first}");
     assert!(first.contains("$0.02"), "{first}");
@@ -1654,7 +1654,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
     );
 
     assert!(
-        rendered.contains("GPT · Mini 5"),
+        rendered.contains("GPT 5 Mini"),
         "resolved model wins:\n{rendered}"
     );
     assert!(
@@ -1691,7 +1691,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         48,
         17,
     );
-    assert!(rendered.contains("GPT · Mini 5"));
+    assert!(rendered.contains("GPT 5 Mini"));
     assert!(rendered.contains("▤ 90 · ◌ 80 ↘ 10 ↗ 3"));
     assert!(
         rendered
@@ -1721,7 +1721,7 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         48,
         19,
     );
-    assert!(rendered.contains("GPT · Mini 5"));
+    assert!(rendered.contains("GPT 5 Mini"));
     assert!(
         !rendered.contains("▤ 90"),
         "unselected idle compact cards retain compact density:\n{rendered}"
@@ -2367,7 +2367,7 @@ fn codex_app_server_context_links_to_rich_card() {
     // The app-server display name supersedes the raw catalog id (its hyphen
     // traded for a space, matching `Opus 4.8`), and locally sourced effort
     // surfaces — neither was on the rollout-only row.
-    assert!(rendered.contains("Codex 5.5"));
+    assert!(rendered.contains("GPT 5.5 Codex"));
     assert!(!rendered.contains("gpt-5.5-codex"));
     assert!(rendered.contains("xhigh"));
     // The 5h/7d windows are account-scoped now: they leave the row for the

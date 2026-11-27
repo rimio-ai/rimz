@@ -366,10 +366,15 @@ impl Dashboard<'_> {
         let total = active.select(&self.stats.total).usd;
         for row in rows {
             let style = styles.get(row.key.as_deref()).mark;
-            let name = row
-                .key
-                .as_deref()
-                .map_or_else(|| "Other".into(), model_name);
+            let name = row.key.as_deref().map_or_else(
+                || "Other".into(),
+                |id| {
+                    model_name(
+                        id,
+                        self.stats.by_model.get(id).map(|model| model.kind.as_str()),
+                    )
+                },
+            );
             let rate = if row.key.is_none() {
                 "–".into()
             } else {
@@ -1146,11 +1151,11 @@ fn fold(mut rows: Vec<(String, RoleWindow)>, limit: usize, threshold: bool) -> V
     named
 }
 
-fn model_name(id: &str) -> String {
+fn model_name(id: &str, kind: Option<&str>) -> String {
     if id.is_empty() {
         "Unknown model".into()
     } else {
-        rimz::agents::model_display::display_model(id)
+        rimz::agents::model_display::display_model_for_kind(id, kind)
             .chars()
             .filter(|ch| !ch.is_control())
             .collect()

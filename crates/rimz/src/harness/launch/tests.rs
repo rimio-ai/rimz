@@ -2279,7 +2279,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let text = parse_toml_string_or_raw(&occurrences[0].value);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
-                assert_eq!(text.contains("GPT · Astra 6."), subagent && model);
+                assert_eq!(text.contains("GPT 6 Astra."), subagent && model);
                 assert!(!text.contains("high effort"));
                 assert_eq!(text.contains("You are a subagent:"), subagent);
                 assert_eq!(text.contains("team `forge`"), !subagent);
@@ -2288,9 +2288,9 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                     !subagent
                 );
                 if subagent && model {
-                    assert!(text.contains("You are @coder, running on GPT · Astra 6"));
+                    assert!(text.contains("You are @coder, running on GPT 6 Astra"));
                     assert!(
-                        text.find("GPT · Astra 6").unwrap()
+                        text.find("GPT 6 Astra").unwrap()
                             < text.find("You are a subagent:").unwrap()
                     );
                 }

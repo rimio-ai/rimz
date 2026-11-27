@@ -231,7 +231,7 @@ pub(super) fn render_spend(
                 } else {
                     render::paint(
                         render::palette::identity(&model.kind),
-                        &rimz::agents::model_display::display_model(id),
+                        &rimz::agents::model_display::display_model_for_kind(id, Some(&model.kind)),
                     )
                 };
                 (

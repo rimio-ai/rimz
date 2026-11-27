@@ -195,7 +195,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output.into_inner()).unwrap(),
-            "  @planner    claude  Fable    <- leader\n  @coder      codex   Astra 6\n  @reviewer   claude  -\n"
+            "  @planner    claude  Fable        <- leader\n  @coder      codex   GPT 6 Astra\n  @reviewer   claude  -\n"
         );
     }
 

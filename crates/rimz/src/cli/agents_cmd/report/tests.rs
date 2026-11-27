@@ -16,7 +16,7 @@ fn model_fast_is_typed_and_keeps_the_label_glyph_free() {
         });
         let report = serde_json::to_value(model_report(&state)).unwrap();
         assert_eq!(report["fast"], fast);
-        assert_eq!(report["label"], "GPT · Sol 6.1@xhigh");
+        assert_eq!(report["label"], "GPT 6.1 Sol@xhigh");
     }
 }
 
@@ -275,16 +275,13 @@ fn card_projection_model_label_is_stable_across_a_turn() {
     state.model = Some("claude-opus-5".into());
     state.effort = Some("medium".into());
     let before = model_report(&state);
-    assert_eq!(before.label.as_deref(), Some("Claude · Opus 5@medium"));
-    assert_eq!(
-        before.human_label.as_deref(),
-        Some("Claude · Opus 5@medium")
-    );
+    assert_eq!(before.label.as_deref(), Some("Claude Opus 5@medium"));
+    assert_eq!(before.human_label.as_deref(), Some("Claude Opus 5@medium"));
     let mut claude_state = state.clone();
     claude_state.kind = AgentKind::new_unchecked("claude");
     assert_eq!(
         model_report(&claude_state).label.as_deref(),
-        Some("Claude · Opus 5@medium")
+        Some("Claude Opus 5@medium")
     );
     assert_eq!(
         model_report(&claude_state).human_label.as_deref(),
@@ -307,12 +304,12 @@ fn card_projection_model_label_is_stable_across_a_turn() {
 #[test]
 fn card_projection_model_keeps_versioned_provider_display_names() {
     for (provider, id, display, expected) in [
-        ("cursor", "auto", "GPT-5.6 Sol", "GPT · Sol 5.6@high"),
+        ("cursor", "auto", "GPT-5.6 Sol", "GPT 5.6 Sol@high"),
         (
             "qwen",
             "[DeepSeek] deepseek-v4-pro",
             "deepseek-v4-pro",
-            "DeepSeek · Pro V4@high",
+            "DeepSeek V4 Pro@high",
         ),
     ] {
         let mut state = rimz::testkit::agent_state(provider, "model", Timestamp::UNIX_EPOCH);

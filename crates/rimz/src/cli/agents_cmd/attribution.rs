@@ -283,7 +283,10 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
         writeln!(w, "{}", render::paint(render::palette::header(), "Models"))?;
         let mut models = render::KeyVals::new().indent(2);
         for stat in &report.models {
-            models.push(model_name(stat), render::cell(model_row_label(stat)));
+            models.push(
+                model_name(report, stat),
+                render::cell(model_row_label(stat)),
+            );
         }
         models.render(w)?;
     }
@@ -325,7 +328,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
                 "- **{}** — {} {}{}",
                 markdown_code(role),
                 markdown_escape(&member.provider),
-                markdown_code(&model_label(member)),
+                markdown_model(&model_label(member)),
                 if member.fast { " ⚡ fast" } else { "" },
             )?;
             if let Some(effort) = effort_label(member) {
@@ -357,11 +360,12 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
     if !report.models.is_empty() {
         writeln!(w, "\n**Models**\n")?;
         for stat in &report.models {
-            let name = stat
-                .model
-                .as_deref()
-                .map_or_else(|| "unknown".to_owned(), markdown_code);
-            writeln!(w, "- {name} — {}", markdown_escape(&model_row_label(stat)))?;
+            writeln!(
+                w,
+                "- {} — {}",
+                markdown_model(&model_name(report, stat)),
+                markdown_escape(&model_row_label(stat))
+            )?;
         }
     }
     writeln!(w)?;
@@ -408,12 +412,33 @@ fn since_label(since: jiff::Timestamp) -> String {
     )
 }
 
+/// The member's model display name under its own kind, joined to its effort.
 fn model_label(member: &AttributionMember) -> String {
-    match (member.model.as_deref(), member.effort.as_deref()) {
+    let display = member.model.as_deref().map(|model| {
+        rimz::agents::model_display::display_model_for_kind(model, Some(member.kind.as_str()))
+    });
+    match (display, member.effort.as_deref()) {
         (Some(model), Some(effort)) => format!("{model}@{effort}"),
-        (Some(model), None) => model.to_owned(),
+        (Some(model), None) => model,
         (None, Some(effort)) => format!("@{effort}"),
         (None, None) => "-".to_owned(),
+    }
+}
+
+/// A model label or Models-row name as markdown text, or as code where an `@`
+/// follows no letter or digit and would read as a mention (`@high`,
+/// `(Neon)@high`, `@octocat`).
+fn markdown_model(label: &str) -> String {
+    let mentions = label.match_indices('@').any(|(at, _)| {
+        !label[..at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+    });
+    if mentions {
+        markdown_code(label)
+    } else {
+        markdown_escape(label)
     }
 }
 
@@ -494,8 +519,27 @@ fn messages_label(member: &AttributionMember) -> Option<String> {
     })
 }
 
-fn model_name(stat: &ModelStat) -> &str {
-    stat.model.as_deref().unwrap_or("unknown")
+/// A Models row's display name, under the kind every member that ran the model
+/// shares, or keeping the series when they differ or none is known.
+fn model_name(report: &Attribution, stat: &ModelStat) -> String {
+    let Some(model) = stat.model.as_deref() else {
+        return "unknown".to_owned();
+    };
+    let mut kinds = report
+        .groups
+        .iter()
+        .flat_map(|group| &group.members)
+        .filter(|member| {
+            member
+                .models
+                .iter()
+                .any(|ran| ran.model.as_deref() == Some(model))
+        })
+        .map(|member| member.kind.as_str());
+    let kind = kinds
+        .next()
+        .filter(|first| kinds.all(|kind| kind == *first));
+    rimz::agents::model_display::display_model_for_kind(model, kind)
 }
 
 fn model_row_label(stat: &ModelStat) -> String {
