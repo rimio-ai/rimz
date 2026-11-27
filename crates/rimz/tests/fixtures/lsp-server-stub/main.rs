@@ -3,6 +3,37 @@
 use rimz::lsp::protocol::{read_frame, write_frame};
 use serde_json::{Value, json};
 
+/// The answer a test scripted for this request in `stub-answers.json` at the root: an object
+/// keyed by method, then by the request's root-relative `path:line:character` (0-based; an
+/// incoming-calls request is keyed by its item's selection start, an outline by its path). A
+/// method the file names answers `null` for a key it lacks; a method it omits is not scripted.
+/// An answer `{"error": {…}}` is sent as a JSON-RPC error reply.
+fn scripted(root: &str, method: &str, params: &Value) -> Option<Value> {
+    let root = root.trim_end_matches('/');
+    let answers = std::fs::read_to_string(format!(
+        "{}/stub-answers.json",
+        root.strip_prefix("file://")?
+    ))
+    .ok()?;
+    let answers: Value = serde_json::from_str(&answers).expect("scripted answers are JSON");
+    let answers = answers.get(method)?;
+    let (uri, position) = if method == "callHierarchy/incomingCalls" {
+        (
+            &params["item"]["uri"],
+            &params["item"]["selectionRange"]["start"],
+        )
+    } else {
+        (&params["textDocument"]["uri"], &params["position"])
+    };
+    let path = uri.as_str()?.strip_prefix(root)?.trim_start_matches('/');
+    let key = if position.is_null() {
+        path.to_owned()
+    } else {
+        format!("{path}:{}:{}", position["line"], position["character"])
+    };
+    Some(answers.get(&key).cloned().unwrap_or(Value::Null))
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut sections = Vec::<String>::new();
@@ -55,6 +86,14 @@ fn main() {
             continue;
         }
         if method.is_empty() {
+            continue;
+        }
+        if let Some(result) = scripted(&root, method, &message["params"]) {
+            let reply = match result.get("error") {
+                Some(error) => json!({"jsonrpc": "2.0", "id": message["id"], "error": error}),
+                None => json!({"jsonrpc": "2.0", "id": message["id"], "result": result}),
+            };
+            write_frame(&mut output, &reply).unwrap();
             continue;
         }
         let result = match method {

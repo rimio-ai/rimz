@@ -167,7 +167,7 @@ impl McpServer {
     }
 
     /// A tool call's result: its text and whether it is an error.
-    fn call(&mut self, id: i64, tool: &str, arguments: Value) -> (String, bool) {
+    pub(super) fn call(&mut self, id: i64, tool: &str, arguments: Value) -> (String, bool) {
         self.start_call(id, tool, arguments);
         tool_result(&self.reply(&json!(id)))
     }
@@ -314,7 +314,7 @@ fn assert_fits(schema: &Value, value: &Value, at: &str) {
     }
 }
 
-fn serve(env: &Env, args: &[&str]) -> McpServer {
+pub(super) fn serve(env: &Env, args: &[&str]) -> McpServer {
     let mut command = env.rimz();
     command.args(["mcp", "serve"]).args(args);
     McpServer::spawn(command)

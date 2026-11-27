@@ -142,6 +142,24 @@ fn is_identifier(text: &str) -> bool {
         && text.chars().all(identifier_char)
 }
 
+/// The byte offset of each whole-identifier `name` in `text`, a raw `r#name` excluded.
+fn identifier_offsets<'a>(text: &'a str, name: &'a str) -> impl Iterator<Item = usize> + 'a {
+    text.match_indices(name)
+        .map(|(at, _)| at)
+        .filter(move |at| {
+            let before = &text[..*at];
+            let raw_identifier = before
+                .strip_suffix("r#")
+                .is_some_and(|rest| !rest.chars().next_back().is_some_and(identifier_char));
+            !raw_identifier
+                && !before.chars().next_back().is_some_and(identifier_char)
+                && !text[at + name.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(identifier_char)
+        })
+}
+
 /// One or more identifiers joined by `::`, the names `show` looks up as `def` does.
 pub(super) fn is_qualified_name(text: &str) -> bool {
     text.split("::").all(is_identifier)
@@ -182,21 +200,8 @@ fn locate_line_name(root: &Path, path: &Path, line: u32, name: &str) -> Result<T
             lines,
         });
     };
-    let columns: Vec<u32> = text
-        .match_indices(name)
-        .filter(|(at, _)| {
-            let before = &text[..*at];
-            let raw_identifier = before
-                .strip_suffix("r#")
-                .is_some_and(|rest| !rest.chars().next_back().is_some_and(identifier_char));
-            !raw_identifier
-                && !before.chars().next_back().is_some_and(identifier_char)
-                && !text[at + name.len()..]
-                    .chars()
-                    .next()
-                    .is_some_and(identifier_char)
-        })
-        .map(|(at, _)| text[..at].encode_utf16().count() as u32)
+    let columns: Vec<u32> = identifier_offsets(text, name)
+        .map(|at| text[..at].encode_utf16().count() as u32)
         .collect();
     match columns[..] {
         [character] => Ok(Target::Position {

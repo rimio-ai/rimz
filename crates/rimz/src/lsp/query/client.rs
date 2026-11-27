@@ -51,6 +51,9 @@ fn bounded_map<T: Sync, R: Send, E: Send>(
         .collect()
 }
 
+#[path = "alias.rs"]
+mod alias;
+
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
@@ -552,6 +555,11 @@ pub fn execute(
         }
     };
     let mut result = request(entry, method, params)?;
+    // rust-analyzer lists no alias-spelled use; the alias pass adds them.
+    let rust_analyzer = entry.kind == Some(crate::config::LspServerKind::RustAnalyzer);
+    if verb == Verb::Refs && rust_analyzer {
+        result = alias::references(entry, &uri, position, result)?;
+    }
     if matches!(verb, Verb::Callers | Verb::Callees) {
         let method = if verb == Verb::Callers {
             "callHierarchy/incomingCalls"
@@ -568,6 +576,12 @@ pub fn execute(
             if let Some(results) = result.as_array() {
                 calls.extend(results.iter().cloned());
             }
+        }
+        if verb == Verb::Callers
+            && rust_analyzer
+            && result.as_array().is_some_and(|items| !items.is_empty())
+        {
+            calls.extend(alias::incoming_calls(entry, &uri, position)?);
         }
         result = Value::Array(calls);
     }
