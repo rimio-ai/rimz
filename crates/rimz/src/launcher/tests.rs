@@ -2477,304 +2477,196 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
     let effective =
         crate::config::effective::load_with_roots(&machine, repo.path(), home.path()).unwrap();
 
-    #[derive(Clone, Copy)]
-    enum LForm {
-        Markdown,
-        Toml,
-        KindBase,
-        BareKind,
-        TomlSeat,
-        MdSeat,
-    }
-    #[derive(Clone, Copy)]
-    enum XForm {
-        None,
-        MdModel,
-        MdTier,
-        MdPlain,
-        TomlModel,
-        KindBase,
-        BareKind,
-        Variant,
-        SelfL,
-        Ancestor,
-    }
-    #[derive(Clone, Copy)]
-    enum Sel {
-        None,
-        Model,
-        Tier,
-    }
+    // The engine rule itself is pinned in `config::engine::tests`. These rows prove that every
+    // launched form (Markdown, TOML, kind base, bare kind, TOML seat, Markdown seat) and every
+    // override/flag path (`--agent` profile/base/variant/self/ancestor, `--model`, `--tier`)
+    // reaches the engine on fresh launch and round-trips through `LaunchRecord` on replay.
+    use crate::config::tiers::ModelTier::Senior;
+    let cases = [
+        // (spec, team_role, agent, model, tier) -> (kind, mini_variant, model, tier)
+        // Every launched form with no flags.
+        (
+            ("md_l", None, None, None, None),
+            ("claude", false, Some("opus"), None),
+        ),
+        (
+            ("toml_l", None, None, None, None),
+            ("claude", false, Some("opus"), None),
+        ),
+        (
+            ("claude", None, None, None, None),
+            ("claude", false, None, None),
+        ),
+        (
+            ("antigravity", None, None, None, None),
+            ("antigravity", false, None, None),
+        ),
+        (
+            (
+                "toml_team.lead",
+                Some(("toml_team", "lead")),
+                None,
+                None,
+                None,
+            ),
+            ("claude", false, Some("sonnet"), None),
+        ),
+        (
+            ("md_team.lead", Some(("md_team", "lead")), None, None, None),
+            ("claude", false, Some("sonnet"), None),
+        ),
+        // `--agent` forms: Markdown model/tier, TOML, bare kind, self, ancestor.
+        (
+            ("md_l", None, Some("x_model"), None, None),
+            ("codex", false, Some("sol"), None),
+        ),
+        (
+            ("toml_l", None, Some("x_tier"), None, None),
+            ("codex", false, Some("astra"), Some(Senior)),
+        ),
+        (
+            ("claude", None, Some("x_toml"), None, None),
+            ("codex", false, Some("astra"), None),
+        ),
+        (
+            ("toml_l", None, Some("antigravity"), None, None),
+            ("antigravity", false, None, None),
+        ),
+        (
+            ("md_l", None, Some("md_l"), None, None),
+            ("claude", false, Some("opus"), None),
+        ),
+        (
+            ("md_l", None, Some("md_anc"), None, None),
+            ("codex", false, Some("sol"), None),
+        ),
+        // `--model` and `--tier` flags, including kind-base X, plain X, bare kind, and variant X.
+        (
+            ("md_l", None, None, Some("haiku"), None),
+            ("claude", false, Some("haiku"), None),
+        ),
+        (
+            (
+                "toml_team.lead",
+                Some(("toml_team", "lead")),
+                Some("codex"),
+                Some("gpt-6"),
+                None,
+            ),
+            ("codex", false, Some("gpt-6"), None),
+        ),
+        (
+            ("antigravity", None, None, None, Some(Senior)),
+            ("claude", false, Some("opus"), Some(Senior)),
+        ),
+        (
+            ("md_l", None, Some("x_plain"), None, Some(Senior)),
+            ("codex", false, Some("astra"), Some(Senior)),
+        ),
+        (
+            (
+                "md_team.lead",
+                Some(("md_team", "lead")),
+                Some("opencode-mini"),
+                None,
+                Some(Senior),
+            ),
+            ("opencode", true, Some("opus"), Some(Senior)),
+        ),
+    ];
 
-    let l_spec = |l: LForm| match l {
-        LForm::Markdown => "md_l",
-        LForm::Toml => "toml_l",
-        LForm::KindBase => "claude",
-        LForm::BareKind => "antigravity",
-        LForm::TomlSeat => "toml_team.lead",
-        LForm::MdSeat => "md_team.lead",
-    };
-
-    for l in [
-        LForm::Markdown,
-        LForm::Toml,
-        LForm::KindBase,
-        LForm::BareKind,
-        LForm::TomlSeat,
-        LForm::MdSeat,
-    ] {
-        for x in [
-            XForm::None,
-            XForm::MdModel,
-            XForm::MdTier,
-            XForm::MdPlain,
-            XForm::TomlModel,
-            XForm::KindBase,
-            XForm::BareKind,
-            XForm::Variant,
-            XForm::SelfL,
-            XForm::Ancestor,
-        ] {
-            let x_name: Option<&str> = match x {
-                XForm::None => None,
-                XForm::MdModel => Some("x_model"),
-                XForm::MdTier => Some("x_tier"),
-                XForm::MdPlain => Some("x_plain"),
-                XForm::TomlModel => Some("x_toml"),
-                XForm::KindBase => Some("codex"),
-                XForm::BareKind => Some("antigravity"),
-                XForm::Variant => Some("opencode-mini"),
-                XForm::SelfL => match l {
-                    LForm::Markdown => Some("md_l"),
-                    LForm::Toml | LForm::TomlSeat => Some("toml_l"),
-                    LForm::KindBase => Some("claude"),
-                    LForm::BareKind => Some("antigravity"),
-                    LForm::MdSeat => Some("md_team.lead"),
-                },
-                XForm::Ancestor => match l {
-                    LForm::Markdown | LForm::MdSeat => Some("md_anc"),
-                    LForm::Toml | LForm::TomlSeat => Some("toml_anc"),
-                    LForm::KindBase | LForm::BareKind => continue,
-                },
-            };
-
-            // Expected X kind, variant, and engine write.
-            let (x_kind, x_variant, x_model, x_tier): (
-                Option<&str>,
-                Option<&str>,
-                Option<&str>,
-                bool,
-            ) = match x {
-                XForm::None => (None, None, None, false),
-                XForm::MdModel => (Some("codex"), None, Some("sol"), false),
-                XForm::MdTier => (Some("codex"), None, None, true),
-                XForm::MdPlain => (Some("codex"), None, None, false),
-                XForm::TomlModel => (Some("codex"), None, Some("astra"), false),
-                XForm::KindBase => (Some("codex"), None, None, false),
-                XForm::BareKind => (Some("antigravity"), None, None, false),
-                XForm::Variant => (Some("opencode"), Some("mini"), None, false),
-                XForm::SelfL => match l {
-                    LForm::Markdown | LForm::Toml | LForm::TomlSeat => {
-                        (Some("claude"), None, Some("opus"), false)
-                    }
-                    LForm::KindBase => (Some("claude"), None, None, false),
-                    LForm::BareKind => (Some("antigravity"), None, None, false),
-                    LForm::MdSeat => (Some("claude"), None, Some("sonnet"), false),
-                },
-                XForm::Ancestor => (Some("codex"), None, Some("sol"), false),
-            };
-            let l_orig_kind = match l {
-                LForm::Markdown
-                | LForm::Toml
-                | LForm::KindBase
-                | LForm::TomlSeat
-                | LForm::MdSeat => "claude",
-                LForm::BareKind => "antigravity",
-            };
-            let l_own_model = match l {
-                LForm::Markdown | LForm::Toml => Some("opus"),
-                LForm::TomlSeat | LForm::MdSeat => Some("sonnet"),
-                LForm::KindBase | LForm::BareKind => None,
-            };
-
-            for sel in [Sel::None, Sel::Model, Sel::Tier] {
-                // Pick a `--model` compatible with X's kind (or L's kind when X is None).
-                let model_flag = match sel {
-                    Sel::Model => Some(match x_kind.unwrap_or(l_orig_kind) {
-                        "codex" => "gpt-6",
-                        "opencode" => "sonnet",
-                        "antigravity" => "neon",
-                        _ => "haiku",
-                    }),
-                    _ => None,
-                };
-                let tier_flag =
-                    matches!(sel, Sel::Tier).then_some(crate::config::tiers::ModelTier::Senior);
-                let label = format!(
-                    "L={} X={:?} sel={}",
-                    l_spec(l),
-                    x_name,
-                    match sel {
-                        Sel::None => "none",
-                        Sel::Model => "model",
-                        Sel::Tier => "tier",
-                    }
-                );
-
-                // Compute expected (kind, variant, model, tier) from the single C1 engine rule.
-                let (exp_kind, exp_variant, exp_model, exp_tier): (
-                    &str,
-                    Option<&str>,
-                    Option<&str>,
-                    Option<crate::config::tiers::ModelTier>,
-                ) = match sel {
-                    Sel::Model => {
-                        let k = x_kind.unwrap_or(l_orig_kind);
-                        let v = if x_kind == Some(k) { x_variant } else { None };
-                        (k, v, model_flag, None)
-                    }
-                    Sel::Tier => {
-                        // Senior tier table is ["opus" (claude), "astra" (codex)].
-                        // Prefer X's family if X is set, else L's natural family.
-                        // `opencode` runs other providers' models so it picks `opus` on `opencode`.
-                        let pref = x_kind.unwrap_or(l_orig_kind);
-                        let (k, m) = match pref {
-                            "codex" => ("codex", "astra"),
-                            "opencode" => ("opencode", "opus"),
-                            _ => ("claude", "opus"),
-                        };
-                        let v = if x_kind == Some(k) { x_variant } else { None };
-                        (k, v, Some(m), Some(crate::config::tiers::ModelTier::Senior))
-                    }
-                    Sel::None => {
-                        let k = x_kind.unwrap_or(l_orig_kind);
-                        let v = if x_kind == Some(k) { x_variant } else { None };
-                        if x_tier {
-                            // `x_tier` prefers codex -> senior picks `astra` on `codex`.
-                            (
-                                "codex",
-                                None,
-                                Some("astra"),
-                                Some(crate::config::tiers::ModelTier::Senior),
-                            )
-                        } else if let Some(xm) = x_model {
-                            (k, v, Some(xm), None)
-                        } else if x_name.is_some() {
-                            let kept = l_own_model.filter(|m| {
-                                crate::config::engine::keeps_inherited_model(l_orig_kind, k, m)
-                            });
-                            (k, v, kept, None)
-                        } else {
-                            (k, v, l_own_model, None)
-                        }
-                    }
-                };
-
-                let finalized = resolve::resolve_finalized_layout(
-                    None,
-                    &machine,
-                    &effective,
-                    ProfileScope::Agents,
-                    Some(l_spec(l)),
-                    None,
-                    &super::LaunchOverrides {
-                        agent: x_name.map(str::to_owned),
-                        tier: tier_flag,
-                        preset: crate::agents::LaunchPreset {
-                            model: model_flag.map(str::to_owned),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    None,
-                    None,
-                    None,
-                    false,
-                    None,
-                )
-                .unwrap_or_else(|err| panic!("fresh {label}: {err}"));
-                let cell = finalized.resolved.layout.agent_cells().next().unwrap();
-                assert_eq!(cell.kind.as_str(), exp_kind, "fresh kind {label}");
-                assert_eq!(
-                    cell.args.starts_with(&mini_args),
-                    exp_variant.is_some(),
-                    "fresh variant {label}: {:?}",
-                    cell.args
-                );
-                assert_eq!(
-                    cell.launch.model.as_deref(),
-                    exp_model,
-                    "fresh model {label}"
-                );
-                assert_eq!(
-                    cell.launch.tier.as_ref().map(|t| t.tier),
-                    exp_tier,
-                    "fresh tier {label}"
-                );
-
-                // Replay from what fresh launch recorded: must end on identical
-                // (kind, variant, model, tier) with no degrade.
-                let record = crate::agents::LaunchRecord {
-                    model: cell.launch.model.clone(),
-                    effort: cell.launch.effort.clone(),
-                    agent: x_name.map(str::to_owned),
+    for ((spec, team_role, agent, model, tier), (exp_kind, exp_mini, exp_model, exp_tier)) in cases
+    {
+        let label = format!("L={spec} X={agent:?} model={model:?} tier={tier:?}");
+        let finalized = resolve::resolve_finalized_layout(
+            None,
+            &machine,
+            &effective,
+            ProfileScope::Agents,
+            Some(spec),
+            None,
+            &super::LaunchOverrides {
+                agent: agent.map(str::to_owned),
+                tier,
+                preset: crate::agents::LaunchPreset {
+                    model: model.map(str::to_owned),
                     ..Default::default()
-                };
-                let (team_name, role_name) = match l {
-                    LForm::TomlSeat => (Some("toml_team"), Some("lead")),
-                    LForm::MdSeat => (Some("md_team"), Some("lead")),
-                    _ => (None, None),
-                };
-                let posture = if team_name.is_some() {
-                    crate::harness::resume::resolve_member_posture(
-                        crate::harness::resume::PostureRequest {
-                            record: Some(&record),
-                            profile: cell.launch.profile.as_deref(),
-                            kind: &cell.kind,
-                            stamped_mode: cell.launch.mode,
-                            stamped_tier: cell.launch.tier.as_deref(),
-                        },
-                        &effective.profiles,
-                        None,
-                        &effective.teams,
-                        team_name,
-                        role_name,
-                    )
-                } else {
-                    crate::harness::resume::resolve_posture(
-                        crate::harness::resume::PostureRequest {
-                            record: Some(&record),
-                            profile: cell.launch.profile.as_deref(),
-                            kind: &cell.kind,
-                            stamped_mode: cell.launch.mode,
-                            stamped_tier: cell.launch.tier.as_deref(),
-                        },
-                        &effective.profiles,
-                        None,
-                    )
-                };
-                assert!(
-                    posture.degraded.is_none(),
-                    "replay {label}: degraded {:?}",
-                    posture.degraded
-                );
-                assert_eq!(
-                    posture.launch.args.starts_with(&mini_args),
-                    exp_variant.is_some(),
-                    "replay variant {label}: {:?}",
-                    posture.launch.args
-                );
-                assert_eq!(
-                    posture.launch.model.as_deref(),
-                    exp_model,
-                    "replay model {label}"
-                );
-                assert_eq!(
-                    posture.launch.tier.as_ref().map(|t| t.tier),
-                    exp_tier,
-                    "replay tier {label}"
-                );
-            }
-        }
+                },
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("fresh {label}: {err}"));
+        let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), exp_kind, "fresh kind {label}");
+        assert_eq!(
+            cell.args.starts_with(&mini_args),
+            exp_mini,
+            "fresh variant {label}: {:?}",
+            cell.args
+        );
+        assert_eq!(
+            cell.launch.model.as_deref(),
+            exp_model,
+            "fresh model {label}"
+        );
+        assert_eq!(
+            cell.launch.tier.as_ref().map(|t| t.tier),
+            exp_tier,
+            "fresh tier {label}"
+        );
+
+        // Replay from what fresh launch recorded: must end on identical
+        // (kind, variant, model, tier) with no degrade.
+        let record = crate::agents::LaunchRecord {
+            model: cell.launch.model.clone(),
+            effort: cell.launch.effort.clone(),
+            agent: agent.map(str::to_owned),
+            ..Default::default()
+        };
+        let request = crate::harness::resume::PostureRequest {
+            record: Some(&record),
+            profile: cell.launch.profile.as_deref(),
+            kind: &cell.kind,
+            stamped_mode: cell.launch.mode,
+            stamped_tier: cell.launch.tier.as_deref(),
+        };
+        let posture = if let Some((team_name, role_name)) = team_role {
+            crate::harness::resume::resolve_member_posture(
+                request,
+                &effective.profiles,
+                None,
+                &effective.teams,
+                Some(team_name),
+                Some(role_name),
+            )
+        } else {
+            crate::harness::resume::resolve_posture(request, &effective.profiles, None)
+        };
+        assert!(
+            posture.degraded.is_none(),
+            "replay {label}: degraded {:?}",
+            posture.degraded
+        );
+        assert_eq!(
+            posture.launch.args.starts_with(&mini_args),
+            exp_mini,
+            "replay variant {label}: {:?}",
+            posture.launch.args
+        );
+        assert_eq!(
+            posture.launch.model.as_deref(),
+            exp_model,
+            "replay model {label}"
+        );
+        assert_eq!(
+            posture.launch.tier.as_ref().map(|t| t.tier),
+            exp_tier,
+            "replay tier {label}"
+        );
     }
 }
