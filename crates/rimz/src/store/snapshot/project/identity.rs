@@ -376,9 +376,9 @@ impl CardIdentityAllocator {
         rows: &impl ClaimRows,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
-        // Only a swap's reservation, the one launch event that carries an
-        // epoch, claims its agent's handle through the launch; any other
-        // launch row takes a name only while no other row owns it.
+        // Only a swap's reservation, the launch event at an epoch above every
+        // row of its launch, claims its agent's handle through the launch; any
+        // other launch row takes a name only while no other row owns it.
         let claimant = payload.launch.epoch.map(|epoch| Claimant {
             launch: payload.launch_id.as_ref().unwrap_or(agent_id),
             epoch,
