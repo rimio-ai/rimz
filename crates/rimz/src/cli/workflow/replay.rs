@@ -114,7 +114,10 @@ fn summary(call: &Call) -> String {
         },
         BlockName::Team => field("team").to_owned(),
         BlockName::Shell => field("command").to_owned(),
-        BlockName::Watch => field("when").to_owned(),
+        BlockName::Watch => match call.object.get("timeout").and_then(Value::as_str) {
+            Some(timeout) => format!("{} (timeout {timeout})", field("when")),
+            None => field("when").to_owned(),
+        },
         BlockName::Workflow => format!("{} {}", field("source"), field("value")),
         BlockName::Schedule => field("name").to_owned(),
         BlockName::Now => String::new(),
