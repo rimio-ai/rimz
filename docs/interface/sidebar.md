@@ -1256,7 +1256,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
 | `Ctrl+d` / `Ctrl+u` | move half a page |
 | `H` / `M` / `L` | select the first, middle, or last row on screen; when that row has left the room since the last paint, the nearest row on screen inward that is still listed, and nothing when none is |
-| `Enter`, `l` | focus the selected card or live child, reopen a paneless reopenable child (`rimz agents resume <session id>`), or list five more finished entries from the `▸ +N done` line without moving focus, scrolling the end of the pile back into view when the wheel moved that line off screen |
+| `Enter`, `l` | focus the selected card or live child, reopen a paneless reopenable child (`rimz agents resume <session id>`), or list five more finished entries from the `▸ +N done` line without moving focus, scrolling the end of the pile to the bottom edge, the new entries above it, when the wheel moved that line off screen |
 | `1` to `9` | select and focus that room-wide card slot, even if a filter or fold hides it; an empty slot shows a notice |
 | `Tab` | select and focus the card you focused before this one; a notice says when there is none or it left the room |
 | `n` / `N` | with a committed text search, select and focus the next or previous matching card, wrapping; otherwise jump to the next or previous card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; a parent turned `waiting` by a subagent targets the live pane of the child its second line names, otherwise the parent's pane |

@@ -316,7 +316,7 @@ pub(in crate::sidebar_pane) struct ViewportRequest {
     /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
     pub(super) reveal_row: Option<String>,
-    /// The row whose card's last line an input reveals minimally on the next draw, then
+    /// The row whose card's last line an input puts at the bottom edge on the next draw, then
     /// consumed.
     pub(super) card_end_reveal: Option<String>,
     /// A fresh shared click placement and its source opening set for the next
@@ -357,7 +357,7 @@ pub(in crate::sidebar_pane) enum ViewportIntent {
     Hold,
     /// `Hold`, revealing this row minimally; `None` replaces a pending row reveal.
     RevealRow(Option<String>),
-    /// `Hold`, revealing the last line of this row's card minimally.
+    /// `Hold`, putting the last line of this row's card at the bottom edge.
     RevealCardEnd(String),
     /// `Hold`, revealing the inactive chip and its first newly shown receipt.
     RevealInactive,
