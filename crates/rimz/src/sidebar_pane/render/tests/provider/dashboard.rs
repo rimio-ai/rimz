@@ -784,6 +784,14 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
         !rendered.contains("Claude Max"),
         "the other block stays off screen:\n{rendered}"
     );
+    let rail = rendered
+        .lines()
+        .find(|line| line.contains("Codex") && line.contains("Claude"))
+        .expect("the tab rail");
+    assert!(
+        rail.find("Codex") < rail.find("Claude"),
+        "the selected card's provider leads the rail:\n{rail}"
+    );
 }
 
 /// The `▬` credit header shows for any kind with credits to report: a zero

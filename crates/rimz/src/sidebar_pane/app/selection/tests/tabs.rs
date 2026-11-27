@@ -147,6 +147,39 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
         "the browse anchor survives every pick"
     );
 }
+/// `←`/`→` step through the rail order, the lead and then the rest in rank
+/// order, wrapping, whatever the pane paints: from a codex lead over the claude,
+/// codex, pi ranking, `→` picks claude, the tab painted to its right.
+#[test]
+fn tab_keys_step_through_the_rail_order_from_the_lead() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .name = "codex".to_owned();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_row(&mut ui, &snapshot, 0);
+    let active = |ui: &ViewState| {
+        render::active_dashboard_tab(&snapshot, ui).map(|key| key.kind.as_str().to_owned())
+    };
+    let mut walk = vec![active(&ui)];
+    for action in [
+        KeyAction::TabNext,
+        KeyAction::TabNext,
+        KeyAction::TabNext,
+        KeyAction::TabPrev,
+    ] {
+        handle_key(action, &mut ui, &mut pane_ui, &snapshot);
+        walk.push(active(&ui));
+    }
+    assert_eq!(
+        walk,
+        ["codex", "claude", "pi", "codex", "pi"].map(|kind| Some(kind.to_owned()))
+    );
+}
+
 #[test]
 fn tab_keys_noop_without_a_second_cyclable_panel() {
     // TabNext is inert and leaves no browse pick whenever there is nothing to
@@ -266,6 +299,18 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
             .map(|key| key.kind.as_str()),
         Some("pi")
     );
+    assert_eq!(
+        rail_kinds(&moved, &ui),
+        ["pi", "claude", "codex"],
+        "the rail leads with the newly selected card's provider"
+    );
+}
+
+fn rail_kinds(snapshot: &SidebarSnapshot, ui: &ViewState) -> Vec<String> {
+    render::dashboard_rail(snapshot, ui)
+        .iter()
+        .map(|key| key.kind.as_str().to_owned())
+        .collect()
 }
 
 #[test]
@@ -295,6 +340,24 @@ fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
             .map(|key| key.kind.as_str()),
         Some("codex"),
         "a non-agent selection holds the last agent's tab"
+    );
+    assert_eq!(
+        rail_kinds(&snapshot, &ui),
+        ["codex", "claude", "pi"],
+        "the held provider leads the rail"
+    );
+    handle_key(
+        KeyAction::TabNext,
+        &mut ui,
+        &mut UiState::default(),
+        &snapshot,
+    );
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
+        Some("claude"),
+        "→ steps right of the held lead"
     );
 }
 

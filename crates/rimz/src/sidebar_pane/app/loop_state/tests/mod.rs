@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 mod card_commands;
 mod clock;
+mod dashboard;
 mod displacement;
 mod fetch;
 mod focus;

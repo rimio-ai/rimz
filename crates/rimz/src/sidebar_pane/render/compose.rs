@@ -27,8 +27,8 @@ use super::sections::{
 use super::theme::{Component, Theme};
 use super::{
     Alert, BodyFilter, DashboardMode, FrameInteractions, HitRegion, HitTarget, RenderedBlock,
-    ScrollEase, UiState, ViewState, active_dashboard_tab, cockpit_spend_target, dashboard_mode,
-    dashboard_present, labels, selected_sub_provider,
+    ScrollEase, UiState, ViewState, cockpit_spend_target, dashboard_lead, dashboard_mode,
+    dashboard_pick, dashboard_present, labels, selected_sub_provider,
 };
 
 const INACTIVE_PAGE_SIZE: usize = 10;
@@ -743,11 +743,13 @@ fn dashboard_chrome(
         return RenderedBlock::default();
     };
     let mut block = RenderedBlock::default();
-    let active_tab = active_dashboard_tab(snapshot, view);
+    let lead = dashboard_lead(snapshot, view);
+    let active_tab = dashboard_pick(snapshot, view).or_else(|| lead.clone());
     let mut panel = dashboard_block(DashboardContext {
         theme,
         providers: &snapshot.providers,
         active_provider: active_tab.as_ref(),
+        lead_provider: lead.as_ref(),
         selected_sub_provider: selected_sub_provider(snapshot, view),
         last_sub_providers: &view.last_sub_providers,
         mode,

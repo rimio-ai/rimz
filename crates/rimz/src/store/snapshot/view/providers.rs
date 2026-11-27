@@ -32,7 +32,7 @@ impl SidebarSnapshot {
     /// health. Styling (emblem, color, name) and the definition-declared empty
     /// budget-window shape resolve here, so the renderer gets a ready-to-paint
     /// block. With no explicit
-    /// `provider_list`, providers paint in usage-rank order: live sessions,
+    /// `provider_list`, providers sit in usage-rank order: live sessions,
     /// then week/month/year session counts, then login and credential recency.
     /// This deliberately ignores intra-day spend shifts. A *stacked* dashboard
     /// caps that ranked list to `max_provider_blocks`; a *tabbed* dashboard
@@ -41,6 +41,9 @@ impl SidebarSnapshot {
     /// `provider_list` overrides the shown set and order, with `all` expanding
     /// the remaining discovered providers in usage-rank order and
     /// bypassing the cap. Ordering, cap, and tabs see only the set's blocks.
+    /// This rank order, or `provider_list` order when it is set, is the
+    /// snapshot order a stacked dashboard paints and the tab rail leads from:
+    /// the rail paints the focused provider first and the rest in this order.
     /// The machine-config fold calls this on producer and consumer alike; the
     /// pure reducer leaves `providers` empty.
     pub(crate) fn with_provider_aggregates(

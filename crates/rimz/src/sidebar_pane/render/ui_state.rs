@@ -286,7 +286,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// advances it on an agent selection that has a dashboard panel and holds
     /// it across a non-agent selection, so focusing a shell row keeps the last
     /// agent's provider block instead of snapping to the first-panel default.
-    /// Read by `active_dashboard_tab` below the live derivation and re-guarded
+    /// Read by `dashboard_lead` below the live derivation and re-guarded
     /// against the panel still being on the dashboard.
     pub(in crate::sidebar_pane) last_agent_kind: Option<crate::ids::AgentKind>,
     /// Last selected credential per dashboard kind, retained while that kind

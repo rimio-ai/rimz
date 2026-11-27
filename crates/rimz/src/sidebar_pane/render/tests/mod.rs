@@ -80,6 +80,7 @@ struct Dashboard<'a> {
     theme: &'a Theme,
     providers: &'a [SidebarProviderPanel],
     active: Option<crate::ids::LoginKey>,
+    lead: Option<crate::ids::LoginKey>,
     mode: DashboardMode,
     fleet: Option<&'a crate::SpendTally>,
     pet: Option<&'a crate::sidebar_pane::pets::PetView>,
@@ -95,6 +96,7 @@ impl<'a> Dashboard<'a> {
             theme,
             providers,
             active: None,
+            lead: None,
             mode,
             fleet: None,
             pet: None,
@@ -119,6 +121,15 @@ impl<'a> Dashboard<'a> {
 
     fn active(mut self, kind: &'a str) -> Self {
         self.active = Some(crate::ids::LoginKey::default_for(
+            crate::ids::AgentKind::new_unchecked(kind),
+        ));
+        self
+    }
+
+    /// The focused provider the rail leads with, and the open tab while no
+    /// `active` pick is set, as `active_dashboard_tab` resolves it.
+    fn lead(mut self, kind: &'a str) -> Self {
+        self.lead = Some(crate::ids::LoginKey::default_for(
             crate::ids::AgentKind::new_unchecked(kind),
         ));
         self
@@ -168,7 +179,8 @@ impl<'a> Dashboard<'a> {
         dashboard_block(DashboardContext {
             theme: self.theme,
             providers: self.providers,
-            active_provider: self.active.as_ref(),
+            active_provider: self.active.as_ref().or(self.lead.as_ref()),
+            lead_provider: self.lead.as_ref(),
             selected_sub_provider: None,
             last_sub_providers: &Default::default(),
             mode: self.mode,
