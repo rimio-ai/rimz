@@ -778,7 +778,7 @@ fn render_machine_config(
             "config files",
             verdict(Health::Ok, "all present files parse"),
         );
-        return kv.render(w);
+        kv.render(w)?;
     }
     for problem in &config.broken_files {
         let summary = problem
@@ -819,6 +819,24 @@ fn render_machine_config(
             detail.clone(),
             fix,
             home_relative(&problem.path),
+        );
+        let (glyph, style) = Severity::Warning.parts();
+        writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
+    }
+    // Definitions that inherit an entry repeat the message of the file that holds it.
+    for (index, warning) in config.definition_warnings.iter().enumerate() {
+        if config.definition_warnings[..index]
+            .iter()
+            .any(|seen| seen.message == warning.message)
+        {
+            continue;
+        }
+        let detail = rimz::packs::one_line(&warning.message);
+        tally.record_subject(
+            Severity::Warning,
+            detail.clone(),
+            "edit the file the warning names as it says to use RimZ's capability, or leave it to keep the native tool",
+            home_relative(&warning.path),
         );
         let (glyph, style) = Severity::Warning.parts();
         writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
@@ -3646,15 +3664,13 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
             let text = if group.len() == 1 {
                 finding.text.clone()
             } else {
-                format!(
-                    "{} findings: {}",
-                    group.len(),
-                    group
-                        .iter()
-                        .map(|finding| finding.subject.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                let mut subjects: Vec<&str> = Vec::new();
+                for finding in &group {
+                    if !subjects.contains(&finding.subject.as_str()) {
+                        subjects.push(&finding.subject);
+                    }
+                }
+                format!("{} findings: {}", group.len(), subjects.join(", "))
             };
             writeln!(
                 w,

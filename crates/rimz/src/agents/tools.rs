@@ -256,6 +256,74 @@ pub(crate) fn grants_tool(kind: &str, bases: &[String], tool: &str) -> bool {
     bases.iter().any(|base| base == tool) || tool_preset(kind, bases).is_some()
 }
 
+/// How a tools list claims the provider's own tool that a RimZ capability stands in for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeClaim<'a> {
+    /// The list names the tool (`native_tool`).
+    Named(&'static str),
+    /// The list holds the kind's tool preset, as written (`tool_preset`).
+    Preset(&'a str),
+}
+
+/// How a profile's lists reach a RimZ capability that also has a native tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RimzClaim {
+    /// An entry names the capability, in `capabilities:`, `mcps`, or `skills`, or for
+    /// `rimz-subagents` any `subagents:` list.
+    Named,
+    /// Only `rimz` in `capabilities:`, an `mcps` holding `*` or `rimz`, or no `mcps` at all.
+    Blanket,
+}
+
+/// Which side gets a capability that both a tools list and RimZ's lists claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Contest {
+    /// The launch keeps the native tool and gets neither the capability's MCP tools nor its
+    /// skill.
+    NativeWins,
+    /// Two named entries contradict each other, so the definition is refused.
+    Refused,
+}
+
+/// The provider tool `capability` stands in for: `AskUserQuestion` for `rimz-ask`, `Agent` for
+/// `rimz-subagents`; `None` for every other capability.
+pub(crate) fn native_tool(capability: crate::mcp::catalog::Capability) -> Option<&'static str> {
+    use crate::mcp::catalog::Capability;
+    match capability {
+        Capability::Ask => Some("AskUserQuestion"),
+        Capability::Subagents => Some("Agent"),
+        _ => None,
+    }
+}
+
+/// How a tools list's `bases` claim on `kind` the native tool `capability` stands in for: a
+/// named tool the kind renders (`applied_tools`), so none on a kind that applies no tools list
+/// nor for a tool its renderer drops, as Pi drops `Agent`; else the kind's preset.
+pub(crate) fn native_claim<'a>(
+    kind: &str,
+    bases: &'a [String],
+    capability: crate::mcp::catalog::Capability,
+) -> Option<NativeClaim<'a>> {
+    let tool = native_tool(capability)?;
+    if bases.iter().any(|base| base == tool) {
+        return applied_tools(kind, &[tool.to_owned()])
+            .is_some_and(|applied| !applied.is_empty())
+            .then_some(NativeClaim::Named(tool));
+    }
+    tool_preset(kind, bases).map(NativeClaim::Preset)
+}
+
+/// The outcome where a tools list and RimZ's lists both claim a capability: a named native tool
+/// outranks a blanket grant, and two named entries refuse. The preset ranks with neither, so
+/// RimZ's capability wins over it as over a list that names no native tool.
+pub(crate) fn contest(native: Option<NativeClaim<'_>>, rimz: Option<RimzClaim>) -> Option<Contest> {
+    match (native?, rimz?) {
+        (NativeClaim::Named(_), RimzClaim::Named) => Some(Contest::Refused),
+        (NativeClaim::Named(_), RimzClaim::Blanket) => Some(Contest::NativeWins),
+        (NativeClaim::Preset(_), _) => None,
+    }
+}
+
 /// Whether a supplied tools list applies to this kind and grants no `Skill`.
 pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
     tools.is_some_and(|tools| !grants_tool(kind, tools.bases(), "Skill"))

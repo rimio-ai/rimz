@@ -393,7 +393,26 @@ fn collect_machine_config() -> model::MachineConfigHealth {
             }
         })
         .collect();
-    model::MachineConfigHealth { broken_files }
+    let machine = crate::cli::machine_config();
+    let mut definition_warnings: Vec<model::DefinitionWarning> = Vec::new();
+    for profile in machine
+        .agents
+        .profiles
+        .0
+        .values()
+        .chain(machine.subagents.profiles.0.values())
+    {
+        for win in profile.native_wins(machine.agents.rimz_mcp_server) {
+            definition_warnings.push(model::DefinitionWarning {
+                path: win.path.display().to_string(),
+                message: win.message,
+            });
+        }
+    }
+    model::MachineConfigHealth {
+        broken_files,
+        definition_warnings,
+    }
 }
 
 fn config_file_error_detail(

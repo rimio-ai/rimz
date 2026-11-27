@@ -1875,9 +1875,11 @@ pub struct Capabilities {
     pub prompt_context: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan
     /// approvals, questions — so RimZ can mark the agent waiting while the
-    /// prompt stays in the native UI. An agent without one (pi gates tools
-    /// only through the extension) resolves the same ask neutrally with no
+    /// prompt stays in the native UI. An agent without one (a process plugin
+    /// whose manifest declares none) resolves the same ask neutrally with no
     /// waiting state: there is no native prompt to route the human to.
+    /// Whether RimZ sees the agent's questions at all is its
+    /// `IntegrationConcern::UserQuestion` coverage, not this flag.
     pub native_ask_ui: bool,
     /// Permission hooks precede the provider's automatic reviewer, rather
     /// than necessarily opening a human prompt.

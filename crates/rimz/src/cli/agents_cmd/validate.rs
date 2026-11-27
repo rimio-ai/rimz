@@ -36,6 +36,7 @@ pub(super) fn run(json: bool) -> Result<()> {
         disk_skills(&env, &chain, (!in_sandbox).then_some(cwd.as_path())),
     ));
     let mut warnings = warnings(&loaded, machine.agents.isolation);
+    warnings.extend(native_tool_warnings(&loaded, &machine));
     warnings.extend(lsp_warnings(&loaded, &machine));
     warnings.extend(keep_warm_warnings(&loaded, &machine.harness));
     if json {
@@ -263,6 +264,32 @@ fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
     warnings
 }
 
+/// One warning per RimZ capability a row, a kind base's included, leaves to the provider's own
+/// tool where its blanket grant would reach it (`Profile::native_wins`).
+fn native_tool_warnings(
+    loaded: &LoadedDefinitions,
+    machine: &rimz::config::MachineConfig,
+) -> Vec<Warning> {
+    let mut warnings = Vec::new();
+    for row in &loaded.rows {
+        let profiles = if row.namespace == "subagents" {
+            &loaded.subagent_profiles
+        } else {
+            &loaded.agent_profiles
+        };
+        let Some(profile) = profiles.0.get(&row.name) else {
+            continue;
+        };
+        for win in profile.native_wins(machine.agents.rimz_mcp_server) {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: win.message,
+            });
+        }
+    }
+    warnings
+}
+
 fn rows<'a>(
     out: &mut impl Write,
     rows: impl Iterator<Item = &'a definitions::DefinitionRow>,
@@ -465,7 +492,9 @@ fn own_rows(
 /// its MCP tools are out of reach, then the reasons its skill is. An empty side is
 /// a way in; the skill side does not look at the disk. A profile whose tools carry
 /// a `capabilities:` grant reaches a capability of RimZ's MCP server only when the
-/// grant names it, on either side, and a `rimz-*` skill alone as its skills say.
+/// grant names it, on either side, and a `rimz-*` skill alone as its skills say. A
+/// capability its definition leaves to the provider's own tool
+/// (`Profile::native_wins`) it reaches neither way.
 fn shut_out(
     machine: &rimz::config::MachineConfig,
     kind: &str,
@@ -488,6 +517,17 @@ fn shut_out(
         && !grant.iter().any(|entry| entry.name() == name)
     {
         let reason = vec![format!("its capabilities leave out {name}")];
+        return (reason.clone(), reason);
+    }
+    if let Some(capability) = Capability::from_name(name)
+        && profile
+            .native_wins(machine.agents.rimz_mcp_server)
+            .iter()
+            .any(|win| win.capability == capability)
+    {
+        let reason = vec![
+            "its tools list names the provider's own tool beside a blanket RimZ grant".to_owned(),
+        ];
         return (reason.clone(), reason);
     }
     let tool = match Capability::from_name(name) {

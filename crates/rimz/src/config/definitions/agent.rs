@@ -10,6 +10,7 @@ use crate::config::tiers::{ModelTier, TierPreference, TierProvenance};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
 
+use super::contest::{self, ListWriters};
 use super::frontmatter::AgentFrontmatter;
 use super::{
     BuildBase, DefinitionCause, DefinitionErr, LoadContext, LoadScope, LoadedDefinitions,
@@ -19,22 +20,25 @@ use super::{
 /// Maximum inheritance chain length for project TOML profiles.
 const MAX_PROFILE_DEPTH: usize = 16;
 
-/// Chain member names that wrote each tuning field on a definition.
+/// Chain member names that wrote each tuning field on a definition, and the files of the chain
+/// that wrote its lists.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TuningWriters {
     pub effort: Option<String>,
     pub fast: Option<String>,
     pub code_mode: Option<String>,
     pub auto_compact: Option<String>,
+    lists: ListWriters,
 }
 
 impl TuningWriters {
-    fn from_frontmatter(fm: &AgentFrontmatter, name: &str) -> Self {
+    fn from_frontmatter(fm: &AgentFrontmatter, name: &str, path: &Path) -> Self {
         Self {
             effort: fm.effort.as_ref().map(|_| name.to_owned()),
             fast: fm.fast.map(|_| name.to_owned()),
             code_mode: fm.code_mode.map(|_| name.to_owned()),
             auto_compact: fm.auto_compact.as_ref().map(|_| name.to_owned()),
+            lists: ListWriters::own(fm, name, path),
         }
     }
 
@@ -49,10 +53,12 @@ impl TuningWriters {
                 dst.clone_from(src);
             }
         }
+        self.lists.inherit(&parent.lists);
     }
 
-    pub(super) fn overlay_from(&mut self, fm: &AgentFrontmatter, name: &str) {
-        let mut own = Self::from_frontmatter(fm, name);
+    /// These writers under `fm`, which `name` writes in `path`.
+    pub(super) fn overlay_from(&mut self, fm: &AgentFrontmatter, name: &str, path: &Path) {
+        let mut own = Self::from_frontmatter(fm, name, path);
         own.inherit(self);
         *self = own;
     }
@@ -243,6 +249,51 @@ impl DefinitionSource {
 
     pub(crate) fn writers(&self) -> &TuningWriters {
         &self.inner.writers
+    }
+
+    /// The file this definition is read from: a team file for a seat.
+    pub fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    /// The file of the kind base `kind`, where a home or pack base stands for it.
+    pub(crate) fn base_path(&self, kind: &str) -> Option<&Path> {
+        self.inner
+            .context
+            .shared
+            .base_paths
+            .get(kind)
+            .map(PathBuf::as_path)
+    }
+
+    /// Each capability this definition leaves to the provider's own tool, which its lists name
+    /// beside a blanket RimZ grant, with the warning that says so.
+    pub(crate) fn native_wins(&self) -> Vec<super::NativeWin> {
+        let inner = &self.inner;
+        let shared = &inner.context.shared;
+        let kind = inner.natural_kind.as_str();
+        let mut fm = inner.frontmatter.clone();
+        // Impossible to refuse: the load lowered these same lists and refused neither step.
+        settle_lists(
+            shared,
+            kind,
+            inner.namespace,
+            false,
+            inner.seat.as_ref(),
+            &mut fm,
+        )
+        .and_then(|_| {
+            settle_contests(
+                shared,
+                kind,
+                inner.namespace,
+                &inner.path,
+                false,
+                &fm,
+                &inner.writers.lists,
+            )
+        })
+        .unwrap_or_default()
     }
 
     /// The verdict `finish_profile` gives this definition's `subagents:` list, over the kind base
@@ -603,6 +654,10 @@ impl DefinitionSourceInner {
         }
         keeps_own_subagents(&mut fm, kind);
         let mut pre_base_fm = fm.clone();
+        let mut writers = self.writers.lists.clone();
+        if let Some(x) = x_def.filter(|_| !x_in_chain) {
+            writers.inherit(&x.writers.lists);
+        }
         let mut built = finish_profile(
             &self.context,
             &self.path,
@@ -615,6 +670,7 @@ impl DefinitionSourceInner {
             self.is_project,
             &subagent_validator,
             fm,
+            &writers,
             craft_sources,
             system_prompt_file.clone(),
             args_for_kind(&merged_args, kind),
@@ -661,6 +717,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         kind_defaults: false,
         kind_base: false,
         built_in_base: false,
+        base_native_wins: Vec::new(),
         tools: None,
         model_tier: None,
         tier_stamp: None,
@@ -1134,7 +1191,7 @@ impl Resolver<'_> {
         let mut writers = if self.seat.is_some() {
             self.seat_writers.clone()
         } else {
-            TuningWriters::from_frontmatter(&definition.frontmatter, name)
+            TuningWriters::from_frontmatter(&definition.frontmatter, name, path)
         };
         let mut chain = match &self.seat {
             Some(seat) => {
@@ -1443,6 +1500,7 @@ impl Resolver<'_> {
             inherited: None,
             own_names: None,
         };
+        let writers = ListWriters::own(&fm, name, &definition.path);
         let mut profile = finish_profile(
             self.scope.context,
             &definition.path,
@@ -1455,6 +1513,7 @@ impl Resolver<'_> {
             false,
             &subagent_validator,
             fm,
+            &writers,
             Vec::new(),
             None,
             None,
@@ -1499,6 +1558,7 @@ fn finish_profile(
     is_project: bool,
     subagent_validator: &SubagentValidator<'_>,
     mut fm: AgentFrontmatter,
+    writers: &ListWriters,
     crafts: Vec<PromptSource>,
     system_prompt_file: Option<PromptSource>,
     args: Option<String>,
@@ -1532,14 +1592,8 @@ fn finish_profile(
             },
         ));
     }
-    if !profile.kind_base
-        && let Some(base) = shared.bases.get(kind)
-    {
-        fm.inherit_base(base, namespace, lists_agent_tool(&fm, kind));
-    }
-    fm.settle_plus(kind)
+    let seat_edits = settle_lists(shared, kind, namespace, kind_base, seat, &mut fm)
         .map_err(|message| DefinitionErr::new(path, message))?;
-    let seat_edits = seat.map_or_else(SeatSkillEdits::default, |seat| seat.edits.edit(&mut fm));
     profile.allowed_tools = fm
         .allowed_tools
         .as_ref()
@@ -1610,7 +1664,12 @@ fn finish_profile(
                     ));
                 }
             }
-            Some(lower_capabilities(path, written, fm.skills.as_deref())?)
+            Some(lower_capabilities(
+                path,
+                kind,
+                written,
+                fm.skills.as_deref(),
+            )?)
         }
         None => None,
     };
@@ -1660,25 +1719,18 @@ fn finish_profile(
     }
     profile.idle_compact = fm.idle_compact;
     profile.smart_compact = fm.smart_compact;
+    if fm.subagents.is_some() && namespace == "subagents" {
+        return Err(DefinitionErr::new(
+            path,
+            "sets `subagents:`, which only a direct profile takes; a child cannot launch again",
+        ));
+    }
+    let wins = settle_contests(shared, kind, namespace, path, kind_base, &fm, writers)
+        .map_err(|message| DefinitionErr::new(path, message))?;
+    if kind_base {
+        profile.base_native_wins = wins;
+    }
     if let Some(listed) = fm.subagents.as_ref() {
-        if namespace == "subagents" {
-            return Err(DefinitionErr::new(
-                path,
-                "sets `subagents:`, which only a direct profile takes; a child cannot launch again",
-            ));
-        }
-        if let Some(tools) = tools
-            .as_ref()
-            .filter(|tools| agents::grants_tool(kind, tools.bases(), "Agent"))
-        {
-            let message = match agents::tool_preset(kind, tools.bases()) {
-                Some(preset) => format!(
-                    "sets `subagents:` and lists the `{preset}` tool preset, which holds the Agent tool; the rimz doorway replaces the native one, so drop `subagents:`, or list the tools by name without Agent"
-                ),
-                _ => "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, so drop whichever this seat does not use".to_owned(),
-            };
-            return Err(DefinitionErr::new(path, message));
-        }
         profile.subagents = subagent_list(path, listed, profile.kind_base, subagent_validator)?;
     }
     let scoped = match shared.skills.check.as_ref() {
@@ -1852,6 +1904,51 @@ fn finish_profile(
     Ok(profile)
 }
 
+/// Settles `fm`'s lists as `finish_profile` lowers them: its kind base filled in below the chain
+/// unless `fm` is that base, each `+` list settled, then its seat's edits.
+fn settle_lists(
+    shared: &super::SharedLoadState,
+    kind: &str,
+    namespace: &str,
+    kind_base: bool,
+    seat: Option<&SeatInfo>,
+    fm: &mut AgentFrontmatter,
+) -> Result<SeatSkillEdits, String> {
+    if !kind_base && let Some(base) = shared.bases.get(kind) {
+        fm.inherit_base(base, namespace, lists_agent_tool(fm, kind));
+    }
+    fm.settle_plus(kind)?;
+    Ok(seat.map_or_else(SeatSkillEdits::default, |seat| seat.edits.edit(fm)))
+}
+
+/// The contests of `fm`'s settled lists, which `writers` and the kind base below them wrote
+/// (`contest::settle`).
+fn settle_contests(
+    shared: &super::SharedLoadState,
+    kind: &str,
+    namespace: &str,
+    own: &Path,
+    kind_base: bool,
+    fm: &AgentFrontmatter,
+    writers: &ListWriters,
+) -> Result<Vec<super::NativeWin>, String> {
+    let writers = match shared.bases.get(kind).filter(|_| !kind_base) {
+        Some(base) => writers.above_base(
+            kind,
+            base,
+            shared.base_paths.get(kind).map(PathBuf::as_path),
+        ),
+        None => writers.clone(),
+    };
+    contest::settle(&contest::Contested {
+        kind,
+        namespace,
+        own,
+        fm,
+        writers: &writers,
+    })
+}
+
 /// The `subagents:` field `finish_profile` lowers `listed` to under `validator`. A `+` list nothing
 /// below added to leaves the field absent, which admits every child, and fails only on a name
 /// that failed to load.
@@ -2017,7 +2114,7 @@ pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, Definitio
 }
 
 /// The words of a `capabilities:` list, each with the tool bases it lowers to.
-const WORDS: [(&str, &[&str]); 5] = [
+pub(super) const WORDS: [(&str, &[&str]); 5] = [
     ("bash", &["Bash"]),
     ("read", &["Read", "Grep", "Glob", "LS"]),
     ("write", &["Edit", "Write"]),
@@ -2040,11 +2137,14 @@ const RETIRED_WAIT: &str = "rimz-wait";
 
 /// Lowers a resolved `capabilities:` list to the tools value it stands for: each word's tool
 /// bases in written order, then `Skill` where [`skill_implied`], carrying each listed
-/// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted,
-/// then itself with its mark, which marks each capability that has none of its own
-/// (`ExecRequest::served_marks`) and reaches a provider's MCP code as it does from `mcps`.
+/// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted
+/// whose native tool the words do not name on `kind`, since a named tool outranks it
+/// (`crate::agents::contest`), then itself with its mark, which marks each capability that has
+/// none of its own (`ExecRequest::served_marks`) and reaches a provider's MCP code as it does
+/// from `mcps`.
 fn lower_capabilities(
     path: &Path,
+    kind: &str,
     written: &[String],
     skills: Option<&[String]>,
 ) -> Result<ToolSet, DefinitionErr> {
@@ -2123,19 +2223,6 @@ fn lower_capabilities(
             None => listed.push((name, mode)),
         }
     }
-    if let Some((doorway, _)) = listed
-        .iter()
-        .find(|(name, _)| [Capability::Ask.name(), SERVER_NAME].contains(name))
-        .filter(|_| bases.iter().any(|base| base == "AskUserQuestion"))
-    {
-        return Err(DefinitionErr::new(
-            path,
-            format!(
-                "lists `ask` and `{doorway}` in `capabilities:`; the rimz doorway replaces the \
-                 native one, so drop whichever this seat does not use"
-            ),
-        ));
-    }
     let wildcard = listed
         .iter()
         .find(|(name, _)| *name == SERVER_NAME)
@@ -2153,6 +2240,11 @@ fn lower_capabilities(
         let rest = Capability::ALL
             .into_iter()
             .filter(|capability| !listed.iter().any(|(name, _)| *name == capability.name()))
+            .filter(|capability| {
+                let native = agents::native_claim(kind, &bases, *capability);
+                agents::contest(native, Some(agents::RimzClaim::Blanket))
+                    != Some(agents::Contest::NativeWins)
+            })
             .map(|capability| crate::config::RimzEntry::new(capability, None));
         grant.extend(rest);
         grant.push(crate::config::RimzEntry::server(mark));

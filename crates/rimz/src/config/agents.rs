@@ -485,6 +485,37 @@ impl From<BTreeMap<String, Profile>> for ProfilesConfig {
     }
 }
 
+impl Profile {
+    /// Each RimZ capability this row leaves to the provider's own tool, with the warning that
+    /// says so: its definition's (`DefinitionSource::native_wins`), or a kind base's own. A win
+    /// counts only where the blanket grant would reach the capability, served (`rimz_mcp_server`
+    /// on, on a kind that takes MCP servers) or as a callable skill (its tools hold `Skill`, and a
+    /// `capabilities:` grant or its `skills` admit it); the launch keeps the native tool either
+    /// way, so one that reaches neither warns nothing. The skill side does not look at the disk.
+    /// The launch judges the same reach in `LaunchReminders::reached_past_native`.
+    pub fn native_wins(&self, rimz_mcp_server: bool) -> Vec<super::definitions::NativeWin> {
+        let wins = self.definition.as_ref().map_or_else(
+            || self.base_native_wins.clone(),
+            super::definitions::DefinitionSource::native_wins,
+        );
+        let served = rimz_mcp_server
+            && crate::agents::find_definition(&self.agent)
+                .is_some_and(|definition| definition.takes_mcp_servers());
+        let granted = self
+            .tools
+            .as_ref()
+            .and_then(crate::agents::ToolSet::rimz)
+            .is_some();
+        let skill = |name: &str| {
+            !crate::agents::skills_lack_skill_tool(&self.agent, self.tools.as_ref())
+                && (granted || super::skill_is_callable(self.skills.as_deref(), name))
+        };
+        wins.into_iter()
+            .filter(|win| served || skill(win.capability.name()))
+            .collect()
+    }
+}
+
 impl ProfilesConfig {
     /// The row a launch word or an `agent:` value names: the word itself, or for an alias with
     /// no row of its own (`agy`, `mcode`), its kind, which keys the kind's base.
@@ -663,6 +694,10 @@ pub struct Profile {
     /// base does.
     #[serde(skip)]
     pub built_in_base: bool,
+    /// A kind base's own native wins (`Profile::native_wins`), which it keeps since it carries no
+    /// `definition` to recompute them from; empty on every other row.
+    #[serde(skip)]
+    pub base_native_wins: Vec<super::definitions::NativeWin>,
     #[serde(skip)]
     pub model_tier: Option<super::tiers::TierProvenance>,
     #[serde(skip)]
@@ -687,7 +722,9 @@ pub struct Profile {
     /// unset serves every capability and leaves the user's servers alone. A subagent child and
     /// a workflow judge are never served `rimz-subagents`, `rimz-agents`, or `rimz-teams`, and
     /// a launch whose profile sets `subagents = []` is never served `rimz-subagents`, nor a
-    /// team seat other than its leader `rimz-ask`, whatever this holds.
+    /// team seat other than its leader `rimz-ask`, whatever this holds. A blanket entry (`*`,
+    /// `rimz`, or unset) serves neither `rimz-ask` nor `rimz-subagents` where the tools list
+    /// names the provider's own tool (`ExecRequest::yields_to_native`).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

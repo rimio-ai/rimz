@@ -137,6 +137,10 @@ pub enum LaunchPlanWarning {
     UnreachableCapability(String),
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
     MissingTeam(String),
+    /// The launch's tools list names a capability's native tool, which outranks the blanket
+    /// grant RimZ reaches the capability through (`crate::agents::Contest::NativeWins`).
+    #[error("{0}")]
+    NativeToolWins(String),
     #[error("parent {0} has no row in the room; this launch uses its own temp directory")]
     ParentUnitMissing(crate::ids::AgentSessionId),
     #[error(
@@ -985,6 +989,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.rimz_skills.remove(ask);
     }
+    warnings.extend(native_tool_warnings(
+        &request,
+        inputs.effective,
+        &reminders,
+        inputs.machine.agents.rimz_mcp_server && adapter.takes_mcp_servers(),
+    ));
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
     reminders.runtime_env = adapter.spec().capabilities.prompt_context
@@ -1692,17 +1702,102 @@ fn reminders(
         }
         team.map(TeamReminder::new)
     });
-    (
-        LaunchReminders {
-            model,
-            lsp_configured,
-            subagent_catalog,
-            built_in_base,
-            team,
-            ..LaunchReminders::default()
+    let reminders = LaunchReminders {
+        model,
+        lsp_configured,
+        subagent_catalog,
+        built_in_base,
+        team,
+        ..LaunchReminders::default()
+    };
+    (reminders, warnings)
+}
+
+/// One warning per RimZ capability the launch leaves to the provider's own tool
+/// (`ExecRequest::yields_to_native`) where its blanket grant would otherwise reach it
+/// (`LaunchReminders::reached_past_native`, with `serves` saying RimZ's server is on for the
+/// kind): in the words of the definition, or the bare launch's kind base, whose own lists settled
+/// it, else in the shape the request carries. A launched subagent keeps neither native tool, so
+/// none warns.
+fn native_tool_warnings(
+    request: &ExecRequest,
+    effective: Option<&LaunchAgents>,
+    reminders: &LaunchReminders,
+    serves: bool,
+) -> Vec<LaunchPlanWarning> {
+    let Some(effective) = effective.filter(|_| !request.subagent) else {
+        return Vec::new();
+    };
+    let params = &request.identity.params;
+    let recorded_agent = params
+        .record
+        .as_ref()
+        .and_then(|record| record.agent.as_deref());
+    // The first row of the chain with a definition, or else its kind base.
+    let (source, base_wins) = crate::config::effective::resolve_seat_setting(
+        params.profile.as_deref(),
+        recorded_agent,
+        Some(request.kind.as_str()),
+        ProfileScope::for_launch(params.profile_scope, request.subagent),
+        &effective.profiles,
+        &effective.subagent_profiles,
+        false,
+        |profile| match &profile.definition {
+            Some(source) => Some((Some(source.clone()), Vec::new())),
+            None => profile
+                .kind_base
+                .then(|| (None, profile.base_native_wins.clone())),
         },
-        warnings,
     )
+    .unwrap_or_default();
+    let wins = source.as_ref().map_or(
+        base_wins,
+        crate::config::definitions::DefinitionSource::native_wins,
+    );
+    let source = source.as_ref();
+    let denied = reminders.denied_capabilities(request);
+    crate::mcp::catalog::Capability::ALL
+        .into_iter()
+        .filter(|capability| {
+            !denied.contains(capability)
+                && request.yields_to_native(*capability)
+                && reminders.reached_past_native(request, *capability, serves)
+        })
+        .map(|capability| {
+            let written = wins.iter().find(|win| win.capability == capability);
+            let message = written.map_or_else(
+                || {
+                    crate::config::definitions::launch_warning(
+                        request.kind.as_str(),
+                        capability,
+                        &blanket_source(request),
+                        request.rimz_capabilities.is_some(),
+                        source.map(|source| (source.path(), source.chain())),
+                        source.and_then(|source| source.base_path(request.kind.as_str())),
+                    )
+                },
+                |win| win.message.clone(),
+            );
+            LaunchPlanWarning::NativeToolWins(message)
+        })
+        .collect()
+}
+
+/// The blanket grant a launch reaches its RimZ capabilities through, as a warning names it: `rimz`
+/// in its grant, the `*` or `rimz` entry of its `mcps`, or RimZ's default with no `mcps`.
+fn blanket_source(request: &ExecRequest) -> String {
+    if request.rimz_capabilities.is_some() {
+        return "`rimz` in `capabilities:`".to_owned();
+    }
+    request
+        .mcps
+        .iter()
+        .flatten()
+        .find(|entry| entry.serves_every_capability())
+        .map_or_else(
+            || "RimZ's default (no `mcps`)".to_owned(),
+            |entry| format!("`{entry}` in `mcps:`"),
+        )
 }
 
 /// Lowercase hex SHA-256 of the configured system-prompt inputs: the composed

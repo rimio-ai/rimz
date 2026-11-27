@@ -8,6 +8,7 @@
 mod agent;
 mod builtin;
 mod catalog;
+mod contest;
 pub mod customization;
 pub(crate) mod frontmatter;
 pub mod inventory;
@@ -17,6 +18,8 @@ mod team;
 mod traits;
 
 pub use agent::DefinitionSource;
+pub use contest::NativeWin;
+pub(crate) use contest::launch_warning;
 pub(in crate::config) use project::{ProjectProfilesInput, resolve_project_profiles};
 pub use traits::ConsensusPieces;
 
@@ -540,6 +543,8 @@ struct SharedLoadState {
     home: PathBuf,
     /// Every kind base's frontmatter, a built-in one included.
     bases: BTreeMap<String, AgentFrontmatter>,
+    /// The file of each home or pack kind base; a built-in one has none.
+    base_paths: BTreeMap<String, PathBuf>,
     /// The rows of each built-in kind base in the agents and the subagents namespace, which a
     /// definition's launch takes as its parent and no profile table lists.
     built_in: BTreeMap<String, (Profile, Profile)>,
@@ -743,6 +748,7 @@ impl BaseLoad<'_> {
             shared: Arc::new(SharedLoadState {
                 home: self.home.to_owned(),
                 bases: BTreeMap::from([(name.to_owned(), fm.clone())]),
+                base_paths: BTreeMap::from([(name.to_owned(), path.to_owned())]),
                 built_in: BTreeMap::new(),
                 failed_bases: BTreeMap::new(),
                 skills: Arc::clone(self.skills),
@@ -1202,6 +1208,7 @@ fn load_resolved(
             shared: Arc::new(SharedLoadState {
                 home: agents_home.to_owned(),
                 bases: bases.clone(),
+                base_paths: base_paths.clone(),
                 built_in: built_in.clone(),
                 failed_bases: failed_bases.clone(),
                 skills: Arc::clone(&catalog),
@@ -1292,6 +1299,7 @@ fn load_resolved(
     let shared = Arc::new(SharedLoadState {
         home: agents_home.to_owned(),
         bases,
+        base_paths,
         built_in,
         failed_bases,
         skills: Arc::clone(&catalog),

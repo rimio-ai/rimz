@@ -273,6 +273,7 @@ fn fallback_contexts(input: &ProjectProfilesInput<'_>) -> LoadContexts {
     let shared = Arc::new(SharedLoadState {
         home: input.agents_home.to_owned(),
         bases,
+        base_paths: BTreeMap::new(),
         built_in,
         failed_bases,
         skills: catalog,

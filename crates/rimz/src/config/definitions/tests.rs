@@ -1844,7 +1844,7 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
             TEAM_STAGES,
             format!("{TEAM_ROLES}\n    tools: [Agent, Bash]"),
             "Pipeline.",
-            "lists the Agent tool",
+            "lists `Agent` in `tools:` and sets `subagents:`",
         ),
         (
             TEAM_STAGES,
@@ -3939,7 +3939,10 @@ fn subagent_allowlists_replace_native_delegation() {
         "model: astra\ntools: [Agent]\nsubagents: []",
         "",
     );
-    error(root.path(), "lists the Agent tool");
+    error(
+        root.path(),
+        "lists `Agent` in `tools:` and sets `subagents:`",
+    );
     definition(
         root.path(),
         "agents/probe.md",
@@ -3961,21 +3964,6 @@ fn subagent_allowlists_replace_native_delegation() {
         "",
     );
     error(root.path(), "a child cannot launch again");
-    for doorway in ["rimz-ask", "rimz"] {
-        definition(
-            root.path(),
-            "agents/probe.md",
-            &format!("model: astra\ncapabilities: [read, ask, {doorway}]"),
-            "",
-        );
-        error(
-            root.path(),
-            &format!(
-                "lists `ask` and `{doorway}` in `capabilities:`; the rimz doorway replaces the \
-                 native one, so drop whichever this seat does not use"
-            ),
-        );
-    }
 }
 
 #[test]
@@ -5121,9 +5109,12 @@ fn kind_bases_take_every_profile_field_and_refuse_by_name() {
         ),
         (
             "tools: [Agent]\nsubagents: [general]",
-            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native \
-             one, so drop whichever this seat does not use"
-                .to_owned(),
+            format!(
+                "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat \
+                 delegates, so keep the one it uses: remove `Agent` from `tools:` in {base}, \
+                 or drop `subagents:` from {base}",
+                base = base.display()
+            ),
         ),
         (
             "subagents: [missing]",
@@ -5443,11 +5434,13 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
             .collect::<Vec<_>>(),
         [(
             root.path().join("agents/writer.md"),
-            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one, \
-             so drop whichever this seat does not use"
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
+            format!(
+                "lists `Agent` in `tools:` of {base} and sets `subagents:`; each says how this \
+                 seat delegates, so keep the one it uses: remove `Agent` from `tools:` in \
+                 {base}, or drop `subagents:` from {writer}",
+                base = root.path().join("agents/claude.md").display(),
+                writer = root.path().join("agents/writer.md").display()
+            )
         )]
     );
 }
@@ -6136,21 +6129,18 @@ fn plus_subagents_meet_the_plain_refusals_and_a_bare_rimz_skill_is_the_users() {
         (
             "agents/probe.md",
             "agent: claude\ntools: [Bash, Agent]\nsubagents: [+general]",
-            "sets `subagents:` and lists the Agent tool; the rimz doorway replaces the native one",
+            "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat delegates",
         ),
         (
             "agents/probe.md",
             "agent: claude\ntools: [Bash, Default]\nsubagents: [+general]",
             "sets `subagents:` and lists the `Default` tool preset, which holds the Agent tool; \
-             the rimz doorway replaces the native one, so drop `subagents:`, or list the tools \
-             by name without Agent",
+             RimZ's delegation replaces the native one, so drop `subagents:` from",
         ),
         (
             "agents/probe.md",
             "agent: claude\ntools: [default, Agent]\nsubagents: [+general]",
-            "sets `subagents:` and lists the `default` tool preset, which holds the Agent tool; \
-             the rimz doorway replaces the native one, so drop `subagents:`, or list the tools \
-             by name without Agent",
+            "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat delegates",
         ),
     ] {
         let root = fixture();
@@ -8151,6 +8141,17 @@ fn resolve_synthetic_agents(
     home: &Path,
     rows: Vec<(&str, AgentFrontmatter, TomlExtras)>,
 ) -> LoadedDefinitions {
+    resolve_synthetic_rows(home, rows, |name| {
+        home.join(format!("synthetic/{name}.toml"))
+    })
+}
+
+/// [`resolve_synthetic_agents`] with each row read from `path(name)`.
+fn resolve_synthetic_rows(
+    home: &Path,
+    rows: Vec<(&str, AgentFrontmatter, TomlExtras)>,
+    path: impl Fn(&str) -> PathBuf,
+) -> LoadedDefinitions {
     definition(
         home,
         "agents/claude.md",
@@ -8166,7 +8167,7 @@ fn resolve_synthetic_agents(
         tree.definitions.insert(
             name.to_owned(),
             Definition {
-                path: home.join(format!("synthetic/{name}.toml")),
+                path: path(name),
                 pack: None,
                 body: String::new(),
                 frontmatter,
@@ -8186,6 +8187,40 @@ fn resolve_synthetic_agents(
         &mut loaded,
     );
     loaded
+}
+
+/// Two rows of one TOML file are two members of a chain, so a child row names the file its parent
+/// row's list is in, not a file below it.
+#[test]
+fn a_parent_row_of_the_same_toml_file_holds_its_own_list() {
+    let root = fixture();
+    let config = root.path().join("project/config.toml");
+    let mut parent = synthetic_fm("claude", None);
+    parent.tools = Some(vec!["Bash".to_owned(), "AskUserQuestion".to_owned()]);
+    let child = synthetic_fm("parent", None);
+    let loaded = resolve_synthetic_rows(
+        root.path(),
+        vec![
+            ("parent", parent, TomlExtras::default()),
+            ("child", child, TomlExtras::default()),
+        ],
+        |_| config.clone(),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let config = config.display();
+    assert_eq!(
+        loaded.agent_profiles.0["child"]
+            .native_wins(true)
+            .into_iter()
+            .map(|win| win.message)
+            .collect::<Vec<_>>(),
+        [format!(
+            "{config} lists `AskUserQuestion` in `tools:` and gets `rimz-ask` from RimZ's \
+             default (no `mcps`); using the native question tool. To ask through RimZ instead, \
+             remove `AskUserQuestion` from `tools:` in {config} (`tools: [Bash, AskUserQuestion]` \
+             becomes `tools: [Bash]`)"
+        )]
+    );
 }
 
 fn synthetic_fm(agent: &str, model: Option<&str>) -> AgentFrontmatter {
@@ -9029,4 +9064,405 @@ fn an_agent_override_from_a_kind_base_onto_a_kind_on_the_built_in_base_takes_tha
     );
     let bare = launch_cell(&loaded, "codex", Some("antigravity"));
     assert_eq!((bare.system_prompt_file, bare.tools), (None, None));
+}
+
+/// A named native tool outranks a blanket RimZ grant: the definition loads, `rimz` grants every
+/// capability but the one its list names the native tool for, and the definition warns naming
+/// each side's file, with a before and after line only where the entry to drop is in its own
+/// file. Two named entries refuse, naming both files. Claude's preset keeps RimZ winning, and a
+/// subagent definition, which never keeps either native tool, is not warned.
+#[test]
+fn a_named_native_tool_outranks_a_blanket_rimz_grant() {
+    use crate::mcp::catalog::Capability;
+    let root = fixture();
+    let path = |name: &str| root.path().join(name).display().to_string();
+    let (probe, parent, base) = (
+        path("agents/probe.md"),
+        path("agents/parent.md"),
+        path("agents/codex.md"),
+    );
+    let wins = |name: &str| -> Vec<(Capability, String)> {
+        let loaded = clean(root.path());
+        let profiles = if name.starts_with("child") {
+            &loaded.subagent_profiles
+        } else {
+            &loaded.agent_profiles
+        };
+        profiles.0[name]
+            .native_wins(true)
+            .into_iter()
+            .map(|win| (win.capability, win.message))
+            .collect()
+    };
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "model: astra\ncapabilities: [read, ask, rimz]",
+        "",
+    );
+    let grant = clean(root.path()).agent_profiles.0["probe"]
+        .tools
+        .as_ref()
+        .and_then(crate::agents::ToolSet::rimz)
+        .unwrap()
+        .to_vec();
+    assert_eq!(
+        [Capability::Ask, Capability::Lsp].map(|capability| grant
+            .iter()
+            .any(|entry| entry.capability() == Some(capability))),
+        [false, true]
+    );
+    assert!(grant.iter().any(crate::config::RimzEntry::is_server));
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Ask,
+            format!(
+                "{probe} lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz` in \
+                 `capabilities:`; using the native question tool. To ask through RimZ instead, \
+                 remove `ask` from `capabilities:` in {probe} (`capabilities: [read, ask, rimz]` \
+                 becomes `capabilities: [read, rimz]`)"
+            )
+        )]
+    );
+    for (mcps, source) in [
+        ("", "RimZ's default (no `mcps`)"),
+        ("\nmcps: ['*']", "`*` in `mcps:`"),
+        ("\nmcps: [rimz, github]", "`rimz` in `mcps:`"),
+    ] {
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("model: astra\ntools: [Bash, AskUserQuestion, Agent]{mcps}"),
+            "",
+        );
+        assert_eq!(
+            wins("probe"),
+            [
+                (
+                    Capability::Subagents,
+                    format!(
+                        "{probe} lists `Agent` in `tools:` and gets `rimz-subagents` from \
+                         {source}; using native delegation. To delegate through RimZ instead, \
+                         remove `Agent` from `tools:` in {probe} (`tools: [Bash, \
+                         AskUserQuestion, Agent]` becomes `tools: [Bash, AskUserQuestion]`)"
+                    )
+                ),
+                (
+                    Capability::Ask,
+                    format!(
+                        "{probe} lists `AskUserQuestion` in `tools:` and gets `rimz-ask` from \
+                         {source}; using the native question tool. To ask through RimZ instead, \
+                         remove `AskUserQuestion` from `tools:` in {probe} (`tools: [Bash, \
+                         AskUserQuestion, Agent]` becomes `tools: [Bash, Agent]`)"
+                    )
+                ),
+            ]
+        );
+    }
+    for (fields, message) in [
+        (
+            "capabilities: [read, ask, rimz-ask]",
+            format!(
+                "lists `ask` in `capabilities:` and names `rimz-ask` in `capabilities:`; each \
+                 says how this seat asks, so keep the one it uses: remove `ask` from \
+                 `capabilities:` in {probe}, or remove `rimz-ask` from `capabilities:` in {probe}"
+            ),
+        ),
+        (
+            "tools: [Bash, AskUserQuestion]\nmcps: ['*', rimz-ask]",
+            "lists `AskUserQuestion` in `tools:` and names `rimz-ask` in `mcps:`".to_owned(),
+        ),
+        (
+            "tools: [Bash, AskUserQuestion, Skill]\nskills: [rimz-ask]",
+            "lists `AskUserQuestion` in `tools:` and names `rimz-ask` in `skills:`".to_owned(),
+        ),
+        (
+            "tools: [Bash, Agent]\nmcps: [rimz-subagents]",
+            "lists `Agent` in `tools:` and names `rimz-subagents` in `mcps:`".to_owned(),
+        ),
+        (
+            "tools: [Bash, Agent, Skill]\nskills: [rimz-subagents]",
+            "lists `Agent` in `tools:` and names `rimz-subagents` in `skills:`".to_owned(),
+        ),
+        (
+            "agent: claude\ntools: [Bash, Agent(Explore), Agent(Plan)]\nmcps: []\nsubagents: []",
+            format!(
+                "lists `Agent(Explore)` and `Agent(Plan)` in `tools:` and sets `subagents:`; each \
+                 says how this seat delegates, so keep the one it uses: remove `Agent(Explore)` \
+                 and `Agent(Plan)` from `tools:` in {probe}, or drop `subagents:` from {probe}"
+            ),
+        ),
+        (
+            "tools: [Bash, Agent]\nmcps: []\nsubagents: []",
+            format!(
+                "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat \
+                 delegates, so keep the one it uses: remove `Agent` from `tools:` in {probe}, or \
+                 drop `subagents:` from {probe}"
+            ),
+        ),
+    ] {
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &(if fields.starts_with("agent:") {
+                fields.to_owned()
+            } else {
+                format!("model: astra\n{fields}")
+            }),
+            "",
+        );
+        error(root.path(), &message);
+    }
+    // Each side names the file whose own list holds its entry, through a `+` list.
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "model: astra\ncapabilities: [read, ask, rimz]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: parent\ncapabilities: [+bash]",
+        "",
+    );
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Ask,
+            format!(
+                "{parent} lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz` in \
+                 `capabilities:`; using the native question tool. To ask through RimZ instead, \
+                 remove `ask` from `capabilities:` in {parent}"
+            )
+        )]
+    );
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "model: astra\ncapabilities: [read, ask]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: parent\ncapabilities: [+rimz-ask]",
+        "",
+    );
+    error(
+        root.path(),
+        &format!(
+            "lists `ask` in `capabilities:` of {parent} and names `rimz-ask` in \
+             `capabilities:`; each says how this seat asks, so keep the one it uses: remove `ask` \
+             from `capabilities:` in {parent}, or delete the `capabilities:` line in {probe}"
+        ),
+    );
+    std::fs::remove_file(root.path().join("agents/parent.md")).unwrap();
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Foundation.\ntools: [Bash, AskUserQuestion]\n---\nBase.",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "model: astra\nmcps: ['*']",
+        "",
+    );
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Ask,
+            format!(
+                "{base} lists `AskUserQuestion` in `tools:` and gets `rimz-ask` from `*` in \
+                 `mcps:` of {probe}; using the native question tool. To ask through RimZ instead, \
+                 remove `AskUserQuestion` from `tools:` in {base}"
+            )
+        )]
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Foundation.\n---\nBase.",
+    );
+    // Claude's preset ranks with neither side: RimZ wins, and `subagents:` beside it refuses.
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [default]",
+        "",
+    );
+    assert_eq!(wins("probe"), []);
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [default]\nsubagents: []",
+        "",
+    );
+    error(
+        root.path(),
+        "lists the `default` tool preset, which holds the Agent tool",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "model: astra\ntools: [Bash]",
+        "",
+    );
+    definition(
+        root.path(),
+        "subagents/child.md",
+        "model: astra\ncapabilities: [read, ask, rimz]",
+        "",
+    );
+    assert_eq!(wins("child"), []);
+    // A native entry claims only where the kind renders the tool: Pi has no `Agent`, and amp
+    // applies no tools list, so neither warns nor refuses there.
+    for (fields, claimed) in [
+        (
+            "agent: pi\ntools: [Read, AskUserQuestion, Agent]",
+            vec![Capability::Ask],
+        ),
+        (
+            "agent: pi\ntools: [Read, Agent]\nmcps: []\nsubagents: []",
+            Vec::new(),
+        ),
+        (
+            "agent: amp\ntools: [Bash, AskUserQuestion, Agent]",
+            Vec::new(),
+        ),
+    ] {
+        definition(root.path(), "agents/probe.md", fields, "");
+        let claimed_now: Vec<Capability> = wins("probe").into_iter().map(|(c, _)| c).collect();
+        assert_eq!(claimed_now, claimed, "{fields}");
+    }
+    // The fix drops every entry that names the tool, and deletes the key where a `+` list would be
+    // left empty rather than replace what the chain below writes; a plain list left empty becomes
+    // `key: []`, since deleting it would bring back the list below or every tool.
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Bash, Agent(Explore), Agent(Plan)]",
+        "",
+    );
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Subagents,
+            format!(
+                "{probe} lists `Agent(Explore)` and `Agent(Plan)` in `tools:` and gets \
+                 `rimz-subagents` from RimZ's default (no `mcps`); using native delegation. To \
+                 delegate through RimZ instead, remove `Agent(Explore)` and `Agent(Plan)` from \
+                 `tools:` in {probe} (`tools: [Bash, Agent(Explore), Agent(Plan)]` becomes \
+                 `tools: [Bash]`)"
+            )
+        )]
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Agent]",
+        "",
+    );
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Subagents,
+            format!(
+                "{probe} lists `Agent` in `tools:` and gets `rimz-subagents` from RimZ's default \
+                 (no `mcps`); using native delegation. To delegate through RimZ instead, remove \
+                 `Agent` from `tools:` in {probe} (`tools: [Agent]` becomes `tools: []`)"
+            )
+        )]
+    );
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "model: astra\ncapabilities: [read, rimz]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: parent\ncapabilities: [+ask]",
+        "",
+    );
+    assert_eq!(
+        wins("probe"),
+        [(
+            Capability::Ask,
+            format!(
+                "{probe} lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz` in \
+                 `capabilities:` of {parent}; using the native question tool. To ask through RimZ \
+                 instead, delete the `capabilities:` line in {probe}"
+            )
+        )]
+    );
+    std::fs::remove_file(root.path().join("agents/parent.md")).unwrap();
+    // A blanket that reaches the capability neither served nor as a callable skill warns nothing.
+    for (fields, server, warned) in [
+        ("tools: [Bash, AskUserQuestion]", false, false),
+        ("tools: [Bash, AskUserQuestion, Skill]", false, true),
+        (
+            "tools: [Bash, AskUserQuestion, Skill]\nskills: []",
+            false,
+            false,
+        ),
+        ("tools: [Bash, AskUserQuestion]", true, true),
+    ] {
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("agent: claude\n{fields}"),
+            "",
+        );
+        let loaded = clean(root.path());
+        let row = &loaded.agent_profiles.0["probe"];
+        assert_eq!(
+            !row.native_wins(server).is_empty(),
+            warned,
+            "{fields} {server}"
+        );
+    }
+    // A kind base's own lists warn on its row, which carries no definition.
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Foundation.\ncapabilities: [read, ask, rimz]\n---\nBase.",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: claude\ntools: [Bash]",
+        "",
+    );
+    assert_eq!(
+        wins("codex"),
+        [(
+            Capability::Ask,
+            format!(
+                "{base} lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz` in \
+                 `capabilities:`; using the native question tool. To ask through RimZ instead, \
+                 remove `ask` from `capabilities:` in {base} (`capabilities: [read, ask, rimz]` \
+                 becomes `capabilities: [read, rimz]`)"
+            )
+        )]
+    );
+    // A launch whose lists no definition settled names the entry in its request's shape.
+    assert_eq!(
+        launch_warning(
+            "codex",
+            Capability::Ask,
+            "`rimz` in `capabilities:`",
+            true,
+            None,
+            Some(Path::new(&base)),
+        ),
+        format!(
+            "this launch lists `ask` in `capabilities:` and gets `rimz-ask` from `rimz` in \
+             `capabilities:`; using the native question tool. To ask through RimZ instead, remove \
+             `ask` from `capabilities:` in the launch's profile or {base}"
+        )
+    );
 }

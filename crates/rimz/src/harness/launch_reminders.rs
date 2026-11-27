@@ -211,10 +211,15 @@ impl LaunchReminders {
     }
 
     /// The skills withheld from the model, on every host kind: the skill of each capability
-    /// the launch is denied (`LaunchReminders::denied_capabilities`), then the hidden ones.
+    /// the launch is denied (`LaunchReminders::denied_capabilities`) or leaves to the provider's
+    /// own tool (`ExecRequest::yields_to_native`), then the hidden ones.
     pub(super) fn withheld_skills(&self, request: &ExecRequest) -> Vec<&'static str> {
-        self.denied_capabilities(request)
+        let denied = self.denied_capabilities(request);
+        Capability::ALL
             .into_iter()
+            .filter(|capability| {
+                denied.contains(capability) || request.yields_to_native(*capability)
+            })
             .map(Capability::name)
             .chain(self.hidden_skills(request))
             .collect()
@@ -236,12 +241,34 @@ impl LaunchReminders {
     }
 
     /// The launch can use `capability`, through its MCP tools or its skill. Under a RimZ grant
-    /// the skill counts only when it is on disk, as a `skills` list is checked on disk.
+    /// the skill counts only when it is on disk, as a `skills` list is checked on disk. A
+    /// capability the launch leaves to the provider's own tool it cannot use.
     fn callable(&self, request: &ExecRequest, capability: Capability) -> bool {
+        if request.yields_to_native(capability) {
+            return false;
+        }
         let name = capability.name();
         self.reach(request, capability) == Reach::Tools(capability)
             || (request.skill_callable(&self.hidden_skills(request), name)
                 && (request.skill_grant().is_none() || self.rimz_skills.contains(name)))
+    }
+
+    /// Whether a blanket grant would reach `capability` but for the provider's own tool the launch
+    /// keeps (`ExecRequest::yields_to_native`): `serves`, RimZ's server on for a kind that takes
+    /// it, or its skill callable, on disk under a RimZ grant, whose lowering left the capability
+    /// out. `Profile::native_wins` judges the same reach offline.
+    pub(super) fn reached_past_native(
+        &self,
+        request: &ExecRequest,
+        capability: Capability,
+        serves: bool,
+    ) -> bool {
+        let name = capability.name();
+        serves
+            || match request.skill_grant() {
+                Some(_) => !request.no_skill_tool && self.rimz_skills.contains(name),
+                None => request.skill_callable(&self.hidden_skills(request), name),
+            }
     }
 
     /// The launch can query the room's shared language servers.
@@ -297,7 +324,9 @@ impl LaunchReminders {
     /// leader, on every base, since neither reaches the user; elsewhere where the launch reaches
     /// `rimz-ask`, its `ask` tool served or its skill callable and on disk. Unlike
     /// `disable_native_subagents`, a callable skill counts only on disk, since a launch with
-    /// neither would lose asking. Any other launch on a built-in kind base keeps its own.
+    /// neither would lose asking. Any other launch on a built-in kind base keeps its own, as does
+    /// one whose tools list names the native tool beside a blanket grant
+    /// (`ExecRequest::yields_to_native`), which reaches no `rimz-ask`.
     pub(super) fn disable_native_ask(&self, request: &ExecRequest) -> bool {
         let ask = Capability::Ask;
         if self.denied_capabilities(request).contains(&ask) {

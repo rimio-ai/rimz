@@ -5083,3 +5083,175 @@ fn a_scoped_preflight_refuses_a_listed_skill_its_view_lacks() {
         )
     );
 }
+
+/// A launch whose tools list names a capability's native tool, while RimZ reaches the capability
+/// only through a blanket grant (`rimz` in its grant, `mcps` holding `*` or `rimz`, or no
+/// `mcps`), keeps the native tool and is neither served the capability's MCP tools nor offered
+/// its skill, on every action. A named RimZ entry, Claude's preset, or no tools list keeps RimZ
+/// winning with the native tool switched off. Pi, which has no `Agent` tool, claims only the
+/// question.
+#[test]
+fn a_named_native_tool_outranks_a_blanket_rimz_grant_on_every_action() {
+    use crate::harness::subagent_policy::{
+        SubagentCatalog, SubagentProfile, SubagentProfileSource,
+    };
+    use crate::mcp::catalog::Capability;
+
+    let reminders = LaunchReminders {
+        mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+        rimz_skills: ["rimz-ask".to_owned(), "rimz-subagents".to_owned()].into(),
+        subagent_catalog: Some(SubagentCatalog::Available(vec![SubagentProfile {
+            name: "explorer".into(),
+            source: SubagentProfileSource::Profile,
+            agent: Some("claude".into()),
+            model: None,
+            effort: None,
+            description: None,
+        }])),
+        ..LaunchReminders::default()
+    };
+    // `capabilities: [read, ask, rimz]` lowers to every capability but `rimz-ask`, then `rimz`.
+    let all_but_ask: Vec<crate::config::RimzEntry> = Capability::ALL
+        .into_iter()
+        .filter(|capability| *capability != Capability::Ask)
+        .map(|capability| crate::config::RimzEntry::new(capability, None))
+        .chain([crate::config::RimzEntry::server(None)])
+        .collect();
+    let both = ["Bash", "AskUserQuestion", "Agent", "Skill"].as_slice();
+    let cases = [
+        ("no mcps", Some(both), None, None, (true, true)),
+        (
+            "mcps *",
+            Some(both),
+            Some(["*"].as_slice()),
+            None,
+            (true, true),
+        ),
+        (
+            "mcps rimz",
+            Some(both),
+            Some(["rimz"].as_slice()),
+            None,
+            (true, true),
+        ),
+        (
+            "capabilities rimz",
+            Some(["Read", "AskUserQuestion", "Skill"].as_slice()),
+            None,
+            Some(all_but_ask),
+            (true, false),
+        ),
+        (
+            "named rimz-ask",
+            Some(["Bash", "AskUserQuestion", "Skill"].as_slice()),
+            Some(["*", "rimz-ask"].as_slice()),
+            None,
+            (false, false),
+        ),
+        (
+            "claude preset",
+            Some(["default"].as_slice()),
+            None,
+            None,
+            (false, false),
+        ),
+        ("no lists", None, None, None, (false, false)),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["claude", "codex"] {
+        for action in [
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+            ExecAction::Resume {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+            ExecAction::Fork {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+        ] {
+            for (case, tools, mcps, grant, kept) in cases.clone() {
+                if case == "claude preset" && kind != "claude" {
+                    continue;
+                }
+                let mut invocation = request(kind, action.clone());
+                invocation.tools =
+                    tools.map(|tools| tools.iter().map(|tool| (*tool).to_owned()).collect());
+                invocation.mcps = mcps
+                    .map(|entries| entries.iter().map(|entry| entry.parse().unwrap()).collect());
+                invocation.rimz_capabilities = grant;
+                let process = compile_agent_process_with_extra_env(
+                    None,
+                    Path::new("/checkout"),
+                    &invocation,
+                    Path::new("/checkout"),
+                    &BTreeMap::new(),
+                    &reminders,
+                )
+                .unwrap();
+                let argv = &process.provider_argv;
+                let native = if kind == "claude" {
+                    let denied = |tool: &str| {
+                        argv.iter().enumerate().any(|(index, arg)| {
+                            arg == "--disallowedTools"
+                                && argv[index + 1..]
+                                    .iter()
+                                    .take_while(|arg| !arg.starts_with('-'))
+                                    .any(|value| value.split(',').any(|name| name == tool))
+                        })
+                    };
+                    (!denied("AskUserQuestion"), !denied("Agent"))
+                } else {
+                    let off = |key: &str| {
+                        argv.windows(2)
+                            .any(|pair| pair[0] == "-c" && pair[1] == format!("{key}=false"))
+                    };
+                    (
+                        !off("tools.experimental_request_user_input.enabled"),
+                        !off("agents.enabled"),
+                    )
+                };
+                let served = reminders.mcp_capabilities(&invocation);
+                let offered: Vec<String> = reminders
+                    .rimz_capabilities(&invocation)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+                let reach = |capability: Capability| {
+                    (
+                        served.contains(&capability),
+                        offered.iter().any(|name| name == capability.name()),
+                    )
+                };
+                let case = format!("{kind} {action:?} {case}");
+                actual.push((
+                    case.clone(),
+                    native,
+                    reach(Capability::Ask),
+                    reach(Capability::Subagents),
+                ));
+                expected.push((case, kept, (!kept.0, !kept.0), (!kept.1, !kept.1)));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+    let mut pi = request(
+        "pi",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    pi.tools = Some(both.iter().map(|tool| (*tool).to_owned()).collect());
+    assert_eq!(
+        [Capability::Ask, Capability::Subagents].map(|capability| (
+            pi.yields_to_native(capability),
+            reminders.mcp_capabilities(&pi).contains(&capability)
+        )),
+        [(true, false), (false, true)]
+    );
+}

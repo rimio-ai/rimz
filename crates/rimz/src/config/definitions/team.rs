@@ -536,7 +536,7 @@ impl SeatLoader<'_> {
             .as_ref()
             .map(|source| source.writers().clone())
             .unwrap_or_default();
-        seat_writers.overlay_from(&role_overlay, &seat_info.profile_name);
+        seat_writers.overlay_from(&role_overlay, &seat_info.profile_name, path);
         // Resolve the overlaid leaf through the standalone checks/defaults with its already-rendered
         // ancestor crafts in place, so the load-time seat and on-demand builds share one path.
         let tree = Namespace {
