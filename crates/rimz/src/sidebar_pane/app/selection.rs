@@ -399,18 +399,19 @@ fn key_outcome(
                     else {
                         return InputOutcome::default();
                     };
-                    let Some(pages) = ui
-                        .cursor_pager
-                        .as_ref()
-                        .filter(|(row, _)| *row == row_id)
-                        .map(|&(_, pages)| pages)
-                    else {
+                    let on_screen = ui.interactions.delegation_pager(&row_id);
+                    let Some(pages) = on_screen.or_else(|| {
+                        ui.cursor_pager
+                            .as_ref()
+                            .filter(|(row, _)| *row == row_id)
+                            .map(|&(_, pages)| pages)
+                    }) else {
                         return InputOutcome::default();
                     };
                     // A pager the wheel scrolled off screen comes back into view to show the page.
                     // The done pile ends its card, so the card's last line is the pager, or the
                     // last listed entry once that page lists the rest.
-                    let intent = if ui.interactions.delegation_pager(&row_id).is_some() {
+                    let intent = if on_screen.is_some() {
                         ViewportIntent::Hold
                     } else {
                         ViewportIntent::RevealCardEnd(row_id.clone())
