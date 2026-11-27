@@ -117,6 +117,11 @@ impl<'a> Cursor<'a> {
     /// the expression's own line, and after a line break one that JavaScript joins to it.
     fn continuation(&self, same_line: bool) -> Option<&'a str> {
         let rest = self.rest();
+        // After a line break, `++` and `--` start a statement: their postfix forms take no line
+        // break, so JavaScript ends the statement before them.
+        if !same_line && (rest.starts_with("++") || rest.starts_with("--")) {
+            return None;
+        }
         let word = rest
             .find(|char: char| !(char.is_alphanumeric() || char == '_' || char == '$'))
             .unwrap_or(rest.len());
