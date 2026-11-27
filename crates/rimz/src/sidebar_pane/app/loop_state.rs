@@ -64,7 +64,7 @@ use super::notify::{BellNotice, emit_terminal_notification};
 use super::paint::{FramePainter, PaintKind};
 use super::selection::{
     InputEffect, InputOutcome, click_focus_pane, finish_search, handle_key, handle_mouse_click,
-    handle_scroll, reconcile_selection, row_index_of_pane, set_make_up_filter,
+    handle_scroll, reconcile_dashboard, reconcile_selection, row_index_of_pane, set_make_up_filter,
 };
 use super::socket::{heartbeat_write_due, write_heartbeat};
 use super::state::{
@@ -3277,6 +3277,9 @@ impl PaneState {
                 .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
                 .map(|row| row.id.clone());
             let entry_changed = v.state.entry_cursor != previous_entry;
+            if selected_row != previous_row {
+                reconcile_dashboard(v.state, &v.context.current);
+            }
             if selected_row != previous_row || entry_changed {
                 v.context.pending_input_focus = None;
                 v.state.request(render::ViewportIntent::OwnInput);

@@ -81,7 +81,7 @@ expression: strip_sgr(&ansi)
    󰕰 ━━━━━━━╺╺─────────────────────────── 13.0% 󰪥  2h
    󰿦 132k · 󱥸 114k  13k  5k  16k
 
- ─── Claude ──── Codex ──── Pi ──── Open Code ───────
+ ─── Open Code ──── Claude ──── Codex ──── Pi ───────
 
            OpenAI OAuth · v0.7.2
   ▗▛▀▀▀▜▖   14   9M  6M  1M 󱥸 980k        $156.00

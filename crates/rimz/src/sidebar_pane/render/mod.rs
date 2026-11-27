@@ -436,21 +436,32 @@ pub(in crate::sidebar_pane) fn unread_pet_row_ids(
 }
 
 /// The provider block the dashboard shows: the manual tab pick while its
-/// panel is still on the dashboard, else the block of the live
-/// selection-derived kind ([`selected_agent_kind`]), whichever account the
-/// card runs on, else the block of the last agent kind the dashboard followed
-/// while one is still present, else the first panel. `None` only when the
-/// dashboard is empty.
+/// panel is still on the dashboard, else the rail's lead
+/// ([`dashboard_lead`]). A pick changes which tab is open, never the rail's
+/// order. `None` only when the dashboard is empty.
 pub(in crate::sidebar_pane) fn active_dashboard_tab(
     snapshot: &SidebarSnapshot,
     ui: &ViewState,
 ) -> Option<crate::ids::LoginKey> {
+    dashboard_pick(snapshot, ui).or_else(|| dashboard_lead(snapshot, ui))
+}
+
+/// The manual tab pick while its panel is still on the dashboard.
+fn dashboard_pick(snapshot: &SidebarSnapshot, ui: &ViewState) -> Option<crate::ids::LoginKey> {
+    ui.toggles
+        .dashboard_tab
+        .as_ref()
+        .filter(|tab| dashboard_has_tab(snapshot, &tab.login))
+        .map(|tab| tab.login.clone())
+}
+
+/// The focused provider the tab rail leads with: the block of the live
+/// selection-derived kind ([`selected_agent_kind`]), whichever account the
+/// card runs on, else the block of the last agent kind the dashboard followed
+/// while one is still present, else the first panel. `None` only when the
+/// dashboard is empty.
+fn dashboard_lead(snapshot: &SidebarSnapshot, ui: &ViewState) -> Option<crate::ids::LoginKey> {
     let panels = &snapshot.providers;
-    if let Some(tab) = &ui.toggles.dashboard_tab
-        && dashboard_has_tab(snapshot, &tab.login)
-    {
-        return Some(tab.login.clone());
-    }
     selected_agent_kind(snapshot, ui)
         .and_then(|kind| dashboard_tab_of_kind(snapshot, &kind))
         .or_else(|| {
@@ -473,17 +484,21 @@ pub(in crate::sidebar_pane) fn dashboard_tab_of_kind(
         .map(|panel| panel.login_key())
 }
 
-pub(in crate::sidebar_pane) fn dashboard_tabs(
+/// The tab rail's order, the one the rail paints and `←`/`→` step through: the
+/// lead ([`dashboard_lead`]), then the rest in snapshot order.
+pub(in crate::sidebar_pane) fn dashboard_rail(
     snapshot: &SidebarSnapshot,
+    ui: &ViewState,
 ) -> Vec<crate::ids::LoginKey> {
-    snapshot
-        .providers
-        .iter()
+    sections::rail_order(&snapshot.providers, dashboard_lead(snapshot, ui).as_ref())
         .map(|panel| panel.login_key())
-        .collect::<Vec<_>>()
+        .collect()
 }
 
-fn dashboard_has_tab(snapshot: &SidebarSnapshot, login: &crate::ids::LoginKey) -> bool {
+pub(in crate::sidebar_pane) fn dashboard_has_tab(
+    snapshot: &SidebarSnapshot,
+    login: &crate::ids::LoginKey,
+) -> bool {
     snapshot
         .providers
         .iter()

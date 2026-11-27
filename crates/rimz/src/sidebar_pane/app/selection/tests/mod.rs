@@ -1,5 +1,7 @@
 use super::*;
-use crate::sidebar_pane::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
+use crate::sidebar_pane::app::fixtures::{
+    pane, provider, snapshot, snapshot_with_panes, workspace,
+};
 use crate::sidebar_pane::render;
 use crate::sidebar_pane::render::PresentationToggles;
 use crate::{MuxName, WorkspaceId};
@@ -327,39 +329,6 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
 }
 
 // ── The dashboard tab model ──────────────────────────────────────────────────
-
-/// A minimal provider panel — only `kind` matters to the tab model.
-fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
-    crate::store::snapshot::SidebarProviderPanel {
-        account: Default::default(),
-        kind: kind.to_owned(),
-        sub_provider: None,
-        account_scope: Default::default(),
-        entitlement: Default::default(),
-        account_key: None,
-        product_name: kind.to_owned(),
-        art: Vec::new(),
-        art_tints: Vec::new(),
-        color: 7,
-        color_rgb: None,
-        color_role: None,
-        version: None,
-        plan: None,
-        metered: false,
-        undecided: false,
-        alternates: Vec::new(),
-        remote_control: Default::default(),
-        active_sessions: 0,
-        spending: None,
-        day_budget: None,
-        month_budget: None,
-        extra_credits: None,
-        reset_credits: None,
-        redeem_forecast: None,
-        window_placeholders: Vec::new(),
-        windows: Vec::new(),
-    }
-}
 
 /// The clickable-block room (a claude agent row, then a process row) with a
 /// three-account dashboard — the tab-model fixture.

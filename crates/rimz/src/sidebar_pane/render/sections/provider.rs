@@ -452,6 +452,9 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
     pub(in crate::sidebar_pane::render) active_provider: Option<&'a crate::ids::LoginKey>,
+    /// The focused provider the tab rail leads with: the open tab whenever no
+    /// hand pick holds, and the rail's first tab whether or not one does.
+    pub(in crate::sidebar_pane::render) lead_provider: Option<&'a crate::ids::LoginKey>,
     pub(in crate::sidebar_pane::render) selected_sub_provider:
         Option<(crate::ids::AgentKind, &'a str)>,
     pub(in crate::sidebar_pane::render) last_sub_providers:
@@ -527,6 +530,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
     output.append(provider_tab_rail(
         context.theme,
         context.providers,
+        context.lead_provider,
         active_kind,
         context.width,
     ));
@@ -858,23 +862,28 @@ fn zip_provider_pet_lines(
 /// a leading `──` stub, then each tab in order, the active one a brand-filled
 /// bold chip (dark ink on the brand color) and the rest brand-colored labels
 /// at full strength resting in the line, separated and trailed by `─` fill in
-/// the hairline's soft gray. Every rail glyph is identical whichever tab is
-/// active — each tab reserves one rail cell and one pad space on each side of
-/// its name, and the pick moves as fill and weight alone — so a click changes
-/// color without a single cell of glyph motion. Under `NO_COLOR` the chip
-/// fill drops, and `┤ ├` caps paint into the active tab's reserved rail cells
-/// as the pick's shape instead. Labels are resolved product names — the rail
-/// carries the product-name role the tabbed header drops. Holds to one screen
-/// row: a tab that would overflow `width` is
-/// dropped whole (label and hit together), except that the active tab reserves
-/// its footprint first so the selected block always has a visible chip. The
-/// hit map stays in lockstep with the frame however many kinds register or
+/// the hairline's soft gray. Every rail glyph is identical whichever painted
+/// tab is active — each tab reserves one rail cell and one pad space on
+/// each side of its name, and the pick moves as fill and weight alone — so a
+/// click changes color without a single cell of glyph motion. Under `NO_COLOR`
+/// the chip fill drops, and `┤ ├` caps paint into the active tab's reserved
+/// rail cells as the pick's shape instead. Labels are resolved product names —
+/// the rail carries the product-name role the tabbed header drops. Tabs place
+/// in [`rail_order`], `lead` first, and hold to one screen row: the fill stops
+/// at the first tab that would overflow `width`, dropping it and every tab
+/// after it whole (label and hit together), so a later, shorter tab never
+/// shows past a hidden one. An active tab the fill would hide reserves its
+/// footprint first and paints at its rail-order position after the tabs that
+/// still fit beside it: a hand pick past the fill point, or a lead wider than
+/// the pane, which then holds a clipped chip alone.
+/// The hit map stays in lockstep with the frame however many kinds register or
 /// however narrow the pane.
 /// Returns one block containing the rail and its typed tab regions, with every
 /// click target spanning the full edge-to-edge footprint.
 fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
+    lead: Option<&crate::ids::LoginKey>,
     active_kind: &crate::ids::LoginKey,
     width: usize,
 ) -> RenderedBlock {
@@ -888,13 +897,14 @@ fn provider_tab_rail(
     spans.push(fill(stub));
     col += stub;
 
-    let selected = selected_provider_tabs(providers, active_kind, width, stub);
+    let order = rail_order(providers, lead).collect::<Vec<_>>();
+    let selected = selected_provider_tabs(&order, active_kind, width, stub);
 
-    let mut rendered = 0;
-    for (index, panel) in providers.iter().enumerate() {
-        if !selected[index] {
-            continue;
-        }
+    let painted = order
+        .iter()
+        .zip(selected)
+        .filter_map(|(panel, selected)| selected.then_some(panel));
+    for (rendered, panel) in painted.enumerate() {
         let gap = if rendered > 0 { RAIL_STUB } else { 0 };
         let active = panel.login_key() == *active_kind;
         let label = panel.product_name.as_str();
@@ -909,7 +919,6 @@ fn provider_tab_rail(
             HitTarget::ProviderTab(panel.login_key()),
         ));
         col += cells;
-        rendered += 1;
     }
     if col < width {
         spans.push(fill(width - col));
@@ -923,34 +932,66 @@ fn provider_tab_cells(panel: &SidebarProviderPanel) -> usize {
     text_width(&panel.product_name) + 4
 }
 
+/// The tab rail's order: the `lead` panel, then the rest in snapshot order. A
+/// lead that names no panel leaves the snapshot order as it is.
+pub(in crate::sidebar_pane::render) fn rail_order<'a>(
+    providers: &'a [SidebarProviderPanel],
+    lead: Option<&crate::ids::LoginKey>,
+) -> impl Iterator<Item = &'a SidebarProviderPanel> {
+    let lead = lead
+        .and_then(|lead| {
+            providers
+                .iter()
+                .position(|panel| panel.login_key() == *lead)
+        })
+        .unwrap_or(0);
+    providers.get(lead).into_iter().chain(
+        providers
+            .iter()
+            .enumerate()
+            .filter(move |(index, _)| *index != lead)
+            .map(|(_, panel)| panel),
+    )
+}
+
+/// Which tabs of `order` the rail paints: the prefix that fits, or, when that
+/// prefix leaves the active tab out, the active tab's footprint first and then
+/// the prefix of the rest that fits beside it.
 fn selected_provider_tabs(
-    providers: &[SidebarProviderPanel],
+    order: &[&SidebarProviderPanel],
     active_kind: &crate::ids::LoginKey,
     width: usize,
     stub: usize,
 ) -> Vec<bool> {
-    let active_index = providers
-        .iter()
-        .position(|panel| panel.login_key() == *active_kind);
-    let mut selected = vec![false; providers.len()];
-    let mut used = stub;
-    if let Some(index) = active_index
-        && used < width
-    {
-        selected[index] = true;
-        used = (used + provider_tab_cells(&providers[index])).min(width);
-    }
-    for (index, panel) in providers.iter().enumerate() {
-        if Some(index) == active_index {
-            continue;
-        }
-        let gap = RAIL_STUB * usize::from(selected.iter().any(|selected| *selected));
-        let cells = provider_tab_cells(panel);
-        if used + gap + cells <= width {
+    let fill = |selected: &mut [bool], mut used: usize, reserved: Option<usize>| {
+        for (index, panel) in order.iter().enumerate() {
+            if Some(index) == reserved {
+                continue;
+            }
+            let gap = RAIL_STUB * usize::from(selected.contains(&true));
+            let next = used + gap + provider_tab_cells(panel);
+            if next > width {
+                break;
+            }
             selected[index] = true;
-            used += gap + cells;
+            used = next;
         }
+    };
+    let mut selected = vec![false; order.len()];
+    fill(&mut selected, stub, None);
+    let Some(active) = order
+        .iter()
+        .position(|panel| panel.login_key() == *active_kind)
+    else {
+        return selected;
+    };
+    if selected[active] || stub >= width {
+        return selected;
     }
+    selected.fill(false);
+    selected[active] = true;
+    let used = (stub + provider_tab_cells(order[active])).min(width);
+    fill(&mut selected, used, Some(active));
     selected
 }
 

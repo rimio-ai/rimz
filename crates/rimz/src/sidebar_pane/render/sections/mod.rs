@@ -47,7 +47,7 @@ pub(crate) use provider::DashboardMode;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{
-    DashboardContext, dashboard_block, fleet_store_lines, fleet_total_lines,
+    DashboardContext, dashboard_block, fleet_store_lines, fleet_total_lines, rail_order,
 };
 #[cfg(test)]
 pub(super) use worktree::worktree_group_lines_projected;

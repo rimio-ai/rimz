@@ -973,7 +973,7 @@ Provider budgets belong to an account, so they sit in a fixed panel at the botto
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h
 ```
 
-With `provider_tabs = "auto"` (the default), two providers stack and three or more share the panel under a tab rail, one block at a time. The active tab follows the selected card's provider, holds the last agent's provider for a process row, and falls to the first tab only when neither is available. `←`, `→`, or a click picks a tab by hand until you select a card of another provider. Under `NO_COLOR` the active tab is marked `┤ Claude ├`. `[theme.display]` sets tabs or stacking with `provider_tabs`, the providers and their order with `provider_list`, and the most stacked blocks with `max_provider_blocks`, 3 by default ([theming: display](../guide/theme.md#display)). By default providers with sessions in this room come first, then the recently used, then the recently logged in.
+With `provider_tabs = "auto"` (the default), two providers stack and three or more share the panel under a tab rail, one block at a time. The selected card's provider takes the first tab and is the active one. A process row keeps the last agent's provider there, and the first provider in order takes it only when neither is available. The rest follow in rank order, or in `provider_list` order when it is set, and the rail stops at the first tab that does not fit, so on a narrow pane a lower-ranked provider's tab can stay hidden until you select one of its cards or pick its tab. `←`, `→`, or a click picks a tab by hand until you select a card of another provider. A pick highlights its tab where it sits, and `←` and `→` step along the rail and wrap; a pick of a tab the rail hides takes a place after the tabs that still fit beside it. Under `NO_COLOR` the active tab is marked `┤ Claude ├`. `[theme.display]` sets tabs or stacking with `provider_tabs`, the providers and their order with `provider_list`, and the most stacked blocks with `max_provider_blocks`, 3 by default ([theming: display](../guide/theme.md#display)). By default providers with sessions in this room come first, then the recently used, then the recently logged in.
 
 | line | shows |
 |------|-------|
@@ -1265,7 +1265,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `z a` | open or close the selected card's subagents and waits |
 | `z R` / `z M` | unfold or fold every group |
 | `z i` | toggle the inactive peek; opening reveals its chip and first receipt, closing returns to the chip; selection stays put |
-| `←` / `→` | switch the dashboard tab |
+| `←` / `→` | switch the dashboard tab to its neighbour along the rail, wrapping, hidden tabs included |
 | `<` / `>` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `=` | return the sidebar to its configured width in every tab of the room, dropping a width set with `<` / `>` |
 | `d d` | close the selected card, stopping its agent in the pane it is in now, as [`rimz sidebar close`](../reference/cli/sidebar.md#close-and-reopen) does |

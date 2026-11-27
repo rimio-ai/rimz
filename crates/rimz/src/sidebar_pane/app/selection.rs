@@ -8,8 +8,8 @@ use crate::store::snapshot::{SidebarRow, SidebarSnapshot, lead_unread_row, triag
 
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, DelegationPages, DelegationPin, EntryCursor, HitTarget,
-    UiState, ViewState, ViewportIntent, active_dashboard_tab, dashboard_tab_of_kind,
-    dashboard_tabbed, dashboard_tabs, selected_agent_kind, selected_sub_provider,
+    UiState, ViewState, ViewportIntent, active_dashboard_tab, dashboard_has_tab, dashboard_rail,
+    dashboard_tab_of_kind, dashboard_tabbed, selected_agent_kind, selected_sub_provider,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
@@ -635,8 +635,10 @@ pub(super) fn finish_search(
 }
 
 /// Step the dashboard's tab `step` entries left or right of the currently
-/// active one, wrapping at the ends — the manual layer over the dashboard
-/// default. A dashboard with fewer than two tabs has nothing to cycle.
+/// active one through the rail order ([`dashboard_rail`]), lead first,
+/// wrapping at the ends and landing on a tab the rail hides as readily as a
+/// painted one — the manual layer over the dashboard default. A dashboard
+/// with fewer than two tabs has nothing to cycle.
 fn cycle_dashboard_tab(
     ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
@@ -645,7 +647,7 @@ fn cycle_dashboard_tab(
     if !dashboard_tabbed(snapshot) {
         return InputOutcome::default();
     }
-    let tabs = dashboard_tabs(snapshot);
+    let tabs = dashboard_rail(snapshot, ui);
     if tabs.len() < 2 {
         return InputOutcome::default();
     }
@@ -1235,7 +1237,11 @@ fn reconcile_browse_and_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot
     prune_card_history(ui, snapshot);
 }
 
-fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
+/// Record the selected card's kind and end a tab pick its selection outgrew. Runs on every
+/// reconcile and after each input that moves the selection
+/// (`crates/rimz/src/sidebar_pane/app/loop_state.rs::PaneState::reduce_input`), so the
+/// frame that input paints already follows the new selection.
+pub(super) fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     let derived_kind = selected_agent_kind(snapshot, ui);
     if let Some(kind) = &derived_kind
         && dashboard_tab_of_kind(snapshot, kind).is_some()
@@ -1258,7 +1264,7 @@ fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     }
     if let Some(tab) = &ui.toggles.dashboard_tab {
         let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
-        let tab_gone = !dashboard_tabs(snapshot).contains(&tab.login);
+        let tab_gone = !dashboard_has_tab(snapshot, &tab.login);
         if derived_moved || tab_gone {
             ui.toggles.dashboard_tab = None;
         }
