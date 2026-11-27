@@ -404,13 +404,13 @@ The [reference](../reference/cli/lsp.md#queries) owns the target grammar, the ou
 | Verb | LSP request |
 | --- | --- |
 | `def` | `textDocument/definition` |
-| `refs` | `textDocument/references` |
+| `refs` | `textDocument/references`, then the [alias pass](#alias-pass) on rust-analyzer |
 | `hover` | `textDocument/hover` |
 | `impl` | `textDocument/implementation` |
 | `symbols` | `textDocument/documentSymbol` |
 | `find` | `workspace/symbol` |
 | `check` | `textDocument/documentSymbol`, once per file with symbol anchors |
-| `callers`, `callees` | Call hierarchy incoming and outgoing |
+| `callers`, `callees` | Call hierarchy incoming and outgoing, then for `callers` the [alias pass](#alias-pass) on rust-analyzer |
 
 ### Targets and exit codes
 
@@ -435,7 +435,7 @@ Counts include resolved groups plus unresolved candidates, shown as `up to` in t
 
 ### Request budget
 
-Outline, collapse, and call-hierarchy fan-outs run through one order-preserving pool of at most four workers. Each fan-out keeps input order and returns the first error in input order with its error type intact.
+Outline, collapse, call-hierarchy, and alias-pass fan-outs run through one order-preserving pool of at most four workers. Each fan-out keeps input order and returns the first error in input order with its error type intact; the alias pass's definition fan-outs read a server error reply as an unconfirmed token instead ([alias pass](#alias-pass)).
 
 | Request | Most per symbol |
 | --- | --- |
@@ -447,12 +447,19 @@ Outline, collapse, and call-hierarchy fan-outs run through one order-preserving 
 | Outline-recovery outlines | 20 |
 | Navigation request | 1 |
 | Call-hierarchy expansion | 1 per item `prepareCallHierarchy` returns (usually one, not capped) |
+| Alias-pass references (`callers` on rust-analyzer, after at least one prepared item) | 1 |
+| Alias-pass definitions (`refs` and `callers` on rust-analyzer) | none when no reference is followed by `as`; otherwise 1 for the target, plus 1 per declared alias and 1 per alias-spelled token in its scope (not capped) |
+| Alias-pass outlines (`callers` on rust-analyzer) | 1 per file holding a confirmed alias use (not capped) |
 
 A not-found result can spend both the 20 enrichment outlines and the 20 recovery outlines. An exact file head needs only one recovery outline and no container requests. More than 20 qualifier matches sends no recovery definition, implementation, or outline requests. Test-last and `--no-tests` rendering add their own per-file outlines (below). `lsp/check.rs` keeps its own sequential per-file outline loop.
 
+### Alias pass
+
+`crates/rimz/src/lsp/query/alias.rs` exists because rust-analyzer's usage search text-searches the definition's own name and then resolves each hit, so a token spelled through a `use … as <alias>` import is never a candidate for `textDocument/references`, `callHierarchy/incomingCalls`, or `textDocument/documentHighlight`, and no initialization option changes that (rust-lang/rust-analyzer#16850 and rust-lang/rust-analyzer#14079, both open). `textDocument/definition` at an alias-spelled token does resolve to the original item, so the pass can confirm each token through it. `query::execute` runs the pass only where `Entry::kind` is rust-analyzer: `alias::references` extends the `refs` answer, and `alias::incoming_calls`, after a `callers` expansion that prepared at least one item, sends its own `textDocument/references` request and adds one call per function and alias, a function the server's answer also lists included. Declarations come from the references answer, since rust-analyzer lists the original-name token inside each `use … as` tree. The [reference](../reference/cli/lsp.md#queries) owns which tokens count and which files each alias searches. `alias::rust_files` walks the filesystem rather than Git's index, since the server answers about the files on disk and a workspace can have no Git. A call's `from` item is the innermost function or method node of the file's hierarchical outline holding the token, without `detail`; a flat, null, or malformed outline yields no call. A definition request at an alias-spelled position (a declaring token or a candidate) that the server answers with a JSON-RPC error counts as unconfirmed, so a file outside every crate the server loads never fails the query. Any other failure (broker, transport, `Unanswered`, `Indexing`, memory), and a failed definition request for the target itself, fails the query as in every other fan-out, and an unreadable file or directory contributes no candidates.
+
 ### List rendering
 
-The five list verbs (`refs`, `impl`, `callers`, `callees`, `find`) show results inside the checkout by default, and `--external` includes the rest. `query::render` decides per verb, and `def`, `hover`, and `symbols` ignore scope. The list arms share an inside-checkout predicate and a hidden-count footer with an `--external` hint. Counts follow each verb's deduplication, and `find` does not deduplicate. JSON stays the unfiltered LSP answer, plus a `target` key beside each position the text prints (`query::json_targets`), formatted by the same `position_text`, so a JSON target and its text line cannot differ. It picks objects by LSP type within each verb's answer shape, not by a generic `{uri, range}` walk, since a CallHierarchyItem carries both `range` and `selectionRange` and the text prints the latter. `find --external` changes only the output: the `workspace/symbol` request is the same.
+The five list verbs (`refs`, `impl`, `callers`, `callees`, `find`) show results inside the checkout by default, and `--external` includes the rest. `query::render` decides per verb, and `def`, `hover`, and `symbols` ignore scope. The list arms share an inside-checkout predicate and a hidden-count footer with an `--external` hint. Counts follow each verb's deduplication, and `find` does not deduplicate. JSON stays the unfiltered LSP answer with the alias pass's entries, plus a `target` key beside each position the text prints (`query::json_targets`), formatted by the same `position_text`, so a JSON target and its text line cannot differ. It picks objects by LSP type within each verb's answer shape, not by a generic `{uri, range}` walk, since a CallHierarchyItem carries both `range` and `selectionRange` and the text prints the latter. `find --external` changes only the output: the `workspace/symbol` request is the same.
 
 `refs`, `callers`, and `find` list production entries before test entries, separated by one `tests:` line. Within each group, checkout results come before external ones. `find` keeps its ranked order, and references and call items group by file, then position, with call items breaking ties by name. A file with both kinds repeats under the test boundary. `find` text reuses the test-classification outlines for names: each symbol with a matching node takes its container from the outline ancestors as in stage 2, including inline modules. Unlocated symbols and ancestors that strip to nothing keep the server container. This adds no request or re-sort, and `find --json` is unchanged. `impl`, `callees`, and flat `symbols` answers are not classified.
 

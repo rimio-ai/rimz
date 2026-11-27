@@ -1,6 +1,6 @@
 Ask the checkout's language server what code means. It resolves a name as the compiler does, through imports, re-exports, and macros, down to a binding's inferred type. Grep also matches comments, strings, and same-named methods of other types, so keep grep for text: a log message, a string literal, a config key.
 
-Verbs: `def` (definition and line span), `hover` (type and docs), `refs` (every use site), `callers` (functions whose bodies call it), `callees` (functions it calls), `impl` (implementations of a trait or interface), `symbols` (a file's outline), `find` (workspace symbols by fuzzy name), `show` (numbered source), `check` (the anchors in a Markdown file).
+Verbs: `def` (definition and line span), `hover` (type and docs), `refs` (every use site, aliased too), `callers` (functions whose bodies call it, by any alias), `callees` (functions it calls), `impl` (implementations of a trait or interface), `symbols` (a file's outline), `find` (workspace symbols by fuzzy name), `show` (numbered source), `check` (the anchors in a Markdown file).
 
 Pass all of a question's targets in one call. A server still starting or indexing holds each call up to two minutes, a wait a loop of calls pays every time.
 

@@ -23,7 +23,19 @@ fn editor_broker_modes(
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
     let mut command = vec![stub.to_string_lossy().into_owned()];
     command.extend(modes.iter().map(|mode| (*mode).to_owned()));
-    let config = serde_json::from_value(json!({"command":command,"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
+    editor_broker_config(
+        env,
+        idle,
+        json!({"command":command,"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"}),
+    )
+}
+
+fn editor_broker_config(
+    env: &Env,
+    idle: &str,
+    config: Value,
+) -> (std::process::Child, std::path::PathBuf) {
+    let config = serde_json::from_value(config).unwrap();
     let mut machine = MachineConfig::default();
     machine.lsp.servers.insert("rust".into(), config);
     std::fs::write(
@@ -3408,6 +3420,494 @@ fn lsp_outline_recovery_agrees_with_anchor_checks() {
         true
     );
     broker.wait().unwrap();
+}
+
+const ALIAS_SOURCES: [(&str, &str); 11] = [
+    (
+        "src/lib.rs",
+        "pub mod m;\nmod elsewhere;\nmod same;\nmod user;\npub use m::target as reexported;\n\npub fn via_reexport() -> u32 {\n    reexported(5)\n}\npub use m::target as first;\npub use m::target as second;\nmod chain;\n",
+    ),
+    (
+        "src/chain.rs",
+        "use crate::first as second;\n\npub fn chain_caller() -> u32 {\n    second(10)\n}\n",
+    ),
+    (
+        "tests/consumer.rs",
+        "use fixture::reexported;\n\nfn consumes_the_reexport() -> u32 {\n    // renamed is private to src/same.rs\n    reexported(9)\n}\n",
+    ),
+    (
+        "fuzz/not_loaded.rs",
+        "fn stray() -> u32 {\n    reexported()\n}\n",
+    ),
+    (
+        "target/debug/skipped.rs",
+        "fn skipped() -> u32 {\n    reexported()\n}\n",
+    ),
+    (
+        ".hidden/skipped.rs",
+        "fn skipped() -> u32 {\n    reexported()\n}\n",
+    ),
+    (
+        "src/m.rs",
+        "pub fn target(x: u32) -> u32 {\n    x + 1\n}\n\npub fn plain_caller() -> u32 {\n    target(1)\n}\n\npub fn address() -> usize {\n    target as usize\n}\n",
+    ),
+    (
+        "src/same.rs",
+        "use crate::m::target as renamed;\n\npub fn same_alias_caller() -> u32 {\n    renamed(2)\n}\n\npub fn shadowed() -> u32 {\n    let renamed = 7;\n    // renamed in a comment\n    renamed + \"renamed\".len() as u32\n}\n\npub fn both_ways() -> u32 {\n    crate::m::target(1) + renamed(2)\n}\n\n#[cfg(test)]\n#[path = \"same_tests.rs\"]\nmod tests;\n",
+    ),
+    (
+        "src/same_tests.rs",
+        "use super::*;\n\nfn calls_through_the_alias() -> u32 {\n    renamed(8)\n}\n",
+    ),
+    (
+        "src/user.rs",
+        "use crate::reexported as again;\nuse crate::reexported;\n\npub fn reexport_caller() -> u32 {\n    reexported(6)\n}\n\npub fn chained_caller() -> u32 {\n    again(7)\n}\n",
+    ),
+    (
+        "src/elsewhere.rs",
+        "pub fn reexported() -> u32 {\n    0\n}\n\npub fn local_caller() -> u32 {\n    reexported()\n}\n",
+    ),
+];
+
+/// The 0-based line and column of the `nth` whole-identifier `name` on 1-based `line` of an
+/// `ALIAS_SOURCES` file.
+#[track_caller]
+fn alias_token(path: &str, line: usize, name: &str, nth: usize) -> (usize, usize) {
+    let source = ALIAS_SOURCES
+        .iter()
+        .find(|(file, _)| *file == path)
+        .unwrap()
+        .1;
+    let text = source.lines().nth(line - 1).unwrap();
+    let identifier = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let column = text
+        .match_indices(name)
+        .map(|(at, _)| at)
+        .filter(|at| {
+            !identifier(text[..*at].chars().next_back())
+                && !identifier(text[at + name.len()..].chars().next())
+        })
+        .nth(nth)
+        .unwrap_or_else(|| panic!("no {name} #{nth} on {path}:{line}: {text}"));
+    (line - 1, column)
+}
+
+fn alias_key(path: &str, line: usize, name: &str, nth: usize) -> String {
+    let (line, column) = alias_token(path, line, name, nth);
+    format!("{path}:{line}:{column}")
+}
+
+fn alias_range(path: &str, line: usize, name: &str, nth: usize) -> Value {
+    let (line, column) = alias_token(path, line, name, nth);
+    json!({"start":{"line":line,"character":column},"end":{"line":line,"character":column + name.len()}})
+}
+
+fn alias_location(env: &Env, path: &str, line: usize, name: &str, nth: usize) -> Value {
+    json!({"uri":format!("file://{}/{path}", env.project_root.display()),"range":alias_range(path, line, name, nth)})
+}
+
+/// A function's call-hierarchy item and outline node, spanning 1-based lines `start` to `end`.
+fn alias_function(env: &Env, path: &str, name: &str, start: usize, end: usize) -> (Value, Value) {
+    let range =
+        json!({"start":{"line":start - 1,"character":0},"end":{"line":end - 1,"character":1}});
+    let selection = alias_range(path, start, name, 0);
+    (
+        json!({"name":name,"kind":12,"uri":format!("file://{}/{path}", env.project_root.display()),"range":range,"selectionRange":selection}),
+        json!({"name":name,"kind":12,"range":range,"selectionRange":selection,"children":[]}),
+    )
+}
+
+/// The alias-blind answers rust-analyzer gives over `ALIAS_SOURCES`, in a workspace with no Git:
+/// references and incoming calls list only tokens spelled `target`, definition resolves every
+/// alias-spelled token, and a file outside the loaded crates (`fuzz/`) answers an error.
+fn alias_fixture() -> (Env, std::process::Child, std::path::PathBuf) {
+    let env = Env::new();
+    for (path, source) in ALIAS_SOURCES {
+        let path = env.project_root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, source).unwrap();
+    }
+    let functions = [
+        ("src/lib.rs", "via_reexport", 7, 9),
+        ("src/m.rs", "target", 1, 3),
+        ("src/m.rs", "plain_caller", 5, 7),
+        ("src/m.rs", "address", 9, 11),
+        ("src/same.rs", "same_alias_caller", 3, 5),
+        ("src/same.rs", "shadowed", 7, 11),
+        ("src/same.rs", "both_ways", 13, 15),
+        ("src/same_tests.rs", "calls_through_the_alias", 3, 5),
+        ("src/user.rs", "reexport_caller", 4, 6),
+        ("src/user.rs", "chained_caller", 8, 10),
+        ("src/elsewhere.rs", "reexported", 1, 3),
+        ("src/elsewhere.rs", "local_caller", 5, 7),
+        ("src/chain.rs", "chain_caller", 3, 5),
+        ("tests/consumer.rs", "consumes_the_reexport", 3, 6),
+    ];
+    let item = |name| {
+        let (path, name, start, end) = functions.iter().find(|f| f.1 == name).unwrap();
+        alias_function(&env, path, name, *start, *end).0
+    };
+    let mut outlines = serde_json::Map::new();
+    for (path, name, start, end) in functions {
+        let node = alias_function(&env, path, name, start, end).1;
+        outlines
+            .entry(path)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(node);
+    }
+    let target = alias_location(&env, "src/m.rs", 1, "target", 0);
+    let mut definitions = serde_json::Map::new();
+    for (path, line, name, nth) in [
+        ("src/m.rs", 1, "target", 0),
+        ("src/lib.rs", 5, "reexported", 0),
+        ("src/lib.rs", 8, "reexported", 0),
+        ("src/same.rs", 1, "renamed", 0),
+        ("src/same.rs", 4, "renamed", 0),
+        ("src/same.rs", 14, "renamed", 0),
+        ("src/same_tests.rs", 4, "renamed", 0),
+        ("src/user.rs", 1, "reexported", 0),
+        ("src/user.rs", 1, "again", 0),
+        ("src/user.rs", 2, "reexported", 0),
+        ("src/user.rs", 5, "reexported", 0),
+        ("src/user.rs", 9, "again", 0),
+        ("src/lib.rs", 10, "first", 0),
+        ("src/lib.rs", 11, "second", 0),
+        ("src/chain.rs", 1, "first", 0),
+        ("src/chain.rs", 1, "second", 0),
+        ("src/chain.rs", 4, "second", 0),
+        ("tests/consumer.rs", 1, "reexported", 0),
+        ("tests/consumer.rs", 5, "reexported", 0),
+    ] {
+        definitions.insert(alias_key(path, line, name, nth), json!([target]));
+    }
+    definitions.insert(
+        alias_key("fuzz/not_loaded.rs", 2, "reexported", 0),
+        json!({"error":{"code":-32603,"message":"file not found: fuzz/not_loaded.rs"}}),
+    );
+    let local = alias_location(&env, "src/same.rs", 8, "renamed", 0);
+    for (line, nth) in [(8, 0), (10, 0)] {
+        definitions.insert(
+            alias_key("src/same.rs", line, "renamed", nth),
+            json!([local]),
+        );
+    }
+    let item_elsewhere = alias_location(&env, "src/elsewhere.rs", 1, "reexported", 0);
+    for line in [1, 6] {
+        definitions.insert(
+            alias_key("src/elsewhere.rs", line, "reexported", 0),
+            json!([item_elsewhere]),
+        );
+    }
+    let call = |name, path, line| json!({"from":item(name),"fromRanges":[alias_range(path, line, "target", 0)]});
+    let answers = json!({
+        "textDocument/references": {
+            alias_key("src/m.rs", 1, "target", 0): [
+                target,
+                alias_location(&env, "src/m.rs", 6, "target", 0),
+                alias_location(&env, "src/m.rs", 10, "target", 0),
+                alias_location(&env, "src/lib.rs", 5, "target", 0),
+                alias_location(&env, "src/same.rs", 1, "target", 0),
+                alias_location(&env, "src/same.rs", 14, "target", 0),
+                alias_location(&env, "src/lib.rs", 10, "target", 0),
+                alias_location(&env, "src/lib.rs", 11, "target", 0),
+            ],
+            alias_key("src/lib.rs", 7, "via_reexport", 0): [
+                alias_location(&env, "src/lib.rs", 7, "via_reexport", 0),
+            ],
+        },
+        "textDocument/prepareCallHierarchy": {
+            alias_key("src/m.rs", 1, "target", 0): [item("target")],
+            alias_key("src/lib.rs", 7, "via_reexport", 0): [item("via_reexport")],
+        },
+        "callHierarchy/incomingCalls": {
+            alias_key("src/m.rs", 1, "target", 0): [
+                call("plain_caller", "src/m.rs", 6),
+                call("address", "src/m.rs", 10),
+                call("both_ways", "src/same.rs", 14),
+            ],
+            alias_key("src/lib.rs", 7, "via_reexport", 0): [],
+        },
+        "textDocument/definition": definitions,
+        "textDocument/documentSymbol": outlines,
+    });
+    std::fs::write(
+        env.project_root.join("stub-answers.json"),
+        answers.to_string(),
+    )
+    .unwrap();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let (broker, directory) = editor_broker_config(
+        &env,
+        "20m",
+        json!({"kind":"rust-analyzer","command":[stub],"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"}),
+    );
+    (env, broker, directory)
+}
+
+fn stop_broker(mut broker: std::process::Child, directory: &Path) {
+    assert_eq!(
+        editor_rpc(directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+/// A `json` answer's entries split into the server's (its `target` keys removed) and the
+/// `(target, alias)` of each entry the alias pass added.
+fn split_alias_entries(json: &[u8], target_of: &str) -> (Value, Vec<(String, String)>) {
+    let entries: Vec<Value> = serde_json::from_slice(json).unwrap();
+    let mut server = Vec::new();
+    let mut added = Vec::new();
+    for mut entry in entries {
+        let holder = if target_of.is_empty() {
+            &mut entry
+        } else {
+            &mut entry[target_of]
+        };
+        let target = holder
+            .as_object_mut()
+            .unwrap()
+            .remove("target")
+            .unwrap_or_else(|| panic!("entry without a target: {holder}"));
+        match entry.get("alias") {
+            Some(alias) => added.push((
+                target.as_str().unwrap().to_owned(),
+                alias.as_str().unwrap().to_owned(),
+            )),
+            None => server.push(entry),
+        }
+    }
+    added.sort();
+    (Value::Array(server), added)
+}
+
+#[test]
+fn lsp_refs_and_callers_list_uses_reached_through_an_alias() {
+    let (env, broker, directory) = alias_fixture();
+    env.rimz()
+        .args(["lsp", "refs", "src/m.rs:1:8"])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "src/chain.rs\n",
+            "  1:12  use crate::first as second;\n",
+            "  4:5  second(10)\n",
+            "src/lib.rs\n",
+            "  5:12  pub use m::target as reexported;\n",
+            "  8:5  reexported(5)\n",
+            "  10:12  pub use m::target as first;\n",
+            "  11:12  pub use m::target as second;\n",
+            "src/m.rs\n",
+            "  1:8  pub fn target(x: u32) -> u32 {\n",
+            "  6:5  target(1)\n",
+            "  10:5  target as usize\n",
+            "src/same.rs\n",
+            "  1:15  use crate::m::target as renamed;\n",
+            "  4:5  renamed(2)\n",
+            "  14:15  crate::m::target(1) + renamed(2)\n",
+            "  14:27  crate::m::target(1) + renamed(2)\n",
+            "src/user.rs\n",
+            "  1:12  use crate::reexported as again;\n",
+            "  2:12  use crate::reexported;\n",
+            "  5:5  reexported(6)\n",
+            "  9:5  again(7)\n",
+            "tests:\n",
+            "src/same_tests.rs\n",
+            "  4:5  renamed(8)\n",
+            "tests/consumer.rs\n",
+            "  1:14  use fixture::reexported;\n",
+            "  5:5  reexported(9)\n",
+        ));
+    let definitions: Vec<_> = editor_query(&directory, "requests")["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|request| request["method"] == "textDocument/definition")
+        .map(|request| {
+            let uri = request["params"]["textDocument"]["uri"].as_str().unwrap();
+            let path = uri
+                .strip_prefix(&format!("file://{}/", env.project_root.display()))
+                .unwrap_or(uri);
+            (
+                path.to_owned(),
+                request["params"]["position"]["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        definitions.contains(&("fuzz/not_loaded.rs".into(), 1)),
+        "{definitions:?}"
+    );
+    let skipped = |(path, line): &&(String, u64)| {
+        path.starts_with("target/")
+            || path.starts_with(".hidden/")
+            || (path == "tests/consumer.rs" && *line == 3)
+    };
+    assert_eq!(
+        definitions.iter().filter(skipped).collect::<Vec<_>>(),
+        Vec::<&(String, u64)>::new()
+    );
+    let callers = concat!(
+        "src/chain.rs\n",
+        "  3:8  chain_caller\n",
+        "src/lib.rs\n",
+        "  7:8  via_reexport\n",
+        "src/m.rs\n",
+        "  5:8  plain_caller\n",
+        "  9:8  address\n",
+        "src/same.rs\n",
+        "  3:8  same_alias_caller\n",
+        "  13:8  both_ways\n",
+        "src/user.rs\n",
+        "  4:8  reexport_caller\n",
+        "  8:8  chained_caller\n",
+        "tests:\n",
+        "src/same_tests.rs\n",
+        "  3:4  calls_through_the_alias\n",
+        "tests/consumer.rs\n",
+        "  3:4  consumes_the_reexport\n",
+    );
+    env.rimz()
+        .args(["lsp", "callers", "src/m.rs:1:8"])
+        .assert()
+        .success()
+        .stdout(callers);
+    let mut server = crate::mcp_server::serve(&env, &[]);
+    server.initialize();
+    let (text, is_error) = server.call(
+        1,
+        "lsp",
+        json!({"verb": "callers", "targets": ["src/m.rs:1:8"], "cwd": env.project_root}),
+    );
+    assert!(!is_error, "{text}");
+    assert_eq!(text.trim_end(), callers.trim_end());
+
+    let answers: Value = serde_json::from_str(
+        &std::fs::read_to_string(env.project_root.join("stub-answers.json")).unwrap(),
+    )
+    .unwrap();
+    let key = alias_key("src/m.rs", 1, "target", 0);
+    let output = env
+        .rimz()
+        .args(["lsp", "refs", "src/m.rs:1:8", "--json"])
+        .assert()
+        .success();
+    let (served, added) = split_alias_entries(&output.get_output().stdout, "");
+    assert_eq!(served, answers["textDocument/references"][&key]);
+    let pairs = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(target, alias)| ((*target).to_owned(), (*alias).to_owned()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        added,
+        pairs(&[
+            ("src/chain.rs:1:12", "first"),
+            ("src/chain.rs:4:5", "second"),
+            ("src/lib.rs:8:5", "reexported"),
+            ("src/same.rs:14:27", "renamed"),
+            ("src/same.rs:4:5", "renamed"),
+            ("src/same_tests.rs:4:5", "renamed"),
+            ("src/user.rs:1:12", "reexported"),
+            ("src/user.rs:2:12", "reexported"),
+            ("src/user.rs:5:5", "reexported"),
+            ("src/user.rs:9:5", "again"),
+            ("tests/consumer.rs:1:14", "reexported"),
+            ("tests/consumer.rs:5:5", "reexported"),
+        ])
+    );
+    let entries: Vec<Value> = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let mut positions: Vec<_> = entries.iter().map(|entry| &entry["target"]).collect();
+    positions.sort_by_key(|target| target.to_string());
+    positions.dedup();
+    assert_eq!(positions.len(), entries.len(), "{entries:?}");
+    for entry in entries.iter().filter(|entry| entry.get("alias").is_some()) {
+        let keys: Vec<_> = entry.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["alias", "range", "target", "uri"], "{entry}");
+    }
+    let output = env
+        .rimz()
+        .args(["lsp", "callers", "src/m.rs:1:8", "--json"])
+        .assert()
+        .success();
+    let (served, added) = split_alias_entries(&output.get_output().stdout, "from");
+    assert_eq!(served, answers["callHierarchy/incomingCalls"][&key]);
+    assert_eq!(
+        added,
+        pairs(&[
+            ("src/chain.rs:3:8", "second"),
+            ("src/lib.rs:7:8", "reexported"),
+            ("src/same.rs:13:8", "renamed"),
+            ("src/same.rs:3:8", "renamed"),
+            ("src/same_tests.rs:3:4", "renamed"),
+            ("src/user.rs:4:8", "reexported"),
+            ("src/user.rs:8:8", "again"),
+            ("tests/consumer.rs:3:4", "reexported"),
+        ])
+    );
+    let entries: Vec<Value> = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let chained = entries
+        .iter()
+        .find(|entry| entry["alias"] == "again")
+        .unwrap();
+    assert_eq!(
+        chained["fromRanges"],
+        json!([alias_range("src/user.rs", 9, "again", 0)])
+    );
+    let both_ways: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry["from"]["name"] == "both_ways")
+        .map(|entry| (entry.get("alias").cloned(), entry["fromRanges"].clone()))
+        .collect();
+    assert_eq!(
+        both_ways,
+        [
+            (None, json!([alias_range("src/same.rs", 14, "target", 0)])),
+            (
+                Some(json!("renamed")),
+                json!([alias_range("src/same.rs", 14, "renamed", 0)])
+            ),
+        ]
+    );
+    stop_broker(broker, &directory);
+}
+
+#[test]
+fn lsp_alias_pass_sends_nothing_more_without_an_as_after_a_reference() {
+    let (env, broker, directory) = alias_fixture();
+    let sent = || {
+        editor_query(&directory, "requests")["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["params"] != json!({"query":"requests"}))
+            .map(|request| request["method"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let mut before = sent().len();
+    for (verb, methods) in [
+        ("refs", &["textDocument/references"][..]),
+        (
+            "callers",
+            &[
+                "textDocument/prepareCallHierarchy",
+                "callHierarchy/incomingCalls",
+                "textDocument/references",
+            ][..],
+        ),
+    ] {
+        env.rimz()
+            .args(["lsp", verb, "src/lib.rs:7:8", "--json"])
+            .assert()
+            .success();
+        let requests = sent();
+        assert_eq!(requests[before..], *methods, "{verb}: {requests:?}");
+        before = requests.len();
+    }
+    stop_broker(broker, &directory);
 }
 
 #[test]
