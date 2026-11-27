@@ -174,6 +174,7 @@ A branch that bumps `SNAPSHOT_VERSION` or `ROLLUP_CACHE_VERSION` re-checks each 
 ## Builds and scratch worktrees
 
 - This worktree's built binary is `$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz`. The target directory may be shared with other worktrees, each under its own hash directory, so resolve it this way and never pick the newest.
+- Keep `CARGO_TARGET_DIR` outside `/tmp` and `/var/tmp`. The `sandbox::` integration tests run the built `rimz` inside a scoped view, which mounts the agent's temp unit over both (`crates/rimz/src/sandbox/mod.rs::TMP_MOUNTS`), so a binary built under either is missing there and those tests fail with `bwrap: execvp /tmp/<target>/debug/rimz: No such file or directory`.
 - Run a throwaway probe test in a detached scratch worktree. Set `CARGO_TARGET_DIR` to your worktree's own target directory, so the build reuses that cache:
 
   ```sh
