@@ -1776,6 +1776,11 @@ impl Fixture {
 
     /// Seed a live row launched by the agent `launched_by`: a team seat when
     /// `role` is set, a plain agent otherwise.
+    ///
+    /// Every seat shares the fixture's one owner process, so the seat hooked last is the caller a
+    /// `serve` session resolves. Hook another seat after a `serve` session starts and that
+    /// session's tool calls fail with "the calling agent has no recorded launch"; drive the flips
+    /// after that point through the CLI as the user.
     fn seed_launched(&self, name: &str, role: Option<&str>, launched_by: Option<&str>) {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
@@ -1822,6 +1827,7 @@ impl Fixture {
         self.hook(name, "UserPromptSubmit", None);
     }
 
+    /// Feed one hook as the agent `role`, which makes it the live caller (see `seed_launched`).
     fn hook(&self, role: &str, event: &str, pane: Option<&str>) {
         self.feed(role, event, pane, None);
     }
