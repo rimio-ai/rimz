@@ -316,8 +316,9 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
     let catalog = crate::agents::LoginCatalog::default();
     // An available 5-hour window observed `read_secs_ago`, and a login whose identity last
     // switched `floor_secs_ago`; with `stated`, the window reads 99% (Antigravity's read of a
-    // spent quota) and the failure recorded the refill its stop stated, past the hold limit.
-    let refusal = |read_secs_ago: u64, floor_secs_ago: Option<u64>, stated: bool| {
+    // spent quota) and the failure recorded the refill its stop stated, past the hold limit; with
+    // `spent`, the window is spent and resets an hour out, before the recorded refill.
+    let refusal = |read_secs_ago: u64, floor_secs_ago: Option<u64>, stated: bool, spent: bool| {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
         let runtime =
@@ -337,8 +338,14 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
                     RateLimitCacheEntry {
                         limits: crate::agents::AgentRateLimits {
                             windows: vec![crate::agents::RateLimitWindow {
-                                used_percentage: Some(if stated { 99 } else { 20 }),
-                                resets_at: Some(now + Duration::from_secs(3 * 3600)),
+                                used_percentage: Some(match (spent, stated) {
+                                    (true, _) => 100,
+                                    (false, true) => 99,
+                                    (false, false) => 20,
+                                }),
+                                resets_at: Some(
+                                    now + Duration::from_secs(if spent { 3600 } else { 3 * 3600 }),
+                                ),
                                 duration_mins: Some(300),
                                 observed_at: Some(now - Duration::from_secs(read_secs_ago)),
                                 ..Default::default()
@@ -404,34 +411,55 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
     };
 
     assert!(
-        refusal(1200, None, false).is_some(),
+        refusal(1200, None, false, false).is_some(),
         "quota available before the failure predates the limit"
     );
     assert!(
-        refusal(1200, Some(1800), false).is_some(),
+        refusal(1200, Some(1800), false, false).is_some(),
         "an identity switch before the failure changes nothing"
     );
     assert_eq!(
-        refusal(60, None, false),
+        refusal(60, None, false, false),
         None,
         "quota available in a read newer than the failure"
     );
     assert_eq!(
-        refusal(1200, Some(300), false),
+        refusal(1200, Some(300), false, false),
         None,
         "the login switched identity since the failure"
     );
     assert!(
-        refusal(60, None, true).is_some(),
+        refusal(60, None, true, false).is_some(),
         "a stated refill outlasts a newer read showing quota available"
     );
     for (read_secs_ago, floor_secs_ago) in [(1200, 300), (60, 300)] {
         assert_eq!(
-            refusal(read_secs_ago, Some(floor_secs_ago), true),
+            refusal(read_secs_ago, Some(floor_secs_ago), true, false),
             None,
             "an identity switch since the failure clears a stated refill: read {read_secs_ago}s ago"
         );
     }
+    let refill_minutes = |refusal: Option<String>| {
+        refusal.and_then(|text| {
+            text.split("--in ")
+                .nth(1)?
+                .split('m')
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+    };
+    assert_eq!(
+        refill_minutes(refusal(60, None, true, true)),
+        Some(120),
+        "with no switch, the later of a spent read's reset and a stated refill holds"
+    );
+    assert_eq!(
+        refill_minutes(refusal(60, Some(300), true, true)),
+        Some(60),
+        "an identity switch since the failure clears a stated refill beside a spent read, whose \
+         own reset still refuses"
+    );
 }
 
 struct ReopenFixture {
