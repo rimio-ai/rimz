@@ -183,6 +183,28 @@ fn select_to_index_in(
     InputOutcome::redraw()
 }
 
+/// Move the browse pick directly to one visible roster ordinal without
+/// stepping through nested card entries.
+#[cfg(feature = "testkit")]
+pub(super) fn select_visible_row(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    target: usize,
+) -> InputOutcome {
+    let roster = ui.visible_roster(snapshot);
+    let len = roster.len();
+    if len == 0 {
+        return InputOutcome::default();
+    }
+    let target = target.min(len - 1);
+    if ui.selected_index == Some(target) && ui.entry_cursor.is_none() {
+        return InputOutcome::default();
+    }
+    select_row_in(ui, &roster, target);
+    begin_or_continue_browse(ui);
+    InputOutcome::redraw()
+}
+
 #[derive(Clone, Copy)]
 enum ScreenRow {
     Top,

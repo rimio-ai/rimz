@@ -323,3 +323,43 @@ fn motion_emits_each_paint_and_still_frames_keep_money_easing() {
         .count();
     assert!(count >= 10, "motion paints on the refresh grid: {count}");
 }
+
+#[test]
+fn ui_select_targets_the_named_card_past_cards_with_child_entries() {
+    let scenario = Scenario::parse(
+        "select-children",
+        "scenario select-children width 54 height 90 length 5s pets off\n\
+         preset economy\n\
+         1s ui select @pi\n\
+         2s ui select @opencode\n\
+         3s ui select @claude-3\n\
+         3s ui key down\n\
+         4s ui select @claude-3",
+    )
+    .unwrap();
+    let mut column = Column::new(&scenario, None, None).unwrap();
+    let selected = |column: &Column| {
+        column.state.inspect_view(|ui, view| {
+            let handle = ui
+                .selected_index
+                .and_then(|index| ui.visible_roster(&view.current).row(index))
+                .and_then(|row| row.as_agent())
+                .and_then(|card| card.handle.clone());
+            (handle, ui.entry_cursor.is_some())
+        })
+    };
+
+    let mut observed = Vec::new();
+    for (at_ms, expected_handle) in [(1_100, "pi"), (2_100, "opencode"), (4_100, "claude-3")] {
+        text_at(&mut column, &scenario, at_ms);
+        observed.push((expected_handle, selected(&column)));
+    }
+    assert_eq!(
+        observed,
+        vec![
+            ("pi", (Some("pi".to_owned()), false)),
+            ("opencode", (Some("opencode".to_owned()), false)),
+            ("claude-3", (Some("claude-3".to_owned()), false)),
+        ]
+    );
+}

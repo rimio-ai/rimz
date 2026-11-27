@@ -20,7 +20,7 @@ use crate::{PaneId, RuntimePaths, SidebarInstanceId};
 use super::clock::LoopClock;
 use super::fetch::{FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
 use super::inbox::WakeupInbox;
-use super::input::{KeyAction, Wakeup};
+use super::input::Wakeup;
 use super::loop_state::LoopState;
 use super::{PaneBackend, RoomConfig, ServeConfig};
 
@@ -442,14 +442,16 @@ impl Column {
                         row.as_agent()
                             .is_some_and(|card| card.handle.as_deref() == Some(handle))
                     })?;
+                    let row_selected = ui.selected_index == Some(ordinal);
                     Some((
                         ordinal,
-                        ui.selected_index == Some(ordinal),
+                        row_selected,
+                        row_selected && ui.entry_cursor.is_none(),
                         roster.rows()[ordinal].id.clone(),
                         roster.len(),
                     ))
                 });
-                let Some((ordinal, selected, row, count)) = target else {
+                let Some((ordinal, row_selected, card_selected, row, count)) = target else {
                     self.label = format!("{}: @{handle} not on screen", self.label);
                     return Ok(());
                 };
@@ -468,13 +470,10 @@ impl Column {
                     if self.set_delegation(row, false)? {
                         return Ok(());
                     }
-                    if selected {
+                    if row_selected {
                         if count > 1 {
-                            self.input(Wakeup::Key(if ordinal == 0 {
-                                KeyAction::Down
-                            } else {
-                                KeyAction::Up
-                            }))?;
+                            let next = if ordinal == 0 { 1 } else { ordinal - 1 };
+                            self.input(Wakeup::SelectRow(next))?;
                         } else {
                             self.label =
                                 format!("{}: @{handle} is the only selectable row", self.label);
@@ -482,11 +481,8 @@ impl Column {
                     }
                     return Ok(());
                 }
-                if !selected {
-                    self.input(Wakeup::Key(KeyAction::Top))?;
-                    for _ in 0..ordinal {
-                        self.input(Wakeup::Key(KeyAction::Down))?;
-                    }
+                if !card_selected {
+                    self.input(Wakeup::SelectRow(ordinal))?;
                 }
                 if matches!(action, UiAction::Expand(_)) {
                     self.set_delegation(row, true)?;

@@ -9,7 +9,7 @@ expression: review
 {"frame":4,"t_ms":5000,"beat":5,"label":"show the nested reviewers","changed":["","#main","@coder#main","@planner#main"],"key":true,"text":"0004.txt","ansi":"0004.ansi"}
 {"frame":5,"t_ms":6000,"beat":6,"label":"6s @fox done \"renderer reviewed\"","changed":["","@coder#main"],"key":true,"text":"0005.txt","ansi":"0005.ansi"}
 {"frame":6,"t_ms":7000,"beat":7,"label":"7s @coder waits 5s \"child reviews\"","changed":["","@coder#main","cockpit"],"key":true,"text":"0006.txt","ansi":"0006.ansi"}
-{"frame":7,"t_ms":10000,"beat":8,"label":"10s @otter done \"model checked\"","changed":["","@coder#main","@planner#main"],"key":true,"text":"0007.txt","ansi":"0007.ansi"}
+{"frame":7,"t_ms":10000,"beat":8,"label":"10s @otter done \"model checked\"","changed":["","@coder#main"],"key":true,"text":"0007.txt","ansi":"0007.ansi"}
 {"frame":8,"t_ms":12000,"beat":9,"label":"hold the current layout","changed":["","@coder#main","@planner#main"],"key":true,"text":"0008.txt","ansi":"0008.ansi"}
 {"frame":9,"t_ms":12500,"beat":10,"label":"ask during the layout freeze","changed":["","@coder#main","cockpit"],"key":true,"text":"0009.txt","ansi":"0009.ansi"}
 {"frame":10,"t_ms":17060,"beat":10,"label":"ask during the layout freeze","changed":["","@coder#main","@planner#main"],"key":true,"text":"0010.txt","ansi":"0010.ansi"}
@@ -176,7 +176,6 @@ cockpit       │
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@planner#main │ ▎  ▤ 0                                               🮇
 @coder#main   │ ▌⢄ coder                                             ▐
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
@@ -186,6 +185,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ⠁ claude · review the renderer                  ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
+              │
               │
               │
               │
@@ -212,7 +212,6 @@ cockpit       │
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@planner#main │ ▎  ▤ 0                                               🮇
 @coder#main   │ ▌⢄ coder                                             ▐
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
@@ -221,6 +220,7 @@ cockpit       │
 @coder#main   │ ▌    ⠁ codex · check the model                       ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ▸ +1 done                                       ▐
+              │
               │
               │
               │
@@ -248,7 +248,6 @@ cockpit       │
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@planner#main │ ▎  ▤ 0                                               🮇
 @coder#main   │ ▌☾ coder                                             ▐
 @coder#main   │ ▌  wakes in 1m                                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
@@ -258,6 +257,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
 @coder#main   │ ▌    ▸ +1 done                                       ▐
+              │
               │
               │
               │
