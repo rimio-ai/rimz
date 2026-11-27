@@ -298,6 +298,14 @@ impl CoreCapability for QoderAdapter {
 }
 
 impl LaunchCapability for QoderAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Own {
+            folder: ".qoder/skills",
+            main_checkout: false,
+            user_first: true,
+        }
+    }
+
     fn min_version(&self) -> Option<super::version::CliVersion> {
         Some(install::MIN_VERSION)
     }

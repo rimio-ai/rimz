@@ -408,6 +408,10 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn take_frontend(&self, extra_args: &mut Vec<String>) -> LaunchFrontend {
         let flags = self.spec().launch.permission.flags;
         let Some(index) = extra_args

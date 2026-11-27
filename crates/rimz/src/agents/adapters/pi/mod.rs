@@ -490,6 +490,10 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn shared_home_entries(&self) -> &'static [SharedHomeEntry] {
         use crate::agents::capabilities::SharedHomeKind::{Dir, File};
         &[

@@ -202,11 +202,12 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     let check = SkillCheck::Check {
         env: &env,
         machine_isolation: super::super::Isolation::Scoped,
+        cwd: None,
     };
     let catalog = SkillCatalog::new(check, root.path(), &crate::packs::resolve(root.path()));
     assert!(
         catalog
-            .enumerate("claude")
+            .enumerate("claude", false)
             .unwrap()
             .unwrap()
             .skills
@@ -215,7 +216,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     std::fs::rename(library.join("first"), library.join("second")).unwrap();
     assert!(
         catalog
-            .enumerate("claude")
+            .enumerate("claude", false)
             .unwrap()
             .unwrap()
             .skills
@@ -223,7 +224,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     );
     assert!(
         catalog
-            .enumerate("codex")
+            .enumerate("codex", false)
             .unwrap()
             .unwrap()
             .skills
@@ -231,7 +232,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     );
     assert!(
         SkillCatalog::new(check, root.path(), &crate::packs::resolve(root.path()))
-            .enumerate("claude")
+            .enumerate("claude", false)
             .unwrap()
             .unwrap()
             .skills
@@ -2601,6 +2602,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         SkillCheck::Check {
             env: &env,
             machine_isolation: crate::config::Isolation::Scoped,
+            cwd: Some(root),
         },
         &CommandsConfig::default(),
         &root.join("config.toml"),
@@ -4073,12 +4075,16 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
             .unwrap()
             .trim_end_matches("-seat");
         let env = BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
-        let roots: Vec<_> = crate::agents::find_definition(kind)
+        let mut roots: Vec<_> = crate::agents::find_definition(kind)
             .unwrap()
             .skills_home(&env)
             .into_iter()
-            .chain([root.path().join("skills")])
             .collect();
+        let tier = root.path().join(".agents/skills");
+        if !roots.contains(&tier) {
+            roots.push(tier);
+        }
+        roots.push(root.path().join("skills"));
         assert_eq!(
             error.cause,
             DefinitionCause::MissingSkill {

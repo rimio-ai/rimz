@@ -278,6 +278,10 @@ impl CoreCapability for MiniMaxAdapter {
 }
 
 impl LaunchCapability for MiniMaxAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["MINIMAX_DATA_DIR"]
     }

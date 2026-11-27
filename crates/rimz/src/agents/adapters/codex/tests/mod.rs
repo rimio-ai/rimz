@@ -137,6 +137,7 @@ fn host_skills_refuse_conflicting_provider_keys() {
         (Some(&["listed".parse().unwrap()]), &[], None),
         Some(root.path()),
         None,
+        None,
         (root.path(), root.path()),
         &mut Vec::new(),
     );

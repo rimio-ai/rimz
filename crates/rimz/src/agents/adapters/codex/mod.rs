@@ -1232,6 +1232,10 @@ fn omit_tools_from(mode: crate::mcp::catalog::LoadMode) -> toml_edit::Array {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
         use crate::agents::capabilities::{
             SharedHomeEntry,

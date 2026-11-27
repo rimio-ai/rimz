@@ -544,7 +544,12 @@ upward-dependencies = [
 # whole when an identity line does not fit (+1).
 # The shell/watch split adds the wait-row vocabulary (a row's verb, a command's label) that
 # the card's cancel command and the keepalive text share (+2).
-surface-budget = 1412
+# The project skill tier (ProjectTier, ProjectSkills, the ProjectOnly refusal) is shared by
+# host enforcement, the scoped view, config load and validate (+11).
+# Project skills: launch_inventory is the one launch-order inventory the scoped preflight and
+# validation share, same_dir lets the sandbox view skip a tier that is the provider root, and
+# ProjectTier::{user_first, user_only} carry the kind's precedence and the user-only refusal (+4).
+surface-budget = 1427
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -6050,7 +6055,8 @@ allowed-dependencies = [
 # ExecRequest::default_always is the one consensus-layer load rule that served_marks and both
 # McpLaunch builders read (+1).
 # CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
-surface-budget = 69
+# PreflightCheckout names the checkout whose project skills an entry-point preflight reads (+1).
+surface-budget = 70
 
 [[verdict]]
 kind = "item"

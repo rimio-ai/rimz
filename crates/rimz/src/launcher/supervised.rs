@@ -459,13 +459,33 @@ fn prepare(
         if worktree_launch {
             prospective.cwd_project_root = Some(workspace.launch_repo_root().to_path_buf());
         }
+        let worktree_name = request
+            .worktree
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| crate::worktree::parse_requested_name(name.trim()))
+            .transpose()?
+            .map(|requested| requested.name);
+        let launch_worktree = super::existing_launch_worktree(
+            &workspace,
+            &machine_config.agents.worktree,
+            worktree_name.as_deref(),
+            request.from_pr.is_some(),
+        )?;
         companion_logins = check_companions(
             &prospective,
             store.runtime_paths(),
             (&layout, leader_index),
             &machine_config,
             (&mut checked_folder_trust, &mut noticed_hook_trust),
-            unattended,
+            (
+                unattended,
+                match &launch_worktree {
+                    Some(worktree) => crate::harness::launch::PreflightCheckout::Worktree(worktree),
+                    None if worktree_launch => crate::harness::launch::PreflightCheckout::Pending,
+                    None => crate::harness::launch::PreflightCheckout::Cwd,
+                },
+            ),
             interaction,
         )?;
     }
@@ -521,7 +541,7 @@ fn prepare(
             (&layout, leader_index),
             &machine_config,
             (&mut checked_folder_trust, &mut noticed_hook_trust),
-            unattended,
+            (unattended, crate::harness::launch::PreflightCheckout::Cwd),
             interaction,
         )?;
     }
@@ -834,7 +854,10 @@ fn check_companions(
         &mut HashSet<(crate::ids::LoginKey, PathBuf)>,
         &mut HashSet<crate::ids::LoginKey>,
     ),
-    unattended: Option<trust::Unattended>,
+    (unattended, checkout): (
+        Option<trust::Unattended>,
+        crate::harness::launch::PreflightCheckout<'_>,
+    ),
     interaction: &mut dyn Interaction,
 ) -> Result<Vec<crate::ids::LoginName>> {
     let mut logins = Vec::new();
@@ -863,6 +886,7 @@ fn check_companions(
             },
             unattended,
             None,
+            checkout,
             interaction,
         )?;
         logins.push(login);

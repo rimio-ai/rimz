@@ -9,6 +9,137 @@ use crate::packs::{
 };
 use crate::utils::path::normalize_path_lexical;
 
+/// The project skills a launch reaches: the skill directories under `<checkout>/.agents/skills`,
+/// and the folder under the checkout the launched kind reads project skills from by itself.
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectTier {
+    checkout: PathBuf,
+    kind: String,
+    reads: crate::agents::ProjectSkills,
+    manual: crate::agents::ManualSkill,
+}
+
+impl ProjectTier {
+    pub(crate) fn new(checkout: PathBuf, adapter: &crate::agents::AgentDefinition) -> Self {
+        Self {
+            checkout,
+            kind: adapter.spec().kind.to_owned(),
+            reads: adapter.project_skills(),
+            manual: adapter.manual_skill(),
+        }
+    }
+
+    /// The tier of a launch in `cwd`: that of the Git checkout enclosing `cwd`, else of `cwd`
+    /// itself. Under `empty_root` only `cwd` counts, since the checkout around RimZ's state is
+    /// not the agent's.
+    pub(crate) fn discover(
+        cwd: &Path,
+        empty_root: &Path,
+        adapter: &crate::agents::AgentDefinition,
+    ) -> Result<Self, SkillErr> {
+        let checkout = if crate::disk::paths::is_under_root(cwd, empty_root) {
+            None
+        } else {
+            crate::worktree::discover_checkout(cwd).map_err(|error| SkillErr::Io {
+                path: error.path,
+                source: error.source,
+            })?
+        };
+        Ok(Self::new(
+            checkout.unwrap_or_else(|| cwd.to_owned()),
+            adapter,
+        ))
+    }
+
+    pub(crate) fn root(&self) -> PathBuf {
+        self.checkout.join(".agents/skills")
+    }
+
+    /// The folder under the checkout the kind reads project skills from by itself.
+    pub(crate) fn native_folder(&self) -> Option<PathBuf> {
+        match self.reads {
+            crate::agents::ProjectSkills::Native => Some(self.root()),
+            crate::agents::ProjectSkills::Own {
+                folder,
+                main_checkout,
+                ..
+            } => {
+                let own = self.checkout.join(folder);
+                let main = (main_checkout && !own.exists())
+                    .then(|| crate::worktree::linked_worktree(&self.checkout))
+                    .flatten()
+                    .map(|worktree| worktree.primary.join(folder));
+                Some(main.unwrap_or(own))
+            }
+            crate::agents::ProjectSkills::Unread => None,
+        }
+    }
+
+    /// The folder whose project skills a launch's inventory holds: the tier in a scoped view,
+    /// which merges it for a kind that does not read it, else the kind's native folder.
+    pub(crate) fn folder(&self, scoped: bool) -> Option<PathBuf> {
+        if scoped {
+            Some(self.root())
+        } else {
+            self.native_folder()
+        }
+    }
+
+    /// Whether the kind loads its user root's copy of a name over its native folder's.
+    pub(crate) fn user_first(&self) -> bool {
+        matches!(
+            self.reads,
+            crate::agents::ProjectSkills::Own {
+                user_first: true,
+                ..
+            }
+        )
+    }
+
+    /// The refusal of listed `name`, resolved to `skill`, when its author marks it user-only
+    /// for the kind.
+    pub(crate) fn user_only(&self, name: &SkillName, skill: &Path) -> Option<SkillErr> {
+        user_only_refusal(name, skill, &self.kind, self.manual)
+    }
+
+    /// Whether the tier holds `name` and the kind does not read the tier.
+    fn holds_unread(&self, name: &SkillName) -> bool {
+        self.reads != crate::agents::ProjectSkills::Native
+            && self.root().join(name.as_str()).join("SKILL.md").exists()
+    }
+
+    /// The refusal of a host launch whose inventory lacks listed `name`, when only this tier,
+    /// which the kind does not read, holds it; `None` when the tier cannot supply it.
+    pub(crate) fn only_unread_copy(&self, name: &SkillName) -> Option<SkillErr> {
+        if !self.holds_unread(name) {
+            return None;
+        }
+        let root = self.root();
+        let mut fixes = Vec::new();
+        if let crate::agents::ProjectSkills::Own { folder, .. } = self.reads {
+            fixes.push(format!(
+                "add {} (a symlink to {} works)",
+                self.checkout.join(folder).join(name.as_str()).display(),
+                root.join(name.as_str()).display()
+            ));
+        }
+        if self.manual != crate::agents::ManualSkill::Unsupported {
+            fixes.push("launch with scoped isolation".to_owned());
+        }
+        let last = "remove it from skills";
+        Some(SkillErr::ProjectOnly {
+            name: name.clone(),
+            kind: self.kind.clone(),
+            root,
+            fix: if fixes.is_empty() {
+                last.to_owned()
+            } else {
+                format!("{}, or {last}", fixes.join(", "))
+            },
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SkillChain {
     pub(crate) library: PathBuf,
@@ -268,6 +399,25 @@ pub enum SkillErr {
     },
     #[error("{message}")]
     Conflict { message: String },
+    #[error(
+        "listed skill '{name}' is only in the project skills at {}, which {kind} does not read at host isolation; {fix}",
+        .root.display()
+    )]
+    ProjectOnly {
+        name: SkillName,
+        kind: String,
+        root: PathBuf,
+        fix: String,
+    },
+    #[error(
+        "listed skill '{name}' is marked user-only for {kind} at {}; listing cannot lift that marker: drop it from skills or remove the marker",
+        .path.display()
+    )]
+    UserOnly {
+        name: SkillName,
+        kind: String,
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -282,19 +432,111 @@ pub enum LaunchSettingsErr {
     ConflictingKey { key: ProviderSkillKey },
 }
 
+/// The refusal of listed `name`, resolved to directory `skill`, when its author marks it
+/// user-only for `kind`, whose marker is `manual`; an unreadable marker is left to the enforcer
+/// that reads it.
+fn user_only_refusal(
+    name: &SkillName,
+    skill: &Path,
+    kind: &str,
+    manual: crate::agents::ManualSkill,
+) -> Option<SkillErr> {
+    let marked = is_user_only(skill, manual, |path| std::fs::read_to_string(path));
+    matches!(marked, Ok(true)).then(|| SkillErr::UserOnly {
+        name: name.clone(),
+        kind: kind.to_owned(),
+        path: skill.join(match manual {
+            crate::agents::ManualSkill::OpenAiPolicy => "agents/openai.yaml",
+            _ => "SKILL.md",
+        }),
+    })
+}
+
+/// The skills named by `keep` in RimZ's inventory order: the provider root, then the
+/// `project` folder, then the RimZ skill chain. The first copy of a name wins.
 pub(crate) fn enumerate(
     provider_root: Option<&Path>,
+    project: Option<&Path>,
     chain: Option<&SkillChain>,
-    keep: fn(&str) -> bool,
+    keep: impl Fn(&str) -> bool + Copy,
 ) -> Result<SkillInventory, SkillErr> {
     let provider =
         provider_root.map_or_else(|| Ok(BTreeMap::new()), |root| scan(root, chain, keep))?;
+    let project = project.map_or_else(
+        || Ok(BTreeMap::new()),
+        |root| {
+            project_folder(root, provider_root, |name| {
+                keep(name) && !provider.contains_key(name)
+            })
+        },
+    )?;
     let mut inventory = chain.map_or_else(
         || Ok(SkillInventory::default()),
-        |chain| chain.inventory(|name| keep(name) && !provider.contains_key(name)),
+        |chain| {
+            chain.inventory(|name| {
+                keep(name) && !provider.contains_key(name) && !project.contains_key(name)
+            })
+        },
     )?;
+    inventory.skills.extend(project);
     inventory.skills.extend(provider);
     Ok(inventory)
+}
+
+/// The skills a launch of `project`'s kind resolves, in the order its enforcer reads them: the
+/// provider root, the project folder of its inventory (the tier in a `scoped` view), the RimZ
+/// skill chain, then in a scoped view the kind's native folder, which the view leaves native.
+pub(crate) fn launch_inventory(
+    provider_root: Option<&Path>,
+    project: Option<&ProjectTier>,
+    chain: Option<&SkillChain>,
+    scoped: bool,
+    keep: impl Fn(&str) -> bool + Copy,
+) -> Result<SkillInventory, SkillErr> {
+    let folder = project.and_then(|project| project.folder(scoped));
+    let mut inventory = enumerate(provider_root, folder.as_deref(), chain, keep)?;
+    let native = project
+        .filter(|_| scoped)
+        .and_then(ProjectTier::native_folder)
+        .filter(|native| folder.as_ref() != Some(native));
+    if let Some(native) = native {
+        let own = project_folder(&native, provider_root, |name| {
+            keep(name) && !inventory.skills.contains_key(name)
+        })?;
+        inventory.skills.extend(own);
+    }
+    Ok(inventory)
+}
+
+/// The skills project folder `root` supplies to RimZ: none when it is the provider root, which
+/// RimZ reads as that, and never a `rimz-*` name, which only the provider root and the chain
+/// supply. A link into RimZ's state is the project's own skill here.
+fn project_folder(
+    root: &Path,
+    provider_root: Option<&Path>,
+    keep: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, SkillDir>, SkillErr> {
+    if provider_root.is_some_and(|provider| same_dir(provider, root)) {
+        return Ok(BTreeMap::new());
+    }
+    scan(root, None, |name| !name.starts_with("rimz-") && keep(name))
+}
+
+/// Whether `a` and `b` name one directory, by their canonical paths where both resolve.
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => normalize_path_lexical(a) == normalize_path_lexical(b),
+    }
+}
+
+/// The skills in a project folder whose names satisfy `keep`. An entry without a `SKILL.md`
+/// or a broken link is skipped, as the library read skips one.
+pub(crate) fn project_skills(
+    root: &Path,
+    keep: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, SkillDir>, SkillErr> {
+    scan(root, None, keep)
 }
 
 /// The skills on disk under a provider root and the RimZ skill chain whose names
@@ -331,14 +573,35 @@ pub fn rimz_skills(
     skills_on_disk(provider_root, chain, |name| name.starts_with("rimz-"))
 }
 
-/// Every skill on disk under a provider root and the RimZ skill chain. A root
-/// that is missing or cannot be read adds nothing, so the set holds what the
-/// readable roots establish.
+/// Every skill on disk a launch of `kind` in `env` resolves: those under its provider root and
+/// the RimZ skill chain, and with a `cwd` those of the project folders a launch from there
+/// reads, in a scoped view when `scoped`. A root that is missing or cannot be read adds
+/// nothing, so the set holds what the readable roots establish.
 pub fn available_skills(
-    provider_root: Option<&Path>,
+    kind: &str,
+    env: &BTreeMap<String, String>,
     chain: Option<&SkillChain>,
+    cwd: Option<&Path>,
+    scoped: bool,
 ) -> std::collections::BTreeSet<String> {
-    skills_on_disk(provider_root, chain, |_| true)
+    let adapter = crate::agents::find_definition(kind);
+    let provider_root = adapter.and_then(|adapter| adapter.skills_home(env));
+    let mut skills = skills_on_disk(provider_root.as_deref(), chain, |_| true);
+    let project = adapter.zip(cwd).and_then(|(adapter, cwd)| {
+        ProjectTier::discover(cwd, &crate::disk::paths::empty_dir_root(), adapter).ok()
+    });
+    let folders = project.iter().flat_map(|project| {
+        project
+            .folder(scoped)
+            .into_iter()
+            .chain(project.native_folder().filter(|_| scoped))
+    });
+    for folder in folders {
+        if let Ok(found) = project_folder(&folder, provider_root.as_deref(), |_| true) {
+            skills.extend(found.into_keys());
+        }
+    }
+    skills
 }
 
 fn scan_pack(
@@ -636,7 +899,7 @@ pub(crate) fn is_model_callable_on_disk(
 ) -> bool {
     let provider_root = adapter.skills_home(env);
     let chain = SkillChain::from_env(env);
-    let Ok(inventory) = enumerate(provider_root.as_deref(), chain.as_ref(), |_| true) else {
+    let Ok(inventory) = enumerate(provider_root.as_deref(), None, chain.as_ref(), |_| true) else {
         return false;
     };
     if inventory.conflicts.contains_key(name) {
@@ -688,10 +951,73 @@ impl HostSkills {
             Option<&[crate::config::RimzEntry]>,
         ),
         root: Option<&Path>,
+        project: Option<&ProjectTier>,
         chain: Option<&SkillChain>,
         paths: (&Path, &Path),
         args: &mut Vec<String>,
     ) -> Result<(HostSkillPlan, Option<LaunchSettingsArtifact>), LaunchSettingsErr> {
+        // A kind without a switch is unenforced, so it reads the inventory only to refuse a
+        // listed name whose copy sits in a tier the kind never reads, and only for those names.
+        let switch = matches!(self, Self::Switch { .. });
+        let tier_listed = |name: &str| {
+            listed.into_iter().flatten().any(|listed| {
+                listed.as_str() == name
+                    && project.is_some_and(|project| project.holds_unread(listed))
+            })
+        };
+        if !switch
+            && !listed
+                .into_iter()
+                .flatten()
+                .any(|name| project.is_some_and(|project| project.holds_unread(name)))
+        {
+            return Ok((HostSkillPlan::Unenforced, None));
+        }
+        let native = project.and_then(ProjectTier::native_folder);
+        let inventory = if switch {
+            enumerate(root, native.as_deref(), chain, |_| true)?
+        } else {
+            enumerate(root, native.as_deref(), chain, tier_listed)?
+        };
+        for name in listed.into_iter().flatten() {
+            if let Some(found) = inventory.skills.get(name.as_str()) {
+                if let Some(refusal) =
+                    project.and_then(|project| project.user_only(name, &found.path))
+                {
+                    return Err(refusal.into());
+                }
+                continue;
+            }
+            if let Some(conflict) = inventory.conflicts.get(name.as_str()).filter(|_| switch) {
+                return Err(SkillErr::Conflict {
+                    message: conflict.message.clone(),
+                }
+                .into());
+            }
+            if let Some(refusal) = project.and_then(|project| project.only_unread_copy(name)) {
+                return Err(refusal.into());
+            }
+            // Without a checkout the launch's own compile decides a name no other root holds.
+            if !switch || project.is_none() {
+                continue;
+            }
+            let mut roots: Vec<PathBuf> = Vec::new();
+            for root in root
+                .map(Path::to_owned)
+                .into_iter()
+                .chain(native.clone())
+                .chain(chain.into_iter().flat_map(SkillChain::roots))
+            {
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+            return Err(SkillErr::UnknownSkill {
+                name: name.clone(),
+                roots,
+            }
+            .into());
+        }
         let Self::Switch {
             flag,
             effect,
@@ -701,26 +1027,6 @@ impl HostSkills {
         else {
             return Ok((HostSkillPlan::Unenforced, None));
         };
-        let inventory = enumerate(root, chain, |_| true)?;
-        for name in listed.into_iter().flatten() {
-            if let Some(conflict) = inventory.conflicts.get(name.as_str()) {
-                return Err(SkillErr::Conflict {
-                    message: conflict.message.clone(),
-                }
-                .into());
-            }
-            if !inventory.skills.contains_key(name.as_str()) {
-                return Err(SkillErr::UnknownSkill {
-                    name: name.clone(),
-                    roots: root
-                        .into_iter()
-                        .map(Path::to_owned)
-                        .chain(chain.into_iter().flat_map(SkillChain::roots))
-                        .collect(),
-                }
-                .into());
-            }
-        }
         let mut callable = Vec::new();
         let mut unlisted = Vec::new();
         for (name, skill) in inventory.skills {
@@ -753,244 +1059,4 @@ impl HostSkills {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn relative_homes_keep_absolute_owned_link_roots() {
-        let temp = tempfile::tempdir().unwrap();
-        let relative = std::env::current_dir()
-            .unwrap()
-            .ancestors()
-            .skip(1)
-            .map(|_| "..")
-            .collect::<PathBuf>()
-            .join(temp.path().strip_prefix("/").unwrap());
-        let provider = temp.path().join("provider");
-        std::fs::create_dir(&provider).unwrap();
-        for target in [
-            temp.path().join("skills/one"),
-            temp.path().join("packs/one"),
-        ] {
-            let link = provider.join("owned");
-            std::os::unix::fs::symlink(&target, &link).unwrap();
-            for chain in [
-                SkillChain::from_home(&relative),
-                SkillChain::from_env(&BTreeMap::from([(
-                    "RIMZ_AGENTS_HOME".into(),
-                    relative.to_str().unwrap().into(),
-                )]))
-                .unwrap(),
-            ] {
-                assert!(chain.roots().iter().all(|root| root.is_absolute()));
-                assert_eq!(chain.owned_link(&link).unwrap(), Some(target.clone()));
-            }
-            std::fs::remove_file(link).unwrap();
-        }
-    }
-
-    #[test]
-    fn discovery_prefers_provider_skips_broken_links_and_records_sources() {
-        let temp = tempfile::tempdir().unwrap();
-        let provider = temp.path().join("provider");
-        let library = temp.path().join("rimz/skills");
-        let foreign = temp.path().join("foreign");
-        for path in [
-            provider.join("same"),
-            library.join("same"),
-            library.join("extra"),
-            foreign.clone(),
-        ] {
-            std::fs::create_dir_all(&path).unwrap();
-            std::fs::write(path.join("SKILL.md"), "skill").unwrap();
-        }
-        std::os::unix::fs::symlink(provider.join("missing"), provider.join("broken")).unwrap();
-        std::os::unix::fs::symlink(&foreign, provider.join("alias")).unwrap();
-        std::os::unix::fs::symlink(library.join("extra"), provider.join("owned")).unwrap();
-        std::fs::create_dir(provider.join("not-a-skill")).unwrap();
-        let chain = SkillChain::from_home(library.parent().unwrap());
-        let skills = enumerate(Some(&provider), Some(&chain), |_| true)
-            .unwrap()
-            .skills;
-        assert_eq!(skills.len(), 3);
-        assert_eq!(
-            skills["same"].source,
-            provider.join("same").canonicalize().unwrap()
-        );
-        assert_eq!(skills["alias"].source, foreign.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn discovery_does_not_inspect_shadowed_rimz_skills() {
-        let temp = tempfile::tempdir().unwrap();
-        let provider = temp.path().join("provider");
-        let chain = SkillChain::from_home(temp.path());
-        std::fs::create_dir_all(provider.join("same")).unwrap();
-        std::fs::write(provider.join("same/SKILL.md"), "provider").unwrap();
-        std::fs::create_dir_all(chain.library.join("same")).unwrap();
-        std::os::unix::fs::symlink("SKILL.md", chain.library.join("same/SKILL.md")).unwrap();
-        let result = enumerate(Some(&provider), Some(&chain), |_| true);
-        assert!(
-            result.is_ok(),
-            "the provider's copy wins without reading the lower marker: {result:?}"
-        );
-    }
-
-    #[test]
-    fn discovery_loads_pack_skills_and_withholds_conflicts_and_exclusions() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("rimz");
-        let library = SkillChain::from_home(&home).library;
-        for pack in ["one", "two"] {
-            let source = temp.path().join(pack);
-            std::fs::create_dir_all(&source).unwrap();
-            std::fs::write(
-                source.join("rimz-packs.toml"),
-                format!("[[pack]]\nname = '{pack}'\ndescription = 'Skills'\npath = '.'\n"),
-            )
-            .unwrap();
-            for name in [pack, "conflict", "hidden", "excluded"] {
-                let path = source.join(ItemType::Skills.as_str()).join(name);
-                std::fs::create_dir_all(&path).unwrap();
-                std::fs::write(path.join("SKILL.md"), "skill").unwrap();
-            }
-            crate::packs::install(&home, &source).unwrap();
-            crate::packs::exclude(
-                &home,
-                &pack.parse().unwrap(),
-                &crate::packs::ExclusionTarget::Item(crate::packs::ItemKey {
-                    kind: crate::packs::ItemType::Skills,
-                    name: "excluded".to_owned(),
-                }),
-            )
-            .unwrap();
-        }
-        std::fs::create_dir_all(library.join("hidden")).unwrap();
-        std::fs::write(library.join("hidden/SKILL.md"), "home").unwrap();
-        let chain = SkillChain::from_home(&home);
-        let skills = enumerate(None, Some(&chain), |_| true).unwrap().skills;
-        assert_eq!(
-            skills.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["hidden", "one", "two"]
-        );
-        let marker = library.join("hidden/SKILL.md");
-        std::fs::remove_file(&marker).unwrap();
-        std::os::unix::fs::symlink("SKILL.md", &marker).unwrap();
-        let result = enumerate(None, Some(&chain), |_| true);
-        assert!(
-            matches!(&result, Err(SkillErr::Io { path, .. }) if path == &marker),
-            "an unreadable library winner must fail, not reveal pack copies: {result:?}"
-        );
-    }
-
-    #[test]
-    fn available_skills_lists_all_skills_while_rimz_skills_keeps_only_rimz_prefix() {
-        let temp = tempfile::tempdir().unwrap();
-        let provider = temp.path().join("provider");
-        let library = temp.path().join("rimz/skills");
-        for path in [
-            provider.join("commit"),
-            library.join("rimz-reflect"),
-            library.join("_shared"),
-        ] {
-            std::fs::create_dir_all(&path).unwrap();
-            std::fs::write(path.join("SKILL.md"), "skill").unwrap();
-        }
-        let chain = SkillChain::from_home(library.parent().unwrap());
-        assert_eq!(
-            available_skills(Some(&provider), Some(&chain)),
-            ["_shared", "commit", "rimz-reflect"]
-                .map(str::to_owned)
-                .into()
-        );
-        assert_eq!(
-            rimz_skills(Some(&provider), Some(&chain)),
-            ["rimz-reflect".to_owned()].into()
-        );
-    }
-
-    #[test]
-    fn is_model_callable_on_disk_drops_same_directory_alias_and_shared_provider_key() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-        let claude_skills = home.join(".claude/skills");
-        let codex_skills = home.join(".agents/skills");
-        let rimz_home = home.join(".rimz");
-        std::fs::create_dir_all(&claude_skills).unwrap();
-        std::fs::create_dir_all(&codex_skills).unwrap();
-        std::fs::create_dir_all(&rimz_home).unwrap();
-
-        let env = BTreeMap::from([
-            ("HOME".to_owned(), home.display().to_string()),
-            (
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                home.join(".claude").display().to_string(),
-            ),
-            (
-                "RIMZ_AGENTS_HOME".to_owned(),
-                rimz_home.display().to_string(),
-            ),
-        ]);
-        let msg_name: SkillName = "rimz-message".parse().unwrap();
-
-        // Branch 1: two names pointing at the same canonical directory (Claude keys by
-        // directory name, so `other-alias` and `rimz-message` have distinct provider keys
-        // and only the canonical-source check catches the collision).
-        let claude_msg = claude_skills.join("rimz-message");
-        std::fs::create_dir_all(&claude_msg).unwrap();
-        std::fs::write(
-            claude_msg.join("SKILL.md"),
-            "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
-        )
-        .unwrap();
-        std::os::unix::fs::symlink(&claude_msg, claude_skills.join("other-alias")).unwrap();
-        let claude = crate::agents::find_definition("claude").unwrap();
-        let alias_name: SkillName = "other-alias".parse().unwrap();
-        assert!(
-            !is_model_callable_on_disk(
-                "rimz-message",
-                claude,
-                &env,
-                std::slice::from_ref(&msg_name)
-            ),
-            "unlisted alias to the same directory must drop seat-added rimz-message"
-        );
-        assert!(
-            is_model_callable_on_disk(
-                "rimz-message",
-                claude,
-                &env,
-                &[msg_name.clone(), alias_name]
-            ),
-            "listing both aliases removes the collision"
-        );
-
-        // Branch 2: two distinct directories sharing one provider key (Codex keys by
-        // frontmatter `name`, so separate directories collide only on the provider-key check).
-        let codex_msg = codex_skills.join("rimz-message");
-        let codex_dup = codex_skills.join("duplicate");
-        for dir in [&codex_msg, &codex_dup] {
-            std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(
-                dir.join("SKILL.md"),
-                "---\nname: rimz-message\ndescription: Message.\n---\nMessage.\n",
-            )
-            .unwrap();
-        }
-        let codex = crate::agents::find_definition("codex").unwrap();
-        let dup_name: SkillName = "duplicate".parse().unwrap();
-        assert!(
-            !is_model_callable_on_disk(
-                "rimz-message",
-                codex,
-                &env,
-                std::slice::from_ref(&msg_name)
-            ),
-            "unlisted directory with the same provider key must drop seat-added rimz-message"
-        );
-        assert!(
-            is_model_callable_on_disk("rimz-message", codex, &env, &[msg_name, dup_name]),
-            "listing both directories removes the provider-key collision"
-        );
-    }
-}
+mod tests;

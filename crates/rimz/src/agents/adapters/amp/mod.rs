@@ -371,6 +371,10 @@ impl crate::agents::capabilities::InstallationCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for AmpAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         amp_config_home(
             env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),

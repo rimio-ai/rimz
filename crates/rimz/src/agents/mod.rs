@@ -87,7 +87,7 @@ pub use background_script::{
     BACKGROUND_SCRIPT_SHOWN_AFTER, BackgroundScript, BackgroundScriptReport,
 };
 pub use background_shell::{BackgroundShell, BackgroundShellReport};
-pub use capabilities::ManualSkill;
+pub use capabilities::{ManualSkill, ProjectSkills};
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage,
     AgentTokenUsage, AgentTurnError, CacheHealth, CostCoverage, FieldPatch, LocalContextPatch,

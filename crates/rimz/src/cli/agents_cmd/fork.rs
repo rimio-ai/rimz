@@ -137,6 +137,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &preflight,
         &seed.cwd,
         (!isolation.is_scoped()).then_some(store.runtime_paths()),
+        rimz::harness::launch::PreflightCheckout::Cwd,
     )?;
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;

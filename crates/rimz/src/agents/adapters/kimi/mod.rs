@@ -561,6 +561,10 @@ impl crate::agents::capabilities::InstallationCapability for KimiAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KimiAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["KIMI_CODE_HOME"]
     }

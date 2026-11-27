@@ -531,6 +531,10 @@ impl crate::agents::capabilities::InstallationCapability for CursorAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["CURSOR_CONFIG_DIR"]
     }

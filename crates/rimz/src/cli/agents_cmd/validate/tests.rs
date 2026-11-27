@@ -538,6 +538,7 @@ fn host_skill_warnings_follow_definition_isolation_and_keep_success() {
         SkillCheck::Check {
             env: &env,
             machine_isolation: Isolation::Scoped,
+            cwd: None,
         },
         &Default::default(),
     );
@@ -758,6 +759,7 @@ fn validation_checks_skills_even_without_sandbox_config() {
     let check = SkillCheck::Check {
         env: &env,
         machine_isolation: Isolation::Host,
+        cwd: Some(root.path()),
     };
     let checked = load(root.path(), check, &Default::default());
     assert!(
@@ -774,6 +776,180 @@ fn validation_checks_skills_even_without_sandbox_config() {
     .unwrap();
     let checked = load(root.path(), check, &Default::default());
     assert!(checked.errors.is_empty(), "{:?}", checked.errors);
+}
+
+#[test]
+fn validation_resolves_listed_skills_against_the_current_checkout() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex", "qoder"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}-worker.md")),
+            format!(
+                "---\ndescription: Worker\nagent: {kind}\ntools: [Skill]\nskills: [proj]\n---\n"
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/codex-reference.md"),
+        "---\ndescription: Reference\nagent: codex\ntools: [Skill]\nskills: [proj]\n---\nUse skill(proj).",
+    )
+    .unwrap();
+    let checkout = tempfile::tempdir().unwrap();
+    let tier = checkout.path().join(".agents/skills");
+    std::fs::create_dir_all(tier.join("proj")).unwrap();
+    std::fs::write(
+        tier.join("proj/SKILL.md"),
+        "---\nname: proj\ndescription: Project.\n---\nProject.",
+    )
+    .unwrap();
+    let env =
+        std::collections::BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
+    let errors = |cwd: &Path| {
+        load(
+            root.path(),
+            SkillCheck::Check {
+                env: &env,
+                machine_isolation: Isolation::Host,
+                cwd: Some(cwd),
+            },
+            &Default::default(),
+        )
+        .errors
+        .into_iter()
+        .map(|error| {
+            let file = error.path.file_name().unwrap().to_str().unwrap().to_owned();
+            (file, error.message)
+        })
+        .collect::<Vec<_>>()
+    };
+    let only = |kind: &str| {
+        format!(
+            "listed skill 'proj' is only in the project skills at {tier}, which {kind} does not \
+             read at host isolation; add {checkout}/.{kind}/skills/proj (a symlink to \
+             {tier}/proj works), launch with scoped isolation, or remove it from skills",
+            tier = tier.display(),
+            checkout = checkout.path().display()
+        )
+    };
+    assert_eq!(
+        errors(checkout.path()),
+        [
+            ("claude-worker.md".to_owned(), only("claude")),
+            ("qoder-worker.md".to_owned(), only("qoder")),
+        ],
+        "codex reads the checkout's .agents/skills, so its workers validate, while a qoder \
+         launch refuses the name though qoder has no switch"
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Check {
+            env: &env,
+            machine_isolation: Isolation::Host,
+            cwd: Some(checkout.path()),
+        },
+        &Default::default(),
+    );
+    let chain = rimz::agents::skills::SkillChain::from_home(root.path());
+    let references: Vec<_> = capability_errors(
+        &loaded,
+        &Default::default(),
+        disk_skills(&env, &chain, Some(checkout.path())),
+    )
+    .into_iter()
+    .filter(|error| error.path.ends_with("codex-reference.md"))
+    .map(|error| error.message)
+    .collect();
+    assert!(
+        references.is_empty(),
+        "skill(proj) names the project skill the launch reaches: {references:?}"
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    let missing = errors(elsewhere.path());
+    assert_eq!(missing.len(), 3, "{missing:?}");
+    assert!(
+        missing.iter().all(|(_, message)| message.contains(
+            &elsewhere
+                .path()
+                .join(".agents/skills/proj/SKILL.md")
+                .display()
+                .to_string()
+        )),
+        "outside the checkout the miss names the tier it searched: {missing:?}"
+    );
+}
+
+/// Config load has no checkout, so a RimZ-owned link left in the provider root and a broken
+/// provider-root link, both of which discovery skips, leave the listed name to the launch.
+#[test]
+fn load_leaves_a_name_behind_a_skipped_provider_root_link_to_the_launch() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: claude\ntools: [Skill]\nskills: [deploy, gone]\n---\n",
+    )
+    .unwrap();
+    let provider = root.path().join(".claude/skills");
+    std::fs::create_dir_all(&provider).unwrap();
+    std::os::unix::fs::symlink(root.path().join("skills/deploy"), provider.join("deploy")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("missing"), provider.join("gone")).unwrap();
+    let env =
+        std::collections::BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
+    let loaded = load(
+        root.path(),
+        SkillCheck::Check {
+            env: &env,
+            machine_isolation: Isolation::Host,
+            cwd: None,
+        },
+        &Default::default(),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+}
+
+/// A scoped Claude launch reads its checkout's own `.claude/skills` natively, so validate
+/// resolves a listed name found only there and names that folder among the roots of a miss.
+#[test]
+fn validation_of_a_scoped_profile_reads_the_kinds_own_project_folder() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(
+        root.path().join("agents/scoped.md"),
+        "---\ndescription: Scoped\nagent: claude\nisolation: scoped\ntools: [Skill]\nskills: [own, absent]\n---\n",
+    )
+    .unwrap();
+    let checkout = tempfile::tempdir().unwrap();
+    let own = checkout.path().join(".claude/skills");
+    std::fs::create_dir_all(own.join("own")).unwrap();
+    std::fs::write(
+        own.join("own/SKILL.md"),
+        "---\nname: own\ndescription: Own.\n---\nOwn.",
+    )
+    .unwrap();
+    let env =
+        std::collections::BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
+    let errors = load(
+        root.path(),
+        SkillCheck::Check {
+            env: &env,
+            machine_isolation: Isolation::Host,
+            cwd: Some(checkout.path()),
+        },
+        &Default::default(),
+    )
+    .errors;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let message = &errors[0].message;
+    assert!(
+        message.starts_with("lists skill 'absent', missing at "),
+        "only the name no root holds fails: {message}"
+    );
+    assert!(
+        message.contains(&own.join("absent/SKILL.md").display().to_string()),
+        "the miss names the kind's own project folder: {message}"
+    );
 }
 
 #[test]
@@ -835,7 +1011,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
     }
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let on_disk = |kind: &str| {
+    let on_disk = |kind: &str, _scoped: bool| {
         assert_eq!(kind, "claude");
         Some(["rimz-chat".to_owned()].into())
     };
@@ -887,7 +1063,7 @@ fn capability_references_error_when_unknown_or_unreachable_and_never_on_skill_te
         ]
     );
     // An unchecked disk (validate inside a scoped view) judges the lists alone.
-    let unchecked: Vec<_> = capability_errors(&loaded, &Default::default(), |_| None)
+    let unchecked: Vec<_> = capability_errors(&loaded, &Default::default(), |_, _| None)
         .into_iter()
         .map(|error| error.message)
         .filter(|message| {
@@ -992,7 +1168,7 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
     .unwrap();
     let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let on_disk = |kind: &str| {
+    let on_disk = |kind: &str, _scoped: bool| {
         assert_eq!(kind, "claude");
         Some(
             ["commit", "_shared", "rebase", "rimz-reflect"]
@@ -1002,7 +1178,7 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
     };
     let collect = |disk: Option<std::collections::BTreeSet<String>>| {
         let mut messages: Vec<_> =
-            capability_errors(&loaded, &Default::default(), |_| disk.clone())
+            capability_errors(&loaded, &Default::default(), |_, _| disk.clone())
                 .into_iter()
                 .map(|error| {
                     let file = error.path.strip_prefix(root.path()).unwrap().to_owned();
@@ -1013,7 +1189,7 @@ fn skill_references_check_lists_disk_and_capability_shorthand() {
         messages
     };
     assert_eq!(
-        collect(on_disk("claude")),
+        collect(on_disk("claude", false)),
         [
             "agents/cap-skill-unlisted.md: profile cap-skill-unlisted: rimz(lsp) names `rimz-lsp`, \
              which this profile cannot reach: its mcps leave out rimz-lsp; its skills leave out \
@@ -1101,7 +1277,7 @@ fn subagent_references_check_allowlists_catalog_commands_aliases_and_children() 
         toml::from_str("[agents.commands]\nlint = 'cargo clippy'\n").unwrap();
     let loaded = load(root.path(), SkillCheck::Skip, &machine);
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let mut messages: Vec<_> = capability_errors(&loaded, &machine, |_| None)
+    let mut messages: Vec<_> = capability_errors(&loaded, &machine, |_, _| None)
         .into_iter()
         .map(|error| {
             let file = error.path.strip_prefix(root.path()).unwrap().to_owned();
@@ -1157,7 +1333,7 @@ fn subagent_references_check_allowlists_catalog_commands_aliases_and_children() 
         toml::from_str("[agents.commands]\nagy = 'echo hi'\n").unwrap();
     let cmd_loaded = load(cmd_root.path(), SkillCheck::Skip, &cmd_machine);
     assert!(cmd_loaded.errors.is_empty(), "{:?}", cmd_loaded.errors);
-    let mut cmd_messages: Vec<_> = capability_errors(&cmd_loaded, &cmd_machine, |_| None)
+    let mut cmd_messages: Vec<_> = capability_errors(&cmd_loaded, &cmd_machine, |_, _| None)
         .into_iter()
         .map(|error| {
             let file = error.path.strip_prefix(cmd_root.path()).unwrap().to_owned();

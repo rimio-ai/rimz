@@ -2646,6 +2646,7 @@ fn seat_added_rimz_message_is_settled_at_launch() {
             crate::config::definitions::SkillCheck::Check {
                 env: &ambient,
                 machine_isolation: Isolation::Host,
+                cwd: None,
             }
         } else {
             crate::config::definitions::SkillCheck::Skip

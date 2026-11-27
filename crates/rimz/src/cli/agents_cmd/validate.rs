@@ -12,10 +12,12 @@ pub(super) fn run(json: bool) -> Result<()> {
     let machine = crate::cli::machine_config();
     let env = rimz::agents::ambient_env();
     let in_sandbox = Isolation::ambient(&env).is_some_and(Isolation::is_scoped);
+    let cwd = std::env::current_dir()?;
     let check = if !in_sandbox {
         SkillCheck::Check {
             env: &env,
             machine_isolation: machine.agents.isolation,
+            cwd: Some(&cwd),
         }
     } else {
         SkillCheck::Skip
@@ -28,18 +30,11 @@ pub(super) fn run(json: bool) -> Result<()> {
     }
     let mut loaded = load(&home, check, &machine);
     let chain = rimz::agents::skills::SkillChain::from_home(&home);
-    loaded
-        .errors
-        .extend(capability_errors(&loaded, &machine, |kind| {
-            (!in_sandbox).then(|| {
-                rimz::agents::skills::available_skills(
-                    rimz::agents::find_definition(kind)
-                        .and_then(|definition| definition.skills_home(&env))
-                        .as_deref(),
-                    Some(&chain),
-                )
-            })
-        }));
+    loaded.errors.extend(capability_errors(
+        &loaded,
+        &machine,
+        disk_skills(&env, &chain, (!in_sandbox).then_some(cwd.as_path())),
+    ));
     let mut warnings = warnings(&loaded, machine.agents.isolation);
     warnings.extend(lsp_warnings(&loaded, &machine));
     warnings.extend(keep_warm_warnings(&loaded, &machine.harness));
@@ -549,6 +544,25 @@ fn catalog_contains(
         .is_some_and(|runtime| specs.iter().any(|spec| spec.name == runtime.kind()))
 }
 
+/// The skills on disk a launch of a kind from `cwd` reaches, scoped or not, for the prompt
+/// references `capability_errors` judges; `None` for every kind when `cwd` is absent, since the
+/// disk is then not checked.
+fn disk_skills<'a>(
+    env: &'a std::collections::BTreeMap<String, String>,
+    chain: &'a rimz::agents::skills::SkillChain,
+    cwd: Option<&'a Path>,
+) -> impl Fn(&str, bool) -> Option<std::collections::BTreeSet<String>> + 'a {
+    move |kind, scoped| {
+        Some(rimz::agents::skills::available_skills(
+            kind,
+            env,
+            Some(chain),
+            Some(cwd?),
+            scoped,
+        ))
+    }
+}
+
 /// Each `rimz(x)`, `skill(x)`, and `subagent(x)` in a profile's resolved prompt sources that
 /// names an unknown target or one the profile cannot reach. A `skill(rimz-x)` for one of the
 /// thirteen MCP capabilities is judged as `rimz(x)`, never against `skills:`. `on_disk` gives a
@@ -558,7 +572,7 @@ fn catalog_contains(
 fn capability_errors(
     loaded: &LoadedDefinitions,
     machine: &rimz::config::MachineConfig,
-    on_disk: impl Fn(&str) -> Option<std::collections::BTreeSet<String>>,
+    on_disk: impl Fn(&str, bool) -> Option<std::collections::BTreeSet<String>>,
 ) -> Vec<definitions::DefinitionErr> {
     let mut inventories = std::collections::BTreeMap::new();
     let full_catalog = rimz::harness::subagent_policy::catalog(
@@ -602,9 +616,12 @@ fn capability_errors(
                 }
             }
         }
+        let scoped = cfg!(target_os = "linux")
+            && rimz::config::Isolation::resolve(None, profile.isolation, machine.agents.isolation)
+                .is_scoped();
         let inventory = inventories
-            .entry(row.kind.clone())
-            .or_insert_with(|| on_disk(&row.kind));
+            .entry((row.kind.clone(), scoped))
+            .or_insert_with(|| on_disk(&row.kind, scoped));
         for name in rimz_names {
             let present = inventory
                 .as_ref()

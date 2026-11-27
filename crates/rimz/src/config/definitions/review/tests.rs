@@ -260,6 +260,7 @@ fn candidate_review_sees_staged_skills_inheritance_defaults_and_launch_names_onc
         super::super::SkillCheck::Check {
             env: &env,
             machine_isolation: Isolation::Scoped,
+            cwd: None,
         },
         &machine,
         &before,

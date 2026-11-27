@@ -425,6 +425,7 @@ fn launch_replacement(
             &swap::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
             &cwd,
             Some(store.runtime_paths()),
+            crate::harness::launch::PreflightCheckout::Cwd,
         )
         .map_err(MoltErr::other)?;
     }

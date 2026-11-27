@@ -376,6 +376,10 @@ impl crate::agents::capabilities::CoreCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["GROK_HOME"]
     }

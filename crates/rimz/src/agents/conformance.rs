@@ -455,39 +455,129 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
 
 #[test]
 fn builtin_skills_homes_follow_config_homes() {
+    use super::ProjectSkills::{Native, Own, Unread};
+    let own = |folder, user_first| Own {
+        folder,
+        main_checkout: false,
+        user_first,
+    };
     let table = [
-        ("claude", Some(".claude/skills"), ManualSkill::Frontmatter),
-        ("codex", Some(".agents/skills"), ManualSkill::OpenAiPolicy),
-        ("amp", Some(".agents/skills"), ManualSkill::Unsupported),
-        ("copilot", Some(".agents/skills"), ManualSkill::Frontmatter),
-        ("kimi", Some(".agents/skills"), ManualSkill::Frontmatter),
-        ("pi", Some(".agents/skills"), ManualSkill::Frontmatter),
-        ("opencode", Some(".agents/skills"), ManualSkill::Unsupported),
+        (
+            "claude",
+            Some(".claude/skills"),
+            ManualSkill::Frontmatter,
+            Own {
+                folder: ".claude/skills",
+                main_checkout: true,
+                user_first: true,
+            },
+        ),
+        (
+            "codex",
+            Some(".agents/skills"),
+            ManualSkill::OpenAiPolicy,
+            Native,
+        ),
+        (
+            "amp",
+            Some(".agents/skills"),
+            ManualSkill::Unsupported,
+            Native,
+        ),
+        (
+            "copilot",
+            Some(".agents/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "kimi",
+            Some(".agents/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "pi",
+            Some(".agents/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "opencode",
+            Some(".agents/skills"),
+            ManualSkill::Unsupported,
+            Native,
+        ),
         (
             "antigravity",
             Some(".gemini/config/skills"),
             ManualSkill::Frontmatter,
+            Native,
         ),
-        ("cursor", Some(".agents/skills"), ManualSkill::Frontmatter),
-        ("droid", Some(".agents/skills"), ManualSkill::Frontmatter),
-        ("kiro", Some(".kiro/skills"), ManualSkill::Unsupported),
-        ("qwen", Some(".qwen/skills"), ManualSkill::Frontmatter),
-        ("qoder", Some(".qoder/skills"), ManualSkill::Frontmatter),
-        ("grok", Some(".agents/skills"), ManualSkill::Unsupported),
-        ("hermes", Some(".hermes/skills"), ManualSkill::Unsupported),
-        ("omp", Some(".omp/agent/skills"), ManualSkill::Frontmatter),
+        (
+            "cursor",
+            Some(".agents/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "droid",
+            Some(".agents/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "kiro",
+            Some(".kiro/skills"),
+            ManualSkill::Unsupported,
+            own(".kiro/skills", false),
+        ),
+        (
+            "qwen",
+            Some(".qwen/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
+        (
+            "qoder",
+            Some(".qoder/skills"),
+            ManualSkill::Frontmatter,
+            own(".qoder/skills", true),
+        ),
+        (
+            "grok",
+            Some(".agents/skills"),
+            ManualSkill::Unsupported,
+            Native,
+        ),
+        // Hermes reads project skills only under a repo root its own
+        // `skills.trusted_project_dirs` lists, and that list starts empty.
+        (
+            "hermes",
+            Some(".hermes/skills"),
+            ManualSkill::Unsupported,
+            Unread,
+        ),
+        (
+            "omp",
+            Some(".omp/agent/skills"),
+            ManualSkill::Frontmatter,
+            Native,
+        ),
         (
             "muse",
             Some(".config/muse/skills"),
             ManualSkill::Unsupported,
+            Native,
         ),
-        ("minimax", None, ManualSkill::Unsupported),
+        ("minimax", None, ManualSkill::Unsupported, Native),
     ];
     assert_eq!(table.len(), BUILTINS.len());
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
-        let (_, suffix, manual) = table.iter().find(|(name, _, _)| *name == kind).unwrap();
+        let (_, suffix, manual, project) = table.iter().find(|(name, ..)| *name == kind).unwrap();
         assert_eq!(adapter.manual_skill(), *manual, "{kind}");
+        assert_eq!(adapter.project_skills(), *project, "{kind}");
         for home in ["/fixture/home", "/another/home"] {
             let env = std::collections::BTreeMap::from([("HOME".into(), home.into())]);
             assert_eq!(
