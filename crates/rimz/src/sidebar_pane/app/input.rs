@@ -51,6 +51,9 @@ pub(in crate::sidebar_pane) enum Wakeup {
     Scroll {
         down: bool,
     },
+    /// Select one visible roster row directly during scenario playback.
+    #[cfg(feature = "testkit")]
+    SelectRow(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

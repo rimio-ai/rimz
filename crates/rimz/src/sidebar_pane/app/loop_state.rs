@@ -62,6 +62,8 @@ use super::layout_freeze;
 use super::lifecycle::{PaintHold, SelfCloseState, grow_beyond_legit, resize_grew};
 use super::notify::{BellNotice, emit_terminal_notification};
 use super::paint::{FramePainter, PaintKind};
+#[cfg(feature = "testkit")]
+use super::selection::select_visible_row;
 use super::selection::{
     InputEffect, InputOutcome, click_focus_pane, finish_search, handle_key, handle_mouse_click,
     handle_scroll, reconcile_dashboard, reconcile_selection, row_index_of_pane, set_make_up_filter,
@@ -381,6 +383,8 @@ pub(super) fn handle_wakeup(
             outcome
         }
         Wakeup::Scroll { down } => handle_scroll(down, view, ui),
+        #[cfg(feature = "testkit")]
+        Wakeup::SelectRow(ordinal) => select_visible_row(view, snapshot, ordinal),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts ticks, room events and worker completions;
         // raw presses resolve against the current UI mode.

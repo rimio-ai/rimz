@@ -371,6 +371,7 @@ impl Controls {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar_pane::app::input::KeyAction;
 
     #[test]
     fn a_stall_past_a_whole_pass_rebuilds_even_at_a_later_local_time() {
