@@ -1120,7 +1120,11 @@ fn write_project_trust_list(
     if values.is_empty() {
         return Ok(());
     }
-    writeln!(out, "  {label}: {}", values.join(", "))
+    writeln!(
+        out,
+        "  {label}: {}",
+        rimz::packs::one_line(&values.join(", "))
+    )
 }
 
 fn write_project_trust_notice(lines: &[&str]) -> std::io::Result<()> {

@@ -48,6 +48,7 @@ impl Target {
         let mut effective = crate::config::effective::load(&machine, workspace.launch_repo_root())
             .map_err(|error| LspErr::Configuration(error.to_string()))?;
         if let Some(server) = effective.untrusted_lsp_servers.first() {
+            let server = crate::packs::one_line(server);
             return Err(LspErr::Configuration(format!(
                 "project config declares language server {server} but the project is not trusted; run rimz trust"
             )));
