@@ -279,8 +279,9 @@ fn scope(root: &Path, declared: &Declared) -> std::result::Result<PathBuf, Query
     Ok(path.parent().unwrap_or(Path::new("/")).to_owned())
 }
 
-/// Every `.rs` file under `directory`, skipping `target/` and dot-directories at any depth and
-/// following no symlinked directory; an unreadable directory contributes none.
+/// Every `.rs` file under `directory`, skipping `target/`, dot-directories, and nested checkouts (a
+/// subdirectory holding `.git`) at any depth and following no symlinked directory; an unreadable
+/// directory contributes none.
 fn rust_files(directory: &Path, files: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
@@ -291,7 +292,10 @@ fn rust_files(directory: &Path, files: &mut Vec<PathBuf>) {
         };
         let path = entry.path();
         if kind.is_dir() {
-            if name != "target" && !name.as_encoded_bytes().starts_with(b".") {
+            if name != "target"
+                && !name.as_encoded_bytes().starts_with(b".")
+                && !path.join(".git").exists()
+            {
                 rust_files(&path, files);
             }
         } else if path.extension().is_some_and(|extension| extension == "rs") {

@@ -3422,7 +3422,7 @@ fn lsp_outline_recovery_agrees_with_anchor_checks() {
     broker.wait().unwrap();
 }
 
-const ALIAS_SOURCES: [(&str, &str); 11] = [
+const ALIAS_SOURCES: [(&str, &str); 13] = [
     (
         "src/lib.rs",
         "pub mod m;\nmod elsewhere;\nmod same;\nmod user;\npub use m::target as reexported;\n\npub fn via_reexport() -> u32 {\n    reexported(5)\n}\npub use m::target as first;\npub use m::target as second;\nmod chain;\n",
@@ -3445,6 +3445,11 @@ const ALIAS_SOURCES: [(&str, &str); 11] = [
     ),
     (
         ".hidden/skipped.rs",
+        "fn skipped() -> u32 {\n    reexported()\n}\n",
+    ),
+    ("worktrees/feat/.git", "gitdir: ../../.git/worktrees/feat\n"),
+    (
+        "worktrees/feat/src/lib.rs",
         "fn skipped() -> u32 {\n    reexported()\n}\n",
     ),
     (
@@ -3743,6 +3748,7 @@ fn lsp_refs_and_callers_list_uses_reached_through_an_alias() {
     let skipped = |(path, line): &&(String, u64)| {
         path.starts_with("target/")
             || path.starts_with(".hidden/")
+            || path.starts_with("worktrees/")
             || (path == "tests/consumer.rs" && *line == 3)
     };
     assert_eq!(
