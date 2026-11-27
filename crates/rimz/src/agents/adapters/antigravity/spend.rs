@@ -3,10 +3,13 @@
 //! Every model response is one `MODEL` / `PLANNER_RESPONSE` row carrying
 //! `input_tokens` (cache reads excluded), `cache_read_tokens` and `output_tokens`
 //! (thinking included). Compaction `SYSTEM` / `CHECKPOINT` rows carry tokens too
-//! and are priced without timing. `transcript.jsonl` repeats the same rows, so it
-//! is never a source. Rows are priced at list price by exact lookup only: a
-//! subscription's quota is work-metered, so the dollars are an estimate, and a
-//! related model's rates are never borrowed.
+//! but name no model, so each counts under the latest model a response row named
+//! before it (carried in the cursor across resumed parses) and is priced without
+//! timing; a checkpoint before any named response stays model-less at $0.
+//! `transcript.jsonl` repeats the same rows, so it is never a source. Rows are
+//! priced at list price by exact lookup only: a subscription's quota is
+//! work-metered, so the dollars are an estimate, and a related model's rates are
+//! never borrowed.
 //!
 //! A `MODEL` / `PLANNER_RESPONSE` row followed immediately by a `MODEL` /
 //! `GENERIC` row (any status) is timed from the whole-second gap between their
@@ -100,6 +103,9 @@ pub(super) fn refresh(
 struct AntigravitySpendState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_start: Option<u64>,
+    /// The latest model a response row named, which a model-less checkpoint counts under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +128,18 @@ impl TokenRow {
     fn is_model_response(&self) -> bool {
         self.source.as_deref() == Some("MODEL")
             && self.record_type.as_deref() == Some("PLANNER_RESPONSE")
+    }
+
+    fn is_checkpoint(&self) -> bool {
+        self.source.as_deref() == Some("SYSTEM")
+            && self.record_type.as_deref() == Some("CHECKPOINT")
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
     }
 
     fn token_split(&self) -> TokenSplit {
@@ -173,9 +191,8 @@ fn follower_end_secs(line: &str) -> Option<u64> {
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
-    let carried_start = resume
-        .and_then(|cursor| cursor.state_as::<AntigravitySpendState>().pending_start)
-        .filter(|&start| start < from);
+    let carried = resume.map_or_else(AntigravitySpendState::default, SpendCursor::state_as);
+    let carried_start = carried.pending_start.filter(|&start| start < from);
     let read_from = carried_start.unwrap_or(from);
     let (bytes, next) = match try_read_transcript_lines(path, read_from) {
         Ok(Some(read)) => read,
@@ -206,6 +223,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     let mut unknown_models = BTreeMap::new();
     let mut entries = Vec::new();
     let mut pending: Option<PendingModel> = None;
+    let mut last_model = carried.last_model;
     let mut pos = 0;
     while pos < bytes.len() {
         let line_start = read_from + pos as u64;
@@ -258,9 +276,16 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
             }
         }
 
-        let Some(row) = parse_token_row(&line) else {
+        let Some(mut row) = parse_token_row(&line) else {
             continue;
         };
+        if row.is_model_response()
+            && let Some(model) = row.model()
+        {
+            last_model = Some(model.to_owned());
+        } else if row.is_checkpoint() && row.model().is_none() {
+            row.model.clone_from(&last_model);
+        }
         if row.is_model_response()
             && let Some(ts_secs) = iso_to_unix_secs(&row.created_at)
             && row.token_split() != TokenSplit::default()
@@ -276,20 +301,20 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         }
     }
 
-    let cursor = if let Some(last) = pending {
-        if !last.emitted
-            && let Some(built) = entry(conversation, &last.row, None, prices, &mut unknown_models)
-        {
-            entries.push(built);
-        }
-        SpendCursor::with_state(
-            next,
-            &AntigravitySpendState {
-                pending_start: Some(last.start),
-            },
-        )
-    } else {
+    if let Some(last) = &pending
+        && !last.emitted
+        && let Some(built) = entry(conversation, &last.row, None, prices, &mut unknown_models)
+    {
+        entries.push(built);
+    }
+    let state = AntigravitySpendState {
+        pending_start: pending.map(|last| last.start),
+        last_model,
+    };
+    let cursor = if state.pending_start.is_none() && state.last_model.is_none() {
         SpendCursor::new(next)
+    } else {
+        SpendCursor::with_state(next, &state)
     };
 
     SpendParse {
@@ -312,11 +337,7 @@ fn entry(
     if split == TokenSplit::default() {
         return None;
     }
-    let model = row
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty());
+    let model = row.model();
     let base = model.map(|model| super::split_model_effort(model).0);
     let cost = match (model, base) {
         (Some(raw), Some(base)) => {
