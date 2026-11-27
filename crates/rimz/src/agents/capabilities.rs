@@ -542,6 +542,23 @@ pub enum ManualSkill {
     OpenAiPolicy,
 }
 
+/// The folder under a checkout the provider reads project skills from by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectSkills {
+    /// `<checkout>/.agents/skills`, the project tier RimZ reads.
+    Native,
+    /// Only the provider's own folder under the checkout. With `main_checkout`, a linked
+    /// worktree that has no such folder reads the main checkout's instead. With `user_first`,
+    /// a name in the provider's user root outranks the folder's copy.
+    Own {
+        folder: &'static str,
+        main_checkout: bool,
+        user_first: bool,
+    },
+    /// No project folder RimZ can name.
+    Unread,
+}
+
 /// Directory targets are created before linking; file targets may remain absent.
 #[derive(Clone, Copy, Debug)]
 pub enum SharedHomeKind {
@@ -730,6 +747,11 @@ pub trait LaunchCapability: CoreCapability {
     /// How the provider marks a skill as user-invoked only.
     fn manual_skill(&self) -> ManualSkill {
         ManualSkill::Unsupported
+    }
+
+    /// Where the provider reads project skills from under the launch checkout by itself.
+    fn project_skills(&self) -> ProjectSkills {
+        ProjectSkills::Unread
     }
 
     /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the scoped view.

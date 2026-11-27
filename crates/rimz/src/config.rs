@@ -942,6 +942,7 @@ impl MachineConfig {
             definitions::SkillCheck::Check {
                 env,
                 machine_isolation: self.agents.isolation,
+                cwd: None,
             }
         } else {
             definitions::SkillCheck::Skip

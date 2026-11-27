@@ -1220,6 +1220,7 @@ fn check_cell_copies_seat_consensus_skill_marker_to_host_preflight() {
         || "rimz hooks trust claude".to_owned(),
         None,
         None,
+        crate::harness::launch::PreflightCheckout::Cwd,
         &mut interaction,
     )
     .unwrap_or_else(|err| {
@@ -1238,6 +1239,7 @@ fn check_cell_copies_seat_consensus_skill_marker_to_host_preflight() {
         || "rimz hooks trust claude".to_owned(),
         None,
         None,
+        crate::harness::launch::PreflightCheckout::Cwd,
         &mut interaction,
     )
     .expect_err("author-written missing rimz-message must refuse in check_cell");
@@ -2684,4 +2686,123 @@ roles = [{ role = "lead", profile = "toml_l", model = "sonnet" }]
             "replay tier {label}"
         );
     }
+}
+
+#[test]
+fn a_worktree_launch_preflights_skills_in_the_checkout_it_runs_in() {
+    if std::env::var_os("RIMZ_TEST_WORKTREE_PREFLIGHT_SKILL").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let rimz_dir = home.path().join(".rimz");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "launcher::tests::a_worktree_launch_preflights_skills_in_the_checkout_it_runs_in",
+                "--nocapture",
+            ])
+            .env("HOME", home.path())
+            .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+            .env("RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_AGENTS_HOME", &rimz_dir)
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_TEST_WORKTREE_PREFLIGHT_SKILL", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    struct AcceptAll;
+    impl Interaction for AcceptAll {
+        fn cross_repo(&mut self, _: &crate::ResolvedWorkspace) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        fn pr_branch(
+            &mut self,
+            _: &crate::worktree::WorktreeErr,
+        ) -> anyhow::Result<Option<crate::worktree::PrBranchChoice>> {
+            Ok(None)
+        }
+        fn unmanaged_checkout(&mut self, _: &str, _: &std::path::Path) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        fn closed_cohort(&mut self, _: ClosedCohort<'_>) -> anyhow::Result<CohortChoice> {
+            Ok(CohortChoice::Fresh)
+        }
+        fn notice(&mut self, _: Notice<'_>) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    crate::agents::find_definition("claude")
+        .unwrap()
+        .install_hooks(
+            &crate::agents::ambient_env(),
+            crate::agents::HookInstallOptions::default(),
+        )
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let workspace = crate::workspace::WorkspaceResolver::resolve(&repo, None).unwrap();
+    let state = crate::StatePaths::for_project_root(&repo).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let config = crate::config::WorktreeConfig::default();
+    let feat = crate::worktree::worktree_path(&repo, &config, "feat").unwrap();
+    let output = std::process::Command::new("git")
+        .current_dir(&repo)
+        .args(["worktree", "add", "-b", "feat"])
+        .arg(&feat)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let skill = feat.join(".claude/skills/feat-skill");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: feat-skill\ndescription: Feat.\n---\nFeat.\n",
+    )
+    .unwrap();
+    let mut cell = agent_cell("claude");
+    cell.skills = Some(vec!["feat-skill".parse().unwrap()]);
+    let check = |checkout| {
+        check_cell(
+            &workspace,
+            &runtime,
+            &cell,
+            crate::config::Isolation::Host,
+            CellStart::Launch(None),
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            || "rimz hooks trust claude".to_owned(),
+            None,
+            None,
+            checkout,
+            &mut AcceptAll,
+        )
+        .map(drop)
+    };
+    let existing = existing_launch_worktree(&workspace, &config, Some("feat"), false).unwrap();
+    assert_eq!(existing.as_deref(), Some(feat.as_path()));
+    check(crate::harness::launch::PreflightCheckout::Worktree(&feat))
+        .unwrap_or_else(|err| panic!("the feat worktree holds the listed skill: {err:#}"));
+    for (name, from_pr) in [(Some("fresh"), false), (None, true)] {
+        assert_eq!(
+            existing_launch_worktree(&workspace, &config, name, from_pr).unwrap(),
+            None,
+            "{name:?} {from_pr}: the launch creates its checkout"
+        );
+    }
+    check(crate::harness::launch::PreflightCheckout::Pending)
+        .unwrap_or_else(|err| panic!("a checkout yet to exist never reads the caller's: {err:#}"));
+    let err = check(crate::harness::launch::PreflightCheckout::Cwd)
+        .expect_err("the caller's checkout lacks the listed skill");
+    assert!(
+        err.to_string().contains("unknown skill 'feat-skill'"),
+        "{err:#}"
+    );
 }

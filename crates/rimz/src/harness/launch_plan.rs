@@ -110,6 +110,15 @@ pub enum LaunchPlanWarning {
     },
     #[error("{0}")]
     McpWording(String),
+    #[error(
+        "{kind} reads the project skills {skills:?} from {} itself, so this launch's skill policy (a skills list, a RimZ capability grant, or withheld rimz-* skills) cannot make them user-only and they stay model-callable; move them out of that folder, or list them in the profile's skills to keep them callable",
+        .folder.display()
+    )]
+    ProjectSkillsUngoverned {
+        kind: crate::ids::AgentKind,
+        folder: PathBuf,
+        skills: Vec<String>,
+    },
     #[error("{kind} has no added-directory permission channel; --add-dir is ignored")]
     AddedDirsUnsupported { kind: crate::ids::AgentKind },
     #[error(
@@ -1439,6 +1448,13 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     grant: request.skill_grant(),
                 },
             })?;
+            if let Some((folder, skills)) = &plan.ungoverned {
+                warnings.push(LaunchPlanWarning::ProjectSkillsUngoverned {
+                    kind: request.kind.clone(),
+                    folder: folder.clone(),
+                    skills: skills.clone(),
+                });
+            }
             process.pin_env(plan.pins.clone());
             let cwd = view.agent_path(inputs.cwd);
             process.argv = sandbox::bwrap_argv(bwrap, &plan.plan, &cwd, &process.argv);

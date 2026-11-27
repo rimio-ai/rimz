@@ -488,6 +488,10 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn min_version(&self) -> Option<super::version::CliVersion> {
         Some(super::version::CliVersion::new(0, 25, 1))
     }

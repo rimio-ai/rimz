@@ -42,10 +42,23 @@ pub(super) fn plan(
     skills_dir: &Path,
     source: &Path,
     kind: ManualSkill,
+    confined: bool,
 ) -> Result<PlannedCopy, MaterializeErr> {
     super::validate_path(skills_dir)?;
     let mut entries = Vec::new();
-    collect(source, Path::new(""), &mut Vec::new(), &mut entries)?;
+    // A `confined` copy keeps only what lies inside the skill directory, so a link a project
+    // skill carries out of it copies nothing from outside.
+    let root = confined
+        .then(|| source.canonicalize())
+        .transpose()
+        .map_err(|error| unreadable(source, error))?;
+    collect(
+        source,
+        Path::new(""),
+        root.as_deref(),
+        &mut Vec::new(),
+        &mut entries,
+    )?;
     plan_entries(skills_dir, source, kind, entries)
 }
 
@@ -297,6 +310,7 @@ fn unreadable(path: &Path, error: io::Error) -> MaterializeErr {
 fn collect(
     source: &Path,
     relative: &Path,
+    root: Option<&Path>,
     ancestors: &mut Vec<PathBuf>,
     entries: &mut Vec<Entry>,
 ) -> Result<(), MaterializeErr> {
@@ -327,6 +341,15 @@ fn collect(
             }
             Err(error) => return Err(unreadable(&path, error)),
         };
+        if let Some(root) = root
+            && child.file_type().is_ok_and(|kind| kind.is_symlink())
+            && !path
+                .canonicalize()
+                .is_ok_and(|target| target.starts_with(root))
+        {
+            tracing::debug!(path = %path.display(), "leaving a link out of its skill out of the copy");
+            continue;
+        }
         let relative = relative.join(child.file_name());
         if !metadata.is_file() && !metadata.is_dir() {
             return Err(unreadable(
@@ -347,7 +370,7 @@ fn collect(
             },
         });
         if metadata.is_dir() {
-            collect(&path, &relative, ancestors, entries)?;
+            collect(&path, &relative, root, ancestors, entries)?;
         }
     }
     ancestors.pop();
@@ -1064,5 +1087,44 @@ mod tests {
         entries[0].bytes = Some(b"body".to_vec());
         entries[0].permissions = fs::Permissions::from_mode(0o755);
         assert_ne!(original, digest(&entries, ManualSkill::Frontmatter));
+    }
+
+    #[test]
+    fn a_confined_copy_leaves_out_a_link_out_of_its_skill_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let outside = base.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("big"), "outside").unwrap();
+        let skill = base.join("skill");
+        fs::create_dir_all(skill.join("own")).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: skill\n---\nSkill.\n").unwrap();
+        fs::write(skill.join("own/file"), "own").unwrap();
+        std::os::unix::fs::symlink(&outside, skill.join("data")).unwrap();
+        std::os::unix::fs::symlink("own/file", skill.join("alias")).unwrap();
+        let paths = |confined| {
+            plan(
+                &base.join("state"),
+                &skill,
+                ManualSkill::Frontmatter,
+                confined,
+            )
+            .unwrap_or_else(|_| panic!("the skill copies"))
+            .entries
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            paths(true),
+            [
+                PathBuf::from("SKILL.md"),
+                PathBuf::from("alias"),
+                PathBuf::from("own"),
+                PathBuf::from("own/file"),
+            ],
+            "a link inside the skill stays, and the tree data names stays out of the copy"
+        );
+        assert!(paths(false).contains(&PathBuf::from("data/big")));
     }
 }

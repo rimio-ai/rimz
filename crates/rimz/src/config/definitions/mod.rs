@@ -96,15 +96,18 @@ fn standalone_profile(profile: &str) -> Option<String> {
 }
 
 /// Whether enforced skill lists resolve against the provider root under `env`, then the
-/// RimZ skill chain derived from the loader's home. Enforcement uses inherited isolation,
-/// then `machine_isolation`; off Linux every definition runs on the host.
-/// The check reads host roots; callers inside a scoped view must skip it.
+/// project skills of `cwd`'s checkout, then the RimZ skill chain derived from the loader's
+/// home. With no `cwd` a listed name none of those roots holds passes, since the launch's own
+/// checkout decides it. Enforcement uses inherited isolation, then `machine_isolation`; off
+/// Linux every definition runs on the host. The check reads host roots; callers inside a
+/// scoped view must skip it.
 #[derive(Clone, Copy, Debug)]
 pub enum SkillCheck<'a> {
     Skip,
     Check {
         env: &'a BTreeMap<String, String>,
         machine_isolation: super::Isolation,
+        cwd: Option<&'a Path>,
     },
 }
 
@@ -114,6 +117,7 @@ enum OwnedSkillCheck {
     Check {
         env: BTreeMap<String, String>,
         machine_isolation: super::Isolation,
+        cwd: Option<PathBuf>,
     },
 }
 
@@ -124,9 +128,11 @@ impl From<SkillCheck<'_>> for OwnedSkillCheck {
             SkillCheck::Check {
                 env,
                 machine_isolation,
+                cwd,
             } => Self::Check {
                 env: env.clone(),
                 machine_isolation,
+                cwd: cwd.map(Path::to_owned),
             },
         }
     }
@@ -139,9 +145,11 @@ impl OwnedSkillCheck {
             Self::Check {
                 env,
                 machine_isolation,
+                cwd,
             } => SkillCheck::Check {
                 env,
                 machine_isolation: *machine_isolation,
+                cwd: cwd.as_deref(),
             },
         }
     }
@@ -164,7 +172,7 @@ fn count_text_read(path: &Path) {
 struct SkillCatalog {
     check: OwnedSkillCheck,
     chain: crate::agents::skills::SkillChain,
-    inventories: Mutex<BTreeMap<String, Result<SkillInventory, String>>>,
+    inventories: Mutex<BTreeMap<(String, bool), Result<SkillInventory, String>>>,
     texts: Mutex<BTreeMap<PathBuf, TextRead>>,
 }
 
@@ -203,7 +211,26 @@ impl SkillCatalog {
             .clone()
     }
 
-    fn enumerate(&self, kind: &str) -> Result<Option<SkillInventory>, String> {
+    /// The project skills a launch of `kind` from the check's `cwd` reaches; `None` without a
+    /// `cwd`, when the launch's own checkout decides them.
+    fn project(&self, kind: &str) -> Result<Option<crate::agents::skills::ProjectTier>, String> {
+        let OwnedSkillCheck::Check { cwd: Some(cwd), .. } = &self.check else {
+            return Ok(None);
+        };
+        let Some(adapter) = crate::agents::find_definition(kind) else {
+            return Ok(None);
+        };
+        crate::agents::skills::ProjectTier::discover(
+            cwd,
+            &crate::disk::paths::empty_dir_root(),
+            adapter,
+        )
+        .map(Some)
+        .map_err(|error| error.to_string())
+    }
+
+    /// The skills a launch of `kind` resolves, for a scoped view when `scoped`.
+    fn enumerate(&self, kind: &str, scoped: bool) -> Result<Option<SkillInventory>, String> {
         let OwnedSkillCheck::Check { env, .. } = &self.check else {
             return Ok(None);
         };
@@ -212,13 +239,16 @@ impl SkillCatalog {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         inventories
-            .entry(kind.to_owned())
+            .entry((kind.to_owned(), scoped))
             .or_insert_with(|| {
-                crate::agents::skills::enumerate(
+                let project = self.project(kind)?;
+                crate::agents::skills::launch_inventory(
                     crate::agents::find_definition(kind)
                         .and_then(|definition| definition.skills_home(env))
                         .as_deref(),
+                    project.as_ref(),
                     Some(&self.chain),
+                    scoped,
                     |_| true,
                 )
                 .map(Arc::new)
@@ -261,7 +291,7 @@ pub struct DefinitionErr {
 /// Why a definition could not load, for surfaces that group failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DefinitionCause {
-    /// A listed skill is absent from the provider root and RimZ skill chain.
+    /// A listed skill is absent from every root the check searched.
     MissingSkill {
         skill: super::SkillName,
         roots: Vec<PathBuf>,

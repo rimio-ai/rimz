@@ -1681,21 +1681,14 @@ fn finish_profile(
         }
         profile.subagents = subagent_list(path, listed, profile.kind_base, subagent_validator)?;
     }
-    let skill_check = match shared.skills.check.as_ref() {
+    let scoped = match shared.skills.check.as_ref() {
         SkillCheck::Check {
             machine_isolation, ..
-        } if (!cfg!(target_os = "linux")
-            || !Isolation::resolve(None, fm.isolation, machine_isolation).is_scoped())
-            && !agents::find_definition(kind).is_some_and(|definition| {
-                matches!(
-                    definition.spec().host_skills,
-                    agents::skills::HostSkills::Switch { .. }
-                )
-            }) =>
-        {
-            SkillCheck::Skip
+        } => {
+            cfg!(target_os = "linux")
+                && Isolation::resolve(None, fm.isolation, machine_isolation).is_scoped()
         }
-        check => check,
+        SkillCheck::Skip => false,
     };
     profile.skills = match fm.skills.as_deref() {
         // `capabilities:` beside `skills: []` keeps the empty list; its RimZ capabilities
@@ -1706,7 +1699,7 @@ fn finish_profile(
             kind,
             listed,
             tools.as_ref(),
-            skill_check,
+            (shared.skills.check.as_ref(), scoped),
             &shared.skills,
         )?,
     };
@@ -2172,15 +2165,16 @@ fn lower_capabilities(
         .with_rimz(grant))
 }
 
-/// Under [`SkillCheck::Check`], each listed skill resolves as the scoped view finds it:
-/// provider root, library, then packs. The winning `SKILL.md` carries the marker check;
-/// an unreadable copy fails rather than letting a shadowed copy speak for it.
+/// Under [`SkillCheck::Check`], each listed skill resolves as a launch, in a scoped view when
+/// `scoped`, finds it from the check's `cwd`. The winning `SKILL.md` carries the marker check;
+/// an unreadable copy fails rather than letting a shadowed copy speak for it. With no `cwd`, a
+/// name no root holds is left for the launch's own checkout to decide.
 pub(super) fn skill_policy(
     path: &Path,
     kind: &str,
     listed: Option<&[String]>,
     tools: Option<&ToolSet>,
-    check: SkillCheck<'_>,
+    (check, scoped): (SkillCheck<'_>, bool),
     catalog: &SkillCatalog,
 ) -> Result<Option<Vec<SkillName>>, DefinitionErr> {
     let Some(listed) = listed else {
@@ -2194,20 +2188,47 @@ pub(super) fn skill_policy(
     }
     let mut skills = Vec::new();
     let definition = agents::find_definition(kind);
+    // A host kind without a switch enforces no list, so its launch refuses only a listed name
+    // whose copy sits in a project folder the kind never reads.
+    let enforced = scoped
+        || definition.is_none_or(|definition| {
+            matches!(
+                definition.spec().host_skills,
+                agents::skills::HostSkills::Switch { .. }
+            )
+        });
     let discovered = match check {
-        SkillCheck::Check { .. } => catalog
-            .enumerate(kind)
+        SkillCheck::Check { .. } if enforced => catalog
+            .enumerate(kind, scoped)
             .map_err(|error| DefinitionErr::new(path, error))?,
-        SkillCheck::Skip => None,
+        _ => None,
     };
     for name in names(path, "skills", listed)? {
         let skill: SkillName = name.parse().map_err(|_| DefinitionErr::new(path, format!("lists skill {name:?}; rimz reads one bare directory name, so a `<name>:<mode>` suffix, a path, or whitespace is refused")))?;
-        if let SkillCheck::Check { env, .. } = check {
-            let roots: Vec<PathBuf> = definition
-                .and_then(|definition| definition.skills_home(env))
-                .into_iter()
-                .chain(catalog.chain.roots())
-                .collect();
+        if let SkillCheck::Check { env, .. } = check
+            && !enforced
+        {
+            let project = catalog
+                .project(kind)
+                .map_err(|error| DefinitionErr::new(path, error))?;
+            if let Some(project) = &project
+                && let Some(refusal) = project.only_unread_copy(&skill)
+            {
+                let held = agents::skills::launch_inventory(
+                    definition
+                        .and_then(|definition| definition.skills_home(env))
+                        .as_deref(),
+                    Some(project),
+                    Some(&catalog.chain),
+                    false,
+                    |listed| listed == skill.as_str(),
+                )
+                .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+                if !held.skills.contains_key(skill.as_str()) {
+                    return Err(DefinitionErr::new(path, refusal.to_string()));
+                }
+            }
+        } else if let SkillCheck::Check { env, .. } = check {
             if let Some(conflict) = discovered
                 .as_ref()
                 .and_then(|skills| skills.conflicts.get(&name))
@@ -2218,6 +2239,53 @@ pub(super) fn skill_policy(
                 .as_ref()
                 .and_then(|skills| skills.skills.get(skill.as_str()))
             else {
+                let project = catalog
+                    .project(kind)
+                    .map_err(|error| DefinitionErr::new(path, error))?;
+                if let Some(refusal) = project
+                    .as_ref()
+                    .filter(|_| !scoped)
+                    .and_then(|project| project.only_unread_copy(&skill))
+                {
+                    return Err(DefinitionErr::new(path, refusal.to_string()));
+                }
+                let project_roots = project.iter().flat_map(|project| {
+                    project
+                        .folder(scoped)
+                        .into_iter()
+                        .chain([project.root()])
+                        .chain(project.native_folder())
+                });
+                let provider_root = definition.and_then(|definition| definition.skills_home(env));
+                let mut roots: Vec<PathBuf> = Vec::new();
+                for root in provider_root
+                    .iter()
+                    .cloned()
+                    .chain(project_roots)
+                    .chain(catalog.chain.roots())
+                {
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                }
+                // Discovery skips RimZ's own link and a broken link in the provider root, so
+                // neither is a broken entry.
+                let broken = |root: &PathBuf| {
+                    let entry = root.join(&name);
+                    entry.symlink_metadata().is_ok()
+                        && (provider_root.as_ref() != Some(root)
+                            || (entry.exists()
+                                && !catalog
+                                    .chain
+                                    .owned_link(&entry)
+                                    .is_ok_and(|owned| owned.is_some())))
+                };
+                // With no `cwd` the launch's own checkout may hold the name, so only a broken
+                // entry of that name, which no project copy repairs, fails here.
+                if project.is_none() && !roots.iter().any(broken) {
+                    skills.push(skill);
+                    continue;
+                }
                 let searched: Vec<String> = roots
                     .iter()
                     .map(|root| root.join(&name).join("SKILL.md").display().to_string())

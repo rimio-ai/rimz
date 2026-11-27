@@ -708,6 +708,10 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
 }
 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::AgentFile)
     }
@@ -903,8 +907,7 @@ impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
 
     /// The global root agy's own built-in skills name. agy also reads
     /// `~/.gemini/antigravity-cli/skills` (above this root on a duplicate name), `~/.gemini/skills`
-    /// (below it, agy 1.5.14), a plugin's `skills/`, and the workspace `.agents/skills`, which
-    /// the scoped view leaves native.
+    /// (below it, agy 1.5.14), and a plugin's `skills/`, which the scoped view leaves native.
     fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         env.get("HOME")
             .filter(|home| !home.is_empty())

@@ -275,6 +275,10 @@ impl CoreCapability for MuseAdapter {
 }
 
 impl LaunchCapability for MuseAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn min_version(&self) -> Option<crate::agents::version::CliVersion> {
         Some(install::MIN_SUPPORTED_CLI)
     }

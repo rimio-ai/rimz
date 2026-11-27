@@ -631,6 +631,10 @@ impl crate::agents::capabilities::InstallationCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CopilotAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn ask_unenforced(
         &self,
         cwd: &Path,

@@ -1666,6 +1666,9 @@ fn child_host_skill_views_withhold_delegation_without_configuring_a_list() {
 #[test]
 fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
     let project = tempfile::tempdir().unwrap();
+    // The launch runs outside the home, so its checkout holds no `.claude/skills` of its own.
+    let work = project.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
     let library = project.path().join("agents/skills");
     for name in ["commit", "rimz-lsp", "rimz-watch"] {
         std::fs::create_dir_all(library.join(name)).unwrap();
@@ -1697,7 +1700,7 @@ fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
             Some(&runtime),
             project.path(),
             &invocation,
-            project.path(),
+            &work,
             &BTreeMap::new(),
             &reminders,
         )
@@ -1748,7 +1751,7 @@ fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
         Some(&runtime),
         project.path(),
         &invocation,
-        project.path(),
+        &work,
         &moved_env,
         &reminders,
     )
@@ -1768,7 +1771,7 @@ fn a_grant_withholds_the_rimz_skills_it_leaves_out_from_the_host_view() {
         Some(&runtime),
         project.path(),
         &invocation,
-        project.path(),
+        &work,
         &login_env,
         &LaunchReminders::default(),
     );
@@ -4944,11 +4947,14 @@ fn preflight_agent_process_settles_seat_consensus_skill_on_host_runtime() {
     ]);
     invocation.seat_consensus_skill = true;
 
-    let process =
-        preflight_agent_process(project.path(), &invocation, project.path(), Some(&runtime))
-            .unwrap_or_else(|err| {
-                panic!("seat-added rimz-message must settle at preflight: {err}")
-            });
+    let process = preflight_agent_process(
+        project.path(),
+        &invocation,
+        project.path(),
+        Some(&runtime),
+        PreflightCheckout::Cwd,
+    )
+    .unwrap_or_else(|err| panic!("seat-added rimz-message must settle at preflight: {err}"));
     let Some(crate::agents::skills::HostSkillPlan::Applied { listed, .. }) = process.host_skills
     else {
         panic!(
@@ -4962,8 +4968,14 @@ fn preflight_agent_process_settles_seat_consensus_skill_on_host_runtime() {
     );
 
     invocation.seat_consensus_skill = false;
-    let err = preflight_agent_process(project.path(), &invocation, project.path(), Some(&runtime))
-        .expect_err("author-written missing rimz-message must still refuse at preflight");
+    let err = preflight_agent_process(
+        project.path(),
+        &invocation,
+        project.path(),
+        Some(&runtime),
+        PreflightCheckout::Cwd,
+    )
+    .expect_err("author-written missing rimz-message must still refuse at preflight");
     assert!(
         matches!(
             &err,
@@ -4974,5 +4986,64 @@ fn preflight_agent_process_settles_seat_consensus_skill_on_host_runtime() {
             ) if name.as_str() == "rimz-message"
         ),
         "expected UnknownSkill('rimz-message'), got: {err:?}"
+    );
+}
+
+#[test]
+fn a_scoped_preflight_refuses_a_listed_skill_its_view_lacks() {
+    if std::env::var_os("RIMZ_TEST_SCOPED_PREFLIGHT_SKILL").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let rimz_dir = home.path().join(".rimz");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch::tests::a_scoped_preflight_refuses_a_listed_skill_its_view_lacks",
+                "--nocapture",
+            ])
+            .env("HOME", home.path())
+            .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+            .env("RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_AGENTS_HOME", &rimz_dir)
+            .env("RIMZ_UNIT_TEST_RIMZ_HOME", &rimz_dir)
+            .env("RIMZ_TEST_SCOPED_PREFLIGHT_SKILL", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let project = tempfile::tempdir().unwrap();
+    let skill = project.path().join(".agents/skills/proj");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: proj\ndescription: Project.\n---\nProject.\n",
+    )
+    .unwrap();
+    let mut invocation = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    invocation.identity.params.profile = Some("worker".to_owned());
+    invocation.skills = Some(vec!["proj".parse().unwrap(), "typo".parse().unwrap()]);
+    let preflight = |checkout| {
+        preflight_agent_process(project.path(), &invocation, project.path(), None, checkout)
+    };
+    let error = preflight(PreflightCheckout::Cwd)
+        .expect_err("a scoped list naming a skill no root holds refuses before any pane exists")
+        .to_string();
+    assert!(
+        error.starts_with("profile 'worker': unknown skill \"typo\"; searched ["),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("]; install the skill or remove it from the profile"),
+        "{error}"
+    );
+    assert!(
+        preflight(PreflightCheckout::Pending).is_ok(),
+        "a checkout the launch has yet to create leaves the name to the exec wrapper"
     );
 }

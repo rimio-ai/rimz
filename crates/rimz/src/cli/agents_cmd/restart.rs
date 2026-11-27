@@ -329,6 +329,7 @@ pub(in crate::cli) fn restart_resolved(
             &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
             &cwd,
             Some(store.runtime_paths()),
+            rimz::harness::launch::PreflightCheckout::Cwd,
         )?;
     }
     let skipped_continue = restart

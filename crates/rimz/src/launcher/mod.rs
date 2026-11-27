@@ -770,6 +770,17 @@ pub fn prepare_layout(
                 "empty-dir ignored: applies only to single-agent launches",
             ))?;
         }
+        let launch_worktree = existing_launch_worktree(
+            workspace,
+            &machine_config.agents.worktree,
+            explicit_worktree_name.as_deref(),
+            args.launch.cohort.from_pr.is_some(),
+        )?;
+        let checkout = match &launch_worktree {
+            Some(worktree) => crate::harness::launch::PreflightCheckout::Worktree(worktree),
+            None if worktree_launch => crate::harness::launch::PreflightCheckout::Pending,
+            None => crate::harness::launch::PreflightCheckout::Cwd,
+        };
         for (index, cell) in layout.agent_cells().enumerate() {
             let (login, prepared) = check_cell(
                 &preflight_workspace,
@@ -796,6 +807,7 @@ pub fn prepare_layout(
                 },
                 unattended,
                 empty_dir_eligible.then_some((&projection.agents, args.launch.name.as_deref())),
+                checkout,
                 interaction,
             )?;
             preflighted_logins.push(login);
@@ -1248,6 +1260,8 @@ fn settle_layout(
                 },
                 unattended,
                 None,
+                // The worktree exists now, so a listed name it lacks refuses before any pane.
+                crate::harness::launch::PreflightCheckout::Cwd,
                 interaction,
             )?;
         }
@@ -1500,6 +1514,21 @@ enum CellStart<'a> {
     Pick,
 }
 
+/// The worktree a `-w` launch runs in when it exists already; `None` when the launch creates
+/// its checkout after the preflight, as a new worktree or a pull request's is.
+fn existing_launch_worktree(
+    workspace: &crate::ResolvedWorkspace,
+    config: &crate::config::WorktreeConfig,
+    name: Option<&str>,
+    from_pr: bool,
+) -> Result<Option<PathBuf>> {
+    let Some(name) = name.filter(|_| !from_pr) else {
+        return Ok(None);
+    };
+    let path = reconcile::cohort_worktree_path(workspace, config, name)?;
+    Ok(path.is_dir().then_some(path))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_cell(
     workspace: &crate::ResolvedWorkspace,
@@ -1512,6 +1541,7 @@ fn check_cell(
     hook_fix: impl FnOnce() -> String,
     unattended: Option<trust::Unattended>,
     empty_dir: Option<(&[AgentState], Option<&str>)>,
+    checkout: crate::harness::launch::PreflightCheckout<'_>,
     interaction: &mut dyn Interaction,
 ) -> Result<(
     crate::ids::LoginName,
@@ -1564,6 +1594,14 @@ fn check_cell(
             prepared.cwd.as_path()
         });
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
+    // A refusal of a listed skill names the profile and role whose list holds it.
+    request
+        .identity
+        .params
+        .profile
+        .clone_from(&cell.launch.profile);
+    request.identity.params.profile_scope = cell.launch.profile_scope;
+    request.identity.params.role.clone_from(&cell.launch.role);
     request.skills.clone_from(&cell.skills);
     request.seat_consensus_skill = cell.seat_consensus_skill;
     request.mcps.clone_from(&cell.mcps);
@@ -1586,6 +1624,7 @@ fn check_cell(
         &request,
         cwd,
         (!isolation.is_scoped()).then_some(runtime),
+        checkout,
     )?;
     let folder_hint = workspace
         .cwd_project_root
@@ -1885,6 +1924,7 @@ fn launch_resume_layout(
                 .map(|_| trust::Unattended::Agent)
                 .or_else(|| team_name.as_ref().map(|_| trust::Unattended::Team)),
             None,
+            crate::harness::launch::PreflightCheckout::Cwd,
             interaction,
         )?;
         if matches!(seed, crate::harness::plan::CohortSeed::Fresh) {

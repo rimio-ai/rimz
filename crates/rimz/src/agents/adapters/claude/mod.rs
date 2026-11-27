@@ -822,6 +822,14 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Own {
+            folder: ".claude/skills",
+            main_checkout: true,
+            user_first: true,
+        }
+    }
+
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
         use crate::agents::capabilities::{
             SharedHomeEntry,
@@ -1161,7 +1169,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
         use crate::agents::skills::LaunchSettingsErr;
-        let skills = crate::agents::skills::enumerate(skill_roots.0, skill_roots.1, |name| {
+        let skills = crate::agents::skills::enumerate(skill_roots.0, None, skill_roots.1, |name| {
             name.starts_with("rimz-") && !name.contains('*')
         })
         .map_err(LaunchSettingsErr::RoutineSkills)?;

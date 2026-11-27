@@ -162,6 +162,9 @@ pub struct SandboxPlan {
     pub pins: BTreeMap<String, EnvPin>,
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<PlannedCopy>,
+    /// The folder of project skills the provider reads by itself, and those of them the
+    /// launch's skill policy leaves out, which stay model-callable.
+    pub ungoverned: Option<(PathBuf, Vec<String>)>,
     tmp_dir: PathBuf,
     file_bind_targets: Vec<PathBuf>,
     guarded_entries: Vec<PathBuf>,
@@ -420,7 +423,12 @@ pub(crate) fn check_file_bind_target(target: &Path) -> Result<(), SandboxErr> {
 }
 
 pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
-    let views = skills::plan(inputs.env, inputs.skills_dir, &inputs.skills)?;
+    let views = skills::plan(
+        inputs.env,
+        inputs.skills_dir,
+        inputs.checkout.unwrap_or(inputs.cwd),
+        &inputs.skills,
+    )?;
     let mut mounts = Vec::new();
     let mut required = crate::mux::domain::ProcessDomain::required_paths(inputs.env);
     let mut pins = BTreeMap::new();
@@ -643,6 +651,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         plan,
         pins,
         skipped: views.skipped,
+        ungoverned: views.ungoverned,
         copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
         file_bind_targets,

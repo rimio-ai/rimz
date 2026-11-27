@@ -873,6 +873,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         crate::config::definitions::SkillCheck::Check {
             env: &env,
             machine_isolation: crate::config::Isolation::Scoped,
+            cwd: None,
         },
         &CommandsConfig::default(),
         &root.path().join("config.toml"),
@@ -3161,6 +3162,7 @@ fn project_rows_1_through_15_refuse_per_row_with_contract_details() {
     let home = tempdir().unwrap();
     let project = tempdir().unwrap();
     seed_definition_home(home.path());
+    std::os::unix::fs::symlink("gone", home.path().join("skills/not-installed")).unwrap();
     let mut deep = String::new();
     deep.push_str("[profiles.d0]\ndescription = 'd0'\nagent = 'claude'\n");
     for i in 1..=16 {
@@ -3233,7 +3235,7 @@ agent = "claude"
 tools = ["Read"]
 
 [profiles.r14_skill]
-description = "Unknown skill."
+description = "Broken skill link."
 agent = "claude"
 skills = ["not-installed"]
 

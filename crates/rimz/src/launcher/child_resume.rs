@@ -396,6 +396,7 @@ fn prepare_child_resume(
             &request,
             &cwd,
             Some(store.runtime_paths()),
+            crate::harness::launch::PreflightCheckout::Cwd,
         )?;
     }
     let launch_id = child

@@ -178,6 +178,10 @@ impl HookCapability for OmpAdapter {
 }
 
 impl LaunchCapability for OmpAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::ExtensionEnv)
     }

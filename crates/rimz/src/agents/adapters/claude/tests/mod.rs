@@ -733,6 +733,7 @@ fn host_skills_merge_settings_once_and_use_directory_names() {
             (Some(&[]), &[], None),
             Some(root.path()),
             None,
+            None,
             (root.path(), root.path()),
             &mut Vec::new(),
         )

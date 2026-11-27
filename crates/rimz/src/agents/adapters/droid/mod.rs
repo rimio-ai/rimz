@@ -340,6 +340,10 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for DroidAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Native
+    }
+
     fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
         env.get("HOME")
             .filter(|home| !home.is_empty())

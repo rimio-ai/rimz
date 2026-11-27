@@ -507,6 +507,149 @@ fn named_launches_share_rewritten_skill_copies() {
     assert_eq!(copies[0].parent(), Some(state.skills_dir.as_path()));
 }
 
+fn project_skill_plan(
+    project: &Path,
+    kind: &str,
+    listed: &[&str],
+    isolation: Isolation,
+) -> Result<LaunchPlan, LaunchPlanErr> {
+    let home = project.join("home");
+    let id = crate::WorkspaceId::from_project_root(project);
+    let runtime = RuntimePaths::under(id.clone(), project).unwrap();
+    let state = StatePaths::under(id, project).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([
+        ("HOME".into(), home.display().to_string()),
+        ("CLAUDE_CONFIG_DIR".into(), home.display().to_string()),
+        ("CODEX_HOME".into(), home.display().to_string()),
+        (
+            "RIMZ_AGENTS_HOME".into(),
+            project.join("agents").display().to_string(),
+        ),
+    ]);
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+    request.skills = Some(listed.iter().map(|name| name.parse().unwrap()).collect());
+    compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project,
+        project_root: project,
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        machine: &machine,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        isolation,
+        bwrap: isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap")),
+        agents: Ok(&[]),
+        ambient_env: &ambient,
+        agent_shell: None,
+        hibernate: false,
+        recorded_system_prompt_digest: None,
+    })
+}
+
+fn write_project_skill(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let name = dir.file_name().unwrap().to_str().unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Project.\n---\nProject."),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_scoped_view_serves_project_skills_in_an_untrusted_repo_and_warns_on_the_ungoverned() {
+    let project = tempfile::tempdir().unwrap();
+    let project = project.path().canonicalize().unwrap();
+    std::fs::create_dir_all(project.join(".rimz")).unwrap();
+    std::fs::write(
+        project.join(".rimz/config.toml"),
+        "[[agents]]\nname = 'codex'\nenv = { PROJECT_ONLY = '1' }\n",
+    )
+    .unwrap();
+    assert_ne!(
+        crate::trust::status(&project).unwrap().state,
+        crate::trust::TrustState::Trusted
+    );
+    write_project_skill(&project.join(".agents/skills/proj"));
+    write_project_skill(&project.join(".claude/skills/own"));
+    let plan = project_skill_plan(&project, "claude", &[], Isolation::Scoped).unwrap();
+    let target = project.join("home/skills/proj");
+    assert!(
+        plan.sandbox.as_ref().unwrap().plan.mounts.iter().any(
+            |mount| matches!(mount, sandbox::Mount::RoBind { target: bound, .. } if *bound == target)
+        ),
+        "the project skill joins Claude's view: {:?}",
+        plan.sandbox.as_ref().unwrap().plan.mounts
+    );
+    let ungoverned: Vec<_> = plan
+        .warnings
+        .iter()
+        .filter_map(|warning| match warning {
+            LaunchPlanWarning::ProjectSkillsUngoverned { folder, skills, .. } => {
+                Some((folder.clone(), skills.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ungoverned,
+        [(project.join(".claude/skills"), vec!["own".to_owned()])]
+    );
+    assert_eq!(
+        plan.warnings
+            .iter()
+            .find(|warning| matches!(warning, LaunchPlanWarning::ProjectSkillsUngoverned { .. }))
+            .unwrap()
+            .to_string(),
+        format!(
+            "claude reads the project skills [\"own\"] from {}/.claude/skills itself, so this \
+             launch's skill policy (a skills list, a RimZ capability grant, or withheld rimz-* \
+             skills) cannot make them user-only and they stay model-callable; move them out of \
+             that folder, or list them in the profile's skills to keep them callable",
+            project.display()
+        )
+    );
+}
+
+#[test]
+fn host_project_skills_resolve_without_links_or_writes_under_the_checkout() {
+    let project = tempfile::tempdir().unwrap();
+    let project = project.path().canonicalize().unwrap();
+    write_project_skill(&project.join(".agents/skills/proj"));
+    write_project_skill(&project.join("agents/skills/lib"));
+    let before: Vec<_> = walkdir(&project.join(".agents"));
+    let plan = project_skill_plan(&project, "codex", &["proj"], Isolation::Host)
+        .unwrap_or_else(|error| panic!("codex reads its checkout's .agents/skills: {error}"));
+    let links = serde_json::to_string(&plan.skill_links).unwrap();
+    assert!(links.contains("lib"), "{links}");
+    assert!(
+        !links.contains("proj"),
+        "a project skill is never linked: {links}"
+    );
+    assert_eq!(walkdir(&project.join(".agents")), before);
+}
+
+fn walkdir(root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![root.to_owned()];
+    let mut index = 0;
+    while index < paths.len() {
+        if paths[index].is_dir() && !paths[index].is_symlink() {
+            let mut children: Vec<_> = std::fs::read_dir(&paths[index])
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            children.sort();
+            paths.extend(children);
+        }
+        index += 1;
+    }
+    paths
+}
+
 #[test]
 fn provider_sandbox_settings_and_warnings_follow_the_resolved_level() {
     let project = tempfile::tempdir().unwrap();

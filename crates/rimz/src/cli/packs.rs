@@ -1182,6 +1182,7 @@ fn skill_check(
         SkillCheck::Check {
             env,
             machine_isolation,
+            cwd: None,
         }
     }
 }

@@ -331,6 +331,14 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KiroAdapter {
+    fn project_skills(&self) -> crate::agents::ProjectSkills {
+        crate::agents::ProjectSkills::Own {
+            folder: ".kiro/skills",
+            main_checkout: false,
+            user_first: false,
+        }
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["KIRO_HOME"]
     }

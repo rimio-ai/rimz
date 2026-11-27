@@ -282,6 +282,15 @@ pub enum AgentProcessCompileErr {
     },
     #[error(transparent)]
     LaunchSettings(#[from] crate::agents::skills::LaunchSettingsErr),
+    /// A refusal of a name in a profile's `skills` list, prefixed with the profile that lists it.
+    #[error("{profile}: {source}")]
+    ListedSkill {
+        profile: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// A listed skill a scoped launch's view would lack, refused before the launch.
+    #[error(transparent)]
+    SkillView(Box<crate::sandbox::SandboxErr>),
     #[error(transparent)]
     Login(#[from] crate::agents::RoomLoginErr),
     #[error("unknown agent kind `{kind}`")]
@@ -1297,13 +1306,31 @@ fn compile_agent_process(
     cwd: &Path,
     host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process_at(
+        PreflightCheckout::Cwd,
+        project_root,
+        request,
+        cwd,
+        host_runtime,
+    )
+}
+
+/// [`compile_agent_process`] ahead of a launch whose project skills live in `checkout`.
+fn compile_agent_process_at(
+    checkout: PreflightCheckout<'_>,
+    project_root: &Path,
+    request: &ExecRequest,
+    cwd: &Path,
+    host_runtime: Option<&RuntimePaths>,
+) -> AgentProcessResult<CompiledAgentProcess> {
     let machine = crate::config::MachineConfig::load_lenient();
     let login = crate::agents::session_login(
         &request.kind,
         request.identity.params.login.as_ref(),
         &machine.accounts,
     )?;
-    compile_agent_process_with_extra_env(
+    compile_agent_process_in(
+        Some(checkout),
         host_runtime,
         project_root,
         request,
@@ -1316,7 +1343,112 @@ fn compile_agent_process(
     )
 }
 
+/// `error`, naming the profile and team role whose `skills` list holds the name it refuses.
+fn listed_skill_refusal(
+    request: &ExecRequest,
+    error: crate::agents::skills::LaunchSettingsErr,
+) -> AgentProcessCompileErr {
+    use crate::agents::skills::{LaunchSettingsErr, SkillErr};
+    let listed = matches!(
+        error,
+        LaunchSettingsErr::Skills(
+            SkillErr::UnknownSkill { .. }
+                | SkillErr::ProjectOnly { .. }
+                | SkillErr::UserOnly { .. }
+        )
+    );
+    match listed_profile(request).filter(|_| listed) {
+        Some(profile) => AgentProcessCompileErr::ListedSkill {
+            profile,
+            source: Box::new(error),
+        },
+        None => error.into(),
+    }
+}
+
+/// The profile and team role whose `skills` list a launch carries, as a refusal names them.
+fn listed_profile(request: &ExecRequest) -> Option<String> {
+    let params = &request.identity.params;
+    let profile = params.profile.as_ref()?;
+    let scope = match params.profile_scope {
+        Some(crate::config::effective::ProfileScope::Subagents) => "subagent profile",
+        _ => "profile",
+    };
+    let role = params
+        .role
+        .as_ref()
+        .map(|role| format!(" (team role '{role}')"))
+        .unwrap_or_default();
+    Some(format!("{scope} '{profile}'{role}"))
+}
+
+/// The refusal a scoped view of `project` gives a name in `listed`, resolved ahead of the
+/// launch from the inventory the view reads.
+fn scoped_listed_skill(
+    root: &Path,
+    project: &crate::agents::skills::ProjectTier,
+    chain: Option<&crate::agents::skills::SkillChain>,
+    listed: &[crate::config::SkillName],
+) -> Result<(), crate::sandbox::SandboxErr> {
+    use crate::agents::skills::{SkillChain, SkillErr};
+    let is_listed = |name: &str| listed.iter().any(|listed| listed.as_str() == name);
+    let inventory =
+        crate::agents::skills::launch_inventory(Some(root), Some(project), chain, true, is_listed)?;
+    for name in listed {
+        if let Some(found) = inventory.skills.get(name.as_str()) {
+            if let Some(refusal) = project.user_only(name, &found.path) {
+                return Err(refusal.into());
+            }
+            continue;
+        }
+        if let Some(conflict) = inventory.conflicts.get(name.as_str()) {
+            return Err(SkillErr::Conflict {
+                message: conflict.message.clone(),
+            }
+            .into());
+        }
+        let mut roots = vec![root.to_owned()];
+        for folder in [project.folder(true), project.native_folder()]
+            .into_iter()
+            .flatten()
+            .chain(chain.into_iter().flat_map(SkillChain::roots))
+        {
+            if !roots.contains(&folder) {
+                roots.push(folder);
+            }
+        }
+        return Err(crate::sandbox::SandboxErr::UnknownSkill {
+            name: name.to_string(),
+            roots,
+        });
+    }
+    Ok(())
+}
+
 fn compile_agent_process_with_extra_env(
+    host_runtime: Option<&RuntimePaths>,
+    project_root: &Path,
+    request: &ExecRequest,
+    cwd: &Path,
+    extra_env: &BTreeMap<String, String>,
+    reminders: &LaunchReminders,
+) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process_in(
+        None,
+        host_runtime,
+        project_root,
+        request,
+        cwd,
+        extra_env,
+        reminders,
+    )
+}
+
+/// The compile behind every entry point. A `preflight` checkout marks a compile ahead of the
+/// launch, which refuses a scoped launch's listed name its view would lack before any pane
+/// exists; the exec wrapper's compile passes `None`, and its view plan refuses it there.
+fn compile_agent_process_in(
+    preflight: Option<PreflightCheckout<'_>>,
     host_runtime: Option<&RuntimePaths>,
     project_root: &Path,
     request: &ExecRequest,
@@ -1466,6 +1598,47 @@ fn compile_agent_process_with_extra_env(
     let withheld = reminders.withheld_skills(request);
     let listed = request.launch_skills(&withheld);
     let grant = request.skill_grant();
+    // The checkout whose project skills the launch reads, unknown while the launch has yet to
+    // create it.
+    let checkout = match preflight {
+        None | Some(PreflightCheckout::Cwd) => Some(cwd),
+        Some(PreflightCheckout::Worktree(worktree)) => Some(worktree),
+        Some(PreflightCheckout::Pending) => None,
+    };
+    let project = || {
+        checkout
+            .map(|checkout| {
+                crate::agents::skills::ProjectTier::discover(
+                    checkout,
+                    &crate::disk::paths::empty_dir_root(),
+                    adapter,
+                )
+            })
+            .transpose()
+    };
+    // A view needs the provider's skill root and its user-only marker, so a launch without
+    // either is left to the view plan's own refusal. Inside a scoped view the provider root
+    // is that view's, not the host's, so there the exec wrapper's compile decides.
+    if host_runtime.is_none()
+        && preflight.is_some()
+        && adapter.manual_skill() != crate::agents::ManualSkill::Unsupported
+        && !crate::config::Isolation::ambient(&crate::agents::ambient_env())
+            .is_some_and(crate::config::Isolation::is_scoped)
+        && let Some(listed) = listed.as_deref()
+        && let Some(root) = adapter.skills_home(&skill_env)
+        && let Some(project) =
+            project().map_err(|error| listed_skill_refusal(request, error.into()))?
+    {
+        scoped_listed_skill(&root, &project, skill_chain.as_ref(), listed).map_err(|error| {
+            match listed_profile(request) {
+                Some(profile) => AgentProcessCompileErr::ListedSkill {
+                    profile,
+                    source: Box::new(error),
+                },
+                None => AgentProcessCompileErr::SkillView(Box::new(error)),
+            }
+        })?;
+    }
     let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
         && (listed.is_some()
             || grant.is_some()
@@ -1476,13 +1649,16 @@ fn compile_agent_process_with_extra_env(
                 ))) {
         let artifact_dir = runtime.prompt_dir();
         let mut args = action.extra_args().to_vec();
-        match adapter.spec().host_skills.apply(
-            (listed.as_deref(), &withheld, grant),
-            adapter.skills_home(&skill_env).as_deref(),
-            skill_chain.as_ref(),
-            (cwd, &artifact_dir),
-            &mut args,
-        ) {
+        match project().map_err(Into::into).and_then(|project| {
+            adapter.spec().host_skills.apply(
+                (listed.as_deref(), &withheld, grant),
+                adapter.skills_home(&skill_env).as_deref(),
+                project.as_ref(),
+                skill_chain.as_ref(),
+                (cwd, &artifact_dir),
+                &mut args,
+            )
+        }) {
             Ok((plan, artifact)) => {
                 *action.extra_args_mut() = args;
                 (Some(plan), artifact)
@@ -1494,7 +1670,7 @@ fn compile_agent_process_with_extra_env(
                 );
                 (None, None)
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(listed_skill_refusal(request, error)),
         }
     } else {
         (None, None)
@@ -2197,6 +2373,19 @@ fn trusted_agent_env(
     }
 }
 
+/// The checkout whose project skills a preflight resolves a launch's listed names in.
+#[derive(Clone, Copy, Debug)]
+pub enum PreflightCheckout<'a> {
+    /// The launch directory's own checkout.
+    Cwd,
+    /// An existing worktree the agent runs in instead of the launch directory.
+    Worktree(&'a Path),
+    /// A checkout the launch creates after its preflight, so a listed name no other root holds
+    /// is left to the re-check a pull-request worktree gets once it exists, else to the exec
+    /// wrapper's compile.
+    Pending,
+}
+
 /// Validate trust, provider capability, environment, and shell compilation
 /// before any launch allocation or mux mutation.
 /// Supply runtime paths for host isolation; settings artifacts are only planned.
@@ -2205,8 +2394,9 @@ pub fn preflight_agent_process(
     request: &ExecRequest,
     cwd: &Path,
     host_runtime: Option<&RuntimePaths>,
+    checkout: PreflightCheckout<'_>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
-    compile_agent_process(project_root, request, cwd, host_runtime)
+    compile_agent_process_at(checkout, project_root, request, cwd, host_runtime)
 }
 
 /// Preflight one fresh provider launch before detailed pane identity exists.
@@ -2216,6 +2406,7 @@ pub fn preflight_agent_kind(project_root: &Path, kind: &str, cwd: &Path) -> Agen
         &ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new()),
         cwd,
         None,
+        PreflightCheckout::Cwd,
     )
     .map(drop)
 }

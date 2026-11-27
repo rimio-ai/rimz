@@ -3040,6 +3040,8 @@ fn a_dependent_definition_failure_names_every_root_and_its_fix() {
     let dir = tempdir().unwrap();
     let home = dir.path();
     let absent = "agent: codex\ntools: [Skill]\nskills: [absent]";
+    std::fs::create_dir_all(home.join("skills")).unwrap();
+    std::os::unix::fs::symlink("gone", home.join("skills/absent")).unwrap();
     let [first, second] = ["subagents/first.md", "subagents/second.md"]
         .map(|file| write_definition(home, file, &format!("description: Helper\n{absent}"), ""));
     let missing = format!(
@@ -3184,6 +3186,8 @@ fn a_kind_base_refused_for_its_subagent_keeps_that_subagents_own_error() {
         write_definition(root, &parent_rel, parent_fields, "");
         let helper_fields = "description: Helper\nagent: parent";
         write_definition(root, "subagents/helper.md", helper_fields, "");
+        std::fs::create_dir_all(home.join("skills")).unwrap();
+        std::os::unix::fs::symlink("gone", home.join("skills/absent")).unwrap();
         let mut owner = home.to_owned();
         let fix = |name: &str, kind: &str| {
             if pack {
@@ -3433,19 +3437,11 @@ fn definition_skill_checks_follow_resolved_isolation_and_host_support() {
         let env = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
         let (config, _) =
             MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
-        if enforced {
-            assert!(
-                config
-                    .definition_failure_for("worker")
-                    .unwrap()
-                    .contains("lists skill 'not-installed', missing at")
-            );
-            assert!(!config.agents.profiles.0.contains_key("worker"));
-            continue;
-        }
         assert!(
             config.notices.definition_errors.is_empty(),
-            "{machine}/{kind}/{default} left definition errors"
+            "{machine}/{kind}/{default}: config load has no checkout, so the launch decides a \
+             name no root holds: {:?}",
+            config.notices.definition_errors
         );
         assert_eq!(
             config.agents.profiles.0["worker"].skills.as_ref().unwrap()[0].as_str(),
@@ -3458,8 +3454,25 @@ fn definition_skill_checks_follow_resolved_isolation_and_host_support() {
             "---\ndisable-model-invocation: true\n---\nSkill.",
         )
         .unwrap();
+        std::fs::create_dir_all(skill.join("agents")).unwrap();
+        std::fs::write(
+            skill.join("agents/openai.yaml"),
+            "policy:\n  allow_implicit_invocation: false\n",
+        )
+        .unwrap();
         let (config, _) =
             MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+        if enforced {
+            assert!(
+                config
+                    .definition_failure_for("worker")
+                    .unwrap()
+                    .contains("lists skill 'not-installed', which "),
+                "{machine}/{kind}/{default}"
+            );
+            assert!(!config.agents.profiles.0.contains_key("worker"));
+            continue;
+        }
         assert!(
             config.notices.definition_errors.is_empty(),
             "unsupported host providers also skip marker checks"
@@ -3477,6 +3490,8 @@ fn scoped_config_enables_definition_skill_library_checks() {
         "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
         "",
     );
+    // A provider-root entry without its SKILL.md is broken; discovery skips a broken link there.
+    std::fs::create_dir_all(dir.path().join(".agents/skills/missing")).unwrap();
     let path = write(&dir, "[agents]\nisolation = 'host'\n");
     MachineConfig::load_from(&path, dir.path()).unwrap();
     write(&dir, "[agents]\nisolation = 'scoped'\n");
@@ -3491,7 +3506,6 @@ fn scoped_config_enables_definition_skill_library_checks() {
     );
     assert!(!config.agents.profiles.0.contains_key("worker"));
 
-    std::fs::create_dir_all(dir.path().join(".agents/skills/missing")).unwrap();
     std::fs::write(
         dir.path().join(".agents/skills/missing/SKILL.md"),
         "---\ndescription: provider-root only\n---\nSkill.",
@@ -3516,6 +3530,8 @@ fn scoped_ambient_skips_definition_skill_library_checks() {
         "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
         "",
     );
+    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+    std::os::unix::fs::symlink("gone", dir.path().join("skills/missing")).unwrap();
     let path = write(&dir, "[agents]\nisolation = 'scoped'\n");
     let mut env = BTreeMap::from([
         ("HOME".to_owned(), dir.path().display().to_string()),

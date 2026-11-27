@@ -11553,6 +11553,9 @@ async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
         "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
         "Worker prompt.",
     );
+    // A broken library entry fails the definition at load; a name no root holds would pass it.
+    std::fs::create_dir_all(env.agents_home().join("skills")).unwrap();
+    std::os::unix::fs::symlink("gone", env.agents_home().join("skills/missing")).unwrap();
     let store = env.store();
     let launch_id = "launch_definition_failure";
     seed_provisional_agent_launch(&env, launch_id, "pruner");
@@ -12868,8 +12871,69 @@ fn host_skill_errors_refuse_before_launch_without_writes() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
-    assert!(stderr.contains("lists skill 'not-installed'"), "{stderr}");
-    assert!(stderr.contains("[profiles.worker]"), "{stderr}");
+    // The machine load leaves a name no root holds to the launch, whose own checkout decides it.
+    let tier = env.project_root.join(".claude/skills");
+    assert!(
+        stderr.contains("error: profile 'worker': unknown skill 'not-installed'; searched ["),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("{:?}", tier.display().to_string())),
+        "{stderr}"
+    );
+    let unread = env.project_root.join(".agents/skills");
+    assert!(
+        !stderr.contains(&format!("{:?}", unread.display().to_string())),
+        "claude never reads .agents/skills, so installing there is no fix: {stderr}"
+    );
+    assert!(
+        stderr.contains("]; install it in one of these roots or remove it from skills"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("missing at"), "{stderr}");
+    assert_eq!(env.store().read_events().unwrap().len(), before.len());
+    assert!(!env.runtime_paths().prompt_dir().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn scoped_skill_errors_refuse_before_launch_without_writes() {
+    if let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        crate::common::skip(&format!("bubblewrap unusable: {err}"));
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::create_dir_all(env.home_root.join(".claude")).unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base\ntools: [Read, Skill]",
+        "Claude base.",
+    );
+    std::fs::write(
+        env.rimz_home().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: claude\nisolation: scoped\ntools: [Read, Skill]\nskills: [typo]\n---\n",
+    )
+    .unwrap();
+    let before = env.store().read_events().unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .args(["agents", "worker"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("error: profile 'worker': unknown skill \"typo\"; searched ["),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("]; install the skill or remove it from the profile"),
+        "{stderr}"
+    );
     assert_eq!(env.store().read_events().unwrap().len(), before.len());
     assert!(!env.runtime_paths().prompt_dir().exists());
 }
