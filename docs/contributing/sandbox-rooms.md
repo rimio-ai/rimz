@@ -197,7 +197,7 @@ Then write a kind base, the provider's default agent definition, with a nonempty
 
 ## Stop the room
 
-The room ends when `--for` runs out, or when you stop the `xtask sandbox room` process you started. Ctrl-C works, and so does `kill -INT` to its PID or its process group, since the cleanup reaper runs outside that group. Killing a wrapper shell leaves the room running. `pgrep -x xtask` lists every held room on the machine, other agents' rooms included, so stop only the PID you noted at the start. Never use `pkill -f` or `pgrep -f`: the pattern also matches the shell that runs it, and the kill takes that shell down. Cleanup stops both multiplexer servers and the room processes it finds, then removes the root unless it carries a `kept` marker.
+The room ends when `--for` runs out, or when you stop the `xtask sandbox room` process you started. An agent whose harness may refuse a signal to a process starts the room with a `--for` that covers its check and lets the timer end it. Ctrl-C works, and so does `kill -INT` to its PID or its process group, since the cleanup reaper runs outside that group. Killing a wrapper shell leaves the room running. `pgrep -x xtask` lists every held room on the machine, other agents' rooms included, so stop only the PID you noted at the start. Never use `pkill -f` or `pgrep -f`: the pattern also matches the shell that runs it, and the kill takes that shell down. Cleanup stops both multiplexer servers and the room processes it finds, then removes the root unless it carries a `kept` marker.
 
 ## Traps
 
