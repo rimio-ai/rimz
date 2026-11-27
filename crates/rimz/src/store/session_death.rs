@@ -1,8 +1,9 @@
 //! Agent-instance identity and supersession rules shared by reducer inheritance
 //! and durable/view reaps. Launch identity spans every same-instance
 //! conversation, while reaping separately requires replacement or failure
-//! evidence. The writer attaches provider rest certificates before applying
-//! those guards; the store-only view reap falls back to durable lifecycle state.
+//! evidence, and an ended record is never that evidence against an unended one.
+//! The writer attaches provider rest certificates before applying those guards;
+//! the store-only view reap falls back to durable lifecycle state.
 
 use jiff::Timestamp;
 
@@ -53,9 +54,15 @@ pub(super) fn reaped_end_rests_at_idle(
     )
 }
 
-/// Whether `newer` proves that `older` no longer owns its session slot.
+/// Whether `newer` proves that `older` no longer owns its session slot. An
+/// ended `newer` never displaces an unended `older`, whatever its stamps: a
+/// reaped duplicate's end stamp can read newer than the live row it shadows.
+/// An ended row may still displace another ended row.
 pub(super) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
     if newer.kind != older.kind || newer.agent_id == older.agent_id {
+        return false;
+    }
+    if older.ended_at.is_none() && newer.ended_at.is_some() {
         return false;
     }
     if older.is_focused_pair(newer) && same_agent_instance(older, newer) {
@@ -325,6 +332,34 @@ mod tests {
             actual.push(supersedes(&older, &newer));
         }
         assert_eq!(actual, vec![true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn a_closed_record_never_displaces_an_open_one() {
+        let (older, mut focused) = conversation_pair(
+            "antigravity",
+            AgentStatus::Success,
+            Some(SessionOrigin::Fresh),
+        );
+        focused.on_screen_at = Some(focused.last_activity);
+        let mut relaunched = focused.clone();
+        relaunched.on_screen_at = None;
+        relaunched.runtime_owner.as_mut().unwrap().pid += 1;
+        for (label, newer) in [("focused", &mut focused), ("relaunched", &mut relaunched)] {
+            assert!(supersedes(&older, newer), "{label}");
+            newer.ended_at = Some(newer.last_activity);
+            assert!(
+                !supersedes(&older, newer),
+                "an ended {label} row hid an open one"
+            );
+        }
+
+        let mut ended = older;
+        ended.ended_at = Some(ended.last_activity);
+        assert!(
+            supersedes(&ended, &relaunched),
+            "an ended row still displaces an ended one"
+        );
     }
 
     #[test]

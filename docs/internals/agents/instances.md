@@ -172,7 +172,7 @@ Daemon-owned Codex sessions have one faster signal, and it is a snapshot-time dr
 
 ### Supersession
 
-Supersession first requires distinct session ids of the same kind ([`crates/rimz/src/store/session_death.rs::supersedes`](../../../crates/rimz/src/store/session_death.rs)). For a `FollowLatest` pair with at least one on-screen stamp and the same pane and agent-process incarnation, only the on-screen rule applies, ahead of activity and the fallback proofs. Every other pair requires a newer `last_activity` and one of the fallback rules:
+Supersession first requires distinct session ids of the same kind, and an ended row never supersedes an unended one, while one ended row may supersede another ([`crates/rimz/src/store/session_death.rs::supersedes`](../../../crates/rimz/src/store/session_death.rs)). The view reap sees the ended launched children that runtime expel keeps for display under a visible parent, so the rule keeps a closed duplicate of a launch from hiding its live session row. For a `FollowLatest` pair with at least one on-screen stamp and the same pane and agent-process incarnation, only the on-screen rule applies, ahead of activity and the fallback proofs. Every other pair requires a newer `last_activity` and one of the fallback rules:
 
 | Rule | Condition |
 | --- | --- |

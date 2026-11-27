@@ -132,7 +132,6 @@ impl Store {
             .filter_map(|agent| {
                 let superseded = projection.agents.iter().any(|newer| {
                     !newer.is_provider_subagent()
-                        && newer.ended_at.is_none()
                         && !shielded(newer)
                         && session_death::supersedes(agent, newer)
                 });
