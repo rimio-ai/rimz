@@ -5078,7 +5078,7 @@ fn verify_reprompt_behind_a_closed_gate_is_withdrawn_with_its_run() {
     let store = env.store();
     let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
     let mut child =
-        spawn_verifying_print(&env, "verify-closed-gate", 2, &pane_fixture, Some("10s"));
+        spawn_verifying_print(&env, "verify-closed-gate", 2, &pane_fixture, Some("30s"));
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     let mut completed = records.pop().expect("initial run");
@@ -5125,12 +5125,16 @@ fn verify_reprompt_wait_timeout_stays_terminal() {
     let env = Env::new();
     let store = env.store();
     let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
-    let mut child = spawn_verifying_print(&env, "verify-timeout", 2, &pane_fixture, Some("1s"));
+    let mut child = spawn_verifying_print(&env, "verify-timeout", 2, &pane_fixture, Some("30s"));
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     let mut completed = records.pop().expect("initial run");
     register_verify_agent(&env, &store, &mut completed);
     completed.status = RunStatus::Completed;
+    // The deadline falls due as the first turn ends, so only the re-prompted wait can time out.
+    // A deadline the first wait reaches times it out before this write, which then overwrites
+    // its TimedOut.
+    completed.deadline_at = Some(Timestamp::now());
     finish_run(&store, &mut completed);
 
     let out = child
