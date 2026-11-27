@@ -131,6 +131,8 @@ impl std::io::Write for FrameOutput {
 /// One `LoopState` under test with the runtime, request channel,
 /// and terminal it needs. Fields stay reachable: these tests drive internal
 /// state by design, and the rig only removes the wiring around that reach.
+/// The rig shares views, as every attachment does in production; a test runs
+/// without them only when that path is its subject.
 struct Rig {
     _dir: tempfile::TempDir,
     ws: WorkspaceId,
