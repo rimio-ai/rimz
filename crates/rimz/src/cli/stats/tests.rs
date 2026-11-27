@@ -2842,7 +2842,7 @@ fn today_dashboard_uses_day_breakdowns_and_grid_activity_without_a_trend() {
     let rendered = strip_ansi(&held_frame(&stats, &AssistStats::default(), active, today));
     for expected in [
         "Today $12",
-        "Current · Mod",
+        "Current Mod",
         "Codex",
         "today $12 so far · ~$12 by midnight · █ yesterday $18",
         "3 active days since",
@@ -3008,17 +3008,14 @@ fn stall_notice_names_child_parent_and_silence_in_stats() {
 fn model_display_names() {
     use rimz::agents::model_display::display_model;
 
-    assert_eq!(display_model("claude-opus-4-8"), "Claude · Opus 4.8");
-    assert_eq!(display_model("claude-haiku-4-5"), "Claude · Haiku 4.5");
-    assert_eq!(display_model("claude-fable-5"), "Claude · Fable 5");
-    assert_eq!(
-        display_model("claude-opus-4-7-20260101"),
-        "Claude · Opus 4.7"
-    );
+    assert_eq!(display_model("claude-opus-4-8"), "Claude Opus 4.8");
+    assert_eq!(display_model("claude-haiku-4-5"), "Claude Haiku 4.5");
+    assert_eq!(display_model("claude-fable-5"), "Claude Fable 5");
+    assert_eq!(display_model("claude-opus-4-7-20260101"), "Claude Opus 4.7");
     assert_eq!(display_model("gpt-5"), "GPT 5");
-    assert_eq!(display_model("gpt-5-codex"), "GPT · Codex 5");
-    assert_eq!(display_model("gpt-5.1-codex-max"), "GPT · Codex Max 5.1");
-    assert_eq!(display_model("mystery-model"), "Mystery · Model");
+    assert_eq!(display_model("gpt-5-codex"), "GPT 5 Codex");
+    assert_eq!(display_model("gpt-5.1-codex-max"), "GPT 5.1 Codex Max");
+    assert_eq!(display_model("mystery-model"), "Mystery Model");
 }
 
 #[test]
@@ -3786,6 +3783,18 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
         tally: every_window(tally(400, 3.0, 1)),
         kind: "pi".into(),
     };
+    let grok = ModelTally {
+        tally: every_window(tally(100, 1.0, 1)),
+        kind: "grok".into(),
+    };
+    let grok_fast = ModelTally {
+        tally: every_window(tally(200, 2.0, 1)),
+        kind: "grok".into(),
+    };
+    let opus = ModelTally {
+        tally: every_window(tally(100, 1.0, 1)),
+        kind: "claude".into(),
+    };
     let mut cache = rimz::agents::spending::ProviderSpendingCache {
         refreshed_at_ms: 123,
         timezone: "UTC".into(),
@@ -3812,14 +3821,22 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
                 ]),
             )]),
         },
-        models: BTreeMap::from([("Gemini 4 Neon".into(), agy), ("gemini-4-neon".into(), pi)]),
+        models: BTreeMap::from([
+            ("Gemini 4 Neon".into(), agy),
+            ("gemini-4-neon".into(), pi),
+            ("grok-4".into(), grok),
+            ("grok-4-fast-non-reasoning".into(), grok_fast),
+            ("claude-opus-4-8".into(), opus),
+        ]),
         ..Default::default()
     };
     cache.spending.total = every_window(tally(1_400, 13.0, 3));
 
     let stats = Stats::from_provider(cache);
 
-    assert_eq!(stats.by_model.len(), 1);
+    // `grok-4` and `grok-4-fast-non-reasoning` share "Grok 4" and fold too.
+    assert_eq!(stats.by_model.len(), 3);
+    assert!((stats.by_model["grok-4-fast-non-reasoning"].tally.day.usd - 3.0).abs() < 1e-9);
     let folded = stats
         .by_model
         .get("Gemini 4 Neon")
@@ -3837,9 +3854,29 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
 
     let json = json::stats_json_value(&stats, &AssistStats::default(), today, false, Window::Today);
     let models = json["models"].as_array().expect("models array");
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0]["model"], "Gemini 4 Neon");
-    assert_eq!(models[0]["name"], "Gemini · Neon 4");
+    assert_eq!(models.len(), 3);
+    let names: BTreeMap<_, _> = models
+        .iter()
+        .map(|model| {
+            (
+                model["model"].as_str().unwrap(),
+                model["name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    // JSON names keep the series whatever kind ran the model.
+    assert_eq!(
+        names,
+        BTreeMap::from([
+            ("Gemini 4 Neon", "Gemini 4 Neon"),
+            ("grok-4-fast-non-reasoning", "Grok 4"),
+            ("claude-opus-4-8", "Claude Opus 4.8"),
+        ])
+    );
+    let models: Vec<_> = models
+        .iter()
+        .filter(|model| model["model"] == "Gemini 4 Neon")
+        .collect();
     assert!((models[0]["usd"].as_f64().unwrap() - 13.0).abs() < 1e-9);
 
     let mut panel_out = Vec::new();
@@ -3854,5 +3891,11 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
     )
     .unwrap();
     let panel_text = String::from_utf8(panel_out).unwrap();
-    assert_eq!(panel_text.matches("Gemini · Neon 4").count(), 1);
+    assert_eq!(panel_text.matches("Gemini 4 Neon").count(), 1);
+    assert_eq!(panel_text.matches("Grok 4").count(), 1);
+    // The row's kind hides Claude's series in the panel.
+    assert!(
+        panel_text.contains("Opus 4.8") && !panel_text.contains("Claude Opus"),
+        "{panel_text}"
+    );
 }

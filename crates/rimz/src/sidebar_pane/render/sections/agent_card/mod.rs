@@ -1134,14 +1134,16 @@ fn sub_agent_model_spans(theme: &Theme, sub: &SidebarSubAgent) -> Option<Vec<Spa
     let model = sub.model.as_deref()?;
     let rendered = ParsedModel::parse(model).render(home_series(sub.kind.as_str()));
     let mut spans = Vec::with_capacity(2);
-    if let Some(series) = rendered.series {
-        let style = identity::series_style(theme, &series);
+    if let Some(series) = rendered.series.as_deref() {
         spans.push(Span::styled(
-            format!("{series}{}", value_seam(theme)),
-            style,
+            series.to_owned(),
+            identity::series_style(theme, series),
         ));
     }
-    spans.push(Span::styled(rendered.name, theme.muted()));
+    let name = identity::model_name_text(&rendered, rendered.children.len());
+    if !name.is_empty() {
+        spans.push(Span::styled(name, theme.muted()));
+    }
     Some(spans)
 }
 

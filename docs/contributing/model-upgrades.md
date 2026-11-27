@@ -4,7 +4,7 @@ What to change when a provider ships a new model. The work splits by who resolve
 
 ## Claude: fable, opus, sonnet, haiku
 
-Nothing is required for a new version of an existing family. The Claude adapter's `DEFINITIONS.models` in [`adapters/claude/mod.rs`](../../crates/rimz/src/agents/adapters/claude/mod.rs) maps each alias to itself (`opus` → `opus`), so Claude Code picks the current model at launch. Display names are derived from the model id (`agents/model_display.rs`), and the 1M context window is read from the `[1m]` marker on the id, never from a model list.
+Nothing is required for a new version of an existing family. The Claude adapter's `DEFINITIONS.models` in [`adapters/claude/mod.rs`](../../crates/rimz/src/agents/adapters/claude/mod.rs) maps each alias to itself (`opus` → `opus`), so Claude Code picks the current model at launch. Display names are derived from the model id (`agents/model_display.rs`), where a new Claude line name (beside Opus, Sonnet, Haiku, Fable, Mythos and Instant) joins `CLAUDE_LINES` so it leads in place of the `Claude` series, and the 1M context window is read from the `[1m]` marker on the id, never from a model list.
 
 A new family name, one that is not already an alias, needs an entry in that table. Without one, a definition naming the bare alias cannot infer its kind and has to set `agent:` explicitly. Give the entry an `effort` only when the family needs a default other than the kind's `xhigh`, as `fable` does with `high`.
 

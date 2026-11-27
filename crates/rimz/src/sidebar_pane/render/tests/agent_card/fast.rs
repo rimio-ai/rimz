@@ -49,7 +49,10 @@ fn fast_card_bolt_follows_the_model_across_tier_edges() {
                     "{width}: {text}"
                 );
                 if fast && capabilities {
-                    assert!(text.contains("Sol 6.1 ϟ"), "{text}");
+                    assert!(
+                        text.contains("GPT 6.1 Sol ϟ") || text.contains("GPT 6.1 ϟ"),
+                        "{text}"
+                    );
                     assert!(!text.contains("Sol · ϟ"), "{text}");
                     if let Some(reasoning) = text.find("xhigh") {
                         assert!(text.find('ϟ').unwrap() < reasoning, "{text}");
@@ -66,7 +69,8 @@ fn fast_card_bolt_follows_the_model_across_tier_edges() {
 fn fast_card_two_cell_override_survives_model_clipping_and_keeps_cost_aligned() {
     let handle = "abcdefghijklmnopqr";
     let mut state = fast_agent("fast", AgentStatus::Running);
-    state.model = Some("a-model-with-an-unusually-long-name".to_owned());
+    // One word, so no child word can drop and the core itself is clipped.
+    state.model = Some("amodelwithanunusuallylongname".to_owned());
     state.name = Some(handle.to_owned());
     state.name_explicit = true;
     let mut plain_state = state.clone();

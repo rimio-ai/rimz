@@ -146,25 +146,20 @@ pub(super) fn agent_identity_line(
     if row_ctx.tier != Tier::L0
         && let Some(model) = display_model(row)
     {
+        // Child words drop from the right, whole words only, until the line
+        // fits; the series word and the core stay, and `pin_right` cuts past that.
         let base_width = spans_width(&left);
-        let (cluster, fits) = identity_capability_spans(
-            row_ctx,
-            row,
-            status,
-            &model,
-            model.series.is_some(),
-            base_width,
-            &right,
-            width,
-        );
-        if model.series.is_some() && !fits {
-            let (without_series, _) = identity_capability_spans(
-                row_ctx, row, status, &model, false, base_width, &right, width,
+        let mut children = model.children.len();
+        let cluster = loop {
+            let (cluster, fits) = identity_capability_spans(
+                row_ctx, row, status, &model, children, base_width, &right, width,
             );
-            left.extend(without_series);
-        } else {
-            left.extend(cluster);
-        }
+            if fits || children == 0 {
+                break cluster;
+            }
+            children -= 1;
+        };
+        left.extend(cluster);
     }
     pin_right(left, right, width)
 }
@@ -178,16 +173,27 @@ pub(super) fn series_style(theme: &Theme, series: &str) -> Style {
     }
 }
 
+/// The text after the series word: the core and the first `children` child
+/// words, led by a space when a series word precedes it.
+pub(super) fn model_name_text(model: &RenderedModel, children: usize) -> String {
+    let name = model.name(children);
+    if model.series.is_some() && !name.is_empty() {
+        format!(" {name}")
+    } else {
+        name
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
-    reason = "measuring with and without the series prefix shares the exact layout inputs"
+    reason = "measuring with each count of child words shares the exact layout inputs"
 )]
 fn identity_capability_spans(
     row_ctx: &RowCtx<'_>,
     row: &SidebarRow,
     status: AgentStatus,
     model: &RenderedModel,
-    include_series: bool,
+    children: usize,
     base_width: usize,
     right: &[Span<'static>],
     width: usize,
@@ -198,23 +204,22 @@ fn identity_capability_spans(
     let mut fits_intact = true;
 
     cluster.push(Span::styled(value_seam(theme), theme.muted()));
-    if include_series && let Some(series) = model.series.as_deref() {
-        cluster.push(Span::styled(
-            format!("{series}{}", value_seam(theme)),
-            series_style(theme, series),
-        ));
+    if let Some(series) = model.series.as_deref() {
+        cluster.push(Span::styled(series.to_owned(), series_style(theme, series)));
     }
+    let name = model_name_text(model, children);
     let bolt = theme.glyph(GlyphRole::CardFast);
+    // An empty name fits a budget of zero, so the bolt shows at its exact fit.
     let model_budget = width
-        .saturating_sub(base_width + spans_width(&cluster) + right_reserved + 1 + text_width(bolt));
-    if row.as_agent().is_some_and(|agent| agent.fast) && model_budget > 0 {
-        if text_width(&model.name) > model_budget {
+        .checked_sub(base_width + spans_width(&cluster) + right_reserved + 1 + text_width(bolt))
+        .filter(|budget| *budget > 0 || name.is_empty());
+    if row.as_agent().is_some_and(|agent| agent.fast)
+        && let Some(model_budget) = model_budget
+    {
+        if text_width(&name) > model_budget {
             fits_intact = false;
         }
-        cluster.push(Span::styled(
-            ellipsize(&model.name, model_budget),
-            theme.muted(),
-        ));
+        cluster.push(Span::styled(ellipsize(&name, model_budget), theme.muted()));
         cluster.push(Span::styled(
             format!(" {bolt}"),
             fast_mode_style(row_ctx, row, status),
@@ -223,7 +228,7 @@ fn identity_capability_spans(
         if row.as_agent().is_some_and(|agent| agent.fast) {
             fits_intact = false;
         }
-        cluster.push(Span::styled(model.name.clone(), theme.muted()));
+        cluster.push(Span::styled(name, theme.muted()));
     }
     if row.as_agent().is_some_and(|card| card.tier_moved) {
         cluster.push(Span::styled(

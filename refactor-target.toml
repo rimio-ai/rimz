@@ -540,7 +540,9 @@ upward-dependencies = [
 # workflow host (+1).
 # AgentState::stated_refill_lifted is the one rule for when a passed stated refill reads lifted,
 # read by auto-continue's recovery and the child limit reading (+1).
-surface-budget = 1409
+# RenderedModel::name replaces RenderedModel's name field, so the sidebar drops child words
+# whole when an identity line does not fit (+1).
+surface-budget = 1410
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

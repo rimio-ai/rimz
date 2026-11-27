@@ -529,6 +529,8 @@ fn child_type_uses_its_own_provider_tone_and_keeps_the_model_muted() {
         child.parent_agent_kind = Some(parent.kind.clone());
         let model = if launched { "GPT 5.5" } else { "Haiku" };
         child.model = Some(model.to_owned());
+        // The series word wears the card's series tone; the rest stays muted.
+        let rest = if launched { " 5.5" } else { "Haiku" };
         if launched {
             child.launch_depth = Some(1);
             child.profile = Some(name.to_owned());
@@ -544,13 +546,16 @@ fn child_type_uses_its_own_provider_tone_and_keeps_the_model_muted() {
                 .flat_map(|line| &line.spans)
                 .collect::<Vec<_>>();
             let type_word = spans.iter().find(|span| span.content == name).unwrap();
-            let model_span = spans.iter().find(|span| span.content == model).unwrap();
+            let model_span = spans.iter().find(|span| span.content == rest).unwrap();
             if launched {
                 assert_eq!(
                     type_word.style.fg,
                     theme.body_brand(theme.provider_brand_tone(kind)).fg,
                     "{kind}"
                 );
+                let series = spans.iter().find(|span| span.content == "GPT").unwrap();
+                assert_eq!(series.style.fg, Some(theme.provider_brand_tone("codex")));
+                assert!(series.style.add_modifier.contains(Modifier::DIM));
                 assert_eq!(model_span.style.fg, theme.muted().fg);
             } else {
                 let inert_fg = Some(theme.component(Component::SubagentInert));

@@ -493,7 +493,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     ));
     assert!(markdown.contains(" active ·"));
     assert!(markdown.contains(" messages (1 from you)</summary>"));
-    assert!(markdown.contains("- **`planner`** — Codex `gpt-5.5@high`"));
+    assert!(markdown.contains("- **`planner`** — Codex GPT 5.5@high"));
     assert!(markdown.contains("  - activity: 1 ask"));
     assert!(markdown.contains("  - messages: 1 from you · 1 to teammates"));
     assert!(markdown.contains("  - tokens: "));
@@ -630,7 +630,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
         )
     );
     assert!(markdown.contains("**Models**"));
-    assert!(markdown.contains("`child-model`"));
+    assert!(markdown.contains("\n- Child Model — "));
 }
 
 #[test]

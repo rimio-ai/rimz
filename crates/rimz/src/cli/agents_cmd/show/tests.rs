@@ -282,9 +282,9 @@ fn fast_show_header_marks_only_a_resolved_model() {
             let text = strip(|w| render_agent_section(w, &report));
             match (model, fast) {
                 (Some(_), true) => {
-                    assert!(text.ends_with(&format!("Sol 6.1 {bolt}\n")), "{text}")
+                    assert!(text.ends_with(&format!("GPT 6.1 Sol {bolt}\n")), "{text}")
                 }
-                (Some(_), false) => assert!(text.ends_with("Sol 6.1\n"), "{text}"),
+                (Some(_), false) => assert!(text.ends_with("GPT 6.1 Sol\n"), "{text}"),
                 (None, _) => assert!(!text.contains(&bolt), "{text}"),
             }
         }

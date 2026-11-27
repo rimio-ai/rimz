@@ -1,6 +1,8 @@
 //! One home for model-id parsing, display names, home-series lookup, and
 //! matching keys across CLI, sidebar, and capacity surfaces.
 
+use std::borrow::Cow;
+
 /// A parsed model name split into its series, family words, version, and
 /// optional context-window qualifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,22 +15,36 @@ pub struct ParsedModel {
     has_date_suffix: bool,
 }
 
-/// A rendered model name split into its optional series prefix (omitted when
-/// the adjacent agent's home series implies it or when there is no family) and
-/// its main family-and-version text.
+/// A rendered model name in reading order: the series word (absent when a
+/// Claude line name leads under Claude's own provider, or when none was parsed),
+/// the core (a Claude line name and the version; the first word when no series
+/// was parsed; empty under a shown series with neither), then the child words
+/// in id order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedModel {
-    pub series: Option<String>,
-    pub name: String,
+    pub(crate) series: Option<String>,
+    core: String,
+    pub(crate) children: Vec<String>,
 }
 
 impl RenderedModel {
-    /// Join the optional series prefix and main name with ` · `.
+    /// Every shown word joined with single spaces.
     pub fn full(&self) -> String {
+        let name = self.name(self.children.len());
         match self.series.as_deref() {
-            Some(series) => format!("{series} · {}", self.name),
-            None => self.name.clone(),
+            Some(series) if name.is_empty() => series.to_owned(),
+            Some(series) => format!("{series} {name}"),
+            None => name,
         }
+    }
+
+    /// The core and the first `children` child words, without the series.
+    pub(crate) fn name(&self, children: usize) -> String {
+        std::iter::once(self.core.as_str())
+            .chain(self.children.iter().take(children).map(String::as_str))
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -71,8 +87,13 @@ impl ModelMatchKey {
 
 impl ParsedModel {
     /// Parse a model id or display label into its series, family, version, and
-    /// optional context-window qualifier. Routing prefixes (`provider/.../`)
-    /// and `#variant` tails are stripped for display and matching only.
+    /// optional context-window qualifier. Routing prefixes (`provider/.../`),
+    /// cloud vendor and region dot-prefixes (`us.anthropic.`), `#variant`
+    /// tails, `-v1:0` revision tails, and trailing dates are stripped for
+    /// display and matching only; `2p5` reads as `2.5`. A snapshot code (a 4-,
+    /// 6- or 8-digit word) after the version extends the version, while an
+    /// 8-digit date inside a version leaves it, so a refusal key written as
+    /// `claude 4.5.20250929 sonnet v1:0` reads as its id does.
     pub fn parse(raw: &str) -> Self {
         let trimmed = raw.trim();
         let (without_window, mut window) = strip_window_qualifier(trimmed);
@@ -87,6 +108,8 @@ impl ParsedModel {
         };
         let base = strip_factory_custom_selector(base).unwrap_or(base);
         let base = strip_routing_prefix(base);
+        let vendorless = strip_vendor_prefixes(base);
+        let base = strip_revision_tail(&vendorless);
         let (base, has_date_suffix) = strip_date_suffix(base);
         let base = base.trim();
         if base.is_empty() {
@@ -112,6 +135,7 @@ impl ParsedModel {
             };
         }
 
+        let base = spell_point_versions(base);
         let words: Vec<&str> = base
             .split(|ch: char| ch == '-' || ch.is_whitespace())
             .filter(|word| !word.is_empty())
@@ -205,44 +229,66 @@ impl ParsedModel {
         Self {
             series: Some(series),
             family,
-            version,
+            version: version.map(|version| without_date_components(&version)),
             verbatim: None,
             window,
             has_date_suffix,
         }
     }
 
-    /// Render the model name, hiding `home_series` when it matches the parsed
-    /// series case-insensitively and a family is present.
+    /// Render the model name as series, then a Claude line name, then the
+    /// version, then the child words in id order, dropping fast, reasoning,
+    /// packaging words, active-parameter tags, and snapshot codes (as words and
+    /// as version components). With a series shown and neither a line name nor
+    /// a version, the core stays empty and every later word is a child. The series
+    /// hides only when it matches `home_series` case-insensitively and a Claude
+    /// line name leads; every other series shows, or the version would lead.
     pub fn render(&self, home_series: Option<&str>) -> RenderedModel {
         let Some(series) = self.series.as_deref() else {
+            if let Some(verbatim) = self.verbatim.as_deref() {
+                return RenderedModel {
+                    series: None,
+                    core: verbatim.to_owned(),
+                    children: Vec::new(),
+                };
+            }
+            // A name with no series (`o4-mini`) keeps its first word as the core.
+            let mut words = shown_words(&self.family).into_iter();
             return RenderedModel {
                 series: None,
-                name: self
-                    .verbatim
-                    .clone()
-                    .unwrap_or_else(|| self.family.join(" ")),
+                core: words.next().unwrap_or_default(),
+                children: words.collect(),
             };
         };
-        if self.family.is_empty() {
-            let name = match self.version.as_deref() {
-                Some(version) => format!("{series} {version}"),
-                None => series.to_owned(),
-            };
-            return RenderedModel { series: None, name };
-        }
-        let mut name = self.family.join(" ");
-        if let Some(version) = self.version.as_deref() {
-            name.push(' ');
-            name.push_str(version);
-        }
-        let shown_series = match home_series {
-            Some(home) if home.eq_ignore_ascii_case(series) => None,
-            _ => Some(series.to_owned()),
+        // A label such as `Opus 4.8` parses its line name into the series slot.
+        let (shown_series, line) = if is_claude_line(series) {
+            (None, Some(series.to_owned()))
+        } else {
+            let line = series
+                .eq_ignore_ascii_case("claude")
+                .then(|| self.family.iter().find(|word| is_claude_line(word)))
+                .flatten()
+                .cloned();
+            let hidden =
+                line.is_some() && home_series.is_some_and(|home| home.eq_ignore_ascii_case(series));
+            ((!hidden).then(|| series.to_owned()), line)
         };
+        let mut children = shown_words(&self.family);
+        if let Some(line) = line.as_deref() {
+            children.retain(|word| word != line);
+        }
+        let version = self.version.as_deref().map(shown_version);
+        let core = line
+            .iter()
+            .chain(version.iter())
+            .filter(|word| !word.is_empty())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
         RenderedModel {
             series: shown_series,
-            name,
+            core,
+            children,
         }
     }
 
@@ -326,16 +372,15 @@ pub(crate) fn home_series_owner(series: &str) -> Option<&'static str> {
     })
 }
 
-/// Render a provider model id for people, hiding `kind`'s home series when
-/// implied.
+/// Render a provider model id for people, hiding `kind`'s home series only
+/// where a Claude line name leads (`Opus 4.8` under Claude).
 pub fn display_model_for_kind(id: &str, kind: Option<&str>) -> String {
     ParsedModel::parse(id)
         .render(kind.and_then(home_series))
         .full()
 }
 
-/// Render a provider model id for people, always keeping the series when a
-/// family is present.
+/// Render a provider model id for people, always keeping the series.
 pub fn display_model(id: &str) -> String {
     ParsedModel::parse(id).render(None).full()
 }
@@ -457,6 +502,62 @@ fn strip_routing_prefix(raw: &str) -> &str {
     }
 }
 
+/// Strip cloud vendor and region dot-prefixes on the leading word (`us.`,
+/// `us-gov.`, `anthropic.`, `meta.`, ...): every segment of letters and
+/// hyphens before a dot. A segment whose rest would lead with a word of fewer
+/// than two letters (`deepseek.r1-v1:0`) stays as the series.
+fn strip_vendor_prefixes(raw: &str) -> Cow<'_, str> {
+    let mut rest = raw;
+    while let Some((segment, tail)) = rest.split_once('.')
+        && segment.starts_with(|ch: char| ch.is_ascii_alphabetic())
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphabetic() || byte == b'-')
+        && !tail.is_empty()
+    {
+        let leading_letters = tail
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphabetic())
+            .count();
+        if leading_letters < 2 {
+            return Cow::Owned(format!("{segment}-{tail}"));
+        }
+        rest = tail;
+    }
+    Cow::Borrowed(rest)
+}
+
+/// Strip a Bedrock revision tail such as `-v1:0` or `-1:0`, after a hyphen
+/// or a space.
+fn strip_revision_tail(raw: &str) -> &str {
+    let Some((head, tail)) = raw.rsplit_once(|ch: char| ch == '-' || ch.is_whitespace()) else {
+        return raw;
+    };
+    let revision = tail.strip_prefix(['v', 'V']).unwrap_or(tail);
+    match revision.split_once(':') {
+        Some((major, minor))
+            if !head.trim_end().is_empty() && is_all_digits(major) && is_all_digits(minor) =>
+        {
+            head.trim_end()
+        }
+        _ => raw,
+    }
+}
+
+/// Read a `NpN` version spelling (`qwen2p5`) as `N.N`.
+fn spell_point_versions(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    raw.char_indices()
+        .map(|(index, ch)| {
+            let between_digits = ch == 'p'
+                && index > 0
+                && bytes[index - 1].is_ascii_digit()
+                && bytes.get(index + 1).is_some_and(u8::is_ascii_digit);
+            if between_digits { '.' } else { ch }
+        })
+        .collect()
+}
+
 /// Strip a `#variant` tail (such as `#high` or `#fast`) for display and
 /// matching only.
 fn strip_variant_suffix(raw: &str) -> &str {
@@ -468,8 +569,9 @@ fn strip_variant_suffix(raw: &str) -> &str {
     }
 }
 
-/// Drop a trailing `YYYYMMDD` or `YYYY-MM-DD` date stamp separated by `-` or
-/// whitespace, returning the trimmed base and whether a stamp was removed.
+/// Drop a trailing `YYYYMMDD`, `YYYY-MM-DD` or `MM-YYYY` date stamp separated by
+/// `-` or whitespace (`MM YYYY` too), returning the trimmed base and whether a
+/// stamp was removed.
 fn strip_date_suffix(raw: &str) -> (&str, bool) {
     let trimmed = raw.trim_end();
     let bytes = trimmed.as_bytes();
@@ -490,6 +592,22 @@ fn strip_date_suffix(raw: &str) -> (&str, bool) {
             }
         }
     }
+    if bytes.len() > 8 {
+        let split = bytes.len() - 8;
+        let sep = bytes[split];
+        let tail = &bytes[split + 1..];
+        let is_month_year = (sep == b'-' || sep.is_ascii_whitespace())
+            && tail[0..2].iter().all(u8::is_ascii_digit)
+            && matches!((tail[0] - b'0') * 10 + (tail[1] - b'0'), 1..=12)
+            && (tail[2] == b'-' || tail[2].is_ascii_whitespace())
+            && tail[3..7].iter().all(u8::is_ascii_digit);
+        if is_month_year {
+            let base = trimmed[..split].trim_end();
+            if !base.is_empty() {
+                return (base, true);
+            }
+        }
+    }
     if bytes.len() > 9 {
         let split = bytes.len() - 9;
         let sep = bytes[split];
@@ -502,6 +620,86 @@ fn strip_date_suffix(raw: &str) -> (&str, bool) {
         }
     }
     (trimmed, false)
+}
+
+/// Claude's line names, which lead in place of the series. A new line name
+/// joins this list.
+const CLAUDE_LINES: [&str; 6] = ["Opus", "Sonnet", "Haiku", "Fable", "Mythos", "Instant"];
+
+fn is_claude_line(word: &str) -> bool {
+    CLAUDE_LINES
+        .iter()
+        .any(|line| line.eq_ignore_ascii_case(word))
+}
+
+/// The family words a name shows: every `fast`, `reasoning` and
+/// `non-reasoning`, packaging words, active-parameter tags (`a3b`), and
+/// snapshot codes drop.
+fn shown_words(family: &[String]) -> Vec<String> {
+    family
+        .iter()
+        .enumerate()
+        .filter(|(index, word)| {
+            let next = family.get(index + 1).map(String::as_str);
+            !is_noise_word(word, next)
+        })
+        .map(|(_, word)| word.clone())
+        .collect()
+}
+
+fn is_noise_word(word: &str, next: Option<&str>) -> bool {
+    const NOISE: [&str; 12] = [
+        "fast",
+        "reasoning",
+        "instruct",
+        "it",
+        "hf",
+        "fp8",
+        "fp4",
+        "bf16",
+        "maas",
+        "latest",
+        "preview",
+        "customtools",
+    ];
+    let lower = word.to_ascii_lowercase();
+    let active_parameters = lower
+        .strip_prefix('a')
+        .and_then(|rest| rest.strip_suffix('b'))
+        .is_some_and(is_numeric_version);
+    NOISE.contains(&lower.as_str())
+        || (lower == "non" && next.is_some_and(|next| next.eq_ignore_ascii_case("reasoning")))
+        || active_parameters
+        || is_snapshot_code(word)
+}
+
+/// A version as shown: every snapshot-code component drops (`4.0613` shows
+/// `4`, `2411` shows nothing).
+fn shown_version(version: &str) -> String {
+    version
+        .split('.')
+        .filter(|component| !is_snapshot_code(component))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Drop each 8-digit date after a version's first component (`4.5.20250929`
+/// reads `4.5`), which only written keys and mid-id dates produce.
+fn without_date_components(version: &str) -> String {
+    version
+        .split('.')
+        .enumerate()
+        .filter(|(index, component)| {
+            *index == 0 || !(is_all_digits(component) && component.len() == 8)
+        })
+        .map(|(_, component)| component)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// A 4-, 6- or 8-digit word such as `0324` or `20250929`.
+fn is_snapshot_code(word: &str) -> bool {
+    is_all_digits(word) && matches!(word.len(), 4 | 6 | 8)
 }
 
 fn is_all_digits(word: &str) -> bool {

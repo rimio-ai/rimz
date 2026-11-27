@@ -222,7 +222,7 @@ fn render_cursor_normalized_model_metadata_once() {
     let rendered = snapshot_to_screen(&snapshot_with(vec![cursor]), 54, 15);
 
     assert!(
-        rendered.contains("GPT · Sol 5.6 · medium · 200k"),
+        rendered.contains("GPT 5.6 Sol · medium · 200k"),
         "the identity line separates Cursor's normalized capabilities:\n{rendered}"
     );
     assert!(
@@ -917,7 +917,7 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
 }
 
 #[test]
-fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
+fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_when_narrow() {
     let mut pi = agent(
         "pi-1",
         "pi",
@@ -926,7 +926,7 @@ fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
         Some("main"),
         Some("run gemini"),
     );
-    pi.model = Some("gemini-4-neon".to_owned());
+    pi.model = Some("gemini-3.8-flash-lite".to_owned());
     pi.effort = Some("high".to_owned());
     pi.usage.context_window = Some(200_000);
     let mut pi_ctx = AgentContext::new("pi", fixed_now());
@@ -944,7 +944,16 @@ fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
         Some("run deepseek"),
     );
     pi_deepseek.model = Some("deepseek-v4-pro".to_owned());
-    let mut snapshot = snapshot_with(vec![pi, pi_deepseek]);
+    let mut agy = agent(
+        "agy-1",
+        "antigravity",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run home gemini"),
+    );
+    agy.model = Some("gemini-4-neon".to_owned());
+    let mut snapshot = snapshot_with(vec![pi, pi_deepseek, agy]);
     snapshot
         .rows_mut()
         .next()
@@ -954,73 +963,86 @@ fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
         .handle = Some("pi-researcher".into());
 
     let theme = super::super::truecolor_sidebar_theme();
-    let wide = snapshot_to_screen(&snapshot, 58, 20);
+    let wide = snapshot_to_screen(&snapshot, 64, 24);
     assert!(
-        wide.contains("pi-researcher · Gemini · Neon 4 · high · 200k"),
-        "wide Pi card shows Gemini series prefix:\n{wide}"
+        wide.contains("pi-researcher · Gemini 3.8 Flash Lite · high · 200k"),
+        "wide Pi card shows the Gemini series word:\n{wide}"
     );
     assert!(
-        wide.contains("pi · DeepSeek · Pro V4"),
-        "wide Pi card shows DeepSeek series prefix:\n{wide}"
+        wide.contains("pi · DeepSeek V4 Pro"),
+        "wide Pi card shows the DeepSeek series word:\n{wide}"
+    );
+    assert!(
+        wide.contains("antigravity · Gemini 4 Neon"),
+        "the home provider keeps a non-Claude series word:\n{wide}"
     );
 
-    // Check span styling on the wide card: `Gemini · ` wears Antigravity's
-    // brand colour dimmed; `DeepSeek · ` has no declaring adapter so it wears
-    // plain dim (`theme.muted()`).
-    let lines = group_lines_at_width(&snapshot, &theme, 99, 58);
-    let gemini_prefix = lines
+    // Span styling on the wide card: `Gemini` wears Antigravity's brand
+    // colour dimmed, under Pi and under Antigravity itself; `DeepSeek` has no
+    // declaring adapter so it wears plain dim (`theme.muted()`).
+    let lines = group_lines_at_width(&snapshot, &theme, 99, 64);
+    let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
+    let gemini: Vec<_> = spans
         .iter()
-        .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.as_ref() == "Gemini · ")
-        .expect("wide card renders `Gemini · ` prefix span");
-    assert_eq!(
-        gemini_prefix.style.fg,
-        Some(theme.provider_brand_tone("antigravity")),
-        "Gemini prefix uses Antigravity brand colour"
-    );
-    assert!(
-        gemini_prefix
-            .style
-            .add_modifier
-            .contains(ratatui::style::Modifier::DIM),
-        "Gemini prefix is dimmed"
-    );
-    let deepseek_prefix = lines
+        .filter(|span| span.content.as_ref() == "Gemini")
+        .collect();
+    assert_eq!(gemini.len(), 2, "one `Gemini` series span per Gemini card");
+    for span in gemini {
+        assert_eq!(
+            span.style.fg,
+            Some(theme.provider_brand_tone("antigravity")),
+            "Gemini series word uses Antigravity brand colour"
+        );
+        assert!(
+            span.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM),
+            "Gemini series word is dimmed"
+        );
+    }
+    let deepseek = spans
         .iter()
-        .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.as_ref() == "DeepSeek · ")
-        .expect("wide card renders `DeepSeek · ` prefix span");
+        .find(|span| span.content.as_ref() == "DeepSeek")
+        .expect("wide card renders the `DeepSeek` series span");
     assert_eq!(
-        deepseek_prefix.style,
+        deepseek.style,
         theme.muted(),
         "undeclared series uses plain dim"
     );
 
-    // Exact drop-width boundary (last width keeping `Gemini · `, first dropping
-    // it, and one column either side): `◐ pi-researcher` (15) +
-    // ` · Gemini · Neon 4 · high · 200k` (32) + ` $1.20` (6) = 53 content cells
-    // (pane width 55).
-    for width in [53, 54, 55, 56] {
+    // Child words drop right to left at each exact drop width and one column
+    // either side: `◐ pi-researcher` (15) + ` · Gemini 3.8 Flash Lite · high ·
+    // 200k` (38) + ` $1.20` (6) = 59 content cells (pane width 61); without
+    // ` Lite` 54 (pane 56); without ` Flash` 48 (pane 50). Below that the line
+    // is cut at the pane edge, never shedding the series word or the core.
+    for (width, shown) in [
+        (62, "Gemini 3.8 Flash Lite · high · 200k"),
+        (61, "Gemini 3.8 Flash Lite · high · 200k"),
+        (60, "Gemini 3.8 Flash · high · 200k"),
+        (57, "Gemini 3.8 Flash · high · 200k"),
+        (56, "Gemini 3.8 Flash · high · 200k"),
+        (55, "Gemini 3.8 · high · 200k"),
+        (51, "Gemini 3.8 · high · 200k"),
+        (50, "Gemini 3.8 · high · 200k"),
+        (49, "Gemini 3.8 · high · 20"),
+    ] {
         let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
         let text = lines
             .iter()
             .find(|line| line.to_string().contains("pi-researcher"))
             .unwrap()
             .to_string();
-        assert_eq!(
-            text.contains("Gemini · Neon 4"),
-            width >= 55,
-            "plain overflow width {width}: {text}"
-        );
         assert!(
-            text.contains("Neon 4 · high · 200k") && text.trim_end().ends_with("$1.20"),
-            "family, version, reasoning, window, and cost stay intact at width {width}: {text}"
+            text.contains(&format!("pi-researcher · {shown}"))
+                && text.trim_end().ends_with("$1.20"),
+            "width {width} shows `{shown}`: {text}"
         );
     }
 
-    // Fast card: `Gemini · ` drops before `Flash Lite 3.8` would be ellipsized
-    // beside the bolt (`◐ pi-researcher` 15 + ` · Gemini · Flash Lite 3.8 ϟ` 28
-    // + ` $1.20` 6 = 49 content cells, pane width 51).
+    // Fast card: child words drop before the name would be ellipsized beside
+    // the bolt (`◐ pi-researcher` 15 + ` · Gemini 3.8 Flash Lite ϟ` 26 +
+    // ` $1.20` 6 = 47 content cells, pane width 49; without ` Lite` pane 44,
+    // without ` Flash` pane 38), and the bolt stays when the core is cut.
     let mut fast_pi = agent(
         "pi-fast",
         "pi",
@@ -1048,29 +1070,121 @@ fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
         card.fast = true;
     }
     let bolt = theme.glyph(GlyphRole::CardFast);
-    for width in [49, 50, 51, 52] {
+    for (width, shown) in [
+        (50, "Gemini 3.8 Flash Lite"),
+        (49, "Gemini 3.8 Flash Lite"),
+        (48, "Gemini 3.8 Flash"),
+        (45, "Gemini 3.8 Flash"),
+        (44, "Gemini 3.8 Flash"),
+        (43, "Gemini 3.8"),
+        (39, "Gemini 3.8"),
+        (38, "Gemini 3.8"),
+        (37, "Gemini 3…"),
+    ] {
         let lines = group_lines_at_width(&fast_snapshot, &theme, usize::MAX, width);
         let text = lines
             .iter()
             .find(|line| line.to_string().contains("pi-researcher"))
             .unwrap()
             .to_string();
-        assert_eq!(
-            text.contains("Gemini · Flash Lite 3.8"),
-            width >= 51,
-            "fast card width {width}: {text}"
-        );
         assert!(
-            text.contains(&format!("Flash Lite 3.8 {bolt}"))
-                && !text.contains('…')
+            text.contains(&format!("pi-researcher · {shown} {bolt}"))
                 && text.trim_end().ends_with("$1.20"),
-            "fast card keeps full model name and bolt at width {width}: {text}"
+            "fast card width {width} shows `{shown}` and the bolt: {text}"
         );
     }
 
-    // Compaction point + capacity: `Gemini · ` drops before `835k/1M` would
-    // lose `/1M` (`⣾ opencode-lead` 15 + ` · Gemini · Neon 4 · 835k/1M` 28 +
-    // ` $1.20` 6 = 49 content cells, pane width 51).
+    // A fast card whose name after the series is empty (`grok-fast` reads
+    // `Grok`) keeps its bolt at the exact width it fits (`◐ pi-grok-researcher`
+    // 20 + ` · Grok ϟ` 9 + ` $1.20` 6 = 35 content cells, pane width 37) and
+    // drops it one column narrower.
+    let mut grok = agent(
+        "pi-grok",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run fast grok"),
+    );
+    grok.model = Some("grok-fast".to_owned());
+    let mut grok_ctx = AgentContext::new("pi", fixed_now());
+    grok_ctx.cost = Some(AgentCost {
+        total_cost_usd: Some(1.20),
+        ..Default::default()
+    });
+    grok.context = Some(grok_ctx);
+    let mut grok_snapshot = snapshot_with(vec![grok]);
+    {
+        let card = grok_snapshot
+            .rows_mut()
+            .next()
+            .unwrap()
+            .as_agent_mut()
+            .unwrap();
+        card.handle = Some("pi-grok-researcher".into());
+        card.fast = true;
+    }
+    for (width, bolted) in [(38, true), (37, true), (36, false)] {
+        let lines = group_lines_at_width(&grok_snapshot, &theme, usize::MAX, width);
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("pi-grok-researcher"))
+            .unwrap()
+            .to_string();
+        assert!(
+            text.contains("pi-grok-researcher · Grok")
+                && text.contains(bolt) == bolted
+                && text.trim_end().ends_with("$1.20"),
+            "fast Grok card width {width} shows the bolt: {bolted}: {text}"
+        );
+    }
+
+    // A versionless name keeps every word after the series a child, so
+    // `Pro` drops whole (`◐ pi-researcher` 15 + ` · Gemini Pro` 13 + ` $1.20`
+    // 6 = 34 content cells, pane width 36), never cut to `Gemini P`.
+    let mut versionless = agent(
+        "pi-pro",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("run gemini pro"),
+    );
+    versionless.model = Some("gemini-pro-latest".to_owned());
+    let mut versionless_ctx = AgentContext::new("pi", fixed_now());
+    versionless_ctx.cost = Some(AgentCost {
+        total_cost_usd: Some(1.20),
+        ..Default::default()
+    });
+    versionless.context = Some(versionless_ctx);
+    let mut versionless_snapshot = snapshot_with(vec![versionless]);
+    versionless_snapshot
+        .rows_mut()
+        .next()
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .handle = Some("pi-researcher".into());
+    for (width, shown) in [(37, "Gemini Pro"), (36, "Gemini Pro"), (35, "Gemini")] {
+        let lines = group_lines_at_width(&versionless_snapshot, &theme, usize::MAX, width);
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("pi-researcher"))
+            .unwrap()
+            .to_string();
+        let after = text.split_once("pi-researcher · ").map(|(_, rest)| rest);
+        assert!(
+            after.is_some_and(|rest| rest
+                .trim_end()
+                .strip_suffix("$1.20")
+                .is_some_and(|name| name.trim_end() == shown)),
+            "versionless card width {width} shows `{shown}`: {text}"
+        );
+    }
+
+    // Compaction point + capacity: ` Neon` drops before `835k/1M` would
+    // lose `/1M` (`⣾ opencode-lead` 15 + ` · Gemini 4 Neon · 835k/1M` 26 +
+    // ` $1.20` 6 = 47 content cells, pane width 49).
     let mut compact_opencode = agent(
         "opencode-compact",
         "opencode",
@@ -1099,21 +1213,21 @@ fn card_dims_series_prefix_in_brand_colour_and_drops_it_first_when_narrow() {
         card.usage.context_window = Some(983_010);
         card.usage.context_capacity = Some(1_048_576);
     }
-    for width in [49, 50, 51, 52] {
+    for (width, shown) in [
+        (50, "Gemini 4 Neon · 835k/1M"),
+        (49, "Gemini 4 Neon · 835k/1M"),
+        (48, "Gemini 4 · 835k/1M"),
+    ] {
         let lines = group_lines_at_width(&compact_snapshot, &theme, usize::MAX, width);
         let text = lines
             .iter()
             .find(|line| line.to_string().contains("opencode-lead"))
             .unwrap()
             .to_string();
-        assert_eq!(
-            text.contains("Gemini · Neon 4"),
-            width >= 51,
-            "compaction card width {width}: {text}"
-        );
         assert!(
-            text.contains("Neon 4 · 835k/1M") && text.trim_end().ends_with("$1.20"),
-            "compaction point and capacity stay intact at width {width}: {text}"
+            text.contains(&format!("opencode-lead · {shown}"))
+                && text.trim_end().ends_with("$1.20"),
+            "compaction card width {width} shows `{shown}`: {text}"
         );
     }
 }

@@ -178,7 +178,7 @@ $ rimz agents attribution
 branch codex-statusline · since 2026-11-22 12:59
 forge team · 2 agents · 1h04m active · $9.23 · 2 messages (1 from you)
 
-  @coder · Claude · claude-fable-5-2@medium
+  @coder · Claude · Fable 5.2@medium
       effort:    12m active · $2.54
       subagents: 1 run · $1.07
                  general  1 × · 10m active · $1.07
@@ -186,7 +186,7 @@ forge team · 2 agents · 1h04m active · $9.23 · 2 messages (1 from you)
       messages:  1 from you · 1 from teammates · 1 to teammates
       tokens:    139k input, 37.5k output, 62.5k cache write, 5.7m cache read
 
-  @scout · Claude · claude-opus-5-5@medium
+  @scout · Claude · Opus 5.5@medium
       effort:    52m active · $6.69
       subagents: 5 runs · $4.75
                  explorer      4 × · 34m active · $4.20
@@ -196,9 +196,9 @@ forge team · 2 agents · 1h04m active · $9.23 · 2 messages (1 from you)
       tokens:    837.2k input, 119.3k output, 130.9k cache write, 23.3m cache read
 
 Models
-  gpt-6.2-sol:      $5.82 · 976.1k input, 125.5k output, 26.1m cache read · 45 tok/s
-  claude-opus-5-5:  $1.94 · 66 input, 22.8k output, 130.9k cache write, 2.2m cache read · 109 tok/s
-  claude-fable-5-2: $1.47 · 32 input, 8.6k output, 62.5k cache write, 608.2k cache read · 85 tok/s
+  GPT 6.2 Sol: $5.82 · 976.1k input, 125.5k output, 26.1m cache read · 45 tok/s
+  Opus 5.5:    $1.94 · 66 input, 22.8k output, 130.9k cache write, 2.2m cache read · 109 tok/s
+  Fable 5.2:   $1.47 · 32 input, 8.6k output, 62.5k cache write, 608.2k cache read · 85 tok/s
 ```
 
 The report covers the agents that worked the checkout's current branch within the worktree's current life, teammates that exited on the way included. Every dollar and token figure is all-in for the member, its subagents counted in rather than added on. The per-kind subagent block shows a share of that member's figure, with active time for pane-backed children where available. `Models` splits the same spend by model, largest first, and shows response throughput over this report's agents when timing is available. `--md` prints a collapsed block ready to paste into a pull-request body, and the [attribution reference](../reference/cli/agents.md#attribution) covers the other scopes, the branch evidence, and what the Markdown form leaves out.
