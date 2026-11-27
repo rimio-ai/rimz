@@ -1755,11 +1755,19 @@ pub(super) fn finalize_agent_cell(
     if let Some(budget) = options.budget {
         cell.launch.budget = Some(budget.to_string());
     }
-    let profile = cell
+    let team = cell
         .launch
-        .profile
-        .clone()
-        .unwrap_or_else(|| cell.kind.to_string());
+        .team
+        .as_deref()
+        .or_else(|| options.smart_compact.and_then(|policy| policy.team));
+    let profile = match (team, cell.launch.role.as_deref()) {
+        (Some(team), Some(role)) => format!("{team}.{role}"),
+        _ => cell
+            .launch
+            .profile
+            .clone()
+            .unwrap_or_else(|| cell.kind.to_string()),
+    };
     if let Some(adapter) = adapter {
         let model = cell.launch.model.as_deref().map(|model| {
             options
