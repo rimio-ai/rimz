@@ -128,6 +128,26 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
         ],
         &["newer"],
     );
+    let mut placeholder = with_owner(
+        pane_session("antigravity", "launch_placeholder", "%1", 60),
+        RuntimeOwnerKind::Agent,
+        111,
+        None,
+    );
+    placeholder.ended_at = Some(placeholder.last_activity);
+    assert_survivors(
+        "a reaped launch placeholder cannot hide the live session row in its pane",
+        vec![
+            with_owner(
+                pane_session("antigravity", "session", "%1", 120),
+                RuntimeOwnerKind::Agent,
+                222,
+                None,
+            ),
+            placeholder,
+        ],
+        &["launch_placeholder", "session"],
+    );
     assert_survivors(
         "distinct stamped panes remain concurrent",
         vec![

@@ -140,10 +140,11 @@ impl SidebarSnapshot {
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
     /// rollup only; the append-only event log is untouched, so it complements
-    /// the workspace-level `rimz gc`. Shared supersession collapses replacements;
-    /// same-instance on-screen switches protect open asks. Without focus
-    /// evidence, the fallback proofs keep concurrent owners and persistent
-    /// forks that have not yielded their slot.
+    /// the workspace-level `rimz gc`. Shared supersession collapses replacements,
+    /// and an ended row never hides an unended one; same-instance on-screen
+    /// switches protect open asks. Without focus evidence, the fallback proofs
+    /// keep concurrent owners and persistent forks that have not yielded their
+    /// slot.
     ///
     /// Ownerless sessions past `session_death::GHOST_SESSION_TTL_SECS` also
     /// leave: process liveness cannot reap them, yet they have not reported in
