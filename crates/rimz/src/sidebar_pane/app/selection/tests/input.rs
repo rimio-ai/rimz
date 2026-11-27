@@ -3512,8 +3512,19 @@ fn the_done_pager_pages_by_click_and_enter_without_moving_focus() {
 
 #[test]
 fn enter_pages_a_pager_the_wheel_scrolled_off_screen_from_its_painted_count() {
-    for count in [17, 8] {
-        let (snapshot, row0_id) = prior_children_snapshot(count);
+    for (count, wheel_down) in [(17, false), (8, false), (17, true), (8, true)] {
+        let (mut snapshot, row0_id) = prior_children_snapshot(count);
+        // Cards below the selected one give the wheel room to carry its pager above the top edge.
+        let below = snapshot_with_panes(
+            &workspace(),
+            (0..8)
+                .map(|index| pane(&format!("terminal_{index}"), "tab_0"))
+                .collect(),
+        );
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )
+        .extend(below.worktree_groups[0].rows.iter().cloned());
         let base = snapshot.now;
         let mut view = ViewState::default();
         let mut ui = UiState::default();
@@ -3526,11 +3537,26 @@ fn enter_pages_a_pager_the_wheel_scrolled_off_screen_from_its_painted_count() {
         // The loop asks the paint after an entry step to reveal its stop.
         view.request(ViewportIntent::OwnInput);
         paint(&mut view, &mut ui, &snapshot, 16);
-        assert!(ui.interactions.delegation_pager(&row0_id).is_some());
-        // A landed wheel tick carries the line off screen, the cursor still on it.
-        handle_scroll(false, &mut view, &mut ui);
-        view.scroll_ease.cancel();
-        paint(&mut view, &mut ui, &snapshot, 16);
+        let pager_row = |ui: &UiState| {
+            ui.interactions
+                .regions()
+                .iter()
+                .find_map(|region| match &region.target {
+                    HitTarget::PageDelegation { row, .. } if *row == row0_id => {
+                        Some(region.rows.start)
+                    }
+                    _ => None,
+                })
+        };
+        // The reveal brings the line up from below the viewport to its bottom edge.
+        let bottom_edge = pager_row(&ui);
+        assert!(bottom_edge.is_some());
+        // Landed wheel ticks carry the line off screen, the cursor still on it.
+        for _ in 0..if wheel_down { 6 } else { 1 } {
+            handle_scroll(wheel_down, &mut view, &mut ui);
+            view.scroll_ease.cancel();
+            paint(&mut view, &mut ui, &snapshot, 16);
+        }
         assert_eq!(ui.interactions.delegation_pager(&row0_id), None);
         assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
 
@@ -3563,24 +3589,17 @@ fn enter_pages_a_pager_the_wheel_scrolled_off_screen_from_its_painted_count() {
             "Enter pages past the first page the last paint drew"
         );
         paint(&mut view, &mut ui, &started, 16);
-        // The done pile ends the card: two pages list ten, so the pager still ends a longer
-        // pile, and the oldest entry ends a shorter one.
-        if count > 10 {
-            assert_eq!(
-                ui.interactions
-                    .delegation_pager(&row0_id)
-                    .map(|pages| pages.pages.get()),
-                Some(3),
-                "the paint after the Enter brings the paged line into view"
-            );
+        // The done pile ends the card, and the paint after the Enter brings the card's last line
+        // to the bottom edge, the page above it: two pages list ten, so the pager still ends a
+        // longer pile, and the oldest entry ends a shorter one.
+        let card_end = if count > 10 {
+            pager_row(&ui)
         } else {
-            assert!(
-                ui.interactions
-                    .line_for_target(&HitTarget::ReopenSubAgent(format!("prior-{count}")))
-                    .is_some(),
-                "the paint after the Enter brings the end of the listed pile into view"
-            );
-        }
+            ui.interactions
+                .line_for_target(&HitTarget::ReopenSubAgent(format!("prior-{count}")))
+                .map(|(_, row)| usize::from(row))
+        };
+        assert_eq!(card_end, bottom_edge, "wheel down: {wheel_down}");
     }
 }
 

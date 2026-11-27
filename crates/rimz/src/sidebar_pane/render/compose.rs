@@ -874,8 +874,7 @@ fn resolve_scroll_offset(
                 .iter()
                 .rposition(|row| *row == Some(ordinal))
         {
-            resolved.offset =
-                nudge_into_view(last, last, resolved.offset, viewport).min(max_offset);
+            resolved.offset = (last + 1).saturating_sub(viewport).min(max_offset);
         }
         if view.viewport.inactive_reveal
             && let Some((chip, last)) = input.inactive_span
