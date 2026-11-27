@@ -135,6 +135,7 @@ fn draw_into(
         .map(|row| row.id.clone())
         .collect();
     ui.interactions = composed.interactions;
+    ui.cursor_pager = composed.cursor_pager;
     view.scrollbar.shift(composed.correction);
     view.scrollbar
         .observe(composed.visible_scroll_offset, view.frame_ms);

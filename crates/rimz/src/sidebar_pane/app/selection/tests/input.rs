@@ -3507,6 +3507,80 @@ fn the_done_pager_pages_by_click_and_enter_without_moving_focus() {
 }
 
 #[test]
+fn enter_pages_a_pager_the_wheel_scrolled_off_screen_from_its_painted_count() {
+    for count in [17, 8] {
+        let (snapshot, row0_id) = prior_children_snapshot(count);
+        let base = snapshot.now;
+        let mut view = ViewState::default();
+        let mut ui = UiState::default();
+        reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
+        paint(&mut view, &mut ui, &snapshot, 16);
+        for _ in 0..6 {
+            entry_step(&mut view, &mut ui, &snapshot);
+        }
+        assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+        // The loop asks the paint after an entry step to reveal its stop.
+        view.request(ViewportIntent::OwnInput);
+        paint(&mut view, &mut ui, &snapshot, 16);
+        assert!(ui.interactions.delegation_pager(&row0_id).is_some());
+        // A landed wheel tick carries the line off screen, the cursor still on it.
+        handle_scroll(false, &mut view, &mut ui);
+        view.scroll_ease.cancel();
+        paint(&mut view, &mut ui, &snapshot, 16);
+        assert_eq!(ui.interactions.delegation_pager(&row0_id), None);
+        assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+
+        // A child starts before the Enter lands, unpainted, as in the on-screen race.
+        let mut started = snapshot.clone();
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut started.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(
+            serde_json::from_value(serde_json::json!({
+                "id": "started",
+                "kind": "claude",
+                "name": "coder",
+                "status": "running",
+                "last_activity": base,
+            }))
+            .unwrap(),
+        );
+        let outcome = handle_key(KeyAction::Enter, &mut view, &mut ui, &started);
+        assert!(outcome.redraw);
+        assert_eq!(
+            view.toggles
+                .delegation_pages
+                .get(&row0_id)
+                .map(|pages| (pages.pages.get(), pages.turn)),
+            Some((2, Some(base))),
+            "Enter pages past the first page the last paint drew"
+        );
+        paint(&mut view, &mut ui, &started, 16);
+        // The done pile ends the card: two pages list ten, so the pager still ends a longer
+        // pile, and the oldest entry ends a shorter one.
+        if count > 10 {
+            assert_eq!(
+                ui.interactions
+                    .delegation_pager(&row0_id)
+                    .map(|pages| pages.pages.get()),
+                Some(3),
+                "the paint after the Enter brings the paged line into view"
+            );
+        } else {
+            assert!(
+                ui.interactions
+                    .line_for_target(&HitTarget::ReopenSubAgent(format!("prior-{count}")))
+                    .is_some(),
+                "the paint after the Enter brings the end of the listed pile into view"
+            );
+        }
+    }
+}
+
+#[test]
 fn delegation_pages_reset_when_the_parent_turn_moves_or_the_section_closes() {
     let (mut snapshot, row0_id) = prior_children_snapshot(7);
     let t0 = snapshot.now;

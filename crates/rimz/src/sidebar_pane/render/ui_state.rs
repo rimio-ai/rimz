@@ -21,6 +21,9 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// Typed hit geometry from the most recently painted frame.
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    /// The selected card's pager record from that same paint while the entry cursor is on it,
+    /// whether or not the viewport showed the line.
+    pub(in crate::sidebar_pane) cursor_pager: Option<(String, DelegationPages)>,
     /// Section labels in physical-row coordinates from that same paint.
     pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
     /// Row identity per roster ordinal in the last painted hit map.
@@ -313,6 +316,9 @@ pub(in crate::sidebar_pane) struct ViewportRequest {
     /// The row a banner, focus marker, or inactive-group click reveals minimally
     /// on the next draw, then consumed.
     pub(super) reveal_row: Option<String>,
+    /// The row whose card's last line an input reveals minimally on the next draw, then
+    /// consumed.
+    pub(super) card_end_reveal: Option<String>,
     /// A fresh shared click placement and its source opening set for the next
     /// draw to land, then consumed.
     pub(super) focus_placement: Option<FocusPlacement>,
@@ -351,6 +357,8 @@ pub(in crate::sidebar_pane) enum ViewportIntent {
     Hold,
     /// `Hold`, revealing this row minimally; `None` replaces a pending row reveal.
     RevealRow(Option<String>),
+    /// `Hold`, revealing the last line of this row's card minimally.
+    RevealCardEnd(String),
     /// `Hold`, revealing the inactive chip and its first newly shown receipt.
     RevealInactive,
     /// A jump's placement for the landing paint, replacing any pending one, without a glide.
@@ -530,6 +538,10 @@ impl ViewState {
             }
             ViewportIntent::RevealRow(row) => {
                 viewport.reveal_row = row;
+                self.request(ViewportIntent::Hold);
+            }
+            ViewportIntent::RevealCardEnd(row) => {
+                viewport.card_end_reveal = Some(row);
                 self.request(ViewportIntent::Hold);
             }
             ViewportIntent::RevealInactive => {

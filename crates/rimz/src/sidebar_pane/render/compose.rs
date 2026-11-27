@@ -284,6 +284,18 @@ pub(super) fn compose_lines_with_meter(
         .is_none_or(|(_, first)| *first < layout.offset);
     insert_unread_banner(layout.show_banner, lead_above, snapshot, theme, &mut top);
     top.tag("cockpit");
+    // The measuring walk paints the selected card whole under an entry cursor, so its pager's
+    // record is here even when the viewport cuts the line.
+    let cursor_pager = view
+        .selected_index
+        .filter(|_| matches!(view.entry_cursor, Some(super::EntryCursor::DelegationPage)))
+        .and_then(|index| roster.row(index))
+        .and_then(|row| {
+            Some((
+                row.id.clone(),
+                scroll.interactions.delegation_pager(&row.id)?,
+            ))
+        });
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
         walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
         walk.measuring = false;
@@ -337,6 +349,7 @@ pub(super) fn compose_lines_with_meter(
         lines: frame.lines,
         sections: frame.sections,
         interactions: frame.interactions,
+        cursor_pager,
         scroll_offset: layout.resolution.offset,
         visible_scroll_offset: layout.offset,
         scroll_max: scroll_len.saturating_sub(layout.viewport),
@@ -810,6 +823,9 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
     pub(super) sections: Vec<super::SectionLabel>,
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    /// The selected card's pager record while the entry cursor is on it, read before the
+    /// viewport cut.
+    pub(super) cursor_pager: Option<(String, super::DelegationPages)>,
     pub(in crate::sidebar_pane) scroll_offset: usize,
     pub(super) visible_scroll_offset: usize,
     pub(in crate::sidebar_pane) scroll_max: usize,
@@ -850,6 +866,16 @@ fn resolve_scroll_offset(
             resolved.offset =
                 auto_scroll_to_selection(input.scroll_map, index, resolved.offset, viewport)
                     .min(max_offset);
+        }
+        let card_end = view.viewport.card_end_reveal.as_deref();
+        if let Some(ordinal) = card_end.and_then(|id| input.roster.ordinal_of_id(id))
+            && let Some(last) = input
+                .scroll_map
+                .iter()
+                .rposition(|row| *row == Some(ordinal))
+        {
+            resolved.offset =
+                nudge_into_view(last, last, resolved.offset, viewport).min(max_offset);
         }
         if view.viewport.inactive_reveal
             && let Some((chip, last)) = input.inactive_span
