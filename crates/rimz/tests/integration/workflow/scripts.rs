@@ -62,11 +62,11 @@ fn land_repairs_a_red_gate_and_lands() {
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
             "3 now",
-            "4 watch FORGE",
+            "4 watch FORGE (timeout 259200s)",
             "5 agent fixer",
             "6 shell uv run --script checks/send.py resend",
             "7 now",
-            "8 watch FORGE",
+            "8 watch FORGE (timeout 259200s)",
             "9 shell cargo clean",
             "10 shell uv run --script checks/notes.py sift",
         ]
@@ -74,7 +74,8 @@ fn land_repairs_a_red_gate_and_lands() {
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
 }
 
-/// A green PR that stays unqueued through the hold counts once the forge reads it again.
+/// A green PR that stays unqueued through the hold counts once the forge reads it again. Each
+/// round's watches share its 3-day deadline, and the hold gets its whole 30 minutes.
 #[test]
 fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
     let (calls, end) = land("held");
@@ -84,15 +85,15 @@ fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
             "3 now",
-            "4 watch FORGE",
+            "4 watch FORGE (timeout 259200s)",
             "5 now",
-            "6 watch BROKEN",
+            "6 watch BROKEN (timeout 30m)",
             "7 now",
-            "8 watch FORGE",
+            "8 watch FORGE (timeout 257340s)",
             "9 agent fixer",
             "10 shell uv run --script checks/send.py resend",
             "11 now",
-            "12 watch FORGE",
+            "12 watch FORGE (timeout 259200s)",
             "13 shell cargo clean",
             "14 shell uv run --script checks/notes.py sift",
         ]
@@ -111,11 +112,11 @@ fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
             "3 now",
-            "4 watch FORGE",
+            "4 watch FORGE (timeout 259200s)",
             "5 now",
-            "6 watch BROKEN",
+            "6 watch BROKEN (timeout 30m)",
             "7 now",
-            "8 watch FORGE",
+            "8 watch FORGE (timeout 258480s)",
             "9 shell cargo clean",
             "10 shell uv run --script checks/notes.py sift",
         ]
@@ -133,15 +134,15 @@ fn land_repairs_a_pr_whose_hold_broke_on_a_red_ci() {
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
             "3 now",
-            "4 watch FORGE",
+            "4 watch FORGE (timeout 259200s)",
             "5 now",
-            "6 watch BROKEN",
+            "6 watch BROKEN (timeout 30m)",
             "7 now",
-            "8 watch FORGE",
+            "8 watch FORGE (timeout 258660s)",
             "9 agent fixer",
             "10 shell uv run --script checks/send.py resend",
             "11 now",
-            "12 watch FORGE",
+            "12 watch FORGE (timeout 259200s)",
             "13 shell cargo clean",
             "14 shell uv run --script checks/notes.py sift",
         ]
@@ -354,7 +355,7 @@ fn try_answers_now_and_offers_a_template_for_the_call_it_waits_on() {
         stdout,
         "wait: Waits on a PR\n\
          1 now\n  answer 1764268800000\n\
-         2 watch pr=merged || ci=failed\n  no answer\n\
+         2 watch pr=merged || ci=failed (timeout 1h)\n  no answer\n\
          waits on call 2, the first with no answer; answer it with a line like one of these:\n\
          \x20 {\"result\":{\"readings\":{\"ci\":null,\"pr\":null}}}\n\
          \x20 {\"failure\":{\"cause\":\"...\"}}\n"
