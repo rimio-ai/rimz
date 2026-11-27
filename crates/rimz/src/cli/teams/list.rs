@@ -232,7 +232,7 @@ pub(super) struct SignalFire {
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let machine = MachineConfig::load().context("loading machine config")?;
-    let reports = load_catalog(globals, None, &machine)?;
+    let (reports, _) = load_catalog(globals, None, &machine)?;
     if json {
         return render::json_pretty(&reports);
     }
@@ -248,7 +248,7 @@ pub(super) fn load_catalog(
     globals: &GlobalFlags,
     worktree: Option<&str>,
     machine: &MachineConfig,
-) -> Result<Vec<TeamReport>> {
+) -> Result<(Vec<TeamReport>, rimz::config::effective::LaunchAgents)> {
     crate::cli::report_definition_errors(machine)?;
     let ctx = Ctx::open(globals)?;
     report_unknown_config_keys(machine)?;
@@ -288,7 +288,7 @@ pub(super) fn load_catalog(
         machine.harness.auto_compact_default(),
     )
     .sources;
-    Ok(build_catalog(
+    let reports = build_catalog(
         &effective.teams,
         &effective.profiles,
         &machine.agents.commands,
@@ -306,7 +306,8 @@ pub(super) fn load_catalog(
             shared_dir: &ctx.store.paths().room_shared_dir,
         },
         |name| team_source(&ctx.workspace.project_root, name, &sources),
-    ))
+    );
+    Ok((reports, effective))
 }
 
 pub(super) fn effective_catalog(

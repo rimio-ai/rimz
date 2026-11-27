@@ -46,6 +46,88 @@ fn teams_show_misses_read_main_alone_as_trunk() {
     }
 }
 
+#[test]
+fn teams_show_refuses_a_failed_team_with_its_failure_detail() {
+    let fixture = Fixture::new();
+    fixture.lane("a");
+    crate::common::write_definition(
+        &fixture.env,
+        "teams",
+        "broken",
+        "leader: coder\nstages: [Build]\nroles:\n  - {role: coder, agent: ghost, owns: [Build]}",
+        "Complete the work.",
+    );
+    fixture.env.write_config(
+        &fixture.env.project_root,
+        "[profiles.hand]\ndescription = 'Hand'\nagent = 'claude'\n\
+         [agents.teams.crew]\nroles = [{role = 'lead', profile = 'hand'}]\n",
+    );
+    let grant = fixture
+        .env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .unwrap();
+    assert!(grant.status.success(), "{grant:?}");
+    let error_line = |output: &Output| {
+        text(&output.stderr)
+            .lines()
+            .find(|line| line.starts_with("error: "))
+            .map(str::to_owned)
+    };
+    for (team, cause) in [
+        ("broken", "selects unknown agent 'ghost'"),
+        ("crew", "team `crew` must declare a `leader`"),
+    ] {
+        let stop = fixture
+            .env
+            .rimz()
+            .args(["teams", "stop", team])
+            .output()
+            .unwrap();
+        let detail = error_line(&stop).expect("teams stop refuses the failed team");
+        assert!(detail.contains(cause), "{detail}");
+        let lane = format!("{team}#a");
+        for args in [
+            &[team][..],
+            &[team, "--json"],
+            &[&lane],
+            &[team, "--worktree", "a", "--json"],
+        ] {
+            let output = fixture
+                .env
+                .rimz()
+                .args(["teams", "show"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+            assert_eq!(error_line(&output).as_ref(), Some(&detail), "{args:?}");
+            assert!(!text(&output.stderr).contains("unknown team"), "{args:?}");
+        }
+    }
+    let unknown = fixture
+        .env
+        .rimz()
+        .args(["teams", "show", "nowhere-team"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        error_line(&unknown).as_deref(),
+        Some("error: unknown team `nowhere-team`; configured teams: forge, peer")
+    );
+    let live = fixture
+        .env
+        .rimz()
+        .args(["teams", "show", "#a", "--json"])
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "{live:?}");
+    let live: Value = serde_json::from_slice(&live.stdout).unwrap();
+    assert_eq!(live.as_array().map(Vec::len), Some(1), "{live}");
+    assert_eq!(live[0]["name"], "forge");
+}
+
 impl Fixture {
     fn new() -> Self {
         let env = Env::new();
