@@ -1164,11 +1164,11 @@ fn selecting_named_team_member_keeps_teammates_resting() {
     );
     assert_eq!(
         rendered.matches("subagents (1)").count(),
-        3,
-        "every full-height card shows its summary line: {rendered}"
+        1,
+        "only the card with a child in flight counts one: {rendered}"
     );
     assert!(
-        rendered.contains("subagents (1) · ⧖ waits (1)") && !rendered.contains("after 3m idle"),
+        rendered.contains("  ⧖ waits (1)") && !rendered.contains("after 3m idle"),
         "the unselected done card counts its waits and keeps their entries hidden: {rendered}"
     );
     assert_snapshot("named_team_selection_keeps_teammates_resting", rendered);

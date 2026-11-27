@@ -183,10 +183,10 @@ fn pilot_renders_nested_children_countdown_expansion_and_root_unread() {
     let scenario = pilot();
     let mut column = Column::new(&scenario, None, None).unwrap();
     let children = text_at(&mut column, &scenario, 6_500);
-    // The running reviewer lists; the finished one waits behind the earlier line.
+    // The running reviewer lists; the finished one waits behind the done line.
     assert!(
         children.contains("codex")
-            && children.contains("▸ +1 earlier")
+            && children.contains("▸ +1 done")
             && !children.contains("renderer reviewed"),
         "{children}"
     );

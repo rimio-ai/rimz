@@ -126,6 +126,7 @@ pub(super) fn compose_lines_with_meter(
     #[cfg(test)]
     if let Some(cache) = walk.heights.as_deref_mut() {
         cache.painted.clear();
+        cache.hits.clear();
     }
     let mut top = top_lines(snapshot, view, cells, theme);
 
@@ -936,14 +937,15 @@ fn resolve_scroll_offset(
     if view.viewport.own_input_reveal
         && let (Some(cursor), Some(row)) = (&view.entry_cursor, selected)
     {
-        let target = match cursor {
-            super::EntryCursor::SubAgent(pane) => HitTarget::SubAgentPane(pane.clone()),
-            super::EntryCursor::ReopenSubAgent(id) => HitTarget::ReopenSubAgent(id.clone()),
-            super::EntryCursor::DelegationPage => HitTarget::PageDelegation {
-                row: row.id.clone(),
-            },
+        let target = |target: &HitTarget| match (cursor, target) {
+            (super::EntryCursor::SubAgent(pane), HitTarget::SubAgentPane(hit)) => pane == hit,
+            (super::EntryCursor::ReopenSubAgent(id), HitTarget::ReopenSubAgent(hit)) => id == hit,
+            (super::EntryCursor::DelegationPage, HitTarget::PageDelegation { row: hit, .. }) => {
+                *hit == row.id
+            }
+            _ => false,
         };
-        if let Some(span) = input.scroll_interactions.target_rows(&target) {
+        if let Some(span) = input.scroll_interactions.target_rows(target) {
             resolved.offset = nudge_into_view(
                 span.start,
                 span.end.saturating_sub(1),

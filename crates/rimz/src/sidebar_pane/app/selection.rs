@@ -2,8 +2,6 @@
 //! the transient motion/click browse layer above it, the key/mouse handlers that
 //! act on it, and the typed effects they return to the serve loop.
 
-use std::num::NonZeroUsize;
-
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot, lead_unread_row, triage_key};
@@ -401,7 +399,10 @@ fn key_outcome(
                     else {
                         return InputOutcome::default();
                     };
-                    page_delegation(view, snapshot, row_id);
+                    let Some(pages) = ui.interactions.delegation_pager(&row_id) else {
+                        return InputOutcome::default();
+                    };
+                    page_delegation(view, snapshot, row_id, pages);
                     view.request(ViewportIntent::Hold);
                     return InputOutcome::redraw();
                 }
@@ -730,8 +731,8 @@ pub(super) fn handle_mouse_click(
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
-        Some(HitTarget::PageDelegation { row }) => {
-            page_delegation(view, snapshot, row);
+        Some(HitTarget::PageDelegation { row, pages }) => {
+            page_delegation(view, snapshot, row, pages);
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
@@ -895,26 +896,16 @@ fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: S
     anchor_selection(ui, snapshot);
 }
 
-/// Show five more of an agent card's finished delegation entries without moving focus or
-/// the card's selection. Pages taken in an earlier user turn of the parent start over.
-fn page_delegation(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
-    let Some(agent) = snapshot
-        .rows()
-        .find(|row| row.id == row_id)
-        .and_then(SidebarRow::as_agent)
-    else {
-        return;
-    };
-    let turn = agent.user_turn_started_at;
-    let pages = ui
-        .toggles
-        .delegation_pages
-        .get(&row_id)
-        .filter(|pages| pages.turn == turn)
-        .map_or(NonZeroUsize::MIN, |pages| pages.pages.saturating_add(1));
-    ui.toggles
-        .delegation_pages
-        .insert(row_id, DelegationPages { pages, turn });
+/// Store the pages a painted pager's activation asks for, five more finished delegation
+/// entries than that paint drew, without moving focus or the card's selection. Pages
+/// stamped with an earlier user turn of the parent are inert, so paging starts over.
+fn page_delegation(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    row_id: String,
+    pages: DelegationPages,
+) {
+    ui.toggles.delegation_pages.insert(row_id, pages);
     anchor_selection(ui, snapshot);
 }
 

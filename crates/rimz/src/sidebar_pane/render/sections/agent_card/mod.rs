@@ -30,7 +30,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
-use crate::sidebar_pane::render::{EntryCursor, HitTarget};
+use crate::sidebar_pane::render::{DelegationPages, EntryCursor, HitTarget};
 
 mod bands;
 mod bookings;
@@ -150,6 +150,13 @@ pub(super) fn has_delegation(agent: &AgentCard, now: jiff::Timestamp) -> bool {
 /// Whether the card holds a finished entry for its delegation section to page.
 pub(super) fn has_finished(agent: &AgentCard) -> bool {
     bands::has_finished(&agent.sub_agents, &agent.launched, &agent.bookings)
+}
+
+/// Whether the card holds an entry its section line counts: an in-flight child, launched
+/// entry or booking, or a wait.
+pub(super) fn has_in_flight(agent: &AgentCard, now: jiff::Timestamp) -> bool {
+    wait_count(agent, now) > 0
+        || bands::has_in_flight(&agent.sub_agents, &agent.launched, &agent.bookings)
 }
 
 fn sub_agent_cursor(child: &SidebarSubAgent) -> Option<EntryCursor> {
@@ -370,22 +377,20 @@ pub(super) fn row_lines(
                 }
                 CardSlot::Cache => inner.extend(cache_line(ctx, row).map(CardLine::from)),
                 CardSlot::Delegation => {
-                    // A card its selection or density opens keeps the line over finished
-                    // entries while a pin closes the section, so the line can reopen it.
-                    let earlier = expanded.delegation
+                    // With nothing in flight, a card its selection or density opens keeps the
+                    // done title while a pin closes the section, so the title can reopen it.
+                    let titled = expanded.delegation
                         || expanded.reach.opens_card()
                         || ctx.card_density == CardDensityMode::Expanded;
-                    inner.extend(
-                        delegation_line(ctx, agent, expanded.delegation, earlier).map(|line| {
-                            CardLine {
-                                line,
-                                target: Some(HitTarget::ToggleDelegation {
-                                    row: row.id.clone(),
-                                    open: !expanded.delegation,
-                                }),
-                            }
+                    let line = delegation_line(ctx, agent)
+                        .or_else(|| titled.then(|| done_title(ctx, agent)).flatten());
+                    inner.extend(line.map(|line| CardLine {
+                        line,
+                        target: Some(HitTarget::ToggleDelegation {
+                            row: row.id.clone(),
+                            open: !expanded.delegation,
                         }),
-                    );
+                    }));
                 }
                 CardSlot::Booked => inner.push(CardLine {
                     line: bookings::finish_line(
@@ -407,8 +412,8 @@ pub(super) fn row_lines(
                         &agent.bookings,
                         expanded.pages,
                     );
-                    // Every current child and each paged earlier one share one grid, so the
-                    // columns hold while current children finish out of the list.
+                    // Every current child and each paged prior-turn one share one grid, so
+                    // the columns hold while current children finish out of the list.
                     let grid: Vec<_> = agent
                         .current_sub_agents()
                         .chain(entries.shown.iter().filter_map(|entry| match entry {
@@ -460,7 +465,7 @@ pub(super) fn row_lines(
                         });
                     }
                     if entries.hidden > 0 {
-                        inner.push(earlier_line(
+                        inner.push(pager_line(
                             ctx,
                             row,
                             selected,
@@ -520,9 +525,9 @@ pub(super) fn row_lines(
 }
 
 /// The last line of an open delegation section while finished entries stay hidden:
-/// `▸ +N earlier` before its first page and `▸ +M more` after, each activation showing
-/// the next page.
-fn earlier_line(
+/// `▸ +N done` before its first page and `▸ +M more` after. Its target carries the record
+/// an activation stores, one page past `pages` in the parent's turn this paint drew.
+fn pager_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
     selected: bool,
@@ -530,7 +535,7 @@ fn earlier_line(
     hidden: usize,
 ) -> CardLine {
     let focused = selected && matches!(ctx.entry_cursor, Some(EntryCursor::DelegationPage));
-    let word = if pages == 0 { "earlier" } else { "more" };
+    let word = if pages == 0 { "done" } else { "more" };
     let mut spans = entry_indent(ctx.theme, focused);
     spans.push(Span::styled(
         format!(
@@ -544,6 +549,10 @@ fn earlier_line(
         line: Line::from(spans),
         target: Some(HitTarget::PageDelegation {
             row: row.id.clone(),
+            pages: DelegationPages {
+                pages: std::num::NonZeroUsize::MIN.saturating_add(pages),
+                turn: row.as_agent().and_then(|agent| agent.user_turn_started_at),
+            },
         }),
     }
 }
@@ -610,35 +619,12 @@ fn message_mark_spans(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> V
     marks
 }
 
-/// The standing delegation line carries the current turn's children, their
-/// known cost, pending waits with background shells, the launched half while an entry
-/// runs, and the booked half last while the plan is unfinished; where the section is open
-/// or `earlier` holds, both draw whenever the card holds an entry of theirs.
-/// A card with only earlier children draws a bare subagents half where `earlier` holds.
-/// Expansion only appends entries.
-fn delegation_line(
-    ctx: &RowCtx<'_>,
-    agent: &AgentCard,
-    open: bool,
-    earlier: bool,
-) -> Option<Line<'static>> {
-    let child_count = agent.current_sub_agents().count();
-    let children =
-        (child_count > 0 || (earlier && !agent.sub_agents.is_empty())).then_some(child_count);
-    let wait_count = wait_count(agent, ctx.now);
-    let launched = if open || earlier || agent.launched.iter().any(|entry| !entry.is_finished()) {
-        agent.launched.len()
-    } else {
-        0
-    };
-    let booked = !agent.bookings.is_empty() && (open || earlier || bookings::open_plan(agent));
-    if children.is_none() && wait_count == 0 && launched == 0 && !booked {
-        return None;
-    }
-    let width = content_width(ctx.width);
-    let theme = ctx.theme;
-    let right = agent
-        .current_sub_agents()
+/// The known cost of every subagent on the card, of any turn, running or finished, as the
+/// section line and the done title pin it right; empty below half a cent.
+fn subagents_cost(theme: &Theme, agent: &AgentCard) -> Vec<Span<'static>> {
+    agent
+        .sub_agents
+        .iter()
         .fold(None, |total, child| {
             crate::agents::spending::sum_optional_cost(total, child.cost_usd)
         })
@@ -649,16 +635,38 @@ fn delegation_line(
                 theme.money_style(Modifier::empty()),
             )]
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// The standing delegation line names each kind with something in flight, with its count:
+/// the current turn's children without a verdict, armed waits with background shells, the
+/// launched entries still alive, and the booked half last over the unfinished bookings,
+/// with the cost of every subagent pinned right. It reads no selection or section state, so
+/// opening the card only appends entries. `None` while nothing is in flight.
+fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
+    let children = bands::in_flight_children(&agent.sub_agents).count();
+    let wait_count = wait_count(agent, ctx.now);
+    let launched = agent
+        .launched
+        .iter()
+        .filter(|entry| !entry.is_finished())
+        .count();
+    let booked = bookings::open_plan(agent);
+    if children == 0 && wait_count == 0 && launched == 0 && !booked {
+        return None;
+    }
+    let width = content_width(ctx.width);
+    let theme = ctx.theme;
+    let right = subagents_cost(theme, agent);
     let halves = |long: bool| delegation_halves(ctx, children, wait_count, launched, long);
-    let earlier_halves = children.is_some() || wait_count > 0 || launched > 0;
+    let leading = children > 0 || wait_count > 0 || launched > 0;
     // With launched entries or bookings on the line, the labels take their short forms
     // before the line trims, so the `⚠` segment always lands beside the cost.
     let long = ctx.tier == Tier::L2
         && ((!booked && launched == 0) || {
             let booked_width = if !booked {
                 0
-            } else if earlier_halves {
+            } else if leading {
                 text_width(&value_seam(ctx.theme)) + bookings::booked_width(ctx, agent)
             } else {
                 bookings::booked_width(ctx, agent)
@@ -674,28 +682,99 @@ fn delegation_line(
     if !booked {
         return Some(pin_right(left, right, width));
     }
-    if earlier_halves {
+    if leading {
         left.push(Span::styled(value_seam(theme), theme.muted()));
     }
     Some(bookings::finish_line(ctx, agent, left, right, long))
 }
 
+/// The section's title while nothing is in flight: the kinds its finished entries hold, in
+/// the line's order and uncounted, long at the long tier where the title fits, and the
+/// dimmed `✓ done (N)` pinned right, followed by the subagents' cost when one is known.
+/// The kinds shorten to their glyphs, then drop, then the cost drops, before the done count
+/// loses a cell. `None` without a finished entry.
+fn done_title(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
+    let done = bands::finished_count(&agent.sub_agents, &agent.launched, &agent.bookings);
+    if done == 0 {
+        return None;
+    }
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
+    let present = bands::finished_kinds(&agent.sub_agents, &agent.launched, &agent.bookings);
+    let kinds = |long: bool| {
+        let mut spans = vec![Span::raw("  ")];
+        let headers = [
+            (
+                GlyphRole::CardSubagents,
+                Component::SubagentHeader,
+                " subagents",
+            ),
+            (
+                GlyphRole::CardLaunched,
+                Component::LaunchedHeader,
+                " launched",
+            ),
+            (GlyphRole::CardBooked, Component::BookedHeader, " booked"),
+        ];
+        for (_, (glyph, component, label)) in present
+            .into_iter()
+            .zip(headers)
+            .filter(|(present, _)| *present)
+        {
+            if spans.len() > 1 {
+                spans.push(if long {
+                    Span::styled(value_seam(theme), theme.muted())
+                } else {
+                    Span::raw(" ")
+                });
+            }
+            spans.push(Span::styled(
+                theme.glyph(glyph).to_owned(),
+                theme.styled(component, Modifier::empty()),
+            ));
+            if long {
+                spans.push(Span::styled(label, theme.body()));
+            }
+        }
+        spans
+    };
+    let mark = vec![Span::styled(
+        format!("{} done ({done})", theme.glyph(GlyphRole::StatusDone)),
+        theme.styled(Component::DelegationDone, Modifier::empty()),
+    )];
+    let cost = subagents_cost(theme, agent);
+    let priced = if cost.is_empty() {
+        mark.clone()
+    } else {
+        [mark.clone(), vec![Span::raw("  ")], cost].concat()
+    };
+    let fits = |(left, right): &(Vec<Span<'static>>, Vec<Span<'static>>)| {
+        spans_width(left) + usize::from(!left.is_empty()) + spans_width(right) <= width
+    };
+    let (left, right) = [true, false]
+        .into_iter()
+        .filter(|long| !long || ctx.tier == Tier::L2)
+        .map(|long| (kinds(long), priced.clone()))
+        .chain([(Vec::new(), priced.clone()), (Vec::new(), mark.clone())])
+        .find(fits)
+        .unwrap_or((Vec::new(), mark));
+    Some(pin_right(left, right, width))
+}
+
 /// The subagents, waits and launched halves of the section line, with long labels when
-/// `long`. `children` is the current child count when the subagents half draws; a count
-/// of 0 draws the half bare. A `launched` count of 0 draws no launched half.
+/// `long`. A count of 0 draws no half.
 fn delegation_halves(
     ctx: &RowCtx<'_>,
-    children: Option<usize>,
+    children: usize,
     wait_count: usize,
     launched: usize,
     long: bool,
 ) -> Vec<Span<'static>> {
     let theme = ctx.theme;
-    let subagents_label = match (children, long) {
-        (Some(0) | None, true) => " subagents".to_owned(),
-        (Some(0) | None, false) => String::new(),
-        (Some(count), true) => format!(" subagents ({count})"),
-        (Some(count), false) => format!(" {count}"),
+    let subagents_label = if long {
+        format!(" subagents ({children})")
+    } else {
+        format!(" {children}")
     };
     let waits_label = if long {
         format!(" waits ({wait_count})")
@@ -706,7 +785,7 @@ fn delegation_halves(
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.
-    if children.is_some() {
+    if children > 0 {
         left.extend([
             Span::styled(
                 theme.glyph(GlyphRole::CardSubagents).to_owned(),
@@ -716,7 +795,7 @@ fn delegation_halves(
         ]);
     }
     if wait_count > 0 {
-        if children.is_some() {
+        if children > 0 {
             left.push(Span::styled(value_seam(theme), theme.muted()));
         }
         left.extend([
@@ -728,7 +807,7 @@ fn delegation_halves(
         ]);
     }
     if launched > 0 {
-        if children.is_some() || wait_count > 0 {
+        if children > 0 || wait_count > 0 {
             left.push(Span::styled(value_seam(theme), theme.muted()));
         }
         left.extend(launched::launched_half(theme, launched, long));

@@ -16,6 +16,9 @@ pub(in crate::sidebar_pane) struct CardHeights {
     heights: HashMap<String, (CardKey, usize)>,
     #[cfg(test)]
     pub(super) painted: Vec<usize>,
+    /// Roster ordinals whose height this compose read from the cache.
+    #[cfg(test)]
+    pub(super) hits: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

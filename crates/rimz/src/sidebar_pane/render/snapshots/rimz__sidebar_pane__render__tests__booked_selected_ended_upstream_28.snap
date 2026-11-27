@@ -14,7 +14,7 @@ expression: screen
 ▌  Workflow language redesi▐
 ▌  ▣ ╸───────────────  1.0%▐
 ▌  ▤ 0                     ▐
-▌  ▷ 8        1 ⣾ · 2 no PR▐
+▌  ▷ 7        1 ⣾ · 2 no PR▐
 ▌    ⣾ coder · type t    1h▐
 ▌    – team forge#lane-read▐
 ▌      ended · no PR     3h▐
@@ -28,7 +28,7 @@ expression: screen
 ▌      once at 2026-11-14 …▐
 ▌    ▷ coder · release the ▐
 ▌      writer              ▐
-▌    ▸ +1 earlier          ▐
+▌    ▸ +1 done             ▐
 
 
  ──────────────────────────

@@ -238,6 +238,9 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         #[cfg(test)]
         if let Some(height) = cached {
             assert_eq!(height, paint(None).len(), "cached height for {}", row.id);
+            if let Some(cache) = walk.heights.as_deref_mut() {
+                cache.hits.push(this_row);
+            }
         }
         let visible = cached.is_some_and(|height| walk.intersects(block.lines.len(), height));
         let measure_entry = walk.measuring && selected && ctx.entry_cursor.is_some();

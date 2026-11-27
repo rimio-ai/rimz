@@ -14,14 +14,14 @@ expression: rendered
 ▌  approve firewall rule change                      ▐
 ▌  ▣ ━━━━━━━━━━━━╺━╺───────────────────── 23.0% ◔ 24m▐
 ▌  ▤ 236k · ◌ 203k ◍ 23k ↘ 9k ↗ 29k                  ▐
-▌  ⧉ subagents (2)                              $0.46▐
+▌  ⧉ subagents (1)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
 ▌      ▤ 18k · Haiku · xhigh                       3m▐
-▌    ▸ +1 earlier                                    ▐
+▌    ▸ +1 done                                       ▐
 ▎⢄ pi-2 · GPT 5.5 · xhigh · 272k                $6.24🮇
 ▎  debug jump-host DNS                               🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━─── 92.0% ◕ 51m🮇
-▎  ⧉ subagents (2)                                   🮇
+▎  ⧉ subagents (1)                                   🮇
 ▎⏸︎ claude-2 · Opus 4.8 · xhigh · 1M            $10.76🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────

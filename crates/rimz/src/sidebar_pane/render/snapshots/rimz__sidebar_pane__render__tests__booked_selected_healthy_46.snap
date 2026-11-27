@@ -14,7 +14,7 @@ expression: screen
 ▌  Workflow language redesign plan           ▐
 ▌  ▣ ╸───────────────────────────  1.0%      ▐
 ▌  ▤ 0                                       ▐
-▌  ▷ booked (7)                     2 running▐
+▌  ▷ booked (6)                     2 running▐
 ▌    ⣾ coder · type the workflow langua    1h▐
 ▌    ? team forge#lane-reade… · ◉ Build   50m▐
 ▌    ▷ writer · document the lane readers    ▐
@@ -25,7 +25,7 @@ expression: screen
 ▌      once at 2026-11-14 03:00              ▐
 ▌    ▷ coder · release the language          ▐
 ▌      after writer                          ▐
-▌    ▸ +1 earlier                            ▐
+▌    ▸ +1 done                               ▐
 
 
 

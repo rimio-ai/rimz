@@ -136,8 +136,8 @@ fn booked_cards_render_at_46_40_and_28_columns() {
 /// Every entry names what it starts by profile or team and lane, then what it is doing: a
 /// running agent its card's text and its runtime on one line, a running team its stage on
 /// one line, any other entry the booking's own text over its second line. No task name or
-/// handle shows outside the entry needing a fix. Finished entries wait behind the earlier
-/// line until paged in, newest end first.
+/// handle shows outside the entry needing a fix. The line counts the unfinished entries, and
+/// finished entries wait behind the done line until paged in, newest end first.
 #[test]
 fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
     let snapshot = planner_snapshot(bookings_in_each_state(fixed_now()), 60);
@@ -146,7 +146,7 @@ fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
     let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 60)).join("\n");
     let running_team = format!("team forge#lane-readers · {current} Build");
     let order = [
-        "▷ booked (10) · ⚠ broken: invalid",
+        "▷ booked (8) · ⚠ broken: invalid",
         "⚠ coder · broken",
         "invalid: unknown term `pr[`",
         "coder · type the workflow language",
@@ -159,7 +159,7 @@ fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
         "pr[workflow-language]: #1640 open",
         "▷ coder ",
         "once at 2026-11-14 03:00",
-        "▸ +2 earlier",
+        "▸ +2 done",
     ];
     let mut from = 0;
     for needle in order {
@@ -212,14 +212,14 @@ fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
     let pages = all_paged(&snapshot);
     let mut ctx = test_row_ctx(&snapshot, &theme, 60, 0, 0, &cost_rolls);
     let unpaged = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
-    let earlier = line_texts(&unpaged.lines)
+    let pager = line_texts(&unpaged.lines)
         .iter()
-        .position(|line| line.contains("▸ +2 earlier"))
+        .position(|line| line.contains("▸ +2 done"))
         .unwrap();
     assert!(matches!(
         unpaged
             .interactions
-            .target_at(8, u16::try_from(earlier).unwrap()),
+            .target_at(8, u16::try_from(pager).unwrap()),
         Some(HitTarget::PageDelegation { .. })
     ));
     ctx.delegation_pages = &pages;
@@ -245,10 +245,7 @@ fn every_booking_state_draws_in_band_order_and_pages_its_finished_entries() {
             .unwrap_or_else(|| panic!("{needle:?} newest finish first:\n{paged}"));
         from += at + needle.len();
     }
-    assert!(
-        !paged.contains("earlier") && !paged.contains("more"),
-        "{paged}"
-    );
+    assert!(!paged.contains("▸ +"), "{paged}");
 }
 
 #[test]
@@ -263,11 +260,29 @@ fn only_the_fix_segment_of_the_booked_line_takes_the_warning_tone() {
         (
             {
                 let mut plan = plan_needing_a_fix();
-                plan[1].needs_fix = Some("checkout gone".to_owned());
-                plan[1].band = BookingBand::NeedsFix;
+                let second = plan
+                    .iter_mut()
+                    .skip(1)
+                    .find(|booking| !booking.is_finished())
+                    .unwrap();
+                second.needs_fix = Some("checkout gone".to_owned());
+                second.band = BookingBand::NeedsFix;
                 plan
             },
             "⚠ 2 need a fix",
+        ),
+        (
+            {
+                // A finished booking keeps its `⚠` on its own entry, off the line.
+                let mut plan = plan_needing_a_fix();
+                let finished = plan
+                    .iter_mut()
+                    .find(|booking| booking.is_finished())
+                    .unwrap();
+                finished.needs_fix = Some("stale lease".to_owned());
+                plan
+            },
+            "⚠ broken: invalid: unknown term `pr[`",
         ),
     ] {
         let snapshot = planner_snapshot(plan, 60);
@@ -317,7 +332,7 @@ fn the_booked_header_takes_the_section_header_tone_and_unfired_leads_stay_muted(
         let lines = group_lines_at_width(&snapshot, &theme, selected, 46);
         let line = lines
             .iter()
-            .find(|line| line.to_string().contains("booked (7)"))
+            .find(|line| line.to_string().contains("booked (6)"))
             .expect("the booked line");
         let at = line
             .spans
@@ -325,7 +340,7 @@ fn the_booked_header_takes_the_section_header_tone_and_unfired_leads_stay_muted(
             .position(|span| span.content == booked)
             .unwrap();
         assert_eq!(line.spans[at].style.fg, Some(meta), "{line}");
-        assert_eq!(line.spans[at + 1].content, " booked (7)");
+        assert_eq!(line.spans[at + 1].content, " booked (6)");
         assert_eq!(line.spans[at + 1].style.fg, theme.body().fg, "{line}");
     }
     let open = group_lines_at_width(&planner_snapshot(healthy_plan(), 60), &theme, 0, 46);
@@ -353,12 +368,12 @@ fn the_resting_summary_gives_way_running_first_and_the_fix_never_drops() {
             .unwrap()
     };
     assert!(booked(&ended, 60).ends_with("1 running · 2 ended, no PR "));
-    assert!(booked(&ended, 34).ends_with("  ▷ 8 1 running · 2 ended, no PR "));
+    assert!(booked(&ended, 34).ends_with("  ▷ 7 1 running · 2 ended, no PR "));
     let dropped = booked(&ended, 33);
     assert!(dropped.ends_with("2 ended, no PR ") && !dropped.contains("running"));
     assert!(booked(&ended, 28).ends_with("1 ⣾ · 2 no PR "));
     let healthy = planner_snapshot(healthy_plan(), 60);
-    assert!(booked(&healthy, 46).contains("▷ booked (7)"));
+    assert!(booked(&healthy, 46).contains("▷ booked (6)"));
     assert!(booked(&healthy, 46).ends_with("2 running "));
     let waiting = planner_snapshot(pick(&["lang-docs", "lang-release"]), 60);
     assert!(booked(&waiting, 46).ends_with("#1640 open "));
@@ -366,7 +381,7 @@ fn the_resting_summary_gives_way_running_first_and_the_fix_never_drops() {
     for width in [24, 28, 32, 46] {
         assert!(booked(&fix, width).contains('⚠'), "{width}");
     }
-    assert!(booked(&fix, 28).contains("▷ 8 · ⚠ broken"));
+    assert!(booked(&fix, 28).contains("▷ 7 · ⚠ broken"));
 }
 
 /// The section line reads the entry next to fire: a timed task, never a task whose every
@@ -423,7 +438,7 @@ fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
         planner_snapshot_as(healthy_plan(), 60, true),
     ] {
         for text in shapes(&snapshot) {
-            assert!(text.contains("▷ booked (7)"), "{text}");
+            assert!(text.contains("▷ booked (6)"), "{text}");
             assert!(
                 !text.contains("type the workflow"),
                 "entries stay closed: {text}"
@@ -436,7 +451,7 @@ fn the_booked_line_holds_on_every_resting_shape_until_the_plan_finishes() {
     }
     let open = line_texts(&group_lines_at_width(&finished, &theme, 0, 46)).join("\n");
     assert!(
-        open.contains("▷ booked (1)") && open.contains("▸ +1 earlier"),
+        open.contains("  ▷ booked ") && open.contains("✓ done (1)") && !open.contains("▸ +"),
         "{open}"
     );
 }
@@ -463,14 +478,14 @@ fn a_crowded_section_line_shortens_its_labels_before_the_fix_clips() {
     };
     let crowded = line(46);
     assert!(
-        crowded.contains(" 3 · ") && crowded.contains("▷ 8 · ⚠ broken"),
+        crowded.contains(" 3 · ") && crowded.contains("▷ 7 · ⚠ broken"),
         "short labels, then the fix: {crowded}"
     );
     assert!(!crowded.contains("subagents ("), "{crowded}");
     let wide = line(100);
     assert!(
         wide.contains("subagents (3)")
-            && wide.contains("booked (8)")
+            && wide.contains("booked (7)")
             && wide.contains("⚠ broken: invalid: unknown term `pr[`"),
         "long labels where the whole line fits: {wide}"
     );
@@ -520,7 +535,7 @@ fn the_fix_keeps_its_glyph_and_a_word_cell_at_every_width_and_cost() {
         }
     }
     let review = section(&card(plan_needing_a_fix(), 1.0), 28);
-    assert!(review.contains("▷ 8 · ⚠ b"), "{review:?}");
+    assert!(review.contains("▷ 7 · ⚠ b"), "{review:?}");
 
     let plain = card(Vec::new(), 1.0);
     assert_eq!(

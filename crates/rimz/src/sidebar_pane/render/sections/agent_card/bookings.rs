@@ -1,10 +1,10 @@
-//! Booked launches on an agent card: the `▷ booked (N)` half of the section line, the
-//! booked line a resting card keeps while its plan is unfinished, and one entry per
-//! booking. The rows arrive in draw order with their bands, so this module adds no
-//! ordering or health rule, and an entry takes `⚠` exactly when the loop gave it a
-//! reason; which entries list is the section's paging rule. Only the `⚠` segment of the section line takes the warning tone. A
-//! fired entry with a live pane targets that pane on both lines; every other entry
-//! selects the card.
+//! Booked launches on an agent card: the `▷ booked (N)` half of the section line over the
+//! unfinished bookings, the booked line a resting card keeps while its plan is unfinished,
+//! and one entry per booking. The rows arrive in draw order with their bands, so this
+//! module adds no ordering or health rule, and an entry takes `⚠` exactly when the loop
+//! gave it a reason; which entries list is the section's paging rule. Only the `⚠` segment
+//! of the section line takes the warning tone. A fired entry with a live pane targets that
+//! pane on both lines; every other entry selects the card.
 
 use crate::store::snapshot::{
     BookingBand, BookingBlocker, BookingFire, BookingPr, BookingSibling, BookingStarts,
@@ -16,7 +16,7 @@ use crate::sidebar_pane::render::labels::value_seam;
 
 /// The card holds a booking whose stage is not finished.
 pub(super) fn open_plan(agent: &AgentCard) -> bool {
-    agent.bookings.iter().any(|booking| !booking.is_finished())
+    unfinished(agent).next().is_some()
 }
 
 /// The pane a click or the entry cursor focuses: a fired entry's live launch.
@@ -56,11 +56,19 @@ fn least_fix(theme: &Theme, fix: &str) -> usize {
     text_width(fix).min(text_width(theme.glyph(GlyphRole::ChromeAlert)) + 3)
 }
 
-fn long_label(agent: &AgentCard) -> String {
-    format!(" booked ({})", agent.bookings.len())
+/// The bookings not finished: what the `▷ booked (N)` half counts and its `⚠` segment names.
+fn unfinished(agent: &AgentCard) -> impl Iterator<Item = &SidebarBooking> {
+    agent
+        .bookings
+        .iter()
+        .filter(|booking| !booking.is_finished())
 }
 
-/// Finish a section line whose earlier halves are `left` and whose cost is `cost`:
+fn long_label(agent: &AgentCard) -> String {
+    format!(" booked ({})", unfinished(agent).count())
+}
+
+/// Finish a section line whose leading halves are `left` and whose cost is `cost`:
 /// the `▷ booked (N)` half, long when `long`, its `⚠` segment, and the right-side
 /// summary. The summary gives way first (`N running`, then the next entry's reading,
 /// then `K ended, no PR` shortens), then the cost, and the `⚠` segment clips its reason
@@ -77,7 +85,7 @@ pub(super) fn finish_line(
     let label = if long {
         long_label(agent)
     } else {
-        format!(" {}", agent.bookings.len())
+        format!(" {}", unfinished(agent).count())
     };
     left.extend([
         Span::styled(
@@ -126,14 +134,12 @@ fn join_right(theme: &Theme, summary: String, cost: &[Span<'static>]) -> Vec<Spa
     right
 }
 
-/// `⚠ <task>: <reason>` for one entry needing a fix, `⚠ N need a fix` for more; the
-/// reason and the words go below 32 columns.
+/// `⚠ <task>: <reason>` for one unfinished entry needing a fix, `⚠ N need a fix` for more;
+/// the reason and the words go below 32 columns.
 fn fix_segment(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<String> {
     let alert = ctx.theme.glyph(GlyphRole::ChromeAlert);
-    let mut needs = agent
-        .bookings
-        .iter()
-        .filter_map(|booking| Some((booking, booking.needs_fix.as_deref()?)));
+    let mut needs =
+        unfinished(agent).filter_map(|booking| Some((booking, booking.needs_fix.as_deref()?)));
     let (first, reason) = needs.next()?;
     let more = needs.count();
     Some(match (more, ctx.tier) {

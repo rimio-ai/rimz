@@ -1,10 +1,11 @@
-//! The paging rule of an open delegation section. Every in-flight entry lists, unpaged:
-//! a subagent of the current turn without a verdict (a stalled one and one parked on
-//! background work included) in spawn order, a launched entry with something alive in
-//! launch order, and a booking not finished in its draw order. Every other subagent,
-//! launched entry and booking is finished: none draws until the section's
-//! `▸ +N earlier` line is activated, and each activation shows [`PAGE_SIZE`] more,
-//! newest finish first across the groups, ties kept in group order.
+//! The in-flight split and the paging rule of a delegation section. Every in-flight entry
+//! counts on the section line and lists, unpaged: a subagent of the current turn without a
+//! verdict (a stalled one and one parked on background work included) in spawn order, a
+//! launched entry with something alive in launch order, and a booking not finished in its
+//! draw order. Every other subagent, launched entry and booking is finished: none draws
+//! until the section's `▸ +N done` line is activated, or the section opens with nothing in
+//! flight, and each page shows [`PAGE_SIZE`] more, newest finish first across the groups,
+//! ties kept in group order.
 
 use jiff::Timestamp;
 
@@ -12,7 +13,7 @@ use crate::store::snapshot::{SidebarBooking, SidebarLaunched, SidebarSubAgent};
 
 use super::sub_agent_finished;
 
-/// The finished entries one activation of the section's earlier line shows.
+/// The finished entries one page of the section's done pile shows.
 const PAGE_SIZE: usize = 5;
 
 /// A finished entry of a delegation section.
@@ -49,12 +50,26 @@ pub(super) struct DelegationEntries<'a> {
     pub(super) bookings: Vec<&'a SidebarBooking>,
     /// The finished entries the section's pages show, newest finish first.
     pub(super) shown: Vec<Finished<'a>>,
-    /// The finished entries behind the earlier line.
+    /// The finished entries behind the section's pager line.
     pub(super) hidden: usize,
 }
 
 fn finished_child(child: &SidebarSubAgent) -> bool {
     child.prior_turn || sub_agent_finished(child)
+}
+
+/// Which of a card's `children`, `launched` and `bookings` hold a finished entry, in that
+/// order.
+pub(super) fn finished_kinds(
+    children: &[SidebarSubAgent],
+    launched: &[SidebarLaunched],
+    bookings: &[SidebarBooking],
+) -> [bool; 3] {
+    [
+        children.iter().any(finished_child),
+        launched.iter().any(SidebarLaunched::is_finished),
+        bookings.iter().any(SidebarBooking::is_finished),
+    ]
 }
 
 /// Whether a card's `children`, `launched` or `bookings` hold a finished entry.
@@ -63,9 +78,47 @@ pub(super) fn has_finished(
     launched: &[SidebarLaunched],
     bookings: &[SidebarBooking],
 ) -> bool {
-    children.iter().any(finished_child)
-        || launched.iter().any(SidebarLaunched::is_finished)
-        || bookings.iter().any(SidebarBooking::is_finished)
+    finished_kinds(children, launched, bookings).contains(&true)
+}
+
+/// A card's in-flight `children`, in spawn order, over the split [`delegation_entries`]
+/// draws.
+pub(super) fn in_flight_children(
+    children: &[SidebarSubAgent],
+) -> impl Iterator<Item = &SidebarSubAgent> {
+    children.iter().filter(|child| !finished_child(child))
+}
+
+/// How many of a card's `children`, `launched` and `bookings` are finished: the done
+/// pile [`delegation_entries`] pages, counted without collecting or sorting it.
+pub(super) fn finished_count(
+    children: &[SidebarSubAgent],
+    launched: &[SidebarLaunched],
+    bookings: &[SidebarBooking],
+) -> usize {
+    children
+        .iter()
+        .filter(|child| finished_child(child))
+        .count()
+        + launched
+            .iter()
+            .filter(|launched| launched.is_finished())
+            .count()
+        + bookings
+            .iter()
+            .filter(|booking| booking.is_finished())
+            .count()
+}
+
+/// Whether a card's `children`, `launched` or `bookings` hold an in-flight entry.
+pub(super) fn has_in_flight(
+    children: &[SidebarSubAgent],
+    launched: &[SidebarLaunched],
+    bookings: &[SidebarBooking],
+) -> bool {
+    children.iter().any(|child| !finished_child(child))
+        || launched.iter().any(|launched| !launched.is_finished())
+        || bookings.iter().any(|booking| !booking.is_finished())
 }
 
 /// A card's delegation entries over its `children`, `launched` and `bookings`, with
@@ -88,14 +141,15 @@ pub(super) fn delegation_entries<'a>(
         .chain(finished_launched.into_iter().map(Finished::Launched))
         .chain(finished_bookings.into_iter().map(Finished::Booking))
         .collect();
-    finished.sort_by_key(|entry| {
-        let at = entry.finished_at();
-        std::cmp::Reverse((at.is_none(), at))
-    });
-    let hidden = finished
-        .len()
-        .saturating_sub(pages.saturating_mul(PAGE_SIZE));
-    finished.truncate(finished.len() - hidden);
+    let shown = finished.len().min(pages.saturating_mul(PAGE_SIZE));
+    let hidden = finished.len() - shown;
+    if shown > 0 {
+        finished.sort_by_key(|entry| {
+            let at = entry.finished_at();
+            std::cmp::Reverse((at.is_none(), at))
+        });
+    }
+    finished.truncate(shown);
     DelegationEntries {
         children,
         launched,

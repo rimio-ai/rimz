@@ -1063,7 +1063,7 @@ fn pin_delegation(ui: &mut ViewState, row: &SidebarRow, open: bool) {
 }
 
 #[test]
-fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_earlier_line() {
+fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_done_line() {
     let mut parent = agent(
         "parent",
         "claude",
@@ -1076,7 +1076,7 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
     let mut agents = vec![parent];
     // Spawn order task-0..task-8, all inside the parent's turn. task-1 and
     // task-4 still run; seven finished out of spawn order and wait behind the
-    // earlier line with the prior-turn child.
+    // done line with the prior-turn child.
     let landed_secs_ago = [300, 0, 60, 780, 0, 600, 1_200, 180, 420];
     for (index, ago) in landed_secs_ago.into_iter().enumerate() {
         let running = matches!(index, 1 | 4);
@@ -1102,7 +1102,7 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
         agents.push(child);
     }
     // Finished before the parent's turn: retained by the projection and paged with
-    // the other finished children, but no count or cost on the line.
+    // the other finished children, and like them uncounted while its cost prices the line.
     let mut prior = agent(
         "child-prior",
         "claude",
@@ -1159,9 +1159,9 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
         let rendered =
             snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 44);
         assert!(
-            rendered.lines().any(|line| line.contains("subagents (9)")
-                && line.trim_end_matches(['▐', ' ']).ends_with(" $0.90")),
-            "the line counts and prices the current children alone:\n{rendered}"
+            rendered.lines().any(|line| line.contains("subagents (2)")
+                && line.trim_end_matches(['▐', ' ']).ends_with(" $5.90")),
+            "the line counts the in-flight children and prices every child:\n{rendered}"
         );
         assert!(!rendered.contains("task-prior"), "{rendered}");
         assert_snapshot(name, rendered.clone());
@@ -1170,6 +1170,19 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
     let [selected, unselected, closed] = screens.as_slice() else {
         unreachable!("three scenarios");
     };
+    let section_line = |screen: &str| {
+        let line = screen
+            .lines()
+            .find(|line| line.contains("subagents ("))
+            .unwrap_or_else(|| panic!("the section line in\n{screen}"));
+        line.chars()
+            .skip(1)
+            .collect::<String>()
+            .trim_end_matches(['▐', '🮇', ' '])
+            .to_owned()
+    };
+    assert_eq!(section_line(selected), section_line(unselected));
+    assert_eq!(section_line(selected), section_line(closed));
     assert_eq!(entries(selected), ["task-1", "task-4"]);
     let position = |screen: &str, needle: &str| {
         screen
@@ -1178,10 +1191,10 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
             .unwrap_or_else(|| panic!("{needle} in\n{screen}"))
     };
     assert!(position(selected, "task-4") < position(selected, "deploy"));
-    assert!(position(selected, "deploy") < position(selected, "▸ +8 earlier"));
+    assert!(position(selected, "deploy") < position(selected, "▸ +8 done"));
     for screen in [unselected, closed] {
         assert!(entries(screen).is_empty(), "{screen}");
-        assert!(!screen.contains("earlier"), "{screen}");
+        assert!(!screen.contains("▸ +"), "{screen}");
     }
     // Each page shows the next five finished children, newest finish first, under the
     // in-flight entries and the waits.
@@ -1228,11 +1241,11 @@ fn delegation_lists_in_flight_children_and_pages_every_finished_one_behind_the_e
                 "{rendered}"
             ),
             None => assert!(
-                !rendered.contains("more") && !rendered.contains("earlier"),
+                !rendered.contains("more") && !rendered.contains("▸ +"),
                 "{rendered}"
             ),
         }
-        for removed in ["more finished", "more earlier", "later", "more ended"] {
+        for removed in ["more finished", "earlier", "later", "more ended"] {
             assert!(!rendered.contains(removed), "{removed}:\n{rendered}");
         }
     }
@@ -1301,8 +1314,8 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
     );
 
     assert!(
-        rendered.contains("⧉ subagents (2)"),
-        "the expanded card lists its children:\n{rendered}"
+        rendered.contains("⧉ subagents (1)"),
+        "the line counts the running child alone:\n{rendered}"
     );
     assert!(
         rendered.contains("Explore · locate the render seam"),
@@ -1442,10 +1455,11 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
         "the child cost pins on its line:\n{rendered}"
     );
     assert!(
-        rendered
-            .lines()
-            .any(|line| line.contains("⧉ subagents (1)") && line.contains("$0.42")),
-        "the lifetime stats line carries child cost:\n{rendered}"
+        rendered.lines().any(|line| line.contains("⧉ subagents ")
+            && line
+                .trim_end_matches(['▐', '🮇', ' '])
+                .ends_with("✓ done (1)  $0.42")),
+        "the done title prices the finished child after its count:\n{rendered}"
     );
     assert!(
         rendered.contains("▤ 12k"),
@@ -1494,7 +1508,7 @@ fn prior_turn_child_snapshot(parent_status: AgentStatus) -> SidebarSnapshot {
 }
 
 #[test]
-fn prior_turn_children_leave_the_card_until_paged_while_its_cost_keeps_them() {
+fn prior_turn_children_leave_the_closed_card_while_its_cost_keeps_them() {
     let snapshot = prior_turn_child_snapshot(AgentStatus::Running);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert!(row.as_agent().unwrap().sub_agents[0].prior_turn);
@@ -1502,16 +1516,18 @@ fn prior_turn_children_leave_the_card_until_paged_while_its_cost_keeps_them() {
     for selected in [usize::MAX, 0] {
         let lines = line_texts(&group_lines(&snapshot, &theme, selected));
         let text = lines.join("\n");
-        assert!(!text.contains("map sidebar"), "{text}");
-        // Only the selected card titles its earlier child, bare and unpriced.
+        // Only the selected card titles its finished child, uncounted and priced, and lists
+        // it unasked.
+        assert_eq!(text.contains("map sidebar"), selected == 0, "{text}");
         assert_eq!(
-            lines.iter().any(|line| line
-                .trim_end_matches(['▐', '🮇', ' '])
-                .ends_with("⧉ subagents")),
+            lines.iter().any(|line| line.contains("⧉ subagents")
+                && line
+                    .trim_end_matches(['▐', '🮇', ' '])
+                    .ends_with("✓ done (1)  $0.42")),
             selected == 0,
             "{text}"
         );
-        assert_eq!(text.contains("▸ +1 earlier"), selected == 0, "{text}");
+        assert!(!text.contains("▸ +"), "{text}");
         // The parent's own cost still carries the launched child's spend.
         assert!(lines[1].contains("$0.42"), "{text}");
     }
@@ -1523,9 +1539,11 @@ fn prior_turn_children_leave_the_card_until_paged_while_its_cost_keeps_them() {
         pin_delegation(&mut ui, row, open);
         let rendered =
             snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 60, 20);
-        assert!(rendered.contains("⧉ subagents"), "{rendered}");
-        assert_eq!(rendered.contains("▸ +1 earlier"), open, "{rendered}");
-        assert!(!rendered.contains("map sidebar"), "{rendered}");
+        assert!(
+            rendered.contains("⧉ subagents") && rendered.contains("✓ done (1)"),
+            "{rendered}"
+        );
+        assert_eq!(rendered.contains("map sidebar"), open, "{rendered}");
     }
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -1558,10 +1576,10 @@ fn an_open_pin_holds_a_quiet_card_open_only_while_its_section_has_an_entry() {
     };
     let stale = draw(&snapshot, false);
     assert!(!stale.contains("subagents"), "{stale}");
-    // An earlier child is an entry: the pin opens the section and holds the card open.
+    // A prior-turn child is an entry: the pin opens the section and holds the card open.
     let open = draw(&snapshot, true);
     assert!(
-        open.contains("⧉ subagents") && open.contains("▸ +1 earlier"),
+        open.contains("✓ done (1)") && open.contains("map sidebar"),
         "{open}"
     );
     assert_ne!(open, stale);
@@ -1596,33 +1614,44 @@ fn waits_keep_the_line_and_entries_without_a_current_child() {
     let lines = line_texts(&group_lines(&snapshot, &Theme::fixed(false), 0));
     let text = lines.join("\n");
     assert!(
-        text.contains("⧉ subagents · ⧖ waits (1)") && !text.contains("subagents ("),
+        text.contains("  ⧖ waits (1)") && !text.contains('⧉'),
         "{text}"
     );
     assert!(
         text.contains("deploy") && !text.contains("map sidebar"),
         "{text}"
     );
-    assert!(lines.last().unwrap().contains("▸ +1 earlier"), "{text}");
+    assert!(lines.last().unwrap().contains("▸ +1 done"), "{text}");
 }
 
 #[test]
-fn resting_unreached_cards_show_the_closed_line_for_a_current_child() {
-    for status in [AgentStatus::Idle, AgentStatus::Success] {
+fn resting_unreached_cards_count_and_price_only_an_in_flight_current_child() {
+    for (status, running) in [
+        (AgentStatus::Idle, true),
+        (AgentStatus::Success, true),
+        (AgentStatus::Success, false),
+    ] {
         let mut snapshot = prior_turn_child_snapshot(status);
         let row = &mut std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
         )[0];
         let card = row.as_agent_mut().unwrap();
         card.sub_agents[0].prior_turn = false;
+        if running {
+            card.sub_agents[0].status = AgentStatus::Running;
+            card.sub_agents[0].finished_at = None;
+        }
         let lines = line_texts(&group_lines(&snapshot, &Theme::fixed(false), usize::MAX));
         let text = lines.join("\n");
-        assert!(
+        // A child finished in the current turn leaves the line and its spend with it.
+        assert_eq!(
             lines
                 .iter()
                 .any(|line| line.contains("⧉ subagents (1)") && line.contains("$0.42")),
+            running,
             "{status:?}:\n{text}"
         );
+        assert_eq!(text.contains('⧉'), running, "{status:?}:\n{text}");
         assert!(!text.contains("map sidebar"), "{status:?}:\n{text}");
     }
 }
@@ -1676,14 +1705,14 @@ fn prior_turn_children_do_not_widen_the_entry_grid() {
     ));
     assert_eq!(beside.len(), alone.len() + 1);
     assert_eq!(&beside[..alone.len()], alone.as_slice());
-    assert!(beside.last().unwrap().contains("▸ +1 earlier"));
+    assert!(beside.last().unwrap().contains("▸ +1 done"));
     assert!(alone.iter().any(|line| line.contains("Haiku 4.5")));
 }
 
 #[test]
-fn an_open_card_pages_its_current_finished_children() {
-    // Every child finished inside the parent's turn: the open section counts them on
-    // its line and lists them once paged.
+fn an_open_card_with_nothing_in_flight_lists_its_current_finished_children_unasked() {
+    // Every child finished inside the parent's turn: the open section titles them with
+    // their done count and lists the first page with no activation.
     let mut parent = agent(
         "claude-root",
         "claude",
@@ -1716,19 +1745,19 @@ fn an_open_card_pages_its_current_finished_children() {
     let pane_ui = UiState::default();
     let row = &snapshot.worktree_groups[0].rows[0];
     pin_delegation(&mut ui, row, true);
-    let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
-    assert!(text.contains("subagents (3)"), "{text}");
-    assert!(text.contains("▸ +3 earlier"), "{text}");
-    assert!(!text.contains("task-"), "{text}");
+    let unpaged = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
+    assert!(
+        unpaged.contains("⧉ subagents") && unpaged.contains("✓ done (3)"),
+        "{unpaged}"
+    );
+    assert!(!unpaged.contains("subagents ("), "{unpaged}");
+    assert!(!unpaged.contains("▸ +"), "{unpaged}");
+    for index in 0..3 {
+        assert!(unpaged.contains(&format!("task-{index}")), "{unpaged}");
+    }
     ui.toggles.delegation_pages = std::collections::BTreeMap::from([paged(row, 1)]);
     let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
-    assert!(
-        !text.contains("earlier") && !text.contains("more"),
-        "{text}"
-    );
-    for index in 0..3 {
-        assert!(text.contains(&format!("task-{index}")), "{text}");
-    }
+    assert_eq!(text, unpaged, "the first page is the one shown unasked");
 }
 
 #[test]
@@ -2411,7 +2440,7 @@ fn prior_child(
 }
 
 #[test]
-fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain() {
+fn the_done_title_lists_a_first_page_and_each_activation_shows_five_more_until_none_remain() {
     let mut snapshot = snapshot_with(vec![agent(
         "parent",
         "claude",
@@ -2471,9 +2500,11 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
         listed.sort_unstable();
         listed.into_iter().map(|(_, n)| n).collect()
     };
+    // With nothing in flight the first page lists with no activation, so no stored pages
+    // and one stored page draw alike.
     for (pages, listed, line) in [
-        (0, vec![], Some("▸ +12 earlier")),
-        (1, (8..=12).rev().collect::<Vec<_>>(), Some("▸ +7 more")),
+        (0, (8..=12).rev().collect::<Vec<_>>(), Some("▸ +7 more")),
+        (1, (8..=12).rev().collect(), Some("▸ +7 more")),
         (2, (3..=12).rev().collect(), Some("▸ +2 more")),
         (3, (1..=12).rev().collect(), None),
     ] {
@@ -2481,11 +2512,13 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
         let joined = text.join("\n");
         assert_eq!(workers(&text), listed, "{pages} pages:\n{joined}");
         assert!(
-            text.iter().any(|line| line
-                .trim_end_matches(['▐', '🮇', ' '])
-                .ends_with("⧉ subagents")),
-            "{pages} pages: an earlier-only card keeps a bare title:\n{joined}"
+            text.iter().any(|line| line.contains("  ⧉ subagents ")
+                && line
+                    .trim_end_matches(['▐', '🮇', ' '])
+                    .ends_with("✓ done (12)")),
+            "{pages} pages: the done title counts the whole pile:\n{joined}"
         );
+        assert!(!joined.contains("subagents ("), "{pages} pages:\n{joined}");
         match line {
             Some(line) => {
                 let at = text
@@ -2493,15 +2526,16 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
                     .position(|text| text.contains(line))
                     .unwrap_or_else(|| panic!("{pages} pages: {line} in\n{joined}"));
                 assert_eq!(at, text.len() - 1, "{pages} pages: the section's last line");
-                assert_eq!(
-                    block.interactions.target_at(4, at as u16),
-                    Some(HitTarget::PageDelegation {
-                        row: row_id.clone()
-                    })
+                assert!(
+                    matches!(
+                        block.interactions.target_at(4, at as u16),
+                        Some(HitTarget::PageDelegation { row, .. }) if row == row_id
+                    ),
+                    "{pages} pages: the pager's target"
                 );
             }
             None => assert!(
-                !joined.contains("earlier") && !joined.contains("more"),
+                !joined.contains("▸ +"),
                 "{pages} pages: the line is gone once nothing is hidden:\n{joined}"
             ),
         }
@@ -2521,7 +2555,7 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
     );
     assert_snapshot("delegation_paged_with_more", paged_screen);
 
-    // A paged earlier child shares the current children's grid, and a paneless one that
+    // A paged prior-turn child shares the current children's grid, and a paneless one that
     // cannot reopen stays inert.
     let mut small = snapshot;
     let small_card =
@@ -2551,9 +2585,7 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
     let small_opened = worktree_group_block(&ctx_small, &small.worktree_groups[0], false, None);
     let small_text: Vec<_> = small_opened.lines.iter().map(Line::to_string).collect();
     assert!(
-        !small_text
-            .iter()
-            .any(|line| line.contains("earlier") || line.contains("more")),
+        !small_text.iter().any(|line| line.contains("▸ +")),
         "one page shows all three:\n{}",
         small_text.join("\n")
     );
@@ -2564,12 +2596,12 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
     let inert_idx = small_text
         .iter()
         .position(|line| line.contains("task p01"))
-        .expect("inert earlier entry");
+        .expect("inert prior-turn entry");
     assert!(current_at < inert_idx, "in-flight entries list first");
     assert_eq!(
         small_opened.interactions.target_at(4, inert_idx as u16),
         Some(HitTarget::Row(0)),
-        "inert earlier entry falls through to the row"
+        "inert prior-turn entry falls through to the row"
     );
     let inert_span = small_opened.lines[inert_idx]
         .spans
@@ -2581,19 +2613,19 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
         Some(theme.component(Component::SubagentInert))
     );
     assert!(inert_span.style.add_modifier.contains(Modifier::DIM));
-    let earlier_meta = small_text
+    let prior_meta = small_text
         .iter()
         .find(|line| line.contains("Haiku"))
-        .expect("earlier entry metadata line");
+        .expect("prior-turn entry metadata line");
     let current_meta = small_text
         .iter()
         .find(|line| line.contains("Opus 4.8"))
         .expect("current entry metadata line");
     let column = |line: &str, needle: &str| line.find(needle).map(|at| line[..at].chars().count());
     assert_eq!(
-        column(earlier_meta, "Haiku"),
+        column(prior_meta, "Haiku"),
         column(current_meta, "Opus 4.8"),
-        "one grid: {earlier_meta:?} vs {current_meta:?}"
+        "one grid: {prior_meta:?} vs {current_meta:?}"
     );
     paged_view.toggles.delegation_pages = small_map;
     let small_screen = snapshot_to_screen_with_alert_and_ui(
@@ -2608,7 +2640,7 @@ fn the_earlier_line_pages_five_finished_entries_per_activation_until_none_remain
 }
 
 #[test]
-fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_held_or_expanded() {
+fn a_card_with_nothing_in_flight_draws_nothing_unselected_and_its_done_title_when_opened() {
     let mut snapshot = snapshot_with(vec![
         agent(
             "parent",
@@ -2654,7 +2686,7 @@ fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_
             .join("\n")
     };
 
-    // Unselected in auto and compact density: no title and no earlier line.
+    // Unselected in auto and compact density: no title and no entry.
     for density in [
         crate::config::CardDensityMode::Auto,
         crate::config::CardDensityMode::Compact,
@@ -2663,13 +2695,13 @@ fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_
         ctx.card_density = density;
         let text = text_of(&ctx);
         assert!(
-            !text.contains("earlier") && !text.contains("subagents"),
+            !text.contains("task p1") && !text.contains("subagents") && !text.contains("done ("),
             "unselected {density:?} card draws nothing new:\n{text}"
         );
     }
 
-    // Selected (auto and compact), held (auto), and expanded (unselected): the bare title
-    // over the earlier line.
+    // Selected (auto and compact), held (auto), and expanded (unselected): the done title
+    // over the first page of finished entries, with no pager while none stays hidden.
     let held = std::collections::BTreeSet::from([row0_id.clone()]);
     for (label, selected_idx, density, use_held) in [
         (
@@ -2702,24 +2734,27 @@ fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_
         let title = lines
             .iter()
             .position(|line| {
-                line.trim_end_matches(['▐', '🮇', ' '])
-                    .ends_with("⧉ subagents")
+                line.contains("  ⧉ subagents ")
+                    && line
+                        .trim_end_matches(['▐', '🮇', ' '])
+                        .ends_with("✓ done (1)")
             })
-            .unwrap_or_else(|| panic!("{label}: expected a bare title:\n{text}"));
+            .unwrap_or_else(|| panic!("{label}: expected the done title:\n{text}"));
         assert_eq!(
-            lines
-                .get(title + 1)
-                .map(|line| line.contains("▸ +1 earlier")),
+            lines.get(title + 1).map(|line| line.contains("task p1")),
             Some(true),
-            "{label}: the earlier line sits under the title:\n{text}"
+            "{label}: the finished entry lists under the title:\n{text}"
         );
-        assert!(!text.contains("(0)"), "{label}:\n{text}");
+        assert!(
+            !text.contains("(0)") && !text.contains("▸ +"),
+            "{label}:\n{text}"
+        );
     }
 
     // A pin closing the selected card's section keeps the title to reopen it and drops
-    // the earlier line.
+    // its entries.
     let pins = std::collections::BTreeMap::from([(
-        row0_id,
+        row0_id.clone(),
         DelegationPin {
             open: false,
             turn: None,
@@ -2727,9 +2762,22 @@ fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_
     )]);
     let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &rolls);
     ctx.delegation_overrides = &pins;
-    let closed = text_of(&ctx);
-    assert!(closed.contains("⧉ subagents"), "{closed}");
-    assert!(!closed.contains("earlier"), "{closed}");
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    let lines = line_texts(&block.lines);
+    let closed = lines.join("\n");
+    let title = lines
+        .iter()
+        .position(|line| line.contains("✓ done (1)"))
+        .unwrap_or_else(|| panic!("the title stays:\n{closed}"));
+    assert!(!closed.contains("task p1"), "{closed}");
+    assert_eq!(
+        block.interactions.target_at(4, title as u16),
+        Some(HitTarget::ToggleDelegation {
+            row: row0_id,
+            open: true,
+        }),
+        "a click on the title reopens the section"
+    );
 
     let selected_screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -2742,7 +2790,7 @@ fn an_earlier_only_card_draws_nothing_unselected_and_a_bare_title_when_selected_
         54,
         22,
     );
-    assert_snapshot("earlier_only_card_selected", selected_screen);
+    assert_snapshot("done_title_card_selected", selected_screen);
 }
 
 #[test]
@@ -2866,7 +2914,7 @@ fn subagent_entries_distinguish_live_reopenable_inert_and_inflight_reopening() {
 }
 
 #[test]
-fn card_height_memo_keys_on_delegation_pages() {
+fn card_heights_hold_across_pages_and_in_flight_flips() {
     let mut snapshot = snapshot_with(vec![agent(
         "parent",
         "claude",
@@ -2882,51 +2930,108 @@ fn card_height_memo_keys_on_delegation_pages() {
     let card = row.as_agent_mut().unwrap();
     card.prompt = Some("build feature".to_owned());
     card.user_turn_started_at = Some(base);
-    card.sub_agents = vec![prior_child(
-        "p1",
-        "coder",
-        AgentStatus::Success,
-        Timestamp::from_second(base.as_second() - 30).unwrap(),
-        true,
-        false,
-    )];
+    card.sub_agents = (1..=7)
+        .map(|n| {
+            prior_child(
+                &format!("p{n}"),
+                "coder",
+                AgentStatus::Success,
+                Timestamp::from_second(base.as_second() - 30 * n).unwrap(),
+                true,
+                false,
+            )
+        })
+        .collect();
     let row = snapshot.worktree_groups[0].rows[0].clone();
+    // The same card with a child running in the current turn.
+    let mut running = snapshot.clone();
+    let mut child = prior_child("now", "coder", AgentStatus::Running, base, true, false);
+    child.prior_turn = false;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut running.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents
+    .push(child);
 
-    let theme = Theme::fixed(false);
-    let ui = UiState::default();
-    let mut heights = crate::sidebar_pane::render::heights::CardHeights::default();
+    let mut ui = UiState::default();
     let mut view = ViewState {
         selected_index: Some(0),
         ..Default::default()
     };
-    let closed = crate::sidebar_pane::render::compose::compose_lines_with_meter(
-        &snapshot,
-        None,
-        &view,
-        &ui,
-        &theme,
-        54,
-        24,
-        None,
-        Some(&mut heights),
+    // Composes as a pane does, with one theme Rc, so repeated composes of one snapshot share
+    // a warm epoch. The epoch keys on the groups Arc and the snapshot clock, so the in-flight
+    // flips (a child starting, the last one finishing) reach a cold epoch; the pages and pin
+    // transitions stay inside a warm one. Every cached height read is checked against a
+    // fresh paint (`worktree_group_lines_windowed`), and the hit count shows the repeat of
+    // each state read what its first compose cached.
+    let mut height = |snapshot: &SidebarSnapshot, view: &ViewState| {
+        let theme = ui.theme(&snapshot.theme);
+        let mut heights = std::mem::take(&mut ui.card_heights);
+        let frame = crate::sidebar_pane::render::compose::compose_lines_with_meter(
+            snapshot,
+            None,
+            view,
+            &ui,
+            &theme,
+            54,
+            60,
+            None,
+            Some(&mut heights),
+        );
+        let hits = heights.hits.len();
+        ui.card_heights = heights;
+        (frame.content_height, hits)
+    };
+    let warm = |height: &mut dyn FnMut(&SidebarSnapshot, &ViewState) -> (usize, usize),
+                snapshot: &SidebarSnapshot,
+                view: &ViewState,
+                what: &str| {
+        let (cold, first_hits) = height(snapshot, view);
+        let (cached, hits) = height(snapshot, view);
+        assert_eq!(cached, cold, "{what}");
+        assert!(
+            hits > first_hits,
+            "{what}: the repeat reads the height the first compose cached ({hits} vs {first_hits})"
+        );
+        cold
+    };
+    let first_page = warm(&mut height, &snapshot, &view, "the implicit first page");
+    let in_flight = warm(&mut height, &running, &view, "a child starting");
+    assert_eq!(
+        first_page,
+        in_flight + 8,
+        "five two-line entries above the pager replace the running child's two lines"
     );
-    let (row_id, pages) = paged(&row, 1);
+    assert_eq!(
+        warm(&mut height, &snapshot, &view, "the last child finishing"),
+        first_page
+    );
+    // Inside the warm epoch: the first stored page lists the second.
+    let (row_id, pages) = paged(&row, 2);
     view.toggles.delegation_pages.insert(row_id, pages);
-    let opened = crate::sidebar_pane::render::compose::compose_lines_with_meter(
-        &snapshot,
-        None,
-        &view,
-        &ui,
-        &theme,
-        54,
-        24,
-        None,
-        Some(&mut heights),
+    let second_page = warm(&mut height, &snapshot, &view, "a stored page");
+    assert_eq!(
+        second_page,
+        first_page + 3,
+        "two more entries, and the pager goes"
     );
+    let paged_in_flight = warm(&mut height, &running, &view, "pages over a running child");
     assert!(
-        opened.content_height > closed.content_height,
-        "a page of earlier entries grows content height ({} vs {})",
-        opened.content_height,
-        closed.content_height
+        paged_in_flight > in_flight,
+        "the pages hold over a running child"
+    );
+    assert_eq!(
+        warm(&mut height, &snapshot, &view, "back at rest"),
+        second_page
+    );
+    // Inside the warm epoch: a pin closes the section, leaving the done title.
+    pin_delegation(&mut view, &row, false);
+    let closed = warm(&mut height, &snapshot, &view, "a pin closing it");
+    assert!(closed < first_page, "a closed section keeps only its title");
+    assert!(warm(&mut height, &running, &view, "closed over a running child") < in_flight);
+    assert_eq!(
+        warm(&mut height, &snapshot, &view, "closed at rest"),
+        closed
     );
 }
