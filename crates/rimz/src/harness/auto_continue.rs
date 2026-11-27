@@ -1,5 +1,5 @@
 //! Producer-side auto-continue: resume a parked agent through the message queue
-//! after a rate-limit window resets or a retry backoff elapses.
+//! after a rate limit refills or a retry backoff elapses.
 //!
 //! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
 //! the park is fresh, re-arms a lost limit record after budget recovery when
@@ -11,9 +11,10 @@
 //! - **Arm.** On each due agent check with a resumable park certificate
 //!   ([`resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
-//!   rate-limit record captures the latest spent-window reset deadline; a
-//!   backoff record carries the turn-error marker time and retry state.
-//! - **Fire.** Once the window reset deadline or retry backoff is due and the
+//!   rate-limit record captures the limit's refill as its deadline
+//!   ([`AgentState::limit_refill`]); a backoff record carries the turn-error
+//!   marker time and retry state.
+//! - **Fire.** Once the refill deadline or retry backoff is due and the
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
 //!   delivers a gated message record (Done for budget resets, Resume otherwise).
@@ -378,8 +379,7 @@ fn resume_park(
     let (class, error) = agent.displayed_turn_error(now)?;
     match class {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
-            let deadline =
-                capacity?.latest_spent_window_reset_for_model(now, agent.current_model())?;
+            let deadline = agent.limit_refill(capacity, agent.current_model(), now)?;
             Some(ResumeArm::RateLimit { deadline })
         }
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
@@ -414,9 +414,7 @@ pub(crate) fn resume_gate_recovered(
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
-        None => {
-            limit_marker_active(agent, now) && capacity_recovered(capacity.as_ref(), agent, now)
-        }
+        None => limit_marker_active(agent, now) && limit_recovered(capacity.as_ref(), agent, now),
     }
 }
 
@@ -528,7 +526,7 @@ pub(crate) fn resume_parked(
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent, now) {
                     if cached_park(&path).is_none()
-                        && capacity_recovered(capacity, agent, now)
+                        && limit_recovered(capacity, agent, now)
                         && !recent_resume_attempt(resume_messages, agent, now)
                     {
                         arm_park(
@@ -657,6 +655,19 @@ fn capacity_recovered(
     capacity.is_some_and(|capacity| {
         capacity.subscription_budget_available_for_model(now, model) && read_since_marker(capacity)
     })
+}
+
+/// Whether `agent`'s limit reads lifted: [`capacity_recovered`], or the refill its displayed
+/// stop states has passed and no reading shows its model blocked
+/// ([`AgentState::stated_refill_lifted`]). A passed stated refill reads lifted as a spent
+/// window's passed reset does, with or without a read since.
+fn limit_recovered(
+    capacity: Option<&ProviderCapacity>,
+    agent: &AgentState,
+    now: Timestamp,
+) -> bool {
+    capacity_recovered(capacity, agent, now)
+        || agent.stated_refill_lifted(capacity, agent.current_model(), now)
 }
 
 /// Whether the provider refuses `agent` on its model and account, from `capacities`.
@@ -883,10 +894,12 @@ fn nudge_due(
                 return false;
             }
             let grace = match record.kind {
-                ParkKind::RateLimit { .. } => grace.as_secs() as i64,
-                _ => 0,
+                ParkKind::RateLimit { .. } => grace,
+                _ => Duration::ZERO,
             };
-            now.as_second() - deadline.as_second() >= grace
+            // At full precision: a stop's stated refill carries subseconds, and a nudge in its
+            // own second before it is refused at the gate and spends a retry.
+            deadline.checked_add(grace).is_ok_and(|due| now >= due)
                 && record.last_nudge_at.is_none_or(|at| {
                     now.as_second() - at.as_second()
                         >= AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64

@@ -3060,7 +3060,13 @@ fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
         "errored Antigravity Stop with a marker appends an Error transcript entry"
     );
 
-    // Statusline push keeps the marker, stamps model, and the row reads Paused.
+    // Statusline push keeps the marker and its stated refill, stamps model, and the row reads
+    // Paused.
+    let stated_refill =
+        rimz::store::agent_context::read_one(store.runtime_paths(), "antigravity", "agy-child")
+            .and_then(|record| record.context.turn_error)
+            .and_then(|marker| marker.refill_at);
+    assert!(stated_refill.is_some(), "the quota Stop states its refill");
     feed_antigravity_statusline_in(
         &store,
         "agy-child",
@@ -3080,6 +3086,10 @@ fn antigravity_quota_stop_keeps_subagent_run_open_and_survives_statusline() {
         .expect("turn_error survives statusline push");
     assert_eq!(marker.class, rimz::agents::TurnErrorClass::PausedRateLimit);
     assert_eq!(marker.model.as_deref(), Some("gemini-4-neon-high"));
+    assert_eq!(
+        marker.refill_at, stated_refill,
+        "the stated refill survives the statusline push"
+    );
     let mut row = antigravity_row(&store, "agy-child");
     rimz::store::agent_context::attach_child_display_context(
         store.runtime_paths(),

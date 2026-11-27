@@ -243,6 +243,7 @@ fn a_limit_failure_refuses_until_its_recorded_refill_on_the_same_login_when_no_w
             cause,
             refill_at,
             label: None,
+            refill_stated: false,
         });
         run
     };
@@ -314,8 +315,9 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
     let same = crate::agents::RoomAccounts::default();
     let catalog = crate::agents::LoginCatalog::default();
     // An available 5-hour window observed `read_secs_ago`, and a login whose identity last
-    // switched `floor_secs_ago`.
-    let refusal = |read_secs_ago: u64, floor_secs_ago: Option<u64>| {
+    // switched `floor_secs_ago`; with `stated`, the window reads 99% (Antigravity's read of a
+    // spent quota) and the failure recorded the refill its stop stated, past the hold limit.
+    let refusal = |read_secs_ago: u64, floor_secs_ago: Option<u64>, stated: bool| {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
         let runtime =
@@ -335,7 +337,7 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
                     RateLimitCacheEntry {
                         limits: crate::agents::AgentRateLimits {
                             windows: vec![crate::agents::RateLimitWindow {
-                                used_percentage: Some(20),
+                                used_percentage: Some(if stated { 99 } else { 20 }),
                                 resets_at: Some(now + Duration::from_secs(3 * 3600)),
                                 duration_mins: Some(300),
                                 observed_at: Some(now - Duration::from_secs(read_secs_ago)),
@@ -389,31 +391,47 @@ fn a_recorded_refill_yields_on_the_same_login_to_a_newer_available_read_or_ident
         );
         run.completed_at = Some(failed_at);
         run.limit_failure = Some(LimitFailure {
-            cause: LimitFailureCause::RefillKnown,
+            cause: if stated {
+                LimitFailureCause::BeyondHoldLimit
+            } else {
+                LimitFailureCause::RefillKnown
+            },
             refill_at: Some(now + Duration::from_secs(2 * 3600)),
             label: None,
+            refill_stated: stated,
         });
         limit_refusal(&store, &child, &run, &same, &catalog)
     };
 
     assert!(
-        refusal(1200, None).is_some(),
+        refusal(1200, None, false).is_some(),
         "quota available before the failure predates the limit"
     );
     assert!(
-        refusal(1200, Some(1800)).is_some(),
+        refusal(1200, Some(1800), false).is_some(),
         "an identity switch before the failure changes nothing"
     );
     assert_eq!(
-        refusal(60, None),
+        refusal(60, None, false),
         None,
         "quota available in a read newer than the failure"
     );
     assert_eq!(
-        refusal(1200, Some(300)),
+        refusal(1200, Some(300), false),
         None,
         "the login switched identity since the failure"
     );
+    assert!(
+        refusal(60, None, true).is_some(),
+        "a stated refill outlasts a newer read showing quota available"
+    );
+    for (read_secs_ago, floor_secs_ago) in [(1200, 300), (60, 300)] {
+        assert_eq!(
+            refusal(read_secs_ago, Some(floor_secs_ago), true),
+            None,
+            "an identity switch since the failure clears a stated refill: read {read_secs_ago}s ago"
+        );
+    }
 }
 
 struct ReopenFixture {

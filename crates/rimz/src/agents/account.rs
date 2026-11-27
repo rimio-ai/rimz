@@ -1113,6 +1113,45 @@ impl ProviderCapacity {
     }
 }
 
+impl super::AgentState {
+    /// When the limit this agent stopped on refills, ahead of `now`: the latest of the refill
+    /// its displayed stop states ([`AgentTurnError::refill_at`]) and the resets of `model`'s
+    /// spent windows in `capacity`
+    /// ([`ProviderCapacity::latest_spent_window_reset_for_model`]). A stated refill needs no
+    /// usage reading and counts whatever the agent's model, while its stop is displayed.
+    pub fn limit_refill(
+        &self,
+        capacity: Option<&ProviderCapacity>,
+        model: Option<&str>,
+        now: Timestamp,
+    ) -> Option<Timestamp> {
+        let stated = self
+            .displayed_turn_error(now)
+            .and_then(|(_, marker)| marker.refill_at)
+            .filter(|refill| *refill > now);
+        let spent =
+            capacity.and_then(|capacity| capacity.latest_spent_window_reset_for_model(now, model));
+        stated.max(spent)
+    }
+
+    /// Whether the refill this agent's displayed stop states has passed and `capacity` does not
+    /// show `model` blocked ([`ProviderCapacity::subscription_exhausted_for_model`]: a spent
+    /// window whose reset is ahead or unknown, a spent sub-cap, or a standing refusal). A reading
+    /// with no known-available window blocks nothing, and neither does no reading.
+    pub(crate) fn stated_refill_lifted(
+        &self,
+        capacity: Option<&ProviderCapacity>,
+        model: Option<&str>,
+        now: Timestamp,
+    ) -> bool {
+        self.displayed_turn_error(now)
+            .and_then(|(_, marker)| marker.refill_at)
+            .is_some_and(|refill| refill <= now)
+            && capacity
+                .is_none_or(|capacity| !capacity.subscription_exhausted_for_model(now, model))
+    }
+}
+
 /// The model id a catalog launch alias names (`opus`), or `model` itself.
 pub(super) fn launch_model_id(model: &str) -> &str {
     super::all_definitions()

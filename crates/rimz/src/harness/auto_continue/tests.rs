@@ -163,6 +163,10 @@ fn write_recovered_window(runtime: &RuntimePaths) {
 }
 
 fn write_recovered_window_read_at(runtime: &RuntimePaths, observed: i64) {
+    write_window_read_at(runtime, 20, observed);
+}
+
+fn write_window_read_at(runtime: &RuntimePaths, used: u8, observed: i64) {
     write_rate_limits_cache(
         runtime,
         &RateLimitsCache {
@@ -174,7 +178,7 @@ fn write_recovered_window_read_at(runtime: &RuntimePaths, observed: i64) {
                     limits: AgentRateLimits {
                         windows: vec![RateLimitWindow {
                             observed_at: Some(ts(observed)),
-                            ..window(20, 9_000)
+                            ..window(used, 9_000)
                         }],
                     },
                     ..Default::default()
@@ -2430,6 +2434,245 @@ fn recovered_budget_rearms_a_lost_limit_park() {
     assert_eq!(
         resume(6_300),
         Some(rate_record(6_000, 1_000, Some(6_300), 1))
+    );
+}
+
+#[test]
+fn a_stop_naming_its_refill_arms_at_it_and_holds_gate_and_nudge_until_then() {
+    let mut stopped = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "Individual quota reached. Resets in 33m30s.",
+    );
+    let refill_at = |agent: &mut AgentState, at: i64| {
+        if let Some(marker) = agent
+            .context
+            .as_mut()
+            .and_then(|context| context.turn_error.as_mut())
+        {
+            marker.refill_at = Some(ts(at));
+        }
+    };
+    refill_at(&mut stopped, 8_000);
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (case, read) in [
+        ("no usage read", false),
+        ("a 99% read since the stop", true),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        if read {
+            write_window_read_at(&runtime, 99, 5_995);
+        }
+        for now in [6_000, 7_999, 8_000, 8_299, 8_300] {
+            let mut snapshot = SidebarSnapshot::build_with_agents(
+                runtime.workspace_id.clone(),
+                vec![stopped.clone()],
+                ts(now),
+            );
+            snapshot.now = ts(now);
+            snapshot.agent_panes = vec![live_pane()].into();
+            resume_parked(
+                |_| false,
+                &snapshot,
+                &runtime,
+                &crate::agents::RoomLoginSet::native(),
+                &ResumeConfig {
+                    auto_continue: true,
+                    auto_continue_max_retries: 3,
+                    ..ResumeConfig::default()
+                },
+                &[],
+            );
+            actual.push((
+                case,
+                now,
+                resume_gate_recovered(&runtime, &stopped, ts(now)),
+                read_park(&path),
+            ));
+        }
+        // Claude resumes itself at the reset, so the nudge also waits out its grace.
+        let held = Some(rate_record(8_000, 1_000, None, 0));
+        expected.extend([
+            (case, 6_000, false, held.clone()),
+            (case, 7_999, false, held.clone()),
+            (case, 8_000, true, held.clone()),
+            (case, 8_299, true, held),
+            (
+                case,
+                8_300,
+                true,
+                Some(rate_record(8_000, 1_000, Some(8_300), 1)),
+            ),
+        ]);
+    }
+    assert_eq!(actual, expected);
+
+    let deadline = |agent: &AgentState, capacity: &ProviderCapacity| match resume_park(
+        agent,
+        Some(capacity),
+        ts(6_000),
+    ) {
+        Some(ResumeArm::RateLimit { deadline }) => Some(deadline),
+        _ => None,
+    };
+    let spent = ProviderCapacity::from_windows(vec![window(100, 8_500)]);
+    refill_at(&mut stopped, 8_000);
+    let before_window = deadline(&stopped, &spent);
+    refill_at(&mut stopped, 9_000);
+    let after_window = deadline(&stopped, &spent);
+    assert_eq!(
+        (before_window, after_window),
+        (Some(ts(8_500)), Some(ts(9_000))),
+        "the later of the stated refill and the spent window"
+    );
+}
+
+#[test]
+fn a_passed_stated_refill_opens_the_gate_and_rearms_unless_the_reading_blocks_the_model() {
+    let mut stopped = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "Individual quota reached. Resets in 33m30s.",
+    );
+    if let Some(marker) = stopped
+        .context
+        .as_mut()
+        .and_then(|context| context.turn_error.as_mut())
+    {
+        marker.refill_at = Some(ts(8_000));
+    }
+    let unrated = RateLimitWindow {
+        used_percentage: None,
+        ..window(0, 9_000)
+    };
+    let spent_unknown_reset = RateLimitWindow {
+        resets_at: None,
+        ..window(100, 0)
+    };
+    let mut actual = Vec::new();
+    for (case, windows) in [
+        ("no window left after a floor", Vec::new()),
+        ("a window with no percentage", vec![unrated]),
+        ("a spent window, reset unknown", vec![spent_unknown_reset]),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_rate_limits_cache(
+            &runtime,
+            &RateLimitsCache {
+                refreshed_at_ms: 0,
+                entries: [(
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        "claude",
+                    ))
+                    .into(),
+                    crate::agents::account::RateLimitCacheEntry {
+                        limits: AgentRateLimits { windows },
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![stopped.clone()],
+            ts(8_100),
+        );
+        snapshot.now = ts(8_100);
+        snapshot.agent_panes = vec![live_pane()].into();
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &ResumeConfig {
+                auto_continue: true,
+                auto_continue_max_retries: 3,
+                ..ResumeConfig::default()
+            },
+            &[],
+        );
+        actual.push((
+            case,
+            resume_gate_recovered(&runtime, &stopped, ts(8_100)),
+            read_park(&path),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "no window left after a floor",
+                true,
+                Some(rate_record(8_100, 1_000, None, 0))
+            ),
+            (
+                "a window with no percentage",
+                true,
+                Some(rate_record(8_100, 1_000, None, 0))
+            ),
+            ("a spent window, reset unknown", false, None),
+        ]
+    );
+}
+
+#[test]
+fn a_subsecond_refill_is_never_nudged_in_its_own_second_before_it() {
+    let (_dir, runtime) = temp_runtime();
+    let refill = ts(8_000) + Duration::from_millis(850);
+    let mut stopped = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "Individual quota reached. Resets in 33m30s.",
+    );
+    stopped.kind = AgentKind::new_unchecked("codex");
+    if let Some(marker) = stopped
+        .context
+        .as_mut()
+        .and_then(|context| context.turn_error.as_mut())
+    {
+        marker.refill_at = Some(refill);
+    }
+    let path = park_record_path(&runtime, &stopped.kind, &stopped.agent_id);
+    let mut pane = live_pane();
+    pane.kind = stopped.kind.clone();
+    let pass = |now: Timestamp| {
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![stopped.clone()],
+            now,
+        );
+        snapshot.now = now;
+        snapshot.agent_panes = vec![pane.clone()].into();
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &ResumeConfig {
+                auto_continue: true,
+                auto_continue_max_retries: 3,
+                ..ResumeConfig::default()
+            },
+            &[],
+        );
+        read_park(&path).map(|record| (record.last_nudge_at, record.retries))
+    };
+    let armed = pass(ts(6_000));
+    let early = pass(ts(8_000) + Duration::from_millis(100));
+    let due = pass(refill);
+    assert_eq!(
+        (armed, early, due),
+        (Some((None, 0)), Some((None, 0)), Some((Some(refill), 1)))
     );
 }
 

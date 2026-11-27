@@ -8021,6 +8021,7 @@ fn parent_message_to_a_limit_failed_child_without_a_conversation_says_so_before_
         cause: LimitFailureCause::RefillKnown,
         refill_at: None,
         label: Some("Usage limit reached".to_owned()),
+        refill_stated: false,
     });
     rimz::harness::run::create(store.paths(), &run).unwrap();
     publish_claude_refill(&env, jiff::Timestamp::now() + Duration::from_secs(108 * 60));
@@ -8523,6 +8524,7 @@ fn assert_parent_follow_up_case(
             cause: rimz::store::run::LimitFailureCause::RefillKnown,
             refill_at: None,
             label: Some("Usage limit reached".to_owned()),
+            refill_stated: false,
         });
     }
     rimz::harness::run::create(store.paths(), &run).unwrap();

@@ -522,12 +522,11 @@ impl workflow::AttemptHost for Host<'_> {
                 self.woken_by.as_ref(),
                 |agent| Ok(crate::agents::read_open_ask(self.state, agent, None)?),
                 |agent| {
-                    ProviderCapacity::read(ctx.runtime(), &agent.login_key()).and_then(|capacity| {
-                        capacity.latest_spent_window_reset_for_model(
-                            Timestamp::now(),
-                            agent.model.as_deref(),
-                        )
-                    })
+                    agent.limit_refill(
+                        ProviderCapacity::read(ctx.runtime(), &agent.login_key()).as_ref(),
+                        agent.model.as_deref(),
+                        Timestamp::now(),
+                    )
                 },
             )
         })()

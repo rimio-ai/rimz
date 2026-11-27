@@ -379,7 +379,7 @@ Not live-tested on agy 1.5.16: a live trace of interactive sign-in or refresh wr
 - Used percentage is `100` only at a remaining fraction of exactly `0`. Otherwise it is rounded and capped at `99`, so a quota stop's window can read unspent; the stop's own refill on its marker keeps that read from confirming a model refusal ([Events](#events)).
 - A Gemini bucket of the wrong shape, a usable bucket's fraction outside `0..=1`, or a reset that is missing, unparseable, or not in the future, rejects the whole reading. So does a `/usage` response whose buckets hold no Gemini one. A `/usage` response with no bucket, and a statusline payload whose map holds no valid Gemini window, are no reading.
 
-The `/usage` windows are `Authoritative` and the statusline's are `BestEffort`, as Claude's are ([providers.md](./providers.md#window-fusion)), and RimZ invents no credits or dollars from them. When an errored `Stop` carries a string `error` that classifies as a rate or spend limit, these windows supply the reset clock that [auto-continue](./providers.md#auto-continue) and subagent limit holds read.
+The `/usage` windows are `Authoritative` and the statusline's are `BestEffort`, as Claude's are ([providers.md](./providers.md#window-fusion)), and RimZ invents no credits or dollars from them. When an errored `Stop` carries a string `error` that classifies as a rate or spend limit, its marker's `refill_at` and these windows supply the reset clock that [auto-continue](./providers.md#auto-continue) and subagent limit holds read, the later of the two (`AgentState::limit_refill`).
 
 ## Cost
 

@@ -582,6 +582,7 @@ fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
         cause: LimitFailureCause::RefillKnown,
         refill_at: Some("2026-11-11T20:00:00Z".parse().unwrap()),
         label: Some("Usage limit reached".to_owned()),
+        refill_stated: true,
     };
     record.limit_failure = Some(failure.clone());
     record.earlier_answers.push(EarlierAnswer {
@@ -595,6 +596,7 @@ fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
             cause: LimitFailureCause::ContinueFailed,
             refill_at: None,
             label: None,
+            refill_stated: false,
         }),
         cancel_reason: None,
         opened_by: Vec::new(),
@@ -609,6 +611,7 @@ fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
             "cause": "refill_known",
             "refill_at": "2026-11-11T20:00:00Z",
             "label": "Usage limit reached",
+            "refill_stated": true,
         })
     );
     assert_eq!(

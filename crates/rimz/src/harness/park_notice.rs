@@ -58,9 +58,11 @@ pub struct ParkNoticeRequest {
 /// The provider usage reading for a parked child's account and model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LimitReading {
-    /// A spent window refills at this instant, still ahead.
+    /// The limit refills at this instant, still ahead: the later of the stop's stated refill and
+    /// the spent windows' resets ([`AgentState::limit_refill`]).
     Refill(Timestamp),
-    /// No spent window ahead, and quota available in a reading taken after the park began.
+    /// No refill ahead, and the stop's stated refill passed with no reading showing the model
+    /// blocked, or quota available in a reading taken after the park began.
     Refilled,
     /// Nothing tells.
     Unknown,
@@ -77,7 +79,7 @@ pub fn limit_reading(
     read_limit(
         ProviderCapacity::read(runtime, &key).as_ref(),
         crate::agents::account::cached_usage_read_at(runtime, &key),
-        child.model.as_deref(),
+        child,
         now,
         since,
     )
@@ -98,16 +100,20 @@ pub fn refill_ahead(
 fn read_limit(
     capacity: Option<&ProviderCapacity>,
     read_at: Option<Timestamp>,
-    model: Option<&str>,
+    child: &AgentState,
     now: Timestamp,
     since: Timestamp,
 ) -> LimitReading {
+    let model = child.model.as_deref();
+    if let Some(refill) = child.limit_refill(capacity, model, now) {
+        return LimitReading::Refill(refill);
+    }
+    if child.stated_refill_lifted(capacity, model, now) {
+        return LimitReading::Refilled;
+    }
     let Some(capacity) = capacity else {
         return LimitReading::Unknown;
     };
-    if let Some(refill) = capacity.latest_spent_window_reset_for_model(now, model) {
-        return LimitReading::Refill(refill);
-    }
     if read_at.is_some_and(|at| at > since)
         && capacity.subscription_budget_available_for_model(now, model)
     {
@@ -280,12 +286,13 @@ fn failure(
     refill_at: Option<Timestamp>,
     now: Timestamp,
 ) -> LimitFailure {
+    let marker = child.displayed_turn_error(now).map(|(_, marker)| marker);
     LimitFailure {
         cause,
         refill_at,
-        label: child
-            .displayed_turn_error(now)
-            .and_then(|(_, error)| error.label.clone()),
+        label: marker.and_then(|marker| marker.label.clone()),
+        refill_stated: refill_at.is_some()
+            && refill_at == marker.and_then(|marker| marker.refill_at),
     }
 }
 

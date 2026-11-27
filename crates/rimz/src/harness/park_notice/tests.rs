@@ -269,6 +269,7 @@ fn a_park_fails_after_the_window_with_its_label_and_refill() {
             cause: LimitFailureCause::BeyondHoldLimit,
             refill_at: Some(far),
             label: Some("Spend cap".to_owned()),
+            refill_stated: false,
         })
     );
     assert!(action(&run, &agents, now, Continuation::Off, LimitReading::Unknown).is_none());
@@ -292,6 +293,7 @@ fn a_park_fails_after_the_window_with_its_label_and_refill() {
             cause: LimitFailureCause::RefillUnknown,
             refill_at: None,
             label: Some("Spend cap".to_owned()),
+            refill_stated: false,
         }
     );
     let (agents, run) = parked(TurnErrorClass::PausedRateLimit, None);
@@ -308,6 +310,7 @@ fn a_park_fails_after_the_window_with_its_label_and_refill() {
             cause: LimitFailureCause::Refilled,
             refill_at: None,
             label: None,
+            refill_stated: false,
         }),
         "a marker without a label stores none"
     );
@@ -454,6 +457,7 @@ fn a_stored_hold_is_never_reclassified_and_fails_only_with_nothing_to_continue_i
                 cause: LimitFailureCause::RefillKnown,
                 refill_at: Some(until),
                 label: label.clone(),
+                refill_stated: false,
             }
         );
         // A continue whose limit reply repeated the marker left this hold in place.
@@ -469,6 +473,7 @@ fn a_stored_hold_is_never_reclassified_and_fails_only_with_nothing_to_continue_i
                 cause: LimitFailureCause::ContinueFailed,
                 refill_at: None,
                 label: label.clone(),
+                refill_stated: false,
             })
         );
         assert!(
@@ -583,37 +588,114 @@ fn quota_reads_as_refilled_only_from_a_usage_read_newer_than_the_park() {
     let spent = ProviderCapacity::from_windows(vec![window(100, now + HOUR)]);
     let available = ProviderCapacity::from_windows(vec![window(5, now + HOUR)]);
     let after = Some(since + Duration::from_secs(1));
+    let child = AgentState::stub("codex", "child", AgentStatus::Running);
     assert_eq!(
-        read_limit(Some(&spent), None, None, now, since),
+        read_limit(Some(&spent), None, &child, now, since),
         LimitReading::Refill(now + HOUR),
         "a refill ahead reads as it stands"
     );
     assert_eq!(
-        read_limit(Some(&available), after, None, now, since),
+        read_limit(Some(&available), after, &child, now, since),
         LimitReading::Refilled
     );
     for read_at in [None, Some(since), Some(since - Duration::from_secs(1))] {
         assert_eq!(
-            read_limit(Some(&available), read_at, None, now, since),
+            read_limit(Some(&available), read_at, &child, now, since),
             LimitReading::Unknown,
             "a read at {read_at:?} predates the park"
         );
     }
     assert_eq!(
-        read_limit(None, after, None, now, since),
+        read_limit(None, after, &child, now, since),
         LimitReading::Unknown
     );
     assert_eq!(
         read_limit(
             Some(&ProviderCapacity::from_windows(Vec::new())),
             after,
-            None,
+            &child,
             now,
             since
         ),
         LimitReading::Unknown,
         "no window is no reading"
     );
+}
+
+#[test]
+fn a_stop_naming_its_refill_holds_or_fails_the_child_at_that_refill_with_or_without_a_read() {
+    use LimitFailureCause as Cause;
+    let at_99 = ProviderCapacity::from_windows(vec![crate::agents::RateLimitWindow {
+        used_percentage: Some(99),
+        duration_mins: Some(7 * 24 * 60),
+        ..Default::default()
+    }]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (case, capacity) in [("no usage read", None), ("a 99% read", Some(&at_99))] {
+        for (refill, secs, continuation, outcome) in [
+            (2 * HOUR, 30, Continuation::On, "hold"),
+            (
+                2 * HOUR,
+                FAIL_WINDOW.as_secs(),
+                Continuation::Off,
+                "refill known",
+            ),
+            (7 * HOUR, 30, Continuation::On, "beyond hold limit"),
+            (
+                Duration::from_secs(120),
+                FAIL_WINDOW.as_secs(),
+                Continuation::Off,
+                "refilled inside the fail window",
+            ),
+        ] {
+            let (mut agents, run) = parked(TurnErrorClass::PausedRateLimit, Some("Quota reached"));
+            let (marker, now) = marker_plus(&agents, secs);
+            let refill_at = marker + refill;
+            if let Some(context) = agents[1].context.as_mut() {
+                context.turn_error.as_mut().unwrap().refill_at = Some(refill_at);
+            }
+            let read_at = capacity.map(|_| marker + Duration::from_secs(1));
+            let reading =
+                |child: &AgentState, since| read_limit(capacity, read_at, child, now, since);
+            let action = park_action(&run, &agents, now, 6 * HOUR, continuation, reading);
+            actual.push((
+                case,
+                outcome,
+                read_limit(capacity, read_at, &agents[1], now, marker),
+                match action {
+                    Some(ParkAction::Hold { hold, .. }) => Some((None, Some(hold.until), false)),
+                    Some(ParkAction::Fail { failure, .. }) => Some((
+                        Some(failure.cause),
+                        failure.refill_at,
+                        failure.refill_stated,
+                    )),
+                    None => None,
+                },
+            ));
+            expected.push(match outcome {
+                "refilled inside the fail window" => (
+                    case,
+                    outcome,
+                    LimitReading::Refilled,
+                    Some((Some(Cause::Refilled), None, false)),
+                ),
+                _ => (
+                    case,
+                    outcome,
+                    LimitReading::Refill(refill_at),
+                    Some(match outcome {
+                        "refill known" => (Some(Cause::RefillKnown), Some(refill_at), true),
+                        "beyond hold limit" => {
+                            (Some(Cause::BeyondHoldLimit), Some(refill_at), true)
+                        }
+                        _ => (None, Some(refill_at), false),
+                    }),
+                ),
+            });
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -658,6 +740,7 @@ fn the_failure_tail_names_the_label_and_the_refill_without_a_duration_or_setting
             cause,
             refill_at,
             label,
+            refill_stated: false,
         };
         assert_eq!(failure_tail(&failure), expected, "{cause:?}");
     }

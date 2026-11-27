@@ -1144,6 +1144,7 @@ fn limit_failed(cause: rimz::store::run::LimitFailureCause, refill_at: Option<&s
         cause,
         refill_at: refill_at.map(|at| at.parse().unwrap()),
         label: Some("Usage limit reached".into()),
+        refill_stated: false,
     });
     record
 }

@@ -294,6 +294,11 @@ pub struct LimitFailure {
     /// The provider's message, when the limit marker carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Whether `refill_at` is the refill the provider's stop stated, not a spent window's reset:
+    /// the parent's follow-up keeps refusing until a stated one even after a newer usage read
+    /// shows quota available, since such a provider can read below 100% while its quota is spent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub refill_stated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

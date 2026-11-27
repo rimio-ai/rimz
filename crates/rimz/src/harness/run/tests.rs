@@ -1310,6 +1310,7 @@ fn terminal_subagent_reopens_for_its_next_turn() {
             cause: crate::store::run::LimitFailureCause::RefillUnknown,
             refill_at: None,
             label: Some("Usage limit reached".into()),
+            refill_stated: false,
         });
         record.deadline_at = Some(record.started_at + std::time::Duration::from_secs(30));
         create(&paths, &record).unwrap();
@@ -4210,6 +4211,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
         cause,
         refill_at: None,
         label: Some("Usage limit reached".to_owned()),
+        refill_stated: false,
     };
     let sentence = "stopped on a provider limit: \"Usage limit reached\"";
 
@@ -4972,6 +4974,7 @@ impl End {
                     cause: crate::store::run::LimitFailureCause::RefillUnknown,
                     refill_at: None,
                     label: None,
+                    refill_stated: false,
                 },
             )
             .unwrap()

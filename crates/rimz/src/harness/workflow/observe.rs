@@ -1,7 +1,7 @@
 //! What an observed agent attempt means, and which agents its stop or detach reaches.
 //!
 //! The attempt host reads the facts (the leader's supervised run record, a room snapshot, an
-//! agent's open ask, a provider window's reset) and these rules project them: the ask that
+//! agent's open ask, a provider limit's refill) and these rules project them: the ask that
 //! blocks the attempt, the provider, budget, or turn stop that holds it, the leader's own errored
 //! turn, and its cohort. `orphan` finds the unpublished supervised run a dead launcher left, the
 //! run its stop then reaches.

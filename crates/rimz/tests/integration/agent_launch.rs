@@ -4211,6 +4211,7 @@ fn raw_failed_limit_parked_child_is_held_failed_beyond_horizon_and_keeps_label_i
             cause: rimz::store::run::LimitFailureCause::BeyondHoldLimit,
             refill_at: Some(reset_far),
             label: Some(label.to_owned()),
+            refill_stated: false,
         })
     );
 }
