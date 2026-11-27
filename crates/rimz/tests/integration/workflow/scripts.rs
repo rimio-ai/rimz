@@ -178,6 +178,41 @@ fn ralph_replans_out_of_an_item() {
     assert_eq!(end, r#"returns {"outcome":"complete"}"#);
 }
 
+/// The condition `cases` watches for ralph's `PR`: an outcome case while no waiting case before
+/// it, a queued PR or a pending CI, reads true.
+const PR: &str = "(pr=merged) || (pr=closed) || ((pr=open && pr.queue=dequeued) && !(pr=open && pr.queue=queued)) || ((pr=open && pr.mergeable=conflicting) && !(pr=open && pr.queue=queued)) || ((pr=open && ci=failed) && !(pr=open && pr.queue=queued)) || ((pr=open && pr.review=changes_requested) && !(pr=open && pr.queue=queued) && !(ci=pending))";
+
+/// A change request on the milestone's PR goes to a sweep, and the next look, with its own 7-day
+/// deadline, reads the merge.
+#[test]
+fn ralph_sweeps_a_change_request_then_waits_for_the_merge() {
+    let (calls, end) = walk("ralph", Some(r#"{"goal":"/goals/tokens"}"#), "swept");
+    let calls: Vec<_> = calls.iter().map(|call| call.replace(PR, "PR")).collect();
+    assert_eq!(
+        calls,
+        [
+            "1 shell uv run --script checks/ralph.py todo",
+            "2 shell uv run --script checks/ralph.py start",
+            "3 agent opus",
+            "4 shell uv run --script checks/ralph.py gate",
+            "5 shell uv run --script checks/ralph.py changed",
+            "6 agent judge",
+            "7 shell uv run --script checks/ralph.py pr",
+            "8 now",
+            "9 watch PR (timeout 604800s)",
+            "10 shell uv run --script checks/ralph.py trouble",
+            "11 agent opus",
+            "12 now",
+            "13 watch PR (timeout 604800s)",
+            "14 shell uv run --script checks/ralph.py advance",
+            "15 shell uv run --script checks/ralph.py todo",
+            "16 agent judge",
+            "17 agent opus",
+        ]
+    );
+    assert_eq!(end, r#"returns {"outcome":"complete"}"#);
+}
+
 #[test]
 fn ralph_reports_a_built_goal() {
     let (calls, end) = walk("ralph", Some(r#"{"goal":"/goals/tokens"}"#), "clean");
