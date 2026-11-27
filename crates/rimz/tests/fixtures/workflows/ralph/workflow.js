@@ -140,20 +140,19 @@ async function shipped(m) {
   throw new Stop('no pull request after three ship attempts')
 }
 
-// Fires on what keeps the pull request out, or on its end. A queued PR, and a PR whose CI is
-// pending, keep the watch waiting.
-const PR = 'pr=merged,closed || (pr=open && pr.queue!=queued && (pr.queue=dequeued' +
-  ' || pr.mergeable=conflicting || ci=failed || (ci!=pending && pr.review=changes_requested)))'
-
-// Names what the watch read, in this order: no PR CI runs on a conflicted head, and the review
-// reads last, since it has no reading on Gitea.
-function blocker({ readings }) {
-  if (readings.pr !== 'open') return readings.pr
-  if (readings['pr.queue'] === 'dequeued') return 'dequeued'
-  if (readings['pr.mergeable'] === 'conflicting') return 'conflicted'
-  if (readings.ci === 'failed') return 'red'
-  return 'changes'
-}
+// What keeps the pull request out, or its end, in this order: no PR CI runs on a conflicted
+// head, and the review reads last, since it has no reading on Gitea. A queued PR waits, and so
+// does a PR whose CI is pending before its review counts.
+const PR = [
+  { outcome: 'merged', when: 'pr=merged' },
+  { outcome: 'closed', when: 'pr=closed' },
+  { when: 'pr=open && pr.queue=queued' },
+  { outcome: 'dequeued', when: 'pr=open && pr.queue=dequeued' },
+  { outcome: 'conflicted', when: 'pr=open && pr.mergeable=conflicting' },
+  { outcome: 'red', when: 'pr=open && ci=failed' },
+  { when: 'ci=pending' },
+  { outcome: 'changes', when: 'pr=open && pr.review=changes_requested' },
+]
 
 // The run never merges: it waits here for the user or another workflow to. trouble keeps the
 // count of sweeps per kind and of change requests already answered. 700 looks cover seven
@@ -161,8 +160,7 @@ function blocker({ readings }) {
 // bounds the launches.
 async function merged(m) {
   for (let look = 1; look <= 700; look++) {
-    const watched = await watch({ when: PR, timeout: '7d' })
-    const pr = { outcome: blocker(watched), readings: watched.readings }
+    const pr = await cases(PR, { timeout: '7d' })
     if (pr.outcome === 'merged') return
     if (pr.outcome === 'closed') throw new Stop('the pull request was closed')
     const trouble = await ralph('trouble', { milestone: m, watch: pr })

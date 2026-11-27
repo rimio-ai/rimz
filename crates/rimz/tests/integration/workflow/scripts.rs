@@ -35,12 +35,13 @@ fn walk(name: &str, args: Option<&str>, answers: &str) -> (Vec<String>, String) 
     (calls, end)
 }
 
-/// The condition land's `FORGE` watches: any of its cases, in order.
-const FORGE: &str = "(pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || (pr=open && pr.queue!=queued && pr.mergeable=conflicting) || (pr=open && pr.queue!=queued && ci=failed) || (pr=open && ci=passed && pr.queue=none)";
+/// The condition `cases` watches for land's `FORGE`: an outcome case while the queued case, which
+/// waits, does not read true.
+const FORGE: &str = "(pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || ((pr=open && pr.mergeable=conflicting) && !(pr=open && pr.queue=queued)) || ((pr=open && ci=failed) && !(pr=open && pr.queue=queued)) || ((pr=open && ci=passed && pr.queue=none) && !(pr=open && pr.queue=queued))";
 
 /// The condition land's hold watches: the PR no longer reads unqueued, its case false or a case
 /// before it true.
-const BROKEN: &str = "!((pr=open && ci=passed && pr.queue=none) && !((pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || (pr=open && pr.queue!=queued && pr.mergeable=conflicting) || (pr=open && pr.queue!=queued && ci=failed)))";
+const BROKEN: &str = "!((pr=open && ci=passed && pr.queue=none) && !((pr=merged) || (pr=closed) || (pr=open && pr.queue=dequeued) || (pr=open && pr.queue=queued) || (pr=open && pr.mergeable=conflicting) || (pr=open && ci=failed)))";
 
 /// A walk of land with its two long conditions named.
 fn land(answers: &str) -> (Vec<String>, String) {
@@ -60,12 +61,14 @@ fn land_repairs_a_red_gate_and_lands() {
         [
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
-            "3 watch FORGE",
-            "4 agent fixer",
-            "5 shell uv run --script checks/send.py resend",
-            "6 watch FORGE",
-            "7 shell cargo clean",
-            "8 shell uv run --script checks/notes.py sift",
+            "3 now",
+            "4 watch FORGE",
+            "5 agent fixer",
+            "6 shell uv run --script checks/send.py resend",
+            "7 now",
+            "8 watch FORGE",
+            "9 shell cargo clean",
+            "10 shell uv run --script checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -80,14 +83,18 @@ fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
         [
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
-            "3 watch FORGE",
-            "4 watch BROKEN",
-            "5 watch FORGE",
-            "6 agent fixer",
-            "7 shell uv run --script checks/send.py resend",
+            "3 now",
+            "4 watch FORGE",
+            "5 now",
+            "6 watch BROKEN",
+            "7 now",
             "8 watch FORGE",
-            "9 shell cargo clean",
-            "10 shell uv run --script checks/notes.py sift",
+            "9 agent fixer",
+            "10 shell uv run --script checks/send.py resend",
+            "11 now",
+            "12 watch FORGE",
+            "13 shell cargo clean",
+            "14 shell uv run --script checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -103,11 +110,40 @@ fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
         [
             "1 shell uv run --script checks/team.py close",
             "2 shell uv run --script checks/send.py",
-            "3 watch FORGE",
-            "4 watch BROKEN",
-            "5 watch FORGE",
-            "6 shell cargo clean",
-            "7 shell uv run --script checks/notes.py sift",
+            "3 now",
+            "4 watch FORGE",
+            "5 now",
+            "6 watch BROKEN",
+            "7 now",
+            "8 watch FORGE",
+            "9 shell cargo clean",
+            "10 shell uv run --script checks/notes.py sift",
+        ]
+    );
+    assert_eq!(end, r#"returns {"pr":"merged"}"#);
+}
+
+/// A hold that breaks on a red CI reads the forge from the top, and the fixer goes to the red PR.
+#[test]
+fn land_repairs_a_pr_whose_hold_broke_on_a_red_ci() {
+    let (calls, end) = land("broken-then-red");
+    assert_eq!(
+        calls,
+        [
+            "1 shell uv run --script checks/team.py close",
+            "2 shell uv run --script checks/send.py",
+            "3 now",
+            "4 watch FORGE",
+            "5 now",
+            "6 watch BROKEN",
+            "7 now",
+            "8 watch FORGE",
+            "9 agent fixer",
+            "10 shell uv run --script checks/send.py resend",
+            "11 now",
+            "12 watch FORGE",
+            "13 shell cargo clean",
+            "14 shell uv run --script checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -116,7 +152,7 @@ fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
 #[test]
 fn land_lands_a_merged_pr() {
     let (calls, end) = walk("land", None, "clean");
-    assert_eq!(calls.len(), 5, "{calls:?}");
+    assert_eq!(calls.len(), 6, "{calls:?}");
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
 }
 
