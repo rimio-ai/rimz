@@ -142,7 +142,7 @@ fn a_dynamic_import_finds_no_module_loader() {
 fn an_import_statement_is_refused_with_its_line() {
     assert_eq!(
         refused(&script("const a = 1\nimport { b } from './b.js'\nreturn b")),
-        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`"
+        "line 3: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`"
     );
 }
 
@@ -249,6 +249,244 @@ fn reads_decides_a_condition_on_the_watchs_three_valued_walk_and_makes_no_call()
                 "`reads`: the readings are not an object of strings and nulls: invalid type: integer `1`, expected a string",
             ]))
         )
+    );
+}
+
+/// A PR's cases as a script hands them to `cases`: a queued PR waits, and a green one counts once
+/// it has stayed green half an hour.
+const PR_CASES: &str = "const PR = [\n\
+  { outcome: 'merged', when: 'pr=merged' },\n\
+  { when: 'pr.queue=queued' },\n\
+  { outcome: 'red', when: 'ci=failed' },\n\
+  { outcome: 'green', when: 'ci=passed', for: '30m' },\n\
+]\n";
+
+/// What `cases` over `PR_CASES` watches: an outcome case while no waiting case before it reads
+/// true.
+const PR_ANY: &str =
+    "(pr=merged) || ((ci=failed) && !(pr.queue=queued)) || ((ci=passed) && !(pr.queue=queued))";
+
+/// What the hold of the green case watches: green no longer the first case that reads true.
+const PR_NOT_GREEN: &str = "!((ci=passed) && !((pr=merged) || (pr.queue=queued) || (ci=failed)))";
+
+fn readings(pr: &str, queue: &str, ci: &str) -> Outcome {
+    result(json!({ "readings": { "ci": ci, "pr": pr, "pr.queue": queue } }))
+}
+
+fn timed_out() -> Outcome {
+    Outcome::Failure(pass_failure(
+        Cause::Timeout,
+        "the watch ran out its timeout".to_owned(),
+        None,
+    ))
+}
+
+/// The objects of the calls a replay made, and how it ended.
+fn objects(replay: Replay) -> (Vec<Value>, End) {
+    let objects = replay.calls.into_iter().map(|call| call.object).collect();
+    (objects, replay.end)
+}
+
+#[test]
+fn cases_watches_each_outcome_case_behind_the_waiting_cases_before_it() {
+    let replay = answered(
+        &format!("{PR_CASES}return await cases(PR, {{ label: 'the PR', cwd: '/work' }})"),
+        vec![result(
+            json!({ "readings": { "ci": "failed", "pr": null, "pr.queue": "none" } }),
+        )],
+    );
+    assert_eq!(
+        objects(replay),
+        (
+            vec![json!({ "when": PR_ANY, "label": "the PR", "cwd": "/work" })],
+            returned(json!({
+                "outcome": "red",
+                "readings": { "ci": "failed", "pr": null, "pr.queue": "none" }
+            }))
+        )
+    );
+    let queued = answered(
+        &format!(
+            "{PR_CASES}try {{ return await cases(PR) }} catch (error) {{ return error.message }}"
+        ),
+        vec![readings("open", "queued", "failed")],
+    );
+    assert_eq!(
+        queued.end,
+        returned(json!(
+            "`cases`: the watch fired on readings no outcome case reads true on"
+        ))
+    );
+}
+
+/// A held case counts only when its hold ran out and the look after it still has it win: a PR
+/// merged mid-hold breaks the hold though it still reads green, and a case that wins the look
+/// after a kept hold counts in its place.
+#[test]
+fn cases_counts_a_held_case_once_it_held_and_still_wins() {
+    let walk = |answers: Vec<Outcome>| {
+        objects(answered(
+            &format!("{PR_CASES}return (await cases(PR)).outcome"),
+            answers,
+        ))
+    };
+    let any = json!({ "when": PR_ANY });
+    let hold = json!({ "when": PR_NOT_GREEN, "timeout": "30m" });
+    let green = || readings("open", "none", "passed");
+    assert_eq!(
+        walk(vec![green(), timed_out(), green()]),
+        (
+            vec![any.clone(), hold.clone(), any.clone()],
+            returned(json!("green"))
+        )
+    );
+    assert_eq!(
+        walk(vec![
+            green(),
+            readings("merged", "none", "passed"),
+            readings("merged", "none", "passed")
+        ]),
+        (
+            vec![any.clone(), hold.clone(), any.clone()],
+            returned(json!("merged"))
+        )
+    );
+    assert_eq!(
+        walk(vec![
+            green(),
+            timed_out(),
+            readings("open", "none", "failed")
+        ]),
+        (
+            vec![any.clone(), hold.clone(), any.clone()],
+            returned(json!("red"))
+        )
+    );
+    assert_eq!(
+        walk(vec![
+            green(),
+            readings("open", "none", "failed"),
+            readings("open", "none", "failed")
+        ]),
+        (vec![any.clone(), hold, any], returned(json!("red")))
+    );
+}
+
+/// `timeout` is one deadline for the whole call: each watch gets the time left, read with a `now`
+/// call before it and rounded up to the second, and a hold longer than the time left watches that
+/// long and fails the call with the watch's timeout. A script that replaces the globals and
+/// methods `cases` uses changes none of this.
+#[test]
+fn cases_gives_each_watch_the_time_left_before_its_deadline() {
+    let body = format!(
+        "{PR_CASES}globalThis.watch = globalThis.now = globalThis.ms = globalThis.reads = () => {{ throw new Error('replaced') }}\n\
+         Math.ceil = () => 0\n\
+         try {{ return (await cases(PR, {{ timeout: '1h' }})).outcome }} catch (failure) {{ return [failure.cause, failure.step] }}"
+    );
+    let at = 1_764_268_800_000_u64;
+    let walk = |answers: Vec<Outcome>| objects(answered(&body, answers));
+    let green = || readings("open", "none", "passed");
+    let any = |timeout: &str| json!({ "when": PR_ANY, "timeout": timeout });
+    let hold = |timeout: &str| json!({ "when": PR_NOT_GREEN, "timeout": timeout });
+    assert_eq!(
+        walk(vec![
+            result(json!(at)),
+            green(),
+            result(json!(at + 1_000_500)),
+            timed_out(),
+            result(json!(at + 2_800_250)),
+            green(),
+        ]),
+        (
+            vec![
+                json!({}),
+                any("3600s"),
+                json!({}),
+                hold("30m"),
+                json!({}),
+                any("800s")
+            ],
+            returned(json!("green"))
+        )
+    );
+    assert_eq!(
+        walk(vec![
+            result(json!(at)),
+            green(),
+            result(json!(at + 3_000_000)),
+            timed_out(),
+        ]),
+        (
+            vec![json!({}), any("3600s"), json!({}), hold("600s")],
+            returned(json!(["timeout", 4]))
+        )
+    );
+}
+
+#[test]
+fn cases_refuses_a_list_it_cannot_decide_before_any_call() {
+    let tries = [
+        ("[]", "`cases`: takes a list of one or more cases"),
+        ("'ci=failed'", "`cases`: takes a list of one or more cases"),
+        (
+            "[{ when: 'ci=pending' }]",
+            "`cases`: no case has an `outcome`, so none can win",
+        ),
+        (
+            "[{ when: 'ci=pending', for: '5m' }, { outcome: 'red', when: 'ci=failed' }]",
+            "`cases`: case 1 has `for` but no `outcome`: a waiting case has nothing to hold",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed', fro: '5m' }]",
+            "`cases`: case 1 takes `when`, `outcome`, and `for`, not `fro`",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed' }, { outcome: 'green' }]",
+            "`cases`: case 2 has no `when` condition",
+        ),
+        ("[null]", "`cases`: case 1 has no `when` condition"),
+        (
+            "[{ outcome: 'red', when: 'ci=' }]",
+            "`cases`: case 1 `when`: clause 1, position 4: empty term; use key=value",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed', for: '366d' }]",
+            "`cases`: case 1 `for`: duration `366d` is longer than the 365d maximum",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed', for: 5 }]",
+            "`cases`: case 1 `for`: a duration is text, such as `30m`",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed' }], { timout: '3d' }",
+            "`cases`: the options take `label`, `cwd`, and `timeout`, not `timout`",
+        ),
+        (
+            "[{ outcome: 'red', when: 'ci=failed' }], { timeout: '' }",
+            "`cases`: `timeout`: duration is empty",
+        ),
+    ];
+    let body = tries
+        .iter()
+        .map(|(arguments, _)| {
+            format!("async () => {{ try {{ await cases({arguments}) }} catch (error) {{ return error.message }} }}")
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let replay = answered(
+        &format!(
+            "Array.isArray = () => true; String.prototype.slice = () => ''\n\
+             const tries = [{body}]\n\
+             const messages = []\n\
+             for (const one of tries) messages.push(await one())\n\
+             return messages"
+        ),
+        Vec::new(),
+    );
+    let messages: Vec<&str> = tries.iter().map(|(_, message)| *message).collect();
+    assert_eq!(
+        (replay.calls, replay.end),
+        (Vec::new(), returned(json!(messages)))
     );
 }
 

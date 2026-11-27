@@ -1,9 +1,9 @@
-// Runs once in each fresh context, before the script. It takes away what would let a replay take
-// another path than the pass it replays (the clock, the time zone, randomness, the weak
-// collections), and adds `pipeline` and `parallel`. It gives the engine the function that makes
-// a call's failure the `Error` the script catches. Everything it calls once the script has run is
-// taken here first, so a script that replaces `Reflect`, `Error`, `Object`, or a prototype's
-// method changes nothing it does.
+// Runs once in each fresh context, after the engine's globals and before the script. It takes
+// away what would let a replay take another path than the pass it replays (the clock, the time
+// zone, randomness, the weak collections), and adds `pipeline`, `parallel`, and `cases`. It gives
+// the engine the function that makes a call's failure the `Error` the script catches. Everything
+// it calls once the script has run is taken here first, so a script that replaces `Reflect`,
+// `Error`, `Object`, a block, or a prototype's method changes nothing it does.
 (() => {
   const { apply, construct } = Reflect
   const NativeError = Error
@@ -163,6 +163,126 @@
       return value
     })))
   globalThis.parallel = tasks => Promise.all(Array.from(tasks, settle))
+
+  // `cases` decides on `watch` and `reads` alone, so a case reads true just when a watch would
+  // fire on it. Its own checks throw before any call, worded as `ms` and `reads` word theirs.
+  const { watch, now, ms, reads } = globalThis
+  const { isArray } = Array
+  const { slice } = String.prototype
+  const { ceil } = Math
+  const failCases = sentence => fail('`cases`: ' + sentence)
+  const only = (object, names, sentence) => {
+    for (const key in object) {
+      if (key !== names[0] && key !== names[1] && key !== names[2]) {
+        failCases(sentence + ', not `' + key + '`')
+      }
+    }
+  }
+  // What `ms` or `reads` gives for `text`, or its reason without the name the engine puts first.
+  const parsed = (name, read, text, at) => {
+    try {
+      return read(text)
+    } catch (error) {
+      failCases(at + ': ' + apply(slice, error.message, [name.length + 4]))
+    }
+  }
+  const duration = (text, at) => typeof text === 'string'
+    ? parsed('ms', ms, text, at)
+    : failCases(at + ': a duration is text, such as `30m`')
+  // A watch counts its `timeout` in whole seconds: rounded up, so it never stops early.
+  const seconds = left => (left > 0 ? ceil(left / 1000) : 0) + 's'
+  globalThis.cases = async (list, options = {}) => {
+    if (!isArray(list) || list.length === 0) failCases('takes a list of one or more cases')
+    only(options, ['label', 'cwd', 'timeout'], 'the options take `label`, `cwd`, and `timeout`')
+    const { label, cwd, timeout } = options
+    const total = timeout === undefined ? undefined : duration(timeout, '`timeout`')
+    // Taken whole here, so a script that edits its list mid-call changes nothing.
+    const own = []
+    let outcomes = 0
+    for (let index = 0; index < list.length; index++) {
+      const one = list[index]
+      const at = 'case ' + (index + 1)
+      if (typeof one !== 'object' || one === null || typeof one.when !== 'string') {
+        failCases(at + ' has no `when` condition')
+      }
+      only(one, ['when', 'outcome', 'for'], at + ' takes `when`, `outcome`, and `for`')
+      parsed('reads', when => reads(when, {}), one.when, at + ' `when`')
+      if (one.outcome !== undefined) outcomes++
+      else if (one.for !== undefined) {
+        failCases(at + ' has `for` but no `outcome`: a waiting case has nothing to hold')
+      }
+      own[index] = {
+        when: one.when,
+        outcome: one.outcome,
+        hold: one.for,
+        lasts: one.for === undefined ? undefined : duration(one.for, at + ' `for`'),
+      }
+    }
+    if (outcomes === 0) failCases('no case has an `outcome`, so none can win')
+
+    // Fires on an outcome case while no waiting case before it reads true.
+    let any = ''
+    for (let index = 0; index < own.length; index++) {
+      if (own[index].outcome === undefined) continue
+      let waits = ''
+      for (let before = 0; before < index; before++) {
+        if (own[before].outcome === undefined) waits += ' && !(' + own[before].when + ')'
+      }
+      any += (any ? ' || ' : '') +
+        (waits ? '((' + own[index].when + ')' + waits + ')' : '(' + own[index].when + ')')
+    }
+    // Fires once case `index` is no longer the first case that reads true.
+    const broken = index => {
+      let before = ''
+      for (let earlier = 0; earlier < index; earlier++) {
+        before += (before ? ' || ' : '') + '(' + own[earlier].when + ')'
+      }
+      const when = own[index].when
+      return before ? '!((' + when + ') && !(' + before + '))' : '!(' + when + ')'
+    }
+    // The first case that reads true, which on readings the watch of `any` fired on is an
+    // outcome case.
+    const winner = readings => {
+      for (let index = 0; index < own.length; index++) {
+        if (reads(own[index].when, readings) !== true) continue
+        if (own[index].outcome !== undefined) return index
+        break
+      }
+      failCases('the watch fired on readings no outcome case reads true on')
+    }
+    // The milliseconds left before the deadline, which the first look sets; `Infinity` without one.
+    let deadline
+    const left = async () => {
+      if (total === undefined) return Infinity
+      const at = await now()
+      if (deadline === undefined) deadline = at + total
+      return deadline - at
+    }
+    const look = async () => {
+      const time = await left()
+      const limit = time === Infinity ? undefined : seconds(time)
+      return watch({ when: any, label, cwd, timeout: limit })
+    }
+
+    // A held case counts once its hold ran out and the look after it still has it win.
+    let read = await look()
+    for (;;) {
+      const index = winner(read.readings)
+      const { outcome, hold, lasts } = own[index]
+      if (hold === undefined) return { outcome, readings: read.readings }
+      const time = await left()
+      const fits = lasts <= time
+      let kept = false
+      try {
+        await watch({ when: broken(index), label, cwd, timeout: fits ? hold : seconds(time) })
+      } catch (failure) {
+        if (failure.cause !== 'timeout' || !fits) throw failure
+        kept = true
+      }
+      read = await look()
+      if (kept && winner(read.readings) === index) return { outcome, readings: read.readings }
+    }
+  }
 
   const { assign } = Object
   return fields => assign(new NativeError(fields.reason), fields)

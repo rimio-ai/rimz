@@ -6,7 +6,8 @@
 //! from those answers, so a second replay of the same inputs makes the same calls with the same
 //! numbers: the context has no clock but the `now` block, no time zone, no randomness, no timers,
 //! no weak references, no module loader, and no host access but the blocks, `file`, and `args`.
-//! Its `ms` and `reads` are pure, so they make no call.
+//! Its `ms` and `reads` are pure, so they make no call, and its `cases` calls only `watch` and
+//! `now`.
 
 use std::path::Path;
 use std::time::Duration;

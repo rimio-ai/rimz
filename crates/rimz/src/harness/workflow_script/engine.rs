@@ -456,7 +456,7 @@ impl Engine<'_> {
         };
         if statement("import") {
             format!(
-                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`"
+                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`"
             )
         } else if statement("export") {
             format!("line {line}: a workflow script exports only `meta`, in its first statement")
@@ -474,14 +474,13 @@ fn options(name: &str) -> EvalOptions {
     options
 }
 
-/// The script's globals: the prelude's, the seven blocks, `file`, `ms`, `reads`, and `args`.
+/// The script's globals: the seven blocks, `file`, `ms`, `reads`, the prelude's, which it builds
+/// on those, and `args`.
 fn install<'js>(
     ctx: &Ctx<'js>,
     state: &Rc<RefCell<State>>,
     pass: &Pass<'_>,
 ) -> rquickjs::Result<()> {
-    let fail = ctx.eval_with_options::<Function, _>(PRELUDE, options(PRELUDE_NAME))?;
-    state.borrow_mut().fail = Some(Persistent::save(ctx, fail));
     block::<Agent>(ctx, state)?;
     block::<Team>(ctx, state)?;
     block::<Shell>(ctx, state)?;
@@ -515,6 +514,8 @@ fn install<'js>(
             |ctx: Ctx<'js>, when: String, readings: JsValue<'js>| truth(&ctx, &when, readings),
         )?,
     )?;
+    let fail = ctx.eval_with_options::<Function, _>(PRELUDE, options(PRELUDE_NAME))?;
+    state.borrow_mut().fail = Some(Persistent::save(ctx, fail));
     let args = match pass.args {
         Some(args) => ctx.json_parse(args.to_string())?,
         None => JsValue::new_undefined(ctx.clone()),
