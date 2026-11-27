@@ -867,7 +867,7 @@ The workspace inventory has limits. A workspace whose `workspace.json` does not 
 
 #### Resource readings
 
-A configured pressure limit or memory floor whose source cannot be read is an error. Room judgment records a warning from `throttle::preflight`, and a machine-gated admission returns `ThrottleError::Unreadable`. The key and fix name `throttle.<key>` in config.toml, and pressure also names enabling PSI with `psi=1`. A project `[throttle]` is ignored, and room judgment records it as the skipped setting `throttle`.
+A configured pressure limit or memory floor whose source cannot be read is an error. Room judgment records a warning from `throttle::preflight`, and a machine-gated admission returns `ThrottleError::Unreadable`. The key and fix name `throttle.<key>` in config.toml, and pressure also names enabling PSI with `psi=1`. A project `[throttle]` is ignored, and room judgment records it under the project config path as a key only the per-machine config reads.
 
 Pressure is the `some` line of `/sys/fs/cgroup/<resource>.pressure` at the cgroup namespace root, falling back per resource to `/proc/pressure/<resource>` when the cgroup file cannot be read or parsed, and holds on the larger of `avg10` and `avg60`. Memory is `proc::memory`. Disk is `statvfs` at the launch checkout. `rimz loop show` reads the same path. The ticket keeps the launch checkout as its place. Nothing samples in the background.
 

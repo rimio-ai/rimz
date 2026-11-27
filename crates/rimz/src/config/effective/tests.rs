@@ -1899,6 +1899,32 @@ fn trusted_repo_profile_overlays_machine_profile() {
 }
 
 #[test]
+fn trusted_load_reads_a_non_table_packs_subagents_or_lsp_as_absent() {
+    let config = tempdir().expect("config");
+    let cfg_path = config.path().join("config.toml");
+    std::fs::write(&cfg_path, "").unwrap();
+    let machine = MachineConfig::parse_text(&cfg_path, "", config.path()).unwrap();
+    // `packs::expectation_warnings` warns on a `packs` that is not a table itself, and a launch
+    // reads any non-table `subagents` or `lsp` as absent.
+    let failures: Vec<_> = [
+        "packs = \"crew/core\"\n",
+        "subagents = [{ helper = {} }]\n",
+        "lsp = [{ servers = {} }]\n",
+    ]
+    .into_iter()
+    .filter_map(|text| {
+        let project = tempdir().expect("project");
+        write_project_config(&project, text);
+        crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+        let effective = load_with_roots(&machine, project.path(), config.path());
+        effective.err().map(|error| (text, error.to_string()))
+    })
+    .collect();
+
+    assert_eq!(failures, Vec::<(&str, String)>::new());
+}
+
+#[test]
 fn trusted_project_tasks_load_with_project_root() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

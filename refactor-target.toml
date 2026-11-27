@@ -1343,7 +1343,9 @@ upward-dependencies = [
 # module for unrunnable tier entries (+1 net).
 # server_mark is the one lookup of the `rimz` entry's mark, which Pi's launch env and `--tools`
 # list read for the server-level exposure, beside served_marks (+1).
-surface-budget = 356
+# ProjectKeyNotice and project_key_notices carry the project config's unread keys to room entry
+# and doctor (+2).
+surface-budget = 358
 
 [[verdict]]
 kind = "item"
@@ -1865,7 +1867,9 @@ allowed-dependencies = ["disk", "proc", "utils"]
 # expectation_warnings checks non-executing project metadata at room entry (+1).
 # one_line renders pack-supplied text on one terminal line for the CLI, definition errors, and room
 # warnings; exclude_command is the one quoted exclude command the three item producers advertise (+2).
-surface-budget = 54
+# breaks_line shares one_line's character set with the project unread-key check, which writes
+# those characters as TOML escapes in a rendered key (+1).
+surface-budget = 55
 
 [[verdict]]
 kind = "item"
@@ -2076,6 +2080,11 @@ reason = "One pure resolver owns the precedence rule and actionable conflict wor
 kind = "item"
 key = "packs::one_line"
 reason = "Every human surface that prints a pack item name, path, or message escapes it by one rule while the domain and JSON keep it raw."
+
+[[verdict]]
+kind = "item"
+key = "packs::breaks_line"
+reason = "The project unread-key check escapes the characters one_line escapes, in TOML's own escape form, so repository key text cannot write to the terminal."
 
 [[verdict]]
 kind = "item"
@@ -5306,19 +5315,23 @@ path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
 # The live resolver shares the project-account refusal with birth and display readers (+1).
 # project_packs reads non-executing pack metadata before the trust gate (+1).
-# project_throttle lets room judgment warn about ignored machine-only project settings (+1).
-# project_keys detects ignored machine-only key tables for room-entry notices (+1).
+# project_config_text hands the unread-key check the text the trust read parsed and accepted.
 surface-budget = 39
 
 [[verdict]]
 kind = "item"
-key = "trust::project_keys"
-reason = "Room entry detects ignored project key bindings through the trust-owned reader without making them executable."
+key = "trust::project_config_text"
+reason = "The project unread-key check reads only a file the trust read accepts, so a refused file keeps its one report."
 
 [[verdict]]
 kind = "item"
-key = "trust::project_throttle"
-reason = "Room entry detects an ignored project throttle table through the trust-owned project reader."
+key = "config::project_file::ProjectKeyNotice"
+reason = "Room entry and doctor's TRUST section render each unread project config key with its own fix."
+
+[[verdict]]
+kind = "item"
+key = "config::project_file::project_key_notices"
+reason = "Room judgment and doctor (binary crate) read the project config's unread keys in every trust state."
 
 [[verdict]]
 kind = "item"

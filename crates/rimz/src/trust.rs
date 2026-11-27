@@ -621,27 +621,36 @@ fn read_project_config_at(
     project_root: &Path,
     config_root: &Path,
 ) -> Result<Option<ProjectConfig>> {
+    Ok(read_project_file_at(project_root, config_root)?.map(|(_, config)| config))
+}
+
+/// [`read_project_config_at`] with the text the config was parsed from.
+fn read_project_file_at(
+    project_root: &Path,
+    config_root: &Path,
+) -> Result<Option<(String, ProjectConfig)>> {
     if crate::disk::paths::holds_rimz_home(project_root, config_root) {
         return Ok(None);
     }
-    read_project_config(&project_root.join(CONFIG_REL))
+    read_project_file(&project_root.join(CONFIG_REL))
 }
 
 pub(crate) fn project_packs(project_root: &Path) -> Result<Option<toml::Value>> {
     Ok(read_project_config_at(project_root, &rimz_home())?.and_then(|config| config.packs))
 }
 
-pub(crate) fn project_throttle(project_root: &Path) -> Result<bool> {
-    Ok(read_project_config_at(project_root, &rimz_home())?
-        .is_some_and(|config| config.throttle.is_some()))
+/// The project config text at `project_root`, as the trust read accepted it, for the unread-key
+/// check in `crate::config::project_key_notices`.
+pub(crate) fn project_config_text(project_root: &Path) -> Result<Option<String>> {
+    Ok(read_project_file_at(project_root, &rimz_home())?.map(|(text, _)| text))
 }
 
-pub(crate) fn project_keys(project_root: &Path) -> Result<bool> {
-    Ok(read_project_config_at(project_root, &rimz_home())?
-        .is_some_and(|config| config.keys.is_some()))
-}
-
+#[cfg(test)]
 fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
+    Ok(read_project_file(path)?.map(|(_, config)| config))
+}
+
+fn read_project_file(path: &Path) -> Result<Option<(String, ProjectConfig)>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
             check_project_config_removed_tables(path, &text)?;
@@ -650,7 +659,7 @@ fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
                     path: path.to_path_buf(),
                     diagnosis: Box::new(ConfigFileDiagnosis::from_toml_de(path, &text, &source)),
                 })?;
-            Ok(Some(config))
+            Ok(Some((text, config)))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(TrustErr::Io {
@@ -667,7 +676,7 @@ fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
     if doc.contains_key("layout") {
         return Err(TrustErr::RemovedProjectTable {
             path: path.to_path_buf(),
-            detail: "`[layout]` (with `[[layout.initial_panes]]`) was removed — set `placement` under `[agents]` and declare teams in <agents_home>/teams/<name>.md"
+            detail: "`[layout]` (with `[[layout.initial_panes]]`) was removed — set `placement` under `[agents]` in ~/.rimz/config.toml and declare teams in <agents_home>/teams/<name>.md"
                 .to_owned(),
         });
     }
@@ -776,15 +785,13 @@ struct BirthPromptDismissal {
     dismissed_at: Timestamp,
 }
 
-/// Project config schema for the trust subsystem. Lenient on unknown keys
-/// (non-command fields like `display_name` or `sidebar_width` deserialize
-/// without affecting the hash) but exact on the command-running fields
-/// documented in `docs/guide/security.md`.
+/// Project config schema for the trust subsystem. Lenient on unknown keys, which deserialize
+/// without affecting the hash, but exact on the command-running fields documented in
+/// `docs/guide/security.md`. The project file's full shape, which decides the keys that warn as
+/// unread, is `crate::config::project_file::ProjectFile`.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
-    throttle: Option<toml::Value>,
-    keys: Option<toml::Value>,
     lsp: ProjectLsp,
     packs: Option<toml::Value>,
     pub agents: ProjectAgents,

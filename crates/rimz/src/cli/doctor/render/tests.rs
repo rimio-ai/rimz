@@ -4055,10 +4055,71 @@ fn trust_section_renders_failed_project_definition_rows_as_warnings() {
         definition_errors: vec![
             "/repo/.rimz/config.toml: [profiles.broken]: missing `description`".to_owned(),
         ],
+        unread_keys: Vec::new(),
     });
     let mut tally = Tally::default();
     let text = strip(|w| render_trust(w, &trust, &mut tally));
     assert!(text.contains("[profiles.broken]"), "{text}");
     assert_eq!(tally.warns.len(), 1, "{text}");
     assert_eq!(tally.warns[0].subject, ".rimz/config.toml");
+}
+
+#[test]
+fn trust_section_renders_each_unread_project_key_with_its_own_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".rimz")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/config.toml"),
+        "nonsense = 1\n\n[throttle]\nmax-parallel-agents = 1\n\n[profilez.typo]\nagent = \"claude\"\n",
+    )
+    .unwrap();
+    let trust = Probe::Ready(Trust {
+        state: TrustState::Untrusted,
+        granted_at: None,
+        definition_errors: Vec::new(),
+        unread_keys: rimz::config::project_key_notices(dir.path()),
+    });
+    let mut tally = Tally::default();
+    let text = strip(|w| render_trust(w, &trust, &mut tally));
+    let findings = tally
+        .warns
+        .iter()
+        .map(|finding| {
+            (
+                finding.text.as_str(),
+                finding.fix.as_str(),
+                finding.subject.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        findings[1..],
+        [
+            (
+                "project config ignores unknown key `nonsense`",
+                "remove or rename it",
+                "nonsense",
+            ),
+            (
+                "project config ignores unknown key `profilez`",
+                "remove or rename it",
+                "profilez",
+            ),
+            (
+                "project config ignores machine-only key `throttle`",
+                "set it in ~/.rimz/config.toml",
+                "throttle",
+            ),
+        ],
+        "{text}"
+    );
+    for (message, _, _) in &findings[1..] {
+        assert!(text.contains(&format!("! {message}\n")), "{text}");
+    }
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing
+            .contains("! TRUST: 2 findings: nonsense, profilez\n      fix: remove or rename it\n"),
+        "{closing}"
+    );
 }

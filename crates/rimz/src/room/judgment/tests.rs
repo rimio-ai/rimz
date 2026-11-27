@@ -13,19 +13,48 @@ fn judgment_warns_and_ignores_project_machine_only_tables() {
     let machine = MachineConfig::default();
     let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
     let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
-    let warning = judgment
-        .skipped
-        .iter()
-        .find(|entry| entry.setting == "throttle");
-    assert!(warning.is_some(), "{:?}", judgment.skipped);
-    assert!(warning.unwrap().message.contains("machine-only"));
-    assert!(
-        judgment.skipped.iter().any(
-            |entry| entry.setting == "keys" && entry.message.contains("[keys] is machine-only")
-        ),
-        "{:?}",
-        judgment.skipped
-    );
+    let setting = root.path().join(".rimz/config.toml").display().to_string();
+    for key in ["keys", "throttle"] {
+        let message = format!(
+            "project config ignores machine-only key `{key}`; set it in ~/.rimz/config.toml"
+        );
+        assert!(
+            judgment.skipped.contains(&SkippedSetting {
+                setting: setting.clone(),
+                message
+            }),
+            "{:?}",
+            judgment.skipped
+        );
+    }
+}
+
+#[test]
+fn judgment_warns_about_an_unread_project_key_whatever_the_trust_state() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[profilez.typo]\nagent = \"claude\"\n",
+    )
+    .unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let machine = MachineConfig::default();
+    let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+    let expected = SkippedSetting {
+        setting: root.path().join(".rimz/config.toml").display().to_string(),
+        message: "project config ignores unknown key `profilez`; remove or rename it".to_owned(),
+    };
+    let untrusted = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+    crate::trust::grant(root.path()).unwrap();
+    let trusted = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+    for judgment in [untrusted, trusted] {
+        assert!(
+            judgment.skipped.contains(&expected),
+            "{:?}",
+            judgment.skipped
+        );
+    }
 }
 
 #[test]

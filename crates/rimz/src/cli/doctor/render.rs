@@ -3043,9 +3043,12 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
     kv.push("trust", value);
     kv.render(w)?;
     if let Probe::Ready(Trust {
-        definition_errors, ..
+        definition_errors,
+        unread_keys,
+        ..
     }) = trust
     {
+        let (glyph, style) = Severity::Warning.parts();
         for detail in definition_errors {
             let fix = "repair the reported row in .rimz/config.toml; launches selecting these definitions are refused until they pass";
             tally.record_subject(
@@ -3054,8 +3057,17 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
                 fix,
                 ".rimz/config.toml".to_owned(),
             );
-            let (glyph, style) = Severity::Warning.parts();
             writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
+        }
+        for notice in unread_keys {
+            tally.record_subject(
+                Severity::Warning,
+                notice.message().to_owned(),
+                notice.fix(),
+                notice.key().to_owned(),
+            );
+            let message = notice.message();
+            writeln!(w, "    {}", paint(style, &format!("{glyph} {message}")))?;
         }
     }
     Ok(())

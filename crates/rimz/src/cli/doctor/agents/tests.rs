@@ -763,3 +763,45 @@ fn collect_trust_surfaces_project_effective_load_error() {
         trust.definition_errors
     );
 }
+
+#[test]
+fn collect_trust_carries_unread_project_keys_whatever_the_trust_state() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".rimz")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/config.toml"),
+        "\"a.b\" = 1\n\n[profilez.typo]\nagent = \"claude\"\n",
+    )
+    .unwrap();
+    let ws = rimz::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    // The JSON `key` is the rendered dotted key, quoting a segment that is not a bare key.
+    let keys = |ws: &rimz::ResolvedWorkspace| {
+        let Probe::Ready(trust) = collect_trust(ws) else {
+            panic!("expected Ready trust probe");
+        };
+        let json = serde_json::to_value(&trust).unwrap();
+        let keys = json["unread_keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|notice| notice["key"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>();
+        (trust.state, keys)
+    };
+    let untrusted = keys(&ws);
+    rimz::trust::grant(dir.path()).unwrap();
+    let trusted = keys(&ws);
+    assert_eq!(
+        [untrusted, trusted],
+        [
+            (
+                trust::TrustState::Untrusted,
+                vec![r#""a.b""#.to_owned(), "profilez".to_owned()]
+            ),
+            (
+                trust::TrustState::Trusted,
+                vec![r#""a.b""#.to_owned(), "profilez".to_owned()]
+            ),
+        ]
+    );
+}

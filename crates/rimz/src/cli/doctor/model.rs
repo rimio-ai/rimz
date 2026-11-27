@@ -936,6 +936,8 @@ pub(super) struct Trust {
     pub(super) granted_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) definition_errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) unread_keys: Vec<rimz::config::ProjectKeyNotice>,
 }
 
 #[derive(Debug, Serialize)]

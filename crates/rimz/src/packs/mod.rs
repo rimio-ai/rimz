@@ -68,24 +68,29 @@ impl<'de> Deserialize<'de> for PackName {
 pub fn one_line(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
     for character in text.chars() {
-        if character.is_control()
-            || matches!(
-                character,
-                '\u{2028}'
-                    | '\u{2029}'
-                    | '\u{061c}'
-                    | '\u{200e}'
-                    | '\u{200f}'
-                    | '\u{202a}'..='\u{202e}'
-                    | '\u{2066}'..='\u{2069}'
-            )
-        {
+        if breaks_line(character) {
             shown.extend(character.escape_default());
         } else {
             shown.push(character);
         }
     }
     shown
+}
+
+/// The characters [`one_line`] escapes: controls, the line and paragraph separators, and the
+/// bidirectional controls.
+pub(crate) fn breaks_line(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// The `rimz packs exclude` command that sets one pack item aside, its `pack:name` argument
