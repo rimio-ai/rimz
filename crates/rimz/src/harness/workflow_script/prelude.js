@@ -231,7 +231,8 @@
       any += (any ? ' || ' : '') +
         (waits ? '((' + own[index].when + ')' + waits + ')' : '(' + own[index].when + ')')
     }
-    // Fires once case `index` is no longer the first case that reads true.
+    // Fires once case `index` reads false or a case before it reads true: an unread key fires
+    // nothing, so a hold runs on through it.
     const broken = index => {
       let before = ''
       for (let earlier = 0; earlier < index; earlier++) {

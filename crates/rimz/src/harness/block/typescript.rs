@@ -51,10 +51,11 @@ declare function reads(when: string, readings: Record<string, string | null>): b
 /**
  * Watches until a case of `list` wins, and gives its `outcome` with the readings of the look it
  * won on. The first case in order whose `when` reads true wins. A case with no `outcome` waits:
- * while it reads true, no case after it wins. A case with `for` wins once it has stayed the first
- * that reads true that long and a look after the hold still has it win. `label` and `cwd` go to
- * each watch; `timeout` is one deadline for the whole call, read with a `now` call before each
- * watch. A list it cannot decide throws before any call.
+ * while it reads true, no case after it wins. A case with `for` wins once that long passes
+ * without it reading false or a case before it reading true, so an unread stretch counts, and a
+ * look after the hold still has it win. `label` and `cwd` go to each watch; `timeout` is one
+ * deadline for the whole call, read with a `now` call before each watch. A list it cannot decide
+ * throws before any call.
  */
 declare function cases(
   list: Case[],
@@ -67,7 +68,7 @@ interface Case {
   when: string;
   /** What `cases` gives when this case wins; a case without one waits. */
   outcome?: string;
-  /** How long the case must stay the first that reads true before it wins (`30m`). */
+  /** How long the case must go without reading false, or a case before it true, to win (`30m`). */
   for?: string;
 }
 
