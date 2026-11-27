@@ -6647,11 +6647,10 @@ fn explain_kind_override_uses_only_the_final_kinds_defaults() {
     }
 }
 
-/// Claude's `default` preset keeps every built-in tool on the built-in kind base, whose code
-/// mode is on: alone it renders as written, beside other names as `preset:default`, and in
-/// both it carries the Skill tool.
+/// Claude's `default` tool preset refuses the definition, alone or beside other names, in
+/// `rimz agents validate` and at launch, with the fix.
 #[test]
-fn explain_claude_default_tools_keep_the_preset() {
+fn validate_and_explain_refuse_claude_default_tools() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
     std::fs::create_dir_all(env.rimz_home()).unwrap();
@@ -6661,57 +6660,46 @@ fn explain_claude_default_tools_keep_the_preset() {
     )
     .unwrap();
     std::fs::create_dir_all(env.agents_home().join("agents")).unwrap();
-    let mut actual = Vec::new();
-    for (name, tools) in [("alone", "[default]"), ("mixed", "[Default, Agent]")] {
+    let reason = |entry: &str| {
+        format!(
+            "`{entry}` in `tools:` is Claude's tool preset, which RimZ does not read; list the \
+             tools by name, or write `capabilities:`"
+        )
+    };
+    let cases = [
+        ("alone", "[default]", "default"),
+        ("mixed", "[Default, Agent]", "Default"),
+    ];
+    for (name, tools, _) in cases {
         // Written by hand: `write_definition` would add a home kind base over the built-in one.
         std::fs::write(
             env.agents_home().join(format!("agents/{name}.md")),
             format!("---\ndescription: probe\nagent: claude\ntools: {tools}\n---\n"),
         )
         .unwrap();
-        let output = env
-            .rimz()
-            .args(["agents", "explain", name, "--json"])
-            .assert()
-            .success()
-            .get_output()
-            .clone();
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let argv: Vec<&str> = report["provider_argv"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|arg| arg.as_str().unwrap())
-            .collect();
-        let tools: Vec<&str> = argv
-            .windows(2)
-            .filter(|pair| pair[0] == "--tools")
-            .map(|pair| pair[1])
-            .collect();
-        actual.push((
-            name,
-            report["code_mode"].clone(),
-            tools.join(" "),
-            report["skills"]["callable"].clone(),
-        ));
     }
-    assert_eq!(
-        actual,
-        [
-            (
-                "alone",
-                serde_json::json!(true),
-                "default".to_owned(),
-                serde_json::Value::Null
-            ),
-            (
-                "mixed",
-                serde_json::json!(true),
-                "preset:default,Agent".to_owned(),
-                serde_json::Value::Null
-            ),
-        ]
-    );
+    let validate = env
+        .rimz()
+        .args(["agents", "validate"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(validate.stdout).unwrap();
+    for (name, _, entry) in cases {
+        let file = format!("agents/{name}.md");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.contains(&file) && line.contains(&reason(entry))),
+            "{stdout}"
+        );
+        env.rimz()
+            .args(["agents", "explain", name])
+            .assert()
+            .code(1)
+            .stderr(contains(reason(entry)));
+    }
 }
 
 #[test]

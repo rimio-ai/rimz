@@ -465,7 +465,6 @@ fn unchanged_profile_reads_subagents_directly_without_parent_or_kind_base_walk()
     def("subagents/other.md", "agent: claude");
     def("agents/parent.md", "agent: claude\nsubagents: [advisor]");
     def("agents/child.md", "agent: parent");
-    def("agents/preset.md", "agent: claude\ntools: [default]");
     let loaded = crate::config::definitions::load(
         home.path(),
         crate::config::definitions::SkillCheck::Skip,
@@ -495,19 +494,4 @@ fn unchanged_profile_reads_subagents_directly_without_parent_or_kind_base_walk()
     };
     assert_eq!(check("child"), None);
     assert_eq!(check("parent"), Some(vec!["advisor".to_owned()]));
-    // Claude's preset holds the native Agent tool, so no lower list reaches it.
-    for agent in [None, Some("claude")] {
-        assert_eq!(
-            allowed_specs(
-                Some("preset"),
-                agent,
-                Some("claude"),
-                ProfileScope::Agents,
-                &profiles,
-                &empty,
-            ),
-            None,
-            "{agent:?}"
-        );
-    }
 }
