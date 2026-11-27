@@ -654,3 +654,7 @@ Interactive first run opens a browser sign-in. Automation sets `FACTORY_API_KEY`
 `droid doctor --auth` checks credentials, and `--json` prints `{ "ok": <bool>, "results": [{ "id", "category", "status", "detail" }] }` with `status` `pass`, `warn`, or `fail`. `auth.verify` reports whether usable credentials exist. The shape was observed from 0.218.2. Factory documents no `doctor` page.
 
 `/cost` shows session token usage and cost, `/stats [period]` shows usage statistics, and `/account` and `/billing` open the web settings. These are interactive views, not machine-readable surfaces. Factory publishes no local quota, balance, or rate-limit API for the CLI.
+
+## Project skills
+
+Droid 1.21 reads `.agents/skills` (and `.agent`, `.factory`) per its [skills docs](https://docs.factory.com/harness/skills.md). A project skill wins, and a same-source duplicate is ignored; root extent and gating are not documented.

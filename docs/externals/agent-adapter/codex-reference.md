@@ -783,3 +783,7 @@ Account analytics use the same authentication and path prefix, `/wham` or `/api/
 Responses use [report-specific types](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-backend-openapi-models/src/models/analytics.rs). Missing amounts remain unavailable.
 
 Thread costs use `POST /wham/usage/thread_usage/query`, or `/api/codex/usage/thread_usage/query`, with `{ "thread_ids": ["<id>"] }`. The [client](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/backend-client/src/client/thread_usage.rs) accepts 1 through 100 distinct ids. The response contains `threads[]` with `thread_id`, `estimated_usage_credits_micros`, optional estimated and native USD amounts, and optional model/effort/speed groups. Amounts are integer millionths of credits or USD. Omitted rows and missing credit estimates mean unavailable usage, not zero.
+
+## Project skills
+
+Codex rust-v0.172.0 reads `.agents/skills` (and `.codex/skills`) in the launch directory and each ancestor up to the nearest project marker (`.git` by default), with no trust gate (`openai/codex@rust-v0.172.0:codex-rs/ext/skills/src/host_roots.rs::repo_agents_skill_roots`). Project and user copies of one name are both listed, deduplicated only by canonical `SKILL.md` path, so a bare `$name` is ambiguous between them (`openai/codex@rust-v0.172.0:codex-rs/ext/skills/src/loader/host_merge.rs::merge_host_skill_root_snapshots`). A `skills.config` name selector disables every loaded skill of that name, project copies included.

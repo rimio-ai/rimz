@@ -871,6 +871,10 @@ These surfaces change tool vocabulary, prompts, runtime transport, or executable
 
 Customization manifests (`skills.json`, `rules.json`, `agents.json`, `plugins.json`) load direct directory children, and nested items require `include_only` ([customization discovery](https://antigravity.google/docs/customization-discovery/)). Discovery reads each `.agents/` directory, `AGENTS.md`, and `GEMINI.md` between cwd (plus `--add-dir` roots) and the repository root, and supports `.gemini/config.json` `personal_customization_dir` (`people/{user}`). Paths in Markdown agent customizations resolve relative to the agent file (1.3.1). Since 1.5.2, workspace `.agents/plugins.json` and `.agents/skills.json` only load entries inside the workspace or repository root, skipping absolute paths, `../`, or symlinks pointing outside.
 
+## Project skills
+
+Antigravity reads the workspace `.agents/skills` (and `.agent`, `_agents`, `_agent`): 1.5.14 docs and a 1.5.18 binary string ([skills discovery](#remote-control-mcp-plugins-and-custom-agents)). Its root extent, gating, and same-name precedence against the user roots were not checked.
+
 ## Documentation drift
 
 These disagreements compare the living `antigravity.google/docs` pages (read 2026-11-22) against release notes, the 1.5.14 binary, and dated live captures.

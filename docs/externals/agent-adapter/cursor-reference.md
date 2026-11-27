@@ -777,6 +777,10 @@ The [September 22 changelog](https://cursor.com/docs/cli/changelog.md) documents
 
 Plugins, worktree setup commands, MCP server commands, hooks, and the status line command execute configured commands.
 
+## Project skills
+
+Cursor Agent reads `.agents/skills` (and `.cursor`, `.claude`, `.codex`) according to the rolling [skills docs](https://cursor.com/docs/skills.md); its root extent, gating, and precedence are not documented.
+
 ## Upstream scope
 
 Cursor positions the CLI as the terminal form of its agent, with ACP for custom clients ([overview.md](https://cursor.com/docs/cli/overview.md), [acp.md](https://cursor.com/docs/cli/acp.md)). Its docs are rolling and describe the IDE and CLI together, so a documented hook or field can be IDE-only; the tables above mark where the CLI's wire differs. The gaps RimZ records against this surface are in the internals page's [Known gaps](../../internals/agents/adapter_cursor.md#known-gaps).

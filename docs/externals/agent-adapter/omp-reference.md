@@ -283,6 +283,10 @@ Task children use `yolo` approval mode because the parent task approval is their
 
 The [upstream README][readme] documents macOS, Linux, and Windows installation. The [package manifest][package] requires Bun `>=1.3.14` for the package runtime. Prebuilt binaries provide a separate installation route. On Alpine/musl, the documented prebuilt requires `libstdc++` and `libgcc`. Platform availability does not establish identical terminal, extension-reload, or permission behavior.
 
+## Project skills
+
+OMP 18.11.0 (commit 13a3d52) reads `.agents/skills` (and `.agent`, `.omp`, `.claude`; `.codex`, `.opencode`, `.github` in the launch directory only) in the launch directory and its ancestors up to the `.git` root, with no trust gate. `~/.omp/agent/skills` wins over a project skill, which wins over `~/.agents/skills`; copies are deduplicated by real path, and differing copies are both kept with the loser namespaced (`can1357/oh-my-pi@13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74:packages/coding-agent/src/discovery/agents.ts::loadSkills`).
+
 ## Evidence limits
 
 | Question | Remaining verification |

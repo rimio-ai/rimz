@@ -773,6 +773,10 @@ Several surfaces execute commands on the user's machine: project plugins in `.am
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS` | corporate proxy and CA certificates |
 | `AMP_DATA_DIR` | data root of the [private thread cache](#private-local-thread-cache). Anchored by ccusage only |
 
+## Project skills
+
+Amp reads `.agents/skills` (and `.claude/skills`) in the project and searched parents, with no trust gate, per the rolling [skills docs](https://ampcode.com/docs/customize/skills). `~/.agents/skills` wins over a project skill of the same name, first by frontmatter name.
+
 ## Undocumented behaviour
 
 Neither the docs nor the baseline binary settle these. Each needs a capture against a pinned build before code depends on it.

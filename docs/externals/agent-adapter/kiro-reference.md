@@ -365,6 +365,10 @@ V3 no longer provides `todo_list` as of 2.27.0. `chat.enableTodoList` has no eff
 
 Local v3 sessions support memory access modes through `/memories config`: read and write, read only, or off. Access changes apply next session. Automatic updates can continue after a session ends when enabled ([Memory](https://kiro.dev/docs/memory/)).
 
+## Project skills
+
+Kiro CLI 3.6 does not read `.agents/skills`: project skills come only from `.kiro/skills`, behind workspace trust, and a workspace skill wins over a user one ([skills docs](https://kiro.dev/docs/skills.md)).
+
 ## Upstream scope
 
 Kiro CLI 2.30.0 still lists v2 as the default engine. A saved setting or the startup migration prompt can select v3 instead ([CLI 3.0 overview](https://kiro.dev/docs/cli/v3/)). Most docs pages describe the IDE and CLI together, and several still describe the 2.x forms, so the tables above follow the engine bundle where the two differ. The gaps RimZ records against this surface are in the internals page's [Known gaps](../../internals/agents/adapter_kiro.md#known-gaps).

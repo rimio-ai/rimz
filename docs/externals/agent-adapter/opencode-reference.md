@@ -205,3 +205,7 @@ Config reloads on watched config-file changes and re-runs inline substitution, s
 
 - **2.0.0 through 2.0.29:** the inline load fails with `bad file reference` ([2.0.0](https://github.com/anomalyco/opencode/blob/v2.0.0/packages/core/src/config/variable.ts), [2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/config/variable.ts)). At startup the server cannot load its config. A failed reload logs `failed to reload config` and keeps the previous config ([`core/src/config.ts`, 2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/config.ts), `reload`).
 - **From 2.0.30:** a missing or unreadable target warns and substitutes empty ([2.0.30](https://github.com/anomalyco/opencode/blob/v2.0.30/packages/core/src/config/variable.ts), [2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config/variable.ts)). An empty `agents.<name>.system` therefore selects the built-in prompt.
+
+## Project skills
+
+OpenCode v2.4.2 reads `.agents/skills` (and `.claude/skills`, `.opencode/skill(s)`) in every ancestor of the launch directory up to the filesystem root, with no trust gate (`OPENCODE_CONFIG_PROJECT_DISABLE` skips it). A project skill wins over a user one; skills are keyed by directory basename, last wins (`anomalyco/opencode@v2.4.2:packages/core/src/config/plugin/compatibility.ts`).
