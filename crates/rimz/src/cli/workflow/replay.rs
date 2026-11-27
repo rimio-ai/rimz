@@ -5,9 +5,9 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
-use rimz::harness::block::{BlockName, Failure};
+use rimz::harness::block::{self, BlockName, Failure};
 use rimz::harness::workflow_script::{self, Call, Caps, End, Log, Outcome, Pass};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::render;
 use crate::cli::usage::UsageError;
@@ -51,13 +51,9 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
     let mut out = render::out();
     writeln!(out, "{}: {}", replay.meta.name, replay.meta.description)?;
     for call in &replay.calls {
-        writeln!(
-            out,
-            "{} {} {}",
-            call.number,
-            call.block.as_str(),
-            summary(call)
-        )?;
+        let summary = summary(call);
+        let gap = if summary.is_empty() { "" } else { " " };
+        writeln!(out, "{} {}{gap}{summary}", call.number, call.block.as_str())?;
         let answer = usize::try_from(call.number - 1)
             .ok()
             .and_then(|index| answers.get(index))
@@ -78,7 +74,15 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
     match &replay.end {
         End::Pending => {
             let first = replay.open.first().copied().unwrap_or_default();
-            writeln!(out, "waits on call {first}, the first with no answer")?;
+            writeln!(
+                out,
+                "waits on call {first}, the first with no answer; answer it with a line like one of these:"
+            )?;
+            if let Some(call) = replay.calls.iter().find(|call| call.number == first) {
+                let result = block::template(call.block, &call.object);
+                writeln!(out, "  {}", json!({ "result": result }))?;
+            }
+            writeln!(out, "  {}", json!({ "failure": { "cause": "..." } }))?;
         }
         End::Returned(value) => writeln!(out, "returns {value}")?,
         End::Failed(failure) => writeln!(out, "fails{}", failed(failure))?,
@@ -113,6 +117,7 @@ fn summary(call: &Call) -> String {
         BlockName::Watch => field("when").to_owned(),
         BlockName::Workflow => format!("{} {}", field("source"), field("value")),
         BlockName::Schedule => field("name").to_owned(),
+        BlockName::Now => String::new(),
     }
 }
 

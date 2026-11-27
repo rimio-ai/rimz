@@ -4,7 +4,9 @@
 
 use serde_json::{Map, Value};
 
-use super::{Agent, Block, BlockName, Failure, Schedule, Shell, Team, Watch, Workflow, schema};
+use super::{
+    Agent, Block, BlockName, Failure, Now, Schedule, Shell, Team, Watch, Workflow, schema,
+};
 
 const GLOBALS: &str = "\
 // The globals of a RimZ workflow script, printed by `rimz workflow types`.
@@ -31,10 +33,25 @@ declare function pipeline<T>(
  * `null` in its place.
  */
 declare function parallel(tasks: (() => unknown)[]): Promise<any[]>;
+
+/**
+ * The milliseconds of a duration in the grammar `timeout` takes (`90s`, `30m`, `2h`, `3d`);
+ * one that does not parse throws. It makes no call.
+ */
+declare function ms(duration: string): number;
+
+/**
+ * Whether a condition in the grammar `watch` takes reads true over `readings`, decided as a
+ * watch decides it: three-valued, `null` for unknown. A key absent or `null` is not read, so
+ * `unread || true` is true, `false && unread` false, and `!unread` unknown. A condition that
+ * does not parse throws. It makes no call.
+ */
+declare function reads(when: string, readings: Record<string, string | null>): boolean | null;
 ";
 
 /// The declarations of every global a workflow script reaches: `args`, `file`, `pipeline`,
-/// `parallel`, the six blocks with their objects and results, and the failure a call throws.
+/// `parallel`, `ms`, `reads`, the seven blocks with their objects and results, and the failure
+/// a call throws.
 pub fn typescript() -> String {
     let mut out = String::from(GLOBALS);
     declare_block::<Agent>(&mut out);
@@ -43,6 +60,7 @@ pub fn typescript() -> String {
     declare_block::<Watch>(&mut out);
     declare_block::<Workflow>(&mut out);
     declare_block::<Schedule>(&mut out);
+    declare_block::<Now>(&mut out);
     let failure = schema::<Failure>();
     out.push('\n');
     doc(&mut out, &failure, "");
@@ -73,10 +91,17 @@ fn declare_block<B: Block>(out: &mut String) {
     let result = if result_schema.get("properties").is_some() {
         format!("{object}Result")
     } else {
-        "any".to_owned()
+        match type_of(&result_schema, "").as_str() {
+            "unknown" => "any".to_owned(),
+            known => known.to_owned(),
+        }
     };
     out.push('\n');
     doc(out, &object_schema, "");
+    if B::BARE {
+        out.push_str(&format!("declare function {name}(): Promise<{result}>;\n"));
+        return;
+    }
     if B::NAME == BlockName::Agent {
         out.push_str(&format!(
             "declare function {name}(block: {object} & {{ schema: object }}): Promise<any>;\n"
@@ -159,7 +184,23 @@ fn type_of(schema: &Value, indent: &str) -> String {
         let values: Vec<String> = values.iter().map(Value::to_string).collect();
         return values.join(" | ");
     }
-    match map.get("type").and_then(Value::as_str) {
+    match map.get("type") {
+        Some(Value::Array(kinds)) => kinds
+            .iter()
+            .map(|kind| kind_type(schema, kind.as_str(), indent))
+            .collect::<Vec<_>>()
+            .join(" | "),
+        kind => kind_type(schema, kind.and_then(Value::as_str), indent),
+    }
+}
+
+/// The type of `schema` read as the one JSON type `kind`.
+fn kind_type(schema: &Value, kind: Option<&str>, indent: &str) -> String {
+    let Some(map) = schema.as_object() else {
+        return "unknown".to_owned();
+    };
+    match kind {
+        Some("null") => "null".to_owned(),
         Some("string") => "string".to_owned(),
         Some("integer" | "number") => "number".to_owned(),
         Some("boolean") => "boolean".to_owned(),

@@ -28,6 +28,20 @@ declare function pipeline<T>(
 declare function parallel(tasks: (() => unknown)[]): Promise<any[]>;
 
 /**
+ * The milliseconds of a duration in the grammar `timeout` takes (`90s`, `30m`, `2h`, `3d`);
+ * one that does not parse throws. It makes no call.
+ */
+declare function ms(duration: string): number;
+
+/**
+ * Whether a condition in the grammar `watch` takes reads true over `readings`, decided as a
+ * watch decides it: three-valued, `null` for unknown. A key absent or `null` is not read, so
+ * `unread || true` is true, `false && unread` false, and `!unread` unknown. A condition that
+ * does not parse throws. It makes no call.
+ */
+declare function reads(when: string, readings: Record<string, string | null>): boolean | null;
+
+/**
  * Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
  * `cwd`) it works in its caller's checkout.
  */
@@ -165,8 +179,11 @@ interface Watch {
 }
 
 interface WatchResult {
-  /** The reading of each key the condition names, at the look that read it true. */
-  readings: Record<string, string>;
+  /**
+   * The reading of each key the condition names, at the look that read it true: `null` for a
+   * key that look had not read.
+   */
+  readings: Record<string, string | null>;
 }
 
 /** Runs a workflow; the call gives what its script returned, and fails with what it threw. */
@@ -227,8 +244,15 @@ interface ScheduleResult {
 }
 
 /**
- * A call that did not end as asked, given in place of its result: in a script, the `Error`
- * the awaited call throws.
+ * The current time, as Unix epoch milliseconds: RimZ reads it and the run's log keeps it as the
+ * call's result, so a replay and a resume read the time the first pass read.
+ */
+declare function now(): Promise<number>;
+
+/**
+ * A call that did not end as asked, given in place of its result. In a script every block's
+ * failure, a refused object's included, arrives one way: the awaited call throws an `Error`
+ * whose own fields are these, so a script tells one failure from another by `cause`.
  */
 interface Failure extends Error {
   /**
@@ -239,7 +263,7 @@ interface Failure extends Error {
   /** What happened, in a sentence. */
   reason: string;
   /** The block whose call failed; none for a run that ended without a call. */
-  block?: "agent" | "team" | "shell" | "watch" | "workflow" | "schedule";
+  block?: "agent" | "team" | "shell" | "watch" | "workflow" | "schedule" | "now";
   /** A command's exit code. */
   code?: number;
   /** An agent's handle. */

@@ -10,7 +10,7 @@
   const fail = sentence => { throw new NativeError(sentence) }
   const refuse = sentence => () => fail(sentence)
   const noClock = refuse(
-    'a workflow script has no clock: take the time from `args`, or from a `shell` command')
+    "a workflow script has no clock: `await now()` gives the time, which the run's log keeps")
   const noZone = sentence => refuse(`a workflow script has no time zone: ${sentence}`)
 
   // `Date()` without `new` gives the current time natively, whatever it is passed, so the
