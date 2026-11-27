@@ -251,6 +251,8 @@ Query a broker that runs the worktree's build. `rimz lsp stop` leaves the old br
 
 `target/debug/rimz lsp` queries under the same two variables then reach that broker. To end the check, close the descriptor (`exec 3>&-`): `attach` exits on EOF and releases its lease, and the broker exits after the 60-second release grace.
 
+A change confined to the query client (`crates/rimz/src/lsp/query/`) needs no fresh broker: `target/debug/rimz lsp` from the checkout queries the room's running broker. Run it under the bwrap binds that [Branch binaries against real state](../contributing/probes.md#branch-binaries-against-real-state) gives for a `rimz lsp` query, so the room's query usage log stays untouched. The integration suite answers from `crates/rimz/tests/fixtures/lsp-server-stub/`, so a change that rests on how rust-analyzer answers runs this way once before hand-off.
+
 ## Freshness
 
 `lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`, coalescing saved-file events in a 50 ms window from the first undelivered event. Freshness depends on the server handling these notifications. Unsaved editor buffers reach the server only through the owning editor ([Editors](#editors)), and watch traffic never increments request counters.
