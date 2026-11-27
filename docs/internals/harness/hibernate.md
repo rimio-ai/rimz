@@ -28,6 +28,7 @@ Live checks: [Live check](#live-check) covers freeze, deepen, and wake in a [san
 - Hibernation never changes an agent's lifecycle or displayed status ([What a frozen row shows](#what-a-frozen-row-shows)).
 - A scope holds only the provider, its descendants, and its in-scope ancestor chain. Any other process vetoes the freeze.
 - The producer in `harness/hibernate.rs` writes only runtime caches and spawns helpers. Cgroup writes and durable writes stay in the helper modules (`hibernate/execute.rs`, `hibernate/wake.rs`), outside the producer's path. The sidebar graph reaches their files through `hibernate.rs`'s re-exports, so the store-write gate searches them too.
+- Hibernation stays enrichment even under an explicit `enabled = true`, a settled exception to the root fail-fast rule: a missing capability warns at `rimz start` and skips hibernation, and never fails the room.
 - The scopes are resource management, not a security boundary: any process of the same user can write the delegated cgroup files.
 
 ## Configuration and admission

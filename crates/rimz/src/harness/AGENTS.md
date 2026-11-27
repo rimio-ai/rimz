@@ -32,10 +32,6 @@ Each of these is decided in one place. Call it; a second copy drifts.
 - Signals: `WatchVerdict::label` is the one wording of a watch outcome, `wait_output_path` the one derivation of a wait's output file, and `From<&Signal> for SignalEventPayload` the one conversion into the store, so no store module reaches up for a harness signal type.
 - Loop tasks: a wait row's target is matched only through `schedule/pending.rs`; `retire_session` is the one removal primitive and `retire_ended_sessions` the one spelling of "durably ended"; `in_flight_run` is the one lookup of a run lock's holder; terminal history rows are appended only through `run_log`, and the CLI renders the transition it gets back.
 
-## Fail-fast
-
-- Fail-fast, settled: a named exception to the root rule. Hibernation is enrichment on every platform, on by default and skipped where Linux, swap, a cgroup freezer, or a systemd user manager is unavailable. `rimz doctor` says why hibernation is skipped, and an explicit `[agents.hibernate] enabled = true` warns once at `rimz start` on Linux for a missing capability.
-
 ## Before a change
 
 - A new launch-time check, refusal, or stamp holds on every path in [Every path that builds a launch layout](../../../../docs/internals/harness/fleet.md#every-path-that-builds-a-launch-layout).
