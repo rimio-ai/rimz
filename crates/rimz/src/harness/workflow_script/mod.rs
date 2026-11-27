@@ -6,8 +6,8 @@
 //! from those answers, so a second replay of the same inputs makes the same calls with the same
 //! numbers: the context has no clock but the `now` block, no time zone, no randomness, no timers,
 //! no weak references, no module loader, and no host access but the blocks, `file`, and `args`.
-//! Its `ms` and `reads` are pure, so they make no call, and its `cases` calls only `watch` and
-//! `now`.
+//! Its `ms` and `reads` are pure, so they make no call, its `phase` and `log` only mark the pass
+//! for display, and its `cases` calls only `watch` and `now`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -28,7 +28,8 @@ pub use load::Meta;
 pub struct Caps {
     /// Wall time, through the engine's interrupt handler.
     pub time: Duration,
-    /// The engine's own heap, in bytes (not the process's RSS), counted by its allocator.
+    /// The engine's own heap, in bytes (not the process's RSS), counted by its allocator, with the
+    /// marks the pass keeps.
     pub memory: usize,
 }
 
@@ -86,6 +87,29 @@ pub struct Call {
     pub block: BlockName,
     pub object: Value,
     pub digest: String,
+    /// The title of the script's last `phase` when it made the call. The digest leaves it out,
+    /// so a renamed phase keeps a log's answers.
+    pub phase: Option<String>,
+}
+
+/// A `phase` or `log` the script made. Both are display alone: neither is a call, takes a
+/// number, or gets an answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    /// How many calls the script had made before it.
+    pub after: u64,
+    /// Made before the pass handed back its log's last line, so an earlier pass over a shorter log
+    /// made it too: a reader of every pass of a run keeps the marks not replayed, and none repeats.
+    pub replayed: bool,
+    pub progress: Progress,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Progress {
+    /// The run's stage from here until the next `phase`, marked only when the title changes.
+    Phase(String),
+    /// One narrator line.
+    Log(String),
 }
 
 /// What a replay found.
@@ -97,6 +121,8 @@ pub struct Replay {
     pub open: Vec<u64>,
     /// How many of the log's lines were handed back before the script could run no further.
     pub used: usize,
+    /// Every `phase` change and `log` line, in the order the script made them.
+    pub marks: Vec<Mark>,
     pub end: End,
 }
 

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use rimz::harness::block::{self, BlockName, Failure};
-use rimz::harness::workflow_script::{self, Call, Caps, End, Log, Outcome, Pass};
+use rimz::harness::workflow_script::{self, Call, Caps, End, Log, Mark, Outcome, Pass, Progress};
 use serde_json::{Value, json};
 
 use super::render;
@@ -50,7 +50,9 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
     .map_err(|reason| anyhow!("{}: {reason}", script.display()))?;
     let mut out = render::out();
     writeln!(out, "{}: {}", replay.meta.name, replay.meta.description)?;
+    let mut marks = replay.marks.iter().peekable();
     for call in &replay.calls {
+        write_marks(&mut out, &mut marks, call.number - 1)?;
         let summary = summary(call);
         let gap = if summary.is_empty() { "" } else { " " };
         writeln!(out, "{} {}{gap}{summary}", call.number, call.block.as_str())?;
@@ -71,6 +73,7 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
             None => writeln!(out, "  no answer")?,
         }
     }
+    write_marks(&mut out, &mut marks, u64::MAX)?;
     match &replay.end {
         End::Pending => {
             let first = replay.open.first().copied().unwrap_or_default();
@@ -95,6 +98,21 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
             replay.used + 1,
             answers.len()
         )?;
+    }
+    Ok(())
+}
+
+/// Each mark not written yet that the script made with at most `made` calls behind it.
+fn write_marks<'a>(
+    out: &mut impl Write,
+    marks: &mut std::iter::Peekable<impl Iterator<Item = &'a Mark>>,
+    made: u64,
+) -> std::io::Result<()> {
+    while let Some(mark) = marks.next_if(|mark| mark.after <= made) {
+        match &mark.progress {
+            Progress::Phase(title) => writeln!(out, "phase {title}")?,
+            Progress::Log(line) => writeln!(out, "log {line}")?,
+        }
     }
     Ok(())
 }

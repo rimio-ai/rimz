@@ -2723,7 +2723,9 @@ path = "crates/rimz/src/harness"
 # `workflow_script`: the module, `replay` and `answers`, the pass and its caps and log, the call,
 # the recorded line, the outcome, the replay and its end, and `Meta`, which `rimz workflow try`
 # reads and prints (+17).
-surface-budget = 1438
+# `workflow_script::{Mark, Progress}`: the `phase` changes and `log` lines of a pass, which
+# `rimz workflow try` prints among the calls (+2).
+surface-budget = 1440
 
 [[verdict]]
 kind = "item"
@@ -6536,7 +6538,8 @@ allowed-dependencies = [
 ]
 # The module, `replay`, `answers`, `Pass`, `Caps`, `Log`, `Line`, `Outcome`, `Call`, `Replay`, `End`,
 # and `Meta`: what `rimz workflow try` builds, reads, and prints (+12).
-surface-budget = 12
+# `Mark` and `Progress`: the `phase` changes and `log` lines `rimz workflow try` prints (+2).
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

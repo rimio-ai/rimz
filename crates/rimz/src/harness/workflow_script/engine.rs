@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use super::heap::{Capped, Heap};
 use super::load::Loaded;
-use super::{Call, Caps, End, Log, Outcome, Pass, Replay, pass_failure};
+use super::{Call, Caps, End, Log, Mark, Outcome, Pass, Progress, Replay, pass_failure};
 use crate::harness::block::{
     Agent, Block, BlockName, Caller, Cause, Failure, Now, Schedule, Shell, Team, Watch, Workflow,
     digest, ms, parse, reads,
@@ -44,9 +44,30 @@ struct State {
     unhandled: Vec<(Persistent<JsValue<'static>>, Persistent<JsValue<'static>>)>,
     /// The prelude's maker of a failure's `Error`.
     fail: Option<Persistent<Function<'static>>>,
+    /// The title of the script's last `phase`.
+    phase: Option<String>,
+    marks: Vec<Mark>,
+    /// How many lines the log holds, and how many of them the pass has handed back.
+    lines: usize,
+    used: usize,
 }
 
 impl State {
+    /// Keep `progress` as a mark of the pass. The pass keeps it outside the engine's heap, so its
+    /// bytes count against the heap's cap.
+    fn mark(&mut self, heap: &Heap, progress: Progress) -> rquickjs::Result<()> {
+        let (Progress::Phase(text) | Progress::Log(text)) = &progress;
+        if !heap.hold(std::mem::size_of::<Mark>() + text.len()) {
+            return Err(rquickjs::Error::Allocation);
+        }
+        self.marks.push(Mark {
+            after: self.calls.len() as u64,
+            replayed: self.used < self.lines,
+            progress,
+        });
+        Ok(())
+    }
+
     fn track<'js>(
         &mut self,
         ctx: &Ctx<'js>,
@@ -97,7 +118,13 @@ pub(super) fn run(pass: &Pass<'_>, loaded: Loaded) -> Result<Replay, String> {
         flag.set(flag.get() || over);
         over
     })));
-    let mut state = State::default();
+    let mut state = State {
+        lines: match pass.log {
+            Log::Recorded(lines) => lines.len(),
+            Log::Answers(answers) => answers.len(),
+        },
+        ..State::default()
+    };
     if let Log::Recorded(lines) = pass.log {
         for line in lines {
             let twice = state
@@ -128,7 +155,7 @@ pub(super) fn run(pass: &Pass<'_>, loaded: Loaded) -> Result<Replay, String> {
     };
     let replayed = engine.replay(pass, &loaded.body);
     // Every engine value the state holds must go before the context does.
-    let (calls, open, held) = {
+    let (calls, marks, used, open, held) = {
         let mut state = state.borrow_mut();
         let open = state.open.keys().copied().collect::<Vec<_>>();
         let held = (
@@ -136,15 +163,23 @@ pub(super) fn run(pass: &Pass<'_>, loaded: Loaded) -> Result<Replay, String> {
             std::mem::take(&mut state.open),
             state.fail.take(),
         );
-        (std::mem::take(&mut state.calls), open, held)
+        let marks = std::mem::take(&mut state.marks);
+        (
+            std::mem::take(&mut state.calls),
+            marks,
+            state.used,
+            open,
+            held,
+        )
     };
     drop(held);
-    let (end, used) = replayed?;
+    let end = replayed?;
     Ok(Replay {
         meta: loaded.meta,
         calls,
         open,
         used,
+        marks,
         end,
     })
 }
@@ -154,19 +189,19 @@ struct Engine<'a> {
     runtime: &'a Runtime,
     state: &'a Rc<RefCell<State>>,
     interrupted: &'a Cell<bool>,
-    heap: &'a Heap,
+    heap: &'a Rc<Heap>,
     caps: Caps,
     name: &'a str,
 }
 
 impl Engine<'_> {
-    fn replay(&self, pass: &Pass<'_>, body: &str) -> Result<(End, usize), String> {
+    fn replay(&self, pass: &Pass<'_>, body: &str) -> Result<End, String> {
         let body = match self.start(pass, body)? {
             Ok(body) => body,
-            Err(end) => return Ok((end, 0)),
+            Err(end) => return Ok(end),
         };
         if let Some(end) = self.pump() {
-            return Ok((end, 0));
+            return Ok(end);
         }
         let lines: Vec<(u64, &Outcome)> = match pass.log {
             Log::Recorded(lines) => lines
@@ -176,7 +211,6 @@ impl Engine<'_> {
             Log::Answers(answers) => (1..).zip(answers).collect(),
         };
         let recorded = matches!(pass.log, Log::Recorded(_));
-        let mut used = 0;
         for (number, outcome) in lines {
             if self.settled(&body) || self.state.borrow().mismatch.is_some() {
                 break;
@@ -206,15 +240,15 @@ impl Engine<'_> {
             let Some((settlers, block)) = taken else {
                 break;
             };
-            used += 1;
+            self.state.borrow_mut().used += 1;
             if let Some(end) = self
                 .settle(number, block, outcome, settlers)
                 .or_else(|| self.pump())
             {
-                return Ok((end, used));
+                return Ok(end);
             }
         }
-        Ok((self.end(body), used))
+        Ok(self.end(body))
     }
 
     /// Build the globals, run the prelude, and start the body: the body's promise, or how the
@@ -225,7 +259,7 @@ impl Engine<'_> {
         body: &str,
     ) -> Result<Result<Persistent<Promise<'static>>, End>, String> {
         self.context.with(|ctx| {
-            if let Err(error) = install(&ctx, self.state, pass).catch(&ctx) {
+            if let Err(error) = install(&ctx, self.state, self.heap, pass).catch(&ctx) {
                 return Ok(Err(self.caught(&ctx, error)));
             }
             let source = format!("(async function () {{{body}\n}})()");
@@ -456,7 +490,7 @@ impl Engine<'_> {
         };
         if statement("import") {
             format!(
-                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`"
+                "line {line}: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, `phase`, `log`, and `args`"
             )
         } else if statement("export") {
             format!("line {line}: a workflow script exports only `meta`, in its first statement")
@@ -474,11 +508,12 @@ fn options(name: &str) -> EvalOptions {
     options
 }
 
-/// The script's globals: the seven blocks, `file`, `ms`, `reads`, the prelude's, which it builds
-/// on those, and `args`.
+/// The script's globals: the seven blocks, `file`, `ms`, `reads`, `phase`, `log`, the prelude's,
+/// which it builds on those, and `args`.
 fn install<'js>(
     ctx: &Ctx<'js>,
     state: &Rc<RefCell<State>>,
+    heap: &Rc<Heap>,
     pass: &Pass<'_>,
 ) -> rquickjs::Result<()> {
     block::<Agent>(ctx, state)?;
@@ -514,6 +549,31 @@ fn install<'js>(
             |ctx: Ctx<'js>, when: String, readings: JsValue<'js>| truth(&ctx, &when, readings),
         )?,
     )?;
+    globals.set("phase", {
+        let (state, heap) = (Rc::clone(state), Rc::clone(heap));
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, title: Opt<JsValue<'js>>| {
+                let title = text(&ctx, title, "`phase` takes its title as text")?;
+                let mut state = state.borrow_mut();
+                if state.phase.as_ref() == Some(&title) {
+                    return Ok(());
+                }
+                state.phase = Some(title.clone());
+                state.mark(&heap, Progress::Phase(title))
+            },
+        )?
+    })?;
+    globals.set("log", {
+        let (state, heap) = (Rc::clone(state), Rc::clone(heap));
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, line: Opt<JsValue<'js>>| {
+                let line = text(&ctx, line, "`log` takes its line as text")?;
+                state.borrow_mut().mark(&heap, Progress::Log(line))
+            },
+        )?
+    })?;
     let fail = ctx.eval_with_options::<Function, _>(PRELUDE, options(PRELUDE_NAME))?;
     state.borrow_mut().fail = Some(Persistent::save(ctx, fail));
     let args = match pass.args {
@@ -594,13 +654,23 @@ fn call<'js, B: Block>(
         Persistent::save(ctx, reject),
     );
     state.open.insert(number, settlers);
+    let phase = state.phase.clone();
     state.calls.push(Call {
         number,
         block: B::NAME,
         object,
         digest,
+        phase,
     });
     Ok(promise)
+}
+
+/// The text a script passed, or `refusal` thrown for anything else.
+fn text<'js>(ctx: &Ctx<'js>, value: Opt<JsValue<'js>>, refusal: &str) -> rquickjs::Result<String> {
+    match value.0.as_ref().and_then(JsValue::as_string) {
+        Some(text) => text.to_string(),
+        None => Err(Exception::throw_message(ctx, refusal)),
+    }
 }
 
 /// A script's `reads`: the truth of `when` over `readings`, `null` for unknown.

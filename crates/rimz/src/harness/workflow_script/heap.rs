@@ -10,7 +10,8 @@ use std::rc::Rc;
 
 use rquickjs::allocator::{Allocator, RustAllocator};
 
-/// What a pass's allocator counted: the bytes it handed out, the cap, and whether it refused.
+/// What a pass's allocator counted: the bytes it handed out and those the pass holds beside them,
+/// the cap, and whether it refused.
 pub(super) struct Heap {
     used: Cell<usize>,
     limit: Cell<usize>,
@@ -35,6 +36,16 @@ impl Heap {
     /// Whether the allocator refused an allocation past the cap during this pass.
     pub(super) fn refused(&self) -> bool {
         self.refused.get()
+    }
+
+    /// Count `bytes` the pass keeps for the script outside the engine's heap, when they fit under
+    /// the cap; a refusal is recorded.
+    pub(super) fn hold(&self, bytes: usize) -> bool {
+        let fits = self.admit(bytes);
+        if fits {
+            self.used.set(self.used.get() + bytes);
+        }
+        fits
     }
 
     /// Whether `more` bytes fit under the cap; a refusal is recorded.

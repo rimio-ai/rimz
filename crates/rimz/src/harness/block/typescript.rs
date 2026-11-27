@@ -49,6 +49,15 @@ declare function ms(duration: string): number;
 declare function reads(when: string, readings: Record<string, string | null>): boolean | null;
 
 /**
+ * Names the run's stage from here until the next `phase`, and each call made after it carries
+ * the title. It makes no call and gives nothing back.
+ */
+declare function phase(title: string): void;
+
+/** Shows one narrator line among the run's calls. It makes no call and gives nothing back. */
+declare function log(message: string): void;
+
+/**
  * Watches until a case of `list` wins, and gives its `outcome` with the readings of the look it
  * won on. The first case in order whose `when` reads true wins. A case with no `outcome` waits:
  * while it reads true, no case after it wins. A case with `for` wins once that long passes
@@ -82,8 +91,8 @@ interface CasesResult {
 ";
 
 /// The declarations of every global a workflow script reaches: `args`, `file`, `pipeline`,
-/// `parallel`, `ms`, `reads`, `cases`, the seven blocks with their objects and results, and the
-/// failure a call throws.
+/// `parallel`, `ms`, `reads`, `phase`, `log`, `cases`, the seven blocks with their objects and
+/// results, and the failure a call throws.
 pub fn typescript() -> String {
     let mut out = String::from(GLOBALS);
     declare_block::<Agent>(&mut out);
