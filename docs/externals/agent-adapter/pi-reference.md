@@ -511,6 +511,10 @@ Clipboard OSC 52 output is capped at 100,000 base64 characters ([clipboard sourc
 
 Pi also sets variables for the processes it starts ([environment-variables.md](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/environment-variables.md)). The CLI and RPC entry points set `AI_AGENT=pi` and `PI_CODING_AGENT=true`, which every child inherits. Commands run by the model's `bash` and `powershell` tools additionally receive `PI_SESSION_ID`, `PI_SESSION_FILE` (unset for ephemeral sessions), `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL`, resolved when each command starts; user-typed `!` commands do not.
 
+## Project skills
+
+Pi v1.6.1 reads `.agents/skills` (and `.pi/skills`) in the launch directory and its ancestors up to the `.git` directory, behind Pi's own project trust (`defaultProjectTrust` ask; print and RPC modes skip project skills without a decision; `--approve`). A project skill wins, deduplicated by canonical file path, then first by precedence (`earendil-works/pi@v1.6.1:packages/coding-agent/src/core/package-manager.ts::collectAncestorAgentsSkillDirs`).
+
 ## Upstream scope
 
 From 1.2.0, configuration schemas are published at `https://pi.dev/schemas/{settings,models,keybindings,theme}.schema.json`. Set `$schema` in the corresponding configuration file for editor validation. The theme schema moved to this location in 1.2.0. Startup themes now receive the same validation as reloads, with reusable colors under `vars` and unsupported metadata rejected ([settings](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/settings.md), [release notes](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md#120---2026-10-12)).

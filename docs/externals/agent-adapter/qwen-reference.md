@@ -656,6 +656,10 @@ Linux tool-execution confinement uses `tools.executionSandbox`, separate from wh
 
 Daemon clients should inspect `GET /capabilities` before using optional behavior. The [pinned OpenAPI schema](https://github.com/QwenLM/qwen-code/blob/v0.25.1/docs/developers/daemon-rest-api.openapi.json) owns HTTP paths, payloads, and capability requirements. The release adds session-centric workspace-agent messages and managed-session execution. These are separate from a TUI subagent transcript. Their contracts are the [session-agent types](https://github.com/QwenLM/qwen-code/blob/v0.25.1/packages/core/src/agents/session-agents/contract.ts) and [managed-session API](https://github.com/QwenLM/qwen-code/blob/v0.25.1/docs/design/2026-09-27-managed-agent-api-contract.md).
 
+## Project skills
+
+Qwen Code v0.25.1 reads `.agents/skills` (and `.qwen/skills`) in the launch directory only, ungated by default (`folderTrust` off). A project skill wins, by manifest name (`QwenLM/qwen-code@v0.25.1:packages/core/src/config/storage.ts::SKILL_PROVIDER_CONFIG_DIRS`).
+
 ## Upstream scope
 
 The surfaces above cover what Qwen Code ships at 0.25.1. Several exist that a pane observer need not adopt: dual output's reverse channel, the live session registry's peer-messaging SDK, managed-session logs, ACP and `qwen serve`, `goal_state` stream events and records, and delegation to external ACP or Codex executors. Which of these RimZ reads, and the gaps it records, are in [adapter_qwen.md](../../internals/agents/adapter_qwen.md#known-gaps).

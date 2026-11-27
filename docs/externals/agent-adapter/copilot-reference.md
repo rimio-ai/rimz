@@ -630,6 +630,10 @@ The docs disagree on the setting. The how-to enables it with `"remoteSessions": 
 
 All remote flags require the remote sessions feature on the account. Enterprise managed settings can disable remote control of sessions on a device or restrict it to SSO-authorized controlling clients: the managed `remoteControl.mode` is `enabled`, `disabled`, or `requireSSO` with `githubDotComOrganizations`.
 
+## Project skills
+
+Copilot CLI v1.0.116 reads `.agents/skills` (and `.github`, `.claude`) in every directory from the launch directory to the Git root, behind folder trust. A project skill wins, first found ([CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)).
+
 ## Upstream scope
 
 The sources reviewed for 1.0.96 do not specify these contracts. Where captures exist, their version pins apply:

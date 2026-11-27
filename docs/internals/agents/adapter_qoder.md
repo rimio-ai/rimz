@@ -41,7 +41,7 @@ Some launch text and profile settings never reach Qoder:
 | hook-context replies, including the deadline stop rung | not sent: `hook_context` is `None`, so a supervised run's stop rung goes through the pane (`crates/rimz/src/harness/deadline.rs::stop_due_by_pane`) and Qoder takes no smart-compaction reminder (`agents::reminder_skip`) |
 | per-turn prompt context | not sent: `prompt_context` is `false` |
 | a profile's tool rules | dropped with a launch warning (`ToolRules::Unsupported`) |
-| a profile's `skills` list on the host | warns and runs unrestricted (`HostSkills::Unsupported`). Under scoped isolation the view applies the list ([sandbox.md](../sandbox.md)) |
+| a profile's `skills` list on the host | warns and runs unrestricted (`HostSkills::Unsupported`), except that a listed skill found only in `.agents/skills` refuses the launch (`SkillErr::ProjectOnly`). Under scoped isolation the view applies the list ([sandbox.md](../sandbox.md)) |
 | the `sandbox` isolation level | warns and launches without a provider sandbox: `has_native_sandbox` keeps its default `false` |
 
 ### Version floor

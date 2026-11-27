@@ -341,6 +341,10 @@ Twelve event types were captured: SessionStart, UserPromptSubmit, PreLLMCall, Po
 
 These captures narrow seven documentation gaps or claims: network mode spelling is `enabled` in help; documented resume/fork SessionStart sources did not fire; `/new` used `startup`; `/compact` was unavailable under echo; profile IDs require colons; transcript_path stayed null despite a known retained-store path; and Interrupt requires async registration. None establishes behavior on earlier versions, another platform, or a network provider.
 
+## Project skills
+
+Muse 1.4.25 reads `.agents/skills` (and `.codex`, `.claude`) behind workspace trust (`--trust-workspace`). A project skill wins; identical copies deduplicate, and distinct copies of one id block each other ([skills guide](https://meta-models.github.io/muse-code-sdk/1.4/guides/extend/skills/)).
+
 ## Validation boundary
 
 Closed rows apply only to the 1.4.9 echo capture above. Missing evidence does not establish that a capability is absent.

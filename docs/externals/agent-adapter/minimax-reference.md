@@ -329,6 +329,10 @@ On 2026-10-15, the installed `/usr/local/bin/mcode` reported `0.6.12`. It is a s
 
 The source-backed in-process runner and parent identity remain unconfirmed by a real hook. Hot reload, model-turn events, compaction, child sessions, token accounting, and authentication behavior were not exercised. This comparison establishes only the rows above, not full `0.6.5` to `0.6.12` parity.
 
+## Project skills
+
+MiniMax Code v0.6.5 reads `.agents/skills` (and `.minimax`, `.claude`) in the launch directory and its ancestors up to the `.git` root, through its `skills.external` settings (on by default), with no trust gate. A project skill wins, by name (`MiniMax-AI/minimax-code@v0.6.5:packages/local-runtime/src/skills/roots.ts::readExternalWorkspaceSkillRoots`).
+
 ## Remaining verification
 
 | Surface | Unverified boundary |

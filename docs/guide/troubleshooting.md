@@ -214,7 +214,7 @@ On Linux, follow the probe's error for your host, or switch to host isolation, w
 rimz config set agents.isolation host
 ```
 
-The switch affects new launches, not existing panes. Profile `skills` lists can stay: host Claude and Codex enforce them through provider switches; other providers warn and run unrestricted. [Scoped isolation](./security.md#scoped-isolation) covers the limits of each mode.
+The switch affects new launches, not existing panes. Profile `skills` lists can stay: host Claude and Codex enforce them through provider switches; other providers warn and run unrestricted, except that a listed skill found only in a project folder the provider does not read refuses the launch. [Scoped isolation](./security.md#scoped-isolation) covers the limits of each mode.
 
 ### A Rust build in a scoped pane fails through sccache
 
@@ -256,6 +256,17 @@ For other misshapen layouts, the row names the misplaced columns and RimZ leaves
 The agent is starting, but RimZ left one skill out of this launch because it could not prepare that skill's user-only copy for the profile's `skills` list in scoped mode. The warning names the skill, its source path, and whether RimZ could not read it or could not rewrite its metadata. Nothing in the installed skill changed, and every other skill is still available.
 
 Fix the source the warning names: make the file readable, or bring its frontmatter into the YAML shape RimZ's rewriter accepts ([skills](./configuration.md#skills)). The alternative is to add the skill's bare name to that profile's `skills` list, which binds it exactly as installed with no rewriting, and makes it model-callable where its author's restrictions allow.
+
+### A launch refuses a skill that is only in `.agents/skills`
+
+The profile's `skills` list names a skill the repository keeps in `<repo>/.agents/skills/`, and the agent runs on the host but does not read that folder: Claude reads `.claude/skills/`, Kiro `.kiro/skills/`, Qoder `.qoder/skills/`, and Hermes reads project skills only for a repository in its `skills.trusted_project_dirs`. RimZ writes nothing into the repository, so it refuses rather than launch an agent without its listed skill. The error names the profile whose list holds the skill (and its team role), the skill, the folder, and the fixes. Link the skill into the agent's own folder, which RimZ then finds there. In a linked worktree, creating `.claude/skills` makes Claude stop reading the main checkout's `.claude/skills` there; link the skill into the main checkout's `.claude/skills` instead to keep both. For a skill named `review` on Claude, from the repository root (Kiro and Qoder take `.kiro/skills` and `.qoder/skills` in its place):
+
+```sh
+mkdir -p .claude/skills
+ln -s ../../.agents/skills/review .claude/skills/review
+```
+
+Or launch with `--isolation scoped` (not on Kiro or Hermes, which have no user-only marker for the view), where RimZ merges `.agents/skills/` into the agent's skill view, or drop the name from `skills`. On Hermes the provider-side alternative is to drop the name and add the repository root to `skills.trusted_project_dirs` in `$HERMES_HOME/config.yaml`, so Hermes reads the folder itself. [Project skills](./configuration.md#skills) has the model.
 
 ## An agent isn't reporting
 

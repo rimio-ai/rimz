@@ -710,6 +710,10 @@ API-key resolution is off under `disable_api_key_auth` or `GROK_DISABLE_API_KEY_
 
 In ACP mode `x.ai/auth/info` returns identity metadata, and `x.ai/billing` queries the Grok service for credit usage percent, the current billing period, the on-demand cap and usage, prepaid balance, unified-billing state, and subscription tier (`extensions/billing.rs`). The TUI shows credit and billing on `/usage`. No CLI subcommand prints billing windows. `grok usage` covers token and cost totals only.
 
+## Project skills
+
+Grok 1.0.92 (installed binary help text) reads project skills from `.grok/`, `.agents/`, `.claude/`, and `.cursor/` roots, under the folder trust that also covers project MCP servers, hooks, and instructions. Root extent and same-name precedence were not checked.
+
 ## Upstream scope
 
 The GitHub mirror ships harness and TUI source without release tags. Its newest sync predates the stable binary by twelve days. npm also lists `alpha` 1.0.54 on 2026-10-12. This page excludes that prerelease channel. `grok update --alpha` or `--stable` switches channel.

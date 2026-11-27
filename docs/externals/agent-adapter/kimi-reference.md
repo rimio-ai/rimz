@@ -507,6 +507,10 @@ These surfaces host a session inside Kimi Code's engine for a client. None of th
 - `kimi web` runs the local REST and WebSocket server (`packages/kap-server`) and opens the web UI. It binds `127.0.0.1:58627` by default, taking the next free port when busy, and requires the bearer token printed at startup (`kimi web rotate-token` replaces it). `--host` binds all interfaces or a named host. `--dangerous-bypass-auth` turns off bearer authentication on every route. The session list filters on `activity.status` values `running`, `approval`, `question`, `failed`, and `idle`. The `event.session.status_changed` event keeps the legacy values `idle`, `running`, `awaiting_approval`, `awaiting_question`, and `aborted` ([server API](https://moonshotai.github.io/kimi-code/en/reference/server-api.html)).
 - `kimi acp` speaks Agent Client Protocol over stdio, with `loadSession`, `session/list`, `session/resume`, `session/close`, `session/delete`, and `session/fork`, and maps approvals, questions, modes, and tool events into ACP ([kimi acp](https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html)).
 
+## Project skills
+
+Kimi Code 2.1.1 reads `.agents/skills` (and `.kimi-code/skills`) at the nearest `.git` root only, else the launch directory, with no trust gate; `--skills-dir` replaces project and user discovery. A project skill wins, by case-insensitive name (`MoonshotAI/kimi-code@f67e6398fb3210ad8ace970e2dfd5bcc984ed61f:packages/agent-core-v2/src/features/skill/catalog/skillRoots.ts::projectRoots`).
+
 ## Upstream scope
 
 Kimi Code publishes no hook for questions, no agent id on most hooks, and no durable `agent.status.updated` snapshot. A stock terminal session exposes subagent identity through durable `subagent.*` records, `state.json.agents`, and child logs. Goal mode, tower mode, swarm mode, cron, and Remote Control are shipped surfaces this page indexes without depth. Which surfaces RimZ leaves unwired, and why, is in the Kimi adapter's [Known gaps](../../internals/agents/adapter_kimi.md#known-gaps).

@@ -357,6 +357,10 @@ The [SDK cost and usage page](https://docs.qoder.com/cli/sdk/cost-usage) documen
 
 Credits fields are optional for older CLI compatibility. Missing values mean unavailable, not zero. Repeated Result totals must not be added together. Request Credits and cumulative totals cover overlapping consumption. The SDK page does not define how these fields appear in ordinary CLI JSONL logs or standalone print output.
 
+## Project skills
+
+Qoder CLI 1.1.99 does not read `.agents/skills`: project skills come only from `.qoder/skills` at the project root, behind folder trust, and a user skill wins over a project one ([skills docs](https://docs.qoder.com/cli/Skills)).
+
 ## Live-validation gaps
 
 The table records remaining live evidence gaps. The no-login probes above establish startup, configuration-root, prompt, ancestry, and trust behavior only. Bundle traces establish implementation paths, not observed logged-in turns.

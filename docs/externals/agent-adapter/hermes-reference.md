@@ -375,6 +375,10 @@ Child toolsets, model/provider selection, execution limits, and approval policy 
 
 The [stop emitter][child-results] runs during result processing, not at the child's last model token. It omits the start event's subagent IDs. Child approval callbacks default to automatic denial, with `delegation.subagent_auto_approve` selecting one-time approval. Child construction supplies no clarify callback. A child approval observation therefore does not establish a root-terminal wait. See [child configuration][child-config] and [construction][delegate].
 
+## Project skills
+
+Hermes v0.22.2 reads `.agents/skills` (and `.hermes/skills`; `.claude/skills` only as a Skills Hub import source) at the nearest `.git` root only, and only for a root listed in `skills.trusted_project_dirs` in `$HERMES_HOME/config.yaml`, an exact-root allowlist that is empty by default, so an untrusted repo's project skills never load; `$HOME` is rejected as a root, and the skill scanner's quarantine applies on top. A project skill shadows lower tiers (`NousResearch/hermes-agent@v0.22.2:agent/skill_utils.py::get_skill_search_roots`, `NousResearch/hermes-agent@v0.22.2:agent/skill_utils.py::_candidate_project_skills_dirs`).
+
 ## Verification gaps
 
 | Required evidence | What remains unproved |
