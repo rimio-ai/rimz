@@ -981,8 +981,10 @@ impl HostSkills {
         };
         for name in listed.into_iter().flatten() {
             if let Some(found) = inventory.skills.get(name.as_str()) {
-                if let Some(refusal) =
-                    project.and_then(|project| project.user_only(name, &found.path))
+                // Without a switch no list is enforced, so no marker is checked either.
+                if let Some(refusal) = project
+                    .filter(|_| switch)
+                    .and_then(|project| project.user_only(name, &found.path))
                 {
                     return Err(refusal.into());
                 }
