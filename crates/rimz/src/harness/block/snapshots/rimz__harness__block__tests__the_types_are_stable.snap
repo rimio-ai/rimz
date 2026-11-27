@@ -42,6 +42,37 @@ declare function ms(duration: string): number;
 declare function reads(when: string, readings: Record<string, string | null>): boolean | null;
 
 /**
+ * Watches until a case of `list` wins, and gives its `outcome` with the readings of the look it
+ * won on. The first case in order whose `when` reads true wins. A case with no `outcome` waits:
+ * while it reads true, no case after it wins. A case with `for` wins once it has stayed the first
+ * that reads true that long and a look after the hold still has it win. `label` and `cwd` go to
+ * each watch; `timeout` is one deadline for the whole call, read with a `now` call before each
+ * watch. A list it cannot decide throws before any call.
+ */
+declare function cases(
+  list: Case[],
+  options?: { label?: string; cwd?: string; timeout?: string },
+): Promise<CasesResult>;
+
+/** One case of `cases`. */
+interface Case {
+  /** A condition in the grammar `watch` takes. */
+  when: string;
+  /** What `cases` gives when this case wins; a case without one waits. */
+  outcome?: string;
+  /** How long the case must stay the first that reads true before it wins (`30m`). */
+  for?: string;
+}
+
+/** What `cases` gives. */
+interface CasesResult {
+  /** The `outcome` of the case that won. */
+  outcome: string;
+  /** The reading of each key the condition names, at the look the case won on: `null` unread. */
+  readings: Record<string, string | null>;
+}
+
+/**
  * Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
  * `cwd`) it works in its caller's checkout.
  */

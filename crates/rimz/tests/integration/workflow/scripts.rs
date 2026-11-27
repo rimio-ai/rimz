@@ -259,7 +259,7 @@ fn a_script_that_cannot_load_exits_nonzero_with_its_line() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.ends_with(
-            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `file`, `ms`, `reads`, and `args`\n"
+            "script.js: line 2: a workflow script has no imports: its globals are the blocks, `pipeline`, `parallel`, `cases`, `file`, `ms`, `reads`, and `args`\n"
         ),
         "{stderr}"
     );
