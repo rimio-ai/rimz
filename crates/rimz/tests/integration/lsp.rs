@@ -5357,6 +5357,83 @@ fn lsp_admission_warns_for_untrusted_and_optional_configuration_once() {
 }
 
 #[test]
+fn lsp_refusals_before_trust_escape_the_project_server_name() {
+    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
+
+    // A quoted TOML key can hold an OSC sequence that retitles the terminal.
+    const NAME: &str = "\u{1b}]0;pwned\u{7}x";
+    const SHOWN: &str = r"\u{1b}]0;pwned\u{7}x";
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    env.write_config(
+        &env.project_root,
+        "[lsp.servers.\"\\u001b]0;pwned\\u0007x\"]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n",
+    );
+    let machine = MachineConfig::default();
+    let runtime = env.runtime_paths();
+    let ignored = |name: &str| {
+        format!(
+            "project config declares language server {name}: project entry ignored until trusted; run rimz trust"
+        )
+    };
+    let admitted = admit_launch(
+        &AdmissionRequest {
+            root: &env.project_root,
+            project: &env.project_root,
+            servers: &machine.lsp.servers,
+            untrusted_servers: &[NAME.to_owned()],
+            policy: &machine.lsp,
+            runtime: &runtime,
+        },
+        &mut WaitQueue::default(),
+    )
+    .unwrap();
+    assert_eq!(admitted.ignored_untrusted, [ignored(SHOWN)]);
+    // The diagnostic record keeps the name as the project wrote it.
+    let root = env.project_root.canonicalize().unwrap();
+    let records = rimz::diag::lsp::recent();
+    assert!(
+        records.iter().any(|record| record.root == root
+            && record.server == NAME
+            && record.details["reason"] == ignored(NAME)),
+        "{records:?}"
+    );
+
+    let mut attach = env
+        .rimz()
+        .args(["lsp", "attach"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    rimz::lsp::protocol::write_frame(
+        attach.stdin.as_mut().unwrap(),
+        &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+    )
+    .unwrap();
+    let output = attach.wait_with_output().unwrap();
+    assert_eq!(
+        (output.status.code(), String::from_utf8_lossy(&output.stderr)),
+        (
+            Some(1),
+            format!(
+                "error: invalid language-server configuration: project config declares language server {SHOWN} but the project is not trusted; run rimz trust\n"
+            )
+            .into()
+        ),
+        "{output:?}"
+    );
+    env.rimz()
+        .args(["lsp", "stop", "--server", "go"])
+        .assert()
+        .code(2)
+        .stderr(format!(
+            "error: no language server named go; configured: {SHOWN}\n"
+        ));
+}
+
+#[test]
 fn lsp_admission_policy_errors_warn_unless_required_markers_match() {
     use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
 

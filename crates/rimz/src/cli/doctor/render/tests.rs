@@ -3651,6 +3651,56 @@ fn assert_refusal_shape(event: &str, details: serde_json::Value, memory: bool) {
 }
 
 #[test]
+fn lsp_section_escapes_a_project_server_name_before_trust() {
+    use rimz::lsp::broker::probe::{Check, Outcome};
+    let name = "\u{1b}]0;pwned\u{7}x";
+    let shown = r"\u{1b}]0;pwned\u{7}x";
+    let ignored = |name: &str| {
+        format!(
+            "project config declares language server {name}: project entry ignored until trusted; run rimz trust"
+        )
+    };
+    // Admission records the refusal with the name raw; doctor reads it back from that record.
+    let lsp = Probe::Ready(super::super::model::Lsp {
+        checks: vec![Check {
+            server: name.into(),
+            root: "/checkout".into(),
+            outcome: Outcome::Untrusted {
+                fix: "run rimz trust".into(),
+            },
+        }],
+        checks_error: None,
+        servers: Vec::new(),
+        last_refusal: Some(rimz::diag::lsp::Record {
+            at: Timestamp::now() - std::time::Duration::from_secs(7200),
+            root: "/checkout".into(),
+            server: name.into(),
+            event: "refused".into(),
+            details: serde_json::json!({"reason": ignored(name)}),
+        }),
+    });
+    let mut tally = Tally::default();
+    let rendered = strip(|w| render_lsp(w, &lsp, &mut tally));
+    let findings: Vec<_> = tally
+        .alarms
+        .iter()
+        .chain(&tally.warns)
+        .map(|finding| finding.text.clone())
+        .collect();
+    assert_eq!(
+        findings,
+        [
+            format!("{shown}: project configuration is untrusted"),
+            format!("/checkout {shown} refused 2h ago: {}", ignored(shown)),
+        ],
+        "{rendered}"
+    );
+    for finding in &findings {
+        assert!(rendered.contains(finding.as_str()), "{rendered}");
+    }
+}
+
+#[test]
 fn refused_shortfall_reports_memory() {
     assert_refusal_shape("refused", shortfall_details(), true);
 }

@@ -109,7 +109,11 @@ pub fn validate_server_name<'a>(
     let configured = if names.is_empty() {
         "none configured".to_owned()
     } else {
-        names.into_iter().collect::<Vec<_>>().join(", ")
+        names
+            .into_iter()
+            .map(crate::packs::one_line)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     Err(UnknownServer {
         server: server.to_owned(),

@@ -468,7 +468,7 @@ fn render_lsp(
     render_lsp_servers(w, &lsp.servers, tally)?;
     for check in &lsp.checks {
         use rimz::lsp::broker::probe::Outcome;
-        let name = &check.server;
+        let name = rimz::packs::one_line(&check.server);
         match &check.outcome {
             Outcome::Running { .. } => note(w, Health::Ok, &format!("{name} running"))?,
             Outcome::Started { version } => note(
@@ -697,7 +697,7 @@ fn render_lsp_refusal(
         tally,
         w,
         Severity::Warning,
-        &format!(
+        &rimz::packs::one_line(&format!(
             "{} {} {} {}: {reason}",
             home_relative_path(&record.root),
             record.server,
@@ -707,7 +707,7 @@ fn render_lsp_refusal(
                 "refused"
             },
             age_short(Timestamp::now(), record.at),
-        ),
+        )),
         fix,
     )
 }

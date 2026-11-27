@@ -658,8 +658,11 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             let message = format!(
                 "project config declares language server {server}: project entry ignored until trusted; run rimz trust"
             );
+            // The diagnostic record keeps the name raw; the line shown on a terminal escapes it.
             record_refusal(&root, server, &message);
-            result.ignored_untrusted.push(message);
+            result
+                .ignored_untrusted
+                .push(crate::packs::one_line(&message));
         }
     }
     match validate_policy(request.policy) {
