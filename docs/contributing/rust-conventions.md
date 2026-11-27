@@ -45,6 +45,8 @@ A `println!` site is legal only under `#[expect(clippy::print_stdout, reason = "
 
 Human-facing tables, key/value blocks, and listings render through the shared `cli/render` layer. `render::out()` returns an `anstream::AutoStream` over stdout that strips ANSI when output is piped or color is disabled (`NO_COLOR`/`CLICOLOR`, or `--color never`), so `--json` and snapshot output stay byte-clean. It writes through `writeln!`, so it needs no `#[expect]` site.
 
+Text a repository or a pack supplies (a config key, a name, a path, a message) goes through `crate::packs::one_line` before it reaches a terminal, or through a form built on `crate::packs::breaks_line`, such as the dotted key `config::project_file` renders. `render::out()` passes escapes through when stdout is a terminal with color on, and project config is read before trust, so a raw key from an untrusted clone could rewrite the user's terminal.
+
 Colors come from `render::palette`, which lazily resolves the machine's scheme, slot overrides, depth, and provider styles through the shared theme core. State tones resolve once in `render::status`, keyed on typed status values rather than rendered strings. Provider identity, state, hierarchy, and quantities follow the [interface language](../internals/theme.md#interface-language). Raw protocol surfaces stay theme-independent.
 
 All other output flows through `tracing` to stderr:
