@@ -98,8 +98,10 @@ pub(super) fn row_selection_reach(
 /// Delegation entries open only on a card with a child, a wait, a launched entry, or a
 /// booking. There they follow a header pin taken in the parent's current user turn, else
 /// open for a live or held selection or under `expanded` density. `pages` counts the pages of
-/// finished entries the open section shows, taken in the parent's current user turn;
-/// it is 0 while the section is closed or has no finished entry.
+/// finished entries the open section shows: those taken in the parent's current user turn,
+/// and at least the first while nothing is in flight. It is 0 while the section is closed or
+/// has no finished entry, and every reader of a card's shown pages (the draw, the entry
+/// stops, the cached height, the pager's next page) reads it here.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CardExpansion {
     pub(super) reach: SelectionReach,
@@ -133,14 +135,15 @@ impl CardExpansion {
         } else {
             false
         };
-        let pages = pages
-            .get(&row.id)
-            .filter(|pages| {
-                delegation
-                    && pages.turn == agent.user_turn_started_at
-                    && agent_card::has_finished(agent)
-            })
-            .map_or(0, |pages| pages.pages.get());
+        let pages = if delegation && agent_card::has_finished(agent) {
+            let paged = pages
+                .get(&row.id)
+                .filter(|pages| pages.turn == agent.user_turn_started_at)
+                .map_or(0, |pages| pages.pages.get());
+            paged.max(usize::from(!agent_card::has_in_flight(agent, now)))
+        } else {
+            0
+        };
         Self {
             reach,
             delegation,

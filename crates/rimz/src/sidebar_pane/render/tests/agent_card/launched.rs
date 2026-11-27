@@ -129,7 +129,7 @@ fn launched_cards_render_at_46_40_and_28_columns() {
 /// A running entry draws on one line, named by profile and lane or by team and lane, with
 /// its card's text or its board stage and its runtime; it sits after the waits and before
 /// the booked entries, and a click on it focuses its pane. A finished one waits behind the
-/// earlier line, and paged in draws its own text over when it ended and its pull request,
+/// done line, and paged in draws its own text over when it ended and its pull request,
 /// newest end first among every group's finished entries.
 #[test]
 fn launched_entries_list_between_waits_and_booked_and_page_when_finished() {
@@ -156,12 +156,12 @@ fn launched_entries_list_between_waits_and_booked_and_page_when_finished() {
     let team = format!("team forge#lane-readers · {current} Build");
     let mut from = 0;
     for needle in [
-        "▶ launched (4)",
+        "▶ launched (2)",
         "cargo test",
         "coder#feat-x · store refactor",
         &team,
         "scribe · write the docs",
-        "▸ +2 earlier",
+        "▸ +2 done",
     ] {
         let at = text[from..]
             .find(needle)
@@ -212,7 +212,7 @@ fn launched_entries_list_between_waits_and_booked_and_page_when_finished() {
             .unwrap_or_else(|| panic!("{needle:?} newest end first:\n{paged}"));
         from += at + needle.len();
     }
-    assert!(!paged.contains("earlier"), "{paged}");
+    assert!(!paged.contains("▸ +"), "{paged}");
     let selected = ViewState {
         selected_index: Some(0),
         ..Default::default()
@@ -227,27 +227,70 @@ fn launched_entries_list_between_waits_and_booked_and_page_when_finished() {
     );
 }
 
-/// The `▶` header wears the section headers' tone. On an unselected card's closed section
-/// the half draws while an entry runs and counts every entry; with every entry finished the
-/// line drops it until the card is selected.
+/// The `▶` header wears the section headers' tone. The half counts the entries still alive
+/// and reads the same unselected, selected, held, under `expanded` density, and pinned open
+/// or closed, with no subagents half for a card whose children all finished. With every
+/// entry finished the line drops it, and an opened card titles the pile instead.
 #[test]
-fn the_launched_half_draws_closed_only_while_an_entry_runs() {
+fn the_launched_half_counts_live_entries_alike_in_every_open_state() {
     let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    let mut running = lead_snapshot(vec![launches().remove(0), launches().remove(2)]);
+    let mut prior = super::super::budget::sub_agent("lead", 0);
+    prior.prior_turn = true;
+    prior.status = AgentStatus::Success;
+    let card = running.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.sub_agents = vec![prior];
+    let row = running.worktree_groups[0].rows[0].id.clone();
+    let held = std::collections::BTreeSet::from([row.clone()]);
+    let pins = |open: bool| {
+        std::collections::BTreeMap::from([(row.clone(), DelegationPin { open, turn: None })])
+    };
+    let (pinned_open, pinned_closed) = (pins(true), pins(false));
+    let ctx = |selected: usize| test_row_ctx(&running, &theme, 46, selected, 0, &rolls);
+    let section = |ctx: &RowCtx<'_>| {
+        let block = worktree_group_block(ctx, &running.worktree_groups[0], false, None);
+        let line = line_texts(&block.lines)
+            .into_iter()
+            .find(|line| line.contains('▶'))
+            .expect("the section line");
+        let cells: Vec<char> = line.chars().collect();
+        cells[1..cells.len() - 1].iter().collect::<String>()
+    };
+    let unselected = section(&ctx(usize::MAX));
+    assert!(
+        unselected.starts_with("  ▶ launched (1) ") && !unselected.contains('⧉'),
+        "{unselected:?}"
+    );
+    let mut held_ctx = ctx(usize::MAX);
+    held_ctx.held_expansions = &held;
+    let mut expanded = ctx(usize::MAX);
+    expanded.card_density = crate::config::CardDensityMode::Expanded;
+    let mut open_ctx = ctx(usize::MAX);
+    open_ctx.delegation_overrides = &pinned_open;
+    let mut closed_ctx = ctx(0);
+    closed_ctx.delegation_overrides = &pinned_closed;
+    for (state, ctx) in [
+        ("selected", ctx(0)),
+        ("held", held_ctx),
+        ("expanded", expanded),
+        ("pinned open", open_ctx),
+        ("pinned closed", closed_ctx),
+    ] {
+        assert_eq!(section(&ctx), unselected, "{state}");
+    }
     let half = |snapshot: &SidebarSnapshot, selected: usize| {
         line_texts(&group_lines_at_width(snapshot, &theme, selected, 46))
             .into_iter()
             .find(|line| line.contains('▶'))
     };
-    let running = lead_snapshot(launches());
-    assert!(
-        half(&running, usize::MAX).is_some_and(|line| line.contains("▶ launched (4)")),
-        "{:?}",
-        half(&running, usize::MAX)
-    );
     let finished = lead_snapshot(launches().split_off(2));
     assert_eq!(half(&finished, usize::MAX), None);
-    let open = half(&finished, 0).expect("the open section's line");
-    assert!(open.contains("▶ launched (2)"), "{open}");
+    let open = half(&finished, 0).expect("the open section's title");
+    assert!(
+        open.contains("  ▶ launched ") && open.trim_end_matches(['▐', ' ']).ends_with("✓ done (2)"),
+        "{open}"
+    );
     let lines = group_lines_at_width(&running, &theme, usize::MAX, 46);
     let header = lines
         .iter()
@@ -264,8 +307,9 @@ fn the_launched_half_draws_closed_only_while_an_entry_runs() {
     );
 }
 
-/// A pin closing a selected card's section keeps its line and the toggle that reopens it
-/// while the card holds only finished launched entries or only finished bookings.
+/// A pin closing a selected card's section keeps its done title and the toggle that reopens
+/// it, with no entry under it, while the card holds only finished launched entries or only
+/// finished bookings.
 #[test]
 fn a_pin_closed_selected_section_keeps_its_line_over_finished_entries() {
     let theme = Theme::fixed(false);
@@ -282,7 +326,11 @@ fn a_pin_closed_selected_section_keeps_its_line_over_finished_entries() {
         .into_iter()
         .filter(|booking| booking.task == "landed")
         .collect();
-    for (snapshot, needle) in [(&launched, "▶ launched (2)"), (&booked, "▷ booked (1)")] {
+    for (snapshot, kind, needle) in [
+        (&launched, "  ▶ launched ", "✓ done (2)"),
+        (&booked, "  ▷ booked ", "✓ done (1)"),
+    ] {
+        let open = line_texts(&group_lines_at_width(snapshot, &theme, 0, 46));
         let row = snapshot.worktree_groups[0].rows[0].id.clone();
         let pins = std::collections::BTreeMap::from([(
             row.clone(),
@@ -298,18 +346,177 @@ fn a_pin_closed_selected_section_keeps_its_line_over_finished_entries() {
         let text = lines.join("\n");
         let at = lines
             .iter()
-            .position(|line| line.contains(needle))
+            .position(|line| line.contains(kind) && line.contains(needle))
             .unwrap_or_else(|| panic!("{needle}:\n{text}"));
         assert_eq!(
             block.interactions.target_at(8, u16::try_from(at).unwrap()),
             Some(HitTarget::ToggleDelegation { row, open: true }),
             "{text}"
         );
+        assert_eq!(at, lines.len() - 1, "the section stays closed:\n{text}");
+        assert!(open.len() > lines.len(), "{}", open.join("\n"));
+    }
+}
+
+/// With nothing in flight the done title names the pile's kinds, `⧉ · ▶ · ▷`, long where
+/// the long tier fits the whole title and as glyphs one column narrower; the kinds drop
+/// one column past their own fit, then the subagents' cost, and only then does `✓ done (N)`
+/// lose a cell.
+#[test]
+fn the_done_title_shortens_then_drops_its_kinds_before_the_done_count_clips() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = lead_snapshot(launches().split_off(2));
+    let mut prior = super::super::budget::sub_agent("lead", 0);
+    prior.prior_turn = true;
+    prior.status = AgentStatus::Success;
+    let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.sub_agents = vec![prior];
+    card.bookings = crate::sidebar::test_support::bookings_in_each_state(fixed_now())
+        .into_iter()
+        .filter(|booking| booking.task == "landed")
+        .collect();
+    let title = |width: usize| {
+        let line = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains("✓") || line.contains("done ("))
+            .unwrap_or_else(|| panic!("the title at {width}"));
+        let cells: Vec<char> = line.chars().collect();
+        cells[1..cells.len() - 1].iter().collect::<String>()
+    };
+    let done = "✓ done (4)";
+    let long = "  ⧉ subagents · ▶ launched · ▷ booked";
+    let long_drop = text_width(long) + 1 + text_width(done) + 2;
+    assert_eq!(long_drop, 50, "{long}");
+    for width in [long_drop, long_drop + 1] {
+        let line = title(width);
         assert!(
-            !text.contains("earlier"),
-            "the section stays closed:\n{text}"
+            line.starts_with(long) && line.ends_with(done),
+            "{width}: {line:?}"
         );
     }
+    let short = "  ⧉ ▶ ▷";
+    let narrower = title(long_drop - 1);
+    assert!(
+        narrower.starts_with(&format!("{short} ")) && narrower.ends_with(done),
+        "glyphs one column narrower: {narrower:?}"
+    );
+    let short_drop = text_width(short) + 1 + text_width(done) + 2;
+    for width in [short_drop, short_drop + 1] {
+        let line = title(width);
+        assert!(
+            line.starts_with(short) && line.ends_with(done),
+            "{width}: {line:?}"
+        );
+    }
+    let bare = title(short_drop - 1);
+    assert!(
+        !bare.contains('⧉') && bare.trim_start() == done,
+        "the kinds drop whole before the count clips: {bare:?}"
+    );
+    let full = text_width(done) + 2;
+    assert_eq!(title(full).trim_start(), done);
+    assert_ne!(title(full - 1).trim_start(), done, "the count clips last");
+
+    // With a known cost the title pins it after the count: the kinds shorten and drop
+    // first, then the cost, and the count clips last.
+    let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.sub_agents[0].cost_usd = Some(1.2);
+    let title = |width: usize| {
+        let line = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains("done ("))
+            .unwrap_or_else(|| panic!("the priced title at {width}"));
+        let cells: Vec<char> = line.chars().collect();
+        cells[1..cells.len() - 1].iter().collect::<String>()
+    };
+    let priced = format!("{done}  $1.20");
+    let long_drop = text_width(long) + 1 + text_width(&priced) + 2;
+    for width in [long_drop, long_drop + 1] {
+        let line = title(width);
+        assert!(
+            line.starts_with(long) && line.ends_with(&priced),
+            "{width}: {line:?}"
+        );
+    }
+    let narrower = title(long_drop - 1);
+    assert!(
+        narrower.starts_with(&format!("{short} ")) && narrower.ends_with(&priced),
+        "glyphs one column narrower: {narrower:?}"
+    );
+    let short_drop = text_width(short) + 1 + text_width(&priced) + 2;
+    for width in [short_drop, short_drop + 1] {
+        let line = title(width);
+        assert!(
+            line.starts_with(short) && line.ends_with(&priced),
+            "{width}: {line:?}"
+        );
+    }
+    let cost_drop = text_width(&priced) + 2;
+    for width in [cost_drop, cost_drop + 1, short_drop - 1] {
+        let line = title(width);
+        assert_eq!(
+            line.trim_start(),
+            priced,
+            "the kinds drop before the cost: {width}"
+        );
+    }
+    assert_eq!(
+        title(cost_drop - 1).trim_start(),
+        done,
+        "the cost drops before the count"
+    );
+    let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.sub_agents[0].cost_usd = None;
+    let line = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 60))
+        .into_iter()
+        .find(|line| line.contains("done ("))
+        .expect("the unpriced title")
+        .trim_end_matches(['▐', '🮇', ' '])
+        .to_owned();
+    assert!(
+        line.trim_end().ends_with(done),
+        "with no known cost the title ends at its count: {line:?}"
+    );
+}
+
+/// A one-kind done title fits below the long tier, so its label follows the tier the
+/// content width reads: the long kind from the tier's first column, the glyph below it.
+#[test]
+fn a_one_kind_done_title_takes_its_long_label_exactly_from_the_long_tier() {
+    use crate::sidebar_pane::render::sections::Tier;
+    let theme = Theme::fixed(false);
+    let mut snapshot = lead_snapshot(Vec::new());
+    let mut prior = super::super::budget::sub_agent("lead", 0);
+    prior.prior_turn = true;
+    prior.status = AgentStatus::Success;
+    let card = snapshot.rows_mut().next().unwrap().as_agent_mut().unwrap();
+    card.sub_agents = vec![prior];
+    let edge = (1..200)
+        .find(|&width| Tier::for_width(super::super::content_width(width)) == Tier::L2)
+        .unwrap();
+    let title = |width: usize| {
+        line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))
+            .into_iter()
+            .find(|line| line.contains("done (1)"))
+            .unwrap_or_else(|| panic!("the title at {width}"))
+    };
+    let long = "  ⧉ subagents ";
+    assert!(
+        text_width(long) + text_width("✓ done (1)") + 2 < edge - 1,
+        "the long title fits below the edge, so only the tier picks the form"
+    );
+    for width in [edge, edge + 1] {
+        let line = title(width);
+        assert!(
+            line[line.char_indices().nth(1).unwrap().0..].starts_with(long),
+            "{width}: {line:?}"
+        );
+    }
+    let below = title(edge - 1);
+    assert!(
+        !below.contains("subagents") && below.contains("⧉ ") && below.contains("✓ done (1)"),
+        "glyph form below the edge: {below:?}"
+    );
 }
 
 /// A team the card launched and waits on lists once, under launched, and its wait neither
@@ -376,13 +583,13 @@ fn the_launched_half_sits_between_waits_and_booked_and_shortens_at_its_drop_widt
             .find(|line| line.contains('⧉'))
             .unwrap()
     };
-    let long = "  ⧉ subagents (2) · ⧖ waits (1) · ▶ launched (4) · ▷ booked (1)";
+    let long = "  ⧉ subagents (2) · ⧖ waits (1) · ▶ launched (2) · ▷ booked (1)";
     let drop = text_width(long) + 2;
     assert!(line(drop + 1).contains(long), "{}", line(drop + 1));
     assert!(line(drop).contains(long), "{}", line(drop));
     let short = line(drop - 1);
     assert!(
-        short.contains("  ⧉ 2 · ⧖ 1 · ▶ 4 · ▷ 1 "),
+        short.contains("  ⧉ 2 · ⧖ 1 · ▶ 2 · ▷ 1 "),
         "short labels one column narrower: {short}"
     );
     assert_eq!(drop, 65, "{long}");

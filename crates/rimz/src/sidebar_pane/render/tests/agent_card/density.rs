@@ -753,10 +753,10 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     );
     let subagent_line = rendered
         .lines()
-        .find(|line| line.contains("⧉ subagents (1)"))
-        .expect("expanded mode should render the parent's subagent section");
+        .find(|line| line.contains("⧖ waits (1)"))
+        .expect("expanded mode should render the parent's delegation section");
     assert!(
-        subagent_line.contains("▎  ⧉ subagents (1)"),
+        subagent_line.contains("▎  ⧖ waits (1)") && !subagent_line.contains('⧉'),
         "expanded mode opens the non-selected parent's subagents:\n{rendered}"
     );
     let child_entry = rendered
@@ -771,7 +771,6 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         child_entry > wait_entry,
         "a finished child pages in below the waits"
     );
-    assert!(subagent_line.contains("· ⧖ waits (1)"));
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
 
     let row = std::sync::Arc::make_mut(
@@ -796,9 +795,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     };
     let opened =
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 31);
-    // Unpaged, both finished children wait behind the earlier line; the title counts this turn's.
-    assert!(opened.contains("⧉ subagents (1)"), "{opened}");
-    assert!(opened.contains("▸ +2 earlier"), "{opened}");
+    // Unpaged, both finished children wait behind the done line; the line counts only the
+    // wait in flight.
+    assert!(opened.contains("  ⧖ waits (1)"), "{opened}");
+    assert!(!opened.contains('⧉'), "{opened}");
+    assert!(opened.contains("▸ +2 done"), "{opened}");
     assert!(!opened.contains("map the render path"), "{opened}");
     assert!(!opened.contains("previous render audit"), "{opened}");
 }

@@ -14,11 +14,11 @@ expression: screen
 ▌  build feature                                     ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents                                       ▐
-▌    ▸ +1 earlier                                    ▐
+▌  ⧉ subagents                             ✓ done (1)▐
+▌    ✓ coder · task p1                               ▐
+▌      Haiku                                         ▐
 ▎○ codex                                             🮇
 ▎  other task                                        🮇
-
  ────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00

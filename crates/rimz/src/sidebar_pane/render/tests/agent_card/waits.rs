@@ -1084,36 +1084,36 @@ fn pending_waits_line_counts_armed_waits() {
     let theme = Theme::fixed(false);
     let collapsed = group_lines(&snapshot, &theme, usize::MAX);
     let collapsed_text = line_texts(&collapsed);
+    // The finished child leaves the line's count, while its spend still prices the line.
     let stats = collapsed_text
         .iter()
-        .position(|line| line.contains("⧉ subagents (1) · ⧖ waits (2)"))
+        .position(|line| line.contains("  ⧖ waits (2)"))
         .unwrap();
+    assert!(
+        !collapsed_text[stats].contains('⧉'),
+        "{}",
+        collapsed_text[stats]
+    );
     let summary = &collapsed[stats];
-    for (glyph, component) in [
-        (GlyphRole::CardSubagents, Component::SubagentHeader),
-        (GlyphRole::CardWaits, Component::WaitHeader),
-    ] {
-        let span = summary
-            .spans
-            .iter()
-            .find(|span| span.content == theme.glyph(glyph))
-            .unwrap();
-        assert_eq!(span.style.fg, Some(theme.component(component)));
-    }
-    for (text, style) in [
-        (" subagents (1)", theme.body()),
-        (" waits (2)", theme.body()),
-        (" · ", theme.muted()),
-        ("$0.42", theme.money_style(Modifier::empty())),
-    ] {
-        let span = summary
-            .spans
-            .iter()
-            .find(|span| span.content == text)
-            .unwrap();
-        assert_eq!(span.style.fg, style.fg);
-    }
-    assert!(collapsed_text[stats].trim_end().ends_with("$0.42"));
+    let mark = summary
+        .spans
+        .iter()
+        .find(|span| span.content == theme.glyph(GlyphRole::CardWaits))
+        .unwrap();
+    assert_eq!(mark.style.fg, Some(theme.component(Component::WaitHeader)));
+    let label = summary
+        .spans
+        .iter()
+        .find(|span| span.content == " waits (2)")
+        .unwrap();
+    assert_eq!(label.style.fg, theme.body().fg);
+    assert!(
+        collapsed_text[stats]
+            .trim_end_matches(['▐', '🮇', ' '])
+            .ends_with(" $0.42"),
+        "{}",
+        collapsed_text[stats]
+    );
     assert!(
         !collapsed_text
             .iter()
@@ -1149,7 +1149,10 @@ fn pending_waits_line_counts_armed_waits() {
     }
     assert!(expanded[stats].contains("▤ 0"));
     let selected_stats = stats + 1;
-    assert!(expanded[selected_stats].ends_with("$0.42▐"));
+    assert!(
+        expanded[selected_stats].contains("  ⧖ waits (2)")
+            && expanded[selected_stats].contains("$0.42")
+    );
     assert!(expanded[selected_stats + 1].contains("◷ timer · in 12m"));
     assert!(expanded[selected_stats + 2].contains(&shell_lead(&theme, "command · make")));
     assert!(expanded[selected_stats + 3].contains("      make check"));
@@ -1165,16 +1168,15 @@ fn pending_waits_line_counts_armed_waits() {
     for width in [24, 30, 36, 45, 46] {
         let narrow = group_lines_at_width(&snapshot, &theme, 0, width);
         let narrow_text = line_texts(&narrow);
-        let counts = narrow_text[selected_stats]
-            .strip_suffix("$0.42▐")
-            .unwrap()
-            .trim_end();
+        let line = narrow_text[selected_stats].strip_suffix('▐').unwrap();
+        let counts = line.strip_suffix("$0.42").unwrap_or(line).trim_end();
         let expected = if width < 46 {
-            "▌  ⧉ 1 · ⧖ 2"
+            "▌  ⧖ 2"
         } else {
-            "▌  ⧉ subagents (1) · ⧖ waits (2)"
+            "▌  ⧖ waits (2)"
         };
         assert_eq!(counts, expected, "pane width {width}");
+        assert!(line.ends_with(" $0.42"), "pane width {width}: {line}");
         assert_eq!(narrow[selected_stats].width(), width);
         let collapsed = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, width));
         assert_eq!(
@@ -1235,13 +1237,27 @@ fn pending_waits_line_counts_armed_waits() {
     .unwrap()
     .pending_waits
     .clear();
+    // With the waits gone nothing is in flight: the done title names the child's kind and
+    // keeps its cost.
     let cleared = line_texts(&group_lines_paged(&snapshot, &theme, 0));
-    assert!(cleared[stats].contains("⧉ subagents (1)"));
+    assert!(
+        cleared[stats].contains("  ⧉ subagents ")
+            && cleared[stats]
+                .trim_end_matches('▐')
+                .ends_with("✓ done (1)  $0.42"),
+        "{}",
+        cleared[stats]
+    );
     assert!(!cleared.iter().any(|line| line.contains("⧖")));
     let narrow = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 36));
-    assert_eq!(
-        narrow[stats].strip_suffix("$0.42▐").unwrap().trim_end(),
-        "▌  ⧉ 1"
+    assert!(
+        narrow[stats].starts_with("▌  ⧉ ")
+            && narrow[stats]
+                .trim_end_matches('▐')
+                .ends_with("✓ done (1)  $0.42")
+            && !narrow[stats].contains("subagents"),
+        "{}",
+        narrow[stats]
     );
 }
 

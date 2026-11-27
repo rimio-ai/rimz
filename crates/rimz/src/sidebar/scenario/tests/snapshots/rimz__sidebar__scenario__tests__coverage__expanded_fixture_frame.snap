@@ -18,10 +18,10 @@ expression: strip_sgr(&ansi)
 ▎  verify 256-color fallback                         🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────── 31.0% 󰪞  6m🮇
 ▎  󰿦 314k · 󱥸 270k  31k  12k  39k                 🮇
-▎   subagents (2)                              $0.46🮇
+▎   subagents (1)                              $0.46🮇
 ▎    ⠁ Plan · run focused nextest               $0.12🮇
 ▎      󰿦 18k · Haiku · xhigh                       3m🮇
-▎    ▸ +1 earlier                                    🮇
+▎    ▸ +1 done                                       🮇
 
   zellij-health                        ⇡1  +760 -210
   pi-2 · GPT 5.5 · xhigh · 272k                $5.76
@@ -42,10 +42,10 @@ expression: strip_sgr(&ansi)
    stabilize render diff
    󰕰 ━━━━━━━━━━━━╺━╺───────────────────── 24.0%
    󰿦 247k · 󱥸 212k  24k  9k  30k
-    subagents (2)                              $0.46
+    subagents (1)                              $0.46
      ⠁ Plan · run focused nextest               $0.12
        󰿦 18k · Haiku · xhigh                       3m
-     ▸ +1 earlier
+     ▸ +1 done
  ▁ claude-2 · Opus 4.8 · xhigh · 1M            $28.90
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━──── 79.0% 󰪞  8m
@@ -60,10 +60,10 @@ expression: strip_sgr(&ansi)
    triage stale pane sample
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺─────────── 72.1% 󰪤 54m
    󰿦 185k · 󱥸 178k  7k  23k
-    subagents (2)
+    subagents (1)
      ⠁ Plan · run focused nextest
        󰿦 18k · Haiku · xhigh                       3m
-     ▸ +1 earlier
+     ▸ +1 done
   pi · GPT 5.5 · xhigh
   claude-3 · Opus 4.8 · xhigh · 1M            $29.84
    API Error: Overloaded

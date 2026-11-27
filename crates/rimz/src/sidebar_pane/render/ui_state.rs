@@ -68,7 +68,7 @@ pub(in crate::sidebar_pane) struct UiState {
 pub(in crate::sidebar_pane) enum EntryCursor {
     SubAgent(PaneId),
     ReopenSubAgent(String),
-    /// The `▸ +N earlier` / `+M more` line closing an open delegation section.
+    /// The `▸ +N done` / `+M more` line closing an open delegation section.
     DelegationPage,
 }
 
@@ -405,14 +405,14 @@ pub(in crate::sidebar_pane) struct PresentationToggles {
     /// that turn moves or the row leaves the snapshot.
     /// Travels with the view, including a fork's initial state.
     pub(in crate::sidebar_pane) delegation_overrides: BTreeMap<String, DelegationPin>,
-    /// Pages of finished delegation entries shown in an agent card's open section in this
-    /// view (row id → pages). Returns to closed when the parent's user turn moves, the row
+    /// Pages of finished delegation entries an activation of an agent card's pager line asked
+    /// for in this view (row id → pages). Drops when the parent's user turn moves, the row
     /// leaves, or the section closes.
     pub(in crate::sidebar_pane) delegation_pages: BTreeMap<String, DelegationPages>,
 }
 
 /// How many pages of an open delegation section's finished entries show, and the
-/// parent's `user_turn_started_at` when the first was opened.
+/// parent's `user_turn_started_at` when the pager was last activated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct DelegationPages {
     pub(in crate::sidebar_pane) pages: NonZeroUsize,
@@ -702,7 +702,8 @@ impl ViewState {
 
     /// Drop the delegation pages of every card that no longer resolves with pages shown:
     /// its row gone from the visible roster, its section closed by a pin or by the
-    /// selection leaving, no finished entry left, or the parent's user turn moved.
+    /// selection leaving, no finished entry left, or the parent's user turn moved, which
+    /// a card with nothing in flight still shows its first page through.
     pub(super) fn prune_delegation_pages(&mut self, snapshot: &SidebarSnapshot) {
         if self.toggles.delegation_pages.is_empty() {
             return;
@@ -711,14 +712,19 @@ impl ViewState {
         let shown: Vec<String> = self
             .toggles
             .delegation_pages
-            .keys()
-            .filter(|id| {
+            .iter()
+            .filter(|(id, pages)| {
                 roster
                     .ordinal_of_id(id)
                     .and_then(|index| self.card_expansion(&roster, snapshot, index))
-                    .is_some_and(|(_, expansion)| expansion.pages > 0)
+                    .is_some_and(|(row, expansion)| {
+                        expansion.pages > 0
+                            && row
+                                .as_agent()
+                                .is_some_and(|agent| agent.user_turn_started_at == pages.turn)
+                    })
             })
-            .cloned()
+            .map(|(id, _)| id.clone())
             .collect();
         self.toggles
             .delegation_pages

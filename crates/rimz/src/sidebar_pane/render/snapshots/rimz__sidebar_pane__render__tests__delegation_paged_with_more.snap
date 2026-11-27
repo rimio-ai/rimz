@@ -14,7 +14,7 @@ expression: screen
 ▌  build feature                                     ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents                                       ▐
+▌  ⧉ subagents                            ✓ done (12)▐
 ▌    ✓ worker-12 · task p12                          ▐
 ▌      Haiku                                         ▐
 ▌    ! worker-11 · task p11                          ▐

@@ -72,10 +72,11 @@ pub(super) enum CardSlot {
     Gauge,
     Tokens,
     Cache,
-    /// The current turn's child count and cost, armed waits, and bookings; empty
-    /// until one exists, or a child of an earlier turn on a card that opens it.
+    /// The in-flight children with their cost, armed waits, live launched entries, and
+    /// unfinished bookings, each counted; with nothing in flight, the done title on a card
+    /// that opens it, and empty otherwise.
     Delegation,
-    /// Every in-flight entry, the paged finished entries, and the `▸ +N earlier` /
+    /// Every in-flight entry, the paged finished entries, and the `▸ +N done` /
     /// `+M more` line over the finished entries still hidden.
     DelegationEntries,
     /// The booked line alone, on a shape without `Delegation` whose card holds an

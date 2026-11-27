@@ -210,7 +210,7 @@ proptest! {
                 9 => ui.toggles.inactive_peek = ui.toggles.inactive_peek.is_none().then(Default::default),
                 10 => ui.toggles.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
-                // A booking arriving, paging behind `▸ +N earlier`, or finishing.
+                // A booking arriving, paging behind `▸ +N done`, or finishing.
                 11 => {
                     let mut bookings =
                         crate::sidebar::test_support::bookings_in_each_state(snapshot.now);

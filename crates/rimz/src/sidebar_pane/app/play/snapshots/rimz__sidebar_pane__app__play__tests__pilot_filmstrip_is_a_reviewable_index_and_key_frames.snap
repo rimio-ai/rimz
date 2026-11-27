@@ -217,10 +217,10 @@ cockpit       │
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌  ⧉ subagents (1)                                   ▐
 @coder#main   │ ▌    ⠁ codex · check the model                       ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@coder#main   │ ▌    ▸ +1 earlier                                    ▐
+@coder#main   │ ▌    ▸ +1 done                                       ▐
               │
               │
               │
@@ -253,11 +253,11 @@ cockpit       │
 @coder#main   │ ▌  wakes in 1m                                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
+@coder#main   │ ▌  ⧉ subagents (1) · ⧖ waits (1)                     ▐
 @coder#main   │ ▌    ⠁ codex · check the model                       ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
-@coder#main   │ ▌    ▸ +1 earlier                                    ▐
+@coder#main   │ ▌    ▸ +1 done                                       ▐
               │
               │
               │
@@ -288,9 +288,9 @@ cockpit       │
 @coder#main   │ ▌  wakes in 1m                                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
+@coder#main   │ ▌  ⧖ waits (1)                                       ▐
 @coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
-@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+@coder#main   │ ▌    ▸ +2 done                                       ▐
               │
               │
               │
@@ -325,9 +325,9 @@ cockpit       │
 @coder#main   │ ▎  wakes now                                         🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
-@coder#main   │ ▎  ⧉ subagents (2) · ⧖ waits (1)                     🮇
+@coder#main   │ ▎  ⧖ waits (1)                                       🮇
 @coder#main   │ ▎    ◷ timer · due                              ◔ <1m🮇
-@coder#main   │ ▎    ▸ +2 earlier                                    🮇
+@coder#main   │ ▎    ▸ +2 done                                       🮇
               │
               │
               │
@@ -361,11 +361,11 @@ cockpit       │
 @coder#main   │ ▎  Ship the sidebar story?                           🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
-@coder#main   │ ▎  ⧉ subagents (2)                                   🮇
-@coder#main   │ ▎    ▸ +2 earlier                                    🮇
-              │
-              │
-              │
+@coder#main   │ ▎  ⧉ subagents                             ✓ done (2)🮇
+@coder#main   │ ▎    ✓ codex · model checked                         🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
+@coder#main   │ ▎    ✓ claude · renderer reviewed                    🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
               │
               │
               │
@@ -392,11 +392,11 @@ cockpit       │
 @coder#main   │ ▎? coder                                             🮇
 @coder#main   │ ▎  Ship the sidebar story?                           🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@coder#main   │ ▎  ⧉ subagents (2)                                   🮇
 @planner#main │ ▌✓ planner                                           ▐
 @planner#main │ ▌  plan approved                                     ▐
 @planner#main │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @planner#main │ ▌  ▤ 0                                               ▐
+              │
               │
               │
               │
@@ -429,15 +429,15 @@ cockpit       │
 @coder#main   │ ▌  Ship the sidebar story?                           ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+@coder#main   │ ▌  ⧉ subagents                             ✓ done (2)▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-              │
-              │
-              │
               │
               │
               │
@@ -465,15 +465,15 @@ cockpit       │
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+@coder#main   │ ▌  ⧉ subagents                             ✓ done (2)▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-              │
-              │
-              │
               │
               │
               │
@@ -501,15 +501,15 @@ cockpit       │
 @coder#main   │ ▌  sidebar story shipped                             ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+@coder#main   │ ▌  ⧉ subagents                             ✓ done (2)▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-              │
-              │
-              │
               │
               │
               │
@@ -537,14 +537,14 @@ cockpit       │
 @coder#main   │ ▌  sidebar story shipped                             ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
-@coder#main   │ ▌    ▸ +2 earlier                                    ▐
+@coder#main   │ ▌  ⧉ subagents                             ✓ done (2)▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
 @planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-              │
-              │
-              │
               │
               │
               │

@@ -651,8 +651,8 @@ pub(in crate::sidebar_pane::render) fn test_row_ctx<'a>(
     }
 }
 
-/// `row`'s delegation pages as `pages` activations of its earlier line in the parent's
-/// current user turn leave them.
+/// A stored record showing `pages` pages of `row`'s finished delegation entries in the
+/// parent's current user turn.
 fn paged(row: &crate::store::snapshot::SidebarRow, pages: usize) -> (String, DelegationPages) {
     let turn = row.as_agent().and_then(|agent| agent.user_turn_started_at);
     let pages = std::num::NonZeroUsize::new(pages).expect("at least one page");

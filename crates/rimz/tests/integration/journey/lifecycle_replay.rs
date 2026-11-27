@@ -359,7 +359,7 @@ fn errored_turn_renders_failed() {
 }
 
 #[test]
-fn subagent_child_row_appears_and_leaves_at_the_next_turn() {
+fn subagent_child_row_appears_and_moves_to_the_done_pile() {
     for agent in [ReplayAgent::Claude, ReplayAgent::Codex] {
         let env = Env::new();
         if env.skip_if_sandboxed() {
@@ -392,24 +392,22 @@ fn subagent_child_row_appears_and_leaves_at_the_next_turn() {
         );
 
         room.agent_hook(agent.source(), &subagent_stop(agent.session(), &child_id));
-        let screen = room.wait_for(|s| s.contains("▸ +1 earlier"), SETTLE);
+        let done = |s: &str| s.contains("done (1)") && !s.contains("⧉ 1");
+        let screen = room.wait_for(done, SETTLE);
         assert!(
-            screen.contains("▸ +1 earlier"),
-            "subagent stop moves the finished child behind the earlier line:\n{screen}"
+            done(&screen),
+            "subagent stop moves the finished child into the done pile:\n{screen}"
         );
 
-        // The standing delegation line counts the current turn's children only,
-        // so the next prompt drops `⧉ 1`.
+        // The standing delegation line counts in-flight children only, so the next
+        // prompt brings no `⧉ 1` back, and the prior turn's child stays in the pile.
         room.agent_hook(agent.source(), &agent.prompt("next parent turn"));
-        let next_turn_without_child = |screen: &str| {
-            screen.contains("next parent turn")
-                && !screen.contains("⧉ 1")
-                && !screen.contains("✓ review")
-        };
-        let screen = room.wait_for(next_turn_without_child, SETTLE);
+        let next_turn_in_the_pile =
+            |screen: &str| screen.contains("next parent turn") && done(screen);
+        let screen = room.wait_for(next_turn_in_the_pile, SETTLE);
         assert!(
-            next_turn_without_child(&screen),
-            "next parent turn drops the prior turn's child row and count:\n{screen}"
+            next_turn_in_the_pile(&screen),
+            "next parent turn keeps the prior turn's child in the done pile:\n{screen}"
         );
     }
 }

@@ -14,7 +14,7 @@ expression: screen
 ▌  delegate background check                         ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents (2)                              $0.36▐
+▌  ⧉ subagents (1)                              $0.36▐
 ▌    ✓ coder · build in background  ⋯ bg        $0.24▐
 ▌      ▤ 14k · Sonnet 4.6                          1m▐
 ▌    ✓ reviewer · checked diff                  $0.12▐

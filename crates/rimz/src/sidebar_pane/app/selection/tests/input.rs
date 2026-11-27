@@ -229,7 +229,7 @@ fn card_level_motions_and_search_clear_an_entry_even_without_a_card_move() {
 }
 
 #[test]
-fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
+fn a_fresh_stage_or_a_filter_invalidates_the_entry_and_a_new_prompt_keeps_it_listed() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for cause in ["prompt", "fresh", "filter", "cap"] {
@@ -248,7 +248,7 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
         actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
-        expected.push(InputOutcome::focus(child));
+        expected.push(InputOutcome::focus(child.clone()));
         let card = std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
         )[0]
@@ -295,10 +295,12 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         reconcile_selection(&mut view, &snapshot, None);
         paint(&mut view, &mut ui, &snapshot, 64);
         actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
-        expected.push(if matches!(cause, "filter" | "cap") {
-            InputOutcome::default()
-        } else {
-            InputOutcome::focus(parent)
+        // After a new prompt nothing is in flight, so the prior turn's children list under
+        // the done title and the entry stays where the cursor left it.
+        expected.push(match cause {
+            "filter" | "cap" => InputOutcome::default(),
+            "prompt" => InputOutcome::focus(child.clone()),
+            _ => InputOutcome::focus(parent),
         });
     }
     assert_eq!(actual, expected);
@@ -1036,7 +1038,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     let opened = compose(&ui, &pane_ui);
     assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
-    assert!(shows(&opened.lines, "▸ +1 earlier"));
+    assert!(shows(&opened.lines, "▸ +1 done"));
     click_delegation_header(
         &mut ui,
         &mut pane_ui,
@@ -1078,7 +1080,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     );
     let reopened = compose(&ui, &pane_ui);
     assert!(shows(&reopened.lines, "live-child"));
-    assert!(shows(&reopened.lines, "▸ +1 earlier"));
+    assert!(shows(&reopened.lines, "▸ +1 done"));
     let mut ordinals = (0..reopened.interactions.line_count())
         .filter_map(|line| reopened.interactions.row_at_line(line))
         .collect::<Vec<_>>();
@@ -1172,8 +1174,8 @@ fn a_delegation_pin_holds_for_the_parents_turn_and_lapses_when_it_moves() {
         set_turn(&mut snapshot, Some(next_turn));
         assert!(shows_child(&ui, &mut pane_ui, &snapshot));
 
-        // A pin taken in the current turn on a card with only earlier children
-        // opens its section to the earlier line, and it drops with its row.
+        // A pin taken in the current turn on a card with only prior-turn children
+        // opens its section to the done title, and it drops with its row.
         set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
         let card = std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -3401,7 +3403,7 @@ fn a_later_row_reveal_replaces_a_dormant_one_even_with_none() {
 
 /// Row 0 of `delegation_snapshot` with `count` reopenable children of an earlier turn,
 /// rested a minute apart, newest `prior-1`.
-fn earlier_children_snapshot(count: usize) -> (SidebarSnapshot, String) {
+fn prior_children_snapshot(count: usize) -> (SidebarSnapshot, String) {
     let mut snapshot = delegation_snapshot();
     let base = snapshot.now;
     let row0 = &mut std::sync::Arc::make_mut(
@@ -3432,14 +3434,23 @@ fn earlier_children_snapshot(count: usize) -> (SidebarSnapshot, String) {
 }
 
 #[test]
-fn the_earlier_line_pages_by_click_and_enter_without_moving_focus() {
-    let (snapshot, row0_id) = earlier_children_snapshot(7);
+fn the_done_pager_pages_by_click_and_enter_without_moving_focus() {
+    let (snapshot, row0_id) = prior_children_snapshot(12);
     let mut view = ViewState::default();
     let mut ui = UiState::default();
     reconcile_selection(&mut view, &snapshot, Some(pane_of(&snapshot, 0)));
-    paint(&mut view, &mut ui, &snapshot, 40);
-    let page_target = HitTarget::PageDelegation {
-        row: row0_id.clone(),
+    paint(&mut view, &mut ui, &snapshot, 60);
+    let pager = |ui: &UiState| {
+        ui.interactions
+            .regions()
+            .iter()
+            .find_map(|region| match &region.target {
+                HitTarget::PageDelegation { row, pages } if *row == row0_id => Some((
+                    (region.columns.start, region.rows.start as u16),
+                    pages.pages.get(),
+                )),
+                _ => None,
+            })
     };
     let pages = |view: &ViewState| {
         view.toggles
@@ -3448,45 +3459,56 @@ fn the_earlier_line_pages_by_click_and_enter_without_moving_focus() {
             .map(|pages| pages.pages.get())
     };
 
-    // A click shows the first page, keeps the card's selection, and moves no focus.
-    let at = ui
-        .interactions
-        .line_for_target(&page_target)
-        .expect("earlier line");
+    let reopen = |n: usize| EntryCursor::ReopenSubAgent(format!("prior-{n}"));
+
+    // With nothing in flight the open section lists the first five unasked, and the cursor
+    // walks them, newest first, then the pager.
+    assert_eq!(pages(&view), None);
+    for n in 1..=5 {
+        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+        assert_eq!(view.entry_cursor, Some(reopen(n)));
+    }
+    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
+    assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+
+    // The first click shows entries six to ten, keeps the card's selection, and moves no
+    // focus.
+    let (at, next) = pager(&ui).expect("pager line");
+    assert_eq!(
+        next, 2,
+        "the painted pager stores the page past the implicit first"
+    );
     let outcome = handle_mouse_click(at.0, at.1, &mut view, &mut ui, &snapshot);
     assert!(outcome.redraw);
     assert!(outcome.effects.is_empty(), "{:?}", outcome.effects);
     assert_eq!(view.selected_index, Some(0));
-    assert_eq!(pages(&view), Some(1));
-    paint(&mut view, &mut ui, &snapshot, 40);
-
-    // The cursor walks the five paged entries, newest first, then the line.
-    for n in 1..=5 {
-        handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
-        assert_eq!(
-            view.entry_cursor,
-            Some(EntryCursor::ReopenSubAgent(format!("prior-{n}")))
-        );
-    }
-    handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
-    assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+    assert_eq!(pages(&view), Some(2));
+    paint(&mut view, &mut ui, &snapshot, 60);
+    let stops = view.entry_stops(&snapshot, 0);
+    assert_eq!(
+        stops,
+        (1..=10)
+            .map(reopen)
+            .chain([EntryCursor::DelegationPage])
+            .collect::<Vec<_>>()
+    );
 
     // Enter on it shows the last two, and the line is gone with nothing left to show.
     let outcome = handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot);
     assert!(outcome.redraw);
     assert!(outcome.effects.is_empty(), "{:?}", outcome.effects);
     assert_eq!(view.selected_index, Some(0));
-    assert_eq!(pages(&view), Some(2));
-    paint(&mut view, &mut ui, &snapshot, 40);
-    assert!(ui.interactions.line_for_target(&page_target).is_none());
+    assert_eq!(pages(&view), Some(3));
+    paint(&mut view, &mut ui, &snapshot, 60);
+    assert!(pager(&ui).is_none());
     assert_ne!(view.entry_cursor, Some(EntryCursor::DelegationPage));
     let stops = view.entry_stops(&snapshot, 0);
-    assert!(stops.contains(&EntryCursor::ReopenSubAgent("prior-7".to_owned())));
+    assert!(stops.contains(&reopen(12)));
 }
 
 #[test]
 fn delegation_pages_reset_when_the_parent_turn_moves_or_the_section_closes() {
-    let (mut snapshot, row0_id) = earlier_children_snapshot(7);
+    let (mut snapshot, row0_id) = prior_children_snapshot(7);
     let t0 = snapshot.now;
     let t1 = jiff::Timestamp::from_second(t0.as_second() + 60).unwrap();
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 40)).unwrap();

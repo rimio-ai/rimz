@@ -125,8 +125,11 @@ pub(crate) enum Component {
     Compaction,
     /// The `⧉` subagents header.
     SubagentHeader,
-    /// The `▸ +N earlier` / `+M more` line that pages a card's finished delegation entries.
+    /// The `▸ +N done` / `+M more` line that pages a card's finished delegation entries.
     DelegationPager,
+    /// The dimmed `✓ done (N)` count on a delegation section's title while nothing is in
+    /// flight.
+    DelegationDone,
     /// A paneless subagent entry that cannot be reopened (provider-native, or a launched child
     /// whose recorded session cannot resume).
     SubagentInert,
@@ -282,6 +285,7 @@ impl Component {
         Component::Compaction,
         Component::SubagentHeader,
         Component::DelegationPager,
+        Component::DelegationDone,
         Component::SubagentInert,
         Component::SubagentReopening,
         Component::WaitHeader,
@@ -369,7 +373,7 @@ impl Component {
             | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
             | NeedsYouFilter | BookingWaiting | BookingEnded | LaunchedEnded | LaunchedStarting
             | EntryLane | EntryTeamTag | EntryStage | CardClosing | DelegationPager
-            | SubagentReopening => palette.muted,
+            | DelegationDone | SubagentReopening => palette.muted,
         })
     }
 }

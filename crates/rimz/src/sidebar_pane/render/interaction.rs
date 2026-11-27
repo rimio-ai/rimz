@@ -13,10 +13,12 @@ pub(in crate::sidebar_pane) enum HitTarget {
     SubAgentPane(crate::ids::PaneId),
     /// A paneless reopenable launched child; activating it runs `rimz agents resume <id>`.
     ReopenSubAgent(String),
-    /// The `▸ +N earlier` / `+M more` line of an open delegation section: shows five
-    /// more of its finished entries.
+    /// The `▸ +N done` / `+M more` line of an open delegation section: shows five
+    /// more of its finished entries. `pages` is the record activating it stores, read from
+    /// the paint that drew it.
     PageDelegation {
         row: String,
+        pages: super::DelegationPages,
     },
     ProviderTab(crate::ids::LoginKey),
     BodyFilter(BodyFilter),
@@ -119,16 +121,31 @@ impl FrameInteractions {
         &self.row_by_line
     }
 
-    pub(super) fn target_rows(&self, target: &HitTarget) -> Option<Range<usize>> {
+    pub(super) fn target_rows(&self, target: impl Fn(&HitTarget) -> bool) -> Option<Range<usize>> {
         let mut rows = self
             .regions
             .iter()
-            .filter(|region| &region.target == target)
+            .filter(|region| target(&region.target))
             .map(|region| &region.rows);
         let first = rows.next()?.clone();
         Some(rows.fold(first, |span, rows| {
             span.start.min(rows.start)..span.end.max(rows.end)
         }))
+    }
+
+    /// The record the painted pager of card `row` stores when activated, while it is on
+    /// screen.
+    pub(in crate::sidebar_pane) fn delegation_pager(
+        &self,
+        row: &str,
+    ) -> Option<super::DelegationPages> {
+        self.regions.iter().find_map(|region| match &region.target {
+            HitTarget::PageDelegation {
+                row: painted,
+                pages,
+            } if painted == row => Some(*pages),
+            _ => None,
+        })
     }
 
     #[cfg(test)]

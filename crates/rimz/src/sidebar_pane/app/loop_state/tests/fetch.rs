@@ -1541,34 +1541,7 @@ fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     rig.watch();
     let _ = super::super::super::key_spawn::take_spawned();
-    // The finished child waits behind the earlier line until a click pages it in.
-    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let page_in = |rig: &mut Rig| {
-        rig.state.pane.dirty = true;
-        let now = rig.state.pane.clock.now();
-        rig.state.paint_now(&mut rig.terminal, now).unwrap();
-        rig.state.pane.click_guard = None;
-        let earlier = rig
-            .state
-            .pane
-            .ui
-            .interactions
-            .line_for_target(&render::HitTarget::PageDelegation {
-                row: row_id.clone(),
-            })
-            .expect("the earlier line");
-        rig.state
-            .on_wakeup(
-                &mut rig.terminal,
-                Wakeup::MouseClick {
-                    column: earlier.0,
-                    row: earlier.1,
-                },
-            )
-            .unwrap();
-    };
-    page_in(&mut rig);
-
+    // With nothing in flight, the open section lists the finished child unasked.
     let click_reopen = |rig: &mut Rig| {
         rig.state.pane.dirty = true;
         let now = rig.state.pane.clock.now();
@@ -1649,7 +1622,6 @@ fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound
     let mut played = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
     played.fold(snapshot, SnapshotSource::Produced);
     played.watch();
-    page_in(&mut played);
     click_reopen(&mut played);
     assert!(marked(&mut played), "mark sets even on play clock");
     assert!(
@@ -1665,6 +1637,108 @@ fn reopen_subagent_spawns_once_while_inflight_and_clears_on_wakeup_pane_or_bound
     played.state.pane.next_frame = clock.now();
     played.paint(true);
     assert!(!marked(&mut played), "mark lapses at its bound");
+}
+
+#[test]
+fn the_pager_pages_from_the_painted_count_when_a_child_starts_before_the_input() {
+    for by_enter in [false, true] {
+        let mut rig = Rig::new();
+        let mut snapshot = agent_snapshot(&rig.ws);
+        let base = snapshot.now;
+        let row0 = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
+        let row_id = row0.id.clone();
+        let card = row0.as_agent_mut().unwrap();
+        card.prompt = Some("coordinate".to_owned());
+        card.user_turn_started_at = Some(base);
+        card.sub_agents = (1..=7)
+            .map(|n| {
+                let rested = base - Duration::from_secs(60 * n);
+                serde_json::from_value(serde_json::json!({
+                    "id": format!("done-{n}"),
+                    "kind": "claude",
+                    "name": "coder",
+                    "status": "success",
+                    "last_activity": rested,
+                    "reopenable": true,
+                    "rested_at": rested,
+                }))
+                .unwrap()
+            })
+            .collect();
+        let parent_pane = snapshot
+            .rows()
+            .next()
+            .and_then(|row| row.pane.as_ref())
+            .map(|pane| pane.pane_id.clone());
+        snapshot.focused_pane = parent_pane;
+        let mut started = snapshot.clone();
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut started.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+        .push(
+            serde_json::from_value(serde_json::json!({
+                "id": "started",
+                "kind": "claude",
+                "name": "coder",
+                "status": "running",
+                "last_activity": base,
+            }))
+            .unwrap(),
+        );
+        rig.fold(snapshot, SnapshotSource::Produced);
+        rig.watch();
+        if by_enter {
+            // Five implicit entries, then the pager.
+            for _ in 0..6 {
+                rig.input(KeyAction::Down);
+            }
+            assert_eq!(
+                rig.view().ui().entry_cursor,
+                Some(render::EntryCursor::DelegationPage)
+            );
+        }
+        // The paint lists the first page under the done title, with nothing in flight.
+        rig.state.pane.dirty = true;
+        let now = rig.state.pane.clock.now();
+        rig.state.paint_now(&mut rig.terminal, now).unwrap();
+        rig.state.pane.click_guard = None;
+        let pager = rig
+            .state
+            .pane
+            .ui
+            .interactions
+            .regions()
+            .iter()
+            .find(|region| matches!(region.target, render::HitTarget::PageDelegation { .. }))
+            .map(|region| (region.columns.start, region.rows.start as u16))
+            .expect("painted pager");
+        // A child starts before the input lands, unpainted.
+        rig.view().ctx().current = started;
+        let input = if by_enter {
+            Wakeup::Key(KeyAction::Enter)
+        } else {
+            Wakeup::MouseClick {
+                column: pager.0,
+                row: pager.1,
+            }
+        };
+        rig.state.on_wakeup(&mut rig.terminal, input).unwrap();
+        assert_eq!(
+            rig.view()
+                .ui()
+                .toggles
+                .delegation_pages
+                .get(&row_id)
+                .map(|pages| (pages.pages.get(), pages.turn)),
+            Some((2, Some(base))),
+            "the activation pages past the painted first page (enter: {by_enter})"
+        );
+    }
 }
 
 #[test]
