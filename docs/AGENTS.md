@@ -27,7 +27,7 @@ Each fact has one owning page; every other page links to it with a half-line of 
 - A moved or reworded heading breaks inbound anchors silently: grep the repo for the old anchor and run `cargo xtask docs-links`, since `cargo xtask lint` does not cover Markdown.
 - A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/`, `internals/`, and `externals/`, and the [documentation map](#documentation-map) below, which names a subsystem folder but not the pages inside it.
 - `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink. Edit `AGENTS.md`, and give a new one its `CLAUDE.md` link.
-- A change that deletes or moves a page retargets each [CHANGELOG.md](../CHANGELOG.md) link to it (`rg -n -F '<page>.md' CHANGELOG.md`), the one edit a pull request makes there.
+- A change that deletes or moves a page retargets each [CHANGELOG.md](../CHANGELOG.md) link to it (`rg -n -F '<page>.md' CHANGELOG.md`).
 
 ## Sentences about the code
 
