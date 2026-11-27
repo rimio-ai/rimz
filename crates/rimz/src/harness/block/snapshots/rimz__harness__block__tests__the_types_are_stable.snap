@@ -177,18 +177,18 @@ interface Shell {
    * with stdin closed, stdout and stderr going to the shell's output file.
    */
   command: string;
-  /** Checkout to run in; defaults to the caller's. */
+  /** Checkout to run in; defaults to the caller's (an agent's session start directory). */
   cwd?: string;
   /**
-   * Any JSON value, written to the `context.json` the command finds in
-   * `RIMZ_WORKFLOW_DIR`.
+   * A JSON object the command reads as `input` from the `context.json` in the directory
+   * `RIMZ_WORKFLOW_DIR` names to it.
    */
-  input?: unknown;
+  input?: Record<string, unknown>;
   /** What you will do on waking, 1 to 60 characters. */
   label?: string;
   /**
-   * Stop the command after this long (`90m`, `2h`, `3d`) and fail the call with
-   * `timeout`; none by default.
+   * Kill the command and every process it started after this long (`90m`, `2h`, `3d`):
+   * its outcome reads timed out, and a script's call fails with `timeout`. None by default.
    */
   timeout?: string;
 }
@@ -208,13 +208,16 @@ declare function watch(block: Watch): Promise<WatchResult>;
 interface Watch {
   /** A condition, firing once it reads true, already true when set included. */
   when: string;
-  /** Checkout to arm in, whose branch bare forge terms read; defaults to the caller's. */
+  /**
+   * Checkout to arm in, whose branch bare forge terms read; defaults to the caller's (an
+   * agent's session start directory).
+   */
   cwd?: string;
   /** What you will do on waking, 1 to 60 characters; the wake carries only what fired. */
   label?: string;
   /**
-   * Stop watching after this long (`90m`, `2h`, `3d`) and fail the call with `timeout`;
-   * none by default.
+   * Stop watching after this long (`90m`, `2h`, `3d`): one wake names the timeout, and a
+   * script's call fails with `timeout`. None by default.
    */
   timeout?: string;
 }

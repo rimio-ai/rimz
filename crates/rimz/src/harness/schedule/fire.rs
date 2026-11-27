@@ -23,7 +23,7 @@ use super::{
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::disk::paths::{StatePaths, logs_dir};
-use crate::harness::signal::Signal;
+use crate::harness::signal::{Signal, WatchVerdict};
 use crate::harness::when::{self, CiSource, ConditionEvidence, Verdict, WhenState};
 use crate::ids::WorkspaceId;
 use crate::workspace::record;
@@ -33,6 +33,8 @@ enum Action {
     Arm,
     Fire,
     WatchLost,
+    /// A self watch past its `expires` unmet: one timed-out wake, which retires the row.
+    Expire,
 }
 
 pub(super) const WATCH_LOST_GRACE_SECS: i64 = 30;
@@ -569,7 +571,7 @@ fn fire_tasks(
     {
         tracing::warn!(workspace = %runtime.workspace_id, error = %err, "sidebar: failed to record loop condition state");
         actions.retain(|(name, action)| {
-            *action != Action::Fire
+            !matches!(action, Action::Fire | Action::Expire)
                 || !tasks[name]
                     .trigger()
                     .as_ref()
@@ -587,7 +589,9 @@ fn fire_tasks(
     let mut fired = Vec::new();
     for (key, armed_at) in due_check_ins {
         let name = &scoped[&key].name;
-        let Some(signal) = when_check_in(&tasks[&key], name, now.timestamp()) else {
+        let Some(signal) = when_signal(&tasks[&key], name, now.timestamp(), |elapsed_ms| {
+            WatchVerdict::NotMet { elapsed_ms }
+        }) else {
             continue;
         };
         if spawn_loop_run(
@@ -613,6 +617,27 @@ fn fire_tasks(
     for (name, action) in actions {
         match action {
             Action::Arm => {}
+            Action::Expire => {
+                let (task, name) = (&tasks[&name], &scoped[&name].name);
+                let Some(signal) = when_signal(task, name, now.timestamp(), |elapsed_ms| {
+                    WatchVerdict::TimedOut { elapsed_ms }
+                }) else {
+                    continue;
+                };
+                if spawn_loop_run(
+                    runtime,
+                    task,
+                    project_root,
+                    name,
+                    Some((&signal, Timestamp::now())),
+                    None,
+                    None,
+                    host,
+                ) == LaunchOutcome::Started
+                {
+                    fired.push(name.clone());
+                }
+            }
             Action::Fire => {
                 // plan omits invalid triggers before producing any action.
                 let condition = match &tasks[&name]
@@ -700,9 +725,15 @@ fn fire_tasks(
     fired
 }
 
-/// The signal a `when` self wait's check-in fires with: `watch.<name>`, carrying a not-met
-/// verdict for the time since it armed, which keeps the row.
-fn when_check_in(task: &LoadedTask, name: &str, now: Timestamp) -> Option<Signal> {
+/// The signal a `when` self wait's check-in or expiry fires with: `watch.<name>`, carrying
+/// `verdict` for the time since it armed. A not-met one keeps the row; a timed-out one retires
+/// it.
+fn when_signal(
+    task: &LoadedTask,
+    name: &str,
+    now: Timestamp,
+    verdict: fn(u64) -> WatchVerdict,
+) -> Option<Signal> {
     let armed_at = task.entry().wait_meta.as_ref()?.armed_at;
     let signal_name = match format!("watch.{name}").parse() {
         Ok(signal_name) => signal_name,
@@ -716,9 +747,7 @@ fn when_check_in(task: &LoadedTask, name: &str, now: Timestamp) -> Option<Signal
         payload: serde_json::Map::new(),
         source: crate::store::event::SignalSource::Watch,
         watch: Some(crate::harness::signal::WatchOutcome {
-            verdict: crate::harness::signal::WatchVerdict::NotMet {
-                elapsed_ms: u64::try_from(now.duration_since(armed_at).as_millis()).unwrap_or(0),
-            },
+            verdict: verdict(u64::try_from(now.duration_since(armed_at).as_millis()).unwrap_or(0)),
             output: String::new(),
             output_path: None,
             summary: crate::disk::summary::FileSummary::default(),
@@ -750,7 +779,7 @@ fn lost_watch_outcome(
         }
     };
     Ok(crate::harness::signal::WatchOutcome::measured(
-        crate::harness::signal::WatchVerdict::Lost {
+        WatchVerdict::Lost {
             detail: "watcher process exited without reporting".to_owned(),
             elapsed_ms,
         },
@@ -838,22 +867,48 @@ fn plan(
             }
             Some(last_fire) if matches!(parsed.trigger, Trigger::Condition { .. }) => {
                 next_state.insert(name.clone(), last_fire);
-                match verdicts.get(name).map(|verdict| verdict.truth) {
-                    Some(Some(true)) => {}
-                    // Unknown holds: no fire, and the clock and latch are neither started nor
-                    // dropped, whatever key is unread.
-                    Some(None) => {
-                        if let Some(state) = when_states.get(name) {
-                            next_when.insert(name.clone(), state.clone());
-                        }
-                        continue;
-                    }
-                    Some(Some(false)) | None => continue,
-                }
                 let Trigger::Condition { expr, hold } = &parsed.trigger else {
                     // The match guard admits only condition triggers.
                     unreachable!("condition arm")
                 };
+                // Past its `expires` unmet, a self watch wakes once naming its timeout; the latch
+                // keeps that to once, and a lost runner's retry sends it again.
+                let expired = task
+                    .entry()
+                    .expires
+                    .is_some_and(|expires| now.timestamp() >= expires);
+                if expired
+                    && verdicts
+                        .get(name)
+                        .is_some_and(|verdict| verdict.truth != Some(true))
+                    && (!latched(task, when_states.get(name)) || lost_runners.contains(name))
+                {
+                    actions.push((name.clone(), Action::Expire));
+                    next_state.insert(name.clone(), now.timestamp());
+                    next_when.insert(
+                        name.clone(),
+                        WhenState {
+                            fingerprint: Some((expr.to_string(), *hold, task.entry().run_dir())),
+                            since: now.timestamp(),
+                            fired: true,
+                        },
+                    );
+                    continue;
+                }
+                match verdicts.get(name).map(|verdict| verdict.truth) {
+                    Some(Some(true)) => {}
+                    // Unknown holds: no fire, and the clock and latch are neither started nor
+                    // dropped, whatever key is unread. An expired watch's latch holds on unmet
+                    // too, so its timeout wakes once.
+                    truth @ (Some(None) | Some(Some(false)) | None) => {
+                        if (truth == Some(None) || expired)
+                            && let Some(state) = when_states.get(name)
+                        {
+                            next_when.insert(name.clone(), state.clone());
+                        }
+                        continue;
+                    }
+                }
                 let fingerprint = Some((expr.to_string(), *hold, task.entry().run_dir()));
                 let mut state = when_states
                     .get(name)

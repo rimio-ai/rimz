@@ -448,6 +448,11 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
         }
         path
     };
+    // A shell's `input` lives in a directory named by its output file's stem.
+    let context = |dir: &Path, name: &str| {
+        fs::create_dir_all(dir.join(name)).unwrap();
+        file(&dir.join(name), "context.json", true)
+    };
     let kept = [
         file(&reader, "wait-recent.output", false),
         file(&reader, "wait-live.output", true),
@@ -456,12 +461,14 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
         file(&reader, "recorded.output", true),
         file(&reader, "recorded.2.output", true),
         file(&reader, "unrelated.txt", true),
+        context(&reader, "shell-live"),
     ];
     let removed = [
         file(&reader, "wait-old.output", true),
         file(&reader, "shell-old.output", true),
         file(&reader, "orphan.output", true),
         file(&emptied, "orphan.1234.output", true),
+        context(&reader, "shell-old"),
     ];
     let mut run = crate::store::run::RunRecord::new(
         paths.workspace_id.clone(),
@@ -476,7 +483,7 @@ fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
     let watcher = |name: &str| Ok(["wait-live", "shell-live"].contains(&name));
     let mut preview = GcReport::default();
     collect_out(&paths, &watcher, &mut Sweep::new(true), &mut preview).unwrap();
-    assert_eq!(preview.sidecar_files_removed, 4);
+    assert_eq!(preview.sidecar_files_removed, 5);
     assert_eq!(preview.wait_outputs_removed, 2);
     assert_eq!(preview.dirs_removed, 1);
     assert!(removed.iter().all(|path| path.exists()));

@@ -35,6 +35,7 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
                 spec: WatchSpec::Command("true".to_owned()),
                 on: CheckOn::Any,
                 timeout: None,
+                input: None,
             },
             true,
         ),
@@ -76,6 +77,7 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
             prompt: DeliveryPrompt::None,
             provenance: DeliveryProvenance::SelfWait { reader: None },
             deadline: None,
+            expires: None,
             max_strikes: None,
         };
         match build_entry(&workspace, spec, now) {

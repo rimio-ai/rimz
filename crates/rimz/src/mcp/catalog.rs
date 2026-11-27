@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::wording::Wording;
-use crate::harness::block::schema;
+use crate::harness::block::{self, Block, Caller, Shell, Watch, schema};
 
 /// The name a provider registers RimZ's server under; Claude spells a tool
 /// `mcp__rimz__<tool>`.
@@ -140,8 +140,8 @@ pub fn serve_args(only: &[Capability]) -> Vec<String> {
 #[derive(Debug)]
 pub enum Call {
     Lsp(LspArgs),
-    Shell(ShellArgs),
-    Watch(WatchArgs),
+    Shell(Shell),
+    Watch(Watch),
     Subagent(SubagentArgs),
     Agent(AgentArgs),
     Team(TeamArgs),
@@ -287,9 +287,9 @@ pub static TOOLS: [Tool; 21] = [
         command: "shell",
         declared: &[],
         verbs: &[],
-        schema: schema::<ShellArgs>,
+        schema: block_schema::<Shell>,
         output: Some(start_schema),
-        parse: |arguments| parse::<ShellArgs>(arguments).map(Call::Shell),
+        parse: |arguments| block_call(arguments, Call::Shell),
     },
     Tool {
         name: "watch",
@@ -299,9 +299,9 @@ pub static TOOLS: [Tool; 21] = [
         command: "watch",
         declared: &[],
         verbs: &[],
-        schema: schema::<WatchArgs>,
+        schema: block_schema::<Watch>,
         output: Some(start_schema),
-        parse: |arguments| parse::<WatchArgs>(arguments).map(Call::Watch),
+        parse: |arguments| block_call(arguments, Call::Watch),
     },
     Tool {
         name: "subagent",
@@ -688,6 +688,23 @@ fn parse<T: ToolArgs>(arguments: Value) -> Result<T, serde_json::Error> {
     }
 }
 
+/// A block tool's schema, without the block's own doc, which speaks to a script's call.
+fn block_schema<B: Block>() -> Value {
+    let mut schema = schema::<B>();
+    if let Some(root) = schema.as_object_mut() {
+        root.remove("description");
+    }
+    schema
+}
+
+/// A block tool's call: its arguments parsed as the block an agent's call takes, refused with
+/// the block's own sentence.
+fn block_call<B: Block>(arguments: Value, call: fn(B) -> Call) -> Result<Call, serde_json::Error> {
+    block::parse::<B>(arguments, Caller::Tool)
+        .map(call)
+        .map_err(serde::de::Error::custom)
+}
+
 fn schema_description_len(value: &Value) -> usize {
     match value {
         Value::Object(map) => map
@@ -828,50 +845,6 @@ impl LspArgs {
             .filter(|_| self.verb != LspVerb::Check)
     }
 }
-
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ShellOn {
-    Fail,
-    Success,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ShellArgs {
-    /// The whole command as one string, run once through POSIX `sh -c` at the checkout's root
-    /// with stdin closed, stdout and stderr going to the shell's output file.
-    pub command: String,
-    /// Wake only on this outcome (default either; `fail` for a server left running).
-    pub on: Option<ShellOn>,
-    /// What you will do on waking, 1 to 60 characters.
-    pub label: Option<String>,
-    /// One still-running notice after this long, whatever `on` says (never a stop); 30m when
-    /// absent, or none while cache keepalive pings you. Set one longer than the command should
-    /// take when it could hang.
-    pub check_in: Option<String>,
-    /// Checkout to run in; defaults to the session's start directory.
-    pub cwd: Option<PathBuf>,
-}
-
-impl ToolArgs for ShellArgs {}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WatchArgs {
-    /// A condition, firing once it reads true, already true when set included.
-    pub when: String,
-    /// What you will do on waking, 1 to 60 characters; the wake carries only what fired.
-    pub label: Option<String>,
-    /// One still-not-met notice after this long (never a stop); 30m when absent, or none while
-    /// cache keepalive pings you.
-    pub check_in: Option<String>,
-    /// Checkout to arm in, whose branch bare forge terms read; defaults to the session's start
-    /// directory.
-    pub cwd: Option<PathBuf>,
-}
-
-impl ToolArgs for WatchArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

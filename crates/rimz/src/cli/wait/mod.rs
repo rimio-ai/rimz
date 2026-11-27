@@ -155,7 +155,11 @@ pub fn run_shell(args: ShellCommand, globals: &GlobalFlags) -> Result<()> {
                 words => shlex::try_join(words.iter().map(String::as_str))
                     .expect("argv words carry no NUL byte"),
             };
-            let trigger = WaitTrigger::Shell { command, on };
+            let trigger = WaitTrigger::Shell {
+                command,
+                on,
+                input: None,
+            };
             add::run(options.request(trigger, check_in), options.json, globals)
         }
     }
@@ -195,6 +199,7 @@ impl WaitOptions {
             label: self.label.clone(),
             trigger,
             check_in,
+            timeout: None,
         }
     }
 }

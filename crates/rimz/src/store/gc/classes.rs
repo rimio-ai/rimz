@@ -726,6 +726,13 @@ fn collect_out(
                 },
                 report,
             )?;
+            // A shell's `context.json` directory, named by its output's stem
+            // (`harness::schedule::signal::wait_context_dir`), goes with the output.
+            let context = path.with_extension("");
+            if is_wait && context.is_dir() {
+                let files = sweep.files_under(&context)?.len();
+                sweep.remove_tree(&context, files, report)?;
+            }
         }
     }
     sweep.remove_empty_dirs(&paths.out_dir, None, report)

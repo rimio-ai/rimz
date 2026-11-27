@@ -2008,7 +2008,7 @@ fn notes_keeps_the_body_bytes_and_the_server_keeps_parsing() {
     assert!(is_error, "{failure}");
     assert_eq!(
         failure["error"],
-        json!("a shell needs a command"),
+        json!("invalid arguments: `command` is blank"),
         "{failure}"
     );
 
@@ -3812,6 +3812,243 @@ fn join_on_a_shell_answers_its_outcome_and_no_message_comes() {
     assert_eq!(
         never,
         json!({"id": unknown, "status": "ended", "hint": GONE})
+    );
+}
+
+/// Every process `pids` names (as a command wrote them, space separated) is gone or a zombie
+/// within the reply deadline.
+#[cfg(target_os = "linux")]
+fn assert_processes_gone(pids: &std::path::Path) {
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    for pid in std::fs::read_to_string(pids).unwrap().split_whitespace() {
+        let stat = format!("/proc/{pid}/stat");
+        let running = || {
+            std::fs::read_to_string(&stat).is_ok_and(|stat| {
+                !stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with('Z'))
+            })
+        };
+        while running() {
+            assert!(
+                Instant::now() < deadline,
+                "process {pid} outlived its shell"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+/// Wait until wait row `name` is gone from the room's instances.
+fn wait_for_row_gone(env: &Env, name: &str) {
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while crate::common::wait::wait_instances(env)
+        .0
+        .contains_key(name)
+    {
+        assert!(Instant::now() < deadline, "wait {name} kept its row");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Every message the room holds, pending or settled.
+fn all_messages(env: &Env) -> Vec<rimz::store::message::MessageRecord> {
+    let (mut messages, history) = env.store().list_messages_and_history().unwrap();
+    messages.extend(history);
+    messages
+}
+
+/// A shell given `timeout` is killed once it passes, with every process of its command, its
+/// background children included: its wake reads timed out, unless `on: success` holds the wake
+/// back, and `join` answers that verdict afterward.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_shell_past_its_timeout_is_killed_whole_and_reads_timed_out() {
+    for on in [None, Some("success")] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        crate::common::wait::register_calling_agent(&env);
+        let mut server = serve_as_agent(&env);
+        server.initialize();
+        let pids = env.home_root.join("timed-out.pids");
+        let command = format!(
+            "sleep 300 & printf '%s %s' $$ $! > {}; wait",
+            pids.display()
+        );
+        let mut arguments = json!({"command": command, "timeout": "1s"});
+        if let Some(on) = on {
+            arguments["on"] = json!(on);
+        }
+        let (start, is_error) = server.answer(1, "shell", arguments);
+        assert!(!is_error, "{start}");
+        let id = start["id"].as_str().unwrap().to_owned();
+        let name = id.strip_prefix("shell:").unwrap().to_owned();
+        wait_for_row_gone(&env, &name);
+        assert_processes_gone(&pids);
+        // The fire consumes the row before it appends the history `join` answers from.
+        let deadline = Instant::now() + REPLY_DEADLINE;
+        let joined = loop {
+            let (joined, is_error) = server.answer(2, "join", json!({"id": id}));
+            assert!(!is_error, "{joined}");
+            if joined["status"] != json!("ended") || Instant::now() >= deadline {
+                break joined;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(joined["status"], json!("done"), "{joined}");
+        let messages = all_messages(&env);
+        let detail = joined["detail"].as_str().unwrap();
+        assert!(detail.starts_with("timed out after "), "{joined}");
+        if on.is_some() {
+            assert!(messages.is_empty(), "on: success sent a wake: {messages:?}");
+            continue;
+        }
+        let [wake] = messages.as_slice() else {
+            panic!("one wake: {messages:?}");
+        };
+        let verdict = wake.text.lines().nth(1).unwrap_or_default();
+        assert!(
+            verdict.starts_with("timed out after ") && verdict.ends_with(&format!(" [{name}]")),
+            "{}",
+            wake.text
+        );
+    }
+}
+
+/// A shell with a timeout still sends its one still-running notice, and `stop` ends its command
+/// whole with no wake of its outcome.
+#[cfg(target_os = "linux")]
+#[test]
+fn check_in_and_stop_work_on_a_shell_with_a_timeout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let pids = env.home_root.join("stopped.pids");
+    let command = format!(
+        "sleep 300 & printf '%s %s' $$ $! > {}; wait",
+        pids.display()
+    );
+    let (start, is_error) = server.answer(
+        1,
+        "shell",
+        json!({"command": command, "check_in": "1s", "timeout": "1h"}),
+    );
+    assert!(!is_error, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    let name = id.strip_prefix("shell:").unwrap().to_owned();
+    let deadline = Instant::now() + REPLY_DEADLINE;
+    while all_messages(&env).is_empty() {
+        assert!(Instant::now() < deadline, "no check-in came");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (stopped, is_error) = server.answer(2, "stop", json!({"id": id}));
+    assert!(!is_error, "{stopped}");
+    assert_eq!(stopped, json!({"id": id, "status": "stopped"}));
+    wait_for_row_gone(&env, &name);
+    assert_processes_gone(&pids);
+    let messages = all_messages(&env);
+    let [checkin] = messages.as_slice() else {
+        panic!("only the check-in: {messages:?}");
+    };
+    assert!(
+        checkin.text.contains("still running after "),
+        "{}",
+        checkin.text
+    );
+}
+
+/// A shell given `input` runs a command that reads `{ "input": … }` from
+/// `$RIMZ_WORKFLOW_DIR/context.json`, in a directory beside its output file; a shell without
+/// one sees `RIMZ_WORKFLOW_DIR` as the server's environment has it.
+#[test]
+fn a_shells_input_reaches_its_command_through_the_workflow_dir() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let mut command = crate::common::wait::agent_wait(&env);
+    command
+        .args(["mcp", "serve"])
+        .env("RIMZ_WORKFLOW_DIR", "/outer-step");
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let input = json!({"brief": "--force", "items": [1, "two"]});
+    let mut outputs = Vec::new();
+    for (id, arguments) in [
+        (
+            1,
+            json!({"command": "cat \"$RIMZ_WORKFLOW_DIR/context.json\"", "input": input}),
+        ),
+        (3, json!({"command": "printf %s \"$RIMZ_WORKFLOW_DIR\""})),
+    ] {
+        let (start, is_error) = server.answer(id, "shell", arguments);
+        assert!(!is_error, "{start}");
+        let (joined, is_error) =
+            server.answer(id + 1, "join", json!({"id": start["id"], "timeout": "60s"}));
+        assert!(!is_error, "{joined}");
+        let output = std::path::PathBuf::from(joined["result"].as_str().expect("the output"));
+        outputs.push((std::fs::read_to_string(&output).unwrap(), output));
+    }
+    let (context, output) = &outputs[0];
+    let context: Value = serde_json::from_str(context).expect("context.json");
+    assert_eq!(context, json!({"input": input}));
+    assert!(output.with_extension("").join("context.json").is_file());
+    assert_eq!(outputs[1].0, "/outer-step");
+}
+
+/// A watch given `timeout` that still reads unmet when it passes wakes its agent once, naming
+/// the timeout, and its row is gone.
+#[test]
+fn a_watch_past_its_timeout_wakes_once_naming_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    crate::common::wait::publish_claude_5h(&env, 90);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (start, is_error) = server.answer(
+        1,
+        "watch",
+        json!({"when": "window.5h.left >= 40", "timeout": "1s"}),
+    );
+    assert!(!is_error, "{start}");
+    let name = start["id"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("watch:")
+        .unwrap()
+        .to_owned();
+    let tick = || {
+        let output = crate::common::wait::agent_wait(&env)
+            .args(["loop", "tick"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    tick();
+    std::thread::sleep(Duration::from_millis(1100));
+    tick();
+    wait_for_row_gone(&env, &name);
+    tick();
+    let messages = all_messages(&env);
+    let [wake] = messages.as_slice() else {
+        panic!("one wake: {messages:?}");
+    };
+    let lines: Vec<_> = wake.text.lines().collect();
+    assert_eq!(lines[0], "waited on window.5h.left>=40", "{}", wake.text);
+    assert!(
+        lines[1].starts_with("timed out after ") && lines[1].ends_with(&format!(" [{name}]")),
+        "{}",
+        wake.text
     );
 }
 

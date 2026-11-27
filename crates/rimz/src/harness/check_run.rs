@@ -117,6 +117,12 @@ pub(crate) enum WatchDeadline<'a> {
     CapacityCheck(Duration),
     /// Run to exit, with an optional one-time check-in.
     Watch(Option<Duration>),
+    /// `Watch` in its own session, killed whole once `timeout` passes, and handed a stop the
+    /// watcher receives.
+    WatchKillAfter {
+        check_in: Option<Duration>,
+        timeout: Duration,
+    },
     Hosted {
         argv: Option<&'a [std::ffi::OsString]>,
         interrupted: &'a dyn Fn() -> bool,
@@ -365,6 +371,15 @@ pub(crate) fn run_command(
             command.args(["-c", cmd]);
             (command, None, None, *check_in)
         }
+        WatchDeadline::WatchKillAfter { check_in, timeout } => (
+            check_command(cmd),
+            Some(CheckSignals::new(
+                &[signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM],
+                record_hold,
+            )?),
+            Some(*timeout),
+            *check_in,
+        ),
         WatchDeadline::Hosted { argv, .. } => (
             hosted_command(dir, env, cmd, *argv).with_context(spawn_context)?,
             None,
@@ -405,6 +420,9 @@ pub(crate) fn run_command(
     let host_interrupted =
         || matches!(&deadline, WatchDeadline::Hosted { interrupted, .. } if interrupted());
     let hosted = matches!(&deadline, WatchDeadline::Hosted { .. });
+    // A bounded watch's timeout covers every member of its group, so a shell that exits while
+    // a background child holds its output stays unreaped, its group the kill's handle.
+    let holds_for_pipes = hosted || matches!(&deadline, WatchDeadline::WatchKillAfter { .. });
     let mut interrupted = false;
     let mut terminated = false;
     let mut forwarded = false;
@@ -447,7 +465,7 @@ pub(crate) fn run_command(
             }
         }
         if !forwarded
-            && (!hosted || (stdout.is_finished() && stderr.is_finished()))
+            && (!holds_for_pipes || (stdout.is_finished() && stderr.is_finished()))
             && let Some(status) = child
                 .try_wait()
                 .with_context(|| format!("waiting for loop check `{cmd}`"))?
@@ -469,7 +487,7 @@ pub(crate) fn run_command(
         // A shell can exit before its group's TERM handlers, and a hosted leader's start
         // token and PGID are its kill handle. Keep the lock, the original timeout, and the
         // leader unreaped until those members close their output pipes.
-        if (!(terminated || hosted) || (stdout.is_finished() && stderr.is_finished()))
+        if (!(terminated || holds_for_pipes) || (stdout.is_finished() && stderr.is_finished()))
             && let Some(status) = child
                 .try_wait()
                 .with_context(|| format!("waiting for loop check `{cmd}`"))?

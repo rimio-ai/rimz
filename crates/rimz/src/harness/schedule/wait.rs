@@ -55,13 +55,21 @@ pub struct WaitRequest {
     pub trigger: WaitTrigger,
     /// One still-running notice after this long; never a stop.
     pub check_in: Option<Duration>,
+    /// How long until the wait ends unmet: a shell's command is killed, and a watch wakes its
+    /// agent once naming the timeout.
+    pub timeout: Option<Duration>,
 }
 
 /// What a self wait waits on.
 #[derive(Debug)]
 pub enum WaitTrigger {
-    /// A command run once through `sh -c`, waking on its exit when the outcome matches `on`.
-    Shell { command: String, on: CheckOn },
+    /// A command run once through `sh -c`, waking on its exit when the outcome matches `on`;
+    /// `input` is what it reads from its `context.json`.
+    Shell {
+        command: String,
+        on: CheckOn,
+        input: Option<serde_json::Map<String, serde_json::Value>>,
+    },
     /// A condition expression, waking once it reads true.
     Watch { when: String },
 }
@@ -760,7 +768,7 @@ pub fn arm(
                 description,
             )
         }
-        WaitTrigger::Shell { command, on } => {
+        WaitTrigger::Shell { command, on, input } => {
             let spec = WatchSpec::Command(command);
             let description = spec.describe();
             (
@@ -768,11 +776,16 @@ pub fn arm(
                     spec,
                     on,
                     timeout: check_in,
+                    input,
                 },
                 description,
             )
         }
     };
+    let expires = request
+        .timeout
+        .map(|timeout| jiff::Timestamp::now().checked_add(timeout))
+        .transpose()?;
     let outcome = arm_delivery(
         workspace,
         DeliverySpec {
@@ -785,6 +798,7 @@ pub fn arm(
                 reader: agent.name.clone(),
             },
             deadline: None,
+            expires,
             max_strikes: None,
         },
     )

@@ -537,10 +537,26 @@ fn calls_carry_their_arguments_as_data() {
     };
     assert_eq!(shell.command, "--version; echo $(id)");
     assert_eq!(shell.check_in.as_deref(), Some("5m"));
-    let Call::Watch(watch) = call("watch", json!({"when": "--help && $(id)"})) else {
+    let Call::Watch(watch) = call("watch", json!({"when": "pr=merged", "timeout": "90m"})) else {
         panic!("a watch call");
     };
-    assert_eq!(watch.when, "--help && $(id)");
+    assert_eq!(
+        (watch.when.as_str(), watch.timeout.as_deref()),
+        ("pr=merged", Some("90m"))
+    );
+    let Call::Shell(shell) = call(
+        "shell",
+        json!({"command": "make", "input": {"brief": "--force"}, "timeout": "2h"}),
+    ) else {
+        panic!("a shell call with an input and a timeout");
+    };
+    assert_eq!(
+        (shell.input, shell.timeout.as_deref()),
+        (
+            Some(json!({"brief": "--force"}).as_object().unwrap().clone()),
+            Some("2h")
+        )
+    );
     let Call::Stop(stop) = call("stop", json!({"id": "--all"})) else {
         panic!("a stop call");
     };
@@ -763,7 +779,9 @@ fn arguments_outside_the_schema_shape_are_refused() {
         ("lsp", json!({"verb": "rename", "targets": []})),
         ("lsp", json!({"verb": "def"})),
         ("shell", json!({"command": 42})),
-        ("watch", json!({"when": "pr=merged", "timeout": "5m"})),
+        ("watch", json!({"when": "pr=merged", "input": {}})),
+        ("watch", json!({"when": "--help && $(id)"})),
+        ("shell", json!({"command": "x", "input": ["a"]})),
         ("tasks", json!({"kind": "native"})),
         ("tasks", json!({"all": true})),
         ("join", json!({"timeout": "4m"})),
@@ -936,6 +954,10 @@ fn schemas_are_inline_objects_without_null_types() {
         json!(["fail", "success"])
     );
     assert_eq!(shell["inputSchema"]["required"], json!(["command"]));
+    assert_eq!(
+        shell["inputSchema"]["properties"]["input"]["type"],
+        "object"
+    );
     let watch = tool("watch").listing(&Wording::built_in());
     assert_eq!(watch["inputSchema"]["required"], json!(["when"]));
     let guide = tool("guide").listing(&Wording::built_in());

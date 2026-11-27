@@ -412,6 +412,11 @@ fn the_tool_refusals_hold_for_both_callers() {
             "`command` is blank",
         ),
         (
+            BlockName::Shell,
+            json!({ "command": "x", "input": "text" }),
+            "invalid type",
+        ),
+        (
             BlockName::Workflow,
             json!({ "source": "name", "value": "a/b" }),
             "`value` is an installed workflow's name, not a path; give `source` `path`",
