@@ -74,7 +74,7 @@ rimz teams show forge --json
 | `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort launched without `--channel` has the team's name as its lane (`forge#forge`); `main` selects none, and a miss under it prints as `#main`, with a resume command that names `<team>#<team>`. The project directory's name and the root path are ordinary lane text and select no root cohort. |
 | `'#<lane>'`, or `-w <lane>` alone | For every team live in that lane, defined or not, its lane block then its definition. With none it prints `no live team in #<lane>` and exits 0. |
 
-Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
+A `<team>` whose definition failed to load exits 1 with the failure detail `rimz teams launch` refuses it with, in both team forms and with `--json`. Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
 
 Each form leads with what it is asked for. A lane form, here `rimz teams show forge#feat-x`, checks on a run:
 

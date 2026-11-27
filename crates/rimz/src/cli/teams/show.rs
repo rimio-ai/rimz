@@ -17,8 +17,9 @@ pub(super) fn run(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let reports = super::list::load_catalog(globals, lane, &machine)?;
-    let selected = select_reports(&reports, name)?;
+    let (reports, effective) = super::list::load_catalog(globals, lane, &machine)?;
+    let failure_for = |name: &str| effective.definition_failure_for(name);
+    let selected = select_reports(&reports, name, failure_for)?;
     let lane = match lane {
         Some(lane) if rimz::address::LaneSelector::parse(Some(lane)).is_trunk() => {
             Some(rimz::ids::LaneName::TRUNK)
@@ -28,8 +29,8 @@ pub(super) fn run(
     if let (Some(name), Some(lane)) = (name, lane)
         && selected[0].instances.is_empty()
     {
-        let all = super::list::load_catalog(globals, None, &machine)?;
-        let report = select_reports(&all, Some(name))?[0];
+        let (all, _) = super::list::load_catalog(globals, None, &machine)?;
+        let report = select_reports(&all, Some(name), failure_for)?[0];
         return Err(missing_cohort(report, lane));
     }
     if json {
@@ -63,6 +64,7 @@ pub(super) fn run(
 fn select_reports<'a>(
     reports: &'a [TeamReport],
     name: Option<&str>,
+    failure_for: impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<&'a TeamReport>> {
     let Some(name) = name else {
         return Ok(reports
@@ -74,6 +76,9 @@ fn select_reports<'a>(
         .iter()
         .find(|report| report.name == name && report.defined)
     else {
+        if let Some(detail) = failure_for(name) {
+            bail!("{detail}");
+        }
         let valid = reports
             .iter()
             .filter(|report| report.defined)
@@ -1023,7 +1028,7 @@ mod tests {
         orphan.name = "orphan".into();
         orphan.defined = false;
         let reports = vec![report(vec![live_instance()]), report(vec![]), orphan];
-        let selected = select_reports(&reports, None).unwrap();
+        let selected = select_reports(&reports, None, |_| None).unwrap();
         assert_eq!(
             selected
                 .iter()
@@ -1031,9 +1036,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["forge", "orphan"]
         );
-        assert_eq!(select_reports(&reports, Some("forge")).unwrap().len(), 1);
-        assert!(select_reports(&reports, Some("orphan")).is_err());
-        assert!(select_reports(&reports, Some("missing")).is_err());
-        assert!(select_reports(&[report(vec![])], None).unwrap().is_empty());
+        let none = |_: &str| None;
+        assert_eq!(
+            select_reports(&reports, Some("forge"), none).unwrap().len(),
+            1
+        );
+        assert!(select_reports(&reports, Some("orphan"), none).is_err());
+        assert!(select_reports(&reports, Some("missing"), none).is_err());
+        assert!(
+            select_reports(&[report(vec![])], None, none)
+                .unwrap()
+                .is_empty()
+        );
+        let failed = |name: &str| (name == "orphan").then(|| "orphan failed".to_owned());
+        assert_eq!(
+            select_reports(&reports, Some("orphan"), failed)
+                .unwrap_err()
+                .to_string(),
+            "orphan failed"
+        );
     }
 }
