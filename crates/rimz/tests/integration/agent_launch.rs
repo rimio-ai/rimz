@@ -6874,6 +6874,7 @@ fn explain_shows_the_grant_of_the_launch() {
         ("rimz-workflow", "mcp(workflow)"),
         ("rimz-loop", "mcp(schedule)"),
         ("rimz-message", "mcp(message)"),
+        ("rimz-ask", "mcp(ask)"),
         (
             "rimz-control",
             "mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)",
@@ -7967,7 +7968,6 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
                 "rimz-wait",
                 "rimz-workflow",
                 "rimz-message",
-                "rimz-ask",
                 "rimz-control",
                 "rimz-notes",
                 "rimz-blackboard"

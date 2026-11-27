@@ -2215,6 +2215,60 @@ fn ask_arms_with_the_brief_and_a_clean_end_opens_it_with_the_final_reply() {
     assert_eq!(raised.len(), 3, "{raised:?}");
 }
 
+/// Even when `rimz-ask` is served explicitly, a launched subagent calling `ask` is refused with
+/// the same error as `rimz asks raise` and writes neither a raised ask nor an audit event.
+#[test]
+fn ask_refuses_a_launched_subagent() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventEnvelope;
+    use rimz::store::raised;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut observation =
+        AgentLifecycleObservation::new(Some("child-session".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("helper".into());
+    observation.launch.parent_agent_id = Some("parent-session".into());
+    observation.launch.launch_depth = Some(1);
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+
+    let mut command = env.rimz();
+    command
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "child-session")
+        .env("RIMZ_AGENT_NAME", "helper")
+        .args(["mcp", "serve", "--only", "rimz-ask"]);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let (refused, is_error) = server.answer(1, "ask", json!({"brief": "Ship now?"}));
+    assert!(is_error, "{refused}");
+    assert_eq!(
+        refused["error"],
+        json!(
+            "a subagent cannot ask the user: make the question your result and end your turn, and \
+             the agent that launched you answers it"
+        ),
+        "{refused}"
+    );
+    assert!(raised::read(env.store().paths()).asks.is_empty());
+    assert!(
+        !env.read_events()
+            .iter()
+            .any(|event| event.method == "ask.raised"),
+        "a refused ask writes nothing"
+    );
+}
+
 #[test]
 fn self_compact_owes_a_continue_by_default_and_honors_no_continue() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
@@ -2752,7 +2806,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("pmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );
@@ -2826,7 +2880,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("omark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-wait, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
         ),
         "{out}"
     );

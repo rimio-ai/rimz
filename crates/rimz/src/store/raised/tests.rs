@@ -309,3 +309,24 @@ fn prepare_raise_without_text_refuses_a_parked_agent_as_not_resting() {
         "expected NotResting for a parked agent, got {result:?}"
     );
 }
+
+#[test]
+fn prepare_raise_refuses_a_subagents_self_raise_and_allows_an_outside_raise() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(&dir);
+    let now = Timestamp::from_second(100).unwrap();
+    let mut agent = AgentState::stub("claude", "child", AgentStatus::Idle);
+    agent.registered_at = Some(Timestamp::from_second(10).unwrap());
+    agent.parent_agent_id = Some("parent".into());
+    agent.launch_depth = Some(1);
+    let err = prepare_raise(&paths, &agent, true, Some("Ship?".into()), None, now).unwrap_err();
+    assert!(matches!(err, RaisedErr::SubagentSelfRaise), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        "a subagent cannot ask the user: make the question your result and end your turn, and \
+         the agent that launched you answers it"
+    );
+    let outside = prepare_raise(&paths, &agent, false, Some("Review?".into()), None, now).unwrap();
+    assert_eq!(outside.value.state, RaisedAskState::Open);
+    assert_eq!(outside.value.brief.as_deref(), Some("Review?"));
+}

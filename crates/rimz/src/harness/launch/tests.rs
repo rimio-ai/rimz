@@ -852,6 +852,7 @@ fn native_subagent_denial_applies_to_children_without_a_catalog() {
                 "--disallowedTools".to_owned(),
                 "Read".to_owned(),
                 "Agent".to_owned(),
+                "AskUserQuestion".to_owned(),
                 "--append-system-prompt".to_owned(),
                 child_reminder(),
                 "--".to_owned(),
@@ -866,6 +867,10 @@ fn native_subagent_denial_applies_to_children_without_a_catalog() {
                 "agents.enabled=false".to_owned(),
                 "-c".to_owned(),
                 "features.multi_agent_v2=false".to_owned(),
+                "-c".to_owned(),
+                "features.default_mode_request_user_input=false".to_owned(),
+                "-c".to_owned(),
+                "tools.experimental_request_user_input.enabled=false".to_owned(),
                 "-c".to_owned(),
                 format!(
                     "developer_instructions={}",
@@ -1422,8 +1427,8 @@ fn native_ask_is_withheld_where_rimz_ask_is_reached_on_every_action() {
     assert_eq!(actual, expected);
 }
 
-/// A team seat other than the leader is served no `ask` tool and loses its native one, while a
-/// child of that seat is served `ask`; the leader keeps `ask` and loses the native tool.
+/// A team seat other than the leader and any launched subagent are served no `ask` tool and lose
+/// their native question tool; the leader keeps `ask` and loses the native tool.
 #[test]
 fn only_the_team_leader_seat_reaches_rimz_ask() {
     let reminders = LaunchReminders {
@@ -1432,7 +1437,12 @@ fn only_the_team_leader_seat_reaches_rimz_ask() {
         ..LaunchReminders::default()
     };
     let mut actual = Vec::new();
-    for (role, subagent) in [("planner", false), ("coder", false), ("coder", true)] {
+    for (role, subagent) in [
+        ("planner", false),
+        ("coder", false),
+        ("planner", true),
+        ("coder", true),
+    ] {
         let mut invocation = team_request("claude");
         invocation.identity.params.role = Some(role.to_owned());
         invocation.subagent = subagent;
@@ -1450,9 +1460,30 @@ fn only_the_team_leader_seat_reaches_rimz_ask() {
         [
             ("planner", false, true, true),
             ("coder", false, false, true),
-            ("coder", true, true, true),
+            ("planner", true, false, true),
+            ("coder", true, false, true),
         ]
     );
+    // A standalone subagent on a built-in base loses both `rimz-ask` and native ask too.
+    let built_in = LaunchReminders {
+        mcp_server: Some(("/bin/rimz".into(), Vec::new())),
+        built_in_base: true,
+        ..LaunchReminders::default()
+    };
+    let mut child = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    child.subagent = true;
+    assert!(
+        !built_in
+            .mcp_capabilities(&child)
+            .contains(&crate::mcp::catalog::Capability::Ask)
+    );
+    assert!(built_in.disable_native_ask(&child));
 }
 
 #[test]
@@ -1470,6 +1501,7 @@ fn a_child_is_withheld_the_skill_of_every_capability_that_launches_agents() {
             "rimz-subagents",
             "rimz-agents",
             "rimz-teams",
+            "rimz-ask",
             "rimz-lsp",
         ]
         .map(|name| name.parse().unwrap())
@@ -1485,10 +1517,13 @@ fn a_child_is_withheld_the_skill_of_every_capability_that_launches_agents() {
     let reminders = super::super::launch_reminders::LaunchReminders::default();
     let withheld = reminders.withheld_skills(&invocation);
     assert!(withheld.is_empty(), "{withheld:?}");
-    assert_eq!(names(invocation.launch_skills(&withheld)).len(), 5);
+    assert_eq!(names(invocation.launch_skills(&withheld)).len(), 6);
     invocation.subagent = true;
     let withheld = reminders.withheld_skills(&invocation);
-    assert_eq!(withheld, ["rimz-subagents", "rimz-agents", "rimz-teams"]);
+    assert_eq!(
+        withheld,
+        ["rimz-subagents", "rimz-agents", "rimz-teams", "rimz-ask"]
+    );
     assert_eq!(
         names(invocation.launch_skills(&withheld)),
         ["commit", "rimz-lsp"]

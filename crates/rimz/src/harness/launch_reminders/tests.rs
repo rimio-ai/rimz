@@ -1166,6 +1166,7 @@ fn a_child_has_no_launching_capability_as_tool_or_skill() {
             mcp_server: served.then(|| ("/bin/rimz".into(), Vec::new())),
             rimz_skills: rimz_skills(&[
                 "rimz-agents",
+                "rimz-ask",
                 "rimz-message",
                 "rimz-subagents",
                 "rimz-teams",
@@ -1181,8 +1182,8 @@ fn a_child_has_no_launching_capability_as_tool_or_skill() {
             ("rimz-message".to_owned(), "skill(rimz-message)".to_owned())
         };
         assert!(lines.contains(&message), "{lines:?}");
-        for launching in ["rimz-subagents", "rimz-agents", "rimz-teams"] {
-            assert!(lines.iter().all(|(name, _)| name != launching), "{lines:?}");
+        for denied in ["rimz-subagents", "rimz-agents", "rimz-teams", "rimz-ask"] {
+            assert!(lines.iter().all(|(name, _)| name != denied), "{lines:?}");
         }
         assert_eq!(
             lines.iter().any(|(name, _)| name == "rimz-wait"),

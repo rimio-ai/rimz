@@ -16,6 +16,11 @@ pub enum RaisedErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error("the user already replied to this turn")]
     AlreadyAnswered,
+    #[error(
+        "a subagent cannot ask the user: make the question your result and end your turn, and \
+         the agent that launched you answers it"
+    )]
+    SubagentSelfRaise,
     #[error("target has no recorded turn or registration")]
     NoBasis,
     #[error("an outside raise without TEXT requires an agent resting cleanly")]
@@ -150,6 +155,9 @@ pub fn prepare_raise(
     raised_by: Option<String>,
     at: Timestamp,
 ) -> Result<Entry<RaisedAsk>, RaisedErr> {
+    if is_self && agent.is_launched_child() {
+        return Err(RaisedErr::SubagentSelfRaise);
+    }
     let basis_at = if is_self {
         at
     } else {

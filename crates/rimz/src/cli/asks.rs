@@ -217,12 +217,6 @@ fn raise(first: Option<String>, text: Option<String>, globals: &GlobalFlags) -> 
             rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller).ok()
         })
         .is_some_and(|source| source.kind == agent.kind && source.agent_id == agent.agent_id);
-    if is_self && agent.is_launched_child() {
-        bail!(
-            "a subagent cannot ask the user: make the question your result and end your turn, and \
-             the agent that launched you answers it"
-        );
-    }
     let sender = rimz::launcher::context::sender_for(caller.as_ref(), ctx.channel(), false);
     let actor = caller.as_ref().map(|_| sender.render());
     let ask = raised::prepare_raise(
