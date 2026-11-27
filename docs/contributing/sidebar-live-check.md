@@ -11,6 +11,8 @@ A unit test proves what the renderer decides, and a scenario PNG proves how a fr
 
 Each check runs in a held [sandbox room](./sandbox-rooms.md). Hold one room per backend, and take every command from that room's room card. Later sections use the `ROOT`, `BIN`, `MUX`, `SESSION`, `STATE`, `rz`, and `a` names that [Run a command in the room](./sandbox-rooms.md#run-a-command-in-the-room) defines.
 
+A check that fails runs again the same way on a testkit build of the merge base before you report it. Add a detached worktree at the merge base (`git worktree add --detach <dir> <merge-base>`), build it there with `cargo build -p rimz --bin rimz --features testkit` and `CARGO_TARGET_DIR` set to this checkout's `target`, copy the binary out of the target directory, and hold the room with `RIMZ_BIN` naming the copy. Remove the worktree afterwards with `git worktree remove <dir>`. A failure the merge-base build also shows is already on the trunk: report it as advisory.
+
 In this page a card is an agent's entry in the sidebar. The pipeline line is the board row under a team's worktree group. It carries the team, one dot per stage, the current stage and its time, and the run's total time at the right.
 
 ## Before you start
@@ -76,7 +78,7 @@ To check the add, open a tab from a one-pane layout (`zellij action new-tab --la
 
 ## First frame of a new tab
 
-A new tab's sidebar paints its first frame from the warm host's last fold, so its first non-blank screen already lists the room's cards ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). No card is open by selection until a frame lists the new sidebar, and the previous tab's pane is never the selection. Poll the new pane's captures from the moment the tab opens, and attribute each with the `fold_decided` and `frame_published` records in `$STATE/audit/focus.log.jsonl` ([focus trace](../internals/diagnostics.md#the-focus-trace)). Every `fold_decided` must have `baseline` and `selected_after` absent or naming a pane in the new tab. A stale seed has shown up about once in 18 tabs on tmux, so open at least 18 tabs before you call the check passed. A failure that the merge-base build also shows is already on the trunk: report it as advisory.
+A new tab's sidebar paints its first frame from the warm host's last fold, so its first non-blank screen already lists the room's cards ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). No card is open by selection until a frame lists the new sidebar, and the previous tab's pane is never the selection. Poll the new pane's captures from the moment the tab opens, and attribute each with the `fold_decided` and `frame_published` records in `$STATE/audit/focus.log.jsonl` ([focus trace](../internals/diagnostics.md#the-focus-trace)). Every `fold_decided` must have `baseline` and `selected_after` absent or naming a pane in the new tab. A stale seed has shown up about once in 18 tabs on tmux, so open at least 18 tabs before you call the check passed.
 
 ## Inspect the data behind a card
 
