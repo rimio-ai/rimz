@@ -221,6 +221,9 @@ pub enum FlipErr {
     PartialFlip {
         done: &'static str,
         rerun: String,
+        /// The board the flip wrote, and the stage it left.
+        board: PathBuf,
+        from: Option<String>,
         #[source]
         source: Box<FlipErr>,
     },
@@ -235,6 +238,8 @@ impl FlipErr {
         Self::PartialFlip {
             done,
             rerun,
+            board: opening.board.to_path_buf(),
+            from: opening.from.map(str::to_owned),
             source: Box::new(self),
         }
     }
@@ -315,7 +320,7 @@ pub fn refuse_shared_board(
 
 /// Flip the cohort's board under the team as the room's config now defines it, refused while
 /// the project is untrusted, with the flipping member's hand-off compaction, then settle the
-/// team report the flip owes the team's launcher.
+/// team report the flip owes the team's launcher, also when it failed after its board write.
 pub fn flip_cohort(request: CohortFlipRequest<'_>) -> Result<CohortFlip, CohortFlipErr> {
     let cohort = request.cohort;
     let team_name = cohort.team();
@@ -365,6 +370,22 @@ pub fn flip_cohort(request: CohortFlipRequest<'_>) -> Result<CohortFlip, CohortF
         by,
         mux: request.mux,
         now: request.now,
+    })
+    .inspect_err(|error| {
+        // The board flipped before the step that failed, so the team run follows it now: the
+        // printed retry flips from the stage this flip opened.
+        if let FlipErr::PartialFlip { board, from, .. } = error
+            && let Err(error) = team_report_on_flip(
+                request.workspace,
+                request.store,
+                &cohort.instance,
+                board,
+                from.as_deref(),
+                request.to,
+            )
+        {
+            warn!(%error, instance = %cohort.instance, "team report failed");
+        }
     })?;
     let report = team_report_on_flip(
         request.workspace,

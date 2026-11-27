@@ -553,6 +553,6 @@ Only a hand-off (the same predicate as the clean-worktree rule) to a stage anoth
 | ``team `<team>` is no longer configured`` | Restore the team definition. |
 | `cannot resolve the current worktree; run from a git worktree` | Run inside Git, or give `TEAM#LANE`. |
 | `use TEAM#LANE or --team in the current worktree, not both` | Exit 2: drop one. |
-| ``completed <steps>; <error>; re-run `rimz teams flip <team>#<lane> <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand. |
+| ``completed <steps>; <error>; re-run `rimz teams flip <team>#<lane> <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand: it repeats the signal and delivery, and on a flip into `Done` it sends a `TEAM_REPORT` that failed too. |
 
 A failure to fire subscriptions after the signal is appended is logged and does not fail the flip. Launch and flip also reject invalid stage configuration (blank or padded names, control characters, duplicate owners, a declared or owned `Done`, owned names missing from a nonempty `stages`); the rules are in [configuration → teams](../../guide/configuration.md#teams).

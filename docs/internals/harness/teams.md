@@ -150,7 +150,7 @@ The caller is a member (`Flipper::Member`) when it belongs to the selected cohor
 
 The `blackboard_flip` and `blackboard_record` tools (`crates/rimz/src/mcp_tools/blackboard.rs`) resolve neither an address nor a directory: the caller's recorded launch (`ancestry::resolve_launch_caller`) names its own live cohort, whose `TeamCohort::board_checkout` is the board, and a caller with no recorded launch or on no live team is refused with the shell command in the hint. The flip tool refuses, writing nothing, while another live cohort of the caller's team works in that checkout, through `team_stage::refuse_shared_board`, the rule `rimz teams flip` applies to the cohorts it selects; an addressed `TEAM#LANE` flip selects only that lane's cohort, so it is not refused beside one in another lane. The flip tool then runs `flip_cohort` as that member, and the record tool writes as the member's role and answers `recorded <Section> @<role>`.
 
-After `flip` returns, `flip_cohort` settles the team report ([Team reports](#team-reports)). A report failure leaves the landed flip standing, and the CLI prints it as a `report` line.
+After `flip` returns, or fails with `PartialFlip` once the board is written, `flip_cohort` settles the team report for the move the board made ([Team reports](#team-reports)): the re-run a `PartialFlip` prints flips from the stage it opened, so it cannot reopen the run itself. A report failure leaves the landed flip standing: the CLI prints it as a `report` line, and after a `PartialFlip` it is logged beside the flip's error.
 
 ## Resume re-wake
 
@@ -193,7 +193,7 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 
 | Event | Run | Message |
 |---|---|---|
-| A flip into `Done` from any other stage (`team_report_on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
+| A flip into `Done` while the run is open, from any stage (`team_report_on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
 | `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/launcher/stop.rs::stop_run`) | None |
@@ -201,9 +201,9 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 | Restart of the leader | Its open peer turn alone fails (`run::fail_peer_turn`); the team run stays open for the board's `Done` | None |
 | The launcher or the leader row is gone at settlement | Completed or failed by the board | None |
 
-Only one flip sees a transition into `Done`, because the board lock serializes flips. The report is queued before the terminal write, so a crash between the two re-reports at the next `Done` rather than losing this one. `settle_team_run` is a compare-and-set: a reporter that loses it cancels its own message, so the flip and the death backstop never both report.
+Each stretch reports once: the report settles the run, so a later flip into `Done` finds none open. A flip into `Done` whose report failed before the settle leaves the run open, and re-running it from `Done` sends the report. The report is queued before the terminal write, so a crash between the two re-reports at the next `Done` rather than losing this one. `settle_team_run` is a compare-and-set: a reporter that loses it cancels its own message, so two flips, or a flip and the death backstop, never both report.
 
-Cohort death is settled by `settle_ended_teams`, called from the sidebar's digest backstop and from the launcher's parked exec wrapper ([subagents.md § Backstops](./subagents.md#backstops)). Both need a live launcher. A hand-edited `Done` with a live cohort reports nothing at the edit, and reports completed when the cohort later ends. A resumed cohort has no run, so after death settlement its next `Done` reports nothing.
+Cohort death is settled by `settle_ended_teams`, called from the sidebar's digest backstop and from the launcher's parked exec wrapper ([subagents.md § Backstops](./subagents.md#backstops)). Both need a live launcher. A hand-edited `Done` with a live cohort reports nothing at the edit, and reports completed at the next flip into `Done` or when the cohort later ends, whichever comes first. A resumed cohort has no run, so after death settlement its next `Done` reports nothing.
 
 ### Detached teams
 
