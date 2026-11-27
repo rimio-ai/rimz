@@ -57,6 +57,8 @@ pub(crate) enum ToolErr {
     Missing,
     #[error("unknown subagent type `{name}`; known types: {known}")]
     UnknownAgent { name: String, known: String },
+    #[error("`{entry}` in `tools:` {reason}")]
+    Refused { entry: String, reason: &'static str },
 }
 
 impl ToolSet {
@@ -240,31 +242,6 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     )
 }
 
-/// The entry of a tools list's `bases` that is `kind`'s preset, as written; `None` on a kind
-/// that declares none, which reads every entry as a tool name.
-pub(crate) fn tool_preset<'a>(kind: &str, bases: &'a [String]) -> Option<&'a str> {
-    let preset = definitions(kind).tool_preset?;
-    bases
-        .iter()
-        .map(String::as_str)
-        .find(|base| base.eq_ignore_ascii_case(preset))
-}
-
-/// Whether a tools list's `bases` grant `tool` on `kind`: they name it, or hold the kind's
-/// preset, which RimZ reads as granting every tool.
-pub(crate) fn grants_tool(kind: &str, bases: &[String], tool: &str) -> bool {
-    bases.iter().any(|base| base == tool) || tool_preset(kind, bases).is_some()
-}
-
-/// How a tools list claims the provider's own tool that a RimZ capability stands in for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeClaim<'a> {
-    /// The list names the tool (`native_tool`).
-    Named(&'static str),
-    /// The list holds the kind's tool preset, as written (`tool_preset`).
-    Preset(&'a str),
-}
-
 /// How a profile's lists reach a RimZ capability that also has a native tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RimzClaim {
@@ -296,37 +273,33 @@ pub(crate) fn native_tool(capability: crate::mcp::catalog::Capability) -> Option
     }
 }
 
-/// How a tools list's `bases` claim on `kind` the native tool `capability` stands in for: a
-/// named tool the kind renders (`applied_tools`), so none on a kind that applies no tools list
-/// nor for a tool its renderer drops, as Pi drops `Agent`; else the kind's preset.
-pub(crate) fn native_claim<'a>(
+/// The native tool `capability` stands in for, where a tools list's `bases` name it and a
+/// `kind` launch renders it (`applied_tools`): none on a kind that applies no tools list, nor
+/// for a tool the kind's renderer drops, as Pi drops `Agent`.
+pub(crate) fn native_claim(
     kind: &str,
-    bases: &'a [String],
+    bases: &[String],
     capability: crate::mcp::catalog::Capability,
-) -> Option<NativeClaim<'a>> {
-    let tool = native_tool(capability)?;
-    if bases.iter().any(|base| base == tool) {
-        return applied_tools(kind, &[tool.to_owned()])
-            .is_some_and(|applied| !applied.is_empty())
-            .then_some(NativeClaim::Named(tool));
-    }
-    tool_preset(kind, bases).map(NativeClaim::Preset)
+) -> Option<&'static str> {
+    let tool = native_tool(capability).filter(|tool| bases.iter().any(|base| base == tool))?;
+    applied_tools(kind, &[tool.to_owned()])
+        .is_some_and(|applied| !applied.is_empty())
+        .then_some(tool)
 }
 
-/// The outcome where a tools list and RimZ's lists both claim a capability: a named native tool
-/// outranks a blanket grant, and two named entries refuse. The preset ranks with neither, so
-/// RimZ's capability wins over it as over a list that names no native tool.
-pub(crate) fn contest(native: Option<NativeClaim<'_>>, rimz: Option<RimzClaim>) -> Option<Contest> {
-    match (native?, rimz?) {
-        (NativeClaim::Named(_), RimzClaim::Named) => Some(Contest::Refused),
-        (NativeClaim::Named(_), RimzClaim::Blanket) => Some(Contest::NativeWins),
-        (NativeClaim::Preset(_), _) => None,
+/// The outcome where a tools list names the native tool `native` and RimZ's lists also claim
+/// its capability: the named native tool outranks a blanket grant, and two named entries refuse.
+pub(crate) fn contest(native: Option<&str>, rimz: Option<RimzClaim>) -> Option<Contest> {
+    native?;
+    match rimz? {
+        RimzClaim::Named => Some(Contest::Refused),
+        RimzClaim::Blanket => Some(Contest::NativeWins),
     }
 }
 
-/// Whether a supplied tools list applies to this kind and grants no `Skill`.
+/// Whether a supplied tools list applies to this kind and excludes `Skill`.
 pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
-    tools.is_some_and(|tools| !grants_tool(kind, tools.bases(), "Skill"))
+    tools.is_some_and(|tools| !tools.has("Skill"))
         && matches!(
             definitions(kind).tools,
             DefinitionTools::Required(_)

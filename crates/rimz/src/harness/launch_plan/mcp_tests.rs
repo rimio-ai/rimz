@@ -292,8 +292,7 @@ fn claude_mcps_lists_become_only_args_and_the_exact_allowlist() {
 
 /// A launch that hands over RimZ's server adds `ToolSearch` once to the `--tools` it rendered
 /// from the profile, code mode on or off, so Claude keeps deferring the server's tools; a
-/// list holding Claude's `default` preset, which carries `ToolSearch`, a raw `--tools`, and a
-/// launch without the server stay as written.
+/// raw `--tools` and a launch without the server stay as written.
 #[test]
 fn claude_rendered_tools_gain_tool_search_when_the_server_is_handed_over() {
     let room = Room::new();
@@ -343,41 +342,6 @@ fn claude_rendered_tools_gain_tool_search_when_the_server_is_handed_over() {
         ),
         (false, bash, &["--tools", "Bash"], None, &["Bash"]),
         (true, None, &["--tools", "Bash"], None, &["Bash"]),
-        (
-            true,
-            Some(&["default"]),
-            &["--tools", "default"],
-            None,
-            &["default"],
-        ),
-        (
-            true,
-            Some(&["Default"]),
-            &["--tools", " Default "],
-            None,
-            &[" Default "],
-        ),
-        (
-            true,
-            Some(&["default"]),
-            &["--tools", "default"],
-            Some(true),
-            &["default"],
-        ),
-        (
-            true,
-            Some(&["default", "Agent"]),
-            &["--tools", "preset:default,Agent"],
-            None,
-            &["preset:default,Agent"],
-        ),
-        (
-            true,
-            Some(&["Agent", "Default"]),
-            &["--tools", "preset:default,Agent"],
-            Some(true),
-            &["preset:default,Agent"],
-        ),
     ] {
         assert_eq!(
             argv(server, rendered, args, code_mode),

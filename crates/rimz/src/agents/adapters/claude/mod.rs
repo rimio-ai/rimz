@@ -548,12 +548,8 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &["claude-"],
         foreign_prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
-        tool_preset: Some(CLAUDE_TOOL_PRESET),
         prompt_appends: false,
     };
-
-/// The `--tools` entry Claude reads as its whole built-in tool set.
-const CLAUDE_TOOL_PRESET: &str = "default";
 
 const CLAUDE_AGENT_TYPES: &[&str] = &[
     "Explore",
@@ -632,11 +628,9 @@ fn render_tool_rules(
 /// without it Claude turns tool search off and loads every MCP tool up front, whatever load mode
 /// the server marks.
 ///
-/// A list that already grants it stays as written, and so does one holding Claude's `default`
-/// preset, which holds `ToolSearch`: Claude reads a bare `default` only as the whole value, so
-/// `default,ToolSearch` would leave the agent with no built-in tool.
+/// A list that already names it stays as written.
 fn keep_tool_search(args: &mut [String], bases: &[String]) {
-    if crate::agents::grants_tool(CLAUDE_DESCRIPTOR.kind, bases, "ToolSearch") {
+    if bases.iter().any(|base| base == "ToolSearch") {
         return;
     }
     let Some(at) = args.iter().position(|arg| arg == "--tools") else {
@@ -655,6 +649,19 @@ fn render_definition_tools(
     tools: &crate::agents::ToolSet,
     extra: &[&str],
 ) -> std::result::Result<Vec<String>, crate::agents::ToolErr> {
+    // Claude reads `default` as its whole built-in tool set, a set no grant, contest, or review
+    // can read by name, so RimZ refuses it.
+    if let Some(preset) = tools
+        .bases()
+        .iter()
+        .find(|name| name.eq_ignore_ascii_case("default"))
+    {
+        return Err(crate::agents::ToolErr::Refused {
+            entry: preset.clone(),
+            reason: "is Claude's tool preset, which RimZ does not read; list the tools by name, \
+                     or write `capabilities:`",
+        });
+    }
     for name in tools.agent_types() {
         if !CLAUDE_AGENT_TYPES.contains(&name.as_str()) {
             return Err(crate::agents::ToolErr::UnknownAgent {
@@ -673,25 +680,12 @@ fn render_definition_tools(
         args.extend(denied.into_iter().map(|name| format!("Agent({name})")));
     }
     let mut names = tools.bases().to_vec();
-    match crate::agents::tool_preset(CLAUDE_DESCRIPTOR.kind, tools.bases()) {
-        // Claude reads its preset bare only as the whole value, and inside a list only as
-        // `preset:default`; either holds every tool `extra` names, and the preset written in
-        // several cases is still one entry.
-        Some(preset) => {
-            names.retain(|name| !name.eq_ignore_ascii_case(CLAUDE_TOOL_PRESET));
-            if names.is_empty() {
-                names.push(preset.to_owned());
-            } else {
-                names.insert(0, format!("preset:{CLAUDE_TOOL_PRESET}"));
-            }
-        }
-        None => names.extend(
-            extra
-                .iter()
-                .filter(|name| !tools.has(name))
-                .map(|name| (*name).to_owned()),
-        ),
-    }
+    names.extend(
+        extra
+            .iter()
+            .filter(|name| !tools.has(name))
+            .map(|name| (*name).to_owned()),
+    );
     args.extend(["--tools".to_owned(), names.join(",")]);
     Ok(args)
 }

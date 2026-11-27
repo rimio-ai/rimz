@@ -8,13 +8,12 @@ fn tools(entries: &[&str]) -> ToolSet {
 fn skills_require_a_supplied_applied_tools_list_without_skill() {
     let without_skill = tools(&["Read", "Bash"]);
     let with_skill = tools(&["Skill", "Read"]);
-    let preset = tools(&["Read", "Default"]);
     let actual: Vec<_> = ["claude", "codex", "pi", "opencode", "omp"]
         .into_iter()
         .map(|kind| {
             (
                 kind,
-                [None, Some(&without_skill), Some(&with_skill), Some(&preset)]
+                [None, Some(&without_skill), Some(&with_skill)]
                     .map(|tools| skills_lack_skill_tool(kind, tools)),
             )
         })
@@ -22,11 +21,11 @@ fn skills_require_a_supplied_applied_tools_list_without_skill() {
     assert_eq!(
         actual,
         [
-            ("claude", [false, true, false, false]),
-            ("codex", [false, true, false, true]),
-            ("pi", [false, true, false, true]),
-            ("opencode", [false, false, false, false]),
-            ("omp", [false, false, false, false]),
+            ("claude", [false, true, false]),
+            ("codex", [false, true, false]),
+            ("pi", [false, true, false]),
+            ("opencode", [false, false, false]),
+            ("omp", [false, false, false]),
         ]
     );
 }
@@ -124,7 +123,7 @@ fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
         &'static [&'static str],
         &'static [&'static str],
     );
-    let cases: [Case; 14] = [
+    let cases: [Case; 8] = [
         (
             "claude",
             Some(read_bash),
@@ -143,63 +142,8 @@ fn code_mode_appends_each_declared_tool_once_and_off_renders_as_today() {
             &["--tools", "REPL,Poll"],
             &["--tools", ""],
         ),
-        // Claude's preset already holds what code mode adds: alone it renders as written,
-        // and beside other names as the one spelling Claude reads inside a list.
-        (
-            "claude",
-            Some(&["Default"]),
-            &["--tools", "Default"],
-            &["--tools", "Default"],
-        ),
-        (
-            "claude",
-            Some(&["default", "Agent"]),
-            &["--tools", "preset:default,Agent"],
-            &["--tools", "preset:default,Agent"],
-        ),
-        (
-            "claude",
-            Some(&["Agent(Explore)", "Default", "Read"]),
-            &[
-                "--disallowedTools",
-                "Agent(Plan)",
-                "Agent(general-purpose)",
-                "Agent(statusline-setup)",
-                "Agent(fork)",
-                "--tools",
-                "preset:default,Agent,Read",
-            ],
-            &[
-                "--disallowedTools",
-                "Agent(Plan)",
-                "Agent(general-purpose)",
-                "Agent(statusline-setup)",
-                "Agent(fork)",
-                "--tools",
-                "preset:default,Agent,Read",
-            ],
-        ),
-        // The preset written twice, in two cases, is still the one preset.
-        (
-            "claude",
-            Some(&["default", "Default"]),
-            &["--tools", "default"],
-            &["--tools", "default"],
-        ),
-        (
-            "claude",
-            Some(&["default", "Default", "Agent"]),
-            &["--tools", "preset:default,Agent"],
-            &["--tools", "preset:default,Agent"],
-        ),
         ("claude", None, &[], &[]),
         ("pi", None, &["--tools", "+codemode"], &[]),
-        (
-            "pi",
-            Some(&["default"]),
-            &["--tools", "codemode", "--no-skills"],
-            &["--no-tools", "--no-skills"],
-        ),
         (
             "pi",
             Some(read_bash),
@@ -297,6 +241,18 @@ fn claude_tools_and_generated_planner_parity() {
             .to_string()
             .contains("known types: Explore, Plan, general-purpose, statusline-setup, fork")
     );
+    // Claude's `default` preset refuses in any case; on Codex `default` is a tool name.
+    for preset in ["default", "Default"] {
+        let error = render_tool_args("claude", Some(&tools(&["Read", preset]))).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "`{preset}` in `tools:` is Claude's tool preset, which RimZ does not read; list \
+                 the tools by name, or write `capabilities:`"
+            )
+        );
+    }
+    assert!(render_tool_args("codex", Some(&tools(&["default"]))).is_ok());
 }
 
 #[test]
@@ -564,61 +520,46 @@ fn every_kind_that_renders_the_native_question_tool_has_question_coverage() {
 }
 
 /// A tools list names a capability's native tool where the kind renders it: Pi has a question
-/// tool but no `Agent`, and a kind that applies no tools list claims neither. Claude's preset
-/// claims both and ranks with neither side; a named tool outranks a blanket grant, and two named
-/// entries refuse.
+/// tool but no `Agent`, and a kind that applies no tools list claims neither. A named tool
+/// outranks a blanket grant, and two named entries refuse.
 #[test]
-fn a_named_native_tool_outranks_a_blanket_grant_and_the_preset_ranks_with_neither() {
+fn a_named_native_tool_outranks_a_blanket_grant() {
     use crate::mcp::catalog::Capability;
     let bases =
         |names: &[&str]| -> Vec<String> { names.iter().map(|name| (*name).to_owned()).collect() };
     let named = bases(&["Bash", "AskUserQuestion", "Agent"]);
-    let preset = bases(&["default"]);
     let claims = |kind: &str| {
         [Capability::Ask, Capability::Subagents, Capability::Lsp]
             .map(|capability| native_claim(kind, &named, capability))
     };
-    let (ask, agent) = (
-        Some(NativeClaim::Named("AskUserQuestion")),
-        Some(NativeClaim::Named("Agent")),
-    );
     assert_eq!(
         ["claude", "codex", "antigravity", "pi", "amp", "omp"].map(claims),
         [
-            [ask, agent, None],
-            [ask, agent, None],
-            [ask, agent, None],
-            [ask, None, None],
+            [Some("AskUserQuestion"), Some("Agent"), None],
+            [Some("AskUserQuestion"), Some("Agent"), None],
+            [Some("AskUserQuestion"), Some("Agent"), None],
+            [Some("AskUserQuestion"), None, None],
             [None, None, None],
             [None, None, None],
         ]
     );
     assert_eq!(
-        [
-            native_claim("claude", &bases(&["Bash"]), Capability::Ask),
-            native_claim("claude", &preset, Capability::Ask),
-            native_claim("codex", &preset, Capability::Ask),
-        ],
-        [None, Some(NativeClaim::Preset("default")), None]
+        native_claim("claude", &bases(&["Bash"]), Capability::Ask),
+        None
     );
-    let named = Some(NativeClaim::Named("AskUserQuestion"));
-    let preset = Some(NativeClaim::Preset("default"));
+    let named = Some("AskUserQuestion");
     assert_eq!(
         [
             contest(named, Some(RimzClaim::Blanket)),
             contest(named, Some(RimzClaim::Named)),
             contest(named, None),
-            contest(preset, Some(RimzClaim::Blanket)),
-            contest(preset, Some(RimzClaim::Named)),
             contest(None, Some(RimzClaim::Blanket)),
         ],
         [
             Some(Contest::NativeWins),
             Some(Contest::Refused),
             None,
-            None,
-            None,
-            None,
+            None
         ]
     );
 }

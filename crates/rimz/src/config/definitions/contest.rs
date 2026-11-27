@@ -5,7 +5,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::agents::{self, Contest, NativeClaim, RimzClaim, ToolSet};
+use crate::agents::{self, Contest, RimzClaim, ToolSet};
 use crate::config::McpName;
 use crate::mcp::catalog::{Capability, SERVER_NAME};
 
@@ -249,10 +249,9 @@ impl Contested<'_> {
         format!("{remove} ({} becomes {})", render(&before), render(&after))
     }
 
-    /// Whether the lists name the native tool `capability` stands in for, or else claim it
-    /// through the kind's preset (`crate::agents::native_claim` over the tool bases they lower
-    /// to), with the entry that claims it.
-    fn native(&self, capability: Capability) -> Option<(bool, Entry<'_>)> {
+    /// The entry that names the native tool `capability` stands in for, where the lists name it
+    /// (`crate::agents::native_claim` over the tool bases they lower to).
+    fn native(&self, capability: Capability) -> Option<Entry<'_>> {
         if let Some(written) = self.fm.capabilities.as_deref() {
             let word = |entry: &str| {
                 super::agent::WORDS
@@ -265,25 +264,15 @@ impl Contested<'_> {
                 .flat_map(|entry| word(frontmatter::added(entry)))
                 .map(|tool| (*tool).to_owned())
                 .collect();
-            let Some(NativeClaim::Named(tool)) =
-                agents::native_claim(self.kind, &bases, capability)
-            else {
-                return None;
-            };
-            return self
-                .entry("capabilities", written, |entry| word(entry).contains(&tool))
-                .map(|entry| (true, entry));
+            let tool = agents::native_claim(self.kind, &bases, capability)?;
+            return self.entry("capabilities", written, |entry| word(entry).contains(&tool));
         }
         let written = self.fm.tools.as_deref()?;
         let bases = ToolSet::parse(written).ok()?;
-        let (named, tool) = match agents::native_claim(self.kind, bases.bases(), capability)? {
-            NativeClaim::Named(tool) => (true, tool.to_owned()),
-            NativeClaim::Preset(preset) => (false, preset.to_owned()),
-        };
+        let tool = agents::native_claim(self.kind, bases.bases(), capability)?;
         self.entry("tools", written, |entry| {
-            frontmatter::tool_key(entry).eq_ignore_ascii_case(&tool)
+            frontmatter::tool_key(entry) == tool
         })
-        .map(|entry| (named, entry))
     }
 
     /// How the RimZ lists reach `capability`: a named entry before a blanket one, which is
@@ -330,38 +319,18 @@ impl Contested<'_> {
     }
 }
 
-/// Refuses two named entries that claim one capability, and `subagents:` beside the kind's tool
-/// preset, which RimZ reads as holding the Agent tool; returns each capability a named native
+/// Refuses two named entries that claim one capability; returns each capability a named native
 /// tool takes from a blanket grant, none on a subagent definition, which keeps neither native
 /// tool at launch.
 pub(super) fn settle(contested: &Contested<'_>) -> Result<Vec<NativeWin>, String> {
     let mut wins = Vec::new();
     for capability in Capability::ALL {
-        let Some((named, entry)) = contested.native(capability) else {
+        let Some(entry) = contested.native(capability) else {
             continue;
         };
-        let native = match agents::native_tool(capability) {
-            Some(tool) if named => NativeClaim::Named(tool),
-            _ => NativeClaim::Preset(entry.texts.first().map_or("", String::as_str)),
-        };
         let rimz = contested.rimz(capability);
-        if !named
-            && let Some((_, Some(listed))) = rimz
-                .as_ref()
-                .filter(|(_, entry)| entry.as_ref().is_some_and(|entry| entry.key == "subagents"))
-        {
-            return Err(format!(
-                "sets `subagents:`{} and lists the {} tool preset{}, which holds the Agent \
-                 tool; RimZ's delegation replaces the native one, so drop `subagents:` from {}, \
-                 or list the tools by name without Agent in {}",
-                contested.of(listed),
-                quoted(&entry.texts),
-                contested.of(&entry),
-                contested.file(listed),
-                contested.file(&entry),
-            ));
-        }
-        match agents::contest(Some(native), rimz.as_ref().map(|(claim, _)| *claim)) {
+        let native = agents::native_tool(capability);
+        match agents::contest(native, rimz.as_ref().map(|(claim, _)| *claim)) {
             Some(Contest::Refused) => {
                 let Some((_, Some(listed))) = &rimz else {
                     continue;

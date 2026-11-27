@@ -61,7 +61,7 @@ impl EffectiveGrants {
                 // the review leaves alone as it does a skills or mcps gain.
                 let grant_skill_only = tools.rimz().is_some_and(|grant| !grant.is_empty())
                     && profile.skills.as_ref().is_some_and(Vec::is_empty);
-                let mut grants: BTreeMap<_, _> = tools
+                tools
                     .bases()
                     .iter()
                     .filter(|base| !(grant_skill_only && *base == "Skill"))
@@ -73,12 +73,7 @@ impl EffectiveGrants {
                         };
                         (base.clone(), types)
                     })
-                    .collect();
-                // The kind's preset grants the native Agent tool with every type.
-                if crate::agents::tool_preset(&profile.kind, tools.bases()).is_some() {
-                    grants.entry("Agent".to_owned()).or_default();
-                }
-                grants
+                    .collect()
             }),
             allowed_tools: profile
                 .allowed_tools

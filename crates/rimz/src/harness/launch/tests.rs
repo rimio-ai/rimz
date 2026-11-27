@@ -5087,9 +5087,8 @@ fn a_scoped_preflight_refuses_a_listed_skill_its_view_lacks() {
 /// A launch whose tools list names a capability's native tool, while RimZ reaches the capability
 /// only through a blanket grant (`rimz` in its grant, `mcps` holding `*` or `rimz`, or no
 /// `mcps`), keeps the native tool and is neither served the capability's MCP tools nor offered
-/// its skill, on every action. A named RimZ entry, Claude's preset, or no tools list keeps RimZ
-/// winning with the native tool switched off. Pi, which has no `Agent` tool, claims only the
-/// question.
+/// its skill, on every action. A named RimZ entry or no tools list keeps RimZ winning with the
+/// native tool switched off. Pi, which has no `Agent` tool, claims only the question.
 #[test]
 fn a_named_native_tool_outranks_a_blanket_rimz_grant_on_every_action() {
     use crate::harness::subagent_policy::{
@@ -5148,13 +5147,6 @@ fn a_named_native_tool_outranks_a_blanket_rimz_grant_on_every_action() {
             None,
             (false, false),
         ),
-        (
-            "claude preset",
-            Some(["default"].as_slice()),
-            None,
-            None,
-            (false, false),
-        ),
         ("no lists", None, None, None, (false, false)),
     ];
     let mut actual = Vec::new();
@@ -5175,9 +5167,6 @@ fn a_named_native_tool_outranks_a_blanket_rimz_grant_on_every_action() {
             },
         ] {
             for (case, tools, mcps, grant, kept) in cases.clone() {
-                if case == "claude preset" && kind != "claude" {
-                    continue;
-                }
                 let mut invocation = request(kind, action.clone());
                 invocation.tools =
                     tools.map(|tools| tools.iter().map(|tool| (*tool).to_owned()).collect());

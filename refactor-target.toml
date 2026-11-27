@@ -524,8 +524,6 @@ upward-dependencies = [
 # tells the sidebar's no-request rung which kinds record a request's start (+1).
 # AgentState::no_request_alert shares the no-request rule with a nested child's line, and
 # AgentContext::latest_unstopped_rest bounds a request a rested turn left behind (+2).
-# tools::grants_tool and tools::tool_preset answer whether a tools list grants a tool on a kind,
-# its kind's declared preset included, for the definition loader and the subagent policy (+2).
 # capabilities::LaunchEnvEdit hands finalize_launch_env the launch's env edits and its McpLaunch,
 # so OpenCode writes RimZ's server into the one inline config the other edits share (+1).
 # LaunchCapability::launch_env_server_stale, mcp_launch_env and mcp_tool_load let a kind that
@@ -549,9 +547,9 @@ upward-dependencies = [
 # Project skills: launch_inventory is the one launch-order inventory the scoped preflight and
 # validation share, same_dir lets the sandbox view skip a tier that is the provider root, and
 # ProjectTier::{user_first, user_only} carry the kind's precedence and the user-only refusal (+4).
-# The native-tool contest (`native_tool`, `native_claim`, `contest` and their three enums) is
-# shared by definition lowering, definition warnings and launch compilation (+6).
-surface-budget = 1433
+# The native-tool contest (`native_tool`, `native_claim`, `contest` and their two enums) is
+# shared by definition lowering, definition warnings and launch compilation (+5).
+surface-budget = 1430
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

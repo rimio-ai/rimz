@@ -177,7 +177,7 @@ impl CraftState<'_> {
     }
 }
 
-fn lists_agent_tool(fm: &AgentFrontmatter, kind: &str) -> bool {
+fn lists_agent_tool(fm: &AgentFrontmatter) -> bool {
     fm.tools
         .as_deref()
         .and_then(|tools| {
@@ -187,7 +187,7 @@ fn lists_agent_tool(fm: &AgentFrontmatter, kind: &str) -> bool {
                 .collect();
             ToolSet::parse(&bare).ok()
         })
-        .is_some_and(|tools| agents::grants_tool(kind, tools.bases(), "Agent"))
+        .is_some_and(|tools| tools.has("Agent"))
 }
 
 fn merge_crafts(
@@ -306,7 +306,7 @@ impl DefinitionSource {
         let inner = &self.inner;
         let mut fm = inner.frontmatter.clone();
         if let Some(base) = inner.context.shared.bases.get(&row.agent) {
-            fm.inherit_base(base, inner.namespace, lists_agent_tool(&fm, &row.agent));
+            fm.inherit_base(base, inner.namespace, lists_agent_tool(&fm));
         }
         let Some(listed) = fm.subagents.as_deref() else {
             return Ok(());
@@ -536,7 +536,10 @@ impl DefinitionSourceInner {
                     fm.tier.clone_from(&x.frontmatter.tier);
                 }
             } else {
-                let x_fm = x.frontmatter.clone().for_namespace(self.namespace);
+                let mut x_fm = x.frontmatter.clone().for_namespace(self.namespace);
+                if lists_agent_tool(&fm) {
+                    x_fm.subagents = None;
+                }
                 if x_fm.subagents.is_some() {
                     if self.frontmatter.subagents.is_none() {
                         subagent_validator.own = x.context.subagents.as_deref();
@@ -574,16 +577,6 @@ impl DefinitionSourceInner {
                 .clone()
                 .or_else(|| x.system_prompt_file.clone()),
             None => self.system_prompt_file.clone(),
-        };
-        // A leaf that lists the Agent tool on the kind a build runs on keeps only its own
-        // `subagents`, so each build drops the override's list once it knows its kind.
-        let keeps_own_subagents = |fm: &mut AgentFrontmatter, kind: &str| {
-            let yields =
-                x_def.is_some() && !x_in_chain && lists_agent_tool(&self.frontmatter, kind);
-            if yields {
-                fm.subagents.clone_from(&self.frontmatter.subagents);
-            }
-            yields
         };
         let mut merged_args = self.args.clone();
         if let Some(x) = x_def.filter(|_| !x_in_chain) {
@@ -652,8 +645,7 @@ impl DefinitionSourceInner {
                 fm.model = None;
             }
         }
-        keeps_own_subagents(&mut fm, kind);
-        let mut pre_base_fm = fm.clone();
+        let pre_base_fm = fm.clone();
         let mut writers = self.writers.lists.clone();
         if let Some(x) = x_def.filter(|_| !x_in_chain) {
             writers.inherit(&x.writers.lists);
@@ -676,9 +668,6 @@ impl DefinitionSourceInner {
             args_for_kind(&merged_args, kind),
             craft,
         )?;
-        if keeps_own_subagents(&mut pre_base_fm, &built.agent) {
-            retained_context = Arc::clone(&self.context);
-        }
         if attach_definition {
             built.definition = Some(self.built_source(
                 x_def,
@@ -1915,7 +1904,7 @@ fn settle_lists(
     fm: &mut AgentFrontmatter,
 ) -> Result<SeatSkillEdits, String> {
     if !kind_base && let Some(base) = shared.bases.get(kind) {
-        fm.inherit_base(base, namespace, lists_agent_tool(fm, kind));
+        fm.inherit_base(base, namespace, lists_agent_tool(fm));
     }
     fm.settle_plus(kind)?;
     Ok(seat.map_or_else(SeatSkillEdits::default, |seat| seat.edits.edit(fm)))
@@ -2138,7 +2127,7 @@ const RETIRED_WAIT: &str = "rimz-wait";
 /// Lowers a resolved `capabilities:` list to the tools value it stands for: each word's tool
 /// bases in written order, then `Skill` where [`skill_implied`], carrying each listed
 /// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted
-/// whose native tool the words do not name on `kind`, since a named tool outranks it
+/// whose native tool the words do not name, since a named tool outranks it
 /// (`crate::agents::contest`), then itself with its mark, which marks each capability that has
 /// none of its own (`ExecRequest::served_marks`) and reaches a provider's MCP code as it does
 /// from `mcps`.

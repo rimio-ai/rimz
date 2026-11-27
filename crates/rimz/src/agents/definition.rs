@@ -756,9 +756,6 @@ pub(super) struct DefinitionSpec {
     /// line name leads (`Opus 4.8` under Claude).
     pub home_series: Option<&'static str>,
     pub tools: DefinitionTools,
-    /// The `tools` entry this kind reads as its whole built-in tool set, matched in any case:
-    /// RimZ reads a list holding it as granting every tool, whatever else it names.
-    pub tool_preset: Option<&'static str>,
     /// Whether the system prompt a definition sends appends to the provider's own prompt
     /// rather than replacing it.
     pub(crate) prompt_appends: bool,
@@ -774,7 +771,6 @@ impl DefinitionSpec {
         foreign_prefixes: &[],
         home_series: None,
         tools: DefinitionTools::Unsupported,
-        tool_preset: None,
         prompt_appends: false,
     };
 }

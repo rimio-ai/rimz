@@ -3997,27 +3997,6 @@ fn skills_are_structural_without_a_library_and_deduplicated() {
         "",
     );
     error(root.path(), "lists no Skill tool");
-    // Only Claude reads `default` as its preset, which holds the Skill tool.
-    definition(
-        root.path(),
-        "agents/probe.md",
-        "model: astra\ntools: [default]\nskills: []",
-        "",
-    );
-    error(root.path(), "lists no Skill tool");
-    definition(
-        root.path(),
-        "agents/probe.md",
-        "agent: claude\ntools: [Read, Default]\nskills: [one]",
-        "",
-    );
-    assert_eq!(
-        clean(root.path()).agent_profiles.0["probe"]
-            .skills
-            .as_ref()
-            .map(|skills| skills.iter().map(SkillName::as_str).collect::<Vec<_>>()),
-        Some(vec!["one"])
-    );
     definition(
         root.path(),
         "agents/probe.md",
@@ -5218,12 +5197,6 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
     );
     definition(
         root.path(),
-        "agents/preset.md",
-        "agent: claude\ntools: [default]",
-        "",
-    );
-    definition(
-        root.path(),
         "agents/ranked.md",
         "agent: claude\ntier: principal",
         "",
@@ -5285,10 +5258,6 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
     let mut delegator = direct.clone();
     delegator["tools"] = serde_json::json!(["Agent", "Skill"]);
     delegator["subagents"] = serde_json::Value::Null;
-    // Claude's preset holds the Agent and Skill tools, so the base's skills stand and its
-    // subagents do not.
-    let mut preset = delegator.clone();
-    preset["tools"] = serde_json::json!(["default"]);
     let mut heir = serde_json::json!({});
     heir["model"] = serde_json::json!("astra");
     heir["tools"] = serde_json::json!(["Bash"]);
@@ -5305,7 +5274,6 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
             shape(&agents["plain"]),
             shape(&agents["own"]),
             shape(&agents["delegator"]),
-            shape(&agents["preset"]),
             shape(&agents["heir"]),
             shape(&subagents["child"]),
         ],
@@ -5315,7 +5283,6 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
             expect(&direct),
             expect(&own),
             expect(&delegator),
-            expect(&preset),
             expect(&heir),
             expect(&child),
         ]
@@ -5408,7 +5375,7 @@ fn kind_base_fields_fill_what_each_chain_leaves_unset_per_namespace_and_kind() {
         "---\ndescription: Base\ntools: [Agent]\n---\nBase.",
     );
     std::fs::remove_dir_all(root.path().join("teams")).unwrap();
-    for name in ["plain", "own", "heir", "delegator", "preset", "ranked"] {
+    for name in ["plain", "own", "heir", "delegator", "ranked"] {
         std::fs::remove_file(root.path().join(format!("agents/{name}.md"))).unwrap();
     }
     std::fs::remove_file(root.path().join("subagents/child.md")).unwrap();
@@ -6129,17 +6096,6 @@ fn plus_subagents_meet_the_plain_refusals_and_a_bare_rimz_skill_is_the_users() {
         (
             "agents/probe.md",
             "agent: claude\ntools: [Bash, Agent]\nsubagents: [+general]",
-            "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat delegates",
-        ),
-        (
-            "agents/probe.md",
-            "agent: claude\ntools: [Bash, Default]\nsubagents: [+general]",
-            "sets `subagents:` and lists the `Default` tool preset, which holds the Agent tool; \
-             RimZ's delegation replaces the native one, so drop `subagents:` from",
-        ),
-        (
-            "agents/probe.md",
-            "agent: claude\ntools: [default, Agent]\nsubagents: [+general]",
             "lists `Agent` in `tools:` and sets `subagents:`; each says how this seat delegates",
         ),
     ] {
@@ -8223,6 +8179,43 @@ fn a_parent_row_of_the_same_toml_file_holds_its_own_list() {
     );
 }
 
+/// An `--agent` override's `subagents` give way where the leaf names the `Agent` tool, so the
+/// build keeps the leaf's own; a leaf without it takes the override's.
+#[test]
+fn override_subagents_yield_to_a_named_agent_tool() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/leaf.md",
+        "agent: claude\ntools: [Read, Agent]",
+        "Leaf.",
+    );
+    definition(
+        root.path(),
+        "agents/plain.md",
+        "agent: claude\ntools: [Read]",
+        "Plain.",
+    );
+    definition(
+        root.path(),
+        "agents/over.md",
+        "agent: claude\ntools: [Read]\nsubagents: []",
+        "Override.",
+    );
+    let loaded = clean(root.path());
+    let over = &loaded.agent_profiles.0["over"];
+    let built = |leaf: &str| {
+        loaded.agent_profiles.0[leaf]
+            .definition
+            .as_ref()
+            .unwrap()
+            .build(Some(BuildBase::Profile(over)), "claude", None)
+            .unwrap_or_else(|error| panic!("{leaf} under over: {}", error.message))
+            .subagents
+    };
+    assert_eq!([built("leaf"), built("plain")], [None, Some(Vec::new())]);
+}
+
 fn synthetic_fm(agent: &str, model: Option<&str>) -> AgentFrontmatter {
     let mut fm = AgentFrontmatter::default();
     fm.agent = Some(agent.to_owned());
@@ -8518,117 +8511,6 @@ fn toml_extras_args_kept_only_when_row_kind_matches_final_kind() {
         .unwrap();
     assert_eq!(l_under_x_claude.agent, "claude");
     assert_eq!(l_under_x_claude.args.as_deref(), Some("--claude-flag"));
-}
-
-/// An `--agent` override's `subagents` give way only where the leaf lists the Agent tool on the
-/// kind the build runs on: Claude's `default` preset grants it, and on Codex `default` is a name.
-#[test]
-fn override_subagents_yield_to_the_agent_tool_on_each_build_kind() {
-    let root = fixture();
-    let tiers: crate::config::tiers::TierConfig =
-        toml::from_str("senior = ['astra']\njunior = ['sonnet']\n").unwrap();
-    definition(
-        root.path(),
-        "agents/leaf.md",
-        "agent: claude\ntools: [default]",
-        "Leaf.",
-    );
-    for tier in ["senior", "junior"] {
-        definition(
-            root.path(),
-            &format!("agents/leaf_{tier}.md"),
-            &format!("agent: claude\ntier: {tier}\ntools: [default]"),
-            "Tiered leaf.",
-        );
-    }
-    for kind in ["claude", "codex"] {
-        definition(
-            root.path(),
-            &format!("agents/over_{kind}.md"),
-            &format!("agent: {kind}\ntools: [Read]\nsubagents: []"),
-            "Override.",
-        );
-    }
-    let loaded = load(
-        root.path(),
-        SkillCheck::Skip,
-        &CommandsConfig::default(),
-        &root.path().join("config.toml"),
-        &tiers,
-        Some(crate::config::AutoCompactDefault::BuiltIn),
-    );
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-
-    // A tier routed under the override builds each candidate with its kind and model, and a
-    // `tier:` leaf walks its own candidates.
-    let no_subagents: Option<Vec<String>> = None;
-    let deny_all = Some(Vec::new());
-    for (leaf, over, target, kind, subagents) in [
-        (
-            "leaf",
-            "over_claude",
-            Some(("codex", "astra")),
-            "codex",
-            &deny_all,
-        ),
-        (
-            "leaf",
-            "over_claude",
-            Some(("claude", "sonnet")),
-            "claude",
-            &no_subagents,
-        ),
-        (
-            "leaf",
-            "over_codex",
-            Some(("codex", "astra")),
-            "codex",
-            &deny_all,
-        ),
-        (
-            "leaf",
-            "over_codex",
-            Some(("claude", "sonnet")),
-            "claude",
-            &no_subagents,
-        ),
-        ("leaf_senior", "over_claude", None, "codex", &deny_all),
-        ("leaf_junior", "over_claude", None, "claude", &no_subagents),
-        ("leaf_senior", "over_codex", None, "codex", &deny_all),
-        ("leaf_junior", "over_codex", None, "claude", &no_subagents),
-    ] {
-        let def = loaded.agent_profiles.0[leaf].definition.as_ref().unwrap();
-        let x = &loaded.agent_profiles.0[over];
-        let base = Some(BuildBase::Profile(x));
-        // A `tier:` leaf under a plain X walks under X's family, as a launch's engine does.
-        let built = match target {
-            Some((kind, model)) => def
-                .build(base, kind, Some(model))
-                .map_err(|error| error.message),
-            None => crate::config::engine::walk_tier(
-                &tiers,
-                def.written_tier().unwrap(),
-                &crate::config::tiers::TierPreference {
-                    model: None,
-                    family: Some(x.agent.clone()),
-                },
-                &x.agent,
-                None,
-                &mut crate::config::engine::Probe {
-                    build: &mut |kind: &str, _, model: Option<&str>| def.build(base, kind, model),
-                    unavailable: &mut |_, _| None,
-                },
-            )
-            .map(|(_, built)| built)
-            .map_err(|error| error.to_string()),
-        }
-        .unwrap_or_else(|error| panic!("{leaf} under {over} on {kind}: {error}"));
-        assert_eq!(
-            (built.agent.as_str(), &built.subagents),
-            (kind, subagents),
-            "{leaf} under {over} on {kind}"
-        );
-    }
 }
 
 #[test]
@@ -9069,8 +8951,8 @@ fn an_agent_override_from_a_kind_base_onto_a_kind_on_the_built_in_base_takes_tha
 /// A named native tool outranks a blanket RimZ grant: the definition loads, `rimz` grants every
 /// capability but the one its list names the native tool for, and the definition warns naming
 /// each side's file, with a before and after line only where the entry to drop is in its own
-/// file. Two named entries refuse, naming both files. Claude's preset keeps RimZ winning, and a
-/// subagent definition, which never keeps either native tool, is not warned.
+/// file. Two named entries refuse, naming both files. A subagent definition, which never keeps
+/// either native tool, is not warned.
 #[test]
 fn a_named_native_tool_outranks_a_blanket_rimz_grant() {
     use crate::mcp::catalog::Capability;
@@ -9286,24 +9168,6 @@ fn a_named_native_tool_outranks_a_blanket_rimz_grant() {
         "agents/codex.md",
         "---\ndescription: Foundation.\n---\nBase.",
     );
-    // Claude's preset ranks with neither side: RimZ wins, and `subagents:` beside it refuses.
-    definition(
-        root.path(),
-        "agents/probe.md",
-        "agent: claude\ntools: [default]",
-        "",
-    );
-    assert_eq!(wins("probe"), []);
-    definition(
-        root.path(),
-        "agents/probe.md",
-        "agent: claude\ntools: [default]\nsubagents: []",
-        "",
-    );
-    error(
-        root.path(),
-        "lists the `default` tool preset, which holds the Agent tool",
-    );
     definition(
         root.path(),
         "agents/probe.md",
@@ -9464,5 +9328,88 @@ fn a_named_native_tool_outranks_a_blanket_rimz_grant() {
              `capabilities:`; using the native question tool. To ask through RimZ instead, remove \
              `ask` from `capabilities:` in the launch's profile or {base}"
         )
+    );
+}
+
+/// Claude's `default` tool preset refuses the definition in any case, written or inherited from
+/// a parent or the kind base, with the fix; on Codex `default` is a tool name.
+#[test]
+fn claude_default_tool_preset_refuses_written_or_inherited() {
+    let refusal = |entry: &str| {
+        format!(
+            "`{entry}` in `tools:` is Claude's tool preset, which RimZ does not read; list the \
+             tools by name, or write `capabilities:`"
+        )
+    };
+    let errors = |root: &Path| {
+        let loaded = load(
+            root,
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(crate::config::AutoCompactDefault::BuiltIn),
+        );
+        let mut errors: Vec<(String, String)> = loaded
+            .errors
+            .iter()
+            .map(|error| {
+                let file = error.path.strip_prefix(root).unwrap().display().to_string();
+                (file, error.message.clone())
+            })
+            .collect();
+        errors.sort();
+        errors
+    };
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/own.md",
+        "agent: claude\ntools: [Read, Default]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: claude\ntools: [default]",
+        "",
+    );
+    definition(root.path(), "agents/heir.md", "agent: parent", "");
+    definition(
+        root.path(),
+        "agents/named.md",
+        "agent: codex\ntools: [default]",
+        "",
+    );
+    assert_eq!(
+        errors(root.path()),
+        [
+            (
+                "agents/heir.md".to_owned(),
+                "follows `parent`, which failed to load".to_owned()
+            ),
+            ("agents/own.md".to_owned(), refusal("Default")),
+            ("agents/parent.md".to_owned(), refusal("default")),
+        ]
+    );
+    let root = fixture();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Foundation.\ntools: [DEFAULT]\n---\nBase.",
+    );
+    definition(root.path(), "agents/probe.md", "agent: claude", "");
+    assert_eq!(
+        errors(root.path()),
+        [
+            ("agents/claude.md".to_owned(), refusal("DEFAULT")),
+            (
+                "agents/probe.md".to_owned(),
+                format!(
+                    "runs on claude, whose kind base {} failed to load; fix that file",
+                    root.path().join("agents/claude.md").display()
+                )
+            ),
+        ]
     );
 }
