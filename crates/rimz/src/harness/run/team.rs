@@ -172,8 +172,9 @@ pub enum TeamReportOutcome {
 }
 
 /// Settle the cohort's team report for one stage flip of `instance`: a flip into `Done` owes
-/// the launcher the `TEAM_REPORT`, and a flip out of it reopens the run so the next `Done`
-/// reports again.
+/// the launcher the `TEAM_REPORT` of the run still open, from any stage, so the retry of a flip
+/// into `Done` whose report failed sends it; and a flip out of `Done` reopens the run so the next
+/// `Done` reports again.
 pub(in crate::harness) fn team_report_on_flip(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -182,12 +183,10 @@ pub(in crate::harness) fn team_report_on_flip(
     from: Option<&str>,
     to: &str,
 ) -> std::result::Result<TeamReportOutcome, ReportErr> {
-    let was_done = from == Some(DONE_STAGE);
-    if to == DONE_STAGE && !was_done {
+    if to == DONE_STAGE {
         return report_done(workspace, store, instance, board);
     }
-    if was_done
-        && to != DONE_STAGE
+    if from == Some(DONE_STAGE)
         && let Some(reopened) = reopen_team_run(store.paths(), instance)?
     {
         return Ok(match reopened.report_to {
@@ -485,18 +484,20 @@ mod tests {
                         .contains("ended before Done at stage no board"))
                 );
             }
-            assert_eq!(
-                team_report_on_flip(
-                    &workspace,
-                    &store,
-                    &"forge#x".parse().unwrap(),
-                    &board,
-                    Some("Build"),
-                    DONE_STAGE
-                )
-                .unwrap(),
-                TeamReportOutcome::NotOwed
-            );
+            for from in [Some("Build"), Some(DONE_STAGE)] {
+                assert_eq!(
+                    team_report_on_flip(
+                        &workspace,
+                        &store,
+                        &"forge#x".parse().unwrap(),
+                        &board,
+                        from,
+                        DONE_STAGE
+                    )
+                    .unwrap(),
+                    TeamReportOutcome::NotOwed
+                );
+            }
             assert_eq!(store.list_messages().unwrap().len(), 1);
             assert_eq!(store.list_message_history().unwrap().len(), 1);
         }

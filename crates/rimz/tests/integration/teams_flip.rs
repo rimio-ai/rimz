@@ -1372,7 +1372,9 @@ fn a_blackboard_flip_whose_delivery_failed_answers_the_library_error() {
 }
 
 /// A tool flip into `Done` sends the leader's `TEAM_REPORT` to the launcher, and a tool flip out
-/// of it reopens the team run so the next `Done` reports again, as the command's flips do.
+/// of it reopens the team run so the next `Done` reports again, as the command's flips do. A flip
+/// that fails after its board write settles the run as the board now stands, or its printed
+/// retry does.
 #[test]
 fn blackboard_flips_report_the_team_at_done_and_reopen_it_after() {
     let fixture = Fixture::new();
@@ -1480,6 +1482,49 @@ fn blackboard_flips_report_the_team_at_done_and_reopen_it_after() {
         (json!({"stage": "Done"}), false)
     );
     assert_eq!(team_reports().len(), 2, "every Done reports");
+
+    // A flip out of Done whose owner delivery fails has still left Done: it reopens the run, and
+    // its printed retry keeps that run for the next Done to report.
+    let open_run = || rimz::harness::run::open_team_run_for(store.paths(), &instance).unwrap();
+    fixture.hook("reviewer", "SessionStart", None);
+    fixture.hook("reviewer", "UserPromptSubmit", None);
+    std::fs::remove_file(fixture.env.agent_config_path("claude")).unwrap();
+    let partial = fixture.flip("Review", None, Some("A last pass."));
+    let stderr = String::from_utf8_lossy(&partial.stderr);
+    assert!(
+        !partial.status.success() && stderr.contains("error: completed board, signal; "),
+        "{stderr}"
+    );
+    let reopened = open_run().expect("the partial flip out of Done reopens the team run");
+    fixture.env.install_agent_hooks("claude");
+    success(fixture.flip("Review", None, Some("A last pass.")));
+    assert_eq!(
+        open_run().map(|run| run.run_id),
+        Some(reopened.run_id),
+        "the retry keeps the reopened run"
+    );
+    answer("Fixed the last finding.");
+    success(fixture.flip("Done", None, Some("Finished for good.")));
+    assert_eq!(team_reports().len(), 3, "every Done reports");
+
+    // A flip into Done whose signal append fails has still reached Done, and the store failure
+    // behind it fails the report too, so the printed retry from Done to Done sends the report.
+    success(fixture.flip("Review", None, Some("Reopened once more.")));
+    answer("Closed the follow-up.");
+    let lock = store.paths().workspace_lock.clone();
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::create_dir(&lock).unwrap();
+    let partial = fixture.flip("Done", None, Some("Finished the follow-up."));
+    std::fs::remove_dir(&lock).unwrap();
+    let stderr = String::from_utf8_lossy(&partial.stderr);
+    assert!(
+        !partial.status.success() && stderr.contains("error: completed board; "),
+        "{stderr}"
+    );
+    assert_eq!(team_reports().len(), 3, "{stderr}");
+    let retry = success(fixture.flip("Done", None, Some("Finished the follow-up.")));
+    assert!(retry.contains("report   TEAM_REPORT to @boss"), "{retry}");
+    assert_eq!(team_reports().len(), 4, "the retried Done reports");
 }
 
 struct Fixture {
