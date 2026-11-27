@@ -419,16 +419,14 @@ fn launch_replacement(
         prompt: Some(note.clone()),
         extra_args: Vec::new(),
     };
-    if !isolation.is_scoped() {
-        crate::harness::launch::preflight_agent_process(
-            &workspace.project_root,
-            &swap::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
-            &cwd,
-            Some(store.runtime_paths()),
-            crate::harness::launch::PreflightCheckout::Cwd,
-        )
-        .map_err(MoltErr::other)?;
-    }
+    crate::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        &swap::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
+        &cwd,
+        (!isolation.is_scoped()).then_some(store.runtime_paths()),
+        crate::harness::launch::PreflightCheckout::Cwd,
+    )
+    .map_err(MoltErr::other)?;
     let mut notices = Vec::new();
     // An accepted window, as at restart's re-find: the briefing and the reservation run after
     // this read, while the close stays guarded by the post-bind hosting read.

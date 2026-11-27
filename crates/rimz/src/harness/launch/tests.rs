@@ -5046,4 +5046,40 @@ fn a_scoped_preflight_refuses_a_listed_skill_its_view_lacks() {
         preflight(PreflightCheckout::Pending).is_ok(),
         "a checkout the launch has yet to create leaves the name to the exec wrapper"
     );
+
+    let home = std::path::PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
+    let sources = tempfile::tempdir().unwrap();
+    for pack in ["one", "two"] {
+        let source = sources.path().join(pack);
+        std::fs::create_dir_all(source.join("skills/clash")).unwrap();
+        std::fs::write(
+            source.join("rimz-packs.toml"),
+            format!("[[pack]]\nname = '{pack}'\ndescription = 'Skills'\npath = '.'\n"),
+        )
+        .unwrap();
+        std::fs::write(source.join("skills/clash/SKILL.md"), "skill").unwrap();
+        crate::packs::install(&home, &source).unwrap();
+    }
+    invocation.skills = Some(vec!["clash".parse().unwrap()]);
+    let error = preflight_agent_process(
+        project.path(),
+        &invocation,
+        project.path(),
+        None,
+        PreflightCheckout::Cwd,
+    )
+    .expect_err("a scoped list naming a skill whose copies conflict refuses before any pane")
+    .to_string();
+    let copy = |pack: &str| home.join("packs").join(pack).join("skills/clash/SKILL.md");
+    assert_eq!(
+        error,
+        format!(
+            "profile 'worker': pack conflict for `clash`: one ({}), two ({}); exclude \
+             conflicting copies (`rimz packs exclude one:clash --type skills` or `rimz packs \
+             exclude two:clash --type skills`), or add a file of your own named `clash`; a \
+             provider-root skill of this name still wins for that provider",
+            copy("one").display(),
+            copy("two").display()
+        )
+    );
 }

@@ -323,15 +323,13 @@ pub(in crate::cli) fn restart_resolved(
         ),
         unattended,
     )?;
-    if !isolation.is_scoped() {
-        rimz::harness::launch::preflight_agent_process(
-            &workspace.project_root,
-            &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
-            &cwd,
-            Some(store.runtime_paths()),
-            rimz::harness::launch::PreflightCheckout::Cwd,
-        )?;
-    }
+    rimz::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
+        &cwd,
+        (!isolation.is_scoped()).then_some(store.runtime_paths()),
+        rimz::harness::launch::PreflightCheckout::Cwd,
+    )?;
     let skipped_continue = restart
         .as_ref()
         .filter(|restart| restart.interrupted)
