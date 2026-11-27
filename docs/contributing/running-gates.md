@@ -23,6 +23,7 @@ How the gates and the test runner behave in practice: what each command shows an
 - Long phases show an animated status line on a terminal. For agents and redirected output they print a newline heartbeat after 15 seconds and every 30 seconds after that. `RIMZ_NO_PROGRESS=1` silences both.
 - The `rimz` CLI spinner has no heartbeat: it draws only when stderr is a terminal outside an agent. An agent therefore runs a long `rimz` command under `rimz shell`. `xtask/src/spinner.rs` is a separate copy of `crates/rimz/src/cli/spinner.rs`, so that xtask stays independent of the runtime crate.
 - An agent tool sandbox can deny Unix socket binds. `PermissionDenied` from `UnixListener::bind` in `agents::spending::service` tests is one known symptom. When a failure occurs only under that sandbox, rerun the affected tests unsandboxed (`cargo xtask test 'agents::spending::service'`). xtask still supplies its disposable roots.
+- Inside an agent tool sandbox, `cargo xtask gate` runs no tests: `loop-tests` cannot write the uv cache (`Read-only file system`), nextest's Cargo metadata fails on sccache (`sccache: error: Operation not permitted`), and the run can hang after its report. Run the gate unsandboxed from the start.
 
 ### Self-skips
 
