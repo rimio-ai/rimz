@@ -6527,6 +6527,15 @@ allowed-dependencies = [
 surface-budget = 32
 
 [[module]]
+path = "crates/rimz/src/mcp"
+# The MCP tools take the block types a workflow script calls, so a field is defined once for both
+# callers, and every tool's schema comes from the block's one generator.
+upward-dependencies = ["harness::block"]
+# The tool table, each tool's argument and answer types, the wording, and the server entry, which
+# `mcp_tools`, the CLI, and the conformance checks read (89).
+surface-budget = 89
+
+[[module]]
 path = "crates/rimz/src/harness/workflow_script"
 # The script engine replays a script over a log and starts nothing: it reads the block types and
 # grammars and nothing else of the crate, so `harness::schedule`, `harness::workflow`, and `mcp`
