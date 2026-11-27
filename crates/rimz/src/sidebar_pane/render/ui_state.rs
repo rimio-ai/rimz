@@ -349,7 +349,10 @@ pub(in crate::sidebar_pane) struct Newborn {
 /// the user's own wheel glide (`LandGlide`), issue an intent that sets authority: a change the
 /// user did not ask for never does. An authoritative offset suppresses a pending
 /// jump's scroll target but keeps its held set, and drops a pending birth reveal and the
-/// birth hold. `RevealBirth`, the one intent reconciliation issues, sets no authority.
+/// birth hold. `RevealBirth`, the one intent reconciliation issues, sets no authority. A reveal
+/// an input asks for names a target that survives the input, and a test of that input covers
+/// the step that removes its own target: the pager press that lists the rest removes its stop,
+/// so that press reveals the card's end (`RevealCardEnd`).
 pub(in crate::sidebar_pane) enum ViewportIntent {
     /// A wheel tick: the offset is authoritative and glides there.
     Wheel,
