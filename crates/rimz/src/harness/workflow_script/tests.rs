@@ -1082,6 +1082,8 @@ fn the_meta_statement_ends_at_its_literal() {
         format!("{meta}\n// note\n; return 7"),
         format!("{meta}\ninner: for (;;) {{ break inner }}\nreturn 7"),
         format!("{meta}\nif (true) return 7"),
+        format!("{meta}\n++globalThis.count\nreturn 7"),
+        format!("{meta}\n--globalThis.count\nreturn 7"),
     ] {
         let log = Log::Answers(Vec::new());
         assert_eq!(
