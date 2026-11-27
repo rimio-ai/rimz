@@ -399,11 +399,24 @@ fn key_outcome(
                     else {
                         return InputOutcome::default();
                     };
-                    let Some(pages) = ui.interactions.delegation_pager(&row_id) else {
+                    let Some(pages) = ui
+                        .cursor_pager
+                        .as_ref()
+                        .filter(|(row, _)| *row == row_id)
+                        .map(|&(_, pages)| pages)
+                    else {
                         return InputOutcome::default();
                     };
+                    // A pager the wheel scrolled off screen comes back into view to show the page.
+                    // The done pile ends its card, so the card's last line is the pager, or the
+                    // last listed entry once that page lists the rest.
+                    let intent = if ui.interactions.delegation_pager(&row_id).is_some() {
+                        ViewportIntent::Hold
+                    } else {
+                        ViewportIntent::RevealCardEnd(row_id.clone())
+                    };
                     page_delegation(view, snapshot, row_id, pages);
-                    view.request(ViewportIntent::Hold);
+                    view.request(intent);
                     return InputOutcome::redraw();
                 }
                 None => {}
@@ -896,8 +909,8 @@ fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: S
     anchor_selection(ui, snapshot);
 }
 
-/// Store the pages a painted pager's activation asks for, five more finished delegation
-/// entries than that paint drew, without moving focus or the card's selection. Pages
+/// Store the pages a pager's activation asks for, five more finished delegation entries than
+/// the paint that composed it drew, without moving focus or the card's selection. Pages
 /// stamped with an earlier user turn of the parent are inert, so paging starts over.
 fn page_delegation(
     ui: &mut ViewState,

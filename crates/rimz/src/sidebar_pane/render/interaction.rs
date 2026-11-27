@@ -133,8 +133,8 @@ impl FrameInteractions {
         }))
     }
 
-    /// The record the painted pager of card `row` stores when activated, while it is on
-    /// screen.
+    /// The record the pager of card `row` stores when activated, while these interactions hold
+    /// its line.
     pub(in crate::sidebar_pane) fn delegation_pager(
         &self,
         row: &str,
