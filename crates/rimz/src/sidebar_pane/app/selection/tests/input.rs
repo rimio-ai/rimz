@@ -3470,6 +3470,10 @@ fn the_done_pager_pages_by_click_and_enter_without_moving_focus() {
     }
     handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
     assert_eq!(view.entry_cursor, Some(EntryCursor::DelegationPage));
+    // Enter before any paint with the cursor on the line pages from the line that paint drew.
+    let (mut entered, mut entered_ui) = (view.clone(), ui.clone());
+    assert!(handle_key(KeyAction::Enter, &mut entered, &mut entered_ui, &snapshot).redraw);
+    assert_eq!(pages(&entered), Some(2));
 
     // The first click shows entries six to ten, keeps the card's selection, and moves no
     // focus.
