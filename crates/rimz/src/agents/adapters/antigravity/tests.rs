@@ -2648,6 +2648,47 @@ mod spend_rows {
     }
 
     #[test]
+    fn a_checkpoint_counts_under_the_latest_named_model_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoint = |step| {
+            json!({"step_index": step, "source": "SYSTEM", "type": "CHECKPOINT",
+                "status": "DONE", "created_at": AT_11, "content": "summary",
+                "input_tokens": 40, "cache_read_tokens": 500, "output_tokens": 7})
+            .to_string()
+        };
+        let body = [
+            checkpoint(1),
+            token_row(2, "gemini-3-flash-low", 100, 0, 10),
+            token_row(3, "gemini-4-neon-xhigh", 100, 0, 10),
+            checkpoint(4),
+        ]
+        .join("\n");
+        let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &body);
+        let parsed = parse(&path, NEON);
+        let checkpoints: Vec<_> = parsed
+            .entries
+            .iter()
+            .filter(|entry| entry.input == 40)
+            .collect();
+        assert_eq!(
+            checkpoints
+                .iter()
+                .map(|entry| entry.model.as_deref())
+                .collect::<Vec<_>>(),
+            [None, Some("gemini-4-neon")]
+        );
+        assert_eq!(
+            checkpoints[0].cost_usd, 0.0,
+            "a leading checkpoint has no model to price"
+        );
+        assert!((checkpoints[1].cost_usd - neon_cost(40, 500, 7)).abs() < 1e-12);
+        assert_eq!(
+            parsed.unknown_models.keys().collect::<Vec<_>>(),
+            ["gemini-3-flash"]
+        );
+    }
+
+    #[test]
     fn session_cost_sums_the_conversation_rows() {
         let dir = tempfile::tempdir().unwrap();
         let body = [
@@ -3194,6 +3235,11 @@ mod spend_rows {
                 None,
             ]
         );
+        assert_eq!(
+            cold.entries[3].model.as_deref(),
+            Some("gemini-4-neon"),
+            "the checkpoint counts under the model row before it"
+        );
 
         for split in 1..lines.len() {
             for trailing_newline in [true, false] {
@@ -3337,7 +3383,7 @@ mod spend_rows {
         let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &prefix);
         let first = AntigravityAdapter.parse_spend(&path, None, &book);
         assert!(
-            first.cursor.state().is_some(),
+            first.cursor.state_as::<serde_json::Value>()["pending_start"].is_u64(),
             "trailing model row must record pending start in cursor state"
         );
         let cursor = first.cursor;
