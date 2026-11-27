@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::wording::Wording;
+use crate::harness::block::schema;
 
 /// The name a provider registers RimZ's server under; Claude spells a tool
 /// `mcp__rimz__<tool>`.
@@ -687,24 +688,6 @@ fn parse<T: ToolArgs>(arguments: Value) -> Result<T, serde_json::Error> {
     }
 }
 
-/// The argument schema of `T`, inlined, with an optional field's `null`
-/// dropped: a client omits an argument rather than sending `null`.
-fn schema<T: JsonSchema>() -> Value {
-    let mut schema = schemars::generate::SchemaSettings::draft07()
-        .with(|settings| {
-            settings.inline_subschemas = true;
-            settings.meta_schema = None;
-        })
-        .into_generator()
-        .into_root_schema_for::<T>()
-        .to_value();
-    if let Some(root) = schema.as_object_mut() {
-        root.remove("title");
-    }
-    drop_null(&mut schema);
-    schema
-}
-
 fn schema_description_len(value: &Value) -> usize {
     match value {
         Value::Object(map) => map
@@ -716,26 +699,6 @@ fn schema_description_len(value: &Value) -> usize {
             .sum(),
         Value::Array(items) => items.iter().map(schema_description_len).sum(),
         _ => 0,
-    }
-}
-
-fn drop_null(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            if let Some(Value::Array(types)) = map.get_mut("type") {
-                types.retain(|kind| kind != "null");
-                if let [only] = types.as_slice() {
-                    let only = only.clone();
-                    map.insert("type".to_owned(), only);
-                }
-            }
-            if let Some(Value::Array(values)) = map.get_mut("enum") {
-                values.retain(|value| !value.is_null());
-            }
-            map.values_mut().for_each(drop_null);
-        }
-        Value::Array(items) => items.iter_mut().for_each(drop_null),
-        _ => {}
     }
 }
 

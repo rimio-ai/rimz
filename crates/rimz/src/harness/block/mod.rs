@@ -143,7 +143,9 @@ fn write_canonical(out: &mut String, value: &Value) {
 
 /// The draft-07 schema of `T`, inlined, with an optional field's `null` dropped: a caller
 /// omits a field rather than passing `null`. A value that holds `null` (a map's) keeps it.
-pub(in crate::harness) fn schema<T: JsonSchema>() -> Value {
+/// Every MCP tool's input schema is made here too, a tool's arguments that are no block's
+/// included.
+pub(crate) fn schema<T: JsonSchema>() -> Value {
     let mut schema = schemars::generate::SchemaSettings::draft07()
         .with(|settings| {
             settings.inline_subschemas = true;

@@ -293,6 +293,7 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 | `message` → `harness::run` | 1 | keep | the subagent-digest join guard |
 | `message` → `harness::assist_log` | 3 | keep | the auto-compact assist is observable only where the command reaches `Sent` |
 | `message` → `harness::schedule::pending` | 1 | keep | the reply view attaches scheduler-owned turn waits (`4f3adcd90`) |
+| `mcp` → `harness::block` | 1 | keep | a tool and a workflow script take one block type and one schema generator, so a field is defined once |
 
 ## Open deferrals
 
