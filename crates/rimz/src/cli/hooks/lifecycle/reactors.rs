@@ -73,11 +73,11 @@ fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
     if record.peer.is_some()
         && let Ok(rows) = ctx.store.audit_rows()
         && let Some(peer) = rows.find(&event.kind, &event.agent_id)
-        && let Some(launcher) = peer.launched_by.as_ref()
+        && let Some((_, launcher)) = rimz::harness::fleet::report_recipient(peer)
     {
         rimz::harness::orphan_sweep::spawn_digest_helper(
             ctx.store.runtime_paths(),
-            launcher.agent_id.clone(),
+            launcher.clone(),
         );
     }
 }

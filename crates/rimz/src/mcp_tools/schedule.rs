@@ -14,11 +14,11 @@ use super::start::{Start, TaskKind};
 use super::workflow::parse_when;
 use crate::agents::LaunchedBy;
 use crate::config::effective::{self, ProfileScope};
-use crate::config::{LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
+use crate::config::{CheckOn, LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
 use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
-use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
+use crate::harness::block::{On, Schedule, ScheduleOverlap, ScheduleTrigger};
 use crate::harness::schedule::arm::task_label;
 use crate::harness::schedule::attention::when_scope;
 use crate::harness::schedule::catalog::TaskCatalog;
@@ -31,8 +31,20 @@ use crate::launcher::workflow_start;
 use crate::mcp::catalog::{Booking, ScheduleTarget, WorkflowArgs};
 use crate::mcp::{Answer, Failure};
 
-/// What a booker hears of a fire: nothing delivers one a message.
-const REPORT: &str = "no message when it fires; `tasks` lists it and `stop` removes it";
+/// What a booker hears of a fire: each one's outcome, as a message.
+const REPORT: &str = "a message to you follows each fire; `tasks` lists it and `stop` removes it";
+const NO_REPORT: &str = "no report comes from a fire, since this agent's provider cannot report; \
+                         `tasks` lists the booking and `stop` removes it";
+
+/// What follows each fire of a booking whose target routes to `kinds`: an agent whose provider
+/// cannot report sends no report, as the direct `agent` tool says.
+fn report_sentence(kinds: &[String]) -> &'static str {
+    let silent = kinds
+        .iter()
+        .filter_map(|kind| crate::agents::registry::find_definition(kind))
+        .any(|adapter| !crate::harness::run::peer_can_report(adapter));
+    if silent { NO_REPORT } else { REPORT }
+}
 
 /// What a fire launches, as its stored row holds it.
 struct Launch {
@@ -87,8 +99,13 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
             ScheduleOverlap::Replace => OverlapPolicy::Replace,
             ScheduleOverlap::Allow => OverlapPolicy::Allow,
         }),
+        on: args.on.map(|on| match on {
+            On::Fail => CheckOn::Fail,
+            On::Success => CheckOn::Success,
+        }),
         root: root.clone(),
         repeat: args.repeat,
+        booked_by,
         ..TaskEntry::default()
     };
     set_trigger(&mut entry, args, &machine)?;
@@ -112,7 +129,6 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     shape
         .action()
         .map_err(|err| Failure::new(err.to_string()))?;
-    entry.booked_by = booked_by;
     let _held = TaskCatalog::lock_edits()?;
     let catalog = TaskCatalog::load(Some(&root))?;
     refuse_held_name(&catalog, &args.name, &entry.booked_by)?;
@@ -121,7 +137,11 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     warnings.extend(idle_warning(booking));
     Ok(Answer::data(&Start {
         warnings,
-        ..Start::running(TaskKind::Schedule, &args.name, REPORT)
+        ..Start::running(
+            TaskKind::Schedule,
+            &args.name,
+            report_sentence(&launch.kinds),
+        )
     }))
 }
 
@@ -492,4 +512,24 @@ fn idle_warning(booking: &Booking) -> Option<String> {
         "note: an agent left idle holds later fires; say in `arguments.prompt` when it ends its \
          session, or set `overlap` to {choices}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_booking_says_no_report_comes_from_an_agent_whose_provider_cannot_report() {
+        assert_eq!(report_sentence(&[]), REPORT);
+        for definition in crate::agents::registry::all_definitions() {
+            let reports = crate::harness::run::peer_can_report(definition);
+            assert_eq!(
+                report_sentence(&[definition.spec().kind.to_owned()]),
+                if reports { REPORT } else { NO_REPORT },
+                "{}",
+                definition.spec().kind
+            );
+        }
+        assert!(NO_REPORT.starts_with("no report comes") && NO_REPORT.contains("cannot report"));
+    }
 }

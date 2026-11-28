@@ -5227,7 +5227,7 @@ fn the_workflow_tool_starts_nothing_for_a_caller_it_could_not_own_it_for() {
     inside.close();
 }
 
-/// A schedule the agent booked: `join` answers that no message comes when it fires, and
+/// A schedule the agent booked: `join` answers that a message comes after each fire, and
 /// `stop` removes the booking while the run it already started runs on, named.
 #[test]
 fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
@@ -5274,7 +5274,7 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
         json!({
             "id": "schedule:nightly",
             "status": "running",
-            "report": "no message comes when it fires; join does not wait for it",
+            "report": "a message comes after each fire; join does not wait for it",
         })
     );
     let (stopped, is_error) = server.answer(3, "stop", json!({"id": "schedule:nightly"}));
@@ -5586,7 +5586,7 @@ fn loop_instances(env: &Env) -> rimz::config::Tasks {
 }
 
 /// A booking the tool makes is the caller's from the start: `tasks` lists it, and `stop` on the
-/// id it answered removes it. The answer promises no message, since a fire sends the booker none.
+/// id it answered removes it. The answer says a message follows each fire.
 #[test]
 fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
     let env = schedule_room();
@@ -5607,8 +5607,10 @@ fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
     assert!(!is_error, "{booked}");
     assert_eq!(booked["id"], json!("schedule:nightly"), "{booked}");
     assert_eq!(booked["stop"], json!("stop({id: \"schedule:nightly\"})"));
-    let report = booked["report"].as_str().unwrap();
-    assert!(!report.contains("message to you"), "{report}");
+    assert_eq!(
+        booked["report"],
+        json!("a message to you follows each fire; `tasks` lists it and `stop` removes it")
+    );
     let (listed, _) = server.answer(2, "tasks", json!({"kind": "schedule"}));
     assert_eq!(task_ids(&listed), ["schedule:nightly"], "{listed}");
     let (stopped, is_error) = server.answer(3, "stop", json!({"id": "schedule:nightly"}));
@@ -6237,9 +6239,160 @@ fn a_shell_booking_runs_its_command_in_its_checkout_under_its_time_limit() {
     );
 }
 
+/// Each fire of a booking messages its booker once, naming the booking, with a command's outcome
+/// in the `shell` tool's wording, and `on` keeps only the outcomes it names. A molted booker gets
+/// the message at its successor, found by launch id; an ended one gets nothing queued, while the
+/// loop log still records the fire.
+#[cfg(target_os = "linux")]
+#[test]
+fn each_fire_of_a_booking_messages_its_booker_while_it_lives() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
+    let env = schedule_room();
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "shell",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    for (id, name, command, on) in [
+        (1, "passes", "true", None),
+        (2, "breaks", "exit 3", None),
+        (3, "passes-quietly", "true", Some("fail")),
+        (4, "breaks-quietly", "exit 3", Some("success")),
+    ] {
+        let mut call = json!({"name": name, "trigger": "cron", "value": "0 0 1 1 *",
+                              "tool": "shell", "arguments": {"command": command}});
+        if let Some(on) = on {
+            call["on"] = json!(on);
+        }
+        let (booked, is_error) = server.answer(id, "schedule", call);
+        assert!(!is_error, "{name}: {booked}");
+    }
+    server.close();
+    let reports = || -> Vec<(String, String)> {
+        env.store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| message.text.starts_with("schedule:"))
+            .map(|message| (message.agent_id.to_string(), message.text))
+            .collect()
+    };
+    let fire = |name: &str| {
+        let before = run_mark(&env, name);
+        let reported = reports().len();
+        env.rimz().args(["loop", "run", name]).output().unwrap();
+        let row = wait_for_loop_report_after(&env, name, before);
+        // The process that lands the row queues the message after it.
+        crate::common::wait::wait_for_loop_runs_to_exit(&env, name);
+        (row.result, reports().split_off(reported))
+    };
+
+    let (result, sent) = fire("passes");
+    assert_eq!(result, LoopRunResult::Completed);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "provider-session", "{sent:?}");
+    assert!(
+        sent[0].1.starts_with("schedule:passes · exit 0 after "),
+        "{sent:?}"
+    );
+    let (result, sent) = fire("breaks");
+    assert_eq!(result, LoopRunResult::Failed);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].1.starts_with("schedule:breaks · exit 3 after "),
+        "{sent:?}"
+    );
+    for name in ["passes-quietly", "breaks-quietly"] {
+        let (_, sent) = fire(name);
+        assert_eq!(sent, [], "{name}");
+    }
+
+    end_session(&env, "provider-session");
+    crate::common::wait::register_agent(
+        &env,
+        "successor-session",
+        "launch-session",
+        "planner",
+        rimz::agents::LaunchParams::default(),
+    );
+    let (_, sent) = fire("passes");
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "successor-session", "{sent:?}");
+
+    end_session(&env, "successor-session");
+    let (result, sent) = fire("breaks");
+    assert_eq!(
+        result,
+        LoopRunResult::Failed,
+        "the loop log records the fire"
+    );
+    assert_eq!(sent, [], "an ended booker is sent nothing");
+}
+
+/// A workflow fire's end reaches its booker once its run is collected, in the starter report's
+/// wording under the booking's id.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_workflow_fire_messages_its_booker_when_its_run_ends() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
+    let env = schedule_room();
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "flow",
+    );
+    deploy_workflow(
+        &env,
+        "quick",
+        "[workflow]\nscope = 'project'\nstart = 'hold'\n\
+         [test.hold]\ntimeout = '5m'\nshell = 'true'\non = { pass = '@done', fail = '@failed' }\n",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (booked, is_error) = server.answer(
+        1,
+        "schedule",
+        json!({"name": "flow", "trigger": "cron", "value": "0 0 1 1 *", "tool": "workflow",
+               "arguments": {"name": "quick"}}),
+    );
+    assert!(!is_error, "{booked}");
+    server.close();
+    let before = run_mark(&env, "flow");
+    let fired = env.rimz().args(["loop", "run", "flow"]).output().unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    let row = wait_for_loop_report_after(&env, "flow", before);
+    assert_eq!(row.result, LoopRunResult::Completed, "{row:?}");
+    let sent = || -> Vec<(String, String)> {
+        env.store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| message.text.starts_with("schedule:flow\n"))
+            .map(|message| (message.agent_id.to_string(), message.text))
+            .collect()
+    };
+    // The process that collects the run queues the message after its row lands.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while sent().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let sent = sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "provider-session", "{sent:?}");
+}
+
 /// A booking fires where it was booked: the same `when` booked from the project root and from a
 /// linked worktree stores each checkout as its row's `dir` and reads each one, and a booking
-/// whose checkout is gone by its fire fails that fire with no fallback to the root.
+/// whose checkout is gone by its fire fails that fire with no fallback to the root, and its
+/// booker is told of the failure.
 #[cfg(unix)]
 #[test]
 fn a_booking_reads_and_fires_in_the_checkout_it_was_booked_from() {
@@ -6400,6 +6553,21 @@ fn a_booking_reads_and_fires_in_the_checkout_it_was_booked_from() {
         "{logs}"
     );
     assert!(!root.join("fired").exists() && !side.join("fired").exists());
+    let told: Vec<String> = env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .map(|message| message.text)
+        .filter(|text| text.starts_with("schedule:in-gone"))
+        .collect();
+    assert_eq!(
+        told,
+        [format!(
+            "schedule:in-gone · error\ntask checkout {}: No such file or directory (os error 2)",
+            gone.display()
+        )]
+    );
 }
 
 /// A booking from an agent whose start directory lies outside the room's repository fires in

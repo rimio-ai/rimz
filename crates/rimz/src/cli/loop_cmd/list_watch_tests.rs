@@ -378,6 +378,8 @@ fn mark(at: Timestamp) -> rimz::harness::schedule::task_record::FireMark {
         fire: rimz::ids::FireId::new(&rimz::ids::TaskId::new()),
         at,
         booked_by: Vec::new(),
+        on: None,
+        report: None,
         once: true,
         run: None,
         scope: rimz::store::workflow::ScopeKind::Worktree,

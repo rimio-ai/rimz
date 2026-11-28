@@ -85,6 +85,7 @@ pub struct LayoutLaunch {
     /// carries it for display, and every cell carries the fire's booking chain and fire id.
     pub loop_task: Option<String>,
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub loop_on: Option<crate::config::CheckOn>,
     pub loop_fire: Option<crate::ids::FireId>,
     /// `--subagent-profile`: resolve the spec, one `[subagents.profiles]` name, from that table
     /// and record the scope on the launched agent, which stays top-level.
@@ -1318,6 +1319,7 @@ fn settle_layout(
         managed_launches: Vec::new(),
         loop_task: loop_task.clone().or_else(|| args.launch.loop_task.clone()),
         loop_booked_by: args.launch.loop_booked_by.clone(),
+        loop_on: args.launch.loop_on,
         loop_fire: args.launch.loop_fire.clone(),
         cleanup_worktree: true,
         // A run-bearing leader opens its own tab, as a supervised launch does.
@@ -1405,7 +1407,8 @@ fn prepare_peer_prompt(
     report_to: crate::store::run::ReportTo,
 ) -> Result<Option<(AgentState, crate::store::run::RunRecord)>> {
     let Some(identity) = identities.iter().find(|identity| {
-        identity.launch.launched_by.is_some()
+        (identity.launch.launched_by.is_some()
+            || (identity.launch.loop_fire.is_some() && !identity.launch.loop_booked_by.is_empty()))
             && identity
                 .prompt
                 .as_deref()
@@ -1425,8 +1428,7 @@ fn prepare_peer_prompt(
             peer.kind == identity.kind && peer.launch_id.as_ref() == Some(&identity.agent_id)
         })
         .context("launched peer has no provisional row")?;
-    let launcher = peer
-        .launcher()
+    let launcher = crate::harness::fleet::report_recipient(peer)
         .and_then(|(kind, id)| crate::address::launch_row(&agents, kind, id));
     if launcher.is_none() {
         tracing::warn!(
@@ -1834,6 +1836,7 @@ fn launch_resume_layout(
             if let crate::harness::plan::CohortSeed::Resume(agent) = seed {
                 agent.loop_fire.clone_from(&args.launch.loop_fire);
                 agent.loop_booked_by.clone_from(&args.launch.loop_booked_by);
+                agent.loop_on = args.launch.loop_on;
             }
         }
     }
@@ -2022,6 +2025,7 @@ fn launch_resume_layout(
                 .launch
                 .loop_booked_by
                 .clone_from(&args.launch.loop_booked_by);
+            request.launch.loop_on = args.launch.loop_on;
         }
     }
     let launch_batch = store.begin_agent_launch_batch(

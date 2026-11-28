@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use super::TaskLaunch;
 use crate::agents::LaunchedBy;
 use crate::harness::loop_task::{
-    LOOP_BOOKED_BY_ENV, LOOP_FIRE_ENV, LOOP_TASK_ENV, LOOP_TRIGGER_ENV,
+    LOOP_BOOKED_BY_ENV, LOOP_FIRE_ENV, LOOP_ON_ENV, LOOP_TASK_ENV, LOOP_TRIGGER_ENV,
 };
 use crate::ids::{FireId, RunId, WorkflowRunId};
 
@@ -40,6 +40,7 @@ pub(super) struct Request<'a> {
     /// What fired it, as loop words it for a launch prompt; empty for none.
     pub(super) trigger: &'a str,
     pub(super) booked_by: &'a [LaunchedBy],
+    pub(super) on: Option<crate::config::CheckOn>,
     /// A workflow fire's start, handed over as `--loop-fire-json`.
     pub(super) start: Option<&'a crate::harness::workflow::TaskStart>,
 }
@@ -104,6 +105,10 @@ pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     match serde_json::to_string(request.booked_by) {
         Ok(chain) if !request.booked_by.is_empty() => command.env(LOOP_BOOKED_BY_ENV, chain),
         _ => command.env_remove(LOOP_BOOKED_BY_ENV),
+    };
+    match request.on.map(|on| serde_json::to_string(&on)) {
+        Some(Ok(on)) => command.env(LOOP_ON_ENV, on),
+        _ => command.env_remove(LOOP_ON_ENV),
     };
     #[cfg(unix)]
     {

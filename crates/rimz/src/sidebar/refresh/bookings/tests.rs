@@ -87,6 +87,8 @@ fn mark(at: Timestamp, kind: Option<LaunchKind>, target: &str) -> FireMark {
         fire: FireId::new(&TaskId::new()),
         at,
         booked_by: vec![link("booker"), link("root")],
+        on: None,
+        report: None,
         once: false,
         run: None,
         scope: crate::store::workflow::ScopeKind::Project,
@@ -828,6 +830,7 @@ fn only_a_booked_agent_or_team_fire_is_rebuilt() {
     let at = now - jiff::SignedDuration::from_secs(60);
     let unbooked = FireMark {
         booked_by: Vec::new(),
+        on: None,
         ..mark(at, Some(LaunchKind::Agent), "coder")
     };
     let marks = ledger([
@@ -1950,6 +1953,7 @@ fn launch_id(name: &str, epoch: u32) -> String {
 /// A booked fire's mark as its fire leaves it, `minutes` ago.
 fn fired_mark(minutes: i64, kind: LaunchKind, target: &str) -> FireMark {
     FireMark {
+        report: None,
         once: true,
         ..mark(
             Timestamp::now() - jiff::SignedDuration::from_mins(minutes),

@@ -648,6 +648,7 @@ pub fn relaunch_request(
         team: agent.team.clone(),
         loop_task: agent.loop_task.clone(),
         loop_booked_by: agent.loop_booked_by.clone(),
+        loop_on: agent.loop_on,
         loop_fire: agent.loop_fire.clone(),
         workflow: None,
         launch_group: agent.launch_group.clone(),
@@ -834,6 +835,7 @@ pub fn fresh_launch_request(
     request.launch.team = agent.team.clone();
     request.launch.loop_task = agent.loop_task.clone();
     request.launch.loop_booked_by = agent.loop_booked_by.clone();
+    request.launch.loop_on = agent.loop_on;
     request.launch.loop_fire = agent.loop_fire.clone();
     request.launch.workflow = agent.workflow.clone();
     request.launch.launch_group = agent.launch_group.clone();

@@ -58,7 +58,7 @@ pub(super) fn run(request: ParkNoticeRequest, globals: &super::GlobalFlags) -> R
                 return Ok(());
             }
             // A held child no longer holds back its siblings' answers.
-            let Some((kind, launcher)) = child.launcher() else {
+            let Some((kind, launcher)) = rimz::harness::fleet::report_recipient(child) else {
                 return Ok(());
             };
             super::subagent_report::report_fleet_with_kind(

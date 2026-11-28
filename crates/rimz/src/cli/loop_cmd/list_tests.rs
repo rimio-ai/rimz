@@ -146,6 +146,8 @@ fn launched_counts_cover_the_marks_holding_a_checkout() {
         fire: FireId::new(&TaskId::new()),
         at,
         booked_by: Vec::new(),
+        on: None,
+        report: None,
         once: true,
         run,
         scope: rimz::store::workflow::ScopeKind::Worktree,

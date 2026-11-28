@@ -70,6 +70,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
             "value": "*/30 * * * *",
             "tool": "shell",
             "arguments": {"command": "cargo test 2>&1 | tail", "cwd": "sub", "timeout": "20m", "label": "run the tests"},
+            "on": "fail",
         }),
         json!({
             "name": "n",
@@ -92,6 +93,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
             "value": "fri 09:30",
             "tool": "agent",
             "arguments": agent_args,
+            "on": "success",
         }),
         json!({
             "name": "n",
@@ -103,6 +105,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
             "worktree": "fix",
             "tool": "team",
             "arguments": team_args,
+            "on": "fail",
         }),
         json!({
             "name": "n",
@@ -145,6 +148,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
                 "give_up": "2h",
                 "skip_capacity": true,
             },
+            "on": "success",
         }),
     ] {
         assert!(schedule.call(valid.clone()).is_ok(), "{valid}");
@@ -224,6 +228,11 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
             "`overlap` takes a repeating trigger",
         ),
         (
+            "on any",
+            json!({"name": "n", "trigger": "cron", "value": "@daily", "on": "any", "tool": "agent", "arguments": agent_args}),
+            "unknown variant `any`",
+        ),
+        (
             "overlap on one-shot when",
             json!({"name": "n", "trigger": "when", "value": "ci=passed", "overlap": "skip", "tool": "agent", "arguments": agent_args}),
             "`overlap` takes a repeating trigger",
@@ -260,7 +269,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
         (
             "shell on",
             json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make", "on": "fail"}}),
-            "`arguments.on`: a fire sends no message, so no outcome wakes anyone",
+            "`arguments.on`: pass top-level `on`",
         ),
         (
             "shell zero timeout",

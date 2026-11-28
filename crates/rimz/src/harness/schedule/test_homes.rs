@@ -60,6 +60,8 @@ pub(super) fn dead_mark(fire: FireId, child: bool) -> FireMark {
         fire,
         at: Timestamp::now(),
         booked_by: Vec::new(),
+        on: None,
+        report: None,
         once: false,
         run: None,
         scope: crate::store::workflow::ScopeKind::Worktree,

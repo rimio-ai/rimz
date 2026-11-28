@@ -75,6 +75,7 @@ fn task(record: &mut RunRecord, manual: bool) {
             task,
             evidence: None,
             booked_by: Vec::new(),
+            on: None,
         }
     } else {
         records::RunFire::Scheduled {
@@ -86,6 +87,7 @@ fn task(record: &mut RunRecord, manual: bool) {
             ),
             evidence: None,
             booked_by: Vec::new(),
+            on: None,
         }
     });
 }
@@ -433,6 +435,7 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
         trigger: None,
         evidence: None,
         booked_by: Vec::new(),
+        on: None,
     });
     update(&state, &record);
     let host = FakeHost::new();

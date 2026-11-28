@@ -345,6 +345,7 @@ pub(super) struct ResumeLaunchIdentity {
     /// fire's when that fire resumes it.
     pub loop_fire: Option<crate::ids::FireId>,
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub loop_on: Option<crate::config::CheckOn>,
 }
 
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
@@ -380,6 +381,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             tier: agent.tier.clone(),
             loop_fire: agent.loop_fire.clone(),
             loop_booked_by: agent.loop_booked_by.clone(),
+            loop_on: agent.loop_on,
         }
     }
 }
@@ -2358,6 +2360,7 @@ pub(super) fn resume_command(
         epoch: (identity.epoch > 0).then_some(identity.epoch),
         loop_fire: identity.loop_fire.clone(),
         loop_booked_by: identity.loop_booked_by.clone(),
+        loop_on: identity.loop_on,
         ..Default::default()
     };
     crate::harness::launch::exec_argv(

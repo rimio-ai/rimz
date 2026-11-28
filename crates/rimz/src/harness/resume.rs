@@ -1232,6 +1232,7 @@ impl ResumeCandidate {
                 tier: None,
                 loop_fire: None,
                 loop_booked_by: Vec::new(),
+                loop_on: None,
             },
             stamped_mode: None,
             effective_isolation: None,

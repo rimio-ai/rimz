@@ -258,6 +258,8 @@ fn holding(task: &LoadedTask, checkout: &Path, scope: ScopeKind) -> TaskRecords 
             fire: FireId::new(&id),
             at: Timestamp::now(),
             booked_by: Vec::new(),
+            on: None,
+            report: None,
             once: true,
             run: None,
             scope,

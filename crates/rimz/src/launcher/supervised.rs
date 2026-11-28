@@ -37,6 +37,7 @@ pub(super) fn prepare_run_layout(
     supervised.loop_task.clone_from(&leader.loop_task);
     supervised.loop_fire.clone_from(&leader.loop_fire);
     supervised.loop_booked_by.clone_from(&leader.loop_booked_by);
+    supervised.loop_on = leader.loop_on;
     supervised
         .reminder_section
         .clone_from(&leader.reminder_section);
@@ -783,6 +784,7 @@ fn prepare(
             loop_task: request.loop_task.clone(),
             loop_fire: request.loop_fire.clone(),
             loop_booked_by: request.loop_booked_by.clone(),
+            loop_on: request.loop_on,
             workflow: request.workflow.clone(),
             reminder_section: request.reminder_section.clone(),
             throttle_turn: None,
@@ -830,6 +832,7 @@ fn prepare(
             managed_launches,
             loop_task: None,
             loop_booked_by: Vec::new(),
+            loop_on: None,
             loop_fire: None,
             cleanup_worktree: request.retries == 0,
             force_new_tab: request.force_new_tab,

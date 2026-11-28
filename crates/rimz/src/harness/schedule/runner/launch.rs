@@ -56,6 +56,7 @@ impl Fire<'_> {
                         checkout: &checkout,
                         trigger: &trigger,
                         booked_by: &booked_by,
+                        on: self.entry.on,
                         start: start.as_ref(),
                     },
                 )

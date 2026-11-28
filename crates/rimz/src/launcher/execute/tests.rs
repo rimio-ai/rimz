@@ -93,6 +93,7 @@ impl Fixture {
                 reminder_section: None,
                 loop_task: None,
                 loop_booked_by: Vec::new(),
+                loop_on: None,
                 description: None,
                 report_to: ReportTo::Launcher,
                 cleanup_worktree: false,
@@ -123,6 +124,7 @@ impl Fixture {
             loop_task: None,
             loop_fire: None,
             loop_booked_by: Vec::new(),
+            loop_on: None,
             workflow: None,
             reminder_section: None,
             throttle_turn: None,
@@ -162,6 +164,7 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
         seq: 7,
         role: crate::agents::WorkflowAttemptRole::Step,
     });
+    leader.loop_on = Some(crate::config::CheckOn::Fail);
     leader.loop_booked_by = vec![crate::agents::LaunchedBy {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         agent_id: "booker".into(),
@@ -219,7 +222,10 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
     assert!(
         requests
             .iter()
-            .all(|request| request.identity.params.loop_booked_by == leader.loop_booked_by),
+            .all(
+                |request| request.identity.params.loop_booked_by == leader.loop_booked_by
+                    && request.identity.params.loop_on == leader.loop_on
+            ),
         "every cell of a fired launch carries the booking chain"
     );
 }

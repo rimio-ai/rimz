@@ -86,6 +86,13 @@ pub struct FireMark {
     pub at: Timestamp,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub booked_by: Vec<crate::agents::LaunchedBy>,
+    /// Which of the fire's outcomes message its booker; either when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<crate::config::CheckOn>,
+    /// The message the fire's outcome reaches its booker under, minted at its first settle, so
+    /// a report retried after a failed write queues it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<crate::ids::MessageId>,
     /// Whether the fire counts for `once-per-checkout`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub once: bool,
@@ -446,6 +453,8 @@ impl FireMark {
             fire: FireId::new(task),
             at: Timestamp::now(),
             booked_by: Vec::new(),
+            on: None,
+            report: None,
             once: true,
             run: None,
             scope,

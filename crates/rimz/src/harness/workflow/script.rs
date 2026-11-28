@@ -555,7 +555,8 @@ fn child_env(
 
 /// A run carrying a loop fire hands its scripts the fire id, so a launch a script makes is the
 /// fire's. A task-started run's checks also name their task and, as a loop guard's did, their
-/// directory, and carry the booking chain its fire froze, for an agent a check launches.
+/// directory, and carry the booking chain and `on` its fire froze, for an agent a check
+/// launches.
 fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if let Some(fire) = &record.loop_fire {
@@ -590,6 +591,12 @@ fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
             crate::harness::loop_task::LOOP_BOOKED_BY_ENV.to_owned(),
             chain,
         ));
+    }
+    if let Some(workflow::RunFire::Manual { on: Some(on), .. })
+    | Some(workflow::RunFire::Scheduled { on: Some(on), .. }) = record.fire.as_ref()
+        && let Ok(on) = serde_json::to_string(on)
+    {
+        env.push((crate::harness::loop_task::LOOP_ON_ENV.to_owned(), on));
     }
     env
 }

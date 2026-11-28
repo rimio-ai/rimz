@@ -43,6 +43,7 @@ pub struct LeaderRun {
     /// The booking chain of the loop fire behind a workflow step's launch, stamped on every
     /// cell.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub loop_on: Option<crate::config::CheckOn>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     pub reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub throttle_turn: Option<crate::harness::throttle::Turn>,
@@ -89,6 +90,7 @@ pub(super) struct FreshLaunch {
     pub(super) loop_task: Option<String>,
     /// The booking chain of the loop fire behind a launch no run of the fire owns.
     pub(super) loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub(super) loop_on: Option<crate::config::CheckOn>,
     /// The loop fire a room launch was made under, stamped on every cell.
     pub(super) loop_fire: Option<crate::ids::FireId>,
     pub(super) description: Option<String>,
@@ -362,6 +364,9 @@ fn open_fresh(
                 .as_ref()
                 .map_or(&fresh.loop_booked_by, |leader| &leader.loop_booked_by),
         );
+        request.launch.loop_on = leader
+            .as_ref()
+            .map_or(fresh.loop_on, |leader| leader.loop_on);
         request.launch.loop_fire.clone_from(
             leader
                 .as_ref()
@@ -449,7 +454,7 @@ fn open_fresh(
         if let Some((peer, _)) = &peer {
             match crate::harness::run::fail_peer_run(store, peer, "peer launch failed") {
                 Ok(Some(_)) => {
-                    if let Some((_, launcher)) = peer.launcher() {
+                    if let Some((_, launcher)) = crate::harness::fleet::report_recipient(peer) {
                         crate::harness::orphan_sweep::spawn_digest_helper(
                             store.runtime_paths(),
                             launcher.clone(),

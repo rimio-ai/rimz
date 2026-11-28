@@ -206,6 +206,7 @@ pub struct SupervisedRunRequest {
     pub loop_fire: Option<crate::ids::FireId>,
     /// The booking chain of the loop task whose check launched this run, stamped on its agent.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    pub loop_on: Option<crate::config::CheckOn>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     /// The composed or replayed reminder section every attempt's pane request carries.
     pub reminder_section: Option<crate::harness::launch::ReminderSection>,
@@ -270,6 +271,7 @@ impl SupervisedRunRequest {
             loop_task: None,
             loop_fire: None,
             loop_booked_by: Vec::new(),
+            loop_on: None,
             workflow: None,
             reminder_section: None,
             passthrough: Vec::new(),

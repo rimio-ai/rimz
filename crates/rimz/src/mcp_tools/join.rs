@@ -29,9 +29,8 @@ const TIMEOUT_DEFAULT: Duration = Duration::from_secs(4 * 60);
 const TIMEOUT_MAX: Duration = Duration::from_secs(9 * 60);
 /// How a wait's outcome reaches the caller.
 const BY_MESSAGE: &str = "its outcome comes to you as a message; join does not wait for it";
-/// What a booker hears of a schedule's fires: nothing delivers one a message (the fire's
-/// launch carries the booking chain for ownership only).
-const NO_MESSAGE: &str = "no message comes when it fires; join does not wait for it";
+/// What a booker hears of a schedule's fires: each one's outcome, as a message.
+const EACH_FIRE: &str = "a message comes after each fire; join does not wait for it";
 const QUEUED: &str = "a message waits for you: read it, then join again";
 /// A shell's outcome a fire sent before the join's claim landed.
 const ALSO_SENT: &str = "this outcome also came to you as a message";
@@ -140,7 +139,7 @@ pub(super) fn join(
         },
         Named::Schedule { .. } if schedule_disabled(&root, name)? => Joined::new(id, "disabled"),
         Named::Schedule { .. } => Joined {
-            report: Some(NO_MESSAGE),
+            report: Some(EACH_FIRE),
             ..Joined::new(id, "running")
         },
         Named::Wait { .. } if kind == TaskKind::Shell => {

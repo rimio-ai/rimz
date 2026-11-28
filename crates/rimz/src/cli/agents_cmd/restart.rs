@@ -710,7 +710,7 @@ fn notify_parent_restarted(
 
 fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result<()> {
     if rimz::harness::run::fail_peer_turn(store, agent, "peer restarted")?.is_some()
-        && let Some((_, launcher)) = agent.launcher()
+        && let Some((_, launcher)) = rimz::harness::fleet::report_recipient(agent)
     {
         rimz::harness::orphan_sweep::spawn_digest_helper(store.runtime_paths(), launcher.clone());
     }

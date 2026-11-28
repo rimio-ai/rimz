@@ -657,7 +657,7 @@ fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
             TaskAction::from_entry("task", &entry)
                 .unwrap_err()
                 .to_string(),
-            "loop task `task` is not a row this RimZ takes (`on` belongs to a watch); delete the task and re-add it with `rimz loop add`",
+            "loop task `task` is not a row this RimZ takes (`on` belongs to a watch or a booking); delete the task and re-add it with `rimz loop add`",
             "{row}"
         );
     }

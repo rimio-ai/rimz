@@ -346,6 +346,7 @@ fn a_loop_fires_evidence_ends_the_agent_prompt_after_the_run_prompt() {
         trigger: None,
         evidence: Some("Rule `nightly` fired here. deploy.done".into()),
         booked_by: Vec::new(),
+        on: None,
     });
     update(&state, &record);
     let host = FakeHost::new();

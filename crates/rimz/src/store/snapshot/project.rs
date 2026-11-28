@@ -1149,6 +1149,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams, registratio
     if !launch.loop_booked_by.is_empty() {
         state.loop_booked_by.clone_from(&launch.loop_booked_by);
     }
+    if launch.loop_on.is_some() {
+        state.loop_on = launch.loop_on;
+    }
     if let Some(fire) = &launch.loop_fire {
         state.loop_fire = Some(fire.clone());
     }
@@ -1246,6 +1249,7 @@ fn strip_root_launch_identity(state: &mut AgentState) {
     state.team = None;
     state.loop_task = None;
     state.loop_booked_by.clear();
+    state.loop_on = None;
     state.loop_fire = None;
     state.workflow = None;
     state.tune = Default::default();
@@ -1544,6 +1548,7 @@ fn inherit_launch_identity(
     successor
         .loop_booked_by
         .clone_from(&predecessor.loop_booked_by);
+    successor.loop_on = predecessor.loop_on;
     successor.loop_fire.clone_from(&predecessor.loop_fire);
     successor.workflow.clone_from(&predecessor.workflow);
     successor.tune.clone_from(&latest.tune);

@@ -16,6 +16,10 @@ pub(crate) const LOOP_FIRE_ENV: &str = "RIMZ_LOOP_FIRE";
 /// its run started (`RunFire::booked_by`), so an agent its check launches records it.
 pub(crate) const LOOP_BOOKED_BY_ENV: &str = "RIMZ_LOOP_BOOKED_BY";
 
+/// The environment key carrying, as JSON, the firing booking's `on`, so an agent or team the
+/// fire launches reports to its booker only when the booking allows a report.
+pub(crate) const LOOP_ON_ENV: &str = "RIMZ_LOOP_ON";
+
 /// The environment key carrying what fired the run (the trigger's evidence, as loop words it
 /// for a launch prompt) to a fire's command, so a launch under it can append it to its prompt.
 pub(crate) const LOOP_TRIGGER_ENV: &str = "RIMZ_LOOP_TRIGGER";
@@ -30,6 +34,7 @@ pub struct FireEnv {
     /// What fired it, for a launch to append to a nonblank prompt.
     pub trigger: Option<String>,
     pub booked_by: Vec<LaunchedBy>,
+    pub on: Option<crate::config::CheckOn>,
 }
 
 /// The fire this process's launches belong to: `RIMZ_LOOP_FIRE` parses as a fire id and no
@@ -60,6 +65,7 @@ fn fire_env_from(
         booked_by: var(LOOP_BOOKED_BY_ENV)
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default(),
+        on: var(LOOP_ON_ENV).and_then(|raw| serde_json::from_str(&raw).ok()),
     })
 }
 
@@ -85,11 +91,13 @@ mod tests {
             (LOOP_TASK_ENV, "nightly"),
             (LOOP_TRIGGER_ENV, "  "),
             (LOOP_BOOKED_BY_ENV, booked),
+            (LOOP_ON_ENV, r#""fail""#),
         ];
         let read = fire_env_from(Some(fire.as_str().to_owned()), false, env(&pairs)).unwrap();
         assert_eq!(read.fire.task(), task);
         assert_eq!(read.task, "nightly");
         assert_eq!(read.trigger, None);
+        assert_eq!(read.on, Some(crate::config::CheckOn::Fail));
         assert_eq!(
             read.booked_by,
             [LaunchedBy {

@@ -13,16 +13,70 @@ pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Optio
         .max_by_key(|run| run.started_at)
 }
 
+/// Who `agent`'s settled work reports to: its launcher, else, for a launch a loop fire
+/// started, the booker (the booking chain's first link). A booking stamps no launcher, so the
+/// fire's work keeps its own lifecycle and reaches the booker through this rule alone; the
+/// booking's `on` narrows which outcomes do ([`reports_outcome`]).
+pub fn report_recipient(agent: &AgentState) -> Option<(&AgentKind, &AgentSessionId)> {
+    agent.launcher().or_else(|| {
+        agent.loop_fire.as_ref()?;
+        let booker = agent.loop_booked_by.first()?;
+        Some((&booker.kind, &booker.agent_id))
+    })
+}
+
+/// Whether `agent`'s settled work ending `status` reaches [`report_recipient`]: every end of a
+/// launcher's child, and of a fire's work the ends its booking's `on` keeps, a delivered report
+/// (`Completed`) being a success and any other end a failure.
+pub fn reports_outcome(agent: &AgentState, status: crate::store::run::RunStatus) -> bool {
+    if agent.launcher().is_some() {
+        return true;
+    }
+    let delivered = status == crate::store::run::RunStatus::Completed;
+    match agent.loop_on {
+        Some(crate::config::CheckOn::Fail) => !delivered,
+        Some(crate::config::CheckOn::Success) => delivered,
+        Some(crate::config::CheckOn::Any) | None => true,
+    }
+}
+
+/// [`AgentState::launcher_is`] on [`report_recipient`].
+pub fn reports_to(agent: &AgentState, candidate: &AgentState) -> bool {
+    report_recipient(agent).is_some_and(|(kind, id)| {
+        candidate.launch_id.as_ref() == Some(id)
+            || (kind == &candidate.kind && candidate.answers_to(id))
+    })
+}
+
+/// [`crate::address::launched_fleet`] on [`reports_to`]: what `launcher` launched, plus
+/// what its bookings' fires launched.
+pub fn reporting_fleet<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    launcher: &AgentState,
+) -> Vec<&'a AgentState> {
+    let members =
+        crate::agents::state::launch_members(agents.clone(), &launcher.kind, launcher.launch_key());
+    let mut fleet: Vec<_> = agents
+        .into_iter()
+        .filter(|agent| !agent.is_team_seat())
+        .filter(|agent| {
+            reports_to(agent, launcher) || members.iter().any(|member| reports_to(agent, member))
+        })
+        .collect();
+    fleet.sort_by_key(|agent| (agent.registered_at, agent.agent_id.clone()));
+    fleet
+}
+
 /// Whether `launcher` launched anyone at all, answered from the agent rows
 /// alone so a caller can skip reading the runs directory.
 pub(super) fn has_members<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     launcher: &AgentState,
 ) -> bool {
-    !crate::address::launched_fleet(agents, launcher).is_empty()
+    !reporting_fleet(agents, launcher).is_empty()
 }
 
-/// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members. A member whose selected run reports to nobody has no row.
+/// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as [`reporting_fleet`] orders its members. A member whose selected run reports to nobody has no row.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
 type AgentKey = (AgentKind, AgentSessionId);
@@ -112,7 +166,7 @@ impl<'a> FleetRunIndex<'a> {
                 launchers_by_launch.entry(launch).or_default().push(index);
             }
             if !agent.is_team_seat()
-                && let Some((kind, id)) = agent.launcher()
+                && let Some((kind, id)) = report_recipient(agent)
             {
                 children
                     .entry((kind.clone(), id.clone()))
@@ -332,13 +386,14 @@ fn open_team_runs<'a, 'agents>(
     agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     runs: &'a [RunRecord],
     launcher: &AgentState,
+    owes: fn(&AgentState, &AgentState) -> bool,
 ) -> Vec<&'a RunRecord> {
     runs.iter()
         .filter(|run| {
             !run.status.is_terminal()
                 && run.team.as_ref().is_some_and(|team| {
                     crate::address::launch_row(agents.clone(), &run.kind, &team.launch_id)
-                        .is_some_and(|leader| leader.launcher_is(launcher))
+                        .is_some_and(|leader| owes(leader, launcher))
                 })
         })
         .collect()
@@ -350,7 +405,7 @@ pub(super) fn owed_team_runs<'a, 'agents>(
     runs: &'a [RunRecord],
     launcher: &AgentState,
 ) -> Vec<&'a RunRecord> {
-    let mut owed = open_team_runs(agents, runs, launcher);
+    let mut owed = open_team_runs(agents, runs, launcher, AgentState::launcher_is);
     owed.retain(|run| run.report_to == ReportTo::Launcher);
     owed
 }
@@ -375,13 +430,14 @@ pub(super) fn team_stage_pending(stage: Option<&str>) -> bool {
     stage != Some(crate::config::DONE_STAGE)
 }
 
-/// Open runs belonging to this launcher whose whole cohort has ended.
+/// Open runs reporting to this launcher whose whole cohort has ended, a booked fire's team
+/// included.
 pub fn ended_team_runs<'a, 'agents>(
     agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     runs: &'a [RunRecord],
     launcher: &AgentState,
 ) -> Vec<&'a RunRecord> {
-    open_team_runs(agents.clone(), runs, launcher)
+    open_team_runs(agents.clone(), runs, launcher, reports_to)
         .into_iter()
         .filter(|run| {
             run.team
@@ -411,7 +467,7 @@ impl<'a> FleetRuns<'a> {
     ) -> Self {
         let mut seen = HashSet::new();
         Self(
-            crate::address::launched_fleet(agents, launcher)
+            reporting_fleet(agents, launcher)
                 .into_iter()
                 .flat_map(|child| {
                     let newest = runs
@@ -440,11 +496,18 @@ impl<'a> FleetRuns<'a> {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
     }
 
-    /// Whether an open run is still working, not held for its provider's refill.
+    /// Whether an open run is still working, not held for its provider's refill. A fire's
+    /// work holds back no digest of its booker's own launches.
     pub fn any_working(&self) -> bool {
-        self.0
-            .iter()
-            .any(|(_, run)| !run.status.is_terminal() && !Self::is_held(run))
+        self.0.iter().any(|(child, run)| {
+            Self::holds(child) && !run.status.is_terminal() && !Self::is_held(run)
+        })
+    }
+
+    /// Whether `child`'s run can hold its recipient: a fire's work reports to its booker
+    /// and never holds it, since the booking stamped no launcher.
+    fn holds(child: &AgentState) -> bool {
+        child.launcher().is_some()
     }
 
     /// Open rows held for a provider's refill, in member order.
@@ -460,7 +523,9 @@ impl<'a> FleetRuns<'a> {
         self.0
             .iter()
             .copied()
-            .filter(|(_, run)| !run.status.is_terminal() || run.owes_report())
+            .filter(|(child, run)| {
+                Self::holds(child) && (!run.status.is_terminal() || run.owes_report())
+            })
             .collect()
     }
 
@@ -582,6 +647,72 @@ mod tests {
     }
 
     #[test]
+    fn a_fired_launch_reports_to_its_booker_and_never_holds_it() {
+        let booker = AgentState::stub("codex", "booker", AgentStatus::Idle);
+        let link = crate::agents::LaunchedBy {
+            kind: booker.kind.clone(),
+            agent_id: booker.agent_id.clone(),
+        };
+        let booked = |id: &str| {
+            let mut row = AgentState::stub("claude", id, AgentStatus::Running);
+            row.launch_id = Some(format!("{id}-launch").as_str().into());
+            row.loop_booked_by = vec![link.clone()];
+            row
+        };
+        let mut fired = booked("fired");
+        fired.loop_fire = Some(crate::ids::FireId::new(&crate::ids::TaskId::new()));
+        let step = booked("step");
+        let mut runs = [&fired, &step].map(|row| {
+            let mut record = RunRecord::new(
+                WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+                row.kind.clone(),
+                PermissionMode::Auto,
+                "task".into(),
+                "/repo".into(),
+            );
+            record.status = crate::store::run::RunStatus::Running;
+            let mut value = serde_json::to_value(record).unwrap();
+            value["peer"] = serde_json::json!({"launch_id": row.launch_id});
+            serde_json::from_value::<RunRecord>(value).unwrap()
+        });
+        let agents = [booker.clone(), fired.clone(), step];
+        assert_eq!(
+            report_recipient(&fired),
+            Some((&booker.kind, &booker.agent_id))
+        );
+        let fleet = fleet_runs(&agents, &runs, &booker);
+        assert_eq!(
+            fleet
+                .0
+                .iter()
+                .map(|(agent, _)| &agent.agent_id)
+                .collect::<Vec<_>>(),
+            [&fired.agent_id],
+            "a workflow step's booking chain reports nothing"
+        );
+        assert!(
+            fleet.unsettled().is_empty() && !fleet.any_working(),
+            "a fire's work never holds its booker"
+        );
+        runs[0].status = crate::store::run::RunStatus::Completed;
+        assert_eq!(fleet_runs(&agents, &runs, &booker).unreported().len(), 1);
+
+        fired.loop_on = Some(crate::config::CheckOn::Success);
+        assert!(
+            report_recipient(&fired).is_some(),
+            "`on: success` keeps the report"
+        );
+        fired.loop_on = Some(crate::config::CheckOn::Fail);
+        assert_eq!(
+            report_recipient(&fired),
+            Some((&booker.kind, &booker.agent_id)),
+            "`on` narrows the outcomes reported, never who they reach"
+        );
+        let agents = [booker.clone(), fired];
+        assert_eq!(fleet_runs(&agents, &runs, &booker).unreported().len(), 1);
+    }
+
+    #[test]
     fn a_held_run_is_open_but_not_working() {
         let at = Timestamp::from_second(1_000).unwrap();
         let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
@@ -655,7 +786,7 @@ mod tests {
         });
         let mut runs = vec![run];
         let mut agents = vec![parent.clone(), leader];
-        let open = open_team_runs(&agents, &runs, &parent);
+        let open = open_team_runs(&agents, &runs, &parent, AgentState::launcher_is);
         assert_eq!(open.len(), 1, "an open team run belongs to its launcher");
         assert_eq!(
             open[0].team.as_ref().unwrap().instance.to_string(),
@@ -695,7 +826,7 @@ mod tests {
         runs[0].report_to = crate::store::run::ReportTo::Launcher;
         assert_eq!(owed_runs(&agents, &runs, &parent).len(), 1);
         runs[0].status = crate::store::run::RunStatus::Completed;
-        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        assert!(open_team_runs(&agents, &runs, &parent, AgentState::launcher_is).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         runs[0].status = crate::store::run::RunStatus::Running;
         // The launcher molted to another kind: its launch id still owns the team.
@@ -706,10 +837,10 @@ mod tests {
         molted[1].launched_by.as_mut().unwrap().agent_id = "parent-launch".into();
         assert_eq!(owed_runs(&molted, &runs, &molted[0]).len(), 1);
         agents[1].launched_by.as_mut().unwrap().agent_id = "someone-else".into();
-        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        assert!(open_team_runs(&agents, &runs, &parent, AgentState::launcher_is).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         agents[1].launched_by = None;
-        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        assert!(open_team_runs(&agents, &runs, &parent, AgentState::launcher_is).is_empty());
     }
 
     #[test]

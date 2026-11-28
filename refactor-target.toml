@@ -2747,7 +2747,12 @@ path = "crates/rimz/src/harness"
 # log keeps (+1).
 # `workflow_script::{Calling, Called, Reader}` and `block::WorkflowSource`: the reader of a called
 # workflow's script a run hands its script engine (+4).
-surface-budget = 1490
+# `fleet::report_recipient`, `reports_to` and `reporting_fleet` resolve a fired launch's booker as its report recipient for the CLI report sites (+2).
+# `schedule::attention::when_scope` is the one checkout a booking's `when` reads in, for the
+# `schedule` tool and the CLI's loop views; `fleet::reports_outcome` is the one rule of which
+# outcomes a fired launch reports under its booking's `on`, for the team run and the CLI's
+# agent report (+2).
+surface-budget = 1494
 
 [[verdict]]
 kind = "item"
@@ -6674,14 +6679,17 @@ path = "crates/rimz/src/harness/loop_task.rs"
 # LOOP_BOOKED_BY_ENV carries the firing task's booking chain beside it (+1).
 # LOOP_TRIGGER_ENV carries what fired the run to its command and the launches under it (+1).
 # The bookings lane reads a booking's declared kind and target, so the reader of a booked row's command as a launch is gone.
+# `config` gives FireEnv::on the booking's `CheckOn`, which narrows the launch's report to its booker.
 allowed-dependencies = [
     "agents",
+    "config",
     "harness::launch",
     "ids",
 ]
 # LOOP_FIRE_ENV spells the fire id a shell command's environment carries (+1).
 # FireEnv and read_fire_env are the one reading of that environment a launch entry stamps from, guarded on no agent identity (+2).
-surface-budget = 6
+# FireEnv::on carries the booking's `on` to the launch it stamps (+1).
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"

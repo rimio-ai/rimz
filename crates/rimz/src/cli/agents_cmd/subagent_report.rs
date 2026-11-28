@@ -77,7 +77,7 @@ pub(super) fn report_fleet_with_kind(
     }
     // A launcher with no members has nothing to report whatever the runs
     // directory holds, and a parked run asks this on every strand poll.
-    if rimz::address::launched_fleet(&projection.agents, parent).is_empty() {
+    if rimz::harness::fleet::reporting_fleet(&projection.agents, parent).is_empty() {
         return Ok(ReportOutcome::NothingToReport);
     }
 
@@ -110,7 +110,10 @@ pub(super) fn report_fleet_with_kind(
     if fleet.any_working() {
         return Ok(ReportOutcome::SiblingsRunning);
     }
-    let rows = fleet
+    let ordinal = |record: &RunRecord, answer: Option<&rimz::store::run::EarlierAnswer>| {
+        answer.map_or(record.follow_ups + 1, |answer| answer.ordinal)
+    };
+    let (rows, dropped): (Vec<_>, Vec<_>) = fleet
         .unreported()
         .into_iter()
         .flat_map(|(child, record)| {
@@ -119,7 +122,20 @@ pub(super) fn report_fleet_with_kind(
                 .filter(|claim| claim.owed)
                 .map(move |claim| (child, record, claim.earlier))
         })
-        .collect::<Vec<_>>();
+        .partition(|(child, record, answer)| {
+            let status = answer.map_or(record.status, |answer| answer.status);
+            rimz::harness::fleet::reports_outcome(child, status)
+        });
+    // An answer its booking's `on` drops is dismissed, so no later digest carries it.
+    for (_, record, answer) in &dropped {
+        run::report::join_and_settle_digest(
+            store,
+            &workspace.session_name,
+            &record.run_id,
+            Some(ordinal(record, *answer)),
+            "outside its booking's `on`",
+        )?;
+    }
     if rows.is_empty() {
         return Ok(ReportOutcome::NothingToReport);
     }
@@ -189,12 +205,7 @@ pub(super) fn report_fleet_with_kind(
     let message_id = message.message_id.clone();
     let answers = rows
         .iter()
-        .map(|(_, run, answer)| {
-            (
-                run.run_id.clone(),
-                answer.map_or(run.follow_ups + 1, |answer| answer.ordinal),
-            )
-        })
+        .map(|(_, run, answer)| (run.run_id.clone(), ordinal(run, *answer)))
         .collect::<Vec<_>>();
     if !run::report::record_report_messages(store.paths(), &answers, Some(&message_id))? {
         return Ok(ReportOutcome::NothingToReport);
@@ -269,7 +280,7 @@ pub(super) fn report_settled_child(
     }) else {
         return Ok(ReportOutcome::ChildMissing);
     };
-    let Some((launcher_kind, launcher_id)) = child.launcher() else {
+    let Some((launcher_kind, launcher_id)) = rimz::harness::fleet::report_recipient(child) else {
         return Ok(ReportOutcome::NoParent);
     };
     report_fleet_with_kind(workspace, store, launcher_id, Some(launcher_kind))
@@ -309,7 +320,7 @@ fn settle_peer_turns(store: &Store, parent_id: &AgentSessionId) -> Result<(), Re
     };
     let mut stranded = Vec::new();
     let agents = &projection.agents;
-    for peer in rimz::address::launched_fleet(agents, parent)
+    for peer in rimz::harness::fleet::reporting_fleet(agents, parent)
         .into_iter()
         .filter(|peer| rimz::address::is_launch_row(agents, peer))
     {

@@ -738,17 +738,19 @@ impl<'a> Fire<'a> {
 
     /// What this fire tells its run's briefs, frozen into the run at its creation: the task, the
     /// served trigger's `evidence` when it has any, and for a scheduled fire the trigger; a
-    /// manual fire's brief names the command instead. The task's booking chain rides along for
-    /// the agents the run launches.
+    /// manual fire's brief names the command instead. The task's booking chain and `on` ride
+    /// along for the agents the run launches.
     fn run_fire(&self, evidence: &str) -> RunFire {
         let task = self.name.clone();
         let evidence = (!evidence.is_empty()).then(|| evidence.to_owned());
         let booked_by = self.task.entry().booked_by.clone();
+        let on = self.task.entry().on;
         if self.mode == LoopRunMode::Manual {
             return RunFire::Manual {
                 task,
                 evidence,
                 booked_by,
+                on,
             };
         }
         RunFire::Scheduled {
@@ -756,6 +758,7 @@ impl<'a> Fire<'a> {
             trigger: super::trigger_clause(&self.task),
             evidence,
             booked_by,
+            on,
         }
     }
 
@@ -897,6 +900,7 @@ impl<'a> Fire<'a> {
             fires::Opening {
                 checkout: &checkout,
                 booked_by: self.entry.booked_by.clone(),
+                on: self.entry.on,
                 once: self.entry.dedupes_checkout(),
                 scope: crate::store::workflow::ScopeKind::Worktree,
                 at: self.now,

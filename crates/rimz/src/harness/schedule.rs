@@ -246,8 +246,9 @@ impl TaskAction {
         if let Some(refused_row) = &entry.refused {
             return Err(refused(&refused_row.detail));
         }
-        if entry.on.is_some() && entry.watch.is_none() {
-            return Err(refused("`on` belongs to a watch"));
+        // A booking's `on` narrows which fires message its booker.
+        if entry.on.is_some() && entry.watch.is_none() && entry.booked_by.is_empty() {
+            return Err(refused("`on` belongs to a watch or a booking"));
         }
         if entry.overlap_limit.is_some() {
             let hint = if entry.overlap != Some(crate::config::OverlapPolicy::Queue) {

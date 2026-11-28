@@ -1350,7 +1350,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     for run in [&quiet, &other, &quiet] {
         assert!(matches!(
             report_run(run, &outcome, None),
-            Ok(Collected::Forgotten)
+            Ok((Collected::Forgotten, _))
         ));
     }
     let count = |key: &str| quiet_of(key).map(|q| q.count);
@@ -1366,7 +1366,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         stranded.stranded = true;
         assert!(matches!(
             report_run(&stranded, &outcome, None),
-            Ok(Collected::Reported(RunTransition::Recorded))
+            Ok((Collected::Reported(RunTransition::Recorded), _))
         ));
         let rows = logged();
         assert_eq!(

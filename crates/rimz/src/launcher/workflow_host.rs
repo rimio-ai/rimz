@@ -417,6 +417,7 @@ impl workflow::AttemptHost for Host<'_> {
                     loop_task: step.task,
                     loop_fire: None,
                     loop_booked_by: step.booked_by,
+                    loop_on: None,
                     workflow: Some(step.workflow),
                     throttle_turn: step.throttle_turn,
                     reader: None,

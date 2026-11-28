@@ -94,13 +94,31 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
             .ok();
     }
     let record = &record;
+    let root = task.entry().resolved_root();
     if let Some(fire) = &record.fire {
         // The mark closes before the row lands, so a reader that sees the row sees it closed.
-        let transition = settle_fire_row(task, fire, record);
-        append_for_root(&task.entry().resolved_root(), record);
+        let (transition, booker) = settle_fire_row(task, fire, record);
+        append_for_root(&root, record);
+        booker::send(booker::Owed::new(
+            &root,
+            booker,
+            record,
+            booker::Ran::Launch,
+        ));
         return transition;
     }
-    append_for_root(&task.entry().resolved_root(), record);
+    append_for_root(&root, record);
+    let booker = Booker::of(
+        &task.entry().booked_by,
+        task.entry().on,
+        crate::ids::MessageId::new(),
+    );
+    booker::send(booker::Owed::new(
+        &root,
+        booker,
+        record,
+        booker::Ran::Launch,
+    ));
     end_quiet_streak(&binding, record);
     note_strike(task, &binding, record).unwrap_or_else(|err| {
         tracing::warn!(task = record.task, error = %err, "loop strike state update failed");
@@ -109,8 +127,12 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
 }
 
 /// Settle a fire's own row: its mark closes and its strike signal moves the count once per
-/// fire id, in one write.
-fn settle_fire_row(task: &LoadedTask, fire: &FireId, record: &LoopRunRecord) -> RunTransition {
+/// fire id, in one write. Returns the booker its first settle owes the outcome.
+fn settle_fire_row(
+    task: &LoadedTask,
+    fire: &FireId,
+    record: &LoopRunRecord,
+) -> (RunTransition, Option<Booker>) {
     let settled = super::fires::settle(super::fires::Outcome {
         fire,
         result: record.result,
@@ -121,13 +143,20 @@ fn settle_fire_row(task: &LoadedTask, fire: &FireId, record: &LoopRunRecord) -> 
         now: Timestamp::now(),
     });
     match settled {
-        Ok(Some(settled)) if settled.disabled => RunTransition::AutoDisabled {
-            strikes: settled.count,
-        },
-        Ok(_) => RunTransition::Recorded,
+        Ok(Some(settled)) => (
+            if settled.disabled {
+                RunTransition::AutoDisabled {
+                    strikes: settled.count,
+                }
+            } else {
+                RunTransition::Recorded
+            },
+            settled.booker,
+        ),
+        Ok(None) => (RunTransition::Recorded, None),
         Err(err) => {
             tracing::warn!(task = record.task, %fire, error = %err, "loop fire outcome not settled");
-            RunTransition::Recorded
+            (RunTransition::Recorded, None)
         }
     }
 }
@@ -446,8 +475,10 @@ fn collect_under_lock(
         workflow::RunClass::Current(record) => record,
         workflow::RunClass::Ended(header) => {
             if header.owes_loop_report() {
-                report_header(state, run, &header)?;
+                let owed = report_header(state, run, &header)?;
                 workflow::mark_header_report_sent(&paths, &guard)?;
+                drop(guard);
+                booker::send(owed);
             } else if header.owes_report() {
                 starter::report(state, run, &header, guard)?;
             }
@@ -477,7 +508,8 @@ fn collect_under_lock(
             check.output_path = check.output_path.map(|log| finished.relocate(&log));
             check
         });
-    match report_run(&record, &outcome, command)? {
+    let (collected, owed) = report_run(&record, &outcome, command)?;
+    match collected {
         Collected::Reported(_) => {
             record.report = workflow::ReportMark::Sent;
             workflow::write(&paths, &record, &guard)?;
@@ -487,20 +519,23 @@ fn collect_under_lock(
             std::fs::remove_dir_all(&paths.home)?;
         }
     }
+    // The queue takes the workspace lock itself.
+    drop(guard);
+    booker::send(owed);
     Ok(())
 }
 
 /// Report a finished run this RimZ does not decode from its record's header: the report row,
 /// without moving a strike, settling its fire's tree or consuming an `--until` row, since the
-/// body that would say what the run did is unread.
+/// body that would say what the run did is unread. Returns the outcome its booker is owed.
 fn report_header(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
     header: &crate::store::workflow::RunHeader,
-) -> Result<(), ReportError> {
+) -> Result<Option<booker::Owed>, ReportError> {
     use crate::store::workflow::{RunEnding, RunOutcome, RunState};
     let (Some(task), Some(ended)) = (header.task.as_deref(), header.state) else {
-        return Ok(());
+        return Ok(None);
     };
     let root = match &header.project_root {
         Some(root) => root.clone(),
@@ -535,17 +570,18 @@ fn report_header(
         checkout: header.scope_path.as_ref().unwrap_or(&root),
         fire_facts: header.fire_facts.as_ref(),
     };
-    report_neutral(&facts, &outcome, &root)
+    report_neutral(&facts, &outcome, &root, booker::Ran::of(run, header))
 }
 
 /// Report a run without moving a strike or the quiet streak: close its fire's mark, so the
 /// checkout it held is free, then append its row, and drain the task's waiting triggers. A run
-/// with no fire names no task id and closes no mark.
+/// with no fire names no task id and closes no mark, and owes no booker its outcome.
 fn report_neutral(
     facts: &ReportFacts<'_>,
     outcome: &crate::store::workflow::RunOutcome,
     project_root: &Path,
-) -> Result<(), ReportError> {
+    ran: booker::Ran,
+) -> Result<Option<booker::Owed>, ReportError> {
     let mut record = report_row(facts, outcome);
     let catalog = super::catalog::TaskCatalog::load_lenient(Some(project_root));
     let root = match catalog.for_run(facts.task) {
@@ -555,8 +591,9 @@ fn report_neutral(
         }
         None => project_root.to_path_buf(),
     };
+    let mut booker = None;
     if let Some(fire) = facts.fire {
-        super::fires::settle(super::fires::Outcome {
+        booker = super::fires::settle(super::fires::Outcome {
             fire,
             result: record.result,
             signal: strikes::Signal::Neutral,
@@ -565,11 +602,12 @@ fn report_neutral(
             strike_out: None,
             now: Timestamp::now(),
         })
-        .map_err(ReportFailure::from)?;
+        .map_err(ReportFailure::from)?
+        .and_then(|settled| settled.booker);
     }
     try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
     drain_waiting(facts.task, facts.fire, &root);
-    Ok(())
+    Ok(booker::Owed::new(&root, booker, &record, ran))
 }
 
 /// Collect every finished run of the task named `task` in `root` that still owes its report, and
@@ -811,6 +849,12 @@ fn settle_dead_fire(
                 notify(&record.task, &root, settled.count);
             }
             drain_waiting(&record.task, Some(fire), &root);
+            booker::send(booker::Owed::new(
+                &root,
+                settled.booker,
+                &record,
+                booker::Ran::Launch,
+            ));
             true
         }
         Ok(_) => false,
@@ -954,21 +998,24 @@ pub(in crate::harness) fn report_row(
 /// error, and the retry's settle moves nothing a second time (once per fire id) before it
 /// appends, while history readers fold a repeated row by its run id. When a scheduled fire's command exited 0, an `--until` row
 /// is consumed, quiet or not. Either way a waiting trigger is drained once the report landed.
-/// `command` is how the run's command ended, which a row carries as its check.
+/// `command` is how the run's command ended, which a row carries as its check. Also returns
+/// the outcome the fire's booker is owed, which the caller sends once its lock is down.
 pub(in crate::harness) fn report_run(
     run: &crate::store::workflow::RunRecord,
     outcome: &crate::store::workflow::RunOutcome,
     command: Option<CheckRecord>,
-) -> Result<Collected, ReportError> {
+) -> Result<(Collected, Option<booker::Owed>), ReportError> {
+    let recorded = Collected::Reported(RunTransition::Recorded);
     let Some(task) = run.task.as_deref() else {
-        return Ok(Collected::Reported(RunTransition::Recorded));
+        return Ok((recorded, None));
     };
     if !run.state.is_terminal() {
-        return Ok(Collected::Reported(RunTransition::Recorded));
+        return Ok((recorded, None));
     }
+    let ran = booker::Ran::of(&run.id, &run.header());
     let Some(fire) = run.loop_fire.as_ref().filter(|_| !run.stranded) else {
-        report_neutral(&ReportFacts::of(run, task), outcome, &run.project_root)?;
-        return Ok(Collected::Reported(RunTransition::Recorded));
+        let owed = report_neutral(&ReportFacts::of(run, task), outcome, &run.project_root, ran)?;
+        return Ok((recorded, owed));
     };
     let records = super::task_record::load().map_err(ReportFailure::from)?;
     let bound = records.get(&fire.task());
@@ -1011,11 +1058,15 @@ pub(in crate::harness) fn report_run(
         // The facts a consumed one-shot's fire sealed still name the kind its row had.
         try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
     }
-    let transition = match settled {
-        Some(settled) if settled.disabled => RunTransition::AutoDisabled {
-            strikes: settled.count,
-        },
-        _ => RunTransition::Recorded,
+    let (transition, booker) = match settled {
+        Some(settled) if settled.disabled => (
+            RunTransition::AutoDisabled {
+                strikes: settled.count,
+            },
+            settled.booker,
+        ),
+        Some(settled) => (RunTransition::Recorded, settled.booker),
+        None => (RunTransition::Recorded, None),
     };
     if let RunTransition::AutoDisabled { strikes } = transition
         && let Some(notify) = LOOP_DISABLED.get()
@@ -1024,11 +1075,12 @@ pub(in crate::harness) fn report_run(
     }
     consume_until(&catalog, run, &record);
     drain_waiting(name, Some(fire), &root);
-    Ok(if quiet {
+    let collected = if quiet {
         Collected::Forgotten
     } else {
         Collected::Reported(transition)
-    })
+    };
+    Ok((collected, booker::Owed::new(&root, booker, &record, ran)))
 }
 
 /// Consume a scheduled fire's `--until` row once its command exited 0.
@@ -2220,6 +2272,8 @@ fn tail_string(value: &str, cap: usize) -> String {
     value[start..].to_owned()
 }
 
+mod booker;
+pub(super) use booker::Booker;
 mod starter;
 
 #[cfg(test)]

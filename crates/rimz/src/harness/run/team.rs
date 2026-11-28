@@ -33,7 +33,9 @@ pub(super) fn create_team_run(
     cwd: &Path,
     report_to: ReportTo,
 ) -> Result<Option<RunRecord>> {
-    if leader.launched_by.is_none() || prompt.trim().is_empty() || !super::peer_can_report(adapter)
+    if crate::harness::fleet::report_recipient(leader).is_none()
+        || prompt.trim().is_empty()
+        || !super::peer_can_report(adapter)
     {
         return Ok(None);
     }
@@ -284,11 +286,13 @@ fn report_settled(
     let agents = &projection.agents;
     let leader = crate::address::launch_row(agents, &record.kind, &team.launch_id);
     let launcher = leader
-        .and_then(|leader| leader.launcher())
+        .filter(|leader| crate::harness::fleet::reports_outcome(leader, status))
+        .and_then(crate::harness::fleet::report_recipient)
         .and_then(|(kind, id)| crate::address::launch_row(agents, kind, id))
         .filter(|launcher| launcher.ended_at.is_none());
     let (Some(leader), Some(launcher)) = (leader, launcher) else {
-        // Nobody to tell: settle the run so the next Done does not report it.
+        // Nobody to tell, or an outcome the booking's `on` drops: settle the run so the next
+        // Done does not report it.
         settle_team_run_as(store.paths(), &record.run_id, None, status, failure)?;
         return Ok(TeamReportOutcome::NotOwed);
     };
@@ -373,6 +377,17 @@ mod tests {
     fn launched_team(
         report_to: ReportTo,
     ) -> (tempfile::TempDir, ResolvedWorkspace, Store, RunRecord) {
+        team_led(report_to, |launch, boss| {
+            launch.launched_by = Some(Box::new(boss))
+        })
+    }
+
+    /// A cohort `forge#x` led by `lead`, stamped by `stamp` with a link to the live agent
+    /// `boss`, with its open team run.
+    fn team_led(
+        report_to: ReportTo,
+        stamp: impl Fn(&mut crate::agents::LaunchParams, crate::agents::LaunchedBy),
+    ) -> (tempfile::TempDir, ResolvedWorkspace, Store, RunRecord) {
         let dir = tempfile::tempdir().unwrap();
         let workspace = ResolvedWorkspace {
             workspace_id: crate::WorkspaceId::from_project_root(dir.path()),
@@ -400,10 +415,13 @@ mod tests {
             if name == "lead" {
                 observation.launch.team = Some("forge".into());
                 observation.launch.channel = Some("x".into());
-                observation.launch.launched_by = Some(Box::new(crate::agents::LaunchedBy {
-                    kind: kind.clone(),
-                    agent_id: "boss".into(),
-                }));
+                stamp(
+                    &mut observation.launch,
+                    crate::agents::LaunchedBy {
+                        kind: kind.clone(),
+                        agent_id: "boss".into(),
+                    },
+                );
             }
             store
                 .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
@@ -548,6 +566,48 @@ mod tests {
             }
             assert_eq!(store.list_messages().unwrap().len(), 1);
             assert_eq!(store.list_message_history().unwrap().len(), 1);
+        }
+    }
+
+    /// A fired team reports to its booker the outcomes the booking's `on` keeps, naming the
+    /// booking: an end before Done is a failure, Done a success.
+    #[test]
+    fn a_fired_team_reports_to_its_booker_the_outcomes_its_on_keeps() {
+        use crate::config::CheckOn;
+        for (on, stage, reports) in [
+            (Some(CheckOn::Fail), None, true),
+            (Some(CheckOn::Fail), Some(DONE_STAGE), false),
+            (Some(CheckOn::Success), None, false),
+            (Some(CheckOn::Success), Some(DONE_STAGE), true),
+            (None, None, true),
+            (None, Some(DONE_STAGE), true),
+        ] {
+            let (dir, workspace, store, record) = team_led(ReportTo::Launcher, |launch, boss| {
+                launch.loop_task = Some("nightly".into());
+                launch.loop_fire = Some(crate::ids::FireId::new(&crate::ids::TaskId::new()));
+                launch.loop_booked_by = vec![boss];
+                launch.loop_on = on;
+            });
+            let board = dir.path().join("blackboard.md");
+            let outcome = report_team_run(&workspace, &store, &record, &board, stage).unwrap();
+            assert_eq!(
+                matches!(outcome, TeamReportOutcome::Queued { .. }),
+                reports,
+                "{on:?} at {stage:?}: {outcome:?}"
+            );
+            let messages = store.list_messages().unwrap();
+            assert_eq!(messages.len(), usize::from(reports), "{on:?} at {stage:?}");
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| message.text.contains("@lead (schedule:nightly):")),
+                "{messages:?}"
+            );
+            let settled = crate::harness::run::load(store.paths(), &record.run_id).unwrap();
+            assert!(
+                settled.status.is_terminal(),
+                "{on:?} at {stage:?}: {settled:?}"
+            );
         }
     }
 }

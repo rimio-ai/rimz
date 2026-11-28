@@ -412,8 +412,16 @@ pub fn compose_answer_row(
     } else {
         "in"
     };
+    // A fire's work reports to its booker, which tells two fires of one booking target apart
+    // by the booking's id.
+    let booking = child
+        .loop_task
+        .as_deref()
+        .filter(|_| child.launcher().is_none() && child.loop_fire.is_some())
+        .map(|task| format!(" (schedule:{task})"))
+        .unwrap_or_default();
     let mut row = format!(
-        "- @{}: {} {preposition} {elapsed}",
+        "- @{}{booking}: {} {preposition} {elapsed}",
         child_name(child, run),
         status.label(),
     );

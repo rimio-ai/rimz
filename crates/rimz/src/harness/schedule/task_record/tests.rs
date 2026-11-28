@@ -12,6 +12,8 @@ fn mark(scope: crate::store::workflow::ScopeKind, result: Option<LoopRunResult>)
         fire: FireId::new(&TaskId::new()),
         at: Timestamp::UNIX_EPOCH,
         booked_by: Vec::new(),
+        on: None,
+        report: None,
         once: true,
         run: None,
         scope,

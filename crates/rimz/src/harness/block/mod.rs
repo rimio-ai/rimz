@@ -441,8 +441,8 @@ pub enum ScheduleOverlap {
     Allow,
 }
 
-/// Books a launch or a command for later; the call gives the booking's id at once, and nothing
-/// follows.
+/// Books a launch or a command for later; the call gives the booking's id at once, and a message
+/// follows each fire.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Schedule {
@@ -453,7 +453,7 @@ pub struct Schedule {
     pub trigger: ScheduleTrigger,
     /// The trigger's argument: for `at`, a delay (`30m`, `2h`) or a clock time (`HH:MM`,
     /// `<weekday> HH:MM`, `YYYY-MM-DD HH:MM`); for `cron`, a five-field expression; for `when`,
-    /// a condition.
+    /// a condition, whose fire appends its evidence line to the launched prompt.
     pub value: String,
     /// What each fire launches, or `shell` for a command it runs.
     pub tool: ScheduleTool,
@@ -466,13 +466,19 @@ pub struct Schedule {
     /// `when` only: fire each time the condition comes to hold rather than once (default once).
     #[serde(default)]
     pub repeat: bool,
-    /// RimZ-owned worktree for every fire, created at the first fire when missing.
+    /// RimZ-owned worktree for every fire, created from the project root's repository at the
+    /// first fire when missing.
     pub worktree: Option<String>,
     /// Repeating triggers only: answer to a trigger during a live fire (`skip` default;
     /// `coalesce` or `queue` hold it, `replace` stops the live fire first, `allow` launches beside
     /// it for `agent` only).
     pub overlap: Option<ScheduleOverlap>,
-    /// Disable after this many failed fires in a row (default `3`; `0` never).
+    /// Message you only on this outcome of a fire (default either): `fail` a nonzero exit, a
+    /// timeout, a failed, canceled, or given-up run, a failed launch, or an agent or team that
+    /// ends without its report; `success` the rest.
+    pub on: Option<On>,
+    /// Disable after this many failed fires in a row (default `3`; `0` never); an agent or team
+    /// fire fails only when its launch does.
     pub max_strikes: Option<u32>,
 }
 
@@ -789,11 +795,7 @@ impl Booked for Shell {
                 "check_in",
                 "a fire's command sends no still-running notice; set `timeout` to bound it",
             ),
-            (
-                self.on.is_some(),
-                "on",
-                "a fire sends no message, so no outcome wakes anyone",
-            ),
+            (self.on.is_some(), "on", "pass top-level `on`"),
         ];
         if let Some((_, field, reason)) = unfit.iter().find(|(given, ..)| *given) {
             return Some(format!("`arguments.{field}`: {reason}"));
