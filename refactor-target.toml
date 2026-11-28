@@ -2739,7 +2739,9 @@ path = "crates/rimz/src/harness"
 # helper (+1).
 # `launch_reminders::section_reminder`, which carries a call's reminder section into the
 # prompt of a launch with no channel for it (+1).
-surface-budget = 1485
+# `block::summary`, the one summary of a call that `rimz workflow try` prints and a run's answer
+# log keeps (+1).
+surface-budget = 1486
 
 [[verdict]]
 kind = "item"
@@ -6550,6 +6552,8 @@ allowed-dependencies = [
 # `ms` and `reads`, the duration grammar and the condition walk a script calls as pure
 # functions, kept here so the script engine reaches nothing past this module (+2).
 # `template`, the answer `rimz workflow try` offers for a call it has none for (+1).
+# `summary`, the field that tells one call from another, which `rimz workflow try` prints and a
+# run's answer log keeps (+1).
 # Caller, BlockName and its spelling, Block, parse, digest, and the schema generator: the
 # entries the script engine calls (+7).
 # `Cause::as_str`, the one spelling of a cause, which `rimz workflow try` prints (+1).
@@ -6557,7 +6561,7 @@ allowed-dependencies = [
 # `Schedule::repeats` and `Schedule::booked`, `Booked` and its two methods, and the
 # `flag_refusal` and `nul_refusal` a `workflow` booking shares, which the `schedule` tool reads
 # (+7).
-surface-budget = 40
+surface-budget = 41
 
 [[module]]
 path = "crates/rimz/src/mcp"
