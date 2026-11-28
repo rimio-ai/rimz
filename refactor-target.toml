@@ -2741,7 +2741,9 @@ path = "crates/rimz/src/harness"
 # prompt of a launch with no channel for it (+1).
 # `block::summary`, the one summary of a call that `rimz workflow try` prints and a run's answer
 # log keeps (+1).
-surface-budget = 1486
+# `workflow_script::{Calling, Called, Reader}` and `block::WorkflowSource`: the reader of a called
+# workflow's script a run hands its script engine (+4).
+surface-budget = 1490
 
 [[verdict]]
 kind = "item"
@@ -6585,7 +6587,9 @@ allowed-dependencies = [
 # The module, `replay`, `answers`, `Pass`, `Caps`, `Log`, `Line`, `Outcome`, `Call`, `Replay`, `End`,
 # and `Meta`: what `rimz workflow try` builds, reads, and prints (+12).
 # `Mark` and `Progress`: the `phase` changes and `log` lines `rimz workflow try` prints (+2).
-surface-budget = 14
+# `Calling`, `Called`, and `Reader`: what reads the script a `workflow` call names, which a run
+# hands a pass (+3).
+surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
