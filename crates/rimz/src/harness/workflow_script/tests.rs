@@ -1500,10 +1500,14 @@ fn an_answers_file_cannot_fail_a_call_with_a_cause_that_ends_a_run_without_one()
         [
             answers("{\"failure\": {\"cause\": \"replay\"}}"),
             answers("{\"result\": 1}\n{\"failure\": {\"cause\": \"stuck\"}}"),
+            answers("{\"failure\": {\"cause\": \"launches\"}}"),
+            answers("{\"failure\": {\"cause\": \"steps\"}}"),
         ],
         [
             Err("line 1: a call cannot fail with `replay`: a call fails with `exit`, `died`, `timeout`, `capacity`, or `invalid`".to_owned()),
             Err("line 2: a call cannot fail with `stuck`: a call fails with `exit`, `died`, `timeout`, `capacity`, or `invalid`".to_owned()),
+            Err("line 1: a call cannot fail with `launches`: a call fails with `exit`, `died`, `timeout`, `capacity`, or `invalid`".to_owned()),
+            Err("line 1: a call cannot fail with `steps`: a call fails with `exit`, `died`, `timeout`, `capacity`, or `invalid`".to_owned()),
         ]
     );
 }

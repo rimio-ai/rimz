@@ -400,7 +400,8 @@ pub(in crate::harness) struct Workflow {
     pub timeout: Option<String>,
     /// The run's launch cap.
     pub max_launches: Option<u32>,
-    /// When to give up capacity waits.
+    /// When to give up capacity waits: a workflow time (`8h`, `18:00`, `mon 09:00`, a date, a
+    /// date-time, or a timestamp).
     pub give_up: Option<String>,
     /// Launch agent steps past every capacity hold.
     #[serde(default)]
@@ -510,6 +511,10 @@ pub enum Cause {
     Replay,
     // A script that can run no further while no call of it is open.
     Stuck,
+    // A run that would launch past its launch cap.
+    Launches,
+    // A run whose script would make a call past its step cap.
+    Steps,
 }
 
 /// A call that did not end as asked, given in place of its result. In a script every block's
@@ -522,7 +527,8 @@ pub struct Failure {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block: Option<BlockName>,
     /// `exit`, `died`, `timeout`, `capacity`, or `invalid` for a call; `replay`, `stuck`,
-    /// or `invalid` (a cap) for a run that ended without one.
+    /// `invalid` (a cap of a pass), or a bound of the run (`launches`, `steps`, `timeout`) for a
+    /// run that ended without one.
     pub cause: Cause,
     /// What happened, in a sentence.
     pub reason: String,
@@ -553,6 +559,8 @@ impl Cause {
             Self::Invalid => "invalid",
             Self::Replay => "replay",
             Self::Stuck => "stuck",
+            Self::Launches => "launches",
+            Self::Steps => "steps",
         }
     }
 }
@@ -657,6 +665,10 @@ impl Block for Workflow {
         }
         blank_place(self.worktree.as_deref(), None)
             .or_else(|| duration_refusal("timeout", self.timeout.as_deref()))
+            .or_else(|| {
+                let error = crate::harness::duration::parse_when(self.give_up.as_deref()?).err()?;
+                Some(format!("`give_up`: {error}"))
+            })
     }
 }
 

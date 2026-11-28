@@ -249,7 +249,10 @@ interface Workflow {
   value: string;
   /** Any JSON value, which the script reads as the global `args`. */
   args?: unknown;
-  /** When to give up capacity waits. */
+  /**
+   * When to give up capacity waits: a workflow time (`8h`, `18:00`, `mon 09:00`, a date, a
+   * date-time, or a timestamp).
+   */
   give_up?: string;
   /** Launch agent steps past every capacity hold. */
   skip_capacity?: boolean;
@@ -317,9 +320,10 @@ declare function now(): Promise<number>;
 interface Failure extends Error {
   /**
    * `exit`, `died`, `timeout`, `capacity`, or `invalid` for a call; `replay`, `stuck`,
-   * or `invalid` (a cap) for a run that ended without one.
+   * `invalid` (a cap of a pass), or a bound of the run (`launches`, `steps`, `timeout`) for a
+   * run that ended without one.
    */
-  cause: "exit" | "died" | "timeout" | "capacity" | "invalid" | "replay" | "stuck";
+  cause: "exit" | "died" | "timeout" | "capacity" | "invalid" | "replay" | "stuck" | "launches" | "steps";
   /** What happened, in a sentence. */
   reason: string;
   /** The block whose call failed; none for a run that ended without a call. */
