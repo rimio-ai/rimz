@@ -102,6 +102,7 @@ pub(super) fn launch_layout(
         )
         .map(|_| ());
     }
+    let call = call_options(&launch)?;
     let selection = if launch.cohort.continue_cohort {
         rimz::launcher::Selection::Cohort
     } else if launch.resume.is_some() {
@@ -142,8 +143,10 @@ pub(super) fn launch_layout(
             .unwrap_or_default(),
         loop_fire: fire.map(|fire| fire.fire),
         subagent_profile: launch.subagent_profile,
-        one_seat: false,
-        call: None,
+        one_seat: call.as_ref().is_some_and(|call| {
+            call.schema.is_some() || matches!(call.stay, rimz::harness::block::Stay::Rest(_))
+        }),
+        call,
     };
     let outcome =
         rimz::launcher::launch_layout(&room, layout, allow_in_place, &mut CliInteraction)?;

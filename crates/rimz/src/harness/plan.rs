@@ -1208,19 +1208,18 @@ pub fn plan_supervised_launch(
         .map(|column| column.rows.len())
         .sum();
     let agents = resolved.layout.agent_cells().count();
-    if request.call.is_some() {
+    if request.call.is_some() && request.background {
+        use crate::harness::call::SeatRefusal;
+        let spec = spec.clone().into_owned();
         if cells > 1 {
-            bail!("`{spec}` is a layout of several seats; `agent` launches one");
+            return Err(SeatRefusal::Layout { spec }.into());
         }
         if agents == 0 {
-            bail!("`{spec}` runs no agent; `agent` launches one");
+            return Err(SeatRefusal::NoAgent { spec }.into());
         }
         // A seat run alone would take the team's lane with no team run behind it.
-        if let Some(team) = &resolved.team_name {
-            bail!(
-                "`{spec}` is a seat of team `{team}`; with `stay: false` `agent` runs one agent \
-                 outside any team, so launch it with `stay: true` or launch the team with `team`"
-            );
+        if let Some(team) = resolved.team_name.clone() {
+            return Err(SeatRefusal::TeamSeat { spec, team }.into());
         }
     }
     if agents != 1 {

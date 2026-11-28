@@ -153,7 +153,7 @@ pub(super) fn launch_team(tools: &Tools, args: &Team) -> Result<Answer, Failure>
     }))
 }
 
-/// A `stay: false` agent: the background run `rimz agents <profile> -p --bg` starts, which
+/// A `stay: false` agent: the background run `rimz agents <profile> --stay false` starts, which
 /// reports to the caller and closes once its turn ends.
 fn launch_worker(
     room: &Room,

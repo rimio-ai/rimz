@@ -396,6 +396,7 @@ impl Interaction for Unattended {
 
 use crate::agents::AgentState;
 use crate::harness::ancestry::{self, LaunchAncestry, LaunchFocus};
+use crate::harness::call::CallSpec;
 use crate::harness::plan::{
     LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
@@ -442,21 +443,34 @@ struct PreparedLayout {
     reported_warnings: Vec<crate::harness::plan::LaunchFinalizeWarning>,
 }
 
-/// `agent` launches what the command resolves to one agent seat, a `team.role` and a bare role
-/// of the caller's lane included; a layout of several cells and a command cell are refused.
+/// A call that needs one agent seat launches what the command resolves to one, a `team.role` and a
+/// bare role of the caller's lane included; a layout of several cells and a command cell are
+/// refused.
 fn require_one_seat(spec: &str, layout: &LayoutSpec) -> Result<()> {
+    use crate::harness::call::SeatRefusal;
+    let spec = spec.to_owned();
     let cells: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
     if cells > 1 {
-        bail!("`{spec}` is a layout of several seats; `agent` launches one");
+        return Err(SeatRefusal::Layout { spec }.into());
     }
     if layout.agent_cells().count() != 1 {
-        bail!(
-            "`{spec}` is not an agent profile; `rimz agents profiles` lists the launchable \
-             profiles"
-        );
+        return Err(SeatRefusal::NotAgentProfile { spec }.into());
     }
     Ok(())
 }
+
+/// A call option takes effect on a fresh seat only, so a launch that opens none, as `resumes`
+/// says, refuses it rather than drop it.
+fn refuse_call_without_fresh_seat(launch: &LayoutLaunch, resumes: &str) -> Result<()> {
+    if launch.call.as_ref().is_some_and(CallSpec::asks) {
+        bail!("{resumes}; {NO_FRESH_SEAT}");
+    }
+    Ok(())
+}
+
+/// Why a call option is refused on a launch that opens no fresh seat.
+const NO_FRESH_SEAT: &str =
+    "a launch that opens no fresh seat cannot carry a stay, schema, or timeout";
 
 pub fn prepare_layout(
     mut request: LayoutRequest,
@@ -930,6 +944,7 @@ fn settle_layout(
         == 1;
     let pick_session = args.launch.selection == Selection::Picker;
     if let Some(scope) = resume_scope {
+        refuse_call_without_fresh_seat(&args.launch, "the launch resumes its cohort")?;
         launch_resume_layout(
             &args,
             &machine_config,
@@ -1115,6 +1130,7 @@ fn settle_layout(
             focus,
             loop_task.is_some(),
             args.launch.subagent_profile,
+            args.launch.call.as_ref().is_some_and(CallSpec::asks),
             interaction,
         )? {
             reconcile::Reconciled::Done => {
@@ -1128,6 +1144,10 @@ fn settle_layout(
                 }));
             }
             reconcile::Reconciled::Resume(path) => {
+                refuse_call_without_fresh_seat(
+                    &args.launch,
+                    &format!("the launch resumes the cohort at `{}`", path.display()),
+                )?;
                 validate_resume_inputs(&args.launch.overrides, ResumeEntrance::Reconcile)?;
                 let layout = resolve_finalized_layout(
                     snapshot.as_ref(),

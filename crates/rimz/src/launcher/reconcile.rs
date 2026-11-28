@@ -33,6 +33,7 @@ pub(super) fn reconcile_cohort_launch(
     focus: LaunchFocus,
     task_step: bool,
     subagent_profile: bool,
+    call_asks: bool,
     interaction: &mut dyn Interaction,
 ) -> Result<Reconciled> {
     if !path.exists() {
@@ -54,6 +55,9 @@ pub(super) fn reconcile_cohort_launch(
             members,
         } => {
             let running = already_running(name, &subject, team);
+            if call_asks {
+                bail!("{running}; {NO_FRESH_SEAT}");
+            }
             let peers = projection.agents.iter().collect::<Vec<_>>();
             let leader = leader
                 .as_ref()

@@ -1210,7 +1210,9 @@ fn is_type(kind: &str, value: &Value) -> bool {
 /// The keywords an agent's answer schema may use.
 const SCHEMA_KEYWORDS: [&str; 5] = ["type", "required", "properties", "enum", "items"];
 
-fn schema_refusal(at: &str, schema: &Map<String, Value>) -> Option<String> {
+/// Why `schema`, given at `at`, is no answer schema: a keyword beyond `SCHEMA_KEYWORDS`, or one
+/// whose value is not that keyword's shape. `rimz agents --schema` checks with it too.
+pub fn schema_refusal(at: &str, schema: &Map<String, Value>) -> Option<String> {
     schema.iter().find_map(|(keyword, value)| {
         if !SCHEMA_KEYWORDS.contains(&keyword.as_str()) {
             return Some(format!(

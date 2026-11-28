@@ -6635,6 +6635,7 @@ fn an_agent_calls_run_refuses_a_command_or_a_team_seat_in_the_tools_terms() {
         ),
     ] {
         let mut request = supervised_request(spec, "work");
+        request.background = true;
         request.call = Some(crate::harness::call::CallSpec {
             stay: crate::harness::block::Stay::TurnEnd,
             schema: None,

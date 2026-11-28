@@ -57,7 +57,7 @@ pub fn defers_to_report(
 }
 
 /// Whether `launcher` launched an agent row `record` matches, searched among every durable
-/// row: a `-p --bg` run's row leaves the live snapshot once its session ends, while the fleet
+/// row: a `--stay false` run's row leaves the live snapshot once its session ends, while the fleet
 /// digest still reports the run from it.
 fn launched(audit: &[AgentState], launcher: &AgentState, record: &RunRecord) -> bool {
     audit

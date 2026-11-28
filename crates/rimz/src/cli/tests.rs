@@ -729,7 +729,10 @@ fn removed_top_level_command_rejects_before_global_help() {
 /// Every launch-option `--timeout` takes the tool's `timeout` grammar, capped at a year.
 #[test]
 fn every_launch_option_timeout_takes_the_tools_cap() {
-    let commands: [&[&str]; 1] = [&["agents", "claude", "hi", "-p"]];
+    let commands: [&[&str]; 2] = [
+        &["agents", "claude", "hi"],
+        &["agents", "claude", "hi", "-p"],
+    ];
     for command in commands {
         for (timeout, refusal) in [
             ("365d", None),

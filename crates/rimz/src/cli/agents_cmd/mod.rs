@@ -374,7 +374,7 @@ pub(crate) struct CohortLaunchArgs {
     /// Cap each member's spend for the session (`5`) or local day (`20/day`).
     #[arg(long, value_name = "AMOUNT[/day]")]
     pub(crate) budget: Option<rimz::harness::budget::BudgetSpec>,
-    /// Launch without taking focus; supervised runs print the agent name and return immediately.
+    /// Launch without taking focus.
     #[arg(long)]
     pub(crate) bg: bool,
     /// Open the launch in a new tab/window instead of the current view.
@@ -571,15 +571,33 @@ pub(crate) struct AgentLaunchArgs {
     /// instruction goes first and stdin follows inside `<stdin>` tags.
     #[arg(long, requires = "print")]
     pub(crate) stdin: bool,
-    /// Wait cap for `--print` or `wait`.
-    #[arg(long, value_parser = rimz::harness::block::timeout, requires = "print")]
+    /// Stop the launch once this long has passed since it opened; a `-p` run then exits 124.
+    #[arg(
+        long,
+        value_parser = rimz::harness::block::timeout,
+        conflicts_with_all = ["resume", "continue_cohort"]
+    )]
     pub(crate) timeout: Option<Duration>,
+    /// How long one launched agent stays: `true` until stopped, `false` for one task (a
+    /// background run that closes at its turn end), or a rest such as `10m`, after which its
+    /// first turn end closes it unless you type to it.
+    #[arg(
+        long,
+        value_name = "true|false|DURATION",
+        value_parser = |raw: &str| raw.parse::<rimz::harness::block::Stay>(),
+        conflicts_with_all = ["print", "resume", "continue_cohort"]
+    )]
+    pub(crate) stay: Option<rimz::harness::block::Stay>,
+    /// The JSON Schema the agent's answer must fit, inline (`{...}`) or a file path; the agent
+    /// hands the answer in with `rimz submit`.
+    #[arg(long, value_name = "JSON|PATH", conflicts_with_all = ["resume", "continue_cohort"])]
+    pub(crate) schema: Option<String>,
     #[arg(skip)]
     pub(crate) warn: Option<Vec<Duration>>,
     #[arg(skip)]
     pub(crate) grace: Option<Duration>,
     /// Leave the supervised agent pane open after completion.
-    #[arg(long, requires = "print")]
+    #[arg(long)]
     pub(crate) keep: bool,
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
@@ -1323,13 +1341,13 @@ fn dispatch_launch(
     let fire = rimz::harness::loop_task::read_fire_env();
     append_fire_trigger(&mut args.launch, fire.as_ref());
     validate_detach(&args.launch)?;
-    if args.launch.print {
+    if args.launch.print || args.launch.stay == Some(rimz::harness::block::Stay::TurnEnd) {
         let (mut request, presentation) = into_supervised_request(args)?;
         stamp_fire(&mut request, fire);
         return match run_print(request, presentation, globals) {
             Ok(Some(exit_code)) => std::process::exit(exit_code),
             Ok(None) => Ok(()),
-            Err(err) => exit_print_usage_error(err),
+            Err(err) => exit_print_usage_error(in_flag_terms(err, "`--stay false`")),
         };
     }
     if json {
@@ -1337,8 +1355,39 @@ fn dispatch_launch(
             "--json is only supported with `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals, true, fire)
-        .map_err(|error| crate::cli::render::launch_suggestions::agents_error(error, bare))
+    let one_seat_flag = match args.launch.stay {
+        Some(rimz::harness::block::Stay::Rest(_)) => "`--stay`",
+        _ => "`--schema`",
+    };
+    launch_layout(args, globals, true, fire).map_err(|error| {
+        crate::cli::render::launch_suggestions::agents_error(
+            in_flag_terms(error, one_seat_flag),
+            bare,
+        )
+    })
+}
+
+/// A launch's refusal of the one agent seat a call option needs, worded for `flag`, the option
+/// that asked for it; any other error passes as it is.
+fn in_flag_terms(error: anyhow::Error, flag: &str) -> anyhow::Error {
+    use rimz::harness::call::SeatRefusal;
+    let Some(refusal) = error.downcast_ref::<SeatRefusal>() else {
+        return error;
+    };
+    anyhow::anyhow!(match refusal {
+        SeatRefusal::Layout { spec } => {
+            format!("`{spec}` is a layout of several seats; {flag} launches one agent")
+        }
+        SeatRefusal::NoAgent { spec } => format!("`{spec}` runs no agent; {flag} launches one"),
+        SeatRefusal::NotAgentProfile { spec } => format!(
+            "`{spec}` is not an agent profile, and {flag} launches one; `rimz agents profiles` \
+             lists the launchable profiles"
+        ),
+        SeatRefusal::TeamSeat { spec, team } => format!(
+            "`{spec}` is a seat of team `{team}`; with {flag} it runs one agent outside any team, \
+             so launch it without {flag} or launch the team with `rimz teams`"
+        ),
+    })
 }
 
 /// A launch made under a loop fire gets what fired it appended to a nonblank prompt; it
@@ -1384,12 +1433,9 @@ fn validate_detach(launch: &AgentLaunchArgs) -> Result<()> {
         );
     }
     if launch.print {
-        if !launch.cohort.bg {
-            bail!(
-                "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach"
-            );
-        }
-        return Ok(());
+        bail!(
+            "--detach on `-p` drops the answer a foreground run prints inline; start the run with `--stay false` in place of `-p`, or drop --detach"
+        );
     }
     if launch
         .prompt
@@ -1401,6 +1447,55 @@ fn validate_detach(launch: &AgentLaunchArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The call `--stay`, `--schema`, and `--timeout` ask of a launch beyond opening it; none when
+/// they ask nothing. Refuses the retired `-p --bg`, a `--keep` no run carries, and a schema
+/// that cannot be read or that a block's schema validator refuses.
+fn call_options(launch: &AgentLaunchArgs) -> Result<Option<rimz::harness::call::CallSpec>> {
+    use rimz::harness::block::Stay;
+    if launch.print && launch.cohort.bg && !launch.subagent {
+        bail!("`-p --bg` is retired: `--stay false` starts the run that closes at its turn end");
+    }
+    let stay = launch.stay.unwrap_or_default();
+    if launch.keep && !launch.print && stay != Stay::TurnEnd {
+        bail!("--keep leaves a run's pane open after it ends; add `-p` or `--stay false`");
+    }
+    let schema = launch.schema.as_deref().map(answer_schema).transpose()?;
+    if schema.is_some()
+        && launch
+            .prompt
+            .as_deref()
+            .is_none_or(|prompt| prompt.trim().is_empty())
+        && !launch.stdin
+    {
+        bail!("--schema needs a prompt: the answer it asks for is the prompt's");
+    }
+    if stay == Stay::UntilStopped && schema.is_none() && launch.timeout.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(rimz::harness::call::CallSpec {
+        stay,
+        schema,
+        timeout: launch.timeout,
+    }))
+}
+
+/// The `--schema` value: inline JSON when it starts with `{`, else the path of a JSON file.
+fn answer_schema(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let (text, source) = if raw.trim_start().starts_with('{') {
+        (raw.to_owned(), String::new())
+    } else {
+        let text = std::fs::read_to_string(raw)
+            .map_err(|error| anyhow::anyhow!("--schema `{raw}` cannot be read: {error}"))?;
+        (text, format!(" `{raw}`"))
+    };
+    let schema: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text)
+        .map_err(|error| anyhow::anyhow!("--schema{source} is not a JSON object: {error}"))?;
+    if let Some(refusal) = rimz::harness::block::schema_refusal("--schema", &schema) {
+        bail!(refusal);
+    }
+    Ok(schema)
 }
 
 /// `rimz loop add --agent`'s check: refuse what a fire's launch cannot carry, then resolve the
@@ -1431,6 +1526,7 @@ pub(super) fn check_loop_launch(
     if let Some((_, refusal)) = refusals.into_iter().find(|(set, _)| *set) {
         bail!("{refusal}; remove it from the tail");
     }
+    call_options(launch)?;
     if launch.print {
         validate_supervised_output(args, launch.output_format.unwrap_or_default())?;
     }
@@ -1593,6 +1689,11 @@ fn into_supervised_request(
     )?;
     let append_system_prompt_files =
         resolve_launch_prompt_files(&args.launch.overrides.append_system_prompt_files)?;
+    let call = if args.launch.subagent {
+        None
+    } else {
+        call_options(&args.launch)?
+    };
     let spec = args
         .launch
         .spec
@@ -1606,10 +1707,16 @@ fn into_supervised_request(
             None,
             rimz::agents::ManagedLaunchState::PendingResolution,
         );
-        request.background = args.launch.cohort.bg;
+        // A `--stay false` run is the background run that closes at its turn end; a `-p` run
+        // closes there too, after printing its answer.
+        request.background = args.launch.cohort.bg || !args.launch.print;
         request.self_cleanup_on_completion =
-            args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
+            request.background || args.launch.self_cleanup_on_completion;
         request.report_to = report_to(args.launch.cohort.detach);
+        request.call = call.map(|call| rimz::harness::call::CallSpec {
+            stay: rimz::harness::block::Stay::TurnEnd,
+            ..call
+        });
         request
     };
     request.permission_mode = permission_mode;
@@ -1667,9 +1774,6 @@ fn report_to(detach: bool) -> rimz::store::run::ReportTo {
 }
 
 fn validate_supervised_output(args: &AgentsArgs, output_format: OutputFormat) -> Result<()> {
-    if args.launch.cohort.bg && output_format == OutputFormat::StreamJson {
-        bail!("--output-format stream-json cannot be combined with --bg");
-    }
     if args.launch.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
         bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
     }

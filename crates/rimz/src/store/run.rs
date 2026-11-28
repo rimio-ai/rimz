@@ -385,8 +385,8 @@ pub struct RunRecord {
     /// agent exits.
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep: bool,
-    /// The run's pane closes once the run completes (a `-p --bg` run, an `agent` call with
-    /// `stay: false`), so no later turn of its launch supersedes it.
+    /// The run's pane closes once the run completes (a `--stay false` run, an `agent` call
+    /// with `stay: false`), so no later turn of its launch supersedes it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub self_cleanup: bool,
     /// Pane-backed child launched through `rimz subagents`.
