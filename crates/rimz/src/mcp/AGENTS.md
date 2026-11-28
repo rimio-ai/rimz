@@ -9,4 +9,4 @@ Local contract for `crates/rimz/src/mcp/`: the protocol loop, the tool catalog a
 - **Flat choices.** A choice of one among several is a required enum plus a required value, never an object of optional keys with a refusal that counts them.
 - **One spelling.** The same value takes the same field name and format in every tool that takes it.
 - **No always-refused field.** A schema lists no field that every call is refused for.
-- **Measure a wording change.** Run `rimz mcp tools` before and after it.
+- **Measure a wording change.** Run `rimz mcp tools` before and after any change to what a tool lists, the types behind its schema included, and diff the two `rimz mcp tools --json` listings: each field `description` the change drops names a fact to find in the new text.
