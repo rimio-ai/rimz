@@ -56,6 +56,19 @@ where
     result
 }
 
+pub fn loop_runs_path(env: &Env) -> std::path::PathBuf {
+    env.rimz_home().join("logs/loop-runs.log.jsonl")
+}
+
+/// The run log's records up to its last newline: a record still being appended has none yet.
+pub fn read_loop_run_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
+    let text = std::fs::read_to_string(loop_runs_path(env)).unwrap_or_default();
+    text[..text.rfind('\n').map_or(0, |end| end + 1)]
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("loop run record"))
+        .collect()
+}
+
 /// Writes the delivery row that wakes the calling agent on `signal`, the shape a team
 /// binding stores; `loop add` no longer arms one.
 pub fn seed_signal_wait(env: &Env, name: &str, signal: &str, repeat: bool) {

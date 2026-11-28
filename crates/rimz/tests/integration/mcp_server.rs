@@ -3568,15 +3568,9 @@ fn a_wait_armed_through_the_server_fires_after_its_group_is_terminated() {
     .unwrap();
     assert_eq!(server.wait_exit().code(), Some(0));
 
-    let runs = env.rimz_home().join("logs/loop-runs.log.jsonl");
     let deadline = Instant::now() + REPLY_DEADLINE;
     let record = loop {
-        let records: Vec<rimz::harness::schedule::run_log::LoopRunRecord> =
-            std::fs::read_to_string(&runs)
-                .unwrap_or_default()
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect();
+        let records = crate::common::wait::read_loop_run_records(&env);
         if let Some(record) = records.into_iter().next() {
             break record;
         }

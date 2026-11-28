@@ -22,7 +22,9 @@ use rimz::store::run::{RunRecord, RunStatus};
 
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
-use crate::common::wait::{publish_claude_5h, reset_minute, rewrite_loop_instances};
+use crate::common::wait::{
+    loop_runs_path, publish_claude_5h, read_loop_run_records, reset_minute, rewrite_loop_instances,
+};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_kinds.rs"]
 mod kind_tests;
@@ -8366,20 +8368,6 @@ fn loop_instances_path(env: &Env) -> std::path::PathBuf {
     env.state_path_for(&env.project_root)
         .root
         .join("records/loop-instances.json")
-}
-
-fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("logs/loop-runs.log.jsonl")
-}
-
-fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
-    let path = loop_runs_path(env);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(|line| serde_json::from_str(line).expect("loop run record"))
-        .collect()
 }
 
 /// A detached loop runner can birth a cold room before the effect a test waits for, which takes

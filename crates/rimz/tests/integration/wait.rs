@@ -3,9 +3,9 @@
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
-    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, register_agent,
-    register_agent_with_owner, register_calling_agent, reset_minute, rewrite_loop_instances,
-    seed_signal_wait, wait_instances, wait_ok,
+    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, read_loop_run_records,
+    register_agent, register_agent_with_owner, register_calling_agent, reset_minute,
+    rewrite_loop_instances, seed_signal_wait, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -1641,14 +1641,19 @@ fn live_watcher_of_a_checked_in_wait_is_not_lost_past_the_grace() {
     .unwrap();
     wait_ok(&env, &["loop", "tick"]);
     wait_for_loop_runs_to_exit(&env, name);
-    assert_eq!(wait_records(&env).len(), 1, "{:?}", wait_records(&env));
+    assert_eq!(
+        read_loop_run_records(&env).len(),
+        1,
+        "{:?}",
+        read_loop_run_records(&env)
+    );
     assert!(wait_instances(&env).0.contains_key(name));
 
     std::fs::write(&release, "").unwrap();
     wait_for_wait_records(&env, 2);
     wait_for_no_wait_instances(&env);
     wait_for_loop_runs_to_exit(&env, name);
-    let records = wait_records(&env);
+    let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 2, "{records:?}");
     let verdict = records[1].watch.as_ref().unwrap();
     assert_eq!(
@@ -3240,7 +3245,7 @@ fn a_watch_checks_in_once_at_its_due_time_and_keeps_waiting() {
     let (mut messages, history) = env.store().list_messages_and_history().unwrap();
     messages.extend(history);
     assert_eq!(messages.len(), 1, "{messages:?}");
-    assert_eq!(wait_records(&env).len(), 1);
+    assert_eq!(read_loop_run_records(&env).len(), 1);
 }
 
 #[test]
@@ -3268,11 +3273,11 @@ fn a_watch_cancelled_before_its_check_in_sends_none() {
         "a cancelled watch checked in: {messages:?}"
     );
     assert!(
-        wait_records(&env)
+        read_loop_run_records(&env)
             .iter()
             .all(|record| record.result.label() != "delivered"),
         "{:?}",
-        wait_records(&env)
+        read_loop_run_records(&env)
     );
 }
 
@@ -3625,7 +3630,7 @@ fn wait_until(env: &Env, description: &str, mut ready: impl FnMut() -> bool) {
             std::time::Instant::now() < deadline,
             "timed out: {description}; pending messages: {:?}; run records: {:?}; wait-watch log: {}",
             env.store().list_pending_messages(),
-            wait_records(env),
+            read_loop_run_records(env),
             wait_watch_log(env)
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -3658,27 +3663,13 @@ fn wait_for_no_wait_instances(env: &Env) {
     });
 }
 
-fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("logs/loop-runs.log.jsonl")
-}
-
-fn wait_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
-    let path = loop_runs_path(env);
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    // A record still being appended has no newline yet.
-    text[..text.rfind('\n').map_or(0, |end| end + 1)]
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 fn wait_for_wait_records(
     env: &Env,
     count: usize,
 ) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
     let mut records = Vec::new();
     wait_until(env, &format!("expected {count} run records"), || {
-        records = wait_records(env);
+        records = read_loop_run_records(env);
         records.len() >= count
     });
     records
