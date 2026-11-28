@@ -23,7 +23,7 @@ use crate::harness::schedule::arm::task_label;
 use crate::harness::schedule::attention::when_scope;
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
-use crate::harness::schedule::{self, TaskShape, shell_task};
+use crate::harness::schedule::{self, TaskShape, shell_task, timer_units};
 use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
@@ -135,6 +135,7 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     catalog.replace_machine(&args.name, &entry)?;
     let mut warnings = launch.warnings;
     warnings.extend(idle_warning(booking));
+    warnings.extend(timer_warning());
     Ok(Answer::data(&Start {
         warnings,
         ..Start::running(
@@ -495,6 +496,15 @@ fn window_account(kinds: &[String], entry: &TaskEntry) -> anyhow::Result<WindowA
         login,
         root,
         runtime,
+    })
+}
+
+/// Without the loop timer, only an open room's sidebar fires a booking.
+fn timer_warning() -> Option<String> {
+    (!timer_units::installed()).then(|| {
+        "warning: no loop timer is installed, so this booking fires only while a room is open; \
+         run `rimz loop timer install` to fire it without one"
+            .to_owned()
     })
 }
 

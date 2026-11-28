@@ -2747,12 +2747,15 @@ path = "crates/rimz/src/harness"
 # log keeps (+1).
 # `workflow_script::{Calling, Called, Reader}` and `block::WorkflowSource`: the reader of a called
 # workflow's script a run hands its script engine (+4).
-# `fleet::report_recipient`, `reports_to` and `reporting_fleet` resolve a fired launch's booker as its report recipient for the CLI report sites (+2).
+# `fleet::report_recipient`, `reports_to` and `reporting_fleet` resolve a fired launch's booker
+# as its report recipient for the CLI report sites (+2).
+# `schedule::timer_units` holds the loop timer's unit paths and the process-free installed
+# check, which the `schedule` tool reads and the CLI's `rimz loop timer` shares (+7).
 # `schedule::attention::when_scope` is the one checkout a booking's `when` reads in, for the
 # `schedule` tool and the CLI's loop views; `fleet::reports_outcome` is the one rule of which
 # outcomes a fired launch reports under its booking's `on`, for the team run and the CLI's
 # agent report (+2).
-surface-budget = 1494
+surface-budget = 1501
 
 [[verdict]]
 kind = "item"

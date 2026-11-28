@@ -5554,12 +5554,82 @@ fn schedule_targets(env: &Env) {
     deploy_workflow(env, "held", HELD_WORKFLOW);
 }
 
+/// A room whose caller may book: the targets are defined and the loop timer is installed, so a
+/// booking answers no warning of its own.
 fn schedule_room() -> Env {
+    let env = timerless_schedule_room();
+    install_loop_timer(&env);
+    env
+}
+
+fn timerless_schedule_room() -> Env {
     let env = Env::new();
     env.record(&env.project_root);
     crate::common::wait::register_calling_agent(&env);
     schedule_targets(&env);
     env
+}
+
+/// The unit files `rimz loop timer install` writes for this platform's timer.
+fn install_loop_timer(env: &Env) {
+    let (dir, units) = if cfg!(target_os = "macos") {
+        (
+            env.home_root.join("Library/LaunchAgents"),
+            &["ai.rimz.loop.plist"][..],
+        )
+    } else {
+        (
+            env.config_root().join("systemd/user"),
+            &["rimz-loop.timer", "rimz-loop.service"][..],
+        )
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    for unit in units {
+        std::fs::write(dir.join(unit), "").unwrap();
+    }
+}
+
+/// A booking with no loop timer installed fires only while a room is open, so its answer warns
+/// and names the command that installs one; once the timer is installed, booking is quiet.
+#[test]
+fn a_booking_warns_while_no_loop_timer_is_installed() {
+    let env = timerless_schedule_room();
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let book = |name: &str| {
+        json!({
+            "name": name,
+            "trigger": "at",
+            "value": "10m",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "check the build"},
+        })
+    };
+    let (unarmed, is_error) = server.answer(1, "schedule", book("unarmed"));
+    assert!(!is_error, "{unarmed}");
+    assert_eq!(
+        unarmed["warnings"],
+        json!([
+            "warning: no loop timer is installed, so this booking fires only while a room is \
+             open; run `rimz loop timer install` to fire it without one"
+        ]),
+        "{unarmed}"
+    );
+
+    if !cfg!(target_os = "macos") {
+        // `rimz loop timer install` writes the service first: alone it fires nothing.
+        let units = env.config_root().join("systemd/user");
+        std::fs::create_dir_all(&units).unwrap();
+        std::fs::write(units.join("rimz-loop.service"), "").unwrap();
+        let (half, is_error) = server.answer(3, "schedule", book("half"));
+        assert!(!is_error, "{half}");
+        assert_eq!(half["warnings"], unarmed["warnings"], "{half}");
+    }
+    install_loop_timer(&env);
+    let (armed, is_error) = server.answer(2, "schedule", book("armed"));
+    server.close();
+    assert!(!is_error, "{armed}");
+    assert!(armed.get("warnings").is_none(), "{armed}");
 }
 
 fn loop_rows(env: &Env) -> toml::Table {
